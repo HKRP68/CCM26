@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if player else 'Add' }} Player{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;">
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost btn-sm">← Back</a>
+  <h2>{{ 'Edit' if player else 'Add New' }} Player</h2>
+</div>
+
+<div class="form-card">
+  <form method="POST">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Player Name *</label>
+        <input type="text" name="name" value="{{ player.name if player else '' }}" required>
+      </div>
+      <div class="form-group">
+        <label>Overall Rating (50-100) *</label>
+        <input type="number" name="rating" min="50" max="100" value="{{ player.rating if player else 75 }}" required>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Category *</label>
+        <select name="category" required>
+          {% for c in ['Batsman','Bowler','All-rounder','Wicket Keeper'] %}
+          <option value="{{ c }}" {{ 'selected' if player and player.category == c }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Country *</label>
+        <input type="text" name="country" value="{{ player.country if player else '' }}" required>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Version</label>
+        <input type="text" name="version" value="{{ player.version if player else 'Base card' }}">
+      </div>
+      <div class="form-group">
+        <label>Active</label>
+        <select name="is_active">
+          <option value="1" {{ 'selected' if not player or player.is_active }}>Active</option>
+          <option value="0" {{ 'selected' if player and not player.is_active }}>Inactive</option>
+        </select>
+      </div>
+    </div>
+
+    <h3 style="margin:1.25rem 0 .75rem;font-size:.9rem;color:var(--accent);text-transform:uppercase;">Batting</h3>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Batting Hand</label>
+        <select name="bat_hand">
+          <option value="Right" {{ 'selected' if player and player.bat_hand == 'Right' }}>Right</option>
+          <option value="Left" {{ 'selected' if player and player.bat_hand == 'Left' }}>Left</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Batting Rating</label>
+        <input type="number" name="bat_rating" min="0" max="100" value="{{ player.bat_rating if player else 50 }}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Batting Average</label>
+        <input type="number" name="bat_avg" step="0.1" value="{{ player.bat_avg if player else 0 }}">
+      </div>
+      <div class="form-group">
+        <label>Strike Rate</label>
+        <input type="number" name="strike_rate" step="0.1" value="{{ player.strike_rate if player else 0 }}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Career Runs</label>
+        <input type="number" name="runs" value="{{ player.runs if player else 0 }}">
+      </div>
+      <div class="form-group">
+        <label>Centuries</label>
+        <input type="number" name="centuries" value="{{ player.centuries if player else 0 }}">
+      </div>
+    </div>
+
+    <h3 style="margin:1.25rem 0 .75rem;font-size:.9rem;color:var(--accent2);text-transform:uppercase;">Bowling</h3>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Bowling Hand</label>
+        <select name="bowl_hand">
+          <option value="Right" {{ 'selected' if player and player.bowl_hand == 'Right' }}>Right</option>
+          <option value="Left" {{ 'selected' if player and player.bowl_hand == 'Left' }}>Left</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Bowling Style</label>
+        <select name="bowl_style">
+          {% for s in ['Fast','Medium Pacer','Off Spinner','Leg Spinner'] %}
+          <option value="{{ s }}" {{ 'selected' if player and player.bowl_style == s }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Bowling Rating</label>
+        <input type="number" name="bowl_rating" min="0" max="100" value="{{ player.bowl_rating if player else 50 }}">
+      </div>
+      <div class="form-group">
+        <label>Bowling Average</label>
+        <input type="number" name="bowl_avg" step="0.1" value="{{ player.bowl_avg if player else 0 }}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Economy</label>
+        <input type="number" name="economy" step="0.1" value="{{ player.economy if player else 0 }}">
+      </div>
+      <div class="form-group">
+        <label>Career Wickets</label>
+        <input type="number" name="wickets" value="{{ player.wickets if player else 0 }}">
+      </div>
+    </div>
+
+    <div style="display:flex;gap:.75rem;margin-top:1.5rem;">
+      <button type="submit" class="btn btn-primary" style="padding:.6rem 1.5rem;">
+        {{ 'Update Player' if player else 'Create Player' }}
+      </button>
+      <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Players{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>Players <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
+  <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
+</div>
+
+<form method="GET" class="toolbar">
+  <input class="search" type="text" name="q" value="{{ q }}" placeholder="Search by name...">
+  <select name="category">
+    <option value="">All Categories</option>
+    {% for c in categories %}<option value="{{ c }}" {{ 'selected' if c == category }}>{{ c }}</option>{% endfor %}
+  </select>
+  <select name="country">
+    <option value="">All Countries</option>
+    {% for c in countries %}<option value="{{ c }}" {{ 'selected' if c == country_filter }}>{{ c }}</option>{% endfor %}
+  </select>
+  <select name="rating_min">
+    <option value="">Min Rating</option>
+    {% for r in range(50, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r|string == rating_min }}>{{ r }}+</option>{% endfor %}
+  </select>
+  <select name="rating_max">
+    <option value="">Max Rating</option>
+    {% for r in range(55, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r|string == rating_max }}>≤{{ r }}</option>{% endfor %}
+  </select>
+  <button type="submit" class="btn btn-blue">Filter</button>
+  {% if q or category or country_filter or rating_min or rating_max %}
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Clear</a>
+  {% endif %}
+</form>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Rating</th>
+        <th>Category</th>
+        <th>Country</th>
+        <th>Bat / Bowl</th>
+        <th>Style</th>
+        <th>Active</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in players %}
+    <tr>
+      <td style="font-weight:600;">{{ p.name }}</td>
+      <td><span class="rating-badge tier-{{ p._tier_css }}">{{ p.rating }}</span></td>
+      <td>{{ p.category }}</td>
+      <td>{{ p.country }}</td>
+      <td>{{ p.bat_hand }} / {{ p.bowl_hand }}</td>
+      <td style="font-size:.8rem;">{{ p.bowl_style }}</td>
+      <td>
+        {% if p.is_active %}
+        <span style="color:var(--green);">●</span>
+        {% else %}
+        <span style="color:var(--red);">●</span>
+        {% endif %}
+      </td>
+      <td>
+        <div class="actions">
+          <a href="{{ url_for('player_edit', player_id=p.id) }}" class="btn btn-blue btn-sm">Edit</a>
+          <form method="POST" action="{{ url_for('player_delete', player_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Delete {{ p.name }}?')">
+            <button type="submit" class="btn btn-red btn-sm">Del</button>
+          </form>
+          {% if p.is_active %}
+          <form method="POST" action="{{ url_for('player_toggle', player_id=p.id) }}" style="display:inline;">
+            <button type="submit" class="btn btn-ghost btn-sm" title="Deactivate">⏸</button>
+          </form>
+          {% else %}
+          <form method="POST" action="{{ url_for('player_toggle', player_id=p.id) }}" style="display:inline;">
+            <button type="submit" class="btn btn-green btn-sm" title="Activate">▶</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not players %}
+    <tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+  <a href="{{ url_for('players_list', page=page-1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">◀</a>
+  {% endif %}
+
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}
+      <span class="current">{{ p }}</span>
+    {% elif p <= 3 or p >= total_pages - 2 or (p >= page - 1 and p <= page + 1) %}
+      <a href="{{ url_for('players_list', page=p, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">{{ p }}</a>
+    {% elif p == 4 and page > 5 %}
+      <span class="info">…</span>
+    {% elif p == total_pages - 3 and page < total_pages - 4 %}
+      <span class="info">…</span>
+    {% endif %}
+  {% endfor %}
+
+  {% if page < total_pages %}
+  <a href="{{ url_for('players_list', page=page+1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">▶</a>
+  {% endif %}
+  <span class="info">{{ total }} players</span>
+</div>
+{% endif %}
+{% endblock %}
