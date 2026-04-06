@@ -1,0 +1,9 @@
+python-telegram-bot==21.3
+sqlalchemy==2.0.30
+pydantic==2.7.1
+pydantic-settings==2.3.4
+python-dotenv==1.0.1
+Pillow==10.3.0
+psycopg2-binary==2.9.9
+flask==3.0.3
+gunicorn==22.0.0
