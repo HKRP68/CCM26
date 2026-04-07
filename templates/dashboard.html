@@ -1,7 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<h2 style="margin-bottom:1rem;">Dashboard</h2>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>Dashboard</h2>
+  <a href="{{ url_for('status') }}" class="btn btn-ghost btn-sm">🔍 System Status</a>
+</div>
+
+{% if stats.total_players == 0 %}
+<div class="flash flash-error" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;">
+  <div>
+    <strong>⚠️ No players in database!</strong><br>
+    <span style="font-size:.85rem;">Upload your players.json file to load all players.</span>
+  </div>
+  <a href="{{ url_for('seed_database') }}" class="btn btn-primary">🌱 Seed Players</a>
+</div>
+{% endif %}
 
 <div class="stats-grid">
   <div class="stat-card">

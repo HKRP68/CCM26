@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<h2 style="margin-bottom:1rem;">Users <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
+
+<form method="GET" class="toolbar">
+  <input class="search" type="text" name="q" value="{{ q }}" placeholder="Search by username or name...">
+  <button type="submit" class="btn btn-blue">Search</button>
+  {% if q %}<a href="{{ url_for('users_list') }}" class="btn btn-ghost">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Telegram ID</th>
+        <th>Coins</th>
+        <th>Gems</th>
+        <th>Roster</th>
+        <th>Streak</th>
+        <th>Joined</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td>
+        <div style="font-weight:600;">{{ u.first_name or '—' }}</div>
+        <div style="font-size:.75rem;color:var(--muted);">@{{ u.username or '—' }}</div>
+      </td>
+      <td style="font-size:.8rem;">{{ u.telegram_id }}</td>
+      <td style="color:var(--accent);">{{ "{:,}".format(u.total_coins) }}</td>
+      <td style="color:var(--accent2);">{{ u.total_gems }}</td>
+      <td>{{ u.roster_count }}/25</td>
+      <td>{{ u._streak }}</td>
+      <td style="font-size:.8rem;">{{ u.created_at.strftime('%d %b %Y') if u.created_at else '—' }}</td>
+      <td>
+        <a href="{{ url_for('user_detail', user_id=u.id) }}" class="btn btn-blue btn-sm">View</a>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not users %}
+    <tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--muted);">No users yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}<a href="{{ url_for('users_list', page=page-1, q=q) }}">◀</a>{% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= total_pages - 1 or (p >= page - 1 and p <= page + 1) %}
+      <a href="{{ url_for('users_list', page=p, q=q) }}">{{ p }}</a>
+    {% elif p == 3 and page > 4 %}<span class="info">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if page < total_pages %}<a href="{{ url_for('users_list', page=page+1, q=q) }}">▶</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

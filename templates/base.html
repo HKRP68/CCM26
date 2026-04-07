@@ -123,6 +123,9 @@ select { cursor:pointer; }
   <div class="links">
     <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
     <a href="{{ url_for('players_list') }}" class="{{ 'active' if request.endpoint in ('players_list','player_edit','player_add') }}">Players</a>
+    <a href="{{ url_for('users_list') }}" class="{{ 'active' if request.endpoint in ('users_list','user_detail') }}">Users</a>
+    <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">Seed</a>
+    <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">Status</a>
     <a href="{{ url_for('logout') }}" class="logout">Logout</a>
   </div>
 </nav>
