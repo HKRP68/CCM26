@@ -80,13 +80,23 @@ def start_admin_panel():
 
 def main():
     setup_logging()
-    logger.info("Initialising database...")
+    print("=" * 50)
+    print("🏏 CRICKET BOT STARTING...")
+    print("=" * 50)
 
+    # Show env status
+    print(f"  BOT_TOKEN: {'✅ set' if BOT_TOKEN else '❌ NOT SET'}")
+    print(f"  DATABASE_URL: {os.getenv('DATABASE_URL', 'sqlite:///cricket_bot.db')}")
+    print(f"  ADMIN_PASSWORD: {'✅ set' if os.getenv('ADMIN_PASSWORD') else '⚠️ using default'}")
+    print(f"  PORT: {os.getenv('PORT', os.getenv('ADMIN_PORT', '5000'))}")
+
+    logger.info("Initialising database...")
     try:
         init_db()
+        print("  Database: ✅ initialised")
     except Exception:
         logger.exception("Database init failed")
-        print("❌ Database init failed. Check DATABASE_URL in env vars.")
+        print("  Database: ❌ FAILED")
         return
 
     # Seed players if table is empty
@@ -96,31 +106,44 @@ def main():
         session = get_session()
         count = session.query(Player).count()
         session.close()
+        print(f"  Players in DB: {count}")
         if count == 0:
-            logger.info("No players in DB — running seed...")
+            print("  Seeding 3,165 players...")
             from seed_players import seed
             seed()
+            session = get_session()
+            count = session.query(Player).count()
+            session.close()
+            print(f"  After seed: {count} players")
     except Exception:
         logger.exception("Seed failed")
+        print("  Seed: ❌ FAILED (you can seed from admin panel)")
+
+    # Check data file exists
+    data_path = os.path.join(os.path.dirname(__file__), "data", "players.json")
+    print(f"  data/players.json: {'✅ found' if os.path.exists(data_path) else '❌ NOT FOUND'}")
 
     # ── Start admin panel FIRST (Render health check needs this) ─────
     admin_thread = threading.Thread(target=start_admin_panel, daemon=True)
     admin_thread.start()
     admin_port = os.getenv("ADMIN_PORT", os.getenv("PORT", 5000))
-    logger.info(f"Admin panel running at http://0.0.0.0:{admin_port}")
+    print(f"  Admin panel: ✅ starting on port {admin_port}")
 
     import time
     time.sleep(2)  # give Flask a moment to bind the port
 
     # ── Start Telegram bot ───────────────────────────────────────────
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not set!")
-        print("❌ BOT_TOKEN not set — admin panel is still running.")
-        print(f"   Open http://0.0.0.0:{admin_port} to manage players.")
+        print("=" * 50)
+        print("⚠️  BOT_TOKEN not set — bot will NOT run")
+        print("   Admin panel is still running at your Render URL")
+        print("   Set BOT_TOKEN in Render env vars to enable the bot")
+        print("=" * 50)
         admin_thread.join()
         return
 
     try:
+        print(f"  Telegram bot: ✅ starting...")
         logger.info("Starting bot...")
         app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -157,6 +180,11 @@ def main():
         app.add_handler(CallbackQueryHandler(trade_back_callback, pattern=r"^tback_"))
 
         logger.info("Bot is running. Press Ctrl+C to stop.")
+        print("=" * 50)
+        print("✅ EVERYTHING RUNNING!")
+        print(f"   Admin: http://0.0.0.0:{admin_port}")
+        print(f"   Bot: polling for Telegram updates")
+        print("=" * 50)
         app.run_polling(drop_pending_updates=True)
 
     except Exception:

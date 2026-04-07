@@ -312,6 +312,77 @@ def player_toggle(player_id):
     return redirect(request.referrer or url_for("players_list"))
 
 
+# ── Seed database ────────────────────────────────────────────────────
+
+@app.route("/seed", methods=["POST"])
+@login_required
+def seed_database():
+    db = get_session()
+    try:
+        count = db.query(func.count(Player.id)).scalar()
+        if count > 0:
+            flash(f"Database already has {count:,} players. Delete them first if you want to re-seed.", "info")
+            return redirect(url_for("dashboard"))
+    finally:
+        db.close()
+
+    try:
+        from seed_players import seed
+        seed()
+        db = get_session()
+        count = db.query(func.count(Player.id)).scalar()
+        db.close()
+        flash(f"Seeded {count:,} players successfully!", "success")
+    except Exception as e:
+        flash(f"Seed failed: {e}", "error")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/status")
+@login_required
+def status():
+    import json
+    checks = {}
+
+    # DB check
+    try:
+        db = get_session()
+        player_count = db.query(func.count(Player.id)).scalar()
+        db.close()
+        checks["database"] = {"ok": True, "detail": f"{player_count:,} players"}
+    except Exception as e:
+        checks["database"] = {"ok": False, "detail": str(e)}
+
+    # Data file check
+    data_path = os.path.join(os.path.dirname(__file__), "data", "players.json")
+    if os.path.exists(data_path):
+        size = os.path.getsize(data_path)
+        try:
+            with open(data_path) as f:
+                data = json.load(f)
+            checks["data_file"] = {"ok": True, "detail": f"{len(data):,} entries, {size:,} bytes"}
+        except Exception as e:
+            checks["data_file"] = {"ok": False, "detail": str(e)}
+    else:
+        checks["data_file"] = {"ok": False, "detail": f"File not found at {data_path}"}
+
+    # Bot token check
+    bot_token = os.getenv("BOT_TOKEN", "")
+    if bot_token:
+        masked = bot_token[:8] + "..." + bot_token[-4:]
+        checks["bot_token"] = {"ok": True, "detail": masked}
+    else:
+        checks["bot_token"] = {"ok": False, "detail": "BOT_TOKEN env var not set"}
+
+    # ENV vars
+    checks["database_url"] = {"ok": True, "detail": os.getenv("DATABASE_URL", "sqlite:///cricket_bot.db")}
+    checks["admin_password"] = {"ok": bool(os.getenv("ADMIN_PASSWORD")), "detail": "Set" if os.getenv("ADMIN_PASSWORD") else "Using default"}
+    checks["port"] = {"ok": True, "detail": os.getenv("PORT", os.getenv("ADMIN_PORT", "5000"))}
+
+    return render_template("status.html", checks=checks)
+
+
 # ── Run ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
