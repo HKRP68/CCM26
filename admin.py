@@ -12,7 +12,7 @@ load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
-from models import Player, User, Trade, UserStats, UserRoster, ActivityLog
+from models import Player, User, Trade, UserStats, UserRoster, ActivityLog, PlayerGameStats
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -618,41 +618,12 @@ def _seed_from_json(raw_data):
             except (ValueError, TypeError):
                 bowl_rating = 0
 
-            scale = max(0.2, (rating - 50) / 50)
-            is_bat = category in ("Batsman", "Wicket Keeper")
-            is_bowl = category == "Bowler"
-
-            if is_bat:
-                bat_avg = round(random.uniform(20, 32) + scale * random.uniform(10, 25), 1)
-                sr = round(random.uniform(55, 75) + scale * random.uniform(10, 50), 1)
-                runs = int(random.uniform(500, 3000) + scale * random.uniform(2000, 12000))
-                centuries = int(scale * random.uniform(1, 45))
-                bowl_avg = round(random.uniform(30, 80), 1) if bowl_rating > 20 else 0.0
-                economy = round(random.uniform(4.0, 8.0), 1) if bowl_rating > 20 else 0.0
-                wickets = int(random.uniform(0, 20) * scale) if bowl_rating > 20 else 0
-            elif is_bowl:
-                bat_avg = round(random.uniform(5, 18) + scale * random.uniform(2, 12), 1)
-                sr = round(random.uniform(30, 60) + scale * random.uniform(5, 30), 1)
-                runs = int(random.uniform(50, 500) + scale * random.uniform(100, 2000))
-                centuries = 0
-                bowl_avg = max(12.0, round(random.uniform(18, 35) - scale * random.uniform(0, 8), 1))
-                economy = max(2.5, round(random.uniform(3.0, 6.5) - scale * random.uniform(0, 1.5), 1))
-                wickets = int(random.uniform(30, 100) + scale * random.uniform(50, 400))
-            else:
-                bat_avg = round(random.uniform(18, 28) + scale * random.uniform(5, 20), 1)
-                sr = round(random.uniform(55, 75) + scale * random.uniform(5, 35), 1)
-                runs = int(random.uniform(500, 2000) + scale * random.uniform(1000, 6000))
-                centuries = int(scale * random.uniform(0, 20))
-                bowl_avg = max(15.0, round(random.uniform(22, 40) - scale * random.uniform(0, 8), 1))
-                economy = max(3.0, round(random.uniform(3.5, 6.5) - scale * random.uniform(0, 1.0), 1))
-                wickets = int(random.uniform(20, 80) + scale * random.uniform(30, 250))
-
             player = Player(
                 name=name, version=version, rating=rating, category=category,
                 country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
                 bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
-                bat_avg=bat_avg, strike_rate=sr, runs=runs, centuries=centuries,
-                bowl_avg=bowl_avg, economy=economy, wickets=wickets, is_active=True,
+                bat_avg=0, strike_rate=0, runs=0, centuries=0,
+                bowl_avg=0, economy=0, wickets=0, is_active=True,
             )
             db.add(player)
             existing_names.add(name)

@@ -159,27 +159,12 @@ def seed():
         except (ValueError, TypeError):
             bowl_rating = 0
 
-        stats = generate_stats(rating, category, bat_rating, bowl_rating)
-
         player = Player(
-            name=name,
-            version=version,
-            rating=rating,
-            category=category,
-            country=country,
-            bat_hand=bat_hand,
-            bowl_hand=bowl_hand,
-            bowl_style=bowl_style,
-            bat_rating=bat_rating,
-            bowl_rating=bowl_rating,
-            bat_avg=stats["bat_avg"],
-            strike_rate=stats["strike_rate"],
-            runs=stats["runs"],
-            centuries=stats["centuries"],
-            bowl_avg=stats["bowl_avg"],
-            economy=stats["economy"],
-            wickets=stats["wickets"],
-            is_active=True,
+            name=name, version=version, rating=rating, category=category,
+            country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
+            bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
+            bat_avg=0, strike_rate=0, runs=0, centuries=0,
+            bowl_avg=0, economy=0, wickets=0, is_active=True,
         )
         session.add(player)
         added += 1

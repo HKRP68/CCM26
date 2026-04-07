@@ -15,9 +15,11 @@ class User(Base):
     telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)
     username = Column(String(100), nullable=True)
     first_name = Column(String(100), nullable=True)
+    team_name = Column(String(50), nullable=True)
     total_coins = Column(Integer, default=0)
     total_gems = Column(Integer, default=0)
     roster_count = Column(Integer, default=0)
+    captain_roster_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -39,6 +41,7 @@ class Player(Base):
     bowl_style = Column(String(30), nullable=False)
     bat_rating = Column(Integer, default=0)
     bowl_rating = Column(Integer, default=0)
+    # Career stats kept in schema but seeded to 0 — real stats are in PlayerGameStats
     bat_avg = Column(Float, default=0.0)
     strike_rate = Column(Float, default=0.0)
     runs = Column(Integer, default=0)
@@ -59,6 +62,7 @@ class UserRoster(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    order_position = Column(Integer, default=99)
     acquired_date = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -93,7 +97,7 @@ class Trade(Base):
     receiver_player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
     initiator_roster_id = Column(Integer, ForeignKey("user_roster.id"), nullable=True)
     receiver_roster_id = Column(Integer, ForeignKey("user_roster.id"), nullable=True)
-    status = Column(String(20), default="pending", nullable=False)  # pending/accepted/rejected/expired
+    status = Column(String(20), default="pending", nullable=False)
     trade_fee = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
@@ -117,10 +121,10 @@ class ActivityLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    action = Column(String(50), nullable=False)   # debut, claim, daily, gspin, release, trade, retain, etc.
-    detail = Column(String(500), nullable=True)    # human-readable description
-    coins_change = Column(Integer, default=0)      # +/- coins
-    gems_change = Column(Integer, default=0)       # +/- gems
+    action = Column(String(50), nullable=False)
+    detail = Column(String(500), nullable=True)
+    coins_change = Column(Integer, default=0)
+    gems_change = Column(Integer, default=0)
     player_name = Column(String(150), nullable=True)
     player_rating = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -132,3 +136,83 @@ class ActivityLog(Base):
         Index("ix_activity_action", "action"),
         Index("ix_activity_time", "created_at"),
     )
+
+
+class PlayerGameStats(Base):
+    """Per-player-per-owner game stats. Created when a player plays for a team."""
+    __tablename__ = "player_game_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+
+    # Awards
+    potm = Column(Integer, default=0)  # Player of the Match count
+
+    # Batting
+    bat_inns = Column(Integer, default=0)
+    runs = Column(Integer, default=0)
+    fifties = Column(Integer, default=0)
+    hundreds = Column(Integer, default=0)
+    fours = Column(Integer, default=0)
+    sixes = Column(Integer, default=0)
+    balls_faced = Column(Integer, default=0)
+    times_out = Column(Integer, default=0)
+    ducks = Column(Integer, default=0)
+    highest_score = Column(Integer, default=0)
+    highest_score_not_out = Column(Boolean, default=False)
+
+    # Bowling
+    bowl_inns = Column(Integer, default=0)
+    wickets_taken = Column(Integer, default=0)
+    runs_conceded = Column(Integer, default=0)
+    overs_bowled = Column(Float, default=0.0)
+    balls_bowled = Column(Integer, default=0)
+    three_fers = Column(Integer, default=0)
+    five_fers = Column(Integer, default=0)
+    hattricks = Column(Integer, default=0)
+    best_bowl_wickets = Column(Integer, default=0)
+    best_bowl_runs = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+    player = relationship("Player")
+
+    __table_args__ = (
+        Index("ix_pgs_user_player", "user_id", "player_id", unique=True),
+    )
+
+    @property
+    def bat_avg(self):
+        return round(self.runs / self.times_out, 2) if self.times_out else 0.0
+
+    @property
+    def bat_sr(self):
+        return round((self.runs / self.balls_faced) * 100, 2) if self.balls_faced else 0.0
+
+    @property
+    def bowl_avg(self):
+        return round(self.runs_conceded / self.wickets_taken, 2) if self.wickets_taken else 0.0
+
+    @property
+    def bowl_economy(self):
+        return round(self.runs_conceded / (self.overs_bowled or 1), 2) if self.overs_bowled else 0.0
+
+    @property
+    def bowl_sr(self):
+        return round(self.balls_bowled / self.wickets_taken, 2) if self.wickets_taken else 0.0
+
+    @property
+    def hs_str(self):
+        if self.highest_score == 0 and self.bat_inns == 0:
+            return "-"
+        no = "*" if self.highest_score_not_out else ""
+        return f"{self.highest_score}{no}"
+
+    @property
+    def bbf_str(self):
+        if self.best_bowl_wickets == 0 and self.bowl_inns == 0:
+            return "-"
+        return f"{self.best_bowl_wickets}/{self.best_bowl_runs}"

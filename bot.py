@@ -23,23 +23,21 @@ from handlers.playerinfo import playerinfo_handler
 
 # Phase 2 handlers
 from handlers.release import (
-    release_handler,
-    releasemultiple_handler,
-    release_confirm_callback,
-    release_cancel_callback,
-    release_dup_callback,
+    release_handler, releasemultiple_handler,
+    release_confirm_callback, release_cancel_callback, release_dup_callback,
 )
 from handlers.trade import (
-    trade_handler,
-    trade_rating_callback,
-    trade_myplayer_callback,
-    trade_theirplayer_callback,
-    trade_send_callback,
-    trade_accept_callback,
-    trade_reject_callback,
-    trade_cancel_callback,
-    trade_back_callback,
+    trade_handler, trade_rating_callback, trade_myplayer_callback,
+    trade_theirplayer_callback, trade_send_callback,
+    trade_accept_callback, trade_reject_callback,
+    trade_cancel_callback, trade_back_callback,
 )
+
+# Phase 3 handlers
+from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler
+from handlers.search import searchpl_handler, searchovr_handler
+from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback
+from handlers.team import teamname_handler, purse_handler, stats_handler
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +52,19 @@ async def start_handler(update, context):
         "/daily - Daily reward (24h)\n"
         "/gspin - Spin the wheel (8h)\n"
         "/myroster - View your roster\n"
+        "/pxi - Playing XI\n"
         "/playerinfo [name] - Player details\n"
-        "/release [name] - Release a player for coins\n"
-        "/releasemultiple - Release duplicate players\n"
-        "/trade @user - Trade players with someone",
+        "/stats [name] - Player game stats\n"
+        "/searchpl [name] - Search player\n"
+        "/searchovr [rating] - Search by OVR\n"
+        "/buypl [name] - Buy a player\n"
+        "/swapplayers [n1] [n2] - Swap positions\n"
+        "/setcaptain [name] - Set captain\n"
+        "/teamname [name] - Set team name\n"
+        "/purse - Check balance\n"
+        "/release [name] - Release for coins\n"
+        "/releasemultiple - Release duplicates\n"
+        "/trade @user - Trade players",
         parse_mode="HTML",
     )
 
@@ -159,6 +166,19 @@ def main():
         app.add_handler(CommandHandler("releasemultiple", releasemultiple_handler))
         app.add_handler(CommandHandler("trade", trade_handler))
 
+        # Phase 3 commands
+        app.add_handler(CommandHandler("pxi", playingxi_handler))
+        app.add_handler(CommandHandler("playingxi", playingxi_handler))
+        app.add_handler(CommandHandler("swapplayers", swapplayers_handler))
+        app.add_handler(CommandHandler("swappl", swapplayers_handler))
+        app.add_handler(CommandHandler("setcaptain", setcaptain_handler))
+        app.add_handler(CommandHandler("searchpl", searchpl_handler))
+        app.add_handler(CommandHandler("searchovr", searchovr_handler))
+        app.add_handler(CommandHandler("buypl", buypl_handler))
+        app.add_handler(CommandHandler("teamname", teamname_handler))
+        app.add_handler(CommandHandler("purse", purse_handler))
+        app.add_handler(CommandHandler("stats", stats_handler))
+
         # ── Phase 1 callbacks ────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
         app.add_handler(CallbackQueryHandler(claim_release_callback, pattern=r"^release_"))
@@ -168,6 +188,10 @@ def main():
         app.add_handler(CallbackQueryHandler(release_confirm_callback, pattern=r"^rlconfirm_"))
         app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlcancel$"))
         app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
+
+        # ── Phase 3 callbacks — buy ─────────────────────────────────
+        app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
+        app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel$"))
 
         # ── Phase 2 callbacks — trading ──────────────────────────────
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
