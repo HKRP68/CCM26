@@ -11,6 +11,7 @@ from services.player_service import get_random_player_by_rarity, get_random_play
 from services.cooldown_service import check_cooldown, format_remaining
 from services.streak_service import update_streak
 from config import DAILY_COOLDOWN, DAILY_COINS, STREAK_MILESTONE
+from services.activity_service import log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,8 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user.roster_count += 1
 
         stats.last_daily = datetime.utcnow()
+        pnames = ', '.join(p.name for p in players)
+        log_activity(session, user.id, 'daily', f'Daily: +{DAILY_COINS} coins, players: {pnames}, streak {streak_count}', coins_change=DAILY_COINS)
         session.commit()
 
         # Build message

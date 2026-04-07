@@ -9,6 +9,7 @@ from database import get_session
 from models import User, UserRoster, UserStats
 from services.player_service import get_players_for_debut
 from config import DEBUT_COINS, DEBUT_GEMS
+from services.activity_service import log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.add(entry)
 
         user.roster_count = len(players)
+        log_activity(session, user.id, 'debut', f'Debut: {len(players)} players, {DEBUT_COINS} coins, {DEBUT_GEMS} gems', coins_change=DEBUT_COINS, gems_change=DEBUT_GEMS)
         session.commit()
 
         lines = []

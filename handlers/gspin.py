@@ -11,6 +11,7 @@ from models import User, UserRoster, UserStats
 from services.player_service import get_random_player_by_rating_range
 from services.cooldown_service import check_cooldown, format_remaining
 from config import GSPIN_COOLDOWN, GSPIN_OUTCOMES, GSPIN_EMOJIS, GSPIN_NAMES
+from services.activity_service import log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reward_lines = f"No players in range — awarded {amount:,} coins instead!\n💰 +{amount:,} coins added"
 
         stats.last_gspin = datetime.utcnow()
+        log_activity(session, user.id, 'gspin', f'GSpin: {colour} → {outcome_type}')
         session.commit()
 
         text = (

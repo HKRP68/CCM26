@@ -13,6 +13,7 @@ from services.rating_matcher_service import (
     get_trade_fee,
     can_trade_with_user,
 )
+from services.activity_service import log_activity
 from services.trading_service import (
     initiate_trade,
     accept_trade,

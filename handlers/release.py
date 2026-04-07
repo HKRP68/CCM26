@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Player, UserRoster
 from config import get_sell_value
+from services.activity_service import log_activity
 from services.roster_service import (
     find_roster_entry,
     release_player,
@@ -89,6 +90,9 @@ async def release_confirm_callback(update: Update, context: ContextTypes.DEFAULT
         if not result["success"]:
             await query.edit_message_text(f"❌ {result['error']}")
             return
+
+        log_activity(session, user.id, 'release', f'Released {result["name"]} for {result["sell_value"]:,}', coins_change=result['sell_value'], player_name=result['name'], player_rating=result['rating'])
+        session.commit()
 
         text = (
             "✅ <b>PLAYER RELEASED!</b>\n\n"

@@ -12,6 +12,7 @@ from services.player_service import get_random_player_by_rarity, get_player_valu
 from services.cooldown_service import check_cooldown, format_remaining
 from services.card_generator import generate_card
 from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER
+from services.activity_service import log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Award claim coins
         user.total_coins += CLAIM_COINS
         stats.last_claim = datetime.utcnow()
+        log_activity(session, user.id, 'claim', f'Claimed {player.name} ({player.rating} OVR)', coins_change=CLAIM_COINS, player_name=player.name, player_rating=player.rating)
         session.commit()
 
         text = (
@@ -138,6 +140,8 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        log_activity(session, user.id, 'retain', f'Retained {name}', player_name=name)
+        session.commit()
         await query.message.reply_text(f"✅ {name} Added to @{username}'s roster!")
         logger.info(f"Retain: user {tg_user.id} kept {name}")
 
@@ -178,6 +182,8 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        log_activity(session, user.id, 'release', f'Released {name} for {sell_val:,} coins', coins_change=sell_val, player_name=name)
+        session.commit()
         await query.message.reply_text(
             f"🔄 {name} Released by @{username}\n💰 +{sell_val:,} coins added to purse"
         )
