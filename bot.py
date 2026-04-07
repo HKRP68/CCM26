@@ -64,86 +64,104 @@ async def start_handler(update, context):
 
 def start_admin_panel():
     """Run the Flask admin panel in a background thread."""
-    from admin import app as flask_app
-    port = int(os.getenv("ADMIN_PORT", os.getenv("PORT", 5000)))
-    logger.info(f"Admin panel starting on port {port}...")
-    flask_app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        use_reloader=False,  # important: no reloader in thread
-    )
+    try:
+        from admin import app as flask_app
+        port = int(os.getenv("ADMIN_PORT", os.getenv("PORT", 5000)))
+        logger.info(f"Admin panel starting on port {port}...")
+        flask_app.run(
+            host="0.0.0.0",
+            port=port,
+            debug=False,
+            use_reloader=False,
+        )
+    except Exception:
+        logger.exception("Admin panel crashed")
 
 
 def main():
     setup_logging()
     logger.info("Initialising database...")
-    init_db()
+
+    try:
+        init_db()
+    except Exception:
+        logger.exception("Database init failed")
+        print("❌ Database init failed. Check DATABASE_URL in env vars.")
+        return
 
     # Seed players if table is empty
-    from database import get_session
-    from models import Player
-    session = get_session()
-    count = session.query(Player).count()
-    session.close()
-    if count == 0:
-        logger.info("No players in DB — running seed...")
-        from seed_players import seed
-        seed()
+    try:
+        from database import get_session
+        from models import Player
+        session = get_session()
+        count = session.query(Player).count()
+        session.close()
+        if count == 0:
+            logger.info("No players in DB — running seed...")
+            from seed_players import seed
+            seed()
+    except Exception:
+        logger.exception("Seed failed")
 
-    # ── Start admin panel in background thread ───────────────────────
+    # ── Start admin panel FIRST (Render health check needs this) ─────
     admin_thread = threading.Thread(target=start_admin_panel, daemon=True)
     admin_thread.start()
     admin_port = os.getenv("ADMIN_PORT", os.getenv("PORT", 5000))
     logger.info(f"Admin panel running at http://0.0.0.0:{admin_port}")
 
+    import time
+    time.sleep(2)  # give Flask a moment to bind the port
+
     # ── Start Telegram bot ───────────────────────────────────────────
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set!")
-        print("❌ BOT_TOKEN not set. Copy .env.example → .env and add your token.")
-        # Keep admin alive even without bot token
+        print("❌ BOT_TOKEN not set — admin panel is still running.")
+        print(f"   Open http://0.0.0.0:{admin_port} to manage players.")
         admin_thread.join()
         return
 
-    logger.info("Starting bot...")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    try:
+        logger.info("Starting bot...")
+        app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # ── Command handlers ─────────────────────────────────────────────
-    app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("debut", debut_handler))
-    app.add_handler(CommandHandler("claim", claim_handler))
-    app.add_handler(CommandHandler("gspin", gspin_handler))
-    app.add_handler(CommandHandler("daily", daily_handler))
-    app.add_handler(CommandHandler("myroster", myroster_handler))
-    app.add_handler(CommandHandler("playerinfo", playerinfo_handler))
-    app.add_handler(CommandHandler("release", release_handler))
-    app.add_handler(CommandHandler("releasemultiple", releasemultiple_handler))
-    app.add_handler(CommandHandler("trade", trade_handler))
+        # ── Command handlers ─────────────────────────────────────────
+        app.add_handler(CommandHandler("start", start_handler))
+        app.add_handler(CommandHandler("debut", debut_handler))
+        app.add_handler(CommandHandler("claim", claim_handler))
+        app.add_handler(CommandHandler("gspin", gspin_handler))
+        app.add_handler(CommandHandler("daily", daily_handler))
+        app.add_handler(CommandHandler("myroster", myroster_handler))
+        app.add_handler(CommandHandler("playerinfo", playerinfo_handler))
+        app.add_handler(CommandHandler("release", release_handler))
+        app.add_handler(CommandHandler("releasemultiple", releasemultiple_handler))
+        app.add_handler(CommandHandler("trade", trade_handler))
 
-    # ── Phase 1 callbacks (claim retain/release) ────────────────────
-    app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
-    app.add_handler(CallbackQueryHandler(claim_release_callback, pattern=r"^release_"))
+        # ── Phase 1 callbacks ────────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
+        app.add_handler(CallbackQueryHandler(claim_release_callback, pattern=r"^release_"))
 
-    # ── Phase 2 callbacks — roster pagination ───────────────────────
-    app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
+        # ── Phase 2 callbacks — roster ───────────────────────────────
+        app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
+        app.add_handler(CallbackQueryHandler(release_confirm_callback, pattern=r"^rlconfirm_"))
+        app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlcancel$"))
+        app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
 
-    # ── Phase 2 callbacks — release ─────────────────────────────────
-    app.add_handler(CallbackQueryHandler(release_confirm_callback, pattern=r"^rlconfirm_"))
-    app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlcancel$"))
-    app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
+        # ── Phase 2 callbacks — trading ──────────────────────────────
+        app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
+        app.add_handler(CallbackQueryHandler(trade_myplayer_callback, pattern=r"^tmypl_"))
+        app.add_handler(CallbackQueryHandler(trade_theirplayer_callback, pattern=r"^tthpl_"))
+        app.add_handler(CallbackQueryHandler(trade_send_callback, pattern=r"^tsend_"))
+        app.add_handler(CallbackQueryHandler(trade_accept_callback, pattern=r"^taccept_"))
+        app.add_handler(CallbackQueryHandler(trade_reject_callback, pattern=r"^treject_"))
+        app.add_handler(CallbackQueryHandler(trade_cancel_callback, pattern=r"^tcancel$"))
+        app.add_handler(CallbackQueryHandler(trade_back_callback, pattern=r"^tback_"))
 
-    # ── Phase 2 callbacks — trading ─────────────────────────────────
-    app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
-    app.add_handler(CallbackQueryHandler(trade_myplayer_callback, pattern=r"^tmypl_"))
-    app.add_handler(CallbackQueryHandler(trade_theirplayer_callback, pattern=r"^tthpl_"))
-    app.add_handler(CallbackQueryHandler(trade_send_callback, pattern=r"^tsend_"))
-    app.add_handler(CallbackQueryHandler(trade_accept_callback, pattern=r"^taccept_"))
-    app.add_handler(CallbackQueryHandler(trade_reject_callback, pattern=r"^treject_"))
-    app.add_handler(CallbackQueryHandler(trade_cancel_callback, pattern=r"^tcancel$"))
-    app.add_handler(CallbackQueryHandler(trade_back_callback, pattern=r"^tback_"))
+        logger.info("Bot is running. Press Ctrl+C to stop.")
+        app.run_polling(drop_pending_updates=True)
 
-    logger.info("Bot is running. Press Ctrl+C to stop.")
-    app.run_polling(drop_pending_updates=True)
+    except Exception:
+        logger.exception("Bot crashed — admin panel still running")
+        admin_thread.join()
 
 
 if __name__ == "__main__":
