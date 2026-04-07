@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from models import User, Player, UserRoster, Trade
 from config import TRADE_EXPIRES_SECONDS, MAX_ACTIVE_TRADES
 from services.rating_matcher_service import get_trade_fee
+from services.activity_service import log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,10 @@ def accept_trade(session: Session, trade_id: int, user: User) -> dict:
 
     init_player = session.query(Player).get(trade.initiator_player_id)
     recv_player = session.query(Player).get(trade.receiver_player_id)
+
+    log_activity(session, initiator.id, 'trade', f'Traded {init_player.name} → got {recv_player.name}', coins_change=-fee, player_name=init_player.name, player_rating=init_player.rating)
+    log_activity(session, receiver.id, 'trade', f'Traded {recv_player.name} → got {init_player.name}', coins_change=-fee, player_name=recv_player.name, player_rating=recv_player.rating)
+    session.flush()
 
     logger.info(
         f"Trade #{trade.id} completed: {initiator.telegram_id} gave {init_player.name}, "
