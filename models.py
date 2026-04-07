@@ -110,3 +110,25 @@ class Trade(Base):
         Index("ix_trades_initiator", "initiator_id"),
         Index("ix_trades_receiver", "receiver_id"),
     )
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String(50), nullable=False)   # debut, claim, daily, gspin, release, trade, retain, etc.
+    detail = Column(String(500), nullable=True)    # human-readable description
+    coins_change = Column(Integer, default=0)      # +/- coins
+    gems_change = Column(Integer, default=0)       # +/- gems
+    player_name = Column(String(150), nullable=True)
+    player_rating = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+    __table_args__ = (
+        Index("ix_activity_user", "user_id"),
+        Index("ix_activity_action", "action"),
+        Index("ix_activity_time", "created_at"),
+    )

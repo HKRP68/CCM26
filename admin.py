@@ -12,7 +12,7 @@ load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
-from models import Player, User, Trade
+from models import Player, User, Trade, UserStats, UserRoster, ActivityLog
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -310,6 +310,184 @@ def player_toggle(player_id):
     finally:
         db.close()
     return redirect(request.referrer or url_for("players_list"))
+
+
+# ── User management ──────────────────────────────────────────────────
+
+@app.route("/users")
+@login_required
+def users_list():
+    db = get_session()
+    try:
+        q = request.args.get("q", "").strip()
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = 20
+
+        query = db.query(User)
+        if q:
+            query = query.filter(
+                (User.username.ilike(f"%{q}%")) | (User.first_name.ilike(f"%{q}%"))
+            )
+
+        total = query.count()
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+
+        users = query.order_by(User.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+
+        # Attach streak count
+        for u in users:
+            st = db.query(UserStats).filter(UserStats.user_id == u.id).first()
+            u._streak = f"{st.streak_count}/14" if st else "0/14"
+
+        return render_template("users.html", users=users, total=total, page=page,
+                               total_pages=total_pages, q=q)
+    finally:
+        db.close()
+
+
+@app.route("/users/<int:user_id>")
+@login_required
+def user_detail(user_id):
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash("User not found", "error")
+            return redirect(url_for("users_list"))
+
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+
+        roster = (
+            db.query(UserRoster, Player)
+            .join(Player, UserRoster.player_id == Player.id)
+            .filter(UserRoster.user_id == user.id)
+            .order_by(Player.rating.desc())
+            .all()
+        )
+        for _, p in roster:
+            p._tier_css = tier_css(p.rating)
+
+        activities = (
+            db.query(ActivityLog)
+            .filter(ActivityLog.user_id == user.id)
+            .order_by(ActivityLog.created_at.desc())
+            .limit(50)
+            .all()
+        )
+
+        return render_template("user_detail.html", user=user, stats=stats,
+                               roster=roster, activities=activities)
+    finally:
+        db.close()
+
+
+@app.route("/users/<int:user_id>/edit-purse", methods=["POST"])
+@login_required
+def user_edit_purse(user_id):
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if user:
+            old_coins = user.total_coins
+            old_gems = user.total_gems
+            user.total_coins = int(request.form.get("coins", user.total_coins))
+            user.total_gems = int(request.form.get("gems", user.total_gems))
+            # Log admin action
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "admin_edit",
+                         f"Admin set coins {old_coins:,}→{user.total_coins:,}, gems {old_gems}→{user.total_gems}",
+                         coins_change=user.total_coins - old_coins,
+                         gems_change=user.total_gems - old_gems)
+            db.commit()
+            flash(f"Updated: {user.total_coins:,} coins, {user.total_gems} gems", "success")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/reset-cooldowns", methods=["POST"])
+@login_required
+def user_reset_cooldowns(user_id):
+    db = get_session()
+    try:
+        stats = db.query(UserStats).filter(UserStats.user_id == user_id).first()
+        if stats:
+            stats.last_claim = None
+            stats.last_daily = None
+            stats.last_gspin = None
+            from services.activity_service import log_activity
+            log_activity(db, user_id, "admin_reset", "Admin reset all cooldowns")
+            db.commit()
+            flash("All cooldowns reset", "success")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/add-player", methods=["POST"])
+@login_required
+def user_add_player(user_id):
+    db = get_session()
+    try:
+        player_name = request.form.get("player_name", "").strip()
+        player = db.query(Player).filter(Player.name.ilike(f"%{player_name}%")).first()
+        if not player:
+            flash(f"Player '{player_name}' not found", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        user = db.query(User).get(user_id)
+        if not user:
+            flash("User not found", "error")
+            return redirect(url_for("users_list"))
+
+        from datetime import datetime
+        entry = UserRoster(user_id=user.id, player_id=player.id, acquired_date=datetime.utcnow())
+        db.add(entry)
+        user.roster_count += 1
+        from services.activity_service import log_activity
+        log_activity(db, user.id, "admin_add", f"Admin added {player.name} ({player.rating} OVR)",
+                     player_name=player.name, player_rating=player.rating)
+        db.commit()
+        flash(f"Added {player.name} ({player.rating} OVR) to roster", "success")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/remove-player/<int:roster_id>", methods=["POST"])
+@login_required
+def user_remove_player(user_id, roster_id):
+    db = get_session()
+    try:
+        entry = db.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user_id).first()
+        if entry:
+            player = db.query(Player).get(entry.player_id)
+            name = player.name if player else "Unknown"
+            db.delete(entry)
+            user = db.query(User).get(user_id)
+            if user:
+                user.roster_count = max(0, user.roster_count - 1)
+            from services.activity_service import log_activity
+            log_activity(db, user_id, "admin_remove", f"Admin removed {name}",
+                         player_name=name)
+            db.commit()
+            flash(f"Removed {name} from roster", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
 
 
 # ── Seed database ────────────────────────────────────────────────────
