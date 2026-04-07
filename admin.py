@@ -314,29 +314,167 @@ def player_toggle(player_id):
 
 # ── Seed database ────────────────────────────────────────────────────
 
-@app.route("/seed", methods=["POST"])
+@app.route("/seed", methods=["GET", "POST"])
 @login_required
 def seed_database():
+    if request.method == "GET":
+        return render_template("seed.html")
+
     db = get_session()
     try:
         count = db.query(func.count(Player.id)).scalar()
         if count > 0:
-            flash(f"Database already has {count:,} players. Delete them first if you want to re-seed.", "info")
-            return redirect(url_for("dashboard"))
+            flash(f"Database already has {count:,} players. Clear them first or just add more.", "info")
     finally:
         db.close()
 
-    try:
-        from seed_players import seed
-        seed()
-        db = get_session()
-        count = db.query(func.count(Player.id)).scalar()
-        db.close()
-        flash(f"Seeded {count:,} players successfully!", "success")
-    except Exception as e:
-        flash(f"Seed failed: {e}", "error")
+    # Try file upload first
+    uploaded = request.files.get("jsonfile")
+    if uploaded and uploaded.filename:
+        try:
+            import json
+            raw_data = json.load(uploaded)
+            added = _seed_from_json(raw_data)
+            flash(f"Seeded {added:,} players from uploaded file!", "success")
+            return redirect(url_for("dashboard"))
+        except Exception as e:
+            flash(f"Upload seed failed: {e}", "error")
+            return redirect(url_for("seed_database"))
 
-    return redirect(url_for("dashboard"))
+    # Try from data/players.json on disk
+    data_path = os.path.join(os.path.dirname(__file__), "data", "players.json")
+    if os.path.exists(data_path):
+        try:
+            import json
+            with open(data_path) as f:
+                raw_data = json.load(f)
+            added = _seed_from_json(raw_data)
+            flash(f"Seeded {added:,} players from data/players.json!", "success")
+            return redirect(url_for("dashboard"))
+        except Exception as e:
+            flash(f"File seed failed: {e}", "error")
+    else:
+        flash("data/players.json not found. Upload the JSON file instead.", "error")
+
+    return redirect(url_for("seed_database"))
+
+
+@app.route("/clear-players", methods=["POST"])
+@login_required
+def clear_players():
+    db = get_session()
+    try:
+        count = db.query(Player).delete()
+        db.commit()
+        flash(f"Deleted {count:,} players.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("seed_database"))
+
+
+def _normalise_category(raw):
+    low = raw.strip().lower()
+    if low == "batsman": return "Batsman"
+    if low == "bowler": return "Bowler"
+    if low == "all-rounder": return "All-rounder"
+    if low in ("wicketkeeper", "wicket keeper", "wk"): return "Wicket Keeper"
+    return raw.strip().title()
+
+def _parse_bowl_style(raw):
+    low = raw.strip().lower().replace("\n", "")
+    if "leg" in low: return "Leg Spinner"
+    if "off" in low: return "Off Spinner"
+    if "fast" in low and "medium" not in low: return "Fast"
+    return "Medium Pacer"
+
+def _seed_from_json(raw_data):
+    """Seed players from parsed JSON list. Returns count added."""
+    import random
+    db = get_session()
+    added = 0
+    try:
+        existing_names = {n[0] for n in db.query(Player.name).all()}
+
+        for entry in raw_data:
+            name = entry.get("Player Name", "").strip()
+            if not name or name in existing_names:
+                continue
+            try:
+                rating = int(entry.get("overall all", 0))
+            except (ValueError, TypeError):
+                continue
+            if rating < 50:
+                continue
+            if rating > 100:
+                rating = 100
+
+            category = _normalise_category(entry.get("Category", "Batsman"))
+            bat_hand = "Left" if "left" in entry.get("Batting Style", "").lower() else "Right"
+            bowl_raw = entry.get("Bowling Style", "Right arm medium fast")
+            bowl_hand = "Left" if "left" in bowl_raw.lower() else "Right"
+            bowl_style = _parse_bowl_style(bowl_raw)
+            country = entry.get("Country", "Unknown").strip()
+            version = entry.get("Version ", "Base card").strip() or "Base card"
+
+            try:
+                bat_rating = int(entry.get("Batting Rating", 0))
+            except (ValueError, TypeError):
+                bat_rating = 0
+            try:
+                bowl_rating = int(entry.get("Bowling Rating", 0))
+            except (ValueError, TypeError):
+                bowl_rating = 0
+
+            scale = max(0.2, (rating - 50) / 50)
+            is_bat = category in ("Batsman", "Wicket Keeper")
+            is_bowl = category == "Bowler"
+
+            if is_bat:
+                bat_avg = round(random.uniform(20, 32) + scale * random.uniform(10, 25), 1)
+                sr = round(random.uniform(55, 75) + scale * random.uniform(10, 50), 1)
+                runs = int(random.uniform(500, 3000) + scale * random.uniform(2000, 12000))
+                centuries = int(scale * random.uniform(1, 45))
+                bowl_avg = round(random.uniform(30, 80), 1) if bowl_rating > 20 else 0.0
+                economy = round(random.uniform(4.0, 8.0), 1) if bowl_rating > 20 else 0.0
+                wickets = int(random.uniform(0, 20) * scale) if bowl_rating > 20 else 0
+            elif is_bowl:
+                bat_avg = round(random.uniform(5, 18) + scale * random.uniform(2, 12), 1)
+                sr = round(random.uniform(30, 60) + scale * random.uniform(5, 30), 1)
+                runs = int(random.uniform(50, 500) + scale * random.uniform(100, 2000))
+                centuries = 0
+                bowl_avg = max(12.0, round(random.uniform(18, 35) - scale * random.uniform(0, 8), 1))
+                economy = max(2.5, round(random.uniform(3.0, 6.5) - scale * random.uniform(0, 1.5), 1))
+                wickets = int(random.uniform(30, 100) + scale * random.uniform(50, 400))
+            else:
+                bat_avg = round(random.uniform(18, 28) + scale * random.uniform(5, 20), 1)
+                sr = round(random.uniform(55, 75) + scale * random.uniform(5, 35), 1)
+                runs = int(random.uniform(500, 2000) + scale * random.uniform(1000, 6000))
+                centuries = int(scale * random.uniform(0, 20))
+                bowl_avg = max(15.0, round(random.uniform(22, 40) - scale * random.uniform(0, 8), 1))
+                economy = max(3.0, round(random.uniform(3.5, 6.5) - scale * random.uniform(0, 1.0), 1))
+                wickets = int(random.uniform(20, 80) + scale * random.uniform(30, 250))
+
+            player = Player(
+                name=name, version=version, rating=rating, category=category,
+                country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
+                bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
+                bat_avg=bat_avg, strike_rate=sr, runs=runs, centuries=centuries,
+                bowl_avg=bowl_avg, economy=economy, wickets=wickets, is_active=True,
+            )
+            db.add(player)
+            existing_names.add(name)
+            added += 1
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    return added
 
 
 @app.route("/status")
