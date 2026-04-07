@@ -24,7 +24,18 @@ def init_db():
 def reset_db():
     """Drop ALL tables and recreate. Destroys all data."""
     from models import User, Player, UserRoster, UserStats, Trade, ActivityLog  # noqa: F401
-    Base.metadata.drop_all(bind=engine)
+    from sqlalchemy import text
+    tables = ["activity_log", "trades", "user_roster", "user_rosters", "user_stats", "users", "players"]
+    with engine.begin() as conn:
+        if "postgresql" in DATABASE_URL:
+            for t in tables:
+                conn.execute(text(f"DROP TABLE IF EXISTS {t} CASCADE"))
+        else:
+            # SQLite: disable FK checks, drop normally
+            conn.execute(text("PRAGMA foreign_keys = OFF"))
+            for t in tables:
+                conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
+            conn.execute(text("PRAGMA foreign_keys = ON"))
     Base.metadata.create_all(bind=engine)
 
 
