@@ -1,6 +1,6 @@
 """Database engine, session factory, and initialisation."""
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from config import DATABASE_URL
 
@@ -17,7 +17,14 @@ class Base(DeclarativeBase):
 
 
 def init_db():
-    from models import User, Player, UserRoster, UserStats  # noqa: F401
+    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog  # noqa: F401
+    Base.metadata.create_all(bind=engine)
+
+
+def reset_db():
+    """Drop ALL tables and recreate. Destroys all data."""
+    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog  # noqa: F401
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
 

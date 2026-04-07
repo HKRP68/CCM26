@@ -492,6 +492,18 @@ def user_remove_player(user_id, roster_id):
 
 # ── Seed database ────────────────────────────────────────────────────
 
+@app.route("/reset-schema", methods=["POST"])
+@login_required
+def reset_schema():
+    try:
+        from database import reset_db
+        reset_db()
+        flash("Database schema reset! All tables recreated. You can now seed players.", "success")
+    except Exception as e:
+        flash(f"Reset failed: {e}", "error")
+    return redirect(url_for("seed_database"))
+
+
 @app.route("/seed", methods=["GET", "POST"])
 @login_required
 def seed_database():
