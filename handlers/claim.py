@@ -1,4 +1,4 @@
-"""Handler for /claim with 60s auto-retain/release timer."""
+"""Handler for /claim — 2-step: show card → Claim → Retain/Release/Replace."""
 
 import io
 import logging
@@ -11,77 +11,58 @@ from models import User, Player, UserRoster, UserStats
 from services.player_service import get_random_player_by_rarity, get_player_values
 from services.cooldown_service import check_cooldown, format_remaining
 from services.card_generator import generate_card
-from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value
-from services.activity_service import log_activity
 from services.card_text import format_player_card
+from services.activity_service import log_activity
+from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value
 
 logger = logging.getLogger(__name__)
+AUTO_TIMEOUT = 60
 
-AUTO_TIMEOUT = 60  # seconds
 
+# ── Auto-release after 60s ──────────────────────────────────────────
 
-async def _auto_resolve(context: ContextTypes.DEFAULT_TYPE):
-    """Called after 60s if user hasn't clicked Retain/Release."""
-    data = context.job.data
-    player_id = data["player_id"]
-    user_id = data["user_id"]
-    sell_val = data["sell_val"]
-    chat_id = data["chat_id"]
-    message_id = data["message_id"]
-
+async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
+    d = context.job.data
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
-        if not user:
+        user = session.query(User).get(d["user_id"])
+        player = session.query(Player).get(d["player_id"])
+        if not user or not player:
             return
-        player = session.query(Player).get(player_id)
-        name = player.name if player else "Unknown"
+        sell_val = d["sell_val"]
+        user.total_coins += sell_val
+        log_activity(session, user.id, "auto_release",
+                     f"Auto-released {player.name} (timeout)", coins_change=sell_val,
+                     player_name=player.name, player_rating=player.rating)
+        session.commit()
 
-        if user.roster_count < MAX_ROSTER:
-            # Auto-retain
-            entry = UserRoster(
-                user_id=user.id, player_id=player_id,
-                order_position=user.roster_count + 1,
-                acquired_date=datetime.utcnow(),
-            )
-            session.add(entry)
-            user.roster_count += 1
-            log_activity(session, user.id, "auto_retain",
-                         f"Auto-retained {name} (60s timeout)",
-                         player_name=name, player_rating=player.rating if player else 0)
-            session.commit()
-            result_text = f"⏰ Time's up! {name} auto-added to your roster."
-        else:
-            # Auto-release
-            user.total_coins += sell_val
-            log_activity(session, user.id, "auto_release",
-                         f"Auto-released {name} for {sell_val:,} (roster full, 60s timeout)",
-                         coins_change=sell_val, player_name=name,
-                         player_rating=player.rating if player else 0)
-            session.commit()
-            result_text = f"⏰ Time's up! Roster full — {name} auto-released.\n💰 +{sell_val:,} coins"
-
-        # Remove buttons
         try:
             await context.bot.edit_message_reply_markup(
-                chat_id=chat_id, message_id=message_id, reply_markup=None
-            )
+                chat_id=d["chat_id"], message_id=d["message_id"], reply_markup=None)
         except Exception:
             pass
-
-        await context.bot.send_message(chat_id=chat_id, text=result_text)
-
+        await context.bot.send_message(
+            chat_id=d["chat_id"],
+            text=f"⌛ <b>Time Expired</b>\n\nYou did not respond in time.\n"
+                 f"{player.name} has been released.\n💰 +{sell_val:,} coins",
+            parse_mode="HTML",
+        )
     except Exception:
         session.rollback()
-        logger.exception("Auto-resolve error")
+        logger.exception("Auto-release error")
     finally:
         session.close()
 
 
+def _cancel_timer(context, user_id):
+    for job in context.job_queue.get_jobs_by_name(f"claim_{user_id}"):
+        job.schedule_removal()
+
+
+# ── Step 1: /claim → show card + "Claim Player" button ─────────────
+
 async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
-    logger.info(f"/claim from user {tg_user.id}")
-
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
@@ -94,68 +75,89 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not ready:
             await update.message.reply_text(
                 f"⏳ Claim on cooldown. Try again in <b>{format_remaining(remaining)}</b>",
-                parse_mode="HTML",
-            )
+                parse_mode="HTML")
             return
 
         player = get_random_player_by_rarity(session)
         if not player:
-            await update.message.reply_text("⚠️ No players available. Contact admin.")
+            await update.message.reply_text("⚠️ No players available.")
             return
 
         buy_val, sell_val = get_player_values(player.rating)
-
         user.total_coins += CLAIM_COINS
         stats.last_claim = datetime.utcnow()
-        log_activity(session, user.id, "claim",
-                     f"Claimed {player.name} ({player.rating} OVR)",
-                     coins_change=CLAIM_COINS,
-                     player_name=player.name, player_rating=player.rating)
+        log_activity(session, user.id, "claim", f"Claimed {player.name} ({player.rating})",
+                     coins_change=CLAIM_COINS, player_name=player.name, player_rating=player.rating)
         session.commit()
 
-        text = (
-            "🎉 <b>New Player, Retain or Release!</b>\n\n"
-            + format_player_card(player) + "\n\n"
-            f"💰 +{CLAIM_COINS:,} coins added!\n"
-            f"⏰ Auto-decides in {AUTO_TIMEOUT}s"
-        )
+        text = format_player_card(player) + f"\n\n💰 +{CLAIM_COINS:,} coins added!"
 
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Retain", callback_data=f"retain_{player.id}_{user.id}"),
-            InlineKeyboardButton("❌ Release", callback_data=f"release_{player.id}_{user.id}_{sell_val}"),
+            InlineKeyboardButton("🔥 Claim Player", callback_data=f"claimlock_{player.id}_{user.id}_{sell_val}")
         ]])
 
         card_bytes = generate_card(player)
         if card_bytes:
-            msg = await update.message.reply_photo(
+            await update.message.reply_photo(
                 photo=io.BytesIO(card_bytes), caption=text,
-                parse_mode="HTML", reply_markup=keyboard,
-            )
+                parse_mode="HTML", reply_markup=keyboard)
         else:
-            msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-
-        # Schedule auto-resolve after 60s
-        job_name = f"claim_auto_{user.id}_{player.id}"
-        # Cancel any existing auto-resolve for this user
-        for job in context.job_queue.get_jobs_by_name(f"claim_auto_{user.id}"):
-            job.schedule_removal()
-
-        context.job_queue.run_once(
-            _auto_resolve, AUTO_TIMEOUT, name=job_name,
-            data={
-                "player_id": player.id, "user_id": user.id,
-                "sell_val": sell_val, "chat_id": msg.chat_id,
-                "message_id": msg.message_id,
-            },
-        )
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
     except Exception:
         session.rollback()
-        logger.exception(f"Claim error for user {tg_user.id}")
-        await update.message.reply_text("⚠️ Database error. Please try again later.")
+        logger.exception(f"Claim error")
+        await update.message.reply_text("⚠️ Error. Try again.")
     finally:
         session.close()
 
+
+# ── Step 2: "Claim Player" clicked → show Retain/Release/Replace ───
+
+async def claim_lock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tg_user = query.from_user
+
+    parts = query.data.split("_")  # claimlock_{pid}_{uid}_{sell}
+    player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
+
+    session = get_session()
+    try:
+        user = session.query(User).get(user_id)
+        if not user or user.telegram_id != tg_user.id:
+            return
+
+        player = session.query(Player).get(player_id)
+        if not player:
+            return
+
+        buttons = [
+            [InlineKeyboardButton("🟢 Retain", callback_data=f"retain_{player_id}_{user_id}")],
+            [InlineKeyboardButton("🔴 Release", callback_data=f"release_{player_id}_{user_id}_{sell_val}")],
+        ]
+        if user.roster_count >= MAX_ROSTER:
+            buttons.append([
+                InlineKeyboardButton("⚪ Replace", callback_data=f"replace_{player_id}_{user_id}_{sell_val}")
+            ])
+
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
+
+        # Start 60s timer
+        _cancel_timer(context, user_id)
+        msg = query.message
+        context.job_queue.run_once(
+            _auto_release, AUTO_TIMEOUT, name=f"claim_{user_id}",
+            data={"player_id": player_id, "user_id": user_id, "sell_val": sell_val,
+                  "chat_id": msg.chat_id, "message_id": msg.message_id})
+
+    except Exception:
+        logger.exception("Claim lock error")
+    finally:
+        session.close()
+
+
+# ── Retain ───────────────────────────────────────────────────────────
 
 async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -163,55 +165,62 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = query.from_user
 
     parts = query.data.split("_")
-    player_id = int(parts[1])
-    owner_user_id = int(parts[2])
+    player_id, user_id = int(parts[1]), int(parts[2])
 
     session = get_session()
     try:
-        user = session.query(User).get(owner_user_id)
+        user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
-            await query.edit_message_reply_markup(reply_markup=None)
             return
-
-        if user.roster_count >= MAX_ROSTER:
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.message.reply_text("❌ Roster full! Release players first.")
-            return
-
-        exists = session.query(UserRoster).filter(
-            UserRoster.user_id == user.id, UserRoster.player_id == player_id
-        ).first()
-
-        if not exists:
-            entry = UserRoster(
-                user_id=user.id, player_id=player_id,
-                order_position=user.roster_count + 1,
-                acquired_date=datetime.utcnow(),
-            )
-            session.add(entry)
-            user.roster_count += 1
 
         player = session.query(Player).get(player_id)
         name = player.name if player else "Unknown"
+        sell_val = get_sell_value(player.rating) if player else 0
 
+        if user.roster_count >= MAX_ROSTER:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                f"❌ <b>Claim Failed</b>\n\nYour squad is full (25/25).\n"
+                f"You must replace or release a player within 1 minute.\n\n"
+                f"/releasepl <playername>",
+                parse_mode="HTML")
+            return
+
+        entry = UserRoster(user_id=user.id, player_id=player_id,
+                           order_position=user.roster_count + 1,
+                           acquired_date=datetime.utcnow())
+        session.add(entry)
+        user.roster_count += 1
         log_activity(session, user.id, "retain", f"Retained {name}", player_name=name)
         session.commit()
 
+        _cancel_timer(context, user_id)
         await query.edit_message_reply_markup(reply_markup=None)
 
-        # Cancel auto-resolve job
-        for job in context.job_queue.get_jobs_by_name(f"claim_auto_{user.id}"):
-            job.schedule_removal()
-
-        username = tg_user.username or tg_user.first_name
-        await query.message.reply_text(f"✅ {name} Added to @{username}'s roster!")
+        await query.message.reply_text(
+            f"🎉 <b>Player Claimed Successfully!</b>\n\n"
+            f"🏏 {name} has been added to your squad.\n\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"👤 Type: {player.category}\n"
+            f"⭐ Rating: {player.rating}\n"
+            f"📊 Bat Rating: {player.bat_rating}\n"
+            f"📊 Bowl Rating: {player.bowl_rating}\n"
+            f"🏏 Bat: {player.bat_hand}\n"
+            f"🎯 Bowl: {player.bowl_style}\n\n"
+            f"Use /playerinfo {name}\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"✅ Your Squad Size: {user.roster_count}/25\n\n"
+            f"Use /myroster to view your updated squad.",
+            parse_mode="HTML")
 
     except Exception:
         session.rollback()
-        logger.exception(f"Retain error")
+        logger.exception("Retain error")
     finally:
         session.close()
 
+
+# ── Release ──────────────────────────────────────────────────────────
 
 async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -219,40 +228,136 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = query.from_user
 
     parts = query.data.split("_")
-    player_id = int(parts[1])
-    owner_user_id = int(parts[2])
-    sell_val = int(parts[3])
+    player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
 
     session = get_session()
     try:
-        user = session.query(User).get(owner_user_id)
+        user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
-            await query.edit_message_reply_markup(reply_markup=None)
             return
-
-        user.total_coins += sell_val
 
         player = session.query(Player).get(player_id)
         name = player.name if player else "Unknown"
+        username = tg_user.username or tg_user.first_name
 
-        log_activity(session, user.id, "release",
-                     f"Released {name} for {sell_val:,}",
+        user.total_coins += sell_val
+        log_activity(session, user.id, "release", f"Released {name} for {sell_val:,}",
                      coins_change=sell_val, player_name=name)
         session.commit()
 
+        _cancel_timer(context, user_id)
         await query.edit_message_reply_markup(reply_markup=None)
 
-        # Cancel auto-resolve job
-        for job in context.job_queue.get_jobs_by_name(f"claim_auto_{user.id}"):
-            job.schedule_removal()
-
-        username = tg_user.username or tg_user.first_name
         await query.message.reply_text(
-            f"🔄 {name} Released by @{username}\n💰 +{sell_val:,} coins added to purse"
-        )
+            f"🗑 <b>Player Released</b>\n\n"
+            f"{username} chose not to keep {name}.\n"
+            f"The player is now removed.\n"
+            f"💰 +{sell_val:,} coins added",
+            parse_mode="HTML")
 
     except Exception:
         session.rollback()
-        logger.exception(f"Release error")
+        logger.exception("Release error")
+    finally:
+        session.close()
+
+
+# ── Replace (squad full) ────────────────────────────────────────────
+
+async def replace_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show lowest-rated players as buttons to replace."""
+    query = update.callback_query
+    await query.answer()
+    tg_user = query.from_user
+
+    parts = query.data.split("_")  # replace_{new_pid}_{uid}_{sell}
+    new_player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
+
+    session = get_session()
+    try:
+        user = session.query(User).get(user_id)
+        if not user or user.telegram_id != tg_user.id:
+            return
+
+        # Get roster sorted by rating ascending (worst first)
+        roster = (
+            session.query(UserRoster, Player)
+            .join(Player, UserRoster.player_id == Player.id)
+            .filter(UserRoster.user_id == user.id)
+            .order_by(Player.rating.asc())
+            .limit(10)
+            .all()
+        )
+
+        if not roster:
+            await query.edit_message_reply_markup(reply_markup=None)
+            return
+
+        buttons = []
+        for entry, player in roster:
+            buttons.append([InlineKeyboardButton(
+                f"🔄 {player.name} ({player.rating} OVR)",
+                callback_data=f"repl_{new_player_id}_{entry.id}_{user_id}"
+            )])
+        buttons.append([InlineKeyboardButton("❌ Cancel (Release)", callback_data=f"release_{new_player_id}_{user_id}_{sell_val}")])
+
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
+
+    except Exception:
+        logger.exception("Replace callback error")
+    finally:
+        session.close()
+
+
+async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Replace a roster player with the new one."""
+    query = update.callback_query
+    await query.answer()
+    tg_user = query.from_user
+
+    parts = query.data.split("_")  # repl_{new_pid}_{old_roster_id}_{uid}
+    new_player_id, old_roster_id, user_id = int(parts[1]), int(parts[2]), int(parts[3])
+
+    session = get_session()
+    try:
+        user = session.query(User).get(user_id)
+        if not user or user.telegram_id != tg_user.id:
+            return
+
+        old_entry = session.query(UserRoster).filter(
+            UserRoster.id == old_roster_id, UserRoster.user_id == user.id).first()
+        if not old_entry:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("❌ Player no longer in roster")
+            return
+
+        old_player = session.query(Player).get(old_entry.player_id)
+        new_player = session.query(Player).get(new_player_id)
+
+        old_name = old_player.name if old_player else "Unknown"
+        new_name = new_player.name if new_player else "Unknown"
+
+        # Replace: update the roster entry's player_id
+        old_entry.player_id = new_player_id
+        old_entry.acquired_date = datetime.utcnow()
+
+        log_activity(session, user.id, "replace",
+                     f"Replaced {old_name} with {new_name}",
+                     player_name=new_name, player_rating=new_player.rating if new_player else 0)
+        session.commit()
+
+        _cancel_timer(context, user_id)
+        await query.edit_message_reply_markup(reply_markup=None)
+
+        await query.message.reply_text(
+            f"🔁 <b>Player Replaced!</b>\n\n"
+            f"⬅ Removed: {old_name}\n"
+            f"➡ Added: {new_name}\n\n"
+            f"✅ Squad Updated: {user.roster_count}/25",
+            parse_mode="HTML")
+
+    except Exception:
+        session.rollback()
+        logger.exception("Replace confirm error")
     finally:
         session.close()
