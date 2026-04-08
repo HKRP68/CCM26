@@ -15,15 +15,18 @@ from logger import setup_logging
 
 # Phase 1 handlers
 from handlers.debut import debut_handler
-from handlers.claim import claim_handler, retain_callback, release_callback as claim_release_callback
-from handlers.gspin import gspin_handler
-from handlers.daily import daily_handler
+from handlers.claim import (
+    claim_handler, claim_lock_callback, retain_callback,
+    release_callback, replace_callback, replace_confirm_callback,
+)
+from handlers.gspin import gspin_handler, gspin_spin_callback
+from handlers.daily import daily_handler, daily_claim_callback
 from handlers.myroster import myroster_handler, roster_page_callback
 from handlers.playerinfo import playerinfo_handler
 
 # Phase 2 handlers
 from handlers.release import (
-    release_handler, releasemultiple_handler,
+    releasepl_handler, releasemultiple_handler,
     release_confirm_callback, release_cancel_callback, release_dup_callback,
 )
 from handlers.trade import (
@@ -162,11 +165,10 @@ def main():
         app.add_handler(CommandHandler("daily", daily_handler))
         app.add_handler(CommandHandler("myroster", myroster_handler))
         app.add_handler(CommandHandler("playerinfo", playerinfo_handler))
-        app.add_handler(CommandHandler("release", release_handler))
+        app.add_handler(CommandHandler("releasepl", releasepl_handler))
+        app.add_handler(CommandHandler("release", releasepl_handler))
         app.add_handler(CommandHandler("releasemultiple", releasemultiple_handler))
         app.add_handler(CommandHandler("trade", trade_handler))
-
-        # Phase 3 commands
         app.add_handler(CommandHandler("pxi", playingxi_handler))
         app.add_handler(CommandHandler("playingxi", playingxi_handler))
         app.add_handler(CommandHandler("swapplayers", swapplayers_handler))
@@ -179,21 +181,28 @@ def main():
         app.add_handler(CommandHandler("purse", purse_handler))
         app.add_handler(CommandHandler("stats", stats_handler))
 
-        # ── Phase 1 callbacks ────────────────────────────────────────
+        # ── Claim flow callbacks ─────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(claim_lock_callback, pattern=r"^claimlock_"))
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
-        app.add_handler(CallbackQueryHandler(claim_release_callback, pattern=r"^release_"))
+        app.add_handler(CallbackQueryHandler(release_callback, pattern=r"^release_"))
+        app.add_handler(CallbackQueryHandler(replace_callback, pattern=r"^replace_"))
+        app.add_handler(CallbackQueryHandler(replace_confirm_callback, pattern=r"^repl_"))
 
-        # ── Phase 2 callbacks — roster ───────────────────────────────
-        app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
+        # ── Daily & GSpin callbacks ──────────────────────────────────
+        app.add_handler(CallbackQueryHandler(daily_claim_callback, pattern=r"^dailyclaim_"))
+        app.add_handler(CallbackQueryHandler(gspin_spin_callback, pattern=r"^gspin_"))
+
+        # ── Release callbacks ────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(release_confirm_callback, pattern=r"^rlconfirm_"))
         app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlcancel$"))
         app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
+        app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
 
-        # ── Phase 3 callbacks — buy ─────────────────────────────────
+        # ── Buy callbacks ────────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
         app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel$"))
 
-        # ── Phase 2 callbacks — trading ──────────────────────────────
+        # ── Trade callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
         app.add_handler(CallbackQueryHandler(trade_myplayer_callback, pattern=r"^tmypl_"))
         app.add_handler(CallbackQueryHandler(trade_theirplayer_callback, pattern=r"^tthpl_"))
