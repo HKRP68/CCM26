@@ -1,4 +1,4 @@
-"""Handler for /claim — 2-step: show card → Claim → Retain/Release/Replace."""
+"""Handler for /claim — 2-step with proper button removal and responses."""
 
 import io
 import logging
@@ -18,11 +18,31 @@ from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value
 logger = logging.getLogger(__name__)
 AUTO_TIMEOUT = 60
 
+# Track processed callbacks to prevent double-click
+_processed = set()
+
+
+def _mark_done(key: str) -> bool:
+    """Return True if already processed (double-click). Otherwise mark it."""
+    if key in _processed:
+        return True
+    _processed.add(key)
+    # Keep set from growing forever — trim old entries
+    if len(_processed) > 5000:
+        to_remove = list(_processed)[:2500]
+        for k in to_remove:
+            _processed.discard(k)
+    return False
+
 
 # ── Auto-release after 60s ──────────────────────────────────────────
 
 async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
     d = context.job.data
+    key = f"claim_{d['user_id']}_{d['player_id']}"
+    if _mark_done(key):
+        return  # already handled by button click
+
     session = get_session()
     try:
         user = session.query(User).get(d["user_id"])
@@ -36,17 +56,20 @@ async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
                      player_name=player.name, player_rating=player.rating)
         session.commit()
 
+        # Remove buttons
         try:
             await context.bot.edit_message_reply_markup(
                 chat_id=d["chat_id"], message_id=d["message_id"], reply_markup=None)
         except Exception:
             pass
+
         await context.bot.send_message(
             chat_id=d["chat_id"],
-            text=f"⌛ <b>Time Expired</b>\n\nYou did not respond in time.\n"
-                 f"{player.name} has been released.\n💰 +{sell_val:,} coins",
-            parse_mode="HTML",
-        )
+            text=(f"⌛ <b>Time Expired</b>\n\n"
+                  f"You did not respond in time.\n"
+                  f"{player.name} has been released.\n"
+                  f"💰 +{sell_val:,} coins added"),
+            parse_mode="HTML")
     except Exception:
         session.rollback()
         logger.exception("Auto-release error")
@@ -93,7 +116,8 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = format_player_card(player) + f"\n\n💰 +{CLAIM_COINS:,} coins added!"
 
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔥 Claim Player", callback_data=f"claimlock_{player.id}_{user.id}_{sell_val}")
+            InlineKeyboardButton("🔥 Claim Player",
+                                 callback_data=f"claimlock_{player.id}_{user.id}_{sell_val}")
         ]])
 
         card_bytes = generate_card(player)
@@ -106,13 +130,13 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception:
         session.rollback()
-        logger.exception(f"Claim error")
+        logger.exception("Claim error")
         await update.message.reply_text("⚠️ Error. Try again.")
     finally:
         session.close()
 
 
-# ── Step 2: "Claim Player" clicked → show Retain/Release/Replace ───
+# ── Step 2: "Claim Player" → show Retain/Release/Replace ───────────
 
 async def claim_lock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -122,18 +146,15 @@ async def claim_lock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     parts = query.data.split("_")  # claimlock_{pid}_{uid}_{sell}
     player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
 
+    # Only the owner can click
     session = get_session()
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
             return
 
-        player = session.query(Player).get(player_id)
-        if not player:
-            return
-
         buttons = [
-            [InlineKeyboardButton("🟢 Retain", callback_data=f"retain_{player_id}_{user_id}")],
+            [InlineKeyboardButton("🟢 Retain", callback_data=f"retain_{player_id}_{user_id}_{sell_val}")],
             [InlineKeyboardButton("🔴 Release", callback_data=f"release_{player_id}_{user_id}_{sell_val}")],
         ]
         if user.roster_count >= MAX_ROSTER:
@@ -141,7 +162,10 @@ async def claim_lock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 InlineKeyboardButton("⚪ Replace", callback_data=f"replace_{player_id}_{user_id}_{sell_val}")
             ])
 
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
+        except Exception:
+            pass
 
         # Start 60s timer
         _cancel_timer(context, user_id)
@@ -161,11 +185,26 @@ async def claim_lock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     tg_user = query.from_user
 
-    parts = query.data.split("_")
+    parts = query.data.split("_")  # retain_{pid}_{uid}_{sell}
     player_id, user_id = int(parts[1]), int(parts[2])
+    sell_val = int(parts[3]) if len(parts) > 3 else 0
+
+    # Double-click guard
+    key = f"claim_{user_id}_{player_id}"
+    if _mark_done(key):
+        await query.answer("Already processed!")
+        return
+    await query.answer()
+
+    # Remove buttons IMMEDIATELY
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    _cancel_timer(context, user_id)
 
     session = get_session()
     try:
@@ -174,18 +213,22 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         player = session.query(Player).get(player_id)
-        name = player.name if player else "Unknown"
-        sell_val = get_sell_value(player.rating) if player else 0
-
-        if user.roster_count >= MAX_ROSTER:
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.message.reply_text(
-                f"❌ <b>Claim Failed</b>\n\nYour squad is full (25/25).\n"
-                f"You must replace or release a player within 1 minute.\n\n"
-                f"/releasepl <playername>",
-                parse_mode="HTML")
+        if not player:
             return
 
+        name = player.name
+
+        if user.roster_count >= MAX_ROSTER:
+            await query.message.reply_text(
+                f"❌ <b>Claim Failed</b>\n\n"
+                f"Your squad is full (25/25).\n"
+                f"Use /releasepl <playername> to make space.",
+                parse_mode="HTML")
+            # Un-mark so they can try replace instead
+            _processed.discard(key)
+            return
+
+        # Check not already in roster from this claim
         entry = UserRoster(user_id=user.id, player_id=player_id,
                            order_position=user.roster_count + 1,
                            acquired_date=datetime.utcnow())
@@ -193,9 +236,6 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user.roster_count += 1
         log_activity(session, user.id, "retain", f"Retained {name}", player_name=name)
         session.commit()
-
-        _cancel_timer(context, user_id)
-        await query.edit_message_reply_markup(reply_markup=None)
 
         await query.message.reply_text(
             f"🎉 <b>Player Claimed Successfully!</b>\n\n"
@@ -206,11 +246,11 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 Bat Rating: {player.bat_rating}\n"
             f"📊 Bowl Rating: {player.bowl_rating}\n"
             f"🏏 Bat: {player.bat_hand}\n"
-            f"🎯 Bowl: {player.bowl_style}\n\n"
-            f"Use /playerinfo {name}\n"
+            f"🎯 Bowl: {player.bowl_style}\n"
             f"━━━━━━━━━━━━━━\n\n"
             f"✅ Your Squad Size: {user.roster_count}/25\n\n"
-            f"Use /myroster to view your updated squad.",
+            f"✦ Use /playerinfo {name}\n"
+            f"✦ Use /myroster to view your updated squad.",
             parse_mode="HTML")
 
     except Exception:
@@ -224,11 +264,25 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     tg_user = query.from_user
 
-    parts = query.data.split("_")
+    parts = query.data.split("_")  # release_{pid}_{uid}_{sell}
     player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
+
+    # Double-click guard
+    key = f"claim_{user_id}_{player_id}"
+    if _mark_done(key):
+        await query.answer("Already processed!")
+        return
+    await query.answer()
+
+    # Remove buttons IMMEDIATELY
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    _cancel_timer(context, user_id)
 
     session = get_session()
     try:
@@ -238,6 +292,8 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         player = session.query(Player).get(player_id)
         name = player.name if player else "Unknown"
+        rating = player.rating if player else 0
+        category = player.category if player else "Unknown"
         username = tg_user.username or tg_user.first_name
 
         user.total_coins += sell_val
@@ -245,14 +301,12 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      coins_change=sell_val, player_name=name)
         session.commit()
 
-        _cancel_timer(context, user_id)
-        await query.edit_message_reply_markup(reply_markup=None)
-
         await query.message.reply_text(
-            f"🗑 <b>Player Released</b>\n\n"
-            f"{username} chose not to keep {name}.\n"
-            f"The player is now removed.\n"
-            f"💰 +{sell_val:,} coins added",
+            f"🗑 <b>Player Successfully Released by @{username}</b>\n\n"
+            f"Player: {name}\n"
+            f"Rating: {rating} OVR\n"
+            f"Category: {category}\n\n"
+            f"💸 You received: {sell_val:,} 🪙",
             parse_mode="HTML")
 
     except Exception:
@@ -279,7 +333,6 @@ async def replace_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user or user.telegram_id != tg_user.id:
             return
 
-        # Get roster sorted by rating ascending (worst first)
         roster = (
             session.query(UserRoster, Player)
             .join(Player, UserRoster.player_id == Player.id)
@@ -290,7 +343,6 @@ async def replace_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if not roster:
-            await query.edit_message_reply_markup(reply_markup=None)
             return
 
         buttons = []
@@ -299,9 +351,15 @@ async def replace_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔄 {player.name} ({player.rating} OVR)",
                 callback_data=f"repl_{new_player_id}_{entry.id}_{user_id}"
             )])
-        buttons.append([InlineKeyboardButton("❌ Cancel (Release)", callback_data=f"release_{new_player_id}_{user_id}_{sell_val}")])
+        buttons.append([InlineKeyboardButton(
+            "❌ Cancel (Release instead)",
+            callback_data=f"release_{new_player_id}_{user_id}_{sell_val}"
+        )])
 
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
+        except Exception:
+            pass
 
     except Exception:
         logger.exception("Replace callback error")
@@ -312,13 +370,35 @@ async def replace_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Replace a roster player with the new one."""
     query = update.callback_query
-    await query.answer()
     tg_user = query.from_user
 
     parts = query.data.split("_")  # repl_{new_pid}_{old_roster_id}_{uid}
     new_player_id, old_roster_id, user_id = int(parts[1]), int(parts[2]), int(parts[3])
 
+    # Double-click guard
+    key = f"repl_{user_id}_{new_player_id}_{old_roster_id}"
+    if _mark_done(key):
+        await query.answer("Already processed!")
+        return
+    await query.answer()
+
+    # Remove buttons IMMEDIATELY
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Also mark the claim as done so timer doesn't fire
     session = get_session()
+    try:
+        new_player = session.query(Player).get(new_player_id)
+        if new_player:
+            _mark_done(f"claim_{user_id}_{new_player_id}")
+    except Exception:
+        pass
+
+    _cancel_timer(context, user_id)
+
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
@@ -327,7 +407,6 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
         old_entry = session.query(UserRoster).filter(
             UserRoster.id == old_roster_id, UserRoster.user_id == user.id).first()
         if not old_entry:
-            await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text("❌ Player no longer in roster")
             return
 
@@ -337,20 +416,15 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
         old_name = old_player.name if old_player else "Unknown"
         new_name = new_player.name if new_player else "Unknown"
 
-        # Replace: update the roster entry's player_id
         old_entry.player_id = new_player_id
         old_entry.acquired_date = datetime.utcnow()
 
-        log_activity(session, user.id, "replace",
-                     f"Replaced {old_name} with {new_name}",
+        log_activity(session, user.id, "replace", f"Replaced {old_name} with {new_name}",
                      player_name=new_name, player_rating=new_player.rating if new_player else 0)
         session.commit()
 
-        _cancel_timer(context, user_id)
-        await query.edit_message_reply_markup(reply_markup=None)
-
         await query.message.reply_text(
-            f"🔁 <b>Player Replaced!</b>\n\n"
+            f"🔁 <b>Player SUCCESSFULLY REPLACED!</b>\n\n"
             f"⬅ Removed: {old_name}\n"
             f"➡ Added: {new_name}\n\n"
             f"✅ Squad Updated: {user.roster_count}/25",
