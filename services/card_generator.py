@@ -1,4 +1,4 @@
-"""Generate premium horizontal player card images with Pillow."""
+"""Premium player card generator matching reference design."""
 
 import io
 import logging
@@ -7,40 +7,64 @@ from PIL import Image, ImageDraw, ImageFont
 logger = logging.getLogger(__name__)
 
 W, H = 700, 420
-BORDER = 3
 
-# ── Tier colours ────────────────────────────────────────────────────
+# ── Tier definitions from reference images ──────────────────────────
 TIERS = {
-    "ultimate":  {"border": "#ffd700", "bg1": "#1a1a1a", "bg2": "#000000", "accent": "#ffd700", "label": "ULTIMATE LEGEND"},
-    "legend":    {"border": "#6366f1", "bg1": "#0f172a", "bg2": "#1e1b4b", "accent": "#818cf8", "label": "LEGEND"},
-    "elite":     {"border": "#ef4444", "bg1": "#1a0505", "bg2": "#2d0a0a", "accent": "#f87171", "label": "ELITE"},
-    "rare":      {"border": "#10b981", "bg1": "#052e16", "bg2": "#064e3b", "accent": "#34d399", "label": "RARE"},
-    "super":     {"border": "#3b82f6", "bg1": "#0c1629", "bg2": "#1e3a5f", "accent": "#60a5fa", "label": "SUPER"},
-    "common":    {"border": "#06b6d4", "bg1": "#0c1a1f", "bg2": "#164e63", "accent": "#22d3ee", "label": "COMMON"},
-    "silver":    {"border": "#94a3b8", "bg1": "#1e293b", "bg2": "#334155", "accent": "#cbd5e1", "label": "SILVER"},
-    "bronze":    {"border": "#92400e", "bg1": "#422006", "bg2": "#451a03", "accent": "#92400e", "label": "BRONZE"},
+    "ultimate": {  # 95-100: Gold/dark olive
+        "bg": (35, 35, 18), "bg2": (22, 22, 8),
+        "border": (184, 150, 11), "accent": (255, 215, 0),
+        "cat_col": (200, 170, 50),
+    },
+    "legend": {  # 90-94: Dark navy/indigo
+        "bg": (15, 23, 42), "bg2": (30, 27, 75),
+        "border": (67, 56, 202), "accent": (129, 140, 248),
+        "cat_col": (129, 140, 248),
+    },
+    "epic": {  # 85-89: Purple
+        "bg": (75, 30, 150), "bg2": (55, 20, 120),
+        "border": (124, 58, 237), "accent": (167, 139, 250),
+        "cat_col": (190, 170, 240),
+    },
+    "rare": {  # 80-84: Chocolate/amber
+        "bg": (72, 40, 12), "bg2": (50, 26, 8),
+        "border": (184, 134, 11), "accent": (218, 165, 32),
+        "cat_col": (218, 165, 32),
+    },
+    "super": {  # 75-79: Dark brown/orange
+        "bg": (62, 33, 10), "bg2": (42, 22, 6),
+        "border": (160, 100, 30), "accent": (184, 115, 51),
+        "cat_col": (200, 150, 60),
+    },
+    "silver": {  # 60-74: Steel/slate
+        "bg": (55, 65, 81), "bg2": (31, 41, 55),
+        "border": (107, 114, 128), "accent": (148, 163, 184),
+        "cat_col": (148, 163, 184),
+    },
+    "bronze": {  # 50-59: Bronze/dark brown
+        "bg": (52, 28, 8), "bg2": (35, 18, 4),
+        "border": (120, 85, 20), "accent": (139, 105, 20),
+        "cat_col": (160, 120, 40),
+    },
 }
+
 
 def _get_tier(rating):
     if rating >= 95: return TIERS["ultimate"]
     if rating >= 90: return TIERS["legend"]
-    if rating >= 85: return TIERS["elite"]
+    if rating >= 85: return TIERS["epic"]
     if rating >= 80: return TIERS["rare"]
     if rating >= 75: return TIERS["super"]
-    if rating >= 70: return TIERS["common"]
     if rating >= 60: return TIERS["silver"]
     return TIERS["bronze"]
 
 
-# ── Country codes for flag ──────────────────────────────────────────
 COUNTRY_CODES = {
     "India": "IND", "Australia": "AUS", "England": "ENG", "Pakistan": "PAK",
     "South Africa": "SA", "New Zealand": "NZ", "Sri Lanka": "SL",
     "Bangladesh": "BAN", "Afghanistan": "AFG", "West Indies": "WI",
     "Zimbabwe": "ZIM", "Ireland": "IRE", "Netherlands": "NED",
     "Scotland": "SCO", "UAE": "UAE", "Nepal": "NEP", "USA": "USA",
-    "Canada": "CAN", "Kenya": "KEN", "Namibia": "NAM", "Oman": "OMN",
-    "Italy": "ITA", "Germany": "GER", "Japan": "JPN", "China": "CHN",
+    "Canada": "CAN", "Italy": "ITA", "Oman": "OMN", "Namibia": "NAM",
 }
 
 
@@ -57,143 +81,196 @@ def _font(size, bold=False):
     return ImageFont.load_default()
 
 
-def _hex_polygon(w, h, cut=0.04):
-    """Hexagonal card shape points."""
-    cx = int(w * cut)
-    cy = int(h * 0.12)
+def _draw_corner_brackets(draw, w, h, color, dot_color):
+    """Draw L-shaped corner brackets with dots like the reference."""
+    blen = 35  # bracket arm length
+    bw = 2     # bracket line width
+    m = 18     # margin from edge
+    dc = 4     # dot circle radius
+
+    # Top-left
+    draw.line([(m, m), (m + blen, m)], fill=color, width=bw)
+    draw.line([(m, m), (m, m + blen)], fill=color, width=bw)
+    draw.ellipse([m - dc, m - dc, m + dc, m + dc], fill=dot_color)
+
+    # Top-right
+    draw.line([(w - m, m), (w - m - blen, m)], fill=color, width=bw)
+    draw.line([(w - m, m), (w - m, m + blen)], fill=color, width=bw)
+    draw.ellipse([w - m - dc, m - dc, w - m + dc, m + dc], fill=dot_color)
+
+    # Bottom-left
+    draw.line([(m, h - m), (m + blen, h - m)], fill=color, width=bw)
+    draw.line([(m, h - m), (m, h - m - blen)], fill=color, width=bw)
+    draw.ellipse([m - dc, h - m - dc, m + dc, h - m + dc], fill=dot_color)
+
+    # Bottom-right
+    draw.line([(w - m, h - m), (w - m - blen, h - m)], fill=color, width=bw)
+    draw.line([(w - m, h - m), (w - m, h - m - blen)], fill=color, width=bw)
+    draw.ellipse([w - m - dc, h - m - dc, w - m + dc, h - m + dc], fill=dot_color)
+
+
+def _hex_shape(w, h, cut_x=28, cut_y=50):
+    """Card outline polygon — slightly clipped corners."""
     return [
-        (cx, 0), (w - cx, 0), (w, cy), (w, h - cy),
-        (w - cx, h), (cx, h), (0, h - cy), (0, cy),
+        (cut_x, 0), (w - cut_x, 0),
+        (w, cut_y), (w, h - cut_y),
+        (w - cut_x, h), (cut_x, h),
+        (0, h - cut_y), (0, cut_y),
     ]
 
 
+def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
+    """Draw text with a top-to-bottom color gradient."""
+    x, y = pos
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_h = bbox[3] - bbox[1]
+
+    # Create a temporary image for gradient text
+    tmp = Image.new("RGBA", (bbox[2] - bbox[0] + 10, text_h + 10), (0, 0, 0, 0))
+    tmp_draw = ImageDraw.Draw(tmp)
+    tmp_draw.text((0, 0), text, fill=top_color, font=font)
+
+    # Simple gradient: blend top and bottom colors
+    for row in range(text_h):
+        t = row / max(text_h - 1, 1)
+        r = int(top_color[0] * (1 - t) + bottom_color[0] * t)
+        g = int(top_color[1] * (1 - t) + bottom_color[1] * t)
+        b = int(top_color[2] * (1 - t) + bottom_color[2] * t)
+        for col in range(tmp.width):
+            px = tmp.getpixel((col, row))
+            if px[3] > 0:
+                tmp.putpixel((col, row), (r, g, b, px[3]))
+
+    return tmp, (x, y)
+
+
 def generate_card(player) -> bytes | None:
-    """Generate a premium horizontal card PNG. Returns bytes or None."""
+    """Generate a premium card PNG matching the reference design."""
     try:
-        # Read all attributes while player is accessible
-        name = player.name
-        rating = player.rating
-        category = player.category
-        country = player.country
-        bat_hand = player.bat_hand
-        bowl_style = player.bowl_style
-        bat_rating = player.bat_rating
-        bowl_rating = player.bowl_rating
+        # Read all attributes
+        name = str(player.name)
+        rating = int(player.rating)
+        category = str(player.category)
+        country = str(player.country)
+        bat_hand = str(player.bat_hand)
+        bowl_style = str(player.bowl_style)
+        bat_rating = int(player.bat_rating)
+        bowl_rating = int(player.bowl_rating)
 
         tier = _get_tier(rating)
-        border_col = tier["border"]
-        bg1 = tier["bg1"]
-        accent = tier["accent"]
-        label = tier["label"]
 
-        # ── Create canvas ───────────────────────────────────────────
-        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        # ── Canvas ──────────────────────────────────────────────────
+        img = Image.new("RGB", (W, H), (5, 5, 5))
         draw = ImageDraw.Draw(img)
 
-        # Outer shape (border colour)
-        poly = _hex_polygon(W, H)
-        draw.polygon(poly, fill=border_col)
+        # Background shape with gradient
+        shape = _hex_shape(W, H)
+        # Draw outer border shape
+        draw.polygon(shape, fill=tier["border"])
+        # Inner shape (3px inset)
+        inner = _hex_shape(W - 6, H - 6, cut_x=26, cut_y=48)
+        inner = [(x + 3, y + 3) for x, y in inner]
 
-        # Inner shape (dark background) — inset by BORDER
-        inner_poly = _hex_polygon(W - BORDER * 2, H - BORDER * 2)
-        inner_poly = [(x + BORDER, y + BORDER) for x, y in inner_poly]
-        draw.polygon(inner_poly, fill=bg1)
-
-        # Subtle gradient overlay
+        # Fill inner with gradient (top to bottom)
+        bg1, bg2 = tier["bg"], tier["bg2"]
         for y in range(H):
-            alpha = int(30 * (y / H))
-            draw.line([(BORDER, y), (W - BORDER, y)],
-                      fill=(255, 255, 255, alpha))
+            t = y / H
+            r = int(bg1[0] * (1 - t) + bg2[0] * t)
+            g = int(bg1[1] * (1 - t) + bg2[1] * t)
+            b = int(bg1[2] * (1 - t) + bg2[2] * t)
+            draw.line([(4, y), (W - 4, y)], fill=(r, g, b))
 
-        # ── LEFT SECTION: Rating + Country ──────────────────────────
-        lx = 55  # left margin
+        # Re-draw outer border lines only
+        draw.polygon(shape, outline=tier["border"], fill=None)
 
-        # Large OVR number
-        f_ovr = _font(90, bold=True)
-        draw.text((lx, 60), str(rating), fill="#ffffff", font=f_ovr)
+        # Corner brackets
+        _draw_corner_brackets(draw, W, H, tier["border"], tier["accent"])
+
+        # ── LEFT: OVR number (metallic gradient) ────────────────────
+        f_ovr = _font(110, bold=True)
+        ovr_text = str(rating)
+
+        gradient_top = (220, 220, 220)
+        gradient_bot = (140, 140, 140)
+        ovr_img, _ = _draw_gradient_text(draw, (0, 0), ovr_text, f_ovr, gradient_top, gradient_bot)
+        img.paste(ovr_img, (50, 50), ovr_img)
 
         # "OVR" label
         f_ovr_label = _font(14, bold=True)
-        draw.text((lx + 2, 155), "OVR", fill=(255, 255, 255, 150), font=f_ovr_label)
+        draw.text((55, 175), "O V R", fill=(255, 255, 255, 140), font=f_ovr_label)
 
         # Country code badge
         cc = COUNTRY_CODES.get(country, country[:3].upper())
-        f_cc = _font(16, bold=True)
-
-        # Country badge background
-        badge_y = 200
-        badge_w = 70
-        badge_h = 32
-        draw.rounded_rectangle(
-            [lx, badge_y, lx + badge_w, badge_y + badge_h],
-            radius=4, fill=accent)
-        # Center text in badge
+        f_cc = _font(18, bold=True)
+        badge_x, badge_y = 50, 220
+        draw.rounded_rectangle([badge_x, badge_y, badge_x + 80, badge_y + 45],
+                               radius=6, fill=(30, 50, 80))
+        draw.rounded_rectangle([badge_x + 1, badge_y + 1, badge_x + 79, badge_y + 44],
+                               radius=5, fill=(40, 60, 100))
         bbox = draw.textbbox((0, 0), cc, font=f_cc)
         tw = bbox[2] - bbox[0]
-        draw.text((lx + (badge_w - tw) // 2, badge_y + 6), cc, fill="#000000", font=f_cc)
+        draw.text((badge_x + (80 - tw) // 2, badge_y + 10), cc, fill=(255, 255, 255), font=f_cc)
 
-        # Tier label
-        f_tier = _font(10, bold=True)
-        draw.text((lx, 250), label, fill=accent, font=f_tier)
+        # ── RIGHT: Player name (large, bold, uppercase) ─────────────
+        rx = 230
+        f_name = _font(52, bold=True)
 
-        # ── RIGHT SECTION: Name + Ratings + Style ───────────────────
-        rx = 210  # right section start
+        # Split name into lines if too long
+        words = name.upper().split()
+        lines = []
+        current = ""
+        for w in words:
+            test = (current + " " + w).strip()
+            bbox = draw.textbbox((0, 0), test, font=f_name)
+            if bbox[2] - bbox[0] > 430:
+                if current:
+                    lines.append(current)
+                current = w
+            else:
+                current = test
+        if current:
+            lines.append(current)
 
-        # Player name (large, uppercase)
-        f_name = _font(36, bold=True)
-        # Truncate if too long
-        display_name = name.upper()
-        if len(display_name) > 18:
-            display_name = display_name[:17] + "…"
-        draw.text((rx, 35), display_name, fill="#ffffff", font=f_name)
+        name_y = 30
+        for line in lines[:2]:  # max 2 lines
+            draw.text((rx, name_y), line, fill=(255, 255, 255), font=f_name)
+            name_y += 58
 
-        # Category
-        f_cat = _font(11, bold=True)
-        draw.text((rx, 80), category.upper(), fill=accent, font=f_cat)
+        # Category (spaced uppercase)
+        cat_spaced = "  ".join(category.upper())
+        f_cat = _font(12, bold=True)
+        draw.text((rx, name_y + 5), cat_spaced, fill=tier["cat_col"], font=f_cat)
 
-        # ── Batting / Bowling ratings (large numbers) ───────────────
-        rating_y = 120
+        # ── Batting / Bowling ratings ───────────────────────────────
+        rating_y = name_y + 45
+        f_rat = _font(50, bold=True)
+        f_rat_label = _font(11, bold=True)
 
-        # Batting
-        f_rating_num = _font(42, bold=True)
-        f_rating_label = _font(10, bold=True)
-        draw.text((rx, rating_y), str(bat_rating), fill="#ffffff", font=f_rating_num)
-        draw.text((rx, rating_y + 48), "BATTING", fill=(255, 255, 255, 120), font=f_rating_label)
+        draw.text((rx, rating_y), str(bat_rating), fill=(255, 255, 255), font=f_rat)
+        draw.text((rx, rating_y + 56), "B A T T I N G", fill=(255, 255, 255, 120), font=f_rat_label)
 
-        # Bowling
-        bx = rx + 180
-        draw.text((bx, rating_y), str(bowl_rating), fill="#ffffff", font=f_rating_num)
-        draw.text((bx, rating_y + 48), "BOWLING", fill=(255, 255, 255, 120), font=f_rating_label)
+        draw.text((rx + 200, rating_y), str(bowl_rating), fill=(255, 255, 255), font=f_rat)
+        draw.text((rx + 200, rating_y + 56), "B O W L I N G", fill=(255, 255, 255, 120), font=f_rat_label)
 
-        # ── Divider line ────────────────────────────────────────────
-        div_y = 240
-        draw.line([(rx, div_y), (W - 50, div_y)], fill=(255, 255, 255, 30), width=1)
+        # ── Divider ─────────────────────────────────────────────────
+        div_y = rating_y + 90
+        draw.line([(rx, div_y), (W - 45, div_y)], fill=(255, 255, 255, 50), width=1)
 
         # ── Style info ──────────────────────────────────────────────
-        f_label = _font(10, bold=True)
-        f_val = _font(12, bold=True)
+        f_label = _font(11, bold=True)
+        f_val = _font(13, bold=True)
 
-        row_y = div_y + 15
-        # Batting Style
-        draw.text((rx, row_y), "BATTING STYLE", fill=(255, 255, 255, 100), font=f_label)
-        draw.text((rx + 280, row_y), f"{bat_hand}-hand bat", fill="#ffffff", font=f_val)
+        row_y = div_y + 18
+        draw.text((rx, row_y), "B A T T I N G   S T Y L E", fill=(255, 255, 255, 90), font=f_label)
+        draw.text((rx + 300, row_y), f"{bat_hand}-hand bat", fill=(255, 255, 255), font=f_val)
 
-        row_y += 30
-        # Bowling Style
-        draw.text((rx, row_y), "BOWLING STYLE", fill=(255, 255, 255, 100), font=f_label)
-        draw.text((rx + 280, row_y), bowl_style, fill="#ffffff", font=f_val)
+        row_y += 32
+        draw.text((rx, row_y), "B O W L I N G   S T Y L E", fill=(255, 255, 255, 90), font=f_label)
+        draw.text((rx + 300, row_y), bowl_style, fill=(255, 255, 255), font=f_val)
 
-        row_y += 30
-        # Country
-        draw.text((rx, row_y), "COUNTRY", fill=(255, 255, 255, 100), font=f_label)
-        draw.text((rx + 280, row_y), country, fill="#ffffff", font=f_val)
-
-        # ── Convert to RGB and export ───────────────────────────────
-        final = Image.new("RGB", (W, H), (5, 5, 5))
-        final.paste(img, (0, 0), img)
-
+        # ── Export ──────────────────────────────────────────────────
         buf = io.BytesIO()
-        final.save(buf, format="PNG", quality=95)
+        img.save(buf, format="PNG", quality=95)
         buf.seek(0)
         return buf.getvalue()
 
