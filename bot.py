@@ -16,7 +16,7 @@ from logger import setup_logging
 # Phase 1 handlers
 from handlers.debut import debut_handler
 from handlers.claim import (
-    claim_handler, claim_lock_callback, retain_callback,
+    claim_handler, retain_callback,
     release_callback, replace_callback, replace_confirm_callback,
 )
 from handlers.gspin import gspin_handler, gspin_spin_callback
@@ -182,7 +182,6 @@ def main():
         app.add_handler(CommandHandler("stats", stats_handler))
 
         # ── Claim flow callbacks ─────────────────────────────────────
-        app.add_handler(CallbackQueryHandler(claim_lock_callback, pattern=r"^claimlock_"))
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
         app.add_handler(CallbackQueryHandler(release_callback, pattern=r"^release_"))
         app.add_handler(CallbackQueryHandler(replace_callback, pattern=r"^replace_"))
