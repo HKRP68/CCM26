@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_user_roster(session: Session, user_id: int, page: int = 1, page_size: int = 10):
-    """Return paginated roster sorted by rating desc.
+    """Return paginated roster sorted by order_position (as added).
     Returns (entries_with_player, total_count, total_pages).
     """
     total = (
@@ -27,7 +27,7 @@ def get_user_roster(session: Session, user_id: int, page: int = 1, page_size: in
         session.query(UserRoster, Player)
         .join(Player, UserRoster.player_id == Player.id)
         .filter(UserRoster.user_id == user_id)
-        .order_by(Player.rating.desc(), Player.name)
+        .order_by(UserRoster.order_position.asc(), UserRoster.acquired_date.asc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
