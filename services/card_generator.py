@@ -1,23 +1,53 @@
-"""Generate player card images with Pillow."""
+"""Generate premium horizontal player card images with Pillow."""
 
 import io
 import logging
 from PIL import Image, ImageDraw, ImageFont
 
-from config import get_tier_colour, get_buy_value, get_sell_value
-
 logger = logging.getLogger(__name__)
 
-W, H = 480, 680
-MARGIN = 24
+W, H = 700, 420
+BORDER = 3
+
+# ── Tier colours ────────────────────────────────────────────────────
+TIERS = {
+    "ultimate":  {"border": "#ffd700", "bg1": "#1a1a1a", "bg2": "#000000", "accent": "#ffd700", "label": "ULTIMATE LEGEND"},
+    "legend":    {"border": "#6366f1", "bg1": "#0f172a", "bg2": "#1e1b4b", "accent": "#818cf8", "label": "LEGEND"},
+    "elite":     {"border": "#ef4444", "bg1": "#1a0505", "bg2": "#2d0a0a", "accent": "#f87171", "label": "ELITE"},
+    "rare":      {"border": "#10b981", "bg1": "#052e16", "bg2": "#064e3b", "accent": "#34d399", "label": "RARE"},
+    "super":     {"border": "#3b82f6", "bg1": "#0c1629", "bg2": "#1e3a5f", "accent": "#60a5fa", "label": "SUPER"},
+    "common":    {"border": "#06b6d4", "bg1": "#0c1a1f", "bg2": "#164e63", "accent": "#22d3ee", "label": "COMMON"},
+    "silver":    {"border": "#94a3b8", "bg1": "#1e293b", "bg2": "#334155", "accent": "#cbd5e1", "label": "SILVER"},
+    "bronze":    {"border": "#92400e", "bg1": "#422006", "bg2": "#451a03", "accent": "#92400e", "label": "BRONZE"},
+}
+
+def _get_tier(rating):
+    if rating >= 95: return TIERS["ultimate"]
+    if rating >= 90: return TIERS["legend"]
+    if rating >= 85: return TIERS["elite"]
+    if rating >= 80: return TIERS["rare"]
+    if rating >= 75: return TIERS["super"]
+    if rating >= 70: return TIERS["common"]
+    if rating >= 60: return TIERS["silver"]
+    return TIERS["bronze"]
 
 
-def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+# ── Country codes for flag ──────────────────────────────────────────
+COUNTRY_CODES = {
+    "India": "IND", "Australia": "AUS", "England": "ENG", "Pakistan": "PAK",
+    "South Africa": "SA", "New Zealand": "NZ", "Sri Lanka": "SL",
+    "Bangladesh": "BAN", "Afghanistan": "AFG", "West Indies": "WI",
+    "Zimbabwe": "ZIM", "Ireland": "IRE", "Netherlands": "NED",
+    "Scotland": "SCO", "UAE": "UAE", "Nepal": "NEP", "USA": "USA",
+    "Canada": "CAN", "Kenya": "KEN", "Namibia": "NAM", "Oman": "OMN",
+    "Italy": "ITA", "Germany": "GER", "Japan": "JPN", "China": "CHN",
+}
+
+
+def _font(size, bold=False):
     paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
         else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ]
     for p in paths:
         try:
@@ -27,111 +57,143 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def generate_card(player) -> bytes | None:
-    """Generate a PNG card image for a player. Returns bytes or None on failure."""
-    try:
-        tier_name, tier_colour, tier_bg = get_tier_colour(player.rating)
-        buy_val = get_buy_value(player.rating)
-        sell_val = get_sell_value(player.rating)
+def _hex_polygon(w, h, cut=0.04):
+    """Hexagonal card shape points."""
+    cx = int(w * cut)
+    cy = int(h * 0.12)
+    return [
+        (cx, 0), (w - cx, 0), (w, cy), (w, h - cy),
+        (w - cx, h), (cx, h), (0, h - cy), (0, cy),
+    ]
 
-        img = Image.new("RGB", (W, H), "#1a1a2e")
+
+def generate_card(player) -> bytes | None:
+    """Generate a premium horizontal card PNG. Returns bytes or None."""
+    try:
+        # Read all attributes while player is accessible
+        name = player.name
+        rating = player.rating
+        category = player.category
+        country = player.country
+        bat_hand = player.bat_hand
+        bowl_style = player.bowl_style
+        bat_rating = player.bat_rating
+        bowl_rating = player.bowl_rating
+
+        tier = _get_tier(rating)
+        border_col = tier["border"]
+        bg1 = tier["bg1"]
+        accent = tier["accent"]
+        label = tier["label"]
+
+        # ── Create canvas ───────────────────────────────────────────
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
-        f_title = _get_font(22, bold=True)
-        f_rating_big = _get_font(52, bold=True)
-        f_label = _get_font(14, bold=True)
-        f_value = _get_font(16)
-        f_tier = _get_font(13, bold=True)
-        f_small = _get_font(12)
+        # Outer shape (border colour)
+        poly = _hex_polygon(W, H)
+        draw.polygon(poly, fill=border_col)
 
-        # Top accent bar
-        draw.rectangle([0, 0, W, 6], fill=tier_colour)
+        # Inner shape (dark background) — inset by BORDER
+        inner_poly = _hex_polygon(W - BORDER * 2, H - BORDER * 2)
+        inner_poly = [(x + BORDER, y + BORDER) for x, y in inner_poly]
+        draw.polygon(inner_poly, fill=bg1)
 
-        # Tier badge
-        draw.rounded_rectangle([MARGIN, 18, MARGIN + 110, 42], radius=4, fill=tier_colour)
-        draw.text((MARGIN + 8, 20), tier_name, fill="#ffffff", font=f_tier)
+        # Subtle gradient overlay
+        for y in range(H):
+            alpha = int(30 * (y / H))
+            draw.line([(BORDER, y), (W - BORDER, y)],
+                      fill=(255, 255, 255, alpha))
 
-        # Rating circle
-        cx, cy, cr = W - 70, 60, 42
-        draw.ellipse([cx - cr, cy - cr, cx + cr, cy + cr], fill=tier_colour)
-        rating_text = str(player.rating)
-        bbox = draw.textbbox((0, 0), rating_text, font=f_rating_big)
+        # ── LEFT SECTION: Rating + Country ──────────────────────────
+        lx = 55  # left margin
+
+        # Large OVR number
+        f_ovr = _font(90, bold=True)
+        draw.text((lx, 60), str(rating), fill="#ffffff", font=f_ovr)
+
+        # "OVR" label
+        f_ovr_label = _font(14, bold=True)
+        draw.text((lx + 2, 155), "OVR", fill=(255, 255, 255, 150), font=f_ovr_label)
+
+        # Country code badge
+        cc = COUNTRY_CODES.get(country, country[:3].upper())
+        f_cc = _font(16, bold=True)
+
+        # Country badge background
+        badge_y = 200
+        badge_w = 70
+        badge_h = 32
+        draw.rounded_rectangle(
+            [lx, badge_y, lx + badge_w, badge_y + badge_h],
+            radius=4, fill=accent)
+        # Center text in badge
+        bbox = draw.textbbox((0, 0), cc, font=f_cc)
         tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        draw.text((cx - tw // 2, cy - th // 2 - 4), rating_text, fill="#ffffff", font=f_rating_big)
-        draw.text((cx - 12, cy + cr - 8), "OVR", fill="#ffffff", font=f_small)
+        draw.text((lx + (badge_w - tw) // 2, badge_y + 6), cc, fill="#000000", font=f_cc)
 
-        # Player name
-        name_y = 60
-        draw.text((MARGIN, name_y), player.name, fill="#ffffff", font=f_title)
+        # Tier label
+        f_tier = _font(10, bold=True)
+        draw.text((lx, 250), label, fill=accent, font=f_tier)
 
-        # Country & Category
-        sub = f"{player.country}  |  {player.category}"
-        draw.text((MARGIN, name_y + 30), sub, fill="#aaaaaa", font=f_value)
+        # ── RIGHT SECTION: Name + Ratings + Style ───────────────────
+        rx = 210  # right section start
 
-        # Divider
-        div_y = 120
-        draw.line([(MARGIN, div_y), (W - MARGIN, div_y)], fill="#333355", width=1)
+        # Player name (large, uppercase)
+        f_name = _font(36, bold=True)
+        # Truncate if too long
+        display_name = name.upper()
+        if len(display_name) > 18:
+            display_name = display_name[:17] + "…"
+        draw.text((rx, 35), display_name, fill="#ffffff", font=f_name)
 
-        # Silhouette placeholder
-        sil_y = 130
-        draw.rounded_rectangle([MARGIN, sil_y, W - MARGIN, sil_y + 180], radius=12, fill="#16213e")
-        # Cricket icon text
-        icon_font = _get_font(18, bold=True)
-        draw.text((W // 2 - 60, sil_y + 70), "CRICKET", fill="#333355", font=_get_font(28, bold=True))
-        draw.text((W // 2 - 50, sil_y + 105), "SIMULATOR", fill="#333355", font=icon_font)
+        # Category
+        f_cat = _font(11, bold=True)
+        draw.text((rx, 80), category.upper(), fill=accent, font=f_cat)
 
-        # Stats grid
-        grid_y = 330
-        draw.rounded_rectangle([MARGIN, grid_y, W - MARGIN, grid_y + 160], radius=10, fill="#16213e")
+        # ── Batting / Bowling ratings (large numbers) ───────────────
+        rating_y = 120
 
-        col1, col2 = MARGIN + 16, W // 2 + 16
-        row_h = 26
-        stats_left = [
-            ("BAT HAND", player.bat_hand),
-            ("BOWL STYLE", player.bowl_style),
-            ("BAT AVG", f"{player.bat_avg:.1f}"),
-            ("STRIKE RATE", f"{player.strike_rate:.1f}"),
-            ("RUNS", f"{player.runs:,}"),
-            ("CENTURIES", str(player.centuries)),
-        ]
-        stats_right = [
-            ("BOWL HAND", player.bowl_hand),
-            ("BAT RTG", str(player.bat_rating)),
-            ("BOWL AVG", f"{player.bowl_avg:.1f}"),
-            ("ECONOMY", f"{player.economy:.1f}"),
-            ("WICKETS", f"{player.wickets:,}"),
-            ("BOWL RTG", str(player.bowl_rating)),
-        ]
+        # Batting
+        f_rating_num = _font(42, bold=True)
+        f_rating_label = _font(10, bold=True)
+        draw.text((rx, rating_y), str(bat_rating), fill="#ffffff", font=f_rating_num)
+        draw.text((rx, rating_y + 48), "BATTING", fill=(255, 255, 255, 120), font=f_rating_label)
 
-        for i, (lbl, val) in enumerate(stats_left):
-            y = grid_y + 10 + i * row_h
-            draw.text((col1, y), lbl, fill="#888888", font=f_small)
-            draw.text((col1 + 100, y), str(val), fill="#ffffff", font=f_value)
+        # Bowling
+        bx = rx + 180
+        draw.text((bx, rating_y), str(bowl_rating), fill="#ffffff", font=f_rating_num)
+        draw.text((bx, rating_y + 48), "BOWLING", fill=(255, 255, 255, 120), font=f_rating_label)
 
-        for i, (lbl, val) in enumerate(stats_right):
-            y = grid_y + 10 + i * row_h
-            draw.text((col2, y), lbl, fill="#888888", font=f_small)
-            draw.text((col2 + 100, y), str(val), fill="#ffffff", font=f_value)
+        # ── Divider line ────────────────────────────────────────────
+        div_y = 240
+        draw.line([(rx, div_y), (W - 50, div_y)], fill=(255, 255, 255, 30), width=1)
 
-        # Value bar
-        val_y = 510
-        draw.rounded_rectangle([MARGIN, val_y, W - MARGIN, val_y + 50], radius=8, fill="#0f3460")
-        draw.text((MARGIN + 12, val_y + 8), "BUY", fill="#888888", font=f_small)
-        draw.text((MARGIN + 12, val_y + 24), f"{buy_val:,}", fill="#f1c40f", font=f_value)
-        draw.text((W // 2 + 12, val_y + 8), "SELL", fill="#888888", font=f_small)
-        draw.text((W // 2 + 12, val_y + 24), f"{sell_val:,}", fill="#2ecc71", font=f_value)
+        # ── Style info ──────────────────────────────────────────────
+        f_label = _font(10, bold=True)
+        f_val = _font(12, bold=True)
 
-        # Version footer
-        foot_y = 580
-        draw.text((MARGIN, foot_y), f"Version: {player.version}", fill="#555555", font=f_small)
-        draw.text((MARGIN, foot_y + 18), "Cricket Simulator Bot", fill="#333355", font=f_small)
+        row_y = div_y + 15
+        # Batting Style
+        draw.text((rx, row_y), "BATTING STYLE", fill=(255, 255, 255, 100), font=f_label)
+        draw.text((rx + 280, row_y), f"{bat_hand}-hand bat", fill="#ffffff", font=f_val)
 
-        # Bottom accent bar
-        draw.rectangle([0, H - 4, W, H], fill=tier_colour)
+        row_y += 30
+        # Bowling Style
+        draw.text((rx, row_y), "BOWLING STYLE", fill=(255, 255, 255, 100), font=f_label)
+        draw.text((rx + 280, row_y), bowl_style, fill="#ffffff", font=f_val)
+
+        row_y += 30
+        # Country
+        draw.text((rx, row_y), "COUNTRY", fill=(255, 255, 255, 100), font=f_label)
+        draw.text((rx + 280, row_y), country, fill="#ffffff", font=f_val)
+
+        # ── Convert to RGB and export ───────────────────────────────
+        final = Image.new("RGB", (W, H), (5, 5, 5))
+        final.paste(img, (0, 0), img)
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG", quality=95)
+        final.save(buf, format="PNG", quality=95)
         buf.seek(0)
         return buf.getvalue()
 
