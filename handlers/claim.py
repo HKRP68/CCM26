@@ -1,4 +1,4 @@
-"""Handler for /claim — direct Retain/Release/Replace buttons."""
+"""Handler for /claim — robust version with separated concerns."""
 
 import io
 import logging
@@ -31,8 +31,12 @@ def _is_done(key):
 
 
 def _cancel_timer(context, user_id):
-    for job in context.job_queue.get_jobs_by_name(f"claim_{user_id}"):
-        job.schedule_removal()
+    try:
+        if context.job_queue:
+            for job in context.job_queue.get_jobs_by_name(f"claim_{user_id}"):
+                job.schedule_removal()
+    except Exception:
+        pass
 
 
 async def _remove_buttons(query):
@@ -43,7 +47,10 @@ async def _remove_buttons(query):
 
 
 async def _send(context, chat_id, text):
-    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+    except Exception as e:
+        logger.exception(f"Failed to send message to {chat_id}")
 
 
 # ── Auto-release after 60s ──────────────────────────────────────────
@@ -73,13 +80,11 @@ async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        await context.bot.send_message(
-            chat_id=d["chat_id"],
-            text=(f"⌛ <b>Time Expired</b>\n\n"
-                  f"🏏 {player.name} has been released.\n"
-                  f"{player.name}, {player.rating} OVR\n"
-                  f"💰 +{sell_val:,} coins added"),
-            parse_mode="HTML")
+        await _send(context, d["chat_id"],
+                    f"⌛ <b>Time Expired</b>\n\n"
+                    f"🏏 {player.name} has been released.\n"
+                    f"{player.name}, {player.rating} OVR\n"
+                    f"💰 +{sell_val:,} coins added")
     except Exception:
         session.rollback()
         logger.exception("Auto-release error")
@@ -87,10 +92,13 @@ async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
-# ── /claim — show card + Retain/Release/Replace directly ────────────
+# ── /claim ───────────────────────────────────────────────────────────
 
 async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    # ── Step 1: DB work ──────────────────────────────────────────
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
@@ -111,48 +119,83 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ No players available.")
             return
 
-        buy_val, sell_val = get_player_values(player.rating)
+        # Save player info before committing
+        player_id = player.id
+        player_name = player.name
+        player_rating = player.rating
+        player_category = player.category
+        player_bat_hand = player.bat_hand
+        player_bowl_hand = player.bowl_hand
+        player_bowl_style = player.bowl_style
+        player_bat_rating = player.bat_rating
+        player_bowl_rating = player.bowl_rating
+        player_country = player.country
+        player_version = player.version
+        roster_count = user.roster_count
+        user_id = user.id
+
+        buy_val, sell_val = get_player_values(player_rating)
+
         user.total_coins += CLAIM_COINS
         stats.last_claim = datetime.utcnow()
-        log_activity(session, user.id, "claim", f"Claimed {player.name} ({player.rating})",
-                     coins_change=CLAIM_COINS, player_name=player.name, player_rating=player.rating)
+        log_activity(session, user.id, "claim", f"Claimed {player_name} ({player_rating})",
+                     coins_change=CLAIM_COINS, player_name=player_name, player_rating=player_rating)
         session.commit()
-
-        text = format_player_card(player) + f"\n\n💰 +{CLAIM_COINS:,} coins added!"
-
-        # Show buttons directly
-        buttons = [
-            [InlineKeyboardButton("🟢 Retain", callback_data=f"retain_{player.id}_{user.id}_{sell_val}")],
-            [InlineKeyboardButton("🔴 Release", callback_data=f"release_{player.id}_{user.id}_{sell_val}")],
-        ]
-        if user.roster_count >= MAX_ROSTER:
-            buttons.append([
-                InlineKeyboardButton("⚪ Replace", callback_data=f"replace_{player.id}_{user.id}_{sell_val}")
-            ])
-
-        keyboard = InlineKeyboardMarkup(buttons)
-
-        card_bytes = generate_card(player)
-        if card_bytes:
-            msg = await update.message.reply_photo(
-                photo=io.BytesIO(card_bytes), caption=text,
-                parse_mode="HTML", reply_markup=keyboard)
-        else:
-            msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-
-        # Start 60s auto-release timer
-        _cancel_timer(context, user.id)
-        context.job_queue.run_once(
-            _auto_release, AUTO_TIMEOUT, name=f"claim_{user.id}",
-            data={"player_id": player.id, "user_id": user.id, "sell_val": sell_val,
-                  "chat_id": msg.chat_id, "message_id": msg.message_id})
-
     except Exception:
         session.rollback()
-        logger.exception("Claim error")
-        await update.message.reply_text("⚠️ Error. Try again.")
+        logger.exception("Claim DB error")
+        await update.message.reply_text("⚠️ Database error. Try again.")
+        return
     finally:
         session.close()
+
+    # ── Step 2: Build text and buttons ───────────────────────────
+    text = format_player_card(player) + f"\n\n💰 +{CLAIM_COINS:,} coins added!"
+
+    buttons = [
+        [InlineKeyboardButton("🟢 Retain", callback_data=f"retain_{player_id}_{user_id}_{sell_val}")],
+        [InlineKeyboardButton("🔴 Release", callback_data=f"release_{player_id}_{user_id}_{sell_val}")],
+    ]
+    if roster_count >= MAX_ROSTER:
+        buttons.append([
+            InlineKeyboardButton("⚪ Replace", callback_data=f"replace_{player_id}_{user_id}_{sell_val}")
+        ])
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    # ── Step 3: Send message ────────────────────────────────────
+    msg = None
+    try:
+        card_bytes = generate_card(player)
+        if card_bytes:
+            # Send photo with SHORT caption, then buttons as separate message
+            await update.message.reply_photo(
+                photo=io.BytesIO(card_bytes),
+                caption=f"📛 <b>{player_name}</b> — {player_rating} OVR | {player_category}",
+                parse_mode="HTML")
+            # Send full text + buttons as text message
+            msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception:
+        logger.exception("Claim send error")
+        # Try text-only fallback
+        try:
+            msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        except Exception:
+            logger.exception("Claim text fallback also failed")
+            return
+
+    # ── Step 4: Schedule timer (optional — claim works even if this fails)
+    if msg:
+        try:
+            _cancel_timer(context, user_id)
+            if context.job_queue:
+                context.job_queue.run_once(
+                    _auto_release, AUTO_TIMEOUT, name=f"claim_{user_id}",
+                    data={"player_id": player_id, "user_id": user_id, "sell_val": sell_val,
+                          "chat_id": chat_id, "message_id": msg.message_id})
+        except Exception:
+            logger.warning(f"Job queue not available — no auto-release timer for user {user_id}")
 
 
 # ── 🟢 Retain ────────────────────────────────────────────────────────
