@@ -334,19 +334,16 @@ async def trade_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]),
         )
 
-        # Send notification to receiver via bot
+        # Send Accept/Reject in same chat (works in groups and DMs)
         buy_val = get_buy_value(init_p.rating)
         recv_text = (
-            f"📬 <b>INCOMING TRADE OFFER FROM</b> @{user.username}!\n\n"
-            f"➡️  They offer: {init_p.name} - {init_p.rating} OVR\n"
-            f"💰 Buy Value: {buy_val:,} 🪙\n"
-            f"💳 Trade Fee (5%): {fee:,} 🪙\n\n"
-            f"⬅️  They want: {recv_p.name} - {recv_p.rating} OVR\n"
-            f"💰 Buy Value: {buy_val:,} 🪙\n"
-            f"💳 Trade Fee (5%): {fee:,} 🪙\n\n"
-            f"🔄 Fair Trade: ✅ Yes (Same rating)\n\n"
-            f"💸 Your cost: {fee:,} 🪙\n"
-            f"⏳ Expires in: {TRADE_EXPIRES_SECONDS} seconds"
+            f"📬 <b>INCOMING TRADE OFFER!</b>\n\n"
+            f"From: @{user.username} → To: @{target.username}\n\n"
+            f"➡️  Offering: {init_p.name} - {init_p.rating} OVR\n"
+            f"⬅️  Wants: {recv_p.name} - {recv_p.rating} OVR\n"
+            f"💳 Trade Fee: {fee:,} 🪙 (5% from both)\n\n"
+            f"⏳ Expires in: {TRADE_EXPIRES_SECONDS} seconds\n\n"
+            f"@{target.username} tap below to respond:"
         )
 
         recv_keyboard = InlineKeyboardMarkup([
@@ -356,15 +353,14 @@ async def trade_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
         ])
 
-        try:
-            await context.bot.send_message(
-                chat_id=target.telegram_id,
-                text=recv_text,
-                parse_mode="HTML",
-                reply_markup=recv_keyboard,
-            )
-        except Exception:
-            logger.warning(f"Could not DM receiver {target.telegram_id} — they may need to start the bot first")
+        # Send in same chat
+        chat_id = query.message.chat_id
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=recv_text,
+            parse_mode="HTML",
+            reply_markup=recv_keyboard,
+        )
 
     except Exception:
         session.rollback()
@@ -405,30 +401,14 @@ async def trade_accept_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # Notify receiver (the one who clicked accept)
         await query.edit_message_text(
             f"✅ <b>TRADE COMPLETED!</b>\n\n"
-            f"With: @{initiator.username}\n\n"
-            f"✅ You gave: {recv_p.name} - {recv_p.rating} OVR\n"
-            f"✅ You received: {init_p.name} - {init_p.rating} OVR\n\n"
-            f"💸 Trade Fee Paid: {fee:,} 🪙\n"
-            f"💰 New Balance: {receiver.total_coins:,}",
+            f"@{receiver.username} ↔ @{initiator.username}\n\n"
+            f"✅ @{receiver.username} gave: {recv_p.name} - {recv_p.rating} OVR\n"
+            f"✅ @{initiator.username} gave: {init_p.name} - {init_p.rating} OVR\n\n"
+            f"💸 Trade Fee: {fee:,} 🪙 from each\n"
+            f"💰 @{receiver.username} Balance: {receiver.total_coins:,}\n"
+            f"💰 @{initiator.username} Balance: {initiator.total_coins:,}",
             parse_mode="HTML",
         )
-
-        # Notify initiator
-        try:
-            await context.bot.send_message(
-                chat_id=initiator.telegram_id,
-                text=(
-                    f"✅ <b>TRADE COMPLETED!</b>\n\n"
-                    f"With: @{receiver.username}\n\n"
-                    f"✅ You gave: {init_p.name} - {init_p.rating} OVR\n"
-                    f"✅ You received: {recv_p.name} - {recv_p.rating} OVR\n\n"
-                    f"💸 Trade Fee Paid: {fee:,} 🪙\n"
-                    f"💰 New Balance: {initiator.total_coins:,}"
-                ),
-                parse_mode="HTML",
-            )
-        except Exception:
-            logger.warning(f"Could not DM initiator {initiator.telegram_id}")
 
     except Exception:
         session.rollback()
@@ -460,21 +440,8 @@ async def trade_reject_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         trade = result["trade"]
         is_initiator = trade.initiator_id == user.id
-        other_id = trade.receiver_id if is_initiator else trade.initiator_id
-
         action = "cancelled" if is_initiator else "rejected"
-        await query.edit_message_text(f"❌ Trade {action}.")
-
-        # Notify the other party
-        other_user = session.query(User).get(other_id)
-        if other_user:
-            try:
-                await context.bot.send_message(
-                    chat_id=other_user.telegram_id,
-                    text=f"❌ Trade was {action} by @{user.username}.",
-                )
-            except Exception:
-                pass
+        await query.edit_message_text(f"❌ Trade {action} by @{user.username}.")
 
     except Exception:
         session.rollback()
