@@ -51,6 +51,7 @@ from handlers.match import (
     opener1_callback, opener2_callback, select_bowler_callback,
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
+    endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,8 @@ async def start_handler(update, context):
         "/release [name] - Release for coins\n"
         "/releasemultiple - Release duplicates\n"
         "/trade @user - Trade players\n"
-        "/playmatch @user - Play a match",
+        "/playmatch @user - Play a match\n"
+        "/endmatch - End match (fine applies)",
         parse_mode="HTML",
     )
 
@@ -193,6 +195,7 @@ def main():
         app.add_handler(CommandHandler("purse", purse_handler))
         app.add_handler(CommandHandler("stats", stats_handler))
         app.add_handler(CommandHandler("playmatch", playmatch_handler))
+        app.add_handler(CommandHandler("endmatch", endmatch_handler))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
@@ -227,6 +230,8 @@ def main():
         app.add_handler(CallbackQueryHandler(shot_callback, pattern=r"^bshot_"))
         app.add_handler(CallbackQueryHandler(new_over_bowler_callback, pattern=r"^nbowl_"))
         app.add_handler(CallbackQueryHandler(new_batsman_callback, pattern=r"^newbat_"))
+        app.add_handler(CallbackQueryHandler(endmatch_yes_callback, pattern=r"^endmatch_"))
+        app.add_handler(CallbackQueryHandler(endmatch_no_callback, pattern=r"^endmatchno_"))
 
         # ── Trade callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
