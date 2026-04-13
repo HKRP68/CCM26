@@ -7,6 +7,8 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
+    MessageHandler,
+    filters,
 )
 
 from config import BOT_TOKEN
@@ -42,6 +44,15 @@ from handlers.search import searchpl_handler, searchovr_handler
 from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback
 from handlers.team import teamname_handler, purse_handler, stats_handler
 
+# Match handlers
+from handlers.match import (
+    playmatch_handler, match_accept_callback, match_deny_callback,
+    overs_text_handler, toss_decision_callback,
+    opener1_callback, opener2_callback, select_bowler_callback,
+    variation_callback, length_callback, spinner_delivery_callback,
+    shot_callback, new_over_bowler_callback,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +78,8 @@ async def start_handler(update, context):
         "/purse - Check balance\n"
         "/release [name] - Release for coins\n"
         "/releasemultiple - Release duplicates\n"
-        "/trade @user - Trade players",
+        "/trade @user - Trade players\n"
+        "/playmatch @user - Play a match",
         parse_mode="HTML",
     )
 
@@ -180,6 +192,7 @@ def main():
         app.add_handler(CommandHandler("teamname", teamname_handler))
         app.add_handler(CommandHandler("purse", purse_handler))
         app.add_handler(CommandHandler("stats", stats_handler))
+        app.add_handler(CommandHandler("playmatch", playmatch_handler))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
@@ -201,6 +214,19 @@ def main():
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
         app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel$"))
 
+        # ── Match callbacks ──────────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
+        app.add_handler(CallbackQueryHandler(match_deny_callback, pattern=r"^matchdeny_"))
+        app.add_handler(CallbackQueryHandler(toss_decision_callback, pattern=r"^toss_"))
+        app.add_handler(CallbackQueryHandler(opener1_callback, pattern=r"^op1_"))
+        app.add_handler(CallbackQueryHandler(opener2_callback, pattern=r"^op2_"))
+        app.add_handler(CallbackQueryHandler(select_bowler_callback, pattern=r"^selbowl_"))
+        app.add_handler(CallbackQueryHandler(variation_callback, pattern=r"^bvar_"))
+        app.add_handler(CallbackQueryHandler(length_callback, pattern=r"^blen_"))
+        app.add_handler(CallbackQueryHandler(spinner_delivery_callback, pattern=r"^bspin_"))
+        app.add_handler(CallbackQueryHandler(shot_callback, pattern=r"^bshot_"))
+        app.add_handler(CallbackQueryHandler(new_over_bowler_callback, pattern=r"^nbowl_"))
+
         # ── Trade callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
         app.add_handler(CallbackQueryHandler(trade_myplayer_callback, pattern=r"^tmypl_"))
@@ -210,6 +236,10 @@ def main():
         app.add_handler(CallbackQueryHandler(trade_reject_callback, pattern=r"^treject_"))
         app.add_handler(CallbackQueryHandler(trade_cancel_callback, pattern=r"^tcancel$"))
         app.add_handler(CallbackQueryHandler(trade_back_callback, pattern=r"^tback_"))
+
+        # ── Text handler for over selection (must be LAST) ───────────
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND, overs_text_handler))
 
         logger.info("Bot is running. Press Ctrl+C to stop.")
         print("=" * 50)

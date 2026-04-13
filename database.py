@@ -17,15 +17,15 @@ class Base(DeclarativeBase):
 
 
 def init_db():
-    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats  # noqa: F401
+    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats, Match  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
 
 def reset_db():
     """Drop ALL tables and recreate. Destroys all data."""
-    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats  # noqa: F401
+    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats, Match  # noqa: F401
     from sqlalchemy import text
-    tables = ["player_game_stats", "activity_log", "trades", "user_roster", "user_rosters", "user_stats", "users", "players"]
+    tables = ["matches", "player_game_stats", "activity_log", "trades", "user_roster", "user_rosters", "user_stats", "users", "players"]
     with engine.begin() as conn:
         if "postgresql" in DATABASE_URL:
             for t in tables:

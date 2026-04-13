@@ -216,3 +216,34 @@ class PlayerGameStats(Base):
         if self.best_bowl_wickets == 0 and self.bowl_inns == 0:
             return "-"
         return f"{self.best_bowl_wickets}/{self.best_bowl_runs}"
+
+class Match(Base):
+    """Tracks a match between two users."""
+    __tablename__ = "matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user1_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String(30), default="pending")  # pending/accepted/toss/selecting/playing/completed/expired
+    overs = Column(Integer, default=20)
+    toss_winner_id = Column(Integer, nullable=True)
+    toss_decision = Column(String(10), nullable=True)  # bat/bowl
+    batting_first_id = Column(Integer, nullable=True)
+    bowling_first_id = Column(Integer, nullable=True)
+    stadium = Column(String(100), nullable=True)
+    pitch_type = Column(String(30), nullable=True)
+    weather = Column(String(30), nullable=True)
+    temperature = Column(Integer, nullable=True)
+    umpire1 = Column(String(60), nullable=True)
+    umpire2 = Column(String(60), nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    user1 = relationship("User", foreign_keys=[user1_id])
+    user2 = relationship("User", foreign_keys=[user2_id])
+
+    __table_args__ = (
+        Index("ix_matches_status", "status"),
+    )
