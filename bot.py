@@ -50,7 +50,7 @@ from handlers.match import (
     overs_text_handler, toss_decision_callback,
     opener1_callback, opener2_callback, select_bowler_callback,
     variation_callback, length_callback, spinner_delivery_callback,
-    shot_callback, new_over_bowler_callback,
+    shot_callback, new_over_bowler_callback, new_batsman_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -226,6 +226,7 @@ def main():
         app.add_handler(CallbackQueryHandler(spinner_delivery_callback, pattern=r"^bspin_"))
         app.add_handler(CallbackQueryHandler(shot_callback, pattern=r"^bshot_"))
         app.add_handler(CallbackQueryHandler(new_over_bowler_callback, pattern=r"^nbowl_"))
+        app.add_handler(CallbackQueryHandler(new_batsman_callback, pattern=r"^newbat_"))
 
         # ── Trade callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
