@@ -30,6 +30,7 @@ from handlers.playerinfo import playerinfo_handler
 from handlers.release import (
     releasepl_handler, releasemultiple_handler,
     release_confirm_callback, release_cancel_callback, release_dup_callback,
+    releasemultiple_confirm_callback,
 )
 from handlers.trade import (
     trade_handler, trade_rating_callback, trade_myplayer_callback,
@@ -211,6 +212,7 @@ def main():
         app.add_handler(CallbackQueryHandler(release_confirm_callback, pattern=r"^rlconfirm_"))
         app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlcancel$"))
         app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
+        app.add_handler(CallbackQueryHandler(releasemultiple_confirm_callback, pattern=r"^relmconf_"))
         app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
 
         # ── Buy callbacks ────────────────────────────────────────────
