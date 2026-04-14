@@ -308,6 +308,7 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(cid, format_xi_text(bowl_r, f"🎳 {bwt} (Bowling)", bwu.captain_roster_id), parse_mode="HTML")
         context.bot_data[f"bat_xi_{mid}"] = bxi; context.bot_data[f"bowl_xi_{mid}"] = bwxi
         context.bot_data[f"bat_uname_{mid}"] = bu.username; context.bot_data[f"bowl_uname_{mid}"] = bwu.username
+        context.bot_data[f"bat_uid_{mid}"] = bu.id; context.bot_data[f"bowl_uid_{mid}"] = bwu.id
         bats = [p for p in bxi if p["category"] in ("Batsman", "Wicket Keeper", "All-rounder")]
         if len(bats) < 2: bats = bxi[:6]
         btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']}", callback_data=f"op1_{mid}_{bu.id}_{p['roster_id']}")] for p in bats[:8]]
@@ -348,7 +349,16 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not pk: return
         context.bot_data[f"opener2_{mid}"] = pk; op1 = context.bot_data.get(f"opener1_{mid}", {})
         await q.edit_message_text(f"✅ Openers: {op1.get('name')} & {pk['name']}\n\n⏳ Bowler...", parse_mode="HTML")
-        m = session.query(Match).get(mid); bwu = session.query(User).get(m.bowling_first_id)
+
+        # Get bowling user from bot_data (works for both innings)
+        bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
+        if bowl_uid:
+            bwu = session.query(User).get(bowl_uid)
+        else:
+            # Fallback: 1st innings — read from Match record
+            m = session.query(Match).get(mid)
+            bwu = session.query(User).get(m.bowling_first_id)
+
         bwxi = context.bot_data.get(f"bowl_xi_{mid}", [])
         bowlers = sorted([p for p in bwxi if p["category"] in ("Bowler", "All-rounder")], key=lambda x: x["bowl_rating"], reverse=True)
         if not bowlers: bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
@@ -368,24 +378,58 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
         u = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u or u.id != bwuid: await q.answer("Not yours!"); return
         await q.answer()
-        m = session.query(Match).get(mid); m.status = "playing"; session.commit()
+
         bwxi = context.bot_data.get(f"bowl_xi_{mid}", [])
         bowler = next((p for p in bwxi if p["roster_id"] == rid), None)
         if not bowler: return
-        bxi = context.bot_data.get(f"bat_xi_{mid}", [])
-        op1 = context.bot_data.get(f"opener1_{mid}", {}); op2 = context.bot_data.get(f"opener2_{mid}", {})
-        bu = session.query(User).get(m.batting_first_id); bwu = session.query(User).get(m.bowling_first_id)
-        bt = bu.team_name or f"@{bu.username}'s XI"; bwt = bwu.team_name or f"@{bwu.username}'s XI"
-        await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ Starting...", parse_mode="HTML")
-        s = create_match_state(mid, m.overs, m.batting_first_id, m.bowling_first_id, bxi, bwxi, op1, op2, bowler)
-        s["chat_id"] = cid; s["bat_user_tg"] = bu.telegram_id; s["bowl_user_tg"] = bwu.telegram_id
-        s["bat_team_name"] = bt; s["bowl_team_name"] = bwt
-        s["bat_username"] = bu.username; s["bowl_username"] = bwu.username
-        s["pitch_type"] = m.pitch_type
-        _ss(context, mid, s)
-        await context.bot.send_message(cid,
-            f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
-            f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+
+        existing_state = _gs(context, mid)
+
+        if existing_state and existing_state.get("innings") == 2:
+            # 2nd innings — update existing state with new bowler
+            s = existing_state
+            s["current_bowler"] = bowler
+            s["batting_order"] = list(s["bat_xi"])  # reset batting order
+            # Re-apply openers
+            op1 = context.bot_data.get(f"opener1_{mid}", {})
+            op2 = context.bot_data.get(f"opener2_{mid}", {})
+            order = [op1, op2]
+            for p in s["bat_xi"]:
+                if p["roster_id"] not in (op1.get("roster_id"), op2.get("roster_id")):
+                    order.append(p)
+            s["batting_order"] = order
+            s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
+            _ss(context, mid, s)
+
+            await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ 2nd Innings Starting...", parse_mode="HTML")
+            await context.bot.send_message(cid,
+                f"🏏 <b>2ND INNINGS!</b>\n\n"
+                f"🟢 {s['bat_team_name']} needs {s['target']} to win\n"
+                f"🏏 {op1.get('name', '?')} & {op2.get('name', '?')}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
+                parse_mode="HTML")
+        else:
+            # 1st innings — create fresh state
+            m = session.query(Match).get(mid); m.status = "playing"; session.commit()
+            bxi = context.bot_data.get(f"bat_xi_{mid}", [])
+            op1 = context.bot_data.get(f"opener1_{mid}", {}); op2 = context.bot_data.get(f"opener2_{mid}", {})
+            bat_uid = context.bot_data.get(f"bat_uid_{mid}", m.batting_first_id)
+            bowl_uid_db = context.bot_data.get(f"bowl_uid_{mid}", m.bowling_first_id)
+            bu = session.query(User).get(bat_uid); bwu = session.query(User).get(bowl_uid_db)
+            bt = bu.team_name or f"@{bu.username}'s XI"; bwt = bwu.team_name or f"@{bwu.username}'s XI"
+
+            s = create_match_state(mid, m.overs, bat_uid, bowl_uid_db, bxi, bwxi, op1, op2, bowler)
+            s["chat_id"] = cid; s["bat_user_tg"] = bu.telegram_id; s["bowl_user_tg"] = bwu.telegram_id
+            s["bat_team_name"] = bt; s["bowl_team_name"] = bwt
+            s["bat_username"] = bu.username; s["bowl_username"] = bwu.username
+            s["pitch_type"] = m.pitch_type
+            _ss(context, mid, s)
+
+            await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ Starting...", parse_mode="HTML")
+            await context.bot.send_message(cid,
+                f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
+                f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
+                parse_mode="HTML")
+
         await _show_delivery(context, cid, mid)
     except Exception: session.rollback(); logger.exception("SelBowl err")
     finally: session.close()
@@ -673,6 +717,8 @@ async def _end_innings(ctx, mid):
         ctx.bot_data[f"bowl_xi_{mid}"] = s["bowl_xi"]
         ctx.bot_data[f"bat_uname_{mid}"] = s["bat_username"]
         ctx.bot_data[f"bowl_uname_{mid}"] = s["bowl_username"]
+        ctx.bot_data[f"bat_uid_{mid}"] = s["bat_team_id"]
+        ctx.bot_data[f"bowl_uid_{mid}"] = s["bowl_team_id"]
         bats = [p for p in s["bat_xi"] if p["category"] in ("Batsman", "Wicket Keeper", "All-rounder")]
         if len(bats) < 2: bats = s["bat_xi"][:6]
         buid = s["bat_team_id"]
