@@ -1,12 +1,12 @@
 """Handler for /playmatch — full match with endmatch, timeouts, rewards."""
 
-import random, logging
+import io, random, logging
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import User, Player, UserRoster, Match
+from models import User, Player, UserRoster, Match, PlayerGameStats
 from services.match_constants import random_match_settings, MATCH_EXPIRE
 from services.bowling_service import get_delivery_options, is_spinner, AVAILABLE_SHOTS
 from services.match_engine import (
@@ -16,6 +16,7 @@ from services.match_engine import (
 )
 from services.flags import get_flag
 from services.activity_service import log_activity
+from services.batsman_card import generate_batsman_card
 from handlers.lineup import format_xi_text
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,47 @@ def _bowl_label(p, s):
     ov_str = f"{od}.{tb}" if tb else str(od)
     h = p.get("bowl_hand", "R")[:1]
     return f"{p['name']} | {h}-{p['bowl_style']} | {ov_str}•{bws.get('runs',0)}•{bws.get('wickets',0)}"
+
+
+async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
+    """Look up PlayerGameStats and send batsman card image."""
+    try:
+        session = get_session()
+        try:
+            gs = (session.query(PlayerGameStats)
+                  .filter(PlayerGameStats.user_id == owner_user_id,
+                          PlayerGameStats.player_id == player_dict["player_id"])
+                  .first())
+            if gs:
+                stats = {
+                    "bat_inns": gs.bat_inns, "runs": gs.runs,
+                    "fifties": gs.fifties, "hundreds": gs.hundreds,
+                    "fours": gs.fours, "sixes": gs.sixes,
+                    "bat_avg": gs.bat_avg, "bat_sr": gs.bat_sr,
+                    "ducks": gs.ducks, "hs_str": gs.hs_str,
+                }
+            else:
+                stats = {"bat_inns": 0, "runs": 0, "fifties": 0, "hundreds": 0,
+                         "fours": 0, "sixes": 0, "bat_avg": 0, "bat_sr": 0,
+                         "ducks": 0, "hs_str": "-"}
+        except Exception:
+            stats = {"bat_inns": 0, "runs": 0, "fifties": 0, "hundreds": 0,
+                     "fours": 0, "sixes": 0, "bat_avg": 0, "bat_sr": 0,
+                     "ducks": 0, "hs_str": "-"}
+        finally:
+            session.close()
+
+        card_bytes = generate_batsman_card(
+            player_dict["name"], player_dict["rating"],
+            player_dict["bat_rating"], stats)
+
+        if card_bytes:
+            await ctx.bot.send_photo(
+                chat_id=chat_id, photo=io.BytesIO(card_bytes),
+                caption=f"🏏 <b>{player_dict['name']}</b> walks to the crease",
+                parse_mode="HTML")
+    except Exception:
+        logger.warning(f"Failed to send batsman card for {player_dict.get('name')}")
 
 
 # ── Timeout helpers ──────────────────────────────────────────────────
@@ -407,6 +449,9 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"🟢 {s['bat_team_name']} needs {s['target']} to win\n"
                 f"🏏 {op1.get('name', '?')} & {op2.get('name', '?')}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
                 parse_mode="HTML")
+            # Send opener cards for 2nd innings
+            await _send_batsman_card(context, cid, op1, s["bat_team_id"])
+            await _send_batsman_card(context, cid, op2, s["bat_team_id"])
         else:
             # 1st innings — create fresh state
             m = session.query(Match).get(mid); m.status = "playing"; session.commit()
@@ -429,6 +474,9 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
                 f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
                 parse_mode="HTML")
+            # Send opener cards
+            await _send_batsman_card(context, cid, op1, s["bat_team_id"])
+            await _send_batsman_card(context, cid, op2, s["bat_team_id"])
 
         await _show_delivery(context, cid, mid)
     except Exception: session.rollback(); logger.exception("SelBowl err")
@@ -655,6 +703,8 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.answer(); _cancel_action_timer(context, mid)
     nb = s["batting_order"][bi]; s["striker_idx"] = bi; _ss(context, mid, s)
     await q.edit_message_text(f"🏏 New batsman: {nb['name']} ({nb['bat_rating']} BAT)", parse_mode="HTML")
+    # Send batsman stats card
+    await _send_batsman_card(context, s["chat_id"], nb, s["bat_team_id"])
     if is_innings_over(s): await _end_innings(context, mid); return
     if s["current_ball"] == 0 and s["current_over"] > 1: await _show_new_over_bowler(context, mid)
     else: await _show_delivery(context, s["chat_id"], mid)
