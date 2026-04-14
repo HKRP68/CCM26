@@ -123,6 +123,18 @@ def bowler_figures(s):
     return f"{ov_str} • {bw.get('runs', 0)} • {bw.get('wickets', 0)}"
 
 
+def projected_score(s):
+    """Calculate projected score for 1st innings based on current run rate."""
+    if s["innings"] != 1:
+        return None
+    tb = (s["current_over"] - 1) * 6 + s["current_ball"]
+    if tb < 6:  # need at least 1 over
+        return None
+    total_balls = s["overs"] * 6
+    rate_per_ball = s["total_runs"] / tb
+    return int(rate_per_ball * total_balls)
+
+
 def build_live_scorecard(s):
     """Build the live match update message."""
     striker = get_striker(s)
@@ -139,10 +151,11 @@ def build_live_scorecard(s):
         inn1_line = f"🔴 <b>{s['inn1_team']}</b>\n{s['inn1_runs']}/{s['inn1_wickets']} ({s['inn1_overs']})"
         inn2_line = f"🟢 <b>{bat_name}</b>\n{format_score(s)} ({format_overs(s)} / {s['overs']})"
     else:
-        inn1_line = f"🟢 <b>{bat_name}</b>\n{format_score(s)} ({format_overs(s)} / {s['overs']})"
+        proj = projected_score(s)
+        proj_text = f" | Proj: {proj}" if proj else ""
+        inn1_line = f"🟢 <b>{bat_name}</b>\n{format_score(s)} ({format_overs(s)} / {s['overs']}){proj_text}"
         inn2_line = f"🔴 <b>{bowl_name}</b>\nYet to bat"
 
-    # Batsmen
     strike_mark_s = " *" 
     strike_mark_n = ""
 
@@ -151,6 +164,9 @@ def build_live_scorecard(s):
     rr_line = f"CRR: {cr} ⚡"
     if rr_val is not None:
         rr_line += f"\nRRR: {rr_val} 🎯"
+    proj = projected_score(s)
+    if proj and s["innings"] == 1:
+        rr_line += f"\n📈 Projected: {proj}"
 
     bf = bowler_figures(s)
 

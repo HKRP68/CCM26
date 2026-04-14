@@ -1,239 +1,279 @@
-"""Probability engine — loads the comprehensive CSV matrix and calculates outcomes."""
+"""Balanced probability engine for T20 cricket simulation.
 
-import csv
-import os
+Target stats (equal ratings, flat pitch):
+- Run rate: ~9-11 per over
+- Dot%: 25-30%, 1s: 25%, 2s: 8%, 3s: 2%, 4s: 16%, 6s: 10%
+- Wicket: 4-5% per ball (~1 per 3-4 overs)
+- Extras: 3-4%
+"""
+
 import random
 import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Load probability matrix from CSV ─────────────────────────────────
-# Key: (bowler_type, variation, length, pitch, phase, shot)
-# Value: dict {Dot, 1, 2, 3, 4, 6, Wicket, Extra}
-
-_MATRIX = {}
-_LOADED = False
-
-CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "probability_matrix.csv")
-
-# Map game bowler types → CSV bowler types
-BOWLER_TYPE_MAP = {
-    "Fast": "Fast",
-    "Medium Pacer": "Medium",
-    "Off Spinner": {"Right": "Right-Arm Off Spinner", "Left": "Left-Arm Off Spinner"},
-    "Leg Spinner": {"Right": "Right-Arm Leg Spinner", "Left": "Left-Arm Leg Spinner"},
+# ── Base probabilities (%) — for "neutral" conditions ────────────────
+# These are the starting point before any modifiers
+BASE = {
+    "dot": 32.0,
+    "1": 25.0,
+    "2": 8.0,
+    "3": 2.0,
+    "4": 12.0,
+    "6": 7.5,
+    "W": 3.5,
+    "wide": 2.5,
+    "noball": 1.2,
+    "legbye": 1.5,
+    "bye": 0.5,
 }
 
-# Map game variation names → CSV variation names (handle minor differences)
-VAR_MAP = {
-    "Reverse Swing": "ReverseSwing",
-    "Seam Up": "SeamUP",
-    "Cross Seam": "Cross-Seam",
-    "Short of Length": "short of Length",
-    "Backspinner": "Backspinner (Slider)",
-    "Wrong'un": "Wrong'un",
+# ── Shot modifiers ───────────────────────────────────────────────────
+SHOT_MODS = {
+    "Drive":      {"dot": -3, "1": 2, "2": 1, "4": 2, "6": -1, "W": -0.5},
+    "Cut":        {"dot": -1, "1": 2, "2": 2, "4": 1, "6": -2, "W": 0},
+    "Pull":       {"dot": -2, "1": 0, "2": 1, "4": 2, "6": 2, "W": 0.5},
+    "Leg Glance": {"dot": -1, "1": 3, "2": 3, "4": 0, "6": -3, "W": -1},
+    "Flick":      {"dot": -2, "1": 2, "2": 2, "4": 1, "6": -1, "W": -0.5},
+    "Sweep":      {"dot": -1, "1": 1, "2": 1, "4": 1, "6": 1, "W": 0.5},
+    "Switch Hit": {"dot": -3, "1": -1, "2": 0, "4": 2, "6": 4, "W": 1.5},
+    "Slog":       {"dot": -6, "1": -3, "2": -1, "4": 3, "6": 8, "W": 2.5},
+    "Loft":       {"dot": -4, "1": -2, "2": 0, "4": 2, "6": 6, "W": 1.5},
+}
+
+# ── Bowler type modifiers ────────────────────────────────────────────
+BOWLER_MODS = {
+    "Fast": {"dot": 1, "1": 0, "4": -0.5, "6": -0.5, "W": 0.5},
+    "Medium Pacer": {"dot": 0, "1": 0.5, "4": 0, "6": 0, "W": 0},
+    "Off Spinner": {"dot": 2, "1": 0.5, "4": -1, "6": -0.5, "W": 0.5},
+    "Leg Spinner": {"dot": 1.5, "1": 0, "4": -0.5, "6": -0.5, "W": 1},
+}
+
+# ── Delivery variation modifiers ─────────────────────────────────────
+VARIATION_MODS = {
+    # Fast
+    "Outswing":       {"dot": 1, "W": 0.5, "4": -0.5},
+    "Inswing":        {"dot": 0.5, "W": 0.5, "4": -0.5},
+    "Reverse Swing":  {"dot": 2, "W": 1, "4": -1, "6": -0.5},
+    "Seam Up":        {"dot": 0.5, "1": 0.5, "W": 0},
+    "Slower":         {"dot": -1, "4": 0.5, "6": 1, "W": 0.5},
+    # Medium
+    "Leg Cutter":     {"dot": 1, "W": 0.5, "4": -0.5},
+    "Off Cutter":     {"dot": 1, "W": 0.5, "4": -0.5},
+    "Knuckle":        {"dot": 0.5, "W": 0.5, "6": -0.5},
+    "Cross Seam":     {"dot": 0, "1": 0.5},
+    # Spinners
+    "Off Break":      {"dot": 1, "W": 0.5, "4": -0.5},
+    "Doosra":         {"dot": 1.5, "W": 1, "4": -1},
+    "Arm Ball":       {"dot": 0, "4": 0.5},
+    "Top Spinner":    {"dot": 0.5, "W": 0.5},
+    "Carrom Ball":    {"dot": 1, "W": 1, "4": -0.5},
+    "Leg Break":      {"dot": 1, "W": 0.5, "4": -0.5},
+    "Googly":         {"dot": 2, "W": 1.5, "4": -1, "6": -0.5},
+    "Flipper":        {"dot": 1, "W": 1, "6": -0.5},
+    "Slider":         {"dot": 0.5, "W": 0.5},
+    "Orthodox":       {"dot": 1, "W": 0.5},
+    "Backspinner":    {"dot": 0.5, "4": 0.5},
+    "Chinaman":       {"dot": 1, "W": 1, "4": -0.5},
+    "Wrong'un":       {"dot": 1.5, "W": 1, "4": -1},
+    "Teesra":         {"dot": 1, "W": 0.5},
+}
+
+# ── Length modifiers (pacers only) ───────────────────────────────────
+LENGTH_MODS = {
+    "Yorker":          {"dot": 5, "1": -2, "4": -3, "6": -2, "W": 2},
+    "Good":            {"dot": 2, "1": 1, "4": -1, "6": -1, "W": 1},
+    "Good Length":     {"dot": 2, "1": 1, "4": -1, "6": -1, "W": 1},
+    "Full":            {"dot": -3, "1": 0, "4": 3, "6": 1, "W": 0},
+    "Full Length":     {"dot": -3, "1": 0, "4": 3, "6": 1, "W": 0},
+    "Hard":            {"dot": 3, "1": -1, "4": -1, "6": 1, "W": 1},
+    "Bouncer":         {"dot": 4, "1": -3, "4": 1, "6": 3, "W": 2},
+    "Hit the Deck":    {"dot": 2, "1": 0, "4": 0, "6": 1, "W": 0},
+    "Short of Length":  {"dot": 2, "1": 0, "4": 1, "6": 1, "W": 0},
+    "Back of Length":   {"dot": 3, "1": 0, "4": -1, "6": 0, "W": 1},
+}
+
+# ── Pitch modifiers ──────────────────────────────────────────────────
+PITCH_MODS = {
+    "Green":  {"dot": 2, "4": -1, "6": -1, "W": 1},
+    "Dry":    {"dot": 1, "4": -0.5, "6": -0.5, "W": 0.5},
+    "Dusty":  {"dot": 2, "4": -1, "6": -1, "W": 1},
+    "Hard":   {"dot": -2, "4": 2, "6": 1, "W": -0.5},
+    "Flat":   {"dot": -2, "4": 2, "6": 1.5, "W": -1},
+    "Bouncy": {"dot": 0.5, "6": 1, "W": 0.5},
+}
+
+# ── Phase modifiers ──────────────────────────────────────────────────
+PHASE_MODS = {
+    "PowerPlay":    {"dot": -3, "1": -1, "4": 2, "6": 2, "W": 0},
+    "Middle Phase": {"dot": 1, "1": 1, "4": -0.5, "6": -1, "W": 0},
+    "Death":        {"dot": -4, "1": -2, "4": 2, "6": 5, "W": 0.5},
+}
+
+# ── Pitch + Bowler type synergy ──────────────────────────────────────
+PITCH_BOWLER_SYNERGY = {
+    ("Green", "Fast"):        {"W": 1, "dot": 1, "4": -1},
+    ("Green", "Medium Pacer"): {"W": 0.5, "dot": 0.5, "4": -0.5},
+    ("Dry", "Off Spinner"):    {"W": 1, "dot": 1, "4": -1},
+    ("Dry", "Leg Spinner"):    {"W": 1, "dot": 1, "4": -1},
+    ("Dusty", "Off Spinner"):  {"W": 1.5, "dot": 1.5, "4": -1.5},
+    ("Dusty", "Leg Spinner"):  {"W": 1.5, "dot": 1.5, "4": -1.5},
+    ("Hard", "Fast"):          {"6": 0.5, "4": 0.5},
+    ("Flat", "Fast"):          {"4": 1, "6": 0.5, "W": -0.5},
+    ("Flat", "Medium Pacer"):  {"4": 1, "6": 0.5, "W": -0.5},
 }
 
 
-def _load_matrix():
-    global _MATRIX, _LOADED
-    if _LOADED:
-        return
-
-    path = os.path.abspath(CSV_PATH)
-    if not os.path.exists(path):
-        logger.warning(f"Probability matrix not found at {path}")
-        _LOADED = True
-        return
-
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                bt = row.get("Bowler Type", "").strip()
-                var = row.get("Variation", "").strip()
-                length = row.get("Length", "N/A").strip()
-                pitch = row.get("Pitch", "Flat").strip()
-                phase = row.get("Phase", "Middle Phase").strip()
-                shot = row.get("Shot", "Drive").strip()
-
-                key = (bt, var, length, pitch, phase, shot)
-
-                try:
-                    probs = {
-                        0: float(row.get("Dot", 0)),
-                        1: float(row.get("1", 0)),
-                        2: float(row.get("2", 0)),
-                        3: float(row.get("3", 0)),
-                        4: float(row.get("4", 0)),
-                        6: float(row.get("6", 0)),
-                        "W": float(row.get("Wicket", 0)),
-                        "E": float(row.get("Extra", 0)),
-                    }
-                    _MATRIX[key] = probs
-                except (ValueError, TypeError):
-                    pass
-
-        logger.info(f"Loaded {len(_MATRIX)} probability entries from CSV")
-        _LOADED = True
-    except Exception:
-        logger.exception("Failed to load probability matrix")
-        _LOADED = True
-
-
-def _map_bowler_type(bowl_style, bowl_hand):
-    """Map game bowler style/hand to CSV bowler type."""
+def _get_bowler_key(bowl_style):
     from services.bowling_service import get_bowler_profile_key
-    key = get_bowler_profile_key(bowl_style)
-    mapped = BOWLER_TYPE_MAP.get(key, "Medium")
-    if isinstance(mapped, dict):
-        hand = "Right" if not bowl_hand or bowl_hand.startswith("R") else "Left"
-        return mapped.get(hand, list(mapped.values())[0])
-    return mapped
+    return get_bowler_profile_key(bowl_style)
 
 
-def _map_variation(variation):
-    """Map game variation name to CSV variation name."""
-    return VAR_MAP.get(variation, variation)
-
-
-def _map_shot(shot):
-    """Map game shot name to CSV shot name."""
-    # Handle "Switch Hit" vs "Switch hit"
-    if shot == "Switch Hit":
-        return "Switch hit"
-    return shot
-
-
-def _get_phase_name(over, total_overs):
-    """Map over number to CSV phase name."""
+def _get_phase(over, total_overs):
     if total_overs <= 5:
         return "PowerPlay"
     if over <= 6:
         return "PowerPlay"
     elif over <= total_overs - 4:
         return "Middle Phase"
-    else:
-        return "Death"
+    return "Death"
+
+
+def _apply_mods(probs, mods):
+    for k, v in mods.items():
+        if k in probs:
+            probs[k] += v
 
 
 def _apply_rating_diff(probs, bat_rating, bowl_rating):
-    """Modify probabilities based on rating differential.
-    Positive diff = batsman advantage → more runs, fewer wickets.
-    """
-    diff = bat_rating - bowl_rating  # -100 to +100 range
-    # Scale factor: diff of +20 means ~20% shift toward batsman
-    factor = diff / 100.0  # -1.0 to +1.0
+    """Rating differential: +1 diff = slight shift toward batsman."""
+    diff = bat_rating - bowl_rating  # -100 to +100
+    factor = diff / 100.0
 
-    modified = dict(probs)
+    probs["dot"] += factor * -5
+    probs["1"] += factor * 1
+    probs["2"] += factor * 0.5
+    probs["4"] += factor * 2.5
+    probs["6"] += factor * 2
+    probs["W"] += factor * -3
 
-    # Shift: positive factor → less dots/wickets, more runs
-    modified[0] += factor * -8       # fewer dots if batsman better
-    modified[1] += factor * 2
-    modified[4] += factor * 4        # more boundaries
-    modified[6] += factor * 3        # more sixes
-    modified["W"] += factor * -5     # fewer wickets
-    modified["E"] += factor * 0.5
+    # Even against much better bowler, keep minimum scoring chance
+    if diff < -10:
+        probs["4"] = max(probs["4"], 10.0)
+        probs["6"] = max(probs["6"], 5.0)
+        probs["W"] = min(probs["W"], 8.0)  # cap wicket chance
 
-    # Clamp all to >= 0
-    for k in modified:
-        if modified[k] < 0:
-            modified[k] = 0.0
 
-    # Normalize to 100%
-    total = sum(modified.values())
+def _normalize(probs):
+    """Clamp to >=0 and normalize to 100%."""
+    for k in probs:
+        if probs[k] < 0:
+            probs[k] = 0.0
+    total = sum(probs.values())
     if total > 0:
-        for k in modified:
-            modified[k] = (modified[k] / total) * 100.0
-
-    return modified
+        for k in probs:
+            probs[k] = (probs[k] / total) * 100.0
+    return probs
 
 
 def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       over, total_overs, shot, bat_rating, bowl_rating):
-    """Calculate delivery outcome using the probability matrix.
+    """Calculate delivery outcome.
 
-    Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye", "runs": int, "how": str}
+    Returns: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye", "runs": int, "how": str}
     """
-    _load_matrix()
+    # Start with base
+    probs = {
+        "dot": BASE["dot"], "1": BASE["1"], "2": BASE["2"], "3": BASE["3"],
+        "4": BASE["4"], "6": BASE["6"], "W": BASE["W"],
+        "wide": BASE["wide"], "noball": BASE["noball"],
+        "legbye": BASE["legbye"],
+    }
 
-    # Map to CSV keys
-    bt = _map_bowler_type(bowl_style, bowl_hand)
-    var = _map_variation(variation)
-    lng = length if length else "N/A"
-    pitch = pitch_type if pitch_type in ("Green", "Dry", "Dusty", "Hard", "Flat") else "Flat"
-    phase = _get_phase_name(over, total_overs)
-    shot_mapped = _map_shot(shot)
+    # Apply modifiers
+    bowler_key = _get_bowler_key(bowl_style)
+    phase = _get_phase(over, total_overs)
 
-    key = (bt, var, lng, pitch, phase, shot_mapped)
-    probs = _MATRIX.get(key)
+    # Bowler type
+    _apply_mods(probs, BOWLER_MODS.get(bowler_key, {}))
 
-    if not probs:
-        # Try without length for spinners
-        key2 = (bt, var, "N/A", pitch, phase, shot_mapped)
-        probs = _MATRIX.get(key2)
+    # Variation
+    clean_var = variation.replace(" (Surprise)", "").strip() if variation else ""
+    _apply_mods(probs, VARIATION_MODS.get(clean_var, {}))
 
-    if not probs:
-        # Try with just bowler type and shot (broadest fallback)
-        for k, v in _MATRIX.items():
-            if k[0] == bt and k[5] == shot_mapped:
-                probs = v
-                break
+    # Length (pacers only)
+    if length and length != "N/A":
+        _apply_mods(probs, LENGTH_MODS.get(length, {}))
 
-    if not probs:
-        # Ultimate fallback
-        probs = {0: 35, 1: 25, 2: 5, 3: 1, 4: 15, 6: 5, "W": 10, "E": 4}
+    # Pitch
+    pitch = pitch_type if pitch_type in PITCH_MODS else "Flat"
+    _apply_mods(probs, PITCH_MODS.get(pitch, {}))
 
-    # Apply rating differential
-    adj = _apply_rating_diff(probs, bat_rating, bowl_rating)
+    # Pitch + bowler synergy
+    _apply_mods(probs, PITCH_BOWLER_SYNERGY.get((pitch, bowler_key), {}))
 
-    # Roll
+    # Phase
+    _apply_mods(probs, PHASE_MODS.get(phase, {}))
+
+    # Shot
+    _apply_mods(probs, SHOT_MODS.get(shot, {}))
+
+    # Rating differential
+    _apply_rating_diff(probs, bat_rating, bowl_rating)
+
+    # Normalize
+    _normalize(probs)
+
+    # Roll the dice
     r = random.random() * 100.0
-    cumulative = 0.0
+    cumul = 0.0
 
-    # Extra first (wide/noball/legbye)
-    cumulative += adj["E"]
-    if r < cumulative:
-        extra_type = random.choices(
-            ["wide", "noball", "legbye"],
-            weights=[45, 30, 25]
-        )[0]
-        if extra_type == "wide":
-            return {"type": "wide"}
-        elif extra_type == "noball":
-            return {"type": "noball", "runs": random.choice([0, 1, 1, 4, 6])}
-        else:
-            return {"type": "legbye", "runs": random.choice([1, 1, 2])}
+    # Wide
+    cumul += probs["wide"]
+    if r < cumul:
+        return {"type": "wide"}
+
+    # No ball
+    cumul += probs["noball"]
+    if r < cumul:
+        return {"type": "noball", "runs": random.choice([0, 1, 1, 2, 4, 6])}
+
+    # Leg bye
+    cumul += probs["legbye"]
+    if r < cumul:
+        return {"type": "legbye", "runs": random.choice([1, 1, 1, 2])}
 
     # Wicket
-    cumulative += adj["W"]
-    if r < cumulative:
-        hows = ["Bowled", "Caught", "LBW", "Caught Behind", "Caught & Bowled", "Stumped"]
+    cumul += probs["W"]
+    if r < cumul:
+        hows = ["Bowled", "Caught", "LBW", "Caught Behind", "Caught & Bowled"]
+        if bowler_key in ("Off Spinner", "Leg Spinner"):
+            hows.append("Stumped")
         return {"type": "wicket", "runs": 0, "how": random.choice(hows)}
 
     # Dot
-    cumulative += adj[0]
-    if r < cumulative:
+    cumul += probs["dot"]
+    if r < cumul:
         return {"type": "runs", "runs": 0}
 
     # 1 run
-    cumulative += adj[1]
-    if r < cumulative:
+    cumul += probs["1"]
+    if r < cumul:
         return {"type": "runs", "runs": 1}
 
     # 2 runs
-    cumulative += adj[2]
-    if r < cumulative:
+    cumul += probs["2"]
+    if r < cumul:
         return {"type": "runs", "runs": 2}
 
     # 3 runs
-    cumulative += adj[3]
-    if r < cumulative:
+    cumul += probs["3"]
+    if r < cumul:
         return {"type": "runs", "runs": 3}
 
     # 4 runs
-    cumulative += adj[4]
-    if r < cumulative:
+    cumul += probs["4"]
+    if r < cumul:
         return {"type": "runs", "runs": 4}
 
     # 6 runs
