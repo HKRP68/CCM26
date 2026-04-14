@@ -36,8 +36,8 @@ def format_xi_text(roster_list, team_name, captain_rid=None):
     """
     top_11 = roster_list[:11]
     bench = roster_list[11:]
+    count = len(top_11)
 
-    # Categorise
     batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
     total_ovr = 0
     for entry, player in top_11:
@@ -62,7 +62,7 @@ def format_xi_text(roster_list, team_name, captain_rid=None):
         else:
             batsmen.append(line)
 
-    avg_ovr = round(total_ovr / 11, 1) if top_11 else 0
+    avg_ovr = round(total_ovr / count, 1) if count else 0
 
     lines = [
         f"🏏 <b>PLAYING XI</b>\n",
@@ -117,8 +117,8 @@ async def playingxi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         roster = _get_ordered_roster(session, user.id)
         session.commit()
 
-        if len(roster) < 11:
-            await update.message.reply_text(f"❌ Need 11+ players. Have {len(roster)}.")
+        if not roster:
+            await update.message.reply_text("❌ No players. Use /claim to get some!")
             return
 
         team_name = user.team_name or f"@{user.username or user.first_name}'s XI"

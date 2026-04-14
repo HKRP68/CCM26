@@ -381,6 +381,7 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
         s["chat_id"] = cid; s["bat_user_tg"] = bu.telegram_id; s["bowl_user_tg"] = bwu.telegram_id
         s["bat_team_name"] = bt; s["bowl_team_name"] = bwt
         s["bat_username"] = bu.username; s["bowl_username"] = bwu.username
+        s["pitch_type"] = m.pitch_type
         _ss(context, mid, s)
         await context.bot.send_message(cid,
             f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
@@ -540,17 +541,48 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else: await _show_delivery(context, s["chat_id"], mid)
 
 def _calc(s, striker, bowler, shot, delivery):
-    bat_r = striker["bat_rating"]; bowl_r = bowler["bowl_rating"]; diff = bat_r - bowl_r; r = random.random() * 100
-    if r < 3: return {"type": "wide"}
-    if r < 5: return {"type": "noball", "runs": random.choice([0, 1, 1, 4, 6])}
-    if r < 8: return {"type": "legbye", "runs": random.choice([1, 1, 2])}
-    wck = max(3, min(18, 8 - diff * 0.08))
-    if r < 8 + wck: return {"type": "wicket", "runs": 0, "how": random.choice(["Bowled", "Caught", "LBW", "Caught Behind", "Caught & Bowled", "Stumped"])}
-    dot = max(15, min(50, 35 - diff * 0.2))
-    if r < 8 + wck + dot: return {"type": "runs", "runs": 0}
-    if r < 8 + wck + dot + 25: return {"type": "runs", "runs": random.choice([1, 1, 1, 2, 2, 3])}
-    if r < 8 + wck + dot + 25 + 16: return {"type": "runs", "runs": 4}
-    return {"type": "runs", "runs": 6}
+    from services.probability_engine import calculate_outcome
+    # Parse delivery into variation + length
+    # For spinners: delivery is just "Off Break" or "Googly (Surprise)"
+    # For pacers: delivery is "Outswing Good" or "Leg Cutter Yorker"
+    parts = delivery.replace(" (Surprise)", "").strip()
+    from services.bowling_service import is_spinner as _is_spin
+    if _is_spin(bowler.get("bowl_style", "")):
+        variation = parts
+        length = None
+    else:
+        # Last word is length for pacers, rest is variation
+        # Handle multi-word lengths like "Good Length", "Hit the Deck"
+        known_lengths = {"Hard", "Good", "Full", "Yorker", "Bouncer",
+                         "Good Length", "Full Length", "Short of Length", "Back of Length",
+                         "Hit the Deck"}
+        variation = parts
+        length = None
+        for ln in sorted(known_lengths, key=len, reverse=True):
+            if parts.endswith(ln):
+                variation = parts[:len(parts) - len(ln)].strip()
+                length = ln
+                break
+        if not length:
+            # Simple split: last word is length
+            words = parts.rsplit(" ", 1)
+            if len(words) == 2:
+                variation, length = words
+            else:
+                variation = parts
+                length = "Good"
+
+    pitch = s.get("pitch_type", "Flat")
+    over = s["current_over"]
+    total_overs = s["overs"]
+
+    return calculate_outcome(
+        bowler.get("bowl_style", "Medium Pacer"),
+        bowler.get("bowl_hand", "Right"),
+        variation, length, pitch,
+        over, total_overs, shot,
+        striker["bat_rating"], bowler["bowl_rating"]
+    )
 
 
 # ═══════════════════════════ NEW BATSMAN ═════════════════════════════
@@ -636,6 +668,11 @@ async def _end_innings(ctx, mid):
         s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "out": False, "how_out": "", "bowled_by": ""} for p in s["bat_xi"]}
         s["bowl_stats"] = {p["roster_id"]: {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0} for p in s["bowl_xi"]}
         _ss(ctx, mid, s)
+        # CRITICAL: Update bot_data so opener callbacks read correct XI
+        ctx.bot_data[f"bat_xi_{mid}"] = s["bat_xi"]
+        ctx.bot_data[f"bowl_xi_{mid}"] = s["bowl_xi"]
+        ctx.bot_data[f"bat_uname_{mid}"] = s["bat_username"]
+        ctx.bot_data[f"bowl_uname_{mid}"] = s["bowl_username"]
         bats = [p for p in s["bat_xi"] if p["category"] in ("Batsman", "Wicket Keeper", "All-rounder")]
         if len(bats) < 2: bats = s["bat_xi"][:6]
         buid = s["bat_team_id"]
