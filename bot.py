@@ -40,7 +40,7 @@ from handlers.trade import (
 )
 
 # Phase 3 handlers
-from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler
+from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback
 from handlers.search import searchpl_handler, searchovr_handler
 from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback
 from handlers.team import teamname_handler, purse_handler, stats_handler
@@ -214,6 +214,7 @@ def main():
         app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
         app.add_handler(CallbackQueryHandler(releasemultiple_confirm_callback, pattern=r"^relmconf_"))
         app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
+        app.add_handler(CallbackQueryHandler(bench_callback, pattern=r"^viewbench_"))
 
         # ── Buy callbacks ────────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
