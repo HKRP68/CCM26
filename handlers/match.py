@@ -131,6 +131,8 @@ async def _action_timeout(context):
             if m and m.status == "playing": m.status = "completed"; m_session.commit()
         except Exception: m_session.rollback()
         finally: m_session.close()
+        # Save stats before cleanup
+        await _save_match_stats(s)
         # Cleanup
         for k in list(context.bot_data.keys()):
             if str(mid) in k: del context.bot_data[k]
@@ -161,6 +163,148 @@ async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
     finally: session.close()
 
 
+async def _save_match_stats(s):
+    """Save PlayerGameStats for all players from both innings.
+    Works for completed matches AND mid-match saves (endmatch/timeout).
+    """
+    session = get_session()
+    try:
+        def build_lookup(xi_list, user_id):
+            return {p["roster_id"]: (p["player_id"], user_id) for p in xi_list}
+
+        # If still in 1st innings, save current stats as 1st innings
+        if s.get("innings") == 1 and not s.get("inn1_bat_team_id"):
+            s["inn1_bat_stats"] = dict(s["bat_stats"])
+            s["inn1_bowl_stats"] = dict(s["bowl_stats"])
+            s["inn1_bat_team_id"] = s["bat_team_id"]
+            s["inn1_bowl_team_id"] = s["bowl_team_id"]
+            s["inn1_bat_xi"] = list(s["bat_xi"])
+            s["inn1_bowl_xi"] = list(s["bowl_xi"])
+
+        inn1_bat_uid = s.get("inn1_bat_team_id")
+        inn1_bowl_uid = s.get("inn1_bowl_team_id")
+        inn1_bat_xi = s.get("inn1_bat_xi", [])
+        inn1_bowl_xi = s.get("inn1_bowl_xi", [])
+
+        # 2nd innings: who batted = current bat_team_id, who bowled = current bowl_team_id
+        inn2_bat_uid = s["bat_team_id"]
+        inn2_bowl_uid = s["bowl_team_id"]
+        inn2_bat_xi = s["bat_xi"]
+        inn2_bowl_xi = s["bowl_xi"]
+
+        bat_lookup_1 = build_lookup(inn1_bat_xi, inn1_bat_uid) if inn1_bat_uid and not s.get("inn1_stats_saved") else {}
+        bowl_lookup_1 = build_lookup(inn1_bowl_xi, inn1_bowl_uid) if inn1_bowl_uid and not s.get("inn1_stats_saved") else {}
+        # Only process 2nd innings if match reached 2nd innings
+        if s.get("innings", 1) >= 2:
+            bat_lookup_2 = build_lookup(inn2_bat_xi, inn2_bat_uid)
+            bowl_lookup_2 = build_lookup(inn2_bowl_xi, inn2_bowl_uid)
+        else:
+            bat_lookup_2 = {}
+            bowl_lookup_2 = {}
+
+        inn1_bat_stats = s.get("inn1_bat_stats", {})
+        inn1_bowl_stats = s.get("inn1_bowl_stats", {})
+        inn2_bat_stats = s.get("bat_stats", {})
+        inn2_bowl_stats = s.get("bowl_stats", {})
+
+        def _update_bat(pid, uid, bs):
+            """Update batting stats for a player."""
+            if not bs or bs.get("balls", 0) == 0:
+                return
+            gs = session.query(PlayerGameStats).filter(
+                PlayerGameStats.user_id == uid, PlayerGameStats.player_id == pid).first()
+            if not gs:
+                gs = PlayerGameStats(user_id=uid, player_id=pid)
+                session.add(gs)
+                session.flush()
+
+            gs.bat_inns += 1
+            gs.runs += bs.get("runs", 0)
+            gs.balls_faced += bs.get("balls", 0)
+            gs.fours += bs.get("fours", 0)
+            gs.sixes += bs.get("sixes", 0)
+
+            r = bs.get("runs", 0)
+            if r >= 100:
+                gs.hundreds += 1
+            elif r >= 50:
+                gs.fifties += 1
+            if bs.get("out", False):
+                gs.times_out += 1
+                if r == 0:
+                    gs.ducks += 1
+            if r > gs.highest_score:
+                gs.highest_score = r
+                gs.highest_score_not_out = not bs.get("out", True)
+            elif r == gs.highest_score and not bs.get("out", True):
+                gs.highest_score_not_out = True
+
+        def _update_bowl(pid, uid, bws):
+            """Update bowling stats for a player."""
+            if not bws or bws.get("balls", 0) == 0:
+                return
+            gs = session.query(PlayerGameStats).filter(
+                PlayerGameStats.user_id == uid, PlayerGameStats.player_id == pid).first()
+            if not gs:
+                gs = PlayerGameStats(user_id=uid, player_id=pid)
+                session.add(gs)
+                session.flush()
+
+            gs.bowl_inns += 1
+            gs.wickets_taken += bws.get("wickets", 0)
+            gs.runs_conceded += bws.get("runs", 0)
+            balls = bws.get("balls", 0)
+            gs.balls_bowled += balls
+            gs.overs_bowled = round(gs.balls_bowled / 6, 1)
+
+            w = bws.get("wickets", 0)
+            if w >= 5:
+                gs.five_fers += 1
+            elif w >= 3:
+                gs.three_fers += 1
+
+            r = bws.get("runs", 0)
+            if w > gs.best_bowl_wickets or (w == gs.best_bowl_wickets and r < gs.best_bowl_runs):
+                gs.best_bowl_wickets = w
+                gs.best_bowl_runs = r
+
+        # Process 1st innings batting
+        for rid, bs in inn1_bat_stats.items():
+            rid_int = int(rid) if isinstance(rid, str) else rid
+            if rid_int in bat_lookup_1:
+                pid, uid = bat_lookup_1[rid_int]
+                _update_bat(pid, uid, bs)
+
+        # Process 1st innings bowling
+        for rid, bws in inn1_bowl_stats.items():
+            rid_int = int(rid) if isinstance(rid, str) else rid
+            if rid_int in bowl_lookup_1:
+                pid, uid = bowl_lookup_1[rid_int]
+                _update_bowl(pid, uid, bws)
+
+        # Process 2nd innings batting
+        for rid, bs in inn2_bat_stats.items():
+            rid_int = int(rid) if isinstance(rid, str) else rid
+            if rid_int in bat_lookup_2:
+                pid, uid = bat_lookup_2[rid_int]
+                _update_bat(pid, uid, bs)
+
+        # Process 2nd innings bowling
+        for rid, bws in inn2_bowl_stats.items():
+            rid_int = int(rid) if isinstance(rid, str) else rid
+            if rid_int in bowl_lookup_2:
+                pid, uid = bowl_lookup_2[rid_int]
+                _update_bowl(pid, uid, bws)
+
+        session.commit()
+        logger.info(f"Saved match stats for match {s.get('match_id')}")
+    except Exception:
+        session.rollback()
+        logger.exception("Failed to save match stats")
+    finally:
+        session.close()
+
+
 # ═══════════════════════════ /endmatch ═══════════════════════════════
 
 async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,6 +333,10 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if q.from_user.id != uid_tg: await q.answer("Not your action!"); return
     await q.answer()
     _cancel_action_timer(context, mid)
+    # Save stats before anything else
+    s = _gs(context, mid)
+    if s:
+        await _save_match_stats(s)
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == uid_tg).first()
@@ -203,7 +351,8 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
         uname = u.username if u else "Unknown"
         await q.edit_message_text(
             f"🛑 <b>MATCH ENDED</b>\n\n@{uname} ended the match.\n"
-            f"⚠️ Fine: -{FINE_COINS:,} Coins 💰 -{FINE_GEMS} Gems 💎", parse_mode="HTML")
+            f"⚠️ Fine: -{FINE_COINS:,} Coins 💰 -{FINE_GEMS} Gems 💎\n"
+            f"📊 Player stats saved.", parse_mode="HTML")
     except Exception: session.rollback()
     finally: session.close()
     for k in list(context.bot_data.keys()):
@@ -231,6 +380,24 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         r2 = session.query(UserRoster).filter(UserRoster.user_id == u2.id).count()
         if r1 < 11: await update.message.reply_text(f"❌ You need 11+ ({r1})."); return
         if r2 < 11: await update.message.reply_text(f"❌ @{u2.username} needs 11+."); return
+
+        # Validate XI composition
+        from handlers.lineup import validate_xi, _get_ordered_roster
+        r1_roster = _get_ordered_roster(session, u1.id)
+        valid1, errs1 = validate_xi(r1_roster)
+        if not valid1:
+            await update.message.reply_text(
+                f"❌ <b>Your XI is invalid:</b>\n" + "\n".join(f"• {e}" for e in errs1),
+                parse_mode="HTML")
+            return
+
+        r2_roster = _get_ordered_roster(session, u2.id)
+        valid2, errs2 = validate_xi(r2_roster)
+        if not valid2:
+            await update.message.reply_text(
+                f"❌ <b>@{u2.username}'s XI is invalid:</b>\n" + "\n".join(f"• {e}" for e in errs2),
+                parse_mode="HTML")
+            return
         st = random_match_settings(); now = datetime.utcnow()
         m = Match(user1_id=u1.id, user2_id=u2.id, status="pending", stadium=st["stadium"],
                   pitch_type=st["pitch_type"], weather=st["weather"], temperature=st["temperature"],
@@ -351,9 +518,8 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         context.bot_data[f"bat_xi_{mid}"] = bxi; context.bot_data[f"bowl_xi_{mid}"] = bwxi
         context.bot_data[f"bat_uname_{mid}"] = bu.username; context.bot_data[f"bowl_uname_{mid}"] = bwu.username
         context.bot_data[f"bat_uid_{mid}"] = bu.id; context.bot_data[f"bowl_uid_{mid}"] = bwu.id
-        bats = [p for p in bxi if p["category"] in ("Batsman", "Wicket Keeper", "All-rounder")]
-        if len(bats) < 2: bats = bxi[:6]
-        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']}", callback_data=f"op1_{mid}_{bu.id}_{p['roster_id']}")] for p in bats[:8]]
+        # Show ALL 11 players for opener selection
+        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{bu.id}_{p['roster_id']}")] for p in bxi]
         await context.bot.send_message(cid, f"🏏 <b>SELECT OPENER 1</b>\n\n@{bu.username}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: session.rollback(); logger.exception("Toss err")
     finally: session.close()
@@ -372,9 +538,9 @@ async def opener1_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bxi = context.bot_data.get(f"bat_xi_{mid}", []); pk = next((p for p in bxi if p["roster_id"] == rid), None)
         if not pk: return
         context.bot_data[f"opener1_{mid}"] = pk
-        rem = [p for p in bxi if p["roster_id"] != rid and p["category"] in ("Batsman", "Wicket Keeper", "All-rounder")]
-        if not rem: rem = [p for p in bxi if p["roster_id"] != rid]
-        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']}", callback_data=f"op2_{mid}_{buid}_{p['roster_id']}")] for p in rem[:8]]
+        # Show ALL remaining players for opener 2
+        rem = [p for p in bxi if p["roster_id"] != rid]
+        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op2_{mid}_{buid}_{p['roster_id']}")] for p in rem]
         await q.edit_message_text(f"✅ Opener 1: {pk['name']}\n\n🏏 <b>SELECT OPENER 2</b>\n\n@{u.username}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: logger.exception("Op1 err")
     finally: session.close()
@@ -402,9 +568,12 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bwu = session.query(User).get(m.bowling_first_id)
 
         bwxi = context.bot_data.get(f"bowl_xi_{mid}", [])
-        bowlers = sorted([p for p in bwxi if p["category"] in ("Bowler", "All-rounder")], key=lambda x: x["bowl_rating"], reverse=True)
-        if not bowlers: bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
-        btns = [[InlineKeyboardButton(f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p['bowl_style']}", callback_data=f"selbowl_{mid}_{bwu.id}_{p['roster_id']}")] for p in bowlers[:8]]
+        # Show ALL 11 players sorted by bowl rating
+        all_bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
+        btns = [[InlineKeyboardButton(
+            f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
+            callback_data=f"selbowl_{mid}_{bwu.id}_{p['roster_id']}"
+        )] for p in all_bowlers]
         await context.bot.send_message(cid, f"🎳 <b>SELECT OPENING BOWLER</b>\n\n@{bwu.username}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: logger.exception("Op2 err")
     finally: session.close()
@@ -714,10 +883,10 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def _show_new_over_bowler(ctx, mid):
     s = _gs(ctx, mid); prev = s.get("prev_bowler_rid")
-    avail = [p for p in s["bowl_xi"] if p["roster_id"] != prev and p["category"] in ("Bowler", "All-rounder")]
-    if not avail: avail = [p for p in s["bowl_xi"] if p["roster_id"] != prev]
+    # Show ALL players except the one who just bowled (can't bowl consecutive)
+    avail = [p for p in s["bowl_xi"] if p["roster_id"] != prev]
     avail = sorted(avail, key=lambda x: x["bowl_rating"], reverse=True)
-    btns = [[InlineKeyboardButton(_bowl_label(p, s), callback_data=f"nbowl_{mid}_{p['roster_id']}")] for p in avail[:8]]
+    btns = [[InlineKeyboardButton(_bowl_label(p, s), callback_data=f"nbowl_{mid}_{p['roster_id']}")] for p in avail]
     await ctx.bot.send_message(s["chat_id"],
         f"🎳 <b>OVER {s['current_over']}</b> — Select bowler:\n📊 {format_score(s)} | {format_overs(s)} ov\n\n@{s['bowl_username']}, choose:",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
@@ -745,6 +914,19 @@ async def _end_innings(ctx, mid):
         s["inn1_runs"] = s["total_runs"]; s["inn1_wickets"] = s["total_wickets"]
         s["inn1_overs"] = format_overs(s); s["inn1_team"] = s["bat_team_name"]
         target = s["total_runs"] + 1
+
+        # SAVE 1st innings stats before reset
+        s["inn1_bat_stats"] = dict(s["bat_stats"])
+        s["inn1_bowl_stats"] = dict(s["bowl_stats"])
+        s["inn1_bat_team_id"] = s["bat_team_id"]
+        s["inn1_bowl_team_id"] = s["bowl_team_id"]
+        s["inn1_bat_xi"] = list(s["bat_xi"])
+        s["inn1_bowl_xi"] = list(s["bowl_xi"])
+
+        # Save 1st innings stats to DB immediately (in case 2nd innings abandoned)
+        await _save_match_stats(s)
+        s["inn1_stats_saved"] = True  # prevent double-save at match end
+
         await ctx.bot.send_message(cid,
             f"━━━━━━━━━━━━━━━━━━━\n📊 <b>END OF 1ST INNINGS</b>\n\n"
             f"🔴 {s['bat_team_name']}: {format_score(s)} ({format_overs(s)})\n\n"
@@ -769,10 +951,9 @@ async def _end_innings(ctx, mid):
         ctx.bot_data[f"bowl_uname_{mid}"] = s["bowl_username"]
         ctx.bot_data[f"bat_uid_{mid}"] = s["bat_team_id"]
         ctx.bot_data[f"bowl_uid_{mid}"] = s["bowl_team_id"]
-        bats = [p for p in s["bat_xi"] if p["category"] in ("Batsman", "Wicket Keeper", "All-rounder")]
-        if len(bats) < 2: bats = s["bat_xi"][:6]
+        # Show ALL 11 players for 2nd innings opener
         buid = s["bat_team_id"]
-        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']}", callback_data=f"op1_{mid}_{buid}_{p['roster_id']}")] for p in bats[:8]]
+        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{buid}_{p['roster_id']}")] for p in s["bat_xi"]]
         await ctx.bot.send_message(cid, f"🏏 <b>2ND INNINGS — SELECT OPENER 1</b>\n\n@{s['bat_username']}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     else:
         # Match complete — give rewards
@@ -794,6 +975,9 @@ async def _end_innings(ctx, mid):
             margin = f"by {target - 1 - chasing} runs"
 
         wc, wg, lc, lg = await _award_match_rewards(ctx, s, winner_tg, loser_tg, overs)
+
+        # Save all player game stats from both innings
+        await _save_match_stats(s)
 
         await ctx.bot.send_message(cid,
             f"━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
