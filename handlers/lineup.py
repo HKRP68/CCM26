@@ -39,45 +39,30 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False):
     bench = roster_list[11:]
     count = len(top_11)
 
-    # First pass: categorize
-    batsmen_raw, keepers_raw, allrounders_raw, pacers_raw, spinners_raw = [], [], [], [], []
+    batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
     total_ovr = 0
+    serial = 0
     for entry, player in top_11:
+        serial += 1
         total_ovr += player.rating
-        cat = player.category
-        pair = (entry, player)
-        if cat == "Batsman":
-            batsmen_raw.append(pair)
-        elif cat == "Wicket Keeper":
-            keepers_raw.append(pair)
-        elif cat == "All-rounder":
-            allrounders_raw.append(pair)
-        elif cat == "Bowler":
-            if _is_spin(player.bowl_style):
-                spinners_raw.append(pair)
-            else:
-                pacers_raw.append(pair)
-        else:
-            batsmen_raw.append(pair)
-
-    # Second pass: number in display order (batsmen → keepers → allrounders → pacers → spinners)
-    def _fmt(entry, player, serial):
         flag = get_flag(player.country)
         cap = " ©️" if entry.id == captain_rid else ""
-        return f"{serial}. {player.name} | {player.rating} | {player.bat_rating} | {player.bowl_rating} | {flag}{cap}"
+        line = f"{serial}. {player.name} | {player.rating} | {player.bat_rating} | {player.bowl_rating} | {flag}{cap}"
 
-    batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
-    serial = 0
-    for pair in batsmen_raw:
-        serial += 1; batsmen.append(_fmt(pair[0], pair[1], serial))
-    for pair in keepers_raw:
-        serial += 1; keepers.append(_fmt(pair[0], pair[1], serial))
-    for pair in allrounders_raw:
-        serial += 1; allrounders.append(_fmt(pair[0], pair[1], serial))
-    for pair in pacers_raw:
-        serial += 1; pacers.append(_fmt(pair[0], pair[1], serial))
-    for pair in spinners_raw:
-        serial += 1; spinners.append(_fmt(pair[0], pair[1], serial))
+        cat = player.category
+        if cat == "Batsman":
+            batsmen.append(line)
+        elif cat == "Wicket Keeper":
+            keepers.append(line)
+        elif cat == "All-rounder":
+            allrounders.append(line)
+        elif cat == "Bowler":
+            if _is_spin(player.bowl_style):
+                spinners.append(line)
+            else:
+                pacers.append(line)
+        else:
+            batsmen.append(line)
 
     avg_ovr = round(total_ovr / count, 1) if count else 0
 
