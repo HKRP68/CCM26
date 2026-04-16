@@ -15,30 +15,30 @@ logger = logging.getLogger(__name__)
 # ── Base probabilities (%) — for "neutral" conditions ────────────────
 # These are the starting point before any modifiers
 BASE = {
-    "dot": 30.0,
+    "dot": 32.0,
     "1": 25.0,
     "2": 8.0,
     "3": 2.0,
-    "4": 14.0,
-    "6": 9.0,
-    "W": 3.2,
-    "wide": 2.0,
-    "noball": 1.0,
-    "legbye": 1.2,
+    "4": 12.0,
+    "6": 7.5,
+    "W": 3.5,
+    "wide": 2.5,
+    "noball": 1.2,
+    "legbye": 1.5,
     "bye": 0.5,
 }
 
 # ── Shot modifiers ───────────────────────────────────────────────────
 SHOT_MODS = {
-    "Drive":      {"dot": -4, "1": 3, "2": 1, "4": 3, "6": -1, "W": -1},
-    "Cut":        {"dot": -2, "1": 3, "2": 2, "4": 2, "6": -2, "W": -0.5},
-    "Pull":       {"dot": -3, "1": 1, "2": 1, "4": 2, "6": 3, "W": 0},
-    "Leg Glance": {"dot": -2, "1": 4, "2": 3, "4": 0, "6": -3, "W": -1.5},
-    "Flick":      {"dot": -3, "1": 3, "2": 2, "4": 2, "6": -1, "W": -1},
-    "Sweep":      {"dot": -2, "1": 2, "2": 2, "4": 2, "6": 1, "W": 0},
-    "Switch Hit": {"dot": -4, "1": -1, "2": 0, "4": 3, "6": 5, "W": 1},
-    "Slog":       {"dot": -7, "1": -3, "2": -1, "4": 3, "6": 10, "W": 2},
-    "Loft":       {"dot": -5, "1": -2, "2": 0, "4": 3, "6": 7, "W": 1},
+    "Drive":      {"dot": -3, "1": 2, "2": 1, "4": 2, "6": -1, "W": -0.5},
+    "Cut":        {"dot": -1, "1": 2, "2": 2, "4": 1, "6": -2, "W": 0},
+    "Pull":       {"dot": -2, "1": 0, "2": 1, "4": 2, "6": 2, "W": 0.5},
+    "Leg Glance": {"dot": -1, "1": 3, "2": 3, "4": 0, "6": -3, "W": -1},
+    "Flick":      {"dot": -2, "1": 2, "2": 2, "4": 1, "6": -1, "W": -0.5},
+    "Sweep":      {"dot": -1, "1": 1, "2": 1, "4": 1, "6": 1, "W": 0.5},
+    "Switch Hit": {"dot": -3, "1": -1, "2": 0, "4": 2, "6": 4, "W": 1.5},
+    "Slog":       {"dot": -6, "1": -3, "2": -1, "4": 3, "6": 8, "W": 2.5},
+    "Loft":       {"dot": -4, "1": -2, "2": 0, "4": 2, "6": 6, "W": 1.5},
 }
 
 # ── Bowler type modifiers ────────────────────────────────────────────
@@ -146,27 +146,22 @@ def _apply_mods(probs, mods):
 
 
 def _apply_rating_diff(probs, bat_rating, bowl_rating):
-    """Rating differential: stronger effect, batsman domination for big gaps."""
+    """Rating differential: +1 diff = slight shift toward batsman."""
     diff = bat_rating - bowl_rating  # -100 to +100
-    factor = diff / 60.0  # stronger scale (was /100)
+    factor = diff / 100.0
 
-    probs["dot"] += factor * -8
-    probs["1"] += factor * 1.5
-    probs["2"] += factor * 1
-    probs["4"] += factor * 4
-    probs["6"] += factor * 3.5
-    probs["W"] += factor * -4
+    probs["dot"] += factor * -5
+    probs["1"] += factor * 1
+    probs["2"] += factor * 0.5
+    probs["4"] += factor * 2.5
+    probs["6"] += factor * 2
+    probs["W"] += factor * -3
 
-    # Minimums for weaker batsmen (they still need to score)
+    # Even against much better bowler, keep minimum scoring chance
     if diff < -10:
-        probs["4"] = max(probs["4"], 8.0)
-        probs["6"] = max(probs["6"], 4.0)
-        probs["W"] = min(probs["W"], 7.0)
-
-    # Cap wicket % when batsman much better (dominance effect)
-    if diff > 15:
-        probs["W"] = min(probs["W"], 2.5)
-        probs["dot"] = min(probs["dot"], 20.0)
+        probs["4"] = max(probs["4"], 10.0)
+        probs["6"] = max(probs["6"], 5.0)
+        probs["W"] = min(probs["W"], 8.0)  # cap wicket chance
 
 
 def _normalize(probs):
