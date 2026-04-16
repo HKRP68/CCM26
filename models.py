@@ -20,13 +20,6 @@ class User(Base):
     total_gems = Column(Integer, default=0)
     roster_count = Column(Integer, default=0)
     captain_roster_id = Column(Integer, nullable=True)
-    matches_played = Column(Integer, default=0)
-    matches_won = Column(Integer, default=0)
-    matches_lost = Column(Integer, default=0)
-    win_streak = Column(Integer, default=0)
-    best_streak = Column(Integer, default=0)
-    active_days = Column(Integer, default=0)  # days with at least 1 match
-    last_match_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -231,10 +224,10 @@ class Match(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user1_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(String(30), default="pending")
+    status = Column(String(30), default="pending")  # pending/accepted/toss/selecting/playing/completed/expired
     overs = Column(Integer, default=20)
     toss_winner_id = Column(Integer, nullable=True)
-    toss_decision = Column(String(10), nullable=True)
+    toss_decision = Column(String(10), nullable=True)  # bat/bowl
     batting_first_id = Column(Integer, nullable=True)
     bowling_first_id = Column(Integer, nullable=True)
     stadium = Column(String(100), nullable=True)
@@ -244,18 +237,6 @@ class Match(Base):
     umpire1 = Column(String(60), nullable=True)
     umpire2 = Column(String(60), nullable=True)
     chat_id = Column(BigInteger, nullable=True)
-    # Result fields
-    winner_id = Column(Integer, nullable=True)
-    loser_id = Column(Integer, nullable=True)
-    margin_type = Column(String(20), nullable=True)  # "runs" or "wickets"
-    margin_value = Column(Integer, nullable=True)
-    result_message_id = Column(BigInteger, nullable=True)  # telegram msg id for /jump
-    inn1_runs = Column(Integer, nullable=True)
-    inn1_wickets = Column(Integer, nullable=True)
-    inn2_runs = Column(Integer, nullable=True)
-    inn2_wickets = Column(Integer, nullable=True)
-    potm_player_id = Column(Integer, nullable=True)
-    potm_impact = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -265,5 +246,4 @@ class Match(Base):
 
     __table_args__ = (
         Index("ix_matches_status", "status"),
-        Index("ix_matches_winner", "winner_id"),
     )
