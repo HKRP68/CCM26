@@ -163,10 +163,140 @@ async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
     finally: session.close()
 
 
-async def _save_match_stats(s):
-    """Save PlayerGameStats for all players from both innings.
-    Works for completed matches AND mid-match saves (endmatch/timeout).
+def _calc_potm(s):
+    """Calculate Player of the Match using Impact Points.
+
+    Batting impact: runs + (4s × 1) + (6s × 2) + (bonus if 50/100) - (penalty if out cheap)
+    Bowling impact: (wickets × 25) + (20 - economy_rate × 2) per over bowled
+
+    Returns: (name, impact_points, stats_string) or (None, 0, "")
     """
+    best_name = None
+    best_impact = 0
+    best_stats = ""
+
+    def _bat_impact(bs):
+        if not bs or bs.get("balls", 0) == 0:
+            return 0
+        runs = bs.get("runs", 0)
+        fours = bs.get("fours", 0)
+        sixes = bs.get("sixes", 0)
+        balls = bs.get("balls", 1)
+        impact = runs + fours * 1 + sixes * 2
+        # Strike rate bonus (T20 context)
+        sr = (runs / balls) * 100 if balls else 0
+        if sr >= 150:
+            impact += 10
+        elif sr >= 130:
+            impact += 5
+        # Milestones
+        if runs >= 100:
+            impact += 30
+        elif runs >= 50:
+            impact += 15
+        return impact
+
+    def _bowl_impact(bws):
+        if not bws or bws.get("balls", 0) == 0:
+            return 0
+        wickets = bws.get("wickets", 0)
+        runs = bws.get("runs", 0)
+        balls = bws.get("balls", 1)
+        overs = balls / 6
+        econ = (runs / balls) * 6 if balls else 0
+        impact = wickets * 25
+        # Economy bonus/penalty (6 runs/over is baseline)
+        econ_diff = 8 - econ  # positive = good economy
+        impact += econ_diff * overs * 2
+        # Milestones
+        if wickets >= 5:
+            impact += 30
+        elif wickets >= 3:
+            impact += 15
+        return max(0, impact)
+
+    # Gather all players from both innings with their stats
+    all_players = {}  # roster_id -> (name, bat_impact, bowl_impact, bat_stats, bowl_stats, team_name)
+
+    # 1st innings
+    inn1_bat_xi = s.get("inn1_bat_xi", [])
+    inn1_bowl_xi = s.get("inn1_bowl_xi", [])
+    inn1_bat_stats = s.get("inn1_bat_stats", {})
+    inn1_bowl_stats = s.get("inn1_bowl_stats", {})
+    inn1_bat_team = s.get("inn1_team", "")
+    inn1_bowl_team = s["bat_team_name"] if s["innings"] == 2 else s["bowl_team_name"]
+
+    for p in inn1_bat_xi:
+        rid = p["roster_id"]
+        bs = inn1_bat_stats.get(rid, {})
+        all_players[rid] = {
+            "name": p["name"], "team": inn1_bat_team,
+            "bat": bs, "bowl": {}, "bat_impact": _bat_impact(bs), "bowl_impact": 0,
+        }
+    for p in inn1_bowl_xi:
+        rid = p["roster_id"]
+        bws = inn1_bowl_stats.get(rid, {})
+        if rid in all_players:
+            all_players[rid]["bowl"] = bws
+            all_players[rid]["bowl_impact"] = _bowl_impact(bws)
+        else:
+            all_players[rid] = {
+                "name": p["name"], "team": inn1_bowl_team,
+                "bat": {}, "bowl": bws, "bat_impact": 0, "bowl_impact": _bowl_impact(bws),
+            }
+
+    # 2nd innings (only if match reached 2nd)
+    if s.get("innings", 1) >= 2:
+        inn2_bat_xi = s["bat_xi"]
+        inn2_bowl_xi = s["bowl_xi"]
+        inn2_bat_team = s["bat_team_name"]
+        inn2_bowl_team = s["bowl_team_name"]
+
+        for p in inn2_bat_xi:
+            rid = p["roster_id"]
+            bs = s["bat_stats"].get(rid, {})
+            if rid in all_players:
+                all_players[rid]["bat"] = bs
+                all_players[rid]["bat_impact"] += _bat_impact(bs)
+            else:
+                all_players[rid] = {
+                    "name": p["name"], "team": inn2_bat_team,
+                    "bat": bs, "bowl": {}, "bat_impact": _bat_impact(bs), "bowl_impact": 0,
+                }
+        for p in inn2_bowl_xi:
+            rid = p["roster_id"]
+            bws = s["bowl_stats"].get(rid, {})
+            if rid in all_players:
+                all_players[rid]["bowl"] = bws
+                all_players[rid]["bowl_impact"] += _bowl_impact(bws)
+            else:
+                all_players[rid] = {
+                    "name": p["name"], "team": inn2_bowl_team,
+                    "bat": {}, "bowl": bws, "bat_impact": 0, "bowl_impact": _bowl_impact(bws),
+                }
+
+    # Find max impact
+    for rid, data in all_players.items():
+        total = data["bat_impact"] + data["bowl_impact"]
+        if total > best_impact:
+            best_impact = total
+            best_name = data["name"]
+            parts = []
+            bs = data["bat"]
+            bws = data["bowl"]
+            if bs.get("balls", 0) > 0:
+                parts.append(f"🏏 {bs.get('runs', 0)}({bs.get('balls', 0)})")
+            if bws.get("balls", 0) > 0:
+                overs = bws['balls'] // 6
+                rem = bws['balls'] % 6
+                ovr_str = f"{overs}.{rem}" if rem else str(overs)
+                parts.append(f"🎳 {bws.get('wickets', 0)}/{bws.get('runs', 0)} ({ovr_str})")
+            best_stats = " | ".join(parts) if parts else "—"
+
+    return best_name, int(best_impact), best_stats
+
+
+async def _save_match_stats(s):
     session = get_session()
     try:
         def build_lookup(xi_list, user_id):
@@ -741,7 +871,20 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split("_"); mid, si = int(parts[1]), int(parts[2])
     s = _gs(context, mid)
     if not s or tg.id != s["bat_user_tg"]: await q.answer("Not your bat!"); return
+
+    # Prevent double-click
+    lock_key = f"processing_{mid}"
+    if context.bot_data.get(lock_key):
+        await q.answer("⏳ Processing...")
+        return
+    context.bot_data[lock_key] = True
+
     await q.answer(); _cancel_action_timer(context, mid)
+    # Remove buttons immediately
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     shot = AVAILABLE_SHOTS[si]; dl = s.get("current_delivery", "?")
     striker = get_striker(s); bowler = get_bowler(s)
@@ -784,7 +927,7 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: rtxt = f"{SYM.get(runs, str(runs))} <b>{runs} RUN{'S' if runs != 1 else ''}!</b>"
         if runs % 2 == 1: s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
 
-    if legal: s["current_ball"] += 1; bws["this_over_balls"] += 1
+    if legal: s["current_ball"] += 1; bws["this_over_balls"] += 1; bws["balls"] = bws.get("balls", 0) + 1
     eoo = False
     if s["current_ball"] >= 6:
         bws["overs_done"] += 1; bws["this_over_balls"] = 0
@@ -794,7 +937,13 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _ss(context, mid, s)
 
     sc = build_live_scorecard(s)
-    await q.edit_message_text(f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}\n\n{sc}", parse_mode="HTML")
+    try:
+        await q.edit_message_text(f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}\n\n{sc}", parse_mode="HTML")
+    except Exception:
+        await context.bot.send_message(s["chat_id"], f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}\n\n{sc}", parse_mode="HTML")
+
+    # Release lock before next step
+    context.bot_data.pop(f"processing_{mid}", None)
 
     if is_innings_over(s): await _end_innings(context, mid); return
     if need_new_bat and s["total_wickets"] < 10: await _show_new_batsman(context, mid)
@@ -957,38 +1106,102 @@ async def _end_innings(ctx, mid):
         await ctx.bot.send_message(cid, f"🏏 <b>2ND INNINGS — SELECT OPENER 1</b>\n\n@{s['bat_username']}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     else:
         # Match complete — give rewards
-        session = get_session()
-        try:
-            m = session.query(Match).get(mid)
-            if m: m.status = "completed"; m.completed_at = datetime.utcnow(); session.commit()
-        except Exception: session.rollback()
-        finally: session.close()
-
         target = s["target"]; chasing = s["total_runs"]; overs = s.get("overs", 10)
         if chasing >= target:
             winner_name = s["bat_team_name"]; loser_name = s["bowl_team_name"]
             winner_tg = s["bat_user_tg"]; loser_tg = s["bowl_user_tg"]
-            margin = f"by {10 - s['total_wickets']} wickets"
+            winner_uid = s["bat_team_id"]; loser_uid = s["bowl_team_id"]
+            margin_type = "wickets"
+            margin_val = 10 - s['total_wickets']
+            margin = f"by {margin_val} wickets"
         else:
             winner_name = s["bowl_team_name"]; loser_name = s["bat_team_name"]
             winner_tg = s["bowl_user_tg"]; loser_tg = s["bat_user_tg"]
-            margin = f"by {target - 1 - chasing} runs"
+            winner_uid = s["bowl_team_id"]; loser_uid = s["bat_team_id"]
+            margin_type = "runs"
+            margin_val = target - 1 - chasing
+            margin = f"by {margin_val} runs"
 
         wc, wg, lc, lg = await _award_match_rewards(ctx, s, winner_tg, loser_tg, overs)
-
-        # Save all player game stats from both innings
         await _save_match_stats(s)
+        potm_name, potm_impact, potm_stats = _calc_potm(s)
 
-        await ctx.bot.send_message(cid,
+        # Get POTM player_id for DB
+        potm_pid = None
+        if potm_name:
+            _ses = get_session()
+            try:
+                p = _ses.query(Player).filter(Player.name == potm_name).first()
+                if p: potm_pid = p.id
+            finally: _ses.close()
+
+        # Update Match record + User stats
+        session = get_session()
+        try:
+            m = session.query(Match).get(mid)
+            if m:
+                m.status = "completed"
+                m.completed_at = datetime.utcnow()
+                m.winner_id = winner_uid; m.loser_id = loser_uid
+                m.margin_type = margin_type; m.margin_value = margin_val
+                m.inn1_runs = s["inn1_runs"]; m.inn1_wickets = s["inn1_wickets"]
+                m.inn2_runs = s["total_runs"]; m.inn2_wickets = s["total_wickets"]
+                m.potm_player_id = potm_pid; m.potm_impact = potm_impact
+
+            # Update user counters
+            today = datetime.utcnow().date()
+            for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
+                u = session.query(User).get(uid)
+                if u:
+                    u.matches_played = (u.matches_played or 0) + 1
+                    if is_winner:
+                        u.matches_won = (u.matches_won or 0) + 1
+                        u.win_streak = (u.win_streak or 0) + 1
+                        u.best_streak = max(u.best_streak or 0, u.win_streak)
+                    else:
+                        u.matches_lost = (u.matches_lost or 0) + 1
+                        u.win_streak = 0
+                    # Active days
+                    last = u.last_match_date
+                    if not last or last.date() != today:
+                        u.active_days = (u.active_days or 0) + 1
+                    u.last_match_date = datetime.utcnow()
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("Match finalize err")
+        finally: session.close()
+
+        msg = (
             f"━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
             f"🔴 {s['inn1_team']}: {s['inn1_runs']}/{s['inn1_wickets']} ({s['inn1_overs']})\n"
             f"🟢 {s['bat_team_name']}: {format_score(s)} ({format_overs(s)})\n\n"
             f"🏆 <b>{winner_name} wins {margin}!</b>\n\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🎁 <b>REWARDS</b>\n"
-            f"🏆 {winner_name}: +{wc:,} Coins 💰 +{wg} Gems 💎\n"
-            f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
-            f"━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+        )
+        if potm_name:
+            msg += (f"⭐ <b>PLAYER OF THE MATCH</b>\n"
+                    f"🌟 {potm_name}\n"
+                    f"{potm_stats}\n"
+                    f"💫 Impact Points: {potm_impact}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n\n")
+        msg += (f"🎁 <b>REWARDS</b>\n"
+                f"🏆 {winner_name}: +{wc:,} Coins 💰 +{wg} Gems 💎\n"
+                f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
+                f"━━━━━━━━━━━━━━━━━━━")
+
+        sent = await ctx.bot.send_message(cid, msg, parse_mode="HTML")
+
+        # Save message id for /jump
+        session = get_session()
+        try:
+            m = session.query(Match).get(mid)
+            if m and sent:
+                m.result_message_id = sent.message_id
+                session.commit()
+        except Exception:
+            session.rollback()
+        finally: session.close()
 
         for k in list(ctx.bot_data.keys()):
             if str(mid) in k: del ctx.bot_data[k]
