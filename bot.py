@@ -44,6 +44,8 @@ from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_h
 from handlers.search import searchpl_handler, searchovr_handler
 from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback
 from handlers.team import teamname_handler, purse_handler, stats_handler
+from handlers.leaderboard import leaderboard_handler, leaderboard_callback
+from handlers.profile import myprofile_handler, myprofile_callback
 
 # Match handlers
 from handlers.match import (
@@ -82,7 +84,9 @@ async def start_handler(update, context):
         "/releasemultiple - Release duplicates\n"
         "/trade @user - Trade players\n"
         "/playmatch @user - Play a match\n"
-        "/endmatch - End match (fine applies)",
+        "/endmatch - End match (fine applies)\n"
+        "/myprofile - Your profile\n"
+        "/cmuleaderboard - Leaderboard",
         parse_mode="HTML",
     )
 
@@ -195,6 +199,10 @@ def main():
         app.add_handler(CommandHandler("teamname", teamname_handler))
         app.add_handler(CommandHandler("purse", purse_handler))
         app.add_handler(CommandHandler("stats", stats_handler))
+        app.add_handler(CommandHandler("cmuleaderboard", leaderboard_handler))
+        app.add_handler(CommandHandler("leaderboard", leaderboard_handler))
+        app.add_handler(CommandHandler("myprofile", myprofile_handler))
+        app.add_handler(CommandHandler("profile", myprofile_handler))
         app.add_handler(CommandHandler("playmatch", playmatch_handler))
         app.add_handler(CommandHandler("endmatch", endmatch_handler))
 
@@ -235,6 +243,10 @@ def main():
         app.add_handler(CallbackQueryHandler(new_batsman_callback, pattern=r"^newbat_"))
         app.add_handler(CallbackQueryHandler(endmatch_yes_callback, pattern=r"^endmatch_"))
         app.add_handler(CallbackQueryHandler(endmatch_no_callback, pattern=r"^endmatchno_"))
+
+        # ── Leaderboard & Profile ──────────────────────────────────
+        app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lb_"))
+        app.add_handler(CallbackQueryHandler(myprofile_callback, pattern=r"^mp_"))
 
         # ── Trade callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
