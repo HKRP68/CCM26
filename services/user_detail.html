@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}User: {{ user.first_name }}{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;">
+  <a href="{{ url_for('users_list') }}" class="btn btn-ghost btn-sm">← Users</a>
+  <h2>{{ user.first_name or 'User' }} <span style="color:var(--muted);font-weight:400;">@{{ user.username or '—' }}</span></h2>
+</div>
+
+<!-- ── Stats cards ────────────────────────────────────────────── -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="label">Coins</div>
+    <div class="value gold">{{ "{:,}".format(user.total_coins) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Gems</div>
+    <div class="value blue">{{ user.total_gems }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Roster</div>
+    <div class="value green">{{ user.roster_count }}/25</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Streak</div>
+    <div class="value">{{ stats.streak_count if stats else 0 }}/14</div>
+  </div>
+</div>
+
+<!-- ── Edit purse ─────────────────────────────────────────────── -->
+<div class="form-card" style="max-width:500px;margin-bottom:1.5rem;">
+  <h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--accent);text-transform:uppercase;">Edit Purse & Gems</h3>
+  <form method="POST" action="{{ url_for('user_edit_purse', user_id=user.id) }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Coins</label>
+        <input type="number" name="coins" value="{{ user.total_coins }}">
+      </div>
+      <div class="form-group">
+        <label>Gems</label>
+        <input type="number" name="gems" value="{{ user.total_gems }}">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+  </form>
+</div>
+
+<!-- ── Cooldowns ──────────────────────────────────────────────── -->
+{% if stats %}
+<div class="form-card" style="max-width:500px;margin-bottom:1.5rem;">
+  <h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--accent2);text-transform:uppercase;">Cooldowns & Streak</h3>
+  <div style="font-size:.85rem;color:var(--muted);line-height:1.8;">
+    <b>Last Claim:</b> {{ stats.last_claim.strftime('%d %b %Y %H:%M') if stats.last_claim else 'Never' }}<br>
+    <b>Last Daily:</b> {{ stats.last_daily.strftime('%d %b %Y %H:%M') if stats.last_daily else 'Never' }}<br>
+    <b>Last GSpin:</b> {{ stats.last_gspin.strftime('%d %b %Y %H:%M') if stats.last_gspin else 'Never' }}<br>
+    <b>Streak:</b> {{ stats.streak_count }}/14 ({{ stats.total_streaks_completed }} completed)<br>
+    <b>Telegram ID:</b> {{ user.telegram_id }}<br>
+    <b>Joined:</b> {{ user.created_at.strftime('%d %b %Y %H:%M') if user.created_at else '—' }}
+  </div>
+  <form method="POST" action="{{ url_for('user_reset_cooldowns', user_id=user.id) }}" style="margin-top:.75rem;">
+    <button type="submit" class="btn btn-ghost btn-sm">Reset All Cooldowns</button>
+  </form>
+</div>
+{% endif %}
+
+<!-- ── Roster ─────────────────────────────────────────────────── -->
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem;">
+  <h3 style="font-size:.9rem;color:var(--muted);text-transform:uppercase;">Roster ({{ roster|length }})</h3>
+  <form method="POST" action="{{ url_for('user_add_player', user_id=user.id) }}" style="display:flex;gap:.5rem;align-items:center;">
+    <input type="text" name="player_name" placeholder="Add player by name..." style="width:200px;padding:.35rem .6rem;font-size:.8rem;">
+    <button type="submit" class="btn btn-green btn-sm">+ Add</button>
+  </form>
+</div>
+<div class="table-wrap" style="margin-bottom:1.5rem;">
+  <table>
+    <thead><tr><th>Player</th><th>Rating</th><th>Category</th><th>Acquired</th><th></th></tr></thead>
+    <tbody>
+    {% for entry, player in roster %}
+    <tr>
+      <td style="font-weight:600;">{{ player.name }}</td>
+      <td><span class="rating-badge tier-{{ player._tier_css }}">{{ player.rating }}</span></td>
+      <td>{{ player.category }}</td>
+      <td style="font-size:.8rem;">{{ entry.acquired_date.strftime('%d %b') if entry.acquired_date else '—' }}</td>
+      <td>
+        <form method="POST" action="{{ url_for('user_remove_player', user_id=user.id, roster_id=entry.id) }}" style="display:inline;" onsubmit="return confirm('Remove {{ player.name }}?')">
+          <button type="submit" class="btn btn-red btn-sm">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not roster %}
+    <tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--muted);">Empty roster</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<!-- ── Activity log ──────────────────────────────────────────── -->
+<h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--muted);text-transform:uppercase;">Recent Activity (last 50)</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Time</th><th>Action</th><th>Detail</th><th>Coins</th></tr></thead>
+    <tbody>
+    {% for a in activities %}
+    <tr>
+      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at.strftime('%d %b %H:%M') if a.created_at else '' }}</td>
+      <td><span style="background:var(--bg);padding:.15rem .5rem;border-radius:4px;font-size:.75rem;font-weight:600;">{{ a.action }}</span></td>
+      <td style="font-size:.8rem;">{{ a.detail or '' }}</td>
+      <td style="font-size:.8rem;{% if a.coins_change > 0 %}color:var(--green);{% elif a.coins_change < 0 %}color:var(--red);{% endif %}">
+        {% if a.coins_change %}{{ '{:+,}'.format(a.coins_change) }}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not activities %}
+    <tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--muted);">No activity yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

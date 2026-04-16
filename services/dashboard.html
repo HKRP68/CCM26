@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>Dashboard</h2>
+  <a href="{{ url_for('status') }}" class="btn btn-ghost btn-sm">🔍 System Status</a>
+</div>
+
+{% if stats.total_players == 0 %}
+<div class="flash flash-error" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;">
+  <div>
+    <strong>⚠️ No players in database!</strong><br>
+    <span style="font-size:.85rem;">Upload your players.json file to load all players.</span>
+  </div>
+  <a href="{{ url_for('seed_database') }}" class="btn btn-primary">🌱 Seed Players</a>
+</div>
+{% endif %}
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="label">Total Players</div>
+    <div class="value gold">{{ stats.total_players | default(0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Active Players</div>
+    <div class="value green">{{ stats.active_players | default(0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total Users</div>
+    <div class="value blue">{{ stats.total_users | default(0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total Trades</div>
+    <div class="value">{{ stats.total_trades | default(0) }}</div>
+  </div>
+</div>
+
+<h3 style="margin-bottom:.75rem;color:var(--muted);font-size:.9rem;text-transform:uppercase;">Rating Distribution</h3>
+<div class="table-wrap" style="max-width:500px;">
+  <table>
+    <thead><tr><th>Rating Range</th><th>Count</th><th>Bar</th></tr></thead>
+    <tbody>
+    {% for tier in tiers %}
+    <tr>
+      <td><span class="rating-badge tier-{{ tier.css }}">{{ tier.label }}</span></td>
+      <td>{{ tier.count }}</td>
+      <td>
+        <div style="background:var(--border);border-radius:3px;height:14px;width:100%;max-width:200px;">
+          <div style="background:{{ tier.color }};height:100%;border-radius:3px;width:{{ tier.pct }}%;min-width:{% if tier.count > 0 %}2px{% else %}0{% endif %};"></div>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h3 style="margin:1.5rem 0 .75rem;color:var(--muted);font-size:.9rem;text-transform:uppercase;">Top Countries</h3>
+<div class="table-wrap" style="max-width:400px;">
+  <table>
+    <thead><tr><th>Country</th><th>Players</th></tr></thead>
+    <tbody>
+    {% for c in countries %}
+    <tr><td>{{ c.country }}</td><td>{{ c.count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

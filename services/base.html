@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Admin{% endblock %} — Cricket Bot</title>
+<style>
+:root {
+  --bg: #0f1923;
+  --card: #1a2634;
+  --card-hover: #1f2f40;
+  --border: #2a3a4a;
+  --accent: #e6ac00;
+  --accent2: #2980b9;
+  --green: #27ae60;
+  --red: #e74c3c;
+  --text: #e0e6ed;
+  --muted: #7f8fa6;
+  --input-bg: #152029;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height:100vh; }
+
+/* Nav */
+nav { background: var(--card); border-bottom: 1px solid var(--border); padding: 0 1.5rem; display:flex; align-items:center; justify-content:space-between; height:56px; position:sticky; top:0; z-index:100; }
+nav .brand { font-size:1.1rem; font-weight:700; color:var(--accent); display:flex; align-items:center; gap:.5rem; }
+nav .links { display:flex; gap:.25rem; }
+nav .links a { color:var(--muted); text-decoration:none; padding:.5rem .75rem; border-radius:6px; font-size:.875rem; transition:all .15s; }
+nav .links a:hover, nav .links a.active { color:var(--text); background:var(--bg); }
+nav .logout { color:var(--red); font-size:.8rem; text-decoration:none; padding:.4rem .75rem; border:1px solid var(--red); border-radius:6px; }
+nav .logout:hover { background:var(--red); color:#fff; }
+
+/* Main */
+main { max-width:1200px; margin:0 auto; padding:1.5rem; }
+
+/* Cards */
+.stats-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+.stat-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.25rem; }
+.stat-card .label { font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+.stat-card .value { font-size:1.75rem; font-weight:700; margin-top:.25rem; }
+.stat-card .value.gold { color:var(--accent); }
+.stat-card .value.blue { color:var(--accent2); }
+.stat-card .value.green { color:var(--green); }
+
+/* Table */
+.table-wrap { background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+table { width:100%; border-collapse:collapse; font-size:.875rem; }
+thead { background:var(--bg); }
+th { padding:.75rem 1rem; text-align:left; font-weight:600; color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.5px; white-space:nowrap; }
+td { padding:.65rem 1rem; border-top:1px solid var(--border); vertical-align:middle; }
+tr:hover td { background:var(--card-hover); }
+.rating-badge { display:inline-block; padding:.15rem .5rem; border-radius:4px; font-weight:700; font-size:.8rem; color:#fff; min-width:40px; text-align:center; }
+.tier-legendary { background:#e6ac00; }
+.tier-epic { background:#9b59b6; }
+.tier-rare { background:#2980b9; }
+.tier-uncommon { background:#27ae60; }
+.tier-common { background:#7f8c8d; }
+.tier-basic { background:#95a5a6; }
+
+/* Buttons */
+.btn { display:inline-flex; align-items:center; gap:.35rem; padding:.45rem .9rem; border-radius:6px; border:none; cursor:pointer; font-size:.8rem; font-weight:600; text-decoration:none; transition:all .15s; }
+.btn-primary { background:var(--accent); color:#000; }
+.btn-primary:hover { background:#f0be26; }
+.btn-blue { background:var(--accent2); color:#fff; }
+.btn-blue:hover { background:#3498db; }
+.btn-green { background:var(--green); color:#fff; }
+.btn-green:hover { background:#2ecc71; }
+.btn-red { background:var(--red); color:#fff; }
+.btn-red:hover { background:#c0392b; }
+.btn-ghost { background:transparent; color:var(--muted); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); border-color:var(--muted); }
+.btn-sm { padding:.3rem .6rem; font-size:.75rem; }
+.actions { display:flex; gap:.35rem; }
+
+/* Forms */
+.form-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:700px; }
+.form-row { display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-bottom:1rem; }
+.form-group { margin-bottom:1rem; }
+.form-group label { display:block; font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:.35rem; }
+input, select, textarea { width:100%; padding:.55rem .75rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:.875rem; outline:none; }
+input:focus, select:focus { border-color:var(--accent); }
+select { cursor:pointer; }
+
+/* Search bar */
+.toolbar { display:flex; gap:.75rem; margin-bottom:1rem; flex-wrap:wrap; align-items:center; }
+.toolbar .search { flex:1; min-width:200px; }
+.toolbar select { width:auto; min-width:120px; }
+
+/* Pagination */
+.pagination { display:flex; gap:.35rem; justify-content:center; padding:1rem; align-items:center; }
+.pagination a, .pagination span { padding:.4rem .75rem; border-radius:6px; font-size:.8rem; text-decoration:none; }
+.pagination a { color:var(--muted); background:var(--bg); border:1px solid var(--border); }
+.pagination a:hover { color:var(--text); border-color:var(--muted); }
+.pagination .current { background:var(--accent); color:#000; font-weight:700; }
+.pagination .info { color:var(--muted); font-size:.8rem; }
+
+/* Flash */
+.flash { padding:.75rem 1rem; border-radius:8px; margin-bottom:1rem; font-size:.875rem; }
+.flash-success { background:#1b4332; border:1px solid var(--green); color:#95d5b2; }
+.flash-error { background:#3d1010; border:1px solid var(--red); color:#f5a5a5; }
+.flash-info { background:#0a2742; border:1px solid var(--accent2); color:#89c4f4; }
+
+/* Mobile */
+@media (max-width:768px) {
+  .form-row { grid-template-columns:1fr; }
+  .stats-grid { grid-template-columns:1fr 1fr; }
+  table { font-size:.8rem; }
+  th, td { padding:.5rem .6rem; }
+  nav .links a { padding:.4rem .5rem; font-size:.8rem; }
+  .toolbar { flex-direction:column; }
+  .toolbar select { width:100%; }
+}
+@media (max-width:480px) {
+  .stats-grid { grid-template-columns:1fr; }
+  main { padding:1rem .75rem; }
+}
+</style>
+</head>
+<body>
+{% if session.get('admin') %}
+<nav>
+  <div class="brand">🏏 Cricket Bot Admin</div>
+  <div class="links">
+    <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
+    <a href="{{ url_for('players_list') }}" class="{{ 'active' if request.endpoint in ('players_list','player_edit','player_add') }}">Players</a>
+    <a href="{{ url_for('users_list') }}" class="{{ 'active' if request.endpoint in ('users_list','user_detail') }}">Users</a>
+    <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">Seed</a>
+    <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">Status</a>
+    <a href="{{ url_for('logout') }}" class="logout">Logout</a>
+  </div>
+</nav>
+{% endif %}
+
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="flash flash-{{ cat }}">{{ msg }}</div>
+  {% endfor %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

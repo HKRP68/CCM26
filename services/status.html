@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Status{% endblock %}
+{% block content %}
+<h2 style="margin-bottom:1rem;">System Status</h2>
+<div class="table-wrap" style="max-width:600px;">
+<table>
+<thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+<tbody>
+{% for name, info in checks.items() %}
+<tr>
+  <td style="font-weight:600;">{{ name }}</td>
+  <td>{% if info.ok %}<span style="color:var(--green);">✅</span>{% else %}<span style="color:var(--red);">❌</span>{% endif %}</td>
+  <td style="font-size:.8rem;word-break:break-all;">{{ info.detail }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endblock %}

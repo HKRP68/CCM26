@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:center;align-items:center;min-height:80vh;">
+  <div class="form-card" style="width:100%;max-width:380px;text-align:center;">
+    <div style="font-size:2.5rem;margin-bottom:.5rem;">🏏</div>
+    <h2 style="margin-bottom:.25rem;">Cricket Bot Admin</h2>
+    <p style="color:var(--muted);font-size:.875rem;margin-bottom:1.5rem;">Enter password to continue</p>
+    <form method="POST">
+      <div class="form-group">
+        <input type="password" name="password" placeholder="Admin password" autofocus required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:.6rem;">Login</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

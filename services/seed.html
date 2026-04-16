@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Seed Database{% endblock %}
+{% block content %}
+<h2 style="margin-bottom:1rem;">Seed Player Database</h2>
+
+<div class="form-card" style="max-width:550px;">
+  <h3 style="margin-bottom:.5rem;font-size:1rem;">📤 Upload players.json</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
+    Upload your player data JSON file. This is the file from the <code>data/</code> folder.
+  </p>
+  <form method="POST" enctype="multipart/form-data">
+    <div class="form-group">
+      <input type="file" name="jsonfile" accept=".json" required 
+             style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;width:100%;color:var(--text);">
+    </div>
+    <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:.6rem;">
+      🌱 Upload & Seed Players
+    </button>
+  </form>
+</div>
+
+<div class="form-card" style="max-width:550px;margin-top:1rem;">
+  <h3 style="margin-bottom:.5rem;font-size:1rem;">🗑️ Clear All Players</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
+    Remove all players from the database. Use before re-seeding.
+  </p>
+  <form method="POST" action="{{ url_for('clear_players') }}" onsubmit="return confirm('Delete ALL players?')">
+    <button type="submit" class="btn btn-red" style="width:100%;justify-content:center;padding:.6rem;">
+      🗑️ Clear All Players
+    </button>
+  </form>
+</div>
+
+<div class="form-card" style="max-width:550px;margin-top:1rem;border-color:var(--red);">
+  <h3 style="margin-bottom:.5rem;font-size:1rem;">⚠️ Reset Database Schema</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
+    Use this if you see "column does not exist" errors. This drops ALL tables and recreates them fresh. 
+    <strong style="color:var(--red);">All data (users, rosters, trades) will be lost.</strong>
+  </p>
+  <form method="POST" action="{{ url_for('reset_schema') }}" onsubmit="return confirm('⚠️ This will DELETE ALL DATA (users, rosters, trades). Continue?')">
+    <button type="submit" class="btn btn-red" style="width:100%;justify-content:center;padding:.6rem;">
+      ⚠️ Reset Schema & Delete All Data
+    </button>
+  </form>
+</div>
+{% endblock %}
