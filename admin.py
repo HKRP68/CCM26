@@ -143,13 +143,26 @@ def players_list():
         q = request.args.get("q", "").strip()
         category = request.args.get("category", "").strip()
         country_filter = request.args.get("country", "").strip()
-        rating_min = request.args.get("rating_min", "").strip()
-        rating_max = request.args.get("rating_max", "").strip()
+        rating_range = request.args.get("rating_range", "").strip()
         bat_hand = request.args.get("bat_hand", "").strip()
         bowl_hand = request.args.get("bowl_hand", "").strip()
         is_active = request.args.get("is_active", "").strip()
         sort = request.args.get("sort", "rating_desc").strip()
         page = max(1, int(request.args.get("page", 1)))
+
+        # Rating range map: label -> (min, max)
+        RANGE_MAP = {
+            "95-100": (95, 100),
+            "90-94":  (90, 94),
+            "85-89":  (85, 89),
+            "80-84":  (80, 84),
+            "75-79":  (75, 79),
+            "70-74":  (70, 74),
+            "65-69":  (65, 69),
+            "60-64":  (60, 64),
+            "55-59":  (55, 59),
+            "50-54":  (50, 54),
+        }
 
         query = db.query(Player)
 
@@ -159,10 +172,9 @@ def players_list():
             query = query.filter(Player.category == category)
         if country_filter:
             query = query.filter(Player.country == country_filter)
-        if rating_min:
-            query = query.filter(Player.rating >= int(rating_min))
-        if rating_max:
-            query = query.filter(Player.rating <= int(rating_max))
+        if rating_range and rating_range in RANGE_MAP:
+            r_min, r_max = RANGE_MAP[rating_range]
+            query = query.filter(Player.rating >= r_min, Player.rating <= r_max)
         if bat_hand:
             query = query.filter(Player.bat_hand == bat_hand)
         if bowl_hand:
@@ -201,7 +213,8 @@ def players_list():
             "players.html",
             players=players, total=total, page=page, total_pages=total_pages,
             q=q, category=category, country_filter=country_filter,
-            rating_min=rating_min, rating_max=rating_max,
+            rating_range=rating_range,
+            rating_ranges=list(RANGE_MAP.keys()),
             bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active,
             sort=sort,
             categories=categories, countries=countries,
@@ -221,15 +234,21 @@ def players_download():
         q = request.args.get("q", "").strip()
         category = request.args.get("category", "").strip()
         country_filter = request.args.get("country", "").strip()
-        rating_min = request.args.get("rating_min", "").strip()
-        rating_max = request.args.get("rating_max", "").strip()
+        rating_range = request.args.get("rating_range", "").strip()
+
+        RANGE_MAP = {
+            "95-100": (95, 100), "90-94": (90, 94), "85-89": (85, 89),
+            "80-84": (80, 84), "75-79": (75, 79), "70-74": (70, 74),
+            "65-69": (65, 69), "60-64": (60, 64), "55-59": (55, 59), "50-54": (50, 54),
+        }
 
         query = db.query(Player)
         if q: query = query.filter(Player.name.ilike(f"%{q}%"))
         if category: query = query.filter(Player.category == category)
         if country_filter: query = query.filter(Player.country == country_filter)
-        if rating_min: query = query.filter(Player.rating >= int(rating_min))
-        if rating_max: query = query.filter(Player.rating <= int(rating_max))
+        if rating_range and rating_range in RANGE_MAP:
+            r_min, r_max = RANGE_MAP[rating_range]
+            query = query.filter(Player.rating >= r_min, Player.rating <= r_max)
 
         players = query.order_by(Player.rating.desc(), Player.name.asc()).all()
 
