@@ -155,11 +155,6 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             total_sell += sv
             lines.append(f"• {player.name} - {player.rating} OVR | 💸 {sv:,}")
 
-        # Store in bot_data for confirm
-        release_data = [(entry.id, player.name, player.rating, get_sell_value(player.rating))
-                        for entry, player in to_release]
-        context.bot_data[f"relm_{tg_user.id}"] = release_data
-
         text = (
             f"🔴 <b>RELEASE PLAYERS?</b>\n\n"
             f"Position {pos_from} to {pos_to} ({len(to_release)} players):\n\n"
@@ -167,8 +162,10 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             f"\n\n💸 Total: {total_sell:,} 🪙"
         )
 
+        # Pass range directly in callback - more reliable than bot_data
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Release All", callback_data=f"relmconf_{user.id}"),
+            InlineKeyboardButton("✅ Release All",
+                callback_data=f"relmconf_{user.id}_{pos_from}_{pos_to}"),
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
 
@@ -184,7 +181,20 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
 async def releasemultiple_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     tg_user = query.from_user
-    uid = int(query.data.split("_")[1])
+    parts = query.data.split("_")
+    if len(parts) < 4:
+        # Old-format callback (legacy) - bail gracefully
+        await query.answer("Expired. Run /releasemultiple again.")
+        try: await query.edit_message_text("❌ Expired. Run /releasemultiple again.")
+        except Exception: pass
+        return
+    try:
+        uid = int(parts[1])
+        pos_from = int(parts[2])
+        pos_to = int(parts[3])
+    except ValueError:
+        await query.answer("Bad data")
+        return
 
     session = get_session()
     try:
@@ -194,29 +204,49 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
             return
         await query.answer()
 
-        release_data = context.bot_data.pop(f"relm_{tg_user.id}", [])
-        if not release_data:
+        # Re-fetch roster by position (most recent state)
+        entries = (
+            session.query(UserRoster, Player)
+            .join(Player, UserRoster.player_id == Player.id)
+            .filter(UserRoster.user_id == user.id)
+            .order_by(UserRoster.order_position)
+            .all()
+        )
+        if pos_from < 1 or pos_to > len(entries) or pos_from > pos_to:
+            await query.edit_message_text("❌ Positions out of range.")
+            return
+
+        to_release = entries[pos_from - 1:pos_to]
+        if not to_release:
             await query.edit_message_text("❌ Nothing to release.")
             return
 
         total_coins = 0
         released = 0
-        for roster_id, name, rating, sell_val in release_data:
-            entry = session.query(UserRoster).filter(
-                UserRoster.id == roster_id, UserRoster.user_id == user.id).first()
-            if entry:
-                session.delete(entry)
-                user.roster_count -= 1
-                user.total_coins += sell_val
-                total_coins += sell_val
-                released += 1
-                log_activity(session, user.id, "release", f"Released {name} for {sell_val:,}",
-                             coins_change=sell_val, player_name=name, player_rating=rating)
+        names = []
+        for entry, player in to_release:
+            sv = get_sell_value(player.rating)
+            session.delete(entry)
+            user.roster_count -= 1
+            user.total_coins += sv
+            total_coins += sv
+            released += 1
+            names.append(player.name)
+            log_activity(session, user.id, "release", f"Released {player.name} for {sv:,}",
+                         coins_change=sv, player_name=player.name, player_rating=player.rating)
+
+        # Fix order_positions (close gaps)
+        remaining = (session.query(UserRoster)
+                     .filter(UserRoster.user_id == user.id)
+                     .order_by(UserRoster.order_position).all())
+        for i, e in enumerate(remaining, 1):
+            e.order_position = i
 
         session.commit()
 
         await query.edit_message_text(
             f"✅ <b>RELEASED {released} PLAYERS!</b>\n\n"
+            f"{', '.join(names[:5])}{', ...' if len(names) > 5 else ''}\n\n"
             f"💸 Total: {total_coins:,} 🪙\n"
             f"💰 Balance: {user.total_coins:,}\n"
             f"📊 Roster: {user.roster_count}/25",
@@ -225,6 +255,10 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
     except Exception:
         session.rollback()
         logger.exception("ReleaseMultiple confirm error")
+        try:
+            await query.edit_message_text("⚠️ Error releasing players. Try again.")
+        except Exception:
+            pass
     finally:
         session.close()
 

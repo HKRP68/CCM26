@@ -371,7 +371,13 @@ async def _save_match_stats(s):
 
         def _update_bowl(pid, uid, bws):
             """Update bowling stats for a player."""
-            if not bws or bws.get("balls", 0) == 0:
+            if not bws:
+                return
+            balls = bws.get("balls", 0)
+            wickets = bws.get("wickets", 0)
+            runs = bws.get("runs", 0)
+            # Skip only if truly nothing happened
+            if balls == 0 and wickets == 0 and runs == 0:
                 return
             gs = session.query(PlayerGameStats).filter(
                 PlayerGameStats.user_id == uid, PlayerGameStats.player_id == pid).first()
@@ -381,22 +387,19 @@ async def _save_match_stats(s):
                 session.flush()
 
             gs.bowl_inns += 1
-            gs.wickets_taken += bws.get("wickets", 0)
-            gs.runs_conceded += bws.get("runs", 0)
-            balls = bws.get("balls", 0)
+            gs.wickets_taken += wickets
+            gs.runs_conceded += runs
             gs.balls_bowled += balls
             gs.overs_bowled = round(gs.balls_bowled / 6, 1)
 
-            w = bws.get("wickets", 0)
-            if w >= 5:
+            if wickets >= 5:
                 gs.five_fers += 1
-            elif w >= 3:
+            elif wickets >= 3:
                 gs.three_fers += 1
 
-            r = bws.get("runs", 0)
-            if w > gs.best_bowl_wickets or (w == gs.best_bowl_wickets and r < gs.best_bowl_runs):
-                gs.best_bowl_wickets = w
-                gs.best_bowl_runs = r
+            if wickets > gs.best_bowl_wickets or (wickets == gs.best_bowl_wickets and runs < gs.best_bowl_runs):
+                gs.best_bowl_wickets = wickets
+                gs.best_bowl_runs = runs
 
         # Process 1st innings batting
         for rid, bs in inn1_bat_stats.items():
