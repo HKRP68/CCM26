@@ -267,3 +267,22 @@ class Match(Base):
         Index("ix_matches_status", "status"),
         Index("ix_matches_winner", "winner_id"),
     )
+
+
+class AdminLog(Base):
+    """Audit log for admin actions in the web panel."""
+    __tablename__ = "admin_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    action = Column(String(50), nullable=False)  # player_add, player_edit, player_delete, bulk_upload, etc
+    target_type = Column(String(30), nullable=True)  # player, user, roster
+    target_id = Column(Integer, nullable=True)
+    target_name = Column(String(150), nullable=True)
+    detail = Column(String(500), nullable=True)
+    ip_address = Column(String(50), nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_admin_logs_timestamp", "timestamp"),
+        Index("ix_admin_logs_action", "action"),
+    )

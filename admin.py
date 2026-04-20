@@ -3,16 +3,19 @@ Shares the same database as the bot. Any changes here reflect in the bot instant
 """
 
 import os
+import io
+import csv
+from datetime import datetime
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, session
-from sqlalchemy import func, or_
+from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
+from sqlalchemy import func, or_, desc, asc
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
-from models import Player, User, Trade, UserStats, UserRoster, ActivityLog, PlayerGameStats
+from models import Player, User, Trade, UserStats, UserRoster, ActivityLog, PlayerGameStats, AdminLog
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -30,6 +33,19 @@ def tier_css(rating: int) -> str:
     elif rating >= 80: return "uncommon"
     elif rating >= 70: return "common"
     else:              return "basic"
+
+
+def log_admin(db, action, target_type=None, target_id=None, target_name=None, detail=None):
+    """Write an entry to the admin log."""
+    try:
+        ip = request.remote_addr if request else None
+        entry = AdminLog(
+            action=action, target_type=target_type, target_id=target_id,
+            target_name=target_name, detail=detail, ip_address=ip,
+        )
+        db.add(entry)
+    except Exception:
+        pass
 
 
 def login_required(f):
@@ -129,6 +145,10 @@ def players_list():
         country_filter = request.args.get("country", "").strip()
         rating_min = request.args.get("rating_min", "").strip()
         rating_max = request.args.get("rating_max", "").strip()
+        bat_hand = request.args.get("bat_hand", "").strip()
+        bowl_hand = request.args.get("bowl_hand", "").strip()
+        is_active = request.args.get("is_active", "").strip()
+        sort = request.args.get("sort", "rating_desc").strip()
         page = max(1, int(request.args.get("page", 1)))
 
         query = db.query(Player)
@@ -143,23 +163,37 @@ def players_list():
             query = query.filter(Player.rating >= int(rating_min))
         if rating_max:
             query = query.filter(Player.rating <= int(rating_max))
+        if bat_hand:
+            query = query.filter(Player.bat_hand == bat_hand)
+        if bowl_hand:
+            query = query.filter(Player.bowl_hand == bowl_hand)
+        if is_active == "1":
+            query = query.filter(Player.is_active == True)
+        elif is_active == "0":
+            query = query.filter(Player.is_active == False)
+
+        # Sorting
+        sort_map = {
+            "name_asc": (Player.name.asc(),),
+            "name_desc": (Player.name.desc(),),
+            "rating_desc": (Player.rating.desc(), Player.name.asc()),
+            "rating_asc": (Player.rating.asc(), Player.name.asc()),
+            "category_asc": (Player.category.asc(), Player.rating.desc()),
+            "country_asc": (Player.country.asc(), Player.rating.desc()),
+            "bat_rating_desc": (Player.bat_rating.desc(), Player.name.asc()),
+            "bowl_rating_desc": (Player.bowl_rating.desc(), Player.name.asc()),
+        }
+        order_by = sort_map.get(sort, sort_map["rating_desc"])
+        query = query.order_by(*order_by)
 
         total = query.count()
         total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
         page = min(page, total_pages)
 
-        players = (
-            query.order_by(Player.rating.desc(), Player.name)
-            .offset((page - 1) * PER_PAGE)
-            .limit(PER_PAGE)
-            .all()
-        )
-
-        # Add tier CSS class to each player for template
+        players = query.offset((page - 1) * PER_PAGE).limit(PER_PAGE).all()
         for p in players:
             p._tier_css = tier_css(p.rating)
 
-        # Get unique categories and countries for filters
         categories = [r[0] for r in db.query(Player.category).distinct().order_by(Player.category).all()]
         countries = [r[0] for r in db.query(Player.country).distinct().order_by(Player.country).all()]
 
@@ -168,8 +202,212 @@ def players_list():
             players=players, total=total, page=page, total_pages=total_pages,
             q=q, category=category, country_filter=country_filter,
             rating_min=rating_min, rating_max=rating_max,
+            bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active,
+            sort=sort,
             categories=categories, countries=countries,
         )
+    finally:
+        db.close()
+
+
+# ── Download all players as CSV ──────────────────────────────────────
+
+@app.route("/players/download")
+@login_required
+def players_download():
+    db = get_session()
+    try:
+        # Apply same filters as the current view (if any)
+        q = request.args.get("q", "").strip()
+        category = request.args.get("category", "").strip()
+        country_filter = request.args.get("country", "").strip()
+        rating_min = request.args.get("rating_min", "").strip()
+        rating_max = request.args.get("rating_max", "").strip()
+
+        query = db.query(Player)
+        if q: query = query.filter(Player.name.ilike(f"%{q}%"))
+        if category: query = query.filter(Player.category == category)
+        if country_filter: query = query.filter(Player.country == country_filter)
+        if rating_min: query = query.filter(Player.rating >= int(rating_min))
+        if rating_max: query = query.filter(Player.rating <= int(rating_max))
+
+        players = query.order_by(Player.rating.desc(), Player.name.asc()).all()
+
+        log_admin(db, "players_download", detail=f"Downloaded {len(players)} players as CSV")
+        db.commit()
+
+        # Build CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Name", "Rating", "Category", "Country", "Bat Hand",
+                         "Bowl Hand", "Bowl Style", "Bat Rating", "Bowl Rating",
+                         "Version", "Is Active"])
+        for p in players:
+            writer.writerow([
+                p.name, p.rating, p.category, p.country, p.bat_hand,
+                p.bowl_hand, p.bowl_style, p.bat_rating, p.bowl_rating,
+                p.version or "Base", "1" if p.is_active else "0",
+            ])
+
+        csv_data = output.getvalue()
+        output.close()
+
+        filename = f"players_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    finally:
+        db.close()
+
+
+# ── Bulk upload players via CSV text ─────────────────────────────────
+
+@app.route("/players/bulk-upload", methods=["GET", "POST"])
+@login_required
+def players_bulk_upload():
+    if request.method == "POST":
+        csv_text = request.form.get("csv_text", "").strip()
+        if not csv_text:
+            flash("Please paste some CSV data.", "error")
+            return redirect(url_for("players_bulk_upload"))
+
+        db = get_session()
+        try:
+            added = 0; skipped = 0; errors = []
+            # Parse CSV
+            reader = csv.reader(io.StringIO(csv_text))
+            rows = list(reader)
+
+            # Detect if first row is a header
+            has_header = False
+            if rows and rows[0]:
+                first = rows[0][0].strip().lower()
+                if first in ("name", "player", "player_name", "player name"):
+                    has_header = True
+
+            start_idx = 1 if has_header else 0
+
+            for i, row in enumerate(rows[start_idx:], start=start_idx + 1):
+                if not row or not row[0].strip():
+                    continue
+                try:
+                    # Format: Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating
+                    # Minimum required: Name, Rating, Category
+                    cols = [c.strip() for c in row]
+                    while len(cols) < 9:
+                        cols.append("")
+
+                    name = cols[0]
+                    if not name:
+                        continue
+
+                    # Check duplicate
+                    existing = db.query(Player).filter(Player.name == name).first()
+                    if existing:
+                        skipped += 1
+                        continue
+
+                    try:
+                        rating = int(cols[1]) if cols[1] else 70
+                    except ValueError:
+                        rating = 70
+
+                    category = cols[2] if cols[2] else "Batsman"
+                    # Normalize category
+                    cat_map = {
+                        "bat": "Batsman", "batsman": "Batsman", "bats": "Batsman",
+                        "bowl": "Bowler", "bowler": "Bowler",
+                        "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
+                        "wicket keeper": "Wicket Keeper", "wicketkeeper": "Wicket Keeper",
+                        "ar": "All-rounder", "all-rounder": "All-rounder",
+                        "allrounder": "All-rounder", "all rounder": "All-rounder",
+                    }
+                    category = cat_map.get(category.lower(), category)
+
+                    country = cols[3] if cols[3] else "Unknown"
+                    bat_hand = cols[4] if cols[4] else "Right"
+                    bowl_hand = cols[5] if cols[5] else "Right"
+                    bowl_style = cols[6] if cols[6] else "Medium Pacer"
+
+                    try:
+                        bat_rating = int(cols[7]) if cols[7] else rating
+                    except ValueError:
+                        bat_rating = rating
+                    try:
+                        bowl_rating = int(cols[8]) if cols[8] else rating
+                    except ValueError:
+                        bowl_rating = rating
+
+                    # Normalize hand
+                    hand_map = {"r": "Right", "right": "Right", "l": "Left", "left": "Left",
+                                "rh": "Right", "lh": "Left"}
+                    bat_hand = hand_map.get(bat_hand.lower(), bat_hand)
+                    bowl_hand = hand_map.get(bowl_hand.lower(), bowl_hand)
+
+                    p = Player(
+                        name=name, rating=rating, category=category, country=country,
+                        bat_hand=bat_hand, bowl_hand=bowl_hand, bowl_style=bowl_style,
+                        bat_rating=bat_rating, bowl_rating=bowl_rating,
+                        version="Base", is_active=True,
+                    )
+                    db.add(p)
+                    added += 1
+                except Exception as e:
+                    errors.append(f"Row {i}: {str(e)[:80]}")
+
+            db.commit()
+
+            log_admin(db, "bulk_upload", detail=f"Added {added}, skipped {skipped} duplicates, {len(errors)} errors")
+            db.commit()
+
+            msg = f"✅ Added {added} players"
+            if skipped: msg += f" · Skipped {skipped} duplicates"
+            if errors: msg += f" · {len(errors)} errors"
+            flash(msg, "success")
+            if errors:
+                for e in errors[:5]:
+                    flash(e, "error")
+
+            return redirect(url_for("players_list"))
+        except Exception as e:
+            db.rollback()
+            flash(f"Upload failed: {e}", "error")
+            return redirect(url_for("players_bulk_upload"))
+        finally:
+            db.close()
+
+    return render_template("bulk_upload.html")
+
+
+# ── Admin activity log ───────────────────────────────────────────────
+
+@app.route("/logs")
+@login_required
+def admin_logs():
+    db = get_session()
+    try:
+        action_filter = request.args.get("action", "").strip()
+        page = max(1, int(request.args.get("page", 1)))
+
+        query = db.query(AdminLog)
+        if action_filter:
+            query = query.filter(AdminLog.action == action_filter)
+
+        total = query.count()
+        total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+        page = min(page, total_pages)
+
+        logs = (query.order_by(AdminLog.timestamp.desc())
+                .offset((page - 1) * PER_PAGE).limit(PER_PAGE).all())
+
+        actions = [r[0] for r in db.query(AdminLog.action).distinct().all()]
+
+        return render_template("admin_logs.html",
+                               logs=logs, total=total, page=page,
+                               total_pages=total_pages, actions=actions,
+                               action_filter=action_filter)
     finally:
         db.close()
 
@@ -209,6 +447,9 @@ def player_add():
                 is_active=request.form.get("is_active", "1") == "1",
             )
             db.add(player)
+            db.flush()
+            log_admin(db, "player_add", target_type="player", target_id=player.id,
+                      target_name=name, detail=f"Rating {player.rating}, {player.category}, {player.country}")
             db.commit()
             flash(f"Player '{name}' created (rating {player.rating})", "success")
             return redirect(url_for("players_list"))
@@ -235,6 +476,8 @@ def player_edit(player_id):
             return redirect(url_for("players_list"))
 
         if request.method == "POST":
+            old_rating = player.rating
+            old_name = player.name
             player.name = request.form["name"].strip()
             player.rating = int(request.form["rating"])
             player.category = request.form["category"]
@@ -254,6 +497,14 @@ def player_edit(player_id):
             player.wickets = int(request.form.get("wickets", 0))
             player.is_active = request.form.get("is_active", "1") == "1"
 
+            changes = []
+            if old_name != player.name:
+                changes.append(f"name: {old_name} → {player.name}")
+            if old_rating != player.rating:
+                changes.append(f"rating: {old_rating} → {player.rating}")
+            detail = "; ".join(changes) if changes else "Edit"
+            log_admin(db, "player_edit", target_type="player", target_id=player.id,
+                      target_name=player.name, detail=detail)
             db.commit()
             flash(f"Player '{player.name}' updated", "success")
             return redirect(url_for("players_list"))
@@ -280,6 +531,9 @@ def player_delete(player_id):
             return redirect(url_for("players_list"))
 
         name = player.name
+        rating = player.rating
+        log_admin(db, "player_delete", target_type="player", target_id=player.id,
+                  target_name=name, detail=f"Rating {rating}, {player.category}")
         db.delete(player)
         db.commit()
         flash(f"Player '{name}' deleted", "success")
@@ -301,8 +555,10 @@ def player_toggle(player_id):
         player = db.query(Player).get(player_id)
         if player:
             player.is_active = not player.is_active
-            db.commit()
             status = "activated" if player.is_active else "deactivated"
+            log_admin(db, "player_toggle", target_type="player", target_id=player.id,
+                      target_name=player.name, detail=f"Player {status}")
+            db.commit()
             flash(f"Player '{player.name}' {status}", "info")
     except Exception as e:
         db.rollback()
@@ -399,6 +655,9 @@ def user_edit_purse(user_id):
                          f"Admin set coins {old_coins:,}→{user.total_coins:,}, gems {old_gems}→{user.total_gems}",
                          coins_change=user.total_coins - old_coins,
                          gems_change=user.total_gems - old_gems)
+            log_admin(db, "purse_edit", target_type="user", target_id=user.id,
+                      target_name=user.username or user.first_name,
+                      detail=f"coins {old_coins:,}→{user.total_coins:,}, gems {old_gems}→{user.total_gems}")
             db.commit()
             flash(f"Updated: {user.total_coins:,} coins, {user.total_gems} gems", "success")
     except Exception as e:
@@ -421,6 +680,10 @@ def user_reset_cooldowns(user_id):
             stats.last_gspin = None
             from services.activity_service import log_activity
             log_activity(db, user_id, "admin_reset", "Admin reset all cooldowns")
+            u = db.query(User).get(user_id)
+            log_admin(db, "cooldown_reset", target_type="user", target_id=user_id,
+                      target_name=(u.username or u.first_name) if u else str(user_id),
+                      detail="Reset claim/daily/gspin cooldowns")
             db.commit()
             flash("All cooldowns reset", "success")
     except Exception as e:

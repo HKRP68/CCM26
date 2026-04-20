@@ -17,9 +17,8 @@ class Base(DeclarativeBase):
 
 
 def init_db():
-    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats, Match  # noqa: F401
+    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats, Match, AdminLog  # noqa: F401
     Base.metadata.create_all(bind=engine)
-    # Auto-add new columns if they don't exist (idempotent)
     _migrate_add_columns()
 
 
