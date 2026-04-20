@@ -31,22 +31,22 @@ STREAK_MISS_DAYS = 2
 
 # ── Claim rarity distribution (cumulative thresholds) ───────────────
 CLAIM_RARITY = [
-    (0.20,  50,  59),   # 20% Bronze
-    (0.40,  60,  69),   # 20% Silver
-    (0.70,  70,  79),   # 30% Common/Super (increased)
-    (0.85,  80,  84),   # 15% Rare
-    (0.94,  85,  89),   # 9% Epic
-    (0.985, 90,  94),   # 4.5% Legend
-    (1.0,   95, 100),   # 1.5% Ultimate (was 0.5%)
+    (0.22,  50,  59),   # 22% Bronze
+    (0.44,  60,  69),   # 22% Silver
+    (0.76,  70,  79),   # 32% Common/Super
+    (0.90,  80,  84),   # 14% Rare
+    (0.975, 85,  89),   # 7.5% Epic
+    (0.995, 90,  94),   # 2% Legend (was 4.5%)
+    (1.0,   95, 100),   # 0.5% Ultimate (was 1.5%)
 ]
 
 # ── Gspin wheel outcomes ────────────────────────────────────────────
 GSPIN_OUTCOMES = [
     (0.55,  "red",    "coins",  (5000, 10000)),   # 55% coins
-    (0.80,  "yellow", "player", (70, 79)),         # 25% 70-79 card (was 79-85)
-    (0.93,  "blue",   "gems",   (10, 500)),        # 13% gems
-    (0.99,  "green",  "player", (80, 85)),         # 6% 80-85 card (was 85-90)
-    (1.0,   "purple", "player", (86, 90)),         # 1% 86-90 card (was 90-95)
+    (0.82,  "yellow", "player", (70, 79)),         # 27% 70-79
+    (0.95,  "blue",   "gems",   (10, 500)),        # 13% gems
+    (0.995, "green",  "player", (80, 85)),         # 4.5% 80-85
+    (1.0,   "purple", "player", (86, 90)),         # 0.5% 86-90
 ]
 
 GSPIN_EMOJIS = {

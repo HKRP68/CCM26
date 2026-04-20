@@ -19,6 +19,56 @@ class Base(DeclarativeBase):
 def init_db():
     from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats, Match  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    # Auto-add new columns if they don't exist (idempotent)
+    _migrate_add_columns()
+
+
+def _migrate_add_columns():
+    """Add any missing columns in-place. Safe to run every start."""
+    new_user_cols = {
+        "matches_played": "INTEGER DEFAULT 0",
+        "matches_won": "INTEGER DEFAULT 0",
+        "matches_lost": "INTEGER DEFAULT 0",
+        "win_streak": "INTEGER DEFAULT 0",
+        "best_streak": "INTEGER DEFAULT 0",
+        "active_days": "INTEGER DEFAULT 0",
+        "last_match_date": "TIMESTAMP",
+    }
+    new_match_cols = {
+        "winner_id": "INTEGER",
+        "loser_id": "INTEGER",
+        "margin_type": "VARCHAR(20)",
+        "margin_value": "INTEGER",
+        "result_message_id": "BIGINT",
+        "inn1_runs": "INTEGER",
+        "inn1_wickets": "INTEGER",
+        "inn2_runs": "INTEGER",
+        "inn2_wickets": "INTEGER",
+        "potm_player_id": "INTEGER",
+        "potm_impact": "INTEGER",
+    }
+
+    try:
+        with engine.begin() as conn:
+            for col, coltype in new_user_cols.items():
+                try:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype}"))
+                except Exception:
+                    # SQLite doesn't support IF NOT EXISTS on ADD COLUMN, try without
+                    try:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {coltype}"))
+                    except Exception:
+                        pass  # column already exists
+            for col, coltype in new_match_cols.items():
+                try:
+                    conn.execute(text(f"ALTER TABLE matches ADD COLUMN IF NOT EXISTS {col} {coltype}"))
+                except Exception:
+                    try:
+                        conn.execute(text(f"ALTER TABLE matches ADD COLUMN {col} {coltype}"))
+                    except Exception:
+                        pass
+    except Exception:
+        pass  # migration is best-effort, don't crash startup
 
 
 def reset_db():
