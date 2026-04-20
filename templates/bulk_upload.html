@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Bulk Upload Players{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+  <h2>📤 Bulk Upload Players</h2>
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost">← Back to Players</a>
+</div>
+
+<div style="background:var(--card);padding:1.25rem;border-radius:.5rem;margin-bottom:1rem;">
+  <h3 style="margin-top:0;">CSV Format</h3>
+  <p style="color:var(--muted);margin:.5rem 0;">
+    Paste comma-separated values below. One player per line. Duplicates (by name) will be skipped.
+  </p>
+
+  <p style="margin:.5rem 0;font-weight:600;">Column order:</p>
+  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;">
+Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating
+  </code>
+
+  <p style="margin:1rem 0 .5rem;font-weight:600;">Example:</p>
+  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;white-space:pre;">Virat Kohli, 97, Batsman, India, Right, Right, Medium Pacer, 96, 30
+Jasprit Bumrah, 96, Bowler, India, Right, Right, Fast, 20, 95
+Ben Stokes, 91, All-rounder, England, Left, Right, Fast, 85, 82
+Jos Buttler, 89, Wicket Keeper, England, Right, Right, Medium Pacer, 87, 20</code>
+
+  <div style="margin-top:1rem;padding:.75rem;background:#1a2e1a;border-left:3px solid #00d4aa;border-radius:.25rem;">
+    <p style="margin:0;font-size:.9rem;">
+      <strong>💡 Tips:</strong><br>
+      • Only <strong>Name</strong> is strictly required<br>
+      • Category accepts abbreviations: "bat"→Batsman, "bowl"→Bowler, "wk"→Wicket Keeper, "ar"→All-rounder<br>
+      • Hand accepts: "R"/"L"/"Right"/"Left"<br>
+      • Missing Rating defaults to 70; missing bat/bowl ratings default to main Rating<br>
+      • First row can be a header (it will be auto-detected and skipped)
+    </p>
+  </div>
+</div>
+
+<form method="POST" action="{{ url_for('players_bulk_upload') }}">
+  <label style="display:block;margin-bottom:.5rem;font-weight:600;">Paste CSV data:</label>
+  <textarea
+    name="csv_text"
+    rows="15"
+    style="width:100%;font-family:monospace;font-size:.9rem;padding:.75rem;background:#0d1117;color:#c9d1d9;border:1px solid var(--border);border-radius:.5rem;"
+    placeholder="Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating
+Virat Kohli, 97, Batsman, India, Right, Right, Medium Pacer, 96, 30
+..."></textarea>
+
+  <div style="margin-top:1rem;display:flex;gap:.5rem;">
+    <button type="submit" class="btn btn-primary">📤 Upload Players</button>
+    <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Cancel</a>
+  </div>
+</form>
+
+{% endblock %}

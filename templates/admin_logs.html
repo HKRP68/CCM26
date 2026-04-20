@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Admin Logs{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📋 Admin Activity Log <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost">← Back to Players</a>
+</div>
+
+<form method="GET" class="toolbar">
+  <select name="action">
+    <option value="">All Actions</option>
+    {% for a in actions %}<option value="{{ a }}" {{ 'selected' if a == action_filter }}>{{ a }}</option>{% endfor %}
+  </select>
+  <button type="submit" class="btn btn-blue">Filter</button>
+  {% if action_filter %}<a href="{{ url_for('admin_logs') }}" class="btn btn-ghost">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:160px;">Time</th>
+        <th style="width:140px;">Action</th>
+        <th style="width:200px;">Target</th>
+        <th>Detail</th>
+        <th style="width:120px;">IP</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for l in logs %}
+    <tr>
+      <td style="font-size:.85rem;white-space:nowrap;color:var(--muted);">
+        {{ l.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+      </td>
+      <td>
+        {% set act_emoji = {
+          'player_add': '➕',
+          'player_edit': '✏️',
+          'player_delete': '🗑',
+          'player_toggle': '🔄',
+          'bulk_upload': '📤',
+          'players_download': '⬇',
+          'purse_edit': '💰',
+          'roster_add': '🎁',
+          'roster_remove': '💸',
+          'cooldown_reset': '⏱',
+          'seed': '🌱',
+          'reset_schema': '⚠️',
+          'clear_players': '⚠️'
+        } %}
+        <span style="white-space:nowrap;">{{ act_emoji.get(l.action, '•') }} {{ l.action }}</span>
+      </td>
+      <td style="font-size:.85rem;">
+        {% if l.target_name %}
+          <strong>{{ l.target_name }}</strong>
+          {% if l.target_type %}<br><span style="color:var(--muted);font-size:.75rem;">{{ l.target_type }} #{{ l.target_id or '-' }}</span>{% endif %}
+        {% else %}
+          <span style="color:var(--muted);">—</span>
+        {% endif %}
+      </td>
+      <td style="font-size:.85rem;">{{ l.detail or '' }}</td>
+      <td style="font-size:.75rem;color:var(--muted);">{{ l.ip_address or '-' }}</td>
+    </tr>
+    {% endfor %}
+    {% if not logs %}
+    <tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted);">No log entries yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+  <a href="{{ url_for('admin_logs', page=page-1, action=action_filter) }}">◀</a>
+  {% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}
+      <span class="current">{{ p }}</span>
+    {% elif p <= 3 or p >= total_pages - 2 or (p >= page - 1 and p <= page + 1) %}
+      <a href="{{ url_for('admin_logs', page=p, action=action_filter) }}">{{ p }}</a>
+    {% elif p == 4 and page > 5 %}
+      <span class="info">…</span>
+    {% elif p == total_pages - 3 and page < total_pages - 4 %}
+      <span class="info">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if page < total_pages %}
+  <a href="{{ url_for('admin_logs', page=page+1, action=action_filter) }}">▶</a>
+  {% endif %}
+  <span class="info">{{ total }} entries</span>
+</div>
+{% endif %}
+{% endblock %}

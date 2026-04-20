@@ -3,29 +3,68 @@
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
   <h2>Players <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
-  <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
+    <a href="{{ url_for('players_bulk_upload') }}" class="btn btn-green">📤 Bulk Upload</a>
+    <a href="{{ url_for('players_download', q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}" class="btn btn-blue">⬇ Download CSV</a>
+    <a href="{{ url_for('admin_logs') }}" class="btn btn-ghost">📋 Logs</a>
+  </div>
 </div>
 
-<form method="GET" class="toolbar">
+<form method="GET" class="toolbar" style="flex-wrap:wrap;gap:.5rem;">
   <input class="search" type="text" name="q" value="{{ q }}" placeholder="Search by name...">
+
   <select name="category">
     <option value="">All Categories</option>
     {% for c in categories %}<option value="{{ c }}" {{ 'selected' if c == category }}>{{ c }}</option>{% endfor %}
   </select>
+
   <select name="country">
     <option value="">All Countries</option>
     {% for c in countries %}<option value="{{ c }}" {{ 'selected' if c == country_filter }}>{{ c }}</option>{% endfor %}
   </select>
+
   <select name="rating_min">
     <option value="">Min Rating</option>
     {% for r in range(50, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r|string == rating_min }}>{{ r }}+</option>{% endfor %}
   </select>
+
   <select name="rating_max">
     <option value="">Max Rating</option>
     {% for r in range(55, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r|string == rating_max }}>≤{{ r }}</option>{% endfor %}
   </select>
-  <button type="submit" class="btn btn-blue">Filter</button>
-  {% if q or category or country_filter or rating_min or rating_max %}
+
+  <select name="bat_hand">
+    <option value="">Any Bat</option>
+    <option value="Right" {{ 'selected' if bat_hand == 'Right' }}>Right Bat</option>
+    <option value="Left" {{ 'selected' if bat_hand == 'Left' }}>Left Bat</option>
+  </select>
+
+  <select name="bowl_hand">
+    <option value="">Any Bowl</option>
+    <option value="Right" {{ 'selected' if bowl_hand == 'Right' }}>Right Bowl</option>
+    <option value="Left" {{ 'selected' if bowl_hand == 'Left' }}>Left Bowl</option>
+  </select>
+
+  <select name="is_active">
+    <option value="">Any Status</option>
+    <option value="1" {{ 'selected' if is_active == '1' }}>Active</option>
+    <option value="0" {{ 'selected' if is_active == '0' }}>Inactive</option>
+  </select>
+
+  <select name="sort">
+    <option value="rating_desc" {{ 'selected' if sort == 'rating_desc' }}>Rating ↓</option>
+    <option value="rating_asc" {{ 'selected' if sort == 'rating_asc' }}>Rating ↑</option>
+    <option value="name_asc" {{ 'selected' if sort == 'name_asc' }}>Name A-Z</option>
+    <option value="name_desc" {{ 'selected' if sort == 'name_desc' }}>Name Z-A</option>
+    <option value="category_asc" {{ 'selected' if sort == 'category_asc' }}>Category</option>
+    <option value="country_asc" {{ 'selected' if sort == 'country_asc' }}>Country</option>
+    <option value="bat_rating_desc" {{ 'selected' if sort == 'bat_rating_desc' }}>Bat Rating ↓</option>
+    <option value="bowl_rating_desc" {{ 'selected' if sort == 'bowl_rating_desc' }}>Bowl Rating ↓</option>
+  </select>
+
+  <button type="submit" class="btn btn-blue">Apply</button>
+  {% if q or category or country_filter or rating_min or rating_max or bat_hand or bowl_hand or is_active %}
   <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Clear</a>
   {% endif %}
 </form>
@@ -39,6 +78,7 @@
         <th>Category</th>
         <th>Country</th>
         <th>Bat / Bowl</th>
+        <th>BAT | BOWL</th>
         <th>Style</th>
         <th>Active</th>
         <th>Actions</th>
@@ -52,6 +92,7 @@
       <td>{{ p.category }}</td>
       <td>{{ p.country }}</td>
       <td>{{ p.bat_hand }} / {{ p.bowl_hand }}</td>
+      <td style="font-size:.8rem;">{{ p.bat_rating }} | {{ p.bowl_rating }}</td>
       <td style="font-size:.8rem;">{{ p.bowl_style }}</td>
       <td>
         {% if p.is_active %}
@@ -80,7 +121,7 @@
     </tr>
     {% endfor %}
     {% if not players %}
-    <tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
+    <tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
     {% endif %}
     </tbody>
   </table>
@@ -89,14 +130,14 @@
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}
-  <a href="{{ url_for('players_list', page=page-1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">◀</a>
+  <a href="{{ url_for('players_list', page=page-1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max, bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active, sort=sort) }}">◀</a>
   {% endif %}
 
   {% for p in range(1, total_pages + 1) %}
     {% if p == page %}
       <span class="current">{{ p }}</span>
     {% elif p <= 3 or p >= total_pages - 2 or (p >= page - 1 and p <= page + 1) %}
-      <a href="{{ url_for('players_list', page=p, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">{{ p }}</a>
+      <a href="{{ url_for('players_list', page=p, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max, bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active, sort=sort) }}">{{ p }}</a>
     {% elif p == 4 and page > 5 %}
       <span class="info">…</span>
     {% elif p == total_pages - 3 and page < total_pages - 4 %}
@@ -105,7 +146,7 @@
   {% endfor %}
 
   {% if page < total_pages %}
-  <a href="{{ url_for('players_list', page=page+1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">▶</a>
+  <a href="{{ url_for('players_list', page=page+1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max, bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active, sort=sort) }}">▶</a>
   {% endif %}
   <span class="info">{{ total }} players</span>
 </div>
