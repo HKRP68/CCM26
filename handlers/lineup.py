@@ -29,6 +29,40 @@ def _get_ordered_roster(session, user_id):
             .filter(UserRoster.user_id == user_id).order_by(UserRoster.order_position).all())
 
 
+def _build_display_order(roster_list):
+    """Return list of (entry, player) in the same order as displayed by /pxi.
+
+    Display order for top 11: Batsmen → Wicket Keepers → All-rounders → Pacers → Spinners.
+    Positions 12+ stay as bench in raw order.
+
+    So display position 1..11 maps to the same categorized-sorted 11 shown in /pxi,
+    and display position 12+ keeps roster order.
+    """
+    top_11 = roster_list[:11]
+    bench = roster_list[11:]
+
+    batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
+    for pair in top_11:
+        _, player = pair
+        cat = player.category
+        if cat == "Batsman":
+            batsmen.append(pair)
+        elif cat == "Wicket Keeper":
+            keepers.append(pair)
+        elif cat == "All-rounder":
+            allrounders.append(pair)
+        elif cat == "Bowler":
+            if _is_spin(player.bowl_style):
+                spinners.append(pair)
+            else:
+                pacers.append(pair)
+        else:
+            batsmen.append(pair)
+
+    # Return in the same order as /pxi displays
+    return batsmen + keepers + allrounders + pacers + spinners + bench
+
+
 def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False):
     """Build the 5-section Playing XI text.
     roster_list: list of (UserRoster, Player).
@@ -276,31 +310,46 @@ async def bench_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def swapplayers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text("Usage: /swapplayers <pos1> <pos2>")
+        await update.message.reply_text("Usage: /swap <pos1> <pos2>\nPositions match the numbers shown in /pxi")
         return
     try:
         pos1, pos2 = int(context.args[0]), int(context.args[1])
     except ValueError:
         await update.message.reply_text("❌ Numbers only.")
         return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
             return
-        entries = _ensure_order(session, user.id)
-        if pos1 < 1 or pos2 < 1 or pos1 > len(entries) or pos2 > len(entries) or pos1 == pos2:
-            await update.message.reply_text(f"❌ Positions 1-{len(entries)}, different.")
+
+        # Get roster in raw order first (to ensure order_position is clean)
+        raw_roster = _get_ordered_roster(session, user.id)
+
+        # Build display order (matches /pxi numbering)
+        display_order = _build_display_order(raw_roster)
+        total = len(display_order)
+
+        if pos1 < 1 or pos2 < 1 or pos1 > total or pos2 > total or pos1 == pos2:
+            await update.message.reply_text(
+                f"❌ Positions must be 1-{total}, and different.")
             return
-        e1, e2 = entries[pos1 - 1], entries[pos2 - 1]
+
+        # Get entries at the DISPLAY positions
+        e1, p1 = display_order[pos1 - 1]
+        e2, p2 = display_order[pos2 - 1]
+
+        # Swap their order_position values in the database
         e1.order_position, e2.order_position = e2.order_position, e1.order_position
-        p1 = session.query(Player).get(e1.player_id)
-        p2 = session.query(Player).get(e2.player_id)
+
         log_activity(session, user.id, "swap", f"Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}")
         session.commit()
+
         xi_note = "\n🏏 Playing XI updated!" if pos1 <= 11 or pos2 <= 11 else ""
-        await update.message.reply_text(f"✅ Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}{xi_note}")
+        await update.message.reply_text(
+            f"✅ Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}{xi_note}")
     except Exception:
         session.rollback()
         logger.exception("Swap err")

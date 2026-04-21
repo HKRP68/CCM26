@@ -74,15 +74,17 @@ def _find_by_arg(session, user_id, arg_str):
     """
     arg_str = arg_str.strip()
 
-    # Try position first
+    # Try position first — use DISPLAY order (matches /pxi numbering)
     if arg_str.isdigit():
         pos = int(arg_str)
-        entries = (session.query(UserRoster, Player)
-                   .join(Player, UserRoster.player_id == Player.id)
-                   .filter(UserRoster.user_id == user_id)
-                   .order_by(UserRoster.order_position).all())
-        if 1 <= pos <= len(entries):
-            return [entries[pos - 1]]
+        from handlers.lineup import _build_display_order
+        raw_entries = (session.query(UserRoster, Player)
+                       .join(Player, UserRoster.player_id == Player.id)
+                       .filter(UserRoster.user_id == user_id)
+                       .order_by(UserRoster.order_position).all())
+        display_entries = _build_display_order(raw_entries)
+        if 1 <= pos <= len(display_entries):
+            return [display_entries[pos - 1]]
         return []
 
     # Name search — exact match first, then substring
@@ -296,10 +298,12 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        entries = (session.query(UserRoster, Player)
-                   .join(Player, UserRoster.player_id == Player.id)
-                   .filter(UserRoster.user_id == user.id)
-                   .order_by(UserRoster.order_position).all())
+        from handlers.lineup import _build_display_order
+        raw_entries = (session.query(UserRoster, Player)
+                       .join(Player, UserRoster.player_id == Player.id)
+                       .filter(UserRoster.user_id == user.id)
+                       .order_by(UserRoster.order_position).all())
+        entries = _build_display_order(raw_entries)
 
         if pos_to > len(entries):
             await update.message.reply_text(
@@ -384,10 +388,12 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
 
         await query.answer()
 
-        entries = (session.query(UserRoster, Player)
-                   .join(Player, UserRoster.player_id == Player.id)
-                   .filter(UserRoster.user_id == user.id)
-                   .order_by(UserRoster.order_position).all())
+        from handlers.lineup import _build_display_order
+        raw_entries = (session.query(UserRoster, Player)
+                       .join(Player, UserRoster.player_id == Player.id)
+                       .filter(UserRoster.user_id == user.id)
+                       .order_by(UserRoster.order_position).all())
+        entries = _build_display_order(raw_entries)
 
         if pos_from < 1 or pos_to > len(entries) or pos_from > pos_to:
             try: await query.edit_message_text(

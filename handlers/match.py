@@ -504,6 +504,67 @@ async def _save_match_stats(s):
         session.close()
 
 
+# ═══════════════════════════ /resume ═════════════════════════════════
+
+async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manually re-show the prompt for the current match state — recovery from API hiccups."""
+    tg = update.effective_user
+    cid = update.effective_chat.id
+    mid = None
+    s = None
+    for k, v in context.bot_data.items():
+        if k.startswith("ms_") and isinstance(v, dict):
+            if v.get("bat_user_tg") == tg.id or v.get("bowl_user_tg") == tg.id:
+                if v.get("chat_id") == cid:
+                    mid = int(k.split("_")[1])
+                    s = v
+                    break
+    if not s:
+        await update.message.reply_text(
+            "❌ No active match found in this chat.\n"
+            "If you're mid-match, make sure you're in the right group.")
+        return
+
+    # Clear any stuck processing lock
+    context.bot_data.pop(f"processing_{mid}", None)
+    _cancel_action_timer(context, mid)
+
+    try:
+        # Check if we need a new batsman
+        striker_out = False
+        striker_idx = s.get("striker_idx")
+        if striker_idx is not None and striker_idx < len(s.get("batting_order", [])):
+            striker = s["batting_order"][striker_idx]
+            bs = s["bat_stats"].get(striker["roster_id"], {})
+            if bs.get("out"):
+                striker_out = True
+
+        # Check if end of over (ball=0 after an over completed)
+        end_of_over = (s.get("current_ball", 0) == 0 and s.get("current_over", 1) > 1
+                       and s.get("prev_bowler_rid") is not None)
+
+        if is_innings_over(s):
+            await update.message.reply_text("🔁 Resuming... innings ended, wrapping up.")
+            await _end_innings(context, mid)
+            return
+
+        if striker_out and s["total_wickets"] < 10:
+            await update.message.reply_text("🔁 Resuming... showing new batsman prompt.")
+            await _show_new_batsman(context, mid)
+            return
+
+        if end_of_over:
+            await update.message.reply_text("🔁 Resuming... showing new over bowler prompt.")
+            await _show_new_over_bowler(context, mid)
+            return
+
+        await update.message.reply_text("🔁 Resuming... showing next delivery prompt.")
+        await _show_delivery(context, cid, mid)
+    except Exception:
+        logger.exception("Resume failed")
+        await update.message.reply_text("⚠️ Couldn't auto-resume. Use /endmatch if stuck.")
+
+
 # ═══════════════════════════ /endmatch ═══════════════════════════════
 
 async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -853,6 +914,68 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
     finally: session.close()
 
 
+# ═══════════════════════════ RECOVERY ═════════════════════════════════
+
+async def _recover_stuck(ctx, mid, where):
+    """Called when any callback fails mid-flow. Notifies players + suggests /resume."""
+    s = _gs(ctx, mid)
+    if not s: return
+    try:
+        await ctx.bot.send_message(
+            s["chat_id"],
+            f"⚠️ <b>Hit a hiccup</b> ({where}).\n"
+            f"Type <code>/resume</code> to continue from where you left off.",
+            parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Resume a stuck match. Finds the live match for this chat and re-shows whatever screen is next."""
+    cid = update.effective_chat.id
+    # Find any ms_* state with this chat_id
+    found_mid = None
+    found_state = None
+    for k, v in list(context.bot_data.items()):
+        if k.startswith("ms_") and isinstance(v, dict) and v.get("chat_id") == cid:
+            found_mid = int(k.split("_", 1)[1])
+            found_state = v
+            break
+
+    if not found_mid or not found_state:
+        await update.message.reply_text("❌ No active match in this chat to resume.")
+        return
+
+    # Clear any stuck processing lock
+    context.bot_data.pop(f"processing_{found_mid}", None)
+    _cancel_action_timer(context, found_mid)
+
+    # Determine what step we're at
+    s = found_state
+    current_delivery = s.get("current_delivery")
+    selected_variation = s.get("selected_variation")
+
+    await update.message.reply_text("🔄 <b>Resuming match...</b>", parse_mode="HTML")
+
+    try:
+        if current_delivery:
+            # Delivery already chosen → show shot buttons
+            await _show_shot(context, cid, found_mid)
+        elif selected_variation:
+            # Variation chosen, need length — re-show delivery (pacer variation already picked)
+            # Simpler: just restart delivery selection
+            s["selected_variation"] = None
+            _ss(context, found_mid, s)
+            await _show_delivery(context, cid, found_mid)
+        else:
+            # Fresh ball — show delivery selection
+            await _show_delivery(context, cid, found_mid)
+    except Exception:
+        logger.exception(f"resume_handler failed mid={found_mid}")
+        await update.message.reply_text(
+            "⚠️ Could not resume. Type /endmatch if match can't continue.")
+
+
 # ═══════════════════════════ DELIVERY ════════════════════════════════
 
 async def _show_delivery(ctx, cid, mid):
@@ -884,39 +1007,98 @@ async def variation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q = update.callback_query; parts = q.data.split("_"); mid, vi = int(parts[1]), int(parts[2])
     s = _gs(context, mid)
     if not s or q.from_user.id != s["bowl_user_tg"]: await q.answer("Not your bowl!"); return
-    await q.answer(); _cancel_action_timer(context, mid)
-    bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
-    var = opts["variations"][vi]; s["selected_variation"] = var; _ss(context, mid, s)
-    ls = opts["lengths"]; btns = []; row = []
-    for i, l in enumerate(ls):
-        row.append(InlineKeyboardButton(l, callback_data=f"blen_{mid}_{i}"))
-        if len(row) == 3: btns.append(row); row = []
-    if row: btns.append(row)
-    await q.edit_message_text(f"🎳 <b>SELECT LENGTH</b> ({var})", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
-    _start_action_timer(context, mid, s["bowl_user_tg"], "select length")
+
+    lock_key = f"processing_{mid}"
+    if context.bot_data.get(lock_key):
+        await q.answer("⏳ Processing...")
+        return
+    context.bot_data[lock_key] = True
+
+    try:
+        await q.answer(); _cancel_action_timer(context, mid)
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
+        var = opts["variations"][vi]; s["selected_variation"] = var; _ss(context, mid, s)
+        ls = opts["lengths"]; btns = []; row = []
+        for i, l in enumerate(ls):
+            row.append(InlineKeyboardButton(l, callback_data=f"blen_{mid}_{i}"))
+            if len(row) == 3: btns.append(row); row = []
+        if row: btns.append(row)
+        try:
+            await q.edit_message_text(f"🎳 <b>SELECT LENGTH</b> ({var})", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        except Exception:
+            # Fallback: send new message if edit failed
+            await context.bot.send_message(s["chat_id"],
+                f"🎳 <b>SELECT LENGTH</b> ({var})",
+                parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        _start_action_timer(context, mid, s["bowl_user_tg"], "select length")
+    except Exception:
+        logger.exception(f"variation_callback failed mid={mid}")
+        await _recover_stuck(context, mid, "variation")
+    finally:
+        context.bot_data.pop(lock_key, None)
+
 
 async def length_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; parts = q.data.split("_"); mid, li = int(parts[1]), int(parts[2])
     s = _gs(context, mid)
     if not s or q.from_user.id != s["bowl_user_tg"]: await q.answer("Not yours!"); return
-    await q.answer(); _cancel_action_timer(context, mid)
-    bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
-    length = opts["lengths"][li]; var = s.get("selected_variation", "Seam")
-    s["current_delivery"] = f"{var} {length}"; s["selected_variation"] = None; _ss(context, mid, s)
-    await q.edit_message_text(f"✅ {bw['name']}: {var} {length}\n⏳ Batsman...", parse_mode="HTML")
-    await _show_shot(context, s["chat_id"], mid)
+
+    lock_key = f"processing_{mid}"
+    if context.bot_data.get(lock_key):
+        await q.answer("⏳ Processing...")
+        return
+    context.bot_data[lock_key] = True
+
+    try:
+        await q.answer(); _cancel_action_timer(context, mid)
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
+        length = opts["lengths"][li]; var = s.get("selected_variation", "Seam")
+        s["current_delivery"] = f"{var} {length}"; s["selected_variation"] = None; _ss(context, mid, s)
+        try:
+            await q.edit_message_text(f"✅ {bw['name']}: {var} {length}\n⏳ Batsman...", parse_mode="HTML")
+        except Exception: pass
+        context.bot_data.pop(lock_key, None)  # release before next step
+        await _show_shot(context, s["chat_id"], mid)
+    except Exception:
+        logger.exception(f"length_callback failed mid={mid}")
+        context.bot_data.pop(lock_key, None)
+        await _recover_stuck(context, mid, "length")
+
 
 async def spinner_delivery_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; parts = q.data.split("_"); mid, di = int(parts[1]), int(parts[2])
     s = _gs(context, mid)
     if not s or q.from_user.id != s["bowl_user_tg"]: await q.answer("Not yours!"); return
-    await q.answer(); _cancel_action_timer(context, mid)
-    bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
-    d = opts["deliveries"][di]
-    if d == "Surprise": ns = [x for x in opts["deliveries"] if x != "Surprise"]; d = random.choice(ns) + " (Surprise)"
-    s["current_delivery"] = d; _ss(context, mid, s)
-    await q.edit_message_text(f"✅ {bw['name']}: {d}\n⏳ Batsman...", parse_mode="HTML")
-    await _show_shot(context, s["chat_id"], mid)
+
+    lock_key = f"processing_{mid}"
+    if context.bot_data.get(lock_key):
+        await q.answer("⏳ Processing...")
+        return
+    context.bot_data[lock_key] = True
+
+    try:
+        await q.answer(); _cancel_action_timer(context, mid)
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
+        d = opts["deliveries"][di]
+        if d == "Surprise":
+            ns = [x for x in opts["deliveries"] if x != "Surprise"]
+            d = random.choice(ns) + " (Surprise)"
+        s["current_delivery"] = d; _ss(context, mid, s)
+        try:
+            await q.edit_message_text(f"✅ {bw['name']}: {d}\n⏳ Batsman...", parse_mode="HTML")
+        except Exception: pass
+        context.bot_data.pop(lock_key, None)
+        await _show_shot(context, s["chat_id"], mid)
+    except Exception:
+        logger.exception(f"spinner_delivery_callback failed mid={mid}")
+        context.bot_data.pop(lock_key, None)
+        await _recover_stuck(context, mid, "spinner_delivery")
 
 
 # ═══════════════════════════ SHOT ════════════════════════════════════
@@ -1021,15 +1203,29 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await q.edit_message_text(f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}\n\n{sc}", parse_mode="HTML")
     except Exception:
-        await context.bot.send_message(s["chat_id"], f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}\n\n{sc}", parse_mode="HTML")
+        try:
+            await context.bot.send_message(s["chat_id"], f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}\n\n{sc}", parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to send scorecard update")
 
     # Release lock before next step
     context.bot_data.pop(f"processing_{mid}", None)
 
-    if is_innings_over(s): await _end_innings(context, mid); return
-    if need_new_bat and s["total_wickets"] < 10: await _show_new_batsman(context, mid)
-    elif eoo: await _show_new_over_bowler(context, mid)
-    else: await _show_delivery(context, s["chat_id"], mid)
+    # Route to next step — wrap each in try/except so a Telegram API hiccup doesn't strand the match
+    try:
+        if is_innings_over(s):
+            await _end_innings(context, mid)
+            return
+        if need_new_bat and s["total_wickets"] < 10:
+            await _show_new_batsman(context, mid)
+        elif eoo:
+            await _show_new_over_bowler(context, mid)
+        else:
+            await _show_delivery(context, s["chat_id"], mid)
+    except Exception:
+        logger.exception(f"Next-step routing failed for match {mid}")
+        context.bot_data.pop(f"processing_{mid}", None)
+        await _recover_stuck(context, mid, "next-step")
 
 def _calc(s, striker, bowler, shot, delivery):
     from services.probability_engine import calculate_outcome
@@ -1086,11 +1282,16 @@ async def _show_new_batsman(ctx, mid):
         if i == s["striker_idx"] or i == s["non_striker_idx"]: continue
         bs = s["bat_stats"].get(p["roster_id"], {})
         if not bs.get("out", False): available.append((i, p))
-    if not available: return
+    if not available:
+        # No more batsmen — innings should be over, force it
+        logger.warning(f"Match {mid}: No available batsmen but wickets={s['total_wickets']}, forcing innings end")
+        await _end_innings(ctx, mid)
+        return
+    # Show ALL available (not capped to 8) so user never loses options
     btns = [[InlineKeyboardButton(
         f"{p['name']} — {s['bat_stats'].get(p['roster_id'], {}).get('runs', 0)}({s['bat_stats'].get(p['roster_id'], {}).get('balls', 0)})",
         callback_data=f"newbat_{mid}_{i}"
-    )] for i, p in available[:8]]
+    )] for i, p in available]
     await ctx.bot.send_message(s["chat_id"],
         f"🏏 <b>WICKET!</b> Select next batsman:\n\n@{s['bat_username']}, choose:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     _start_action_timer(ctx, mid, s["bat_user_tg"], "select batsman")
@@ -1101,12 +1302,33 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not s or q.from_user.id != s["bat_user_tg"]: await q.answer("Not yours!"); return
     await q.answer(); _cancel_action_timer(context, mid)
     nb = s["batting_order"][bi]; s["striker_idx"] = bi; _ss(context, mid, s)
-    await q.edit_message_text(f"🏏 New batsman: {nb['name']} ({nb['bat_rating']} BAT)", parse_mode="HTML")
-    # Send batsman stats card
-    await _send_batsman_card(context, s["chat_id"], nb, s["bat_team_id"])
-    if is_innings_over(s): await _end_innings(context, mid); return
-    if s["current_ball"] == 0 and s["current_over"] > 1: await _show_new_over_bowler(context, mid)
-    else: await _show_delivery(context, s["chat_id"], mid)
+    try:
+        await q.edit_message_text(f"🏏 New batsman: {nb['name']} ({nb['bat_rating']} BAT)", parse_mode="HTML")
+    except Exception:
+        pass
+    # Send batsman stats card (best-effort — don't let it strand the match)
+    try:
+        await _send_batsman_card(context, s["chat_id"], nb, s["bat_team_id"])
+    except Exception:
+        logger.warning("Batsman card send failed but continuing")
+
+    try:
+        if is_innings_over(s):
+            await _end_innings(context, mid)
+            return
+        if s["current_ball"] == 0 and s["current_over"] > 1:
+            await _show_new_over_bowler(context, mid)
+        else:
+            await _show_delivery(context, s["chat_id"], mid)
+    except Exception:
+        logger.exception(f"new_batsman_callback next-step failed for match {mid}")
+        try:
+            await context.bot.send_message(
+                s["chat_id"],
+                "⚠️ Hit a hiccup. Type <code>/resume</code> to continue.",
+                parse_mode="HTML")
+        except Exception:
+            pass
 
 
 # ═══════════════════════════ NEW OVER BOWLER ═════════════════════════
