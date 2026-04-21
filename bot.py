@@ -29,7 +29,7 @@ from handlers.playerinfo import playerinfo_handler
 # Phase 2 handlers
 from handlers.release import (
     releasepl_handler, releasemultiple_handler,
-    release_confirm_callback, release_cancel_callback, release_dup_callback,
+    release_one_callback, release_cancel_callback,
     releasemultiple_confirm_callback,
 )
 from handlers.trade import (
@@ -217,10 +217,13 @@ def main():
         app.add_handler(CallbackQueryHandler(gspin_spin_callback, pattern=r"^gspin_"))
 
         # ── Release callbacks ────────────────────────────────────────
-        app.add_handler(CallbackQueryHandler(release_confirm_callback, pattern=r"^rlconfirm_"))
+        app.add_handler(CallbackQueryHandler(release_one_callback, pattern=r"^rlone_"))
         app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlcancel$"))
-        app.add_handler(CallbackQueryHandler(release_dup_callback, pattern=r"^rldup_"))
-        app.add_handler(CallbackQueryHandler(releasemultiple_confirm_callback, pattern=r"^relmconf_"))
+        app.add_handler(CallbackQueryHandler(releasemultiple_confirm_callback, pattern=r"^rlm_"))
+        # Legacy patterns (ignored gracefully)
+        app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rlconfirm_"))
+        app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^relmconf_"))
+        app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rldup_"))
         app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
         app.add_handler(CallbackQueryHandler(bench_callback, pattern=r"^viewbench_"))
 
