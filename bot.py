@@ -63,30 +63,30 @@ logger = logging.getLogger(__name__)
 async def start_handler(update, context):
     await update.message.reply_text(
         "🏏 <b>Welcome to Cricket Simulator Bot!</b>\n\n"
-        "Use /debut to create your account and receive your starting squad.\n\n"
-        "<b>Commands:</b>\n"
-        "/debut - Create account & get 8 players\n"
-        "/claim - Claim 1 player + 500 coins (hourly)\n"
-        "/daily - Daily reward (24h)\n"
-        "/gspin - Spin the wheel (8h)\n"
-        "/myroster - View your roster\n"
-        "/pxi - Playing XI\n"
-        "/playerinfo [name] - Player details\n"
-        "/stats [name] - Player game stats\n"
-        "/searchpl [name] - Search player\n"
-        "/searchovr [rating] - Search by OVR\n"
-        "/buypl [name] - Buy a player\n"
-        "/swapplayers [n1] [n2] - Swap positions\n"
-        "/setcaptain [name] - Set captain\n"
-        "/teamname [name] - Set team name\n"
-        "/purse - Check balance\n"
-        "/release [name] - Release for coins\n"
-        "/releasemultiple - Release duplicates\n"
-        "/trade @user - Trade players\n"
-        "/playmatch @user - Play a match\n"
-        "/endmatch - End match (fine applies)\n"
-        "/myprofile - Your profile\n"
-        "/cmuleaderboard - Leaderboard",
+        "Use /debut (or /d) to create your account and receive your starting squad.\n\n"
+        "<b>Commands</b> <i>(short aliases in brackets)</i>:\n"
+        "/debut /d - Create account & get 8 players\n"
+        "/claim /c - Claim 1 player + coins (hourly)\n"
+        "/daily /dl - Daily reward (24h)\n"
+        "/gspin /gs - Spin the wheel (8h)\n"
+        "/myroster /mr - View your roster\n"
+        "/playingxi /pxi /xi - Playing XI\n"
+        "/playerinfo /pi [name] - Player details\n"
+        "/stats /st [name] - Player game stats\n"
+        "/searchpl /sp [name] - Search player\n"
+        "/searchovr /so [rating] - Search by OVR\n"
+        "/buypl /buy /b [name] - Buy a player\n"
+        "/swapplayers /swap [n1] [n2] - Swap positions\n"
+        "/setcaptain /cap [name] - Set captain\n"
+        "/teamname /tn [name] - Set team name\n"
+        "/purse /p - Check balance\n"
+        "/release /rel [name|pos] - Release for coins\n"
+        "/releasemultiple /relm [from] [to] - Range release\n"
+        "/trade /tr @user - Trade players\n"
+        "/playmatch /pm @user - Play a match\n"
+        "/endmatch /em - End match (fine applies)\n"
+        "/myprofile /me - Your profile\n"
+        "/leaderboard /lb /top - Leaderboard",
         parse_mode="HTML",
     )
 
@@ -177,34 +177,30 @@ def main():
         app = ApplicationBuilder().token(BOT_TOKEN).build()
 
         # ── Command handlers ─────────────────────────────────────────
-        app.add_handler(CommandHandler("start", start_handler))
-        app.add_handler(CommandHandler("debut", debut_handler))
-        app.add_handler(CommandHandler("claim", claim_handler))
-        app.add_handler(CommandHandler("gspin", gspin_handler))
-        app.add_handler(CommandHandler("daily", daily_handler))
-        app.add_handler(CommandHandler("myroster", myroster_handler))
-        app.add_handler(CommandHandler("playerinfo", playerinfo_handler))
-        app.add_handler(CommandHandler("releasepl", releasepl_handler))
-        app.add_handler(CommandHandler("release", releasepl_handler))
-        app.add_handler(CommandHandler("releasemultiple", releasemultiple_handler))
-        app.add_handler(CommandHandler("trade", trade_handler))
-        app.add_handler(CommandHandler("pxi", playingxi_handler))
-        app.add_handler(CommandHandler("playingxi", playingxi_handler))
-        app.add_handler(CommandHandler("swapplayers", swapplayers_handler))
-        app.add_handler(CommandHandler("swappl", swapplayers_handler))
-        app.add_handler(CommandHandler("setcaptain", setcaptain_handler))
-        app.add_handler(CommandHandler("searchpl", searchpl_handler))
-        app.add_handler(CommandHandler("searchovr", searchovr_handler))
-        app.add_handler(CommandHandler("buypl", buypl_handler))
-        app.add_handler(CommandHandler("teamname", teamname_handler))
-        app.add_handler(CommandHandler("purse", purse_handler))
-        app.add_handler(CommandHandler("stats", stats_handler))
-        app.add_handler(CommandHandler("cmuleaderboard", leaderboard_handler))
-        app.add_handler(CommandHandler("leaderboard", leaderboard_handler))
-        app.add_handler(CommandHandler("myprofile", myprofile_handler))
-        app.add_handler(CommandHandler("profile", myprofile_handler))
-        app.add_handler(CommandHandler("playmatch", playmatch_handler))
-        app.add_handler(CommandHandler("endmatch", endmatch_handler))
+        # ── Core commands + short aliases ────────────────────────────
+        app.add_handler(CommandHandler(["start", "s"], start_handler))
+        app.add_handler(CommandHandler(["debut", "d"], debut_handler))
+        app.add_handler(CommandHandler(["claim", "c"], claim_handler))
+        app.add_handler(CommandHandler(["gspin", "gs"], gspin_handler))
+        app.add_handler(CommandHandler(["daily", "dl"], daily_handler))
+        app.add_handler(CommandHandler(["myroster", "mr", "roster"], myroster_handler))
+        app.add_handler(CommandHandler(["playerinfo", "pi", "info"], playerinfo_handler))
+        app.add_handler(CommandHandler(["releasepl", "release", "rel"], releasepl_handler))
+        app.add_handler(CommandHandler(["releasemultiple", "relm", "rm"], releasemultiple_handler))
+        app.add_handler(CommandHandler(["trade", "tr"], trade_handler))
+        app.add_handler(CommandHandler(["playingxi", "pxi", "xi"], playingxi_handler))
+        app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
+        app.add_handler(CommandHandler(["setcaptain", "captain", "cap"], setcaptain_handler))
+        app.add_handler(CommandHandler(["searchpl", "search", "sp"], searchpl_handler))
+        app.add_handler(CommandHandler(["searchovr", "so"], searchovr_handler))
+        app.add_handler(CommandHandler(["buypl", "buy", "b"], buypl_handler))
+        app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
+        app.add_handler(CommandHandler(["purse", "p"], purse_handler))
+        app.add_handler(CommandHandler(["stats", "st"], stats_handler))
+        app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
+        app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
+        app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
+        app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
