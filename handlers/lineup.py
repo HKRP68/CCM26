@@ -214,15 +214,18 @@ def validate_xi(roster_list):
     if len(allrounders) > 3:
         errors.append(f"Max 3 All-rounders (have {len(allrounders)})")
 
-    # 3rd ALR rule: 3rd all-rounder must have lower bowl rating than all bowlers
+    # 3rd ALR rule: if you have 3 all-rounders, AT LEAST ONE of them
+    # must have a BOWL rating lower than all pure Bowlers' BOWL ratings
     if len(allrounders) == 3 and bowlers:
-        alr_sorted = sorted(allrounders, key=lambda p: p.bowl_rating, reverse=True)
-        third_alr = alr_sorted[0]  # highest bowl rating ALR
         min_bowler_bowl = min(b.bowl_rating for b in bowlers)
-        if third_alr.bowl_rating >= min_bowler_bowl:
+        # Find the weakest (lowest bowl rating) all-rounder
+        weakest_alr = min(allrounders, key=lambda p: p.bowl_rating)
+        if weakest_alr.bowl_rating >= min_bowler_bowl:
             errors.append(
-                f"3rd All-rounder ({third_alr.name}, BOWL {third_alr.bowl_rating}) "
-                f"must have lower BOWL rating than all Bowlers (lowest: {min_bowler_bowl})"
+                f"At least one All-rounder must have BOWL rating lower than all Bowlers. "
+                f"Lowest Bowler BOWL: {min_bowler_bowl}. "
+                f"Your weakest All-rounder ({weakest_alr.name}, BOWL {weakest_alr.bowl_rating}) "
+                f"doesn't qualify."
             )
 
     return len(errors) == 0, errors
