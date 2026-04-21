@@ -55,6 +55,7 @@ from handlers.match import (
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
+    resume_handler,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ async def start_handler(update, context):
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
         "/endmatch /em - End match (fine applies)\n"
+        "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
         "/leaderboard /lb /top - Leaderboard",
         parse_mode="HTML",
@@ -201,6 +203,8 @@ def main():
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
+        app.add_handler(CommandHandler(["resume", "r"], resume_handler))
+        app.add_handler(CommandHandler(["resume", "rs"], resume_handler))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
