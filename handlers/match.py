@@ -17,6 +17,8 @@ from services.match_engine import (
 from services.flags import get_flag
 from services.activity_service import log_activity
 from services.batsman_card import generate_batsman_card
+from services.bowler_card import generate_bowler_card
+from services.scorecard_card import generate_batting_scorecard, generate_bowling_scorecard
 from handlers.lineup import format_xi_text
 
 logger = logging.getLogger(__name__)
@@ -75,8 +77,14 @@ async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
             session.close()
 
         card_bytes = generate_batsman_card(
-            player_dict["name"], player_dict["rating"],
-            player_dict["bat_rating"], stats)
+            player_dict["name"],
+            player_dict["rating"],
+            player_dict["bat_rating"],
+            stats,
+            bat_hand=player_dict.get("bat_hand", "Right"),
+            bowl_hand=player_dict.get("bowl_hand", "Right"),
+            bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
+        )
 
         if card_bytes:
             await ctx.bot.send_photo(
@@ -85,6 +93,64 @@ async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
                 parse_mode="HTML")
     except Exception:
         logger.warning(f"Failed to send batsman card for {player_dict.get('name')}")
+
+
+async def _send_bowler_card(ctx, chat_id, player_dict, owner_user_id):
+    """Look up PlayerGameStats and send bowler card image."""
+    try:
+        session = get_session()
+        try:
+            gs = (session.query(PlayerGameStats)
+                  .filter(PlayerGameStats.user_id == owner_user_id,
+                          PlayerGameStats.player_id == player_dict["player_id"])
+                  .first())
+            if gs:
+                # Calculate BBF (best bowling figures)
+                if gs.best_bowl_wickets > 0:
+                    bbf_str = f"{gs.best_bowl_wickets}/{gs.best_bowl_runs}"
+                else:
+                    bbf_str = "-"
+                stats = {
+                    "bowl_inns": gs.bowl_inns,
+                    "wickets_taken": gs.wickets_taken,
+                    "runs_conceded": gs.runs_conceded,
+                    "balls_bowled": gs.balls_bowled,
+                    "bowl_avg": gs.bowl_avg,
+                    "bowl_sr": gs.bowl_sr,
+                    "econ": gs.bowl_economy,
+                    "hat_tricks": getattr(gs, "hat_tricks", 0),
+                    "five_fers": gs.five_fers,
+                    "three_fers": gs.three_fers,
+                    "bbf_str": bbf_str,
+                }
+            else:
+                stats = {"bowl_inns": 0, "wickets_taken": 0, "runs_conceded": 0,
+                         "balls_bowled": 0, "bowl_avg": 0, "bowl_sr": 0, "econ": 0,
+                         "hat_tricks": 0, "five_fers": 0, "three_fers": 0, "bbf_str": "-"}
+        except Exception:
+            stats = {"bowl_inns": 0, "wickets_taken": 0, "runs_conceded": 0,
+                     "balls_bowled": 0, "bowl_avg": 0, "bowl_sr": 0, "econ": 0,
+                     "hat_tricks": 0, "five_fers": 0, "three_fers": 0, "bbf_str": "-"}
+        finally:
+            session.close()
+
+        card_bytes = generate_bowler_card(
+            player_dict["name"],
+            player_dict["rating"],
+            player_dict["bowl_rating"],
+            stats,
+            bat_hand=player_dict.get("bat_hand", "Right"),
+            bowl_hand=player_dict.get("bowl_hand", "Right"),
+            bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
+        )
+
+        if card_bytes:
+            await ctx.bot.send_photo(
+                chat_id=chat_id, photo=io.BytesIO(card_bytes),
+                caption=f"🎳 <b>{player_dict['name']}</b> is bowling",
+                parse_mode="HTML")
+    except Exception:
+        logger.warning(f"Failed to send bowler card for {player_dict.get('name')}")
 
 
 # ── Timeout helpers ──────────────────────────────────────────────────
@@ -754,6 +820,7 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             # Send opener cards for 2nd innings
             await _send_batsman_card(context, cid, op1, s["bat_team_id"])
             await _send_batsman_card(context, cid, op2, s["bat_team_id"])
+            await _send_bowler_card(context, cid, bowler, s["bowl_team_id"])
         else:
             # 1st innings — create fresh state
             m = session.query(Match).get(mid); m.status = "playing"; session.commit()
@@ -779,6 +846,7 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             # Send opener cards
             await _send_batsman_card(context, cid, op1, s["bat_team_id"])
             await _send_batsman_card(context, cid, op2, s["bat_team_id"])
+            await _send_bowler_card(context, cid, bowler, s["bowl_team_id"])
 
         await _show_delivery(context, cid, mid)
     except Exception: session.rollback(); logger.exception("SelBowl err")
@@ -917,6 +985,16 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bs["how_out"] = oc.get("how", "Bowled"); bs["bowled_by"] = bowler["name"]
         add_to_timeline(s, SYM["W"]); s["partnership_runs"] = 0; s["partnership_balls"] = 0
         need_new_bat = True
+        # Track fall of wickets: (score, over-string) for this wicket
+        if "fow" not in s:
+            s["fow"] = []
+        # Calculate over string AS OF this ball (before current_ball is incremented below)
+        over_now = s["current_over"] - 1
+        ball_now = s["current_ball"] + 1  # the ball just bowled
+        if ball_now >= 6:
+            over_now += 1; ball_now = 0
+        fow_over = f"{over_now}.{ball_now}" if ball_now else str(over_now)
+        s["fow"].append((s["total_runs"], fow_over))
         rtxt = f"🟥 <b>WICKET!</b> {striker['name']} — {oc.get('how', 'OUT')}!"
     else:
         runs = oc.get("runs", 0); s["total_runs"] += runs; bs["runs"] += runs; bs["balls"] += 1
@@ -1055,10 +1133,153 @@ async def new_over_bowler_callback(update: Update, context: ContextTypes.DEFAULT
     bws = s["bowl_stats"].setdefault(bw["roster_id"], {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0})
     bws["this_over_balls"] = 0; _ss(context, mid, s)
     await q.edit_message_text(f"🎳 Over {s['current_over']}: {bw['name']} | {bw.get('bowl_hand','R')[:1]}-{bw['bowl_style']}", parse_mode="HTML")
+    await _send_bowler_card(context, s["chat_id"], bw, s["bowl_team_id"])
     await _show_delivery(context, s["chat_id"], mid)
 
 
 # ═══════════════════════════ END INNINGS ═════════════════════════════
+
+async def _send_innings_scorecards(ctx, mid, innings_num):
+    """Send batting + bowling scorecards for the innings that just ended.
+
+    For 1st innings: sent at end of 1st innings
+    For 2nd innings: sent at match completion
+    """
+    s = _gs(ctx, mid)
+    if not s:
+        return
+
+    cid = s["chat_id"]
+
+    try:
+        # Pull data for the innings that just ENDED (not current state)
+        if innings_num == 1:
+            # 1st innings data (already saved in inn1_* keys)
+            bat_team = s.get("inn1_team", s.get("bat_team_name", "Team"))
+            bowl_team = s.get("bowl_team_name", "Opponent")
+            if s.get("innings", 1) == 2:
+                # We've already swapped — bowl_team_name is now the one who batted in 1st inns' bowlers
+                bowl_team = s.get("bat_team_name", "Opponent")
+            total_runs = s.get("inn1_runs", 0)
+            total_wickets = s.get("inn1_wickets", 0)
+            overs_str = s.get("inn1_overs", "0.0")
+            bat_stats_map = s.get("inn1_bat_stats", {})
+            bowl_stats_map = s.get("inn1_bowl_stats", {})
+            bat_xi = s.get("inn1_bat_xi", [])
+            bowl_xi = s.get("inn1_bowl_xi", [])
+            fow = s.get("inn1_fow", [])
+        else:
+            # 2nd innings — current state is the 2nd innings
+            bat_team = s.get("bat_team_name", "Team")
+            bowl_team = s.get("bowl_team_name", "Opponent")
+            total_runs = s.get("total_runs", 0)
+            total_wickets = s.get("total_wickets", 0)
+            overs_str = format_overs(s)
+            bat_stats_map = s.get("bat_stats", {})
+            bowl_stats_map = s.get("bowl_stats", {})
+            bat_xi = s.get("bat_xi", [])
+            bowl_xi = s.get("bowl_xi", [])
+            fow = s.get("fow", [])
+
+        # Build batsmen rows — order by batting order
+        order = s.get("inn1_batting_order", s.get("batting_order", bat_xi)) if innings_num == 1 \
+            else s.get("batting_order", bat_xi)
+        # Dedupe while preserving order
+        seen = set()
+        bat_order_unique = []
+        for p in order:
+            if p["roster_id"] not in seen:
+                seen.add(p["roster_id"]); bat_order_unique.append(p)
+        # Append any batsmen who didn't appear in order but are in XI
+        for p in bat_xi:
+            if p["roster_id"] not in seen:
+                seen.add(p["roster_id"]); bat_order_unique.append(p)
+
+        batsmen_rows = []
+        for p in bat_order_unique:
+            bs = bat_stats_map.get(p["roster_id"], {})
+            # Only include players who actually batted (faced a ball) OR were marked out
+            if bs.get("balls", 0) == 0 and not bs.get("out"):
+                # Did not bat — skip
+                continue
+            runs = bs.get("runs", 0)
+            balls = bs.get("balls", 0)
+            sr = (runs / balls * 100) if balls > 0 else 0.0
+            dismissal = bs.get("how_out", "") if bs.get("out") else "not out"
+            batsmen_rows.append({
+                "rating": p.get("rating", 0),
+                "name": p.get("name", "?"),
+                "dismissal": dismissal,
+                "runs": runs,
+                "balls": balls,
+                "fours": bs.get("fours", 0),
+                "sixes": bs.get("sixes", 0),
+                "strike_rate": round(sr, 1),
+            })
+
+        # Build bowlers rows
+        bowlers_rows = []
+        for p in bowl_xi:
+            bws = bowl_stats_map.get(p["roster_id"], {})
+            balls = bws.get("balls", 0)
+            if balls == 0 and bws.get("wickets", 0) == 0 and bws.get("runs", 0) == 0:
+                continue
+            overs_complete = balls // 6
+            ball_rem = balls % 6
+            overs_str_bw = f"{overs_complete}.{ball_rem}" if ball_rem else str(overs_complete)
+            runs_conceded = bws.get("runs", 0)
+            econ = (runs_conceded / balls * 6) if balls > 0 else 0.0
+            bowlers_rows.append({
+                "name": p.get("name", "?"),
+                "overs": overs_str_bw,
+                "maidens": bws.get("maidens", 0),
+                "runs_conceded": runs_conceded,
+                "wickets": bws.get("wickets", 0),
+                "economy": round(econ, 2),
+            })
+
+        # Extras
+        extras = {
+            "wd": s.get("wides_1" if innings_num == 1 else "wides", s.get("wides", 0)),
+            "nb": s.get("noballs_1" if innings_num == 1 else "noballs", s.get("noballs", 0)),
+            "b": 0,
+            "lb": s.get("legbyes_1" if innings_num == 1 else "legbyes", s.get("legbyes", 0)),
+        }
+        extras["total"] = extras["wd"] + extras["nb"] + extras["b"] + extras["lb"]
+
+        # Match title
+        match_title = "MATCH"
+
+        is_first = (innings_num == 1)
+
+        # Generate batting scorecard
+        bat_card_bytes = generate_batting_scorecard(
+            bat_team, bowl_team,
+            total_runs, total_wickets, overs_str,
+            batsmen_rows, fow, extras,
+            is_first_innings=is_first, match_title=match_title,
+        )
+
+        # Generate bowling scorecard — team name is the bowling team
+        bowl_card_bytes = generate_bowling_scorecard(
+            bowl_team, bowlers_rows, fow,
+            is_first_innings=is_first, match_title=match_title,
+        )
+
+        # Send in the order asked: Bowling first, then Batting (per user spec)
+        if bowl_card_bytes:
+            await ctx.bot.send_photo(
+                chat_id=cid, photo=io.BytesIO(bowl_card_bytes),
+                caption=f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
+                parse_mode="HTML")
+        if bat_card_bytes:
+            await ctx.bot.send_photo(
+                chat_id=cid, photo=io.BytesIO(bat_card_bytes),
+                caption=f"🏏 <b>{bat_team}</b> — Batting Scorecard",
+                parse_mode="HTML")
+    except Exception:
+        logger.exception(f"Failed to send innings {innings_num} scorecards")
+
 
 async def _end_innings(ctx, mid):
     s = _gs(ctx, mid); cid = s["chat_id"]; _cancel_action_timer(ctx, mid)
@@ -1074,10 +1295,20 @@ async def _end_innings(ctx, mid):
         s["inn1_bowl_team_id"] = s["bowl_team_id"]
         s["inn1_bat_xi"] = list(s["bat_xi"])
         s["inn1_bowl_xi"] = list(s["bowl_xi"])
+        s["inn1_fow"] = list(s.get("fow", []))
+        s["inn1_wides"] = s.get("wides", 0)
+        s["inn1_noballs"] = s.get("noballs", 0)
+        s["inn1_legbyes"] = s.get("legbyes", 0)
 
         # Save 1st innings stats to DB immediately (in case 2nd innings abandoned)
         await _save_match_stats(s)
         s["inn1_stats_saved"] = True  # prevent double-save at match end
+
+        # Save batting order snapshot for scorecard display
+        s["inn1_batting_order"] = list(s.get("batting_order", []))
+
+        # Send innings 1 scorecards (bowling then batting)
+        await _send_innings_scorecards(ctx, mid, innings_num=1)
 
         await ctx.bot.send_message(cid,
             f"━━━━━━━━━━━━━━━━━━━\n📊 <b>END OF 1ST INNINGS</b>\n\n"
@@ -1095,6 +1326,7 @@ async def _end_innings(ctx, mid):
         s["prev_bowler_rid"] = None; s["selected_variation"] = None
         s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "out": False, "how_out": "", "bowled_by": ""} for p in s["bat_xi"]}
         s["bowl_stats"] = {p["roster_id"]: {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0} for p in s["bowl_xi"]}
+        s["fow"] = []  # reset for 2nd innings
         _ss(ctx, mid, s)
         # CRITICAL: Update bot_data so opener callbacks read correct XI
         ctx.bot_data[f"bat_xi_{mid}"] = s["bat_xi"]
@@ -1192,6 +1424,9 @@ async def _end_innings(ctx, mid):
                 f"🏆 {winner_name}: +{wc:,} Coins 💰 +{wg} Gems 💎\n"
                 f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
                 f"━━━━━━━━━━━━━━━━━━━")
+
+        # Send 2nd innings scorecards (bowling then batting) BEFORE result message
+        await _send_innings_scorecards(ctx, mid, innings_num=2)
 
         sent = await ctx.bot.send_message(cid, msg, parse_mode="HTML")
 

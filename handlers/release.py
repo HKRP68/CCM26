@@ -1,4 +1,4 @@
-"""Handler for /releasepl [name] and /releasemultiple."""
+"""Release player handlers — /release (supports name, position, ranges) + /releasemultiple."""
 
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,19 +8,121 @@ from database import get_session
 from models import User, Player, UserRoster
 from config import get_sell_value
 from services.activity_service import log_activity
-from services.roster_service import find_roster_entry, release_player, get_duplicate_entries, release_duplicates
+from services.flags import get_flag
 
 logger = logging.getLogger(__name__)
 
 
+# ── Helpers ──────────────────────────────────────────────────────────
+
+def _renumber_roster(session, user_id):
+    """Close any gaps in order_position after a release."""
+    remaining = (session.query(UserRoster)
+                 .filter(UserRoster.user_id == user_id)
+                 .order_by(UserRoster.order_position, UserRoster.acquired_date).all())
+    for i, entry in enumerate(remaining, 1):
+        if entry.order_position != i:
+            entry.order_position = i
+
+
+def _do_release(session, user, entries):
+    """Release a list of (UserRoster, Player) tuples atomically.
+    Returns dict with success, released list, total_coins, new_balance, new_count.
+    """
+    total_coins = 0
+    released = []
+    captain_released = False
+
+    for entry, player in entries:
+        sv = get_sell_value(player.rating)
+        # Captain check — clear captain if captain is released
+        if user.captain_roster_id == entry.id:
+            user.captain_roster_id = None
+            captain_released = True
+        session.delete(entry)
+        user.total_coins += sv
+        user.roster_count = max(0, user.roster_count - 1)
+        total_coins += sv
+        released.append({"name": player.name, "rating": player.rating, "value": sv})
+        log_activity(session, user.id, "release",
+                     f"Released {player.name} ({player.rating}) for {sv:,}",
+                     coins_change=sv, player_name=player.name, player_rating=player.rating)
+
+    session.flush()
+    _renumber_roster(session, user.id)
+
+    return {
+        "success": True,
+        "released": released,
+        "total_coins": total_coins,
+        "new_balance": user.total_coins,
+        "new_count": user.roster_count,
+        "captain_released": captain_released,
+    }
+
+
+def _find_by_arg(session, user_id, arg_str):
+    """Find roster entries matching the argument.
+    - If arg is a number, returns entry at that position.
+    - If arg is a name, returns all matching entries (for disambiguation).
+    Returns list of (UserRoster, Player).
+    """
+    arg_str = arg_str.strip()
+
+    # Try position first
+    if arg_str.isdigit():
+        pos = int(arg_str)
+        entries = (session.query(UserRoster, Player)
+                   .join(Player, UserRoster.player_id == Player.id)
+                   .filter(UserRoster.user_id == user_id)
+                   .order_by(UserRoster.order_position).all())
+        if 1 <= pos <= len(entries):
+            return [entries[pos - 1]]
+        return []
+
+    # Name search — exact match first, then substring
+    exact = (session.query(UserRoster, Player)
+             .join(Player, UserRoster.player_id == Player.id)
+             .filter(UserRoster.user_id == user_id, Player.name.ilike(arg_str))
+             .order_by(UserRoster.order_position).all())
+    if exact:
+        return exact
+
+    substr = (session.query(UserRoster, Player)
+              .join(Player, UserRoster.player_id == Player.id)
+              .filter(UserRoster.user_id == user_id,
+                      Player.name.ilike(f"%{arg_str}%"))
+              .order_by(UserRoster.order_position).all())
+    return substr
+
+
+def _fmt_player_line(entry, player):
+    sv = get_sell_value(player.rating)
+    flag = get_flag(player.country) if player.country else ""
+    return f"#{entry.order_position}. {player.name} {flag} | {player.rating} OVR | 💸 {sv:,}"
+
+
+# ── /release — smart single/name/position release ────────────────────
+
 async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /release <name>     → release by name (disambiguates duplicates)
+    /release <position> → release by roster position (1-based)
+    /release            → show usage
+    """
     tg_user = update.effective_user
 
     if not context.args:
-        await update.message.reply_text("Usage: /releasepl <player name>\nExample: /releasepl Virat Kohli")
+        await update.message.reply_text(
+            "Usage:\n"
+            "<code>/release &lt;player name&gt;</code> — by name\n"
+            "<code>/release &lt;position&gt;</code> — by roster position\n"
+            "<code>/releasemultiple &lt;from&gt; &lt;to&gt;</code> — range",
+            parse_mode="HTML")
         return
 
-    search_name = " ".join(context.args).strip()
+    arg = " ".join(context.args).strip()
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
@@ -28,72 +130,107 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        entry, player = find_roster_entry(session, user.id, search_name)
-        if not entry:
-            await update.message.reply_text(f"❌ No player named '{search_name}' in your roster")
+        matches = _find_by_arg(session, user.id, arg)
+
+        if not matches:
+            await update.message.reply_text(f"❌ No match for '<code>{arg}</code>'", parse_mode="HTML")
             return
 
-        sell_val = get_sell_value(player.rating)
+        # Multiple matches — let user pick
+        if len(matches) > 1:
+            # Show up to 10 choices
+            btns = []
+            for entry, player in matches[:10]:
+                sv = get_sell_value(player.rating)
+                btns.append([InlineKeyboardButton(
+                    f"#{entry.order_position} {player.name} ({player.rating}) — 💸 {sv:,}",
+                    callback_data=f"rlone_{entry.id}")])
+            btns.append([InlineKeyboardButton("❌ Cancel", callback_data="rlcancel")])
+
+            text = f"🔍 Found <b>{len(matches)}</b> matching players:\n\nChoose one to release:"
+            await update.message.reply_text(text, parse_mode="HTML",
+                                            reply_markup=InlineKeyboardMarkup(btns))
+            return
+
+        # Single match — show confirm
+        entry, player = matches[0]
+        sv = get_sell_value(player.rating)
+        flag = get_flag(player.country) if player.country else ""
+        captain_warn = ""
+        if user.captain_roster_id == entry.id:
+            captain_warn = "\n\n⚠️ <b>This is your Captain!</b> You'll need to set a new one."
 
         text = (
             "🔴 <b>RELEASE PLAYER?</b>\n\n"
-            f"Player: {player.name}\n"
-            f"Rating: {player.rating} OVR\n"
-            f"Category: {player.category}\n\n"
-            f"💸 You will receive: {sell_val:,} 🪙"
+            f"#{entry.order_position}. {player.name} {flag}\n"
+            f"⭐ Rating: {player.rating} OVR\n"
+            f"🏷 {player.category}\n\n"
+            f"💸 You will receive: <b>{sv:,}</b> 🪙"
+            f"{captain_warn}"
         )
 
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Confirm Release", callback_data=f"rlconfirm_{entry.id}"),
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Release", callback_data=f"rlone_{entry.id}"),
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
-
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
     except Exception:
-        logger.exception(f"ReleasePl error")
-        await update.message.reply_text("⚠️ Error. Try again.")
+        logger.exception("Release error")
+        await update.message.reply_text("⚠️ Error.")
     finally:
         session.close()
 
 
-async def release_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm single release — callback: rlone_<roster_id>"""
     query = update.callback_query
-    await query.answer()
     tg_user = query.from_user
 
-    roster_entry_id = int(query.data.split("_")[1])
+    try:
+        roster_id = int(query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await query.answer("Invalid")
+        return
 
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
-            await query.edit_message_reply_markup(reply_markup=None)
+            await query.answer("Not authorized")
             return
 
-        result = release_player(session, user, roster_entry_id)
-
-        if not result["success"]:
-            await query.edit_message_text(f"❌ {result['error']}")
+        entry = session.query(UserRoster).filter(
+            UserRoster.id == roster_id, UserRoster.user_id == user.id).first()
+        if not entry:
+            await query.answer("Not yours or already released")
+            try: await query.edit_message_text("❌ This player is no longer in your roster.")
+            except Exception: pass
             return
 
-        log_activity(session, user.id, "releasepl",
-                     f"Released {result['name']} for {result['sell_value']:,}",
-                     coins_change=result["sell_value"],
-                     player_name=result["name"], player_rating=result["rating"])
+        await query.answer()
+        player = session.query(Player).get(entry.player_id)
+        result = _do_release(session, user, [(entry, player)])
         session.commit()
 
-        await query.edit_message_text(
-            f"✅ <b>PLAYER RELEASED!</b>\n\n"
-            f"{result['name']} - {result['rating']} OVR\n\n"
-            f"💸 Received: {result['sell_value']:,} 🪙\n"
-            f"💰 New Balance: {result['new_balance']:,}\n"
-            f"📊 Roster: {result['new_count']}/25",
-            parse_mode="HTML")
+        r = result["released"][0]
+        text = (
+            f"✅ <b>PLAYER RELEASED</b>\n\n"
+            f"{r['name']} ({r['rating']} OVR)\n\n"
+            f"💸 Received: <b>{r['value']:,}</b> 🪙\n"
+            f"💰 Balance: {result['new_balance']:,}\n"
+            f"📊 Roster: {result['new_count']}/25"
+        )
+        if result["captain_released"]:
+            text += "\n\n⚠️ Captain slot cleared. Use /setcaptain to assign new one."
+
+        await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception:
         session.rollback()
-        logger.exception("Release confirm error")
+        logger.exception("Release one callback error")
+        try: await query.edit_message_text("⚠️ Error. Try again.")
+        except Exception: pass
     finally:
         session.close()
 
@@ -107,9 +244,33 @@ async def release_cancel_callback(update: Update, context: ContextTypes.DEFAULT_
         pass
 
 
+# ── /releasemultiple — range release ─────────────────────────────────
+
 async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/releasemultiple 7 11 — release players from position 7 to 11."""
+    """/releasemultiple <from> <to> — release roster positions in range."""
     tg_user = update.effective_user
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: <code>/releasemultiple &lt;from&gt; &lt;to&gt;</code>\n"
+            "Example: <code>/releasemultiple 7 11</code>",
+            parse_mode="HTML")
+        return
+
+    try:
+        pos_from = int(context.args[0])
+        pos_to = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Positions must be numbers.")
+        return
+
+    if pos_from > pos_to:
+        pos_from, pos_to = pos_to, pos_from
+
+    if pos_from < 1:
+        await update.message.reply_text("❌ Position must be 1 or higher.")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
@@ -117,153 +278,136 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        if not context.args or len(context.args) < 2:
+        entries = (session.query(UserRoster, Player)
+                   .join(Player, UserRoster.player_id == Player.id)
+                   .filter(UserRoster.user_id == user.id)
+                   .order_by(UserRoster.order_position).all())
+
+        if pos_to > len(entries):
             await update.message.reply_text(
-                "Usage: /releasemultiple <from> <to>\n"
-                "Example: /releasemultiple 7 11\n"
-                "Releases roster positions 7 through 11")
-            return
-
-        try:
-            pos_from = int(context.args[0])
-            pos_to = int(context.args[1])
-        except ValueError:
-            await update.message.reply_text("❌ Positions must be numbers.")
-            return
-
-        if pos_from > pos_to:
-            pos_from, pos_to = pos_to, pos_from
-
-        # Get ordered roster
-        entries = (
-            session.query(UserRoster, Player)
-            .join(Player, UserRoster.player_id == Player.id)
-            .filter(UserRoster.user_id == user.id)
-            .order_by(UserRoster.order_position)
-            .all()
-        )
-
-        if pos_from < 1 or pos_to > len(entries):
-            await update.message.reply_text(f"❌ Positions must be 1-{len(entries)}")
+                f"❌ You only have {len(entries)} players. Max position is {len(entries)}.")
             return
 
         to_release = entries[pos_from - 1:pos_to]
+        if not to_release:
+            await update.message.reply_text("❌ Nothing to release in that range.")
+            return
+
         total_sell = 0
         lines = []
+        captain_in_range = False
         for entry, player in to_release:
             sv = get_sell_value(player.rating)
             total_sell += sv
-            lines.append(f"• {player.name} - {player.rating} OVR | 💸 {sv:,}")
+            lines.append(_fmt_player_line(entry, player))
+            if user.captain_roster_id == entry.id:
+                captain_in_range = True
+
+        # Build preview (truncate if too long)
+        preview = "\n".join(lines[:15])
+        if len(lines) > 15:
+            preview += f"\n<i>... and {len(lines) - 15} more</i>"
+
+        captain_warn = "\n\n⚠️ <b>Captain is in this range!</b>" if captain_in_range else ""
 
         text = (
-            f"🔴 <b>RELEASE PLAYERS?</b>\n\n"
-            f"Position {pos_from} to {pos_to} ({len(to_release)} players):\n\n"
-            + "\n".join(lines) +
-            f"\n\n💸 Total: {total_sell:,} 🪙"
+            f"🔴 <b>RELEASE {len(to_release)} PLAYERS?</b>\n\n"
+            f"<b>Positions {pos_from} → {pos_to}</b>\n\n"
+            f"{preview}\n\n"
+            f"💸 Total: <b>{total_sell:,}</b> 🪙"
+            f"{captain_warn}"
         )
 
-        # Pass range directly in callback - more reliable than bot_data
-        keyboard = InlineKeyboardMarkup([[
+        kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Release All",
-                callback_data=f"relmconf_{user.id}_{pos_from}_{pos_to}"),
+                callback_data=f"rlm_{user.telegram_id}_{pos_from}_{pos_to}"),
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
-
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
     except Exception:
-        logger.exception("ReleaseMultiple error")
+        logger.exception("ReleaseMultiple handler error")
         await update.message.reply_text("⚠️ Error.")
     finally:
         session.close()
 
 
 async def releasemultiple_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback: rlm_<tg_user_id>_<from>_<to>"""
     query = update.callback_query
     tg_user = query.from_user
+
     parts = query.data.split("_")
     if len(parts) < 4:
-        # Old-format callback (legacy) - bail gracefully
-        await query.answer("Expired. Run /releasemultiple again.")
+        await query.answer("Expired")
         try: await query.edit_message_text("❌ Expired. Run /releasemultiple again.")
         except Exception: pass
         return
+
     try:
-        uid = int(parts[1])
+        authorized_tg_id = int(parts[1])
         pos_from = int(parts[2])
         pos_to = int(parts[3])
     except ValueError:
         await query.answer("Bad data")
         return
 
+    # Authorization — only the user who issued the command can confirm
+    if tg_user.id != authorized_tg_id:
+        await query.answer("Not your release!", show_alert=True)
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user or user.id != uid:
-            await query.answer("Not yours!")
+        if not user:
+            await query.answer("Not authorized")
             return
+
         await query.answer()
 
-        # Re-fetch roster by position (most recent state)
-        entries = (
-            session.query(UserRoster, Player)
-            .join(Player, UserRoster.player_id == Player.id)
-            .filter(UserRoster.user_id == user.id)
-            .order_by(UserRoster.order_position)
-            .all()
-        )
+        entries = (session.query(UserRoster, Player)
+                   .join(Player, UserRoster.player_id == Player.id)
+                   .filter(UserRoster.user_id == user.id)
+                   .order_by(UserRoster.order_position).all())
+
         if pos_from < 1 or pos_to > len(entries) or pos_from > pos_to:
-            await query.edit_message_text("❌ Positions out of range.")
+            try: await query.edit_message_text(
+                f"❌ Roster changed. You now have {len(entries)} players.\n"
+                f"Please run /releasemultiple again.")
+            except Exception: pass
             return
 
         to_release = entries[pos_from - 1:pos_to]
         if not to_release:
-            await query.edit_message_text("❌ Nothing to release.")
+            try: await query.edit_message_text("❌ Nothing to release.")
+            except Exception: pass
             return
 
-        total_coins = 0
-        released = 0
-        names = []
-        for entry, player in to_release:
-            sv = get_sell_value(player.rating)
-            session.delete(entry)
-            user.roster_count -= 1
-            user.total_coins += sv
-            total_coins += sv
-            released += 1
-            names.append(player.name)
-            log_activity(session, user.id, "release", f"Released {player.name} for {sv:,}",
-                         coins_change=sv, player_name=player.name, player_rating=player.rating)
-
-        # Fix order_positions (close gaps)
-        remaining = (session.query(UserRoster)
-                     .filter(UserRoster.user_id == user.id)
-                     .order_by(UserRoster.order_position).all())
-        for i, e in enumerate(remaining, 1):
-            e.order_position = i
-
+        result = _do_release(session, user, to_release)
         session.commit()
 
-        await query.edit_message_text(
-            f"✅ <b>RELEASED {released} PLAYERS!</b>\n\n"
-            f"{', '.join(names[:5])}{', ...' if len(names) > 5 else ''}\n\n"
-            f"💸 Total: {total_coins:,} 🪙\n"
-            f"💰 Balance: {user.total_coins:,}\n"
-            f"📊 Roster: {user.roster_count}/25",
-            parse_mode="HTML")
+        released = result["released"]
+        names_str = ", ".join(r["name"] for r in released[:8])
+        if len(released) > 8:
+            names_str += f", +{len(released) - 8} more"
+
+        text = (
+            f"✅ <b>RELEASED {len(released)} PLAYERS</b>\n\n"
+            f"{names_str}\n\n"
+            f"💸 Total: <b>{result['total_coins']:,}</b> 🪙\n"
+            f"💰 Balance: {result['new_balance']:,}\n"
+            f"📊 Roster: {result['new_count']}/25"
+        )
+        if result["captain_released"]:
+            text += "\n\n⚠️ Captain slot cleared. Use /setcaptain."
+
+        await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception:
         session.rollback()
         logger.exception("ReleaseMultiple confirm error")
-        try:
-            await query.edit_message_text("⚠️ Error releasing players. Try again.")
-        except Exception:
-            pass
+        try: await query.edit_message_text("⚠️ Error releasing players. Try again.")
+        except Exception: pass
     finally:
         session.close()
-
-
-async def release_dup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Backward compat — old dup release buttons."""
-    query = update.callback_query
-    await query.answer("Use /releasemultiple <from> <to> instead")
