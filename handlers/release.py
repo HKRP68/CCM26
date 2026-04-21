@@ -17,9 +17,14 @@ logger = logging.getLogger(__name__)
 
 def _renumber_roster(session, user_id):
     """Close any gaps in order_position after a release."""
+    from sqlalchemy import asc
     remaining = (session.query(UserRoster)
                  .filter(UserRoster.user_id == user_id)
-                 .order_by(UserRoster.order_position, UserRoster.acquired_date).all())
+                 .order_by(
+                     asc(UserRoster.order_position).nullslast(),
+                     UserRoster.acquired_date,
+                     UserRoster.id,
+                 ).all())
     for i, entry in enumerate(remaining, 1):
         if entry.order_position != i:
             entry.order_position = i
@@ -210,6 +215,15 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await query.answer()
         player = session.query(Player).get(entry.player_id)
+        if not player:
+            # Roster entry orphaned — just delete it
+            session.delete(entry)
+            user.roster_count = max(0, user.roster_count - 1)
+            session.commit()
+            try: await query.edit_message_text("⚠️ Player data missing — roster entry cleaned up.")
+            except Exception: pass
+            return
+
         result = _do_release(session, user, [(entry, player)])
         session.commit()
 
@@ -226,11 +240,15 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await query.edit_message_text(text, parse_mode="HTML")
 
-    except Exception:
+    except Exception as e:
         session.rollback()
-        logger.exception("Release one callback error")
-        try: await query.edit_message_text("⚠️ Error. Try again.")
-        except Exception: pass
+        logger.exception(f"Release one callback FAILED: {type(e).__name__}: {e}")
+        try:
+            await query.edit_message_text(
+                f"⚠️ Error releasing player.\n<code>{type(e).__name__}: {str(e)[:80]}</code>",
+                parse_mode="HTML")
+        except Exception:
+            pass
     finally:
         session.close()
 
@@ -404,10 +422,12 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
 
         await query.edit_message_text(text, parse_mode="HTML")
 
-    except Exception:
+    except Exception as e:
         session.rollback()
-        logger.exception("ReleaseMultiple confirm error")
-        try: await query.edit_message_text("⚠️ Error releasing players. Try again.")
+        logger.exception(f"ReleaseMultiple confirm FAILED: {type(e).__name__}: {e}")
+        try: await query.edit_message_text(
+            f"⚠️ Error releasing players.\n<code>{type(e).__name__}: {str(e)[:80]}</code>",
+            parse_mode="HTML")
         except Exception: pass
     finally:
         session.close()
