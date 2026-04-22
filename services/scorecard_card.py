@@ -10,6 +10,7 @@ Color scheme 1: Lava Red / Lagoon Teal / Midnight Slate / Soft Pearl
 """
 
 import io
+import os
 import logging
 from PIL import Image, ImageDraw, ImageFont
 
@@ -21,8 +22,27 @@ SECONDARY  = (0, 201, 167)      # #00C9A7 Lagoon Teal
 BG         = (15, 23, 42)       # #0F172A Midnight Slate
 BG_DARK    = (6, 11, 24)        # near black for gradient bottom
 TEXT       = (241, 245, 249)    # #F1F5F9 Soft Pearl
+OPPONENT   = (110, 120, 140)    # muted — for "vs OPPONENT"
 DIM        = (130, 140, 160)    # dimmed text for labels / small stats
 ROW_SEP    = (40, 50, 70)       # row divider
+
+# Logo path — user can replace this file anytime
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "assets", "logo.png")
+
+
+def _load_logo(target_size=120):
+    """Load the bot logo, resized to fit header. Returns PIL Image with alpha or None."""
+    try:
+        if not os.path.exists(_LOGO_PATH):
+            return None
+        img = Image.open(_LOGO_PATH).convert("RGBA")
+        # Preserve aspect ratio, fit inside target_size box
+        img.thumbnail((target_size, target_size), Image.LANCZOS)
+        return img
+    except Exception:
+        logger.warning("Could not load logo")
+        return None
 
 
 def _font(size, bold=False, italic=False):
@@ -81,11 +101,11 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
     """
     try:
         accent = PRIMARY if is_first_innings else SECONDARY
-        label_prefix = "BAT1" if is_first_innings else "BAT2"
+        innings_label = "INNINGS 1" if is_first_innings else "INNINGS 2"
 
         # Canvas
         W = 1700
-        base_h = 420
+        base_h = 440
         row_h = 56
         H = base_h + len(batsmen_rows) * row_h + 200
 
@@ -94,16 +114,16 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         draw = ImageDraw.Draw(img, "RGBA")
 
         # ── Fonts ────
-        f_label = _font(22, bold=True)
-        f_team_big = _font(72, bold=True, italic=True)
-        f_vs = _font(28, bold=True)
-        f_opp = _font(28, bold=True)
+        f_innings_tag = _font(20, bold=True)
+        f_team_big = _font(96, bold=True, italic=True)
+        f_vs = _font(34, bold=True, italic=True)
+        f_opp = _font(38, bold=True, italic=True)
         f_score_big = _font(100, bold=True)
         f_score_slash = _font(100, bold=True)
         f_overs_num = _font(38, bold=True)
         f_overs_label = _font(18, bold=True)
-        f_brand = _font(18, bold=True, italic=True)
-        f_match = _font(18, bold=True)
+        f_brand = _font(16, bold=True, italic=True)
+        f_match = _font(16, bold=True)
         f_col_header = _font(20, bold=True)
         f_batsman = _font(26, bold=True)
         f_dismissal = _font(20, italic=True)
@@ -113,28 +133,58 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         f_fow_num = _font(26, bold=True)
         f_fow_over = _font(16, italic=True)
 
-        # ── Top accent line and label ────
-        draw.line([(50, 55), (160, 55)], fill=accent, width=4)
-        draw.text((175, 45), f"{label_prefix} SCORECARD", fill=accent, font=f_label)
+        # ── LOGO (top-left) ────
+        logo = _load_logo(target_size=130)
+        logo_x = 45
+        logo_y = 35
+        content_start_x = 45  # where text content starts (after logo area)
+        if logo:
+            img.paste(logo, (logo_x, logo_y), logo)
+            content_start_x = logo_x + logo.size[0] + 25
+        else:
+            content_start_x = 45
 
-        # Match title (gray, next to label)
-        label_w = _tw(draw, f"{label_prefix} SCORECARD", f_label)
-        draw.text((175 + label_w + 30, 45), match_title.upper(), fill=DIM, font=f_match)
+        # ── Innings tag with accent line ────
+        tag_y = 45
+        draw.line([(content_start_x, tag_y + 12), (content_start_x + 55, tag_y + 12)],
+                  fill=accent, width=4)
+        tag_text = f"BATTING  •  {innings_label}"
+        draw.text((content_start_x + 70, tag_y), tag_text, fill=accent, font=f_innings_tag)
+
+        # Match title (next to tag, gray)
+        tag_w = _tw(draw, tag_text, f_innings_tag)
+        draw.text((content_start_x + 70 + tag_w + 30, tag_y + 2),
+                  match_title.upper(), fill=DIM, font=f_match)
 
         # Brand top-right
         brand = "CRICMASTERULTRA"
         brand_w = _tw(draw, brand, f_brand)
-        draw.text((W - 50 - brand_w, 45), brand, fill=accent, font=f_brand)
+        draw.text((W - 50 - brand_w, tag_y + 2), brand, fill=DIM, font=f_brand)
 
-        # ── Team names big ────
-        draw.text((175, 75), team_name.upper(), fill=TEXT, font=f_team_big)
-        team_w = _tw(draw, team_name.upper(), f_team_big)
+        # ── Team name (BIG, white, italic bold) ────
+        team_y = 85
+        team_upper = team_name.upper()
+        # Auto-shrink if team name is too long
+        team_size = 96
+        max_team_width = 820
+        while team_size > 48:
+            tf = _font(team_size, bold=True, italic=True)
+            if _tw(draw, team_upper, tf) <= max_team_width:
+                break
+            team_size -= 6
+        f_team_big = _font(team_size, bold=True, italic=True)
+        draw.text((content_start_x, team_y), team_upper, fill=TEXT, font=f_team_big)
+        team_w = _tw(draw, team_upper, f_team_big)
 
-        vs_y = 120
-        draw.text((175 + team_w + 30, vs_y), "VS", fill=DIM, font=f_vs)
-        vs_w = _tw(draw, "VS", f_vs)
-        draw.text((175 + team_w + 30 + vs_w + 20, vs_y),
-                  opponent_name.upper(), fill=DIM, font=f_opp)
+        # ── vs OPPONENT (smaller, dim gray, italic) ────
+        vs_y = team_y + team_size // 2 + 5
+        vs_text = "VS"
+        opp_upper = opponent_name.upper()
+        draw.text((content_start_x + team_w + 30, vs_y),
+                  vs_text, fill=OPPONENT, font=f_vs)
+        vs_w = _tw(draw, vs_text, f_vs)
+        draw.text((content_start_x + team_w + 30 + vs_w + 18, vs_y),
+                  opp_upper, fill=OPPONENT, font=f_opp)
 
         # ── Score top-right ────
         score_str = f"{total_runs}"
@@ -145,33 +195,23 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         overs_num_w = _tw(draw, str(overs_str), f_overs_num)
         overs_lbl_w = _tw(draw, "OVERS", f_overs_label)
         overs_total_w = overs_num_w + 10 + overs_lbl_w
-
         total_score_w = score_w + slash_w + wkt_w + 25 + overs_total_w
 
         score_x = W - 50 - total_score_w
-        draw.text((score_x, 55), score_str, fill=TEXT, font=f_score_big)
-        draw.text((score_x + score_w, 55), "/", fill=accent, font=f_score_slash)
-        draw.text((score_x + score_w + slash_w, 55), wkt_str, fill=TEXT, font=f_score_big)
-
+        score_y = 75
+        draw.text((score_x, score_y), score_str, fill=TEXT, font=f_score_big)
+        draw.text((score_x + score_w, score_y), "/", fill=accent, font=f_score_slash)
+        draw.text((score_x + score_w + slash_w, score_y), wkt_str, fill=TEXT, font=f_score_big)
         overs_x = score_x + score_w + slash_w + wkt_w + 25
-        draw.text((overs_x, 100), str(overs_str), fill=TEXT, font=f_overs_num)
-        draw.text((overs_x + overs_num_w + 10, 118), "OVERS", fill=DIM, font=f_overs_label)
-
-        # ── Cloud/scene icon (left side) ────
-        icon_box = [50, 50, 150, 150]
-        draw.rounded_rectangle(icon_box, radius=8, fill=(30, 40, 60))
-        # Draw simple cloud
-        cloud_color = (200, 210, 225)
-        draw.ellipse([72, 95, 104, 127], fill=cloud_color)
-        draw.ellipse([90, 85, 128, 123], fill=cloud_color)
-        draw.ellipse([108, 95, 140, 127], fill=cloud_color)
+        draw.text((overs_x, score_y + 45), str(overs_str), fill=TEXT, font=f_overs_num)
+        draw.text((overs_x + overs_num_w + 10, score_y + 63), "OVERS", fill=DIM, font=f_overs_label)
 
         # ── Separator line below header ────
-        header_bot = 205
+        header_bot = 225
         draw.line([(50, header_bot), (W - 50, header_bot)], fill=ROW_SEP, width=1)
 
         # ── Column headers ────
-        col_y = 225
+        col_y = 245
         col_rtg_x = 50
         col_bat_x = 140
         col_dis_x = 560
@@ -328,10 +368,10 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
     try:
         # Bowl 1st = secondary (teal), Bowl 2nd = primary (red)
         accent = SECONDARY if is_first_innings else PRIMARY
-        label_prefix = "BOWL1" if is_first_innings else "BOWL2"
+        innings_label = "INNINGS 1" if is_first_innings else "INNINGS 2"
 
         W = 1700
-        base_h = 260
+        base_h = 280
         row_h = 68
         fow_h = 180
         H = base_h + len(bowlers_rows) * row_h + fow_h
@@ -340,11 +380,9 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
         _draw_gradient(img, BG, BG_DARK)
         draw = ImageDraw.Draw(img, "RGBA")
 
-        f_label = _font(22, bold=True)
-        f_team_big = _font(80, bold=True, italic=True)
-        f_sub = _font(32, bold=True, italic=True)
-        f_brand = _font(20, bold=True, italic=True)
-        f_match = _font(18, bold=True)
+        f_innings_tag = _font(20, bold=True)
+        f_brand = _font(16, bold=True, italic=True)
+        f_match = _font(16, bold=True)
         f_col_header = _font(22, bold=True)
         f_bowler = _font(30, bold=True)
         f_stat_big = _font(36, bold=True)
@@ -354,36 +392,56 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
         f_fow_over = _font(16, italic=True)
         f_fow_num_label = _font(14, bold=True)
 
-        # ── Top accent line and label ────
-        draw.line([(50, 55), (160, 55)], fill=accent, width=4)
-        draw.text((175, 45), f"{label_prefix} SCORECARD", fill=accent, font=f_label)
+        # ── LOGO (top-left) ────
+        logo = _load_logo(target_size=130)
+        logo_x = 45
+        logo_y = 35
+        if logo:
+            img.paste(logo, (logo_x, logo_y), logo)
+            content_start_x = logo_x + logo.size[0] + 25
+        else:
+            content_start_x = 45
 
-        label_w = _tw(draw, f"{label_prefix} SCORECARD", f_label)
-        draw.text((175 + label_w + 30, 45), match_title.upper(), fill=DIM, font=f_match)
+        # ── Innings tag with accent line ────
+        tag_y = 45
+        draw.line([(content_start_x, tag_y + 12), (content_start_x + 55, tag_y + 12)],
+                  fill=accent, width=4)
+        tag_text = f"BOWLING  •  {innings_label}"
+        draw.text((content_start_x + 70, tag_y), tag_text, fill=accent, font=f_innings_tag)
+
+        tag_w = _tw(draw, tag_text, f_innings_tag)
+        draw.text((content_start_x + 70 + tag_w + 30, tag_y + 2),
+                  match_title.upper(), fill=DIM, font=f_match)
 
         brand = "CRICMASTERULTRA"
         brand_w = _tw(draw, brand, f_brand)
-        draw.text((W - 50 - brand_w, 45), brand, fill=DIM, font=f_brand)
+        draw.text((W - 50 - brand_w, tag_y + 2), brand, fill=DIM, font=f_brand)
 
-        # Team name big
-        draw.text((175, 75), team_name.upper(), fill=TEXT, font=f_team_big)
-        tn_w = _tw(draw, team_name.upper(), f_team_big)
-        draw.text((175 + tn_w + 20, 100), "BOWLING", fill=DIM, font=f_sub)
+        # ── Team name (BIG white italic bold) ────
+        team_y = 85
+        team_upper = team_name.upper()
+        team_size = 96
+        max_team_width = 900
+        while team_size > 48:
+            tf = _font(team_size, bold=True, italic=True)
+            if _tw(draw, team_upper, tf) <= max_team_width:
+                break
+            team_size -= 6
+        f_team_big = _font(team_size, bold=True, italic=True)
+        draw.text((content_start_x, team_y), team_upper, fill=TEXT, font=f_team_big)
+        team_w = _tw(draw, team_upper, f_team_big)
 
-        # Left mountain icon placeholder
-        icon_box = [50, 50, 150, 150]
-        draw.rounded_rectangle(icon_box, radius=8, fill=(30, 50, 40))
-        # Mountain triangles
-        mountain_color = (80, 130, 100)
-        draw.polygon([(65, 135), (95, 80), (120, 135)], fill=mountain_color)
-        draw.polygon([(95, 135), (120, 95), (140, 135)], fill=(60, 110, 85))
+        # BOWLING label (muted, next to team)
+        f_sub = _font(36, bold=True, italic=True)
+        draw.text((content_start_x + team_w + 25, team_y + team_size // 2 - 10),
+                  "BOWLING", fill=OPPONENT, font=f_sub)
 
         # ── Divider ────
-        header_bot = 195
+        header_bot = 220
         draw.line([(50, header_bot), (W - 50, header_bot)], fill=ROW_SEP, width=1)
 
         # ── Column headers ────
-        col_y = 215
+        col_y = 240
         col_bowler_x = 50
         col_o_x = W - 650
         col_m_x = W - 520
