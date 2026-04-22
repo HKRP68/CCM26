@@ -34,9 +34,28 @@ def _do_release(session, user, entries):
     """Release a list of (UserRoster, Player) tuples atomically.
     Returns dict with success, released list, total_coins, new_balance, new_count.
     """
+    from models import Trade
+
     total_coins = 0
     released = []
     captain_released = False
+
+    # First: clean up any pending trades that reference these roster entries
+    roster_ids = [e.id for e, _ in entries]
+    if roster_ids:
+        stale_trades = (session.query(Trade)
+                        .filter(Trade.status == "pending")
+                        .filter((Trade.initiator_roster_id.in_(roster_ids)) |
+                                (Trade.receiver_roster_id.in_(roster_ids)))
+                        .all())
+        for t in stale_trades:
+            t.status = "cancelled"
+            # Null out the FK so deletion doesn't cascade or block
+            if t.initiator_roster_id in roster_ids:
+                t.initiator_roster_id = None
+            if t.receiver_roster_id in roster_ids:
+                t.receiver_roster_id = None
+        session.flush()
 
     for entry, player in entries:
         sv = get_sell_value(player.rating)

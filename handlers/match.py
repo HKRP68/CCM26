@@ -1583,14 +1583,46 @@ async def _end_innings(ctx, mid):
         await _save_match_stats(s)
         potm_name, potm_impact, potm_stats = _calc_potm(s)
 
-        # Get POTM player_id for DB
+        # Get POTM player_id and the OWNER USER ID
         potm_pid = None
+        potm_owner_uid = None
         if potm_name:
-            _ses = get_session()
+            all_xi_lists = [
+                (s.get("inn1_bat_xi", []), s.get("inn1_bat_team_id")),
+                (s.get("inn1_bowl_xi", []), s.get("inn1_bowl_team_id")),
+                (s.get("bat_xi", []), s.get("bat_team_id")),
+                (s.get("bowl_xi", []), s.get("bowl_team_id")),
+            ]
+            seen_rids = set()
+            for xi, owner in all_xi_lists:
+                for p in xi:
+                    rid = p.get("roster_id")
+                    if p.get("name") == potm_name and rid not in seen_rids:
+                        potm_pid = p.get("player_id")
+                        potm_owner_uid = owner
+                        seen_rids.add(rid)
+                        break
+                if potm_pid:
+                    break
+
+        # Increment PlayerGameStats.potm
+        if potm_pid and potm_owner_uid:
+            _ses2 = get_session()
             try:
-                p = _ses.query(Player).filter(Player.name == potm_name).first()
-                if p: potm_pid = p.id
-            finally: _ses.close()
+                gs_potm = (_ses2.query(PlayerGameStats)
+                           .filter(PlayerGameStats.user_id == potm_owner_uid,
+                                   PlayerGameStats.player_id == potm_pid).first())
+                if gs_potm:
+                    gs_potm.potm = (gs_potm.potm or 0) + 1
+                else:
+                    gs_potm = PlayerGameStats(user_id=potm_owner_uid, player_id=potm_pid, potm=1)
+                    _ses2.add(gs_potm)
+                _ses2.commit()
+            except Exception:
+                _ses2.rollback()
+                logger.exception("Failed to increment POTM count")
+            finally:
+                _ses2.close()
 
         # Update Match record + User stats
         session = get_session()
