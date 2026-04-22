@@ -30,23 +30,25 @@ STREAK_MILESTONE = 14
 STREAK_MISS_DAYS = 2
 
 # ── Claim rarity distribution (cumulative thresholds) ───────────────
+# Tuned so 80+ feels genuinely rare, not routine.
 CLAIM_RARITY = [
-    (0.22,  50,  59),   # 22% Bronze
-    (0.44,  60,  69),   # 22% Silver
-    (0.76,  70,  79),   # 32% Common/Super
-    (0.90,  80,  84),   # 14% Rare
-    (0.985, 85,  89),   # 8.5% Epic
-    (0.998, 90,  94),   # 1.3% Legend
-    (1.0,   95, 100),   # 0.2% Ultimate
+    (0.26,  50,  59),   # 26% Bronze (fodder)
+    (0.51,  60,  69),   # 25% Silver
+    (0.89,  70,  79),   # 38% Super (the core band — most pulls)
+    (0.95,  80,  84),   # 6%  Rare (noticeable celebration moment)
+    (0.985, 85,  89),   # 3.5% Epic
+    (0.9995, 90, 94),   # 1.45% Legend
+    (1.0,   95, 100),   # 0.05% Ultimate (≈1 in 2000)
 ]
 
 # ── Gspin wheel outcomes ────────────────────────────────────────────
+# Most spins = coins/gems. Player pulls skew low-mid.
 GSPIN_OUTCOMES = [
-    (0.55,  "red",    "coins",  (5000, 10000)),
-    (0.82,  "yellow", "player", (70, 79)),
-    (0.95,  "blue",   "gems",   (10, 500)),
-    (0.997, "green",  "player", (80, 85)),
-    (1.0,   "purple", "player", (86, 90)),
+    (0.58,  "red",    "coins",  (5000, 10000)),   # 58% coins
+    (0.82,  "yellow", "player", (65, 78)),         # 24% 65-78 card
+    (0.95,  "blue",   "gems",   (10, 500)),        # 13% gems
+    (0.992, "green",  "player", (79, 84)),         # 4.2% 79-84 card
+    (1.0,   "purple", "player", (85, 90)),         # 0.8% 85-90 card
 ]
 
 GSPIN_EMOJIS = {
