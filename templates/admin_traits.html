@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Traits{% endblock %}
+{% block content %}
+
+<h1 style="margin-bottom:1rem;">💎 Traits ({{ traits|length }})</h1>
+
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.5px;">
+      <th style="padding:.75rem; text-align:left;">Emoji</th>
+      <th style="padding:.75rem; text-align:left;">Name</th>
+      <th style="padding:.75rem; text-align:left;">Category</th>
+      <th style="padding:.75rem; text-align:left;">Effect Key</th>
+      <th style="padding:.75rem; text-align:left;">Description</th>
+      <th style="padding:.75rem; text-align:center;">Equipped</th>
+      <th style="padding:.75rem; text-align:center;">Inventory</th>
+      <th style="padding:.75rem; text-align:center;">Active</th>
+      <th style="padding:.75rem; text-align:center;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in traits %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.75rem; font-size:1.4rem;">{{ t.emoji }}</td>
+      <td style="padding:.75rem;"><strong>{{ t.name }}</strong></td>
+      <td style="padding:.75rem;">
+        <span style="background:var(--bg); padding:.2rem .5rem; border-radius:4px; font-size:.8rem;">{{ t.category }}</span>
+      </td>
+      <td style="padding:.75rem; color:var(--muted); font-family:monospace; font-size:.85rem;">{{ t.effect_key }}</td>
+      <td style="padding:.75rem; color:var(--muted); font-size:.85rem;">{{ t.description }}</td>
+      <td style="padding:.75rem; text-align:center; color:var(--accent2);">{{ stats[t.id]['equipped'] }}</td>
+      <td style="padding:.75rem; text-align:center; color:var(--accent);">{{ stats[t.id]['inventory'] }}</td>
+      <td style="padding:.75rem; text-align:center;">
+        {% if t.is_active %}
+          <span style="color:var(--green);">✓</span>
+        {% else %}
+          <span style="color:var(--red);">✗</span>
+        {% endif %}
+      </td>
+      <td style="padding:.75rem; text-align:center; white-space:nowrap;">
+        <a href="{{ url_for('admin_trait_edit', trait_id=t.id) }}" style="color:var(--accent2); text-decoration:none; font-size:.85rem;">Edit</a>
+        <form method="POST" action="{{ url_for('admin_trait_toggle', trait_id=t.id) }}" style="display:inline; margin-left:.5rem;">
+          <button type="submit" style="background:none; border:none; color:var(--muted); cursor:pointer; font-size:.85rem;">Toggle</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}

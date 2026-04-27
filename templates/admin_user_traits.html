@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}User Traits{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('user_detail', user_id=user.id) }}" style="color:var(--muted); text-decoration:none;">← Back to user</a>
+
+<h1 style="margin:1rem 0;">💎 Traits — {{ user.username or user.first_name }}</h1>
+
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1.5rem;">
+  Gems: <strong style="color:var(--accent);">{{ "{:,}".format(user.total_gems) }} 💎</strong>
+</div>
+
+<!-- ───── EQUIPPED ───── -->
+<h2 style="margin-bottom:1rem; font-size:1.2rem;">Equipped Traits ({{ equipped|length }})</h2>
+
+{% if equipped %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:2rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Player</th>
+      <th style="padding:.6rem; text-align:left;">Trait</th>
+      <th style="padding:.6rem; text-align:center;">Level</th>
+      <th style="padding:.6rem; text-align:center;">Acquired</th>
+      <th style="padding:.6rem; text-align:right;">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for pt, t, ur, p in equipped %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">
+        <span style="color:var(--muted);">#{{ ur.order_position }}</span>
+        <strong>{{ p.name }}</strong>
+        <span style="color:var(--muted); font-size:.85rem;">({{ p.rating }})</span>
+      </td>
+      <td style="padding:.6rem;">{{ t.emoji }} {{ t.name }}</td>
+      <td style="padding:.6rem; text-align:center;">
+        <span style="color:var(--accent);">Lv.{{ pt.level }}</span>
+        {% if pt.level == 5 %} 🌟{% endif %}
+      </td>
+      <td style="padding:.6rem; text-align:center; color:var(--muted); font-size:.85rem;">{{ pt.acquired_at.strftime('%Y-%m-%d') }}</td>
+      <td style="padding:.6rem; text-align:right;">
+        <form method="POST" action="{{ url_for('admin_revoke_player_trait', user_id=user.id, player_trait_id=pt.id) }}" style="display:inline;"
+              onsubmit="return confirm('Revoke this trait? This is permanent.');">
+          <button type="submit" style="background:none; border:1px solid var(--red); color:var(--red); padding:.3rem .6rem; border-radius:4px; cursor:pointer; font-size:.8rem;">Revoke</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:var(--muted); margin-bottom:2rem;">No equipped traits.</p>
+{% endif %}
+
+<!-- ───── INVENTORY ───── -->
+<h2 style="margin-bottom:1rem; font-size:1.2rem;">Inventory ({{ inventory|length }})</h2>
+
+{% if inventory %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:2rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Trait</th>
+      <th style="padding:.6rem; text-align:center;">Level</th>
+      <th style="padding:.6rem; text-align:center;">Acquired</th>
+      <th style="padding:.6rem; text-align:right;">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for inv, t in inventory %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">{{ t.emoji }} {{ t.name }}</td>
+      <td style="padding:.6rem; text-align:center;">Lv.{{ inv.level }}</td>
+      <td style="padding:.6rem; text-align:center; color:var(--muted); font-size:.85rem;">{{ inv.acquired_at.strftime('%Y-%m-%d') }}</td>
+      <td style="padding:.6rem; text-align:right;">
+        <form method="POST" action="{{ url_for('admin_delete_inventory', user_id=user.id, inv_id=inv.id) }}" style="display:inline;"
+              onsubmit="return confirm('Delete this inventory entry?');">
+          <button type="submit" style="background:none; border:1px solid var(--red); color:var(--red); padding:.3rem .6rem; border-radius:4px; cursor:pointer; font-size:.8rem;">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:var(--muted); margin-bottom:2rem;">No inventory traits.</p>
+{% endif %}
+
+<!-- ───── GRANT NEW ───── -->
+<h2 style="margin-bottom:1rem; font-size:1.2rem;">Grant Trait (Admin Override)</h2>
+
+<form method="POST" action="{{ url_for('admin_grant_trait', user_id=user.id) }}"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:500px;">
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Trait</label>
+    <select name="trait_id" required style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      {% set all_traits = [] %}
+      {% for inv, t in inventory %}{% if t not in all_traits %}{% set _ = all_traits.append(t) %}{% endif %}{% endfor %}
+      {% for tt in get_all_traits %}
+        <option value="{{ tt.id }}">{{ tt.emoji }} {{ tt.name }} ({{ tt.category }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Level (1-5)</label>
+    <input type="number" name="level" value="1" min="1" max="5" required
+           style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+  </div>
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">Grant to Inventory</button>
+  <small style="color:var(--muted); display:block; margin-top:.5rem;">Goes to inventory — user applies via /traitapply.</small>
+</form>
+
+{% endblock %}

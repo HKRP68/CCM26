@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Edit Trait{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_traits_list') }}" style="color:var(--muted); text-decoration:none;">← Back to traits</a>
+
+<h1 style="margin:1rem 0;">{{ trait.emoji }} Edit: {{ trait.name }}</h1>
+
+<form method="POST" style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:600px;">
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Name</label>
+    <input type="text" name="name" value="{{ trait.name }}" required
+           style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Category</label>
+    <select name="category" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      {% for cat in ['Batting', 'Bowling', 'Fielding', 'Mental'] %}
+        <option value="{{ cat }}" {% if trait.category == cat %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Description</label>
+    <textarea name="description" rows="3" required
+              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">{{ trait.description }}</textarea>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Emoji</label>
+    <input type="text" name="emoji" value="{{ trait.emoji }}" maxlength="4"
+           style="width:100px; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); text-align:center; font-size:1.4rem;">
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Effect Key (engine routing — change with care)</label>
+    <input type="text" name="effect_key" value="{{ trait.effect_key }}"
+           style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace;">
+    <small style="color:var(--muted); font-size:.75rem;">
+      Allowed: bat_finisher, bat_power_hitter, bat_anchor, bat_fast_starter, bat_clutch,
+      bowl_death, bowl_wicket_hunter, bowl_dot_specialist, bowl_powerplay, bowl_yorker,
+      field_safe_hands, field_sniper, mental_consistency, mental_momentum
+    </small>
+  </div>
+
+  <div style="margin-bottom:1.5rem;">
+    <label style="font-size:.9rem;">
+      <input type="checkbox" name="is_active" {% if trait.is_active %}checked{% endif %}> Active (appears in shop)
+    </label>
+  </div>
+
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">Save</button>
+</form>
+
+{% endblock %}

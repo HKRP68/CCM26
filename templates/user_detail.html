@@ -4,6 +4,12 @@
 <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;">
   <a href="{{ url_for('users_list') }}" class="btn btn-ghost btn-sm">← Users</a>
   <h2>{{ user.first_name or 'User' }} <span style="color:var(--muted);font-weight:400;">@{{ user.username or '—' }}</span></h2>
+  <div style="margin-top:.5rem;">
+    <a href="{{ url_for('admin_user_traits', user_id=user.id) }}"
+       style="color:var(--accent); text-decoration:none; font-size:.85rem; padding:.3rem .6rem; border:1px solid var(--accent); border-radius:4px; display:inline-block;">
+      💎 Manage Traits →
+    </a>
+  </div>
 </div>
 
 <!-- ── Stats cards ────────────────────────────────────────────── -->
