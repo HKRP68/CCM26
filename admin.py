@@ -15,7 +15,9 @@ load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
-from models import Player, User, Trade, UserStats, UserRoster, ActivityLog, PlayerGameStats, AdminLog
+from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
+                    PlayerGameStats, AdminLog,
+                    Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -845,6 +847,167 @@ def clear_players():
     finally:
         db.close()
     return redirect(url_for("seed_database"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TRAIT ADMIN ROUTES
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/traits")
+@login_required
+def admin_traits_list():
+    db = get_session()
+    try:
+        traits = db.query(Trait).order_by(Trait.category, Trait.name).all()
+        # Stats: equipped count + inventory count per trait
+        stats = {}
+        for t in traits:
+            equipped = db.query(PlayerTrait).filter(PlayerTrait.trait_id == t.id).count()
+            inventory = db.query(TraitInventory).filter(TraitInventory.trait_id == t.id).count()
+            stats[t.id] = {"equipped": equipped, "inventory": inventory}
+        return render_template("admin_traits.html", traits=traits, stats=stats)
+    finally:
+        db.close()
+
+
+@app.route("/traits/<int:trait_id>/edit", methods=["GET", "POST"])
+@login_required
+def admin_trait_edit(trait_id):
+    db = get_session()
+    try:
+        t = db.query(Trait).get(trait_id)
+        if not t:
+            flash("Trait not found.", "error")
+            return redirect(url_for("admin_traits_list"))
+
+        if request.method == "POST":
+            t.name = request.form.get("name", t.name).strip()
+            t.category = request.form.get("category", t.category).strip()
+            t.description = request.form.get("description", t.description).strip()
+            t.emoji = request.form.get("emoji", t.emoji).strip() or "✨"
+            t.effect_key = request.form.get("effect_key", t.effect_key).strip()
+            t.is_active = bool(request.form.get("is_active"))
+            db.commit()
+            log_admin(db, "trait_edit", "trait", t.id, t.name,
+                       f"Edited trait {t.name}")
+            db.commit()
+            flash(f"Trait '{t.name}' updated.", "info")
+            return redirect(url_for("admin_traits_list"))
+
+        return render_template("admin_trait_form.html", trait=t)
+    finally:
+        db.close()
+
+
+@app.route("/traits/<int:trait_id>/toggle", methods=["POST"])
+@login_required
+def admin_trait_toggle(trait_id):
+    db = get_session()
+    try:
+        t = db.query(Trait).get(trait_id)
+        if t:
+            t.is_active = not t.is_active
+            db.commit()
+            log_admin(db, "trait_toggle", "trait", t.id, t.name,
+                       f"Set is_active={t.is_active}")
+            db.commit()
+            flash(f"Trait '{t.name}' is now {'active' if t.is_active else 'inactive'}.", "info")
+    finally:
+        db.close()
+    return redirect(url_for("admin_traits_list"))
+
+
+@app.route("/users/<int:user_id>/traits")
+@login_required
+def admin_user_traits(user_id):
+    """View a single user's equipped + inventory traits."""
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash("User not found.", "error")
+            return redirect(url_for("users_list"))
+
+        equipped = (db.query(PlayerTrait, Trait, UserRoster, Player)
+                    .join(Trait, PlayerTrait.trait_id == Trait.id)
+                    .join(UserRoster, PlayerTrait.roster_id == UserRoster.id)
+                    .join(Player, UserRoster.player_id == Player.id)
+                    .filter(PlayerTrait.user_id == user_id)
+                    .order_by(UserRoster.order_position).all())
+
+        inventory = (db.query(TraitInventory, Trait)
+                     .join(Trait, TraitInventory.trait_id == Trait.id)
+                     .filter(TraitInventory.user_id == user_id).all())
+
+        all_traits = db.query(Trait).filter(Trait.is_active == True).order_by(Trait.category, Trait.name).all()
+
+        return render_template("admin_user_traits.html",
+                               user=user, equipped=equipped, inventory=inventory,
+                               get_all_traits=all_traits)
+    finally:
+        db.close()
+
+
+@app.route("/users/<int:user_id>/traits/grant", methods=["POST"])
+@login_required
+def admin_grant_trait(user_id):
+    """Admin override: grant a trait directly to user inventory at chosen level."""
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        trait_id = int(request.form.get("trait_id", 0))
+        level = max(1, min(5, int(request.form.get("level", 1))))
+        trait = db.query(Trait).get(trait_id)
+        if not (user and trait):
+            flash("Invalid user or trait.", "error")
+            return redirect(url_for("admin_user_traits", user_id=user_id))
+        inv = TraitInventory(user_id=user_id, trait_id=trait_id, level=level)
+        db.add(inv)
+        db.commit()
+        log_admin(db, "trait_grant", "user", user_id, user.username or "",
+                   f"Granted {trait.name} Lv.{level}")
+        db.commit()
+        flash(f"Granted {trait.name} Lv.{level} to {user.username}.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_user_traits", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/traits/revoke/<int:player_trait_id>", methods=["POST"])
+@login_required
+def admin_revoke_player_trait(user_id, player_trait_id):
+    db = get_session()
+    try:
+        pt = db.query(PlayerTrait).get(player_trait_id)
+        if pt and pt.user_id == user_id:
+            trait = db.query(Trait).get(pt.trait_id)
+            db.delete(pt)
+            db.commit()
+            log_admin(db, "trait_revoke", "user", user_id, "",
+                       f"Revoked {trait.name}")
+            db.commit()
+            flash(f"Revoked {trait.name}.", "info")
+    finally:
+        db.close()
+    return redirect(url_for("admin_user_traits", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/traits/del-inv/<int:inv_id>", methods=["POST"])
+@login_required
+def admin_delete_inventory(user_id, inv_id):
+    db = get_session()
+    try:
+        inv = db.query(TraitInventory).get(inv_id)
+        if inv and inv.user_id == user_id:
+            db.delete(inv)
+            db.commit()
+            flash("Inventory entry removed.", "info")
+    finally:
+        db.close()
+    return redirect(url_for("admin_user_traits", user_id=user_id))
 
 
 def _normalise_category(raw):

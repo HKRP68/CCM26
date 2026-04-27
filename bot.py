@@ -58,6 +58,17 @@ from handlers.match import (
     resume_handler,
 )
 
+# Trait handlers
+from handlers.traits import (
+    traits_handler, traitshop_handler, traitapply_handler,
+    traitupgrade_handler, traitreplace_handler,
+    traitbuy_callback, traitreroll_callback,
+    trapply_inv_callback, trapply_pl_callback,
+    trup_pt_callback, trup_inv_callback,
+    trrep_pt_callback, trrep_inv_callback,
+    trait_cancel_callback,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,6 +99,11 @@ async def start_handler(update, context):
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
+        "/traits /tt - Your traits & inventory\n"
+        "/traitshop /tshop - Daily trait shop\n"
+        "/traitapply /tapply - Apply trait to player\n"
+        "/traitupgrade /tup - Level up a trait\n"
+        "/traitreplace /trep - Replace a trait\n"
         "/leaderboard /lb /top - Leaderboard",
         parse_mode="HTML",
     )
@@ -204,7 +220,23 @@ def main():
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
-        app.add_handler(CommandHandler(["resume", "rs"], resume_handler))
+
+        # ── Trait system ─────────────────────────────────────────────
+        app.add_handler(CommandHandler(["traits", "tt"], traits_handler))
+        app.add_handler(CommandHandler(["traitshop", "tshop"], traitshop_handler))
+        app.add_handler(CommandHandler(["traitapply", "tapply"], traitapply_handler))
+        app.add_handler(CommandHandler(["traitupgrade", "tup"], traitupgrade_handler))
+        app.add_handler(CommandHandler(["traitreplace", "trep"], traitreplace_handler))
+
+        app.add_handler(CallbackQueryHandler(traitbuy_callback, pattern=r"^trbuy_"))
+        app.add_handler(CallbackQueryHandler(traitreroll_callback, pattern=r"^trreroll$"))
+        app.add_handler(CallbackQueryHandler(trapply_inv_callback, pattern=r"^trapply_inv_"))
+        app.add_handler(CallbackQueryHandler(trapply_pl_callback, pattern=r"^trapply_pl_"))
+        app.add_handler(CallbackQueryHandler(trup_pt_callback, pattern=r"^trup_pt_"))
+        app.add_handler(CallbackQueryHandler(trup_inv_callback, pattern=r"^trup_inv_"))
+        app.add_handler(CallbackQueryHandler(trrep_pt_callback, pattern=r"^trrep_pt_"))
+        app.add_handler(CallbackQueryHandler(trrep_inv_callback, pattern=r"^trrep_inv_"))
+        app.add_handler(CallbackQueryHandler(trait_cancel_callback, pattern=r"^trcancel$"))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))

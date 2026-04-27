@@ -17,9 +17,41 @@ class Base(DeclarativeBase):
 
 
 def init_db():
-    from models import User, Player, UserRoster, UserStats, Trade, ActivityLog, PlayerGameStats, Match, AdminLog  # noqa: F401
+    from models import (  # noqa: F401
+        User, Player, UserRoster, UserStats, Trade, ActivityLog,
+        PlayerGameStats, Match, AdminLog,
+        Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
+    )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
+    _seed_traits()
+
+
+def _seed_traits():
+    """Idempotent trait seed. Inserts missing traits only."""
+    from models import Trait
+    from services.trait_service import TRAIT_DEFINITIONS
+    session = SessionLocal()
+    try:
+        existing = {t.name for t in session.query(Trait).all()}
+        added = 0
+        for td in TRAIT_DEFINITIONS:
+            if td["name"] not in existing:
+                session.add(Trait(
+                    name=td["name"],
+                    category=td["category"],
+                    description=td["description"],
+                    emoji=td["emoji"],
+                    effect_key=td["effect_key"],
+                    is_active=True,
+                ))
+                added += 1
+        if added:
+            session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def _migrate_add_columns():

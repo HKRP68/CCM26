@@ -142,3 +142,108 @@ MAX_ACTIVE_TRADES = 1
 TRADE_MIN_RATING = 75
 TRADE_FEE_PERCENT = 5
 ROSTER_PAGE_SIZE = 10
+
+# ══════════════════════════════════════════════════════════════════════
+# TRAIT SYSTEM
+# ══════════════════════════════════════════════════════════════════════
+
+# Master trait list. Seeded on startup (admin can toggle is_active).
+TRAIT_DEFINITIONS = [
+    # Batting
+    {"key": "finisher", "name": "Finisher", "category": "batting", "emoji": "🔥",
+     "description": "Boundary boost in the last 3 overs"},
+    {"key": "power_hitter", "name": "Power Hitter", "category": "batting", "emoji": "💥",
+     "description": "More sixes, but slightly higher wicket risk"},
+    {"key": "anchor", "name": "Anchor", "category": "batting", "emoji": "⚓",
+     "description": "Much lower wicket chance, fewer sixes"},
+    {"key": "fast_starter", "name": "Fast Starter", "category": "batting", "emoji": "⚡",
+     "description": "Boundary boost in first 10 balls"},
+    {"key": "clutch_player", "name": "Clutch Player", "category": "batting", "emoji": "🎯",
+     "description": "Boundary boost when RRR > 8"},
+
+    # Bowling
+    {"key": "death_specialist", "name": "Death Specialist", "category": "bowling", "emoji": "💀",
+     "description": "Fewer sixes, more wickets in last 3 overs"},
+    {"key": "wicket_hunter", "name": "Wicket Hunter", "category": "bowling", "emoji": "🏹",
+     "description": "Higher wicket chance throughout"},
+    {"key": "dot_ball_specialist", "name": "Dot Ball Specialist", "category": "bowling", "emoji": "🚫",
+     "description": "More dot balls every over"},
+    {"key": "powerplay_king", "name": "Powerplay King", "category": "bowling", "emoji": "👑",
+     "description": "Dominant in overs 1-3"},
+    {"key": "yorker_specialist", "name": "Yorker Specialist", "category": "bowling", "emoji": "🎯",
+     "description": "Extra accuracy in the last 3 overs"},
+
+    # Fielding
+    {"key": "safe_hands", "name": "Safe Hands", "category": "fielding", "emoji": "🧤",
+     "description": "Lower catch-drop chance (catches stick)"},
+    {"key": "sniper_arm", "name": "Sniper Arm", "category": "fielding", "emoji": "🎯",
+     "description": "Higher run-out chance"},
+
+    # Mental
+    {"key": "consistency_king", "name": "Consistency King", "category": "mental", "emoji": "🧠",
+     "description": "Shrinks variance — fewer extremes both ways"},
+    {"key": "momentum_player", "name": "Momentum Player", "category": "mental", "emoji": "📈",
+     "description": "Gets stronger as the innings progresses"},
+]
+
+# Level → base effect percentage (additive building block for engine)
+TRAIT_LEVEL_EFFECT = {
+    1: 0.05,   # 5%
+    2: 0.10,   # 10%
+    3: 0.15,   # 15%
+    4: 0.20,   # 20%
+    5: 0.25,   # 25%
+}
+
+# Hidden bonus applied when max-level
+TRAIT_MAX_BONUS = 0.02   # extra 2% at L5
+
+# Diminishing-returns multipliers for stacking traits on one player.
+# (sorted by level desc, then applied: slot 0 × 1.0, slot 1 × 0.7, slot 2 × 0.5)
+TRAIT_STACK_WEIGHTS = [1.0, 0.7, 0.5]
+
+# Hard cap on combined effective boost per side of the ball
+# (prevents 3 high-level traits from snowballing)
+TRAIT_BOOST_CAP = 0.25   # 25%
+
+# Max traits per player
+TRAIT_MAX_PER_PLAYER = 3
+# Max same-category traits per player (prevents 3 batting traits on one batsman)
+TRAIT_MAX_SAME_CATEGORY = 2
+
+# ── Market ────────────────────────────────────────────────────────
+TRAIT_MARKET_SLOTS = 5
+TRAIT_MARKET_REFRESH_HOURS = 24
+TRAIT_MARKET_BUY_COST = 150  # gems — flat cost for L1 trait
+TRAIT_MARKET_REROLL_COST = 30  # gems
+
+# Daily purchase limit
+TRAIT_DAILY_PURCHASE_LIMIT = 2
+TRAIT_DAILY_REROLL_LIMIT = 3
+
+# Discount on 1 random slot
+TRAIT_DISCOUNT_CHANCE = 0.5  # 50% of shops have a discount item
+TRAIT_DISCOUNT_RANGE = (10, 20)  # 10% or 20% off
+
+# ── Upgrade costs ─────────────────────────────────────────────────
+TRAIT_UPGRADE_COSTS = {
+    1: 200,    # L1 → L2
+    2: 400,    # L2 → L3
+    3: 800,    # L3 → L4
+    4: 1500,   # L4 → L5
+}
+
+# ── Replace / swap ────────────────────────────────────────────────
+TRAIT_REPLACE_COST = 250  # gems
+
+# ── Aliases so trait_service / trait_engine can use consistent names ──
+TRAIT_LEVEL_PCT = {k: int(v * 100) for k, v in TRAIT_LEVEL_EFFECT.items()}
+TRAIT_MAX_EFFECTIVE_PCT = int(TRAIT_BOOST_CAP * 100)
+TRAIT_LEVEL_5_HIDDEN_BONUS_PCT = int(TRAIT_MAX_BONUS * 100)
+TRAIT_SHOP_SLOTS = TRAIT_MARKET_SLOTS
+TRAIT_SHOP_DAILY_PURCHASE_LIMIT = TRAIT_DAILY_PURCHASE_LIMIT
+TRAIT_SHOP_BASE_PRICE = TRAIT_MARKET_BUY_COST
+TRAIT_REROLL_COST = TRAIT_MARKET_REROLL_COST
+TRAIT_DAILY_DISCOUNT_MIN = TRAIT_DISCOUNT_RANGE[0]
+TRAIT_DAILY_DISCOUNT_MAX = TRAIT_DISCOUNT_RANGE[1]
+

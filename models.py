@@ -286,3 +286,83 @@ class AdminLog(Base):
         Index("ix_admin_logs_timestamp", "timestamp"),
         Index("ix_admin_logs_action", "action"),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TRAIT SYSTEM
+# ══════════════════════════════════════════════════════════════════════
+
+class Trait(Base):
+    """Master definition of a trait. 14 rows seeded at startup."""
+    __tablename__ = "traits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), unique=True, nullable=False)
+    category = Column(String(30), nullable=False)  # Batting / Bowling / Fielding / Mental
+    description = Column(String(300), nullable=False)
+    emoji = Column(String(10), default="✨")
+    effect_key = Column(String(50), nullable=False)  # routed to trait_engine handlers
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PlayerTrait(Base):
+    """Trait equipped on a user's roster entry. Max 3 per roster_id."""
+    __tablename__ = "player_traits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    roster_id = Column(Integer, ForeignKey("user_roster.id"), nullable=False, index=True)
+    trait_id = Column(Integer, ForeignKey("traits.id"), nullable=False)
+    level = Column(Integer, default=1)
+    acquired_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_pt_user_roster", "user_id", "roster_id"),
+    )
+
+
+class TraitInventory(Base):
+    """Unequipped traits stockpiled by user."""
+    __tablename__ = "trait_inventory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    trait_id = Column(Integer, ForeignKey("traits.id"), nullable=False)
+    level = Column(Integer, default=1)
+    acquired_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TraitMarket(Base):
+    """Daily shop snapshot — 5 slots per user, refreshes every 24h."""
+    __tablename__ = "trait_market"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    slot_index = Column(Integer, nullable=False)
+    trait_id = Column(Integer, ForeignKey("traits.id"), nullable=False)
+    base_price = Column(Integer, nullable=False)
+    discount_pct = Column(Integer, default=0)
+    final_price = Column(Integer, nullable=False)
+    purchased = Column(Boolean, default=False)
+    refreshed_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_tm_user_slot", "user_id", "slot_index"),
+    )
+
+
+class TraitDaily(Base):
+    """Per-user per-day counters (purchases cap)."""
+    __tablename__ = "trait_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    day_key = Column(String(10), nullable=False)  # YYYY-MM-DD
+    purchases = Column(Integer, default=0)
+    rerolls = Column(Integer, default=0)
+    last_refresh_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_td_user_day", "user_id", "day_key"),
+    )
