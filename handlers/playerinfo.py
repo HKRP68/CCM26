@@ -44,6 +44,19 @@ async def playerinfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         text = format_player_card(player, acq_date)
 
+        # If owned, show equipped traits
+        if owned:
+            from models import PlayerTrait, Trait
+            traits = (session.query(PlayerTrait, Trait)
+                      .join(Trait, PlayerTrait.trait_id == Trait.id)
+                      .filter(PlayerTrait.roster_id == owned.id)
+                      .all())
+            if traits:
+                text += "\n\n💎 <b>Traits:</b>"
+                for pt, t in traits:
+                    badge = " 🌟" if pt.level == 5 else ""
+                    text += f"\n  {t.emoji} {t.name} Lv.{pt.level}{badge}"
+
         card_bytes = generate_card(player)
         if card_bytes:
             await update.message.reply_photo(
