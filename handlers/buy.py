@@ -52,18 +52,25 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💰 Buy", callback_data=f"buypl_{player.id}_{user.id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data="buycancel"),
+            InlineKeyboardButton("💰 Buy", callback_data=f"buypl_{player.id}_{user.id}_{tg_user.id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"buycancel_{tg_user.id}"),
         ]])
 
         card_bytes = generate_card(player)
         if card_bytes:
-            await update.message.reply_photo(
+            sent = await update.message.reply_photo(
                 photo=io.BytesIO(card_bytes), caption=text,
                 parse_mode="HTML", reply_markup=keyboard,
             )
         else:
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+        # 2-minute auto-cleanup
+        try:
+            from services.button_timeout import schedule_button_timeout
+            schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
+        except Exception:
+            pass
 
     except Exception:
         logger.exception(f"BuyPl error for {tg_user.id}")
@@ -146,6 +153,16 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 async def buypl_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    tg_user = query.from_user
+    parts = query.data.split("_")
+    if len(parts) >= 2:
+        try:
+            owner_tg = int(parts[1])
+            if tg_user.id != owner_tg:
+                await query.answer("This isn't your purchase!", show_alert=True)
+                return
+        except ValueError:
+            pass
     await query.answer("Cancelled")
     try:
         await query.edit_message_reply_markup(reply_markup=None)

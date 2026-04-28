@@ -70,9 +70,13 @@ def _player_to_dict(player):
     }
 
 
-# ── Auto-release after 60s ──────────────────────────────────────────
+# ── Auto decide after 60s — auto-retain if space, auto-release if full ──
 
-async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
+async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
+    """Called by job queue. If user didn't click within timeout:
+       - Roster has space  → AUTO-RETAIN (add to roster, keep player)
+       - Roster is full    → AUTO-RELEASE (sell back, get coins)
+    """
     d = context.job.data
     key = f"claim_{d['user_id']}_{d['player_id']}"
     if _is_done(key):
@@ -84,31 +88,66 @@ async def _auto_release(context: ContextTypes.DEFAULT_TYPE):
         player = session.query(Player).get(d["player_id"])
         if not user or not player:
             return
-        sell_val = d["sell_val"]
-        user.total_coins += sell_val
-        log_activity(session, user.id, "auto_release",
-                     f"Auto-released {player.name} (timeout)", coins_change=sell_val,
-                     player_name=player.name, player_rating=player.rating)
-        session.commit()
 
+        sell_val = d["sell_val"]
+        roster_full = user.roster_count >= MAX_ROSTER
+
+        if not roster_full:
+            # AUTO-RETAIN
+            try:
+                entry = UserRoster(user_id=user.id, player_id=player.id,
+                                   order_position=user.roster_count + 1,
+                                   acquired_date=datetime.utcnow())
+                session.add(entry)
+                user.roster_count += 1
+                log_activity(session, user.id, "auto_retain",
+                             f"Auto-retained {player.name} (timeout)",
+                             player_name=player.name, player_rating=player.rating)
+                session.commit()
+                action_msg = (f"⏱ <b>Time Expired — Auto-Retained</b>\n\n"
+                              f"🏏 {player.name} ({player.rating} OVR) added to your roster.")
+            except Exception:
+                session.rollback()
+                logger.exception("Auto-retain failed, falling back to auto-release")
+                user = session.query(User).get(d["user_id"])
+                user.total_coins += sell_val
+                log_activity(session, user.id, "auto_release",
+                             f"Auto-released {player.name} (retain failed)",
+                             coins_change=sell_val, player_name=player.name,
+                             player_rating=player.rating)
+                session.commit()
+                action_msg = (f"⏱ <b>Time Expired — Auto-Released</b>\n\n"
+                              f"🏏 {player.name} ({player.rating} OVR)\n"
+                              f"💰 +{sell_val:,} coins added")
+        else:
+            # AUTO-RELEASE (roster full, can't retain without picking who to drop)
+            user.total_coins += sell_val
+            log_activity(session, user.id, "auto_release",
+                         f"Auto-released {player.name} (roster full, timeout)",
+                         coins_change=sell_val, player_name=player.name,
+                         player_rating=player.rating)
+            session.commit()
+            action_msg = (f"⏱ <b>Time Expired — Roster Full</b>\n\n"
+                          f"🏏 {player.name} ({player.rating} OVR) auto-released.\n"
+                          f"💰 +{sell_val:,} coins added")
+
+        # Strip buttons + post outcome
         try:
             await context.bot.edit_message_reply_markup(
                 chat_id=d["chat_id"], message_id=d["message_id"], reply_markup=None)
         except Exception:
             pass
-
         await context.bot.send_message(
-            chat_id=d["chat_id"],
-            text=(f"⌛ <b>Time Expired</b>\n\n"
-                  f"🏏 {player.name} has been released.\n"
-                  f"{player.name}, {player.rating} OVR\n"
-                  f"💰 +{sell_val:,} coins added"),
-            parse_mode="HTML")
+            chat_id=d["chat_id"], text=action_msg, parse_mode="HTML")
     except Exception:
         session.rollback()
-        logger.exception("Auto-release error")
+        logger.exception("_auto_decide error")
     finally:
         session.close()
+
+
+# Keep the old name pointed at the new function for any leftover references
+_auto_release = _auto_decide
 
 
 # ── /claim ───────────────────────────────────────────────────────────
@@ -190,7 +229,7 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _cancel_timer(context, user_id)
                 if context.job_queue:
                     context.job_queue.run_once(
-                        _auto_release, AUTO_TIMEOUT, name=f"claim_{user_id}",
+                        _auto_decide, AUTO_TIMEOUT, name=f"claim_{user_id}",
                         data={"player_id": p["id"], "user_id": user_id, "sell_val": sell_val,
                               "chat_id": chat_id, "message_id": msg.message_id})
             except Exception:

@@ -23,12 +23,45 @@ from handlers.lineup import format_xi_text
 
 logger = logging.getLogger(__name__)
 
-ACTION_TIMEOUT = 60
+# ACTION_TIMEOUT no longer triggers a forfeit — the heartbeat (every 30s, with
+# auto-decide at 5min idle) keeps matches alive without ever forcefully ending them.
+# Set high so the timer effectively never fires before the heartbeat does.
+ACTION_TIMEOUT = 900  # 15 minutes — safety net only; heartbeat acts at 5min
 FINE_COINS = 10000
 FINE_GEMS = 20
 
-def _gs(ctx, mid): return ctx.bot_data.get(f"ms_{mid}")
-def _ss(ctx, mid, s): ctx.bot_data[f"ms_{mid}"] = s
+# Sentinel telegram ID for the AI bot opponent in /vsbot
+BOT_TG_ID_ = -1
+
+# State store (persistent — backed by match_state DB table)
+from services.match_state_store import (
+    get_state as _store_get,
+    save_state as _store_save,
+    set_next_action,
+    get_next_action,
+    cleanup_state,
+    increment_ball_seq,
+    get_ball_seq,
+    get_last_prompt_msg_id,
+    get_match_lock,
+    release_match_lock,
+    A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+    A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER,
+    A_INNINGS_BREAK, A_COMPLETED,
+)
+
+
+def _gs(ctx, mid):
+    """Get state — checks memory cache first, falls back to DB."""
+    return _store_get(ctx, mid)
+
+
+def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None):
+    """Save state — writes to memory + DB.
+    Optionally update next_action pointer and/or last_prompt_msg_id.
+    """
+    _store_save(ctx, mid, s, next_action=next_action,
+                last_prompt_msg_id=last_prompt_msg_id)
 
 def _pd(e, p):
     return {"roster_id": e.id, "player_id": p.id, "name": p.name, "rating": p.rating,
@@ -166,15 +199,42 @@ def _start_action_timer(ctx, mid, user_tg_id, action_label):
     try:
         if ctx.job_queue:
             s = _gs(ctx, mid)
+            if not s: return
+            snapshot = (
+                s.get("current_over"), s.get("current_ball"),
+                s.get("total_runs"), s.get("total_wickets"),
+                s.get("striker_idx"), s.get("current_delivery"),
+            )
             ctx.job_queue.run_once(
                 _action_timeout, ACTION_TIMEOUT, name=f"act_{mid}",
-                data={"match_id": mid, "chat_id": s["chat_id"], "user_tg": user_tg_id, "action": action_label})
+                data={"match_id": mid, "chat_id": s["chat_id"],
+                      "user_tg": user_tg_id, "action": action_label,
+                      "state_snapshot": snapshot})
     except Exception: pass
 
 async def _action_timeout(context):
     d = context.job.data; mid = d["match_id"]
     s = _gs(context, mid)
     if not s: return
+
+    # SAFETY: Don't fine if a click is currently being processed.
+    # The lock means the user did click — they just haven't finished yet.
+    if context.bot_data.get(f"processing_{mid}"):
+        return
+
+    # SAFETY: Don't fine if the match has already moved on (state changed).
+    # Compare a snapshot taken when the timer was started against current state.
+    snapshot = d.get("state_snapshot")
+    if snapshot:
+        current_signature = (
+            s.get("current_over"), s.get("current_ball"),
+            s.get("total_runs"), s.get("total_wickets"),
+            s.get("striker_idx"), s.get("current_delivery"),
+        )
+        if current_signature != snapshot:
+            # State has advanced — user already acted, don't fine.
+            return
+
     # Fine the user who didn't act
     session = get_session()
     try:
@@ -199,9 +259,9 @@ async def _action_timeout(context):
         finally: m_session.close()
         # Save stats before cleanup
         await _save_match_stats(s)
-        # Cleanup
-        for k in list(context.bot_data.keys()):
-            if str(mid) in k: del context.bot_data[k]
+        # Cleanup persistent state + lock
+        cleanup_state(context, mid)
+        release_match_lock(mid)
     except Exception: session.rollback(); logger.exception("Timeout fine err")
     finally: session.close()
 
@@ -559,8 +619,8 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"📊 Player stats saved.", parse_mode="HTML")
     except Exception: session.rollback()
     finally: session.close()
-    for k in list(context.bot_data.keys()):
-        if str(mid) in k: del context.bot_data[k]
+    cleanup_state(context, mid)
+    release_match_lock(mid)
 
 async def endmatch_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -841,7 +901,8 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             s["bat_team_name"] = bt; s["bowl_team_name"] = bwt
             s["bat_username"] = bu.username; s["bowl_username"] = bwu.username
             s["pitch_type"] = m.pitch_type
-            _ss(context, mid, s)
+            # Persist initial state with PICK_DELIVERY action
+            _ss(context, mid, s, next_action=A_PICK_DELIVERY)
 
             await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ Starting...", parse_mode="HTML")
             await context.bot.send_message(cid,
@@ -853,71 +914,143 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             await _send_batsman_card(context, cid, op2, s["bat_team_id"])
             await _send_bowler_card(context, cid, bowler, s["bowl_team_id"])
 
-        await _show_delivery(context, cid, mid)
+        await render_screen(context, mid)
     except Exception: session.rollback(); logger.exception("SelBowl err")
     finally: session.close()
 
 
-# ═══════════════════════════ RECOVERY ═════════════════════════════════
+# ═══════════════════════════ RENDER DISPATCHER ════════════════════════
+#
+# render_screen(ctx, mid) is the SINGLE function any code path calls when
+# it needs to "show whatever screen the user should see now". It reads
+# next_action from the persistent store and dispatches to the right renderer.
+#
+# Code paths that call this:
+#   - shot_callback (after processing a ball)
+#   - length_callback / spinner_delivery_callback (after delivery picked)
+#   - new_batsman_callback / new_over_bowler_callback (after picker resolved)
+#   - resume_handler (/r command)
+#   - heartbeat (every 30s for stuck matches)
+#
+# The internal _show_* functions are the actual renderers.
+# DO NOT call _show_* functions directly outside of render_screen anymore —
+# they assume the state has already been validated.
 
 
-async def _safe_show_next(ctx, mid):
-    """Determine current state of the match and re-render the correct UI screen.
+async def render_screen(ctx, mid):
+    """SINGLE dispatcher — reads next_action and renders the correct screen.
 
-    This is the master recovery function. Given any valid state, it works out
-    what screen the user should be looking at, and shows it.
+    Returns True if a screen was sent, False otherwise. Always best-effort —
+    never raises. Always releases the processing lock first.
 
-    Returns True if a screen was successfully sent, False otherwise.
+    State machine actions handled:
+      A_PICK_DELIVERY   → _show_delivery (or vsbot AI if bot bowling)
+      A_PICK_LENGTH     → _show_length_picker
+      A_PICK_SHOT       → _show_shot (or vsbot AI if bot batting)
+      A_PICK_NEW_BATSMAN→ _show_new_batsman (or vsbot AI)
+      A_PICK_NEW_BOWLER → _show_new_over_bowler (or vsbot AI)
+      A_INNINGS_BREAK   → _end_innings
+      A_COMPLETED       → no-op
     """
     s = _gs(ctx, mid)
     if not s:
         return False
+
     cid = s["chat_id"]
 
-    # Always release the processing lock before showing
+    # Always release any stale processing lock first
     ctx.bot_data.pop(f"processing_{mid}", None)
-    _cancel_action_timer(ctx, mid)
 
     try:
-        # If innings is over, end it
+        # Always check innings-over first (regardless of next_action)
         if is_innings_over(s):
             await _end_innings(ctx, mid)
             return True
 
-        # Check if a wicket fell and we need a new batsman.
-        # The striker slot will be marked out=True if so.
-        striker = get_striker(s) if s.get("bat_xi") else None
-        if striker:
-            bs = s["bat_stats"].get(striker["roster_id"], {})
-            if bs.get("out", False) and s["total_wickets"] < 10:
-                # Need new batsman
-                await _show_new_batsman(ctx, mid)
+        next_act = get_next_action(ctx, mid) or A_PICK_DELIVERY
+
+        # vsbot first: if bot is the actor for this action, route to AI
+        if s.get("is_vsbot"):
+            from handlers.vsbot import vsbot_auto_continue
+            handled = await vsbot_auto_continue(ctx, mid)
+            if handled:
                 return True
 
-        # Start of an over (current_ball == 0 and current_over > 1) → new bowler
-        if s.get("current_ball", 0) == 0 and s.get("current_over", 1) > 1:
+        # Dispatch by action
+        if next_act == A_PICK_NEW_BATSMAN:
+            await _show_new_batsman(ctx, mid)
+        elif next_act == A_PICK_NEW_BOWLER:
             await _show_new_over_bowler(ctx, mid)
-            return True
-
-        # Delivery already selected → show shot
-        if s.get("current_delivery"):
+        elif next_act == A_PICK_SHOT:
             await _show_shot(ctx, cid, mid)
-            return True
-
-        # Variation selected but length not picked → re-show delivery from scratch
-        if s.get("selected_variation"):
+        elif next_act == A_PICK_LENGTH:
+            if s.get("selected_variation"):
+                await _show_length_picker(ctx, cid, mid)
+            else:
+                # Inconsistent state — fall back to fresh ball
+                _ss(ctx, mid, s, next_action=A_PICK_DELIVERY)
+                await _show_delivery(ctx, cid, mid)
+        elif next_act == A_COMPLETED:
+            return False  # nothing to render
+        else:
+            # Default: PICK_DELIVERY (or unknown — start of new ball)
+            s["current_delivery"] = None
             s["selected_variation"] = None
-            _ss(ctx, mid, s)
+            _ss(ctx, mid, s, next_action=A_PICK_DELIVERY)
             await _show_delivery(ctx, cid, mid)
-            return True
 
-        # Default: fresh ball — show delivery selection
-        await _show_delivery(ctx, cid, mid)
         return True
 
     except Exception:
-        logger.exception(f"_safe_show_next failed for match {mid}")
+        logger.exception(f"render_screen failed for match {mid}")
         return False
+
+
+async def _safe_show_next(ctx, mid):
+    """Backwards-compat alias — calls the new dispatcher.
+    Kept so existing code paths still work without rewriting every call site.
+    """
+    return await render_screen(ctx, mid)
+
+
+async def _safe_show_next_OLD(ctx, mid):  # noqa
+    """Old implementation kept for reference. Not called.
+
+    The new render_screen() dispatcher is the canonical path.
+    """
+    return False
+
+
+# ── Legacy code from the old recovery function below was removed. ──
+# (The new render_screen() above replaces it.)
+
+
+async def _show_length_picker(ctx, cid, mid):
+    """Re-render the length picker for a state where variation was picked but length wasn't.
+    Used by render_screen when next_action == PICK_LENGTH.
+    """
+    s = _gs(ctx, mid)
+    if not s: return
+    var = s.get("selected_variation")
+    if not var:
+        # No variation set — fall back to delivery
+        await _show_delivery(ctx, cid, mid)
+        return
+    bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
+    ls = opts["lengths"]; btns = []; row = []
+    for i, l in enumerate(ls):
+        row.append(InlineKeyboardButton(l, callback_data=f"blen_{mid}_{i}"))
+        if len(row) == 3: btns.append(row); row = []
+    if row: btns.append(row)
+    try:
+        sent = await ctx.bot.send_message(cid,
+            f"🎳 <b>SELECT LENGTH</b> ({var})", parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(btns))
+        if sent and hasattr(sent, "message_id"):
+            _ss(ctx, mid, s, last_prompt_msg_id=sent.message_id)
+        _start_action_timer(ctx, mid, s["bowl_user_tg"], "select length")
+    except Exception:
+        logger.exception(f"_show_length_picker failed for match {mid}")
 
 
 async def _recover_stuck(ctx, mid, where):
@@ -973,6 +1106,11 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _show_delivery(ctx, cid, mid):
     s = _gs(ctx, mid)
+    if not s: return
+    # Brief pacing pause (was 1.5s — too long, caused users to think bot was stuck)
+    import asyncio as _asyncio
+    await _asyncio.sleep(0.5)
+    s = _gs(ctx, mid)  # re-fetch in case state changed during sleep
     if not s: return
     try:
         bw = get_bowler(s); st = get_striker(s); ph = get_phase(s)
@@ -1034,19 +1172,22 @@ async def variation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         try: await q.edit_message_reply_markup(reply_markup=None)
         except Exception: pass
         bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
-        var = opts["variations"][vi]; s["selected_variation"] = var; _ss(context, mid, s)
+        var = opts["variations"][vi]; s["selected_variation"] = var
+        _ss(context, mid, s, next_action=A_PICK_LENGTH)
         ls = opts["lengths"]; btns = []; row = []
         for i, l in enumerate(ls):
             row.append(InlineKeyboardButton(l, callback_data=f"blen_{mid}_{i}"))
             if len(row) == 3: btns.append(row); row = []
         if row: btns.append(row)
+        sent_msg = None
         try:
-            await q.edit_message_text(f"🎳 <b>SELECT LENGTH</b> ({var})", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+            sent_msg = await q.edit_message_text(f"🎳 <b>SELECT LENGTH</b> ({var})", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
         except Exception:
-            # Fallback: send new message if edit failed
-            await context.bot.send_message(s["chat_id"],
+            sent_msg = await context.bot.send_message(s["chat_id"],
                 f"🎳 <b>SELECT LENGTH</b> ({var})",
                 parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        if sent_msg and hasattr(sent_msg, "message_id"):
+            _ss(context, mid, s, last_prompt_msg_id=sent_msg.message_id)
         _start_action_timer(context, mid, s["bowl_user_tg"], "select length")
     except Exception:
         logger.exception(f"variation_callback failed mid={mid}")
@@ -1072,12 +1213,18 @@ async def length_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         bw = get_bowler(s); opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
         length = opts["lengths"][li]; var = s.get("selected_variation", "Seam")
-        s["current_delivery"] = f"{var} {length}"; s["selected_variation"] = None; _ss(context, mid, s)
+        s["current_delivery"] = f"{var} {length}"; s["selected_variation"] = None
+        _ss(context, mid, s, next_action=A_PICK_SHOT)
         try:
             await q.edit_message_text(f"✅ {bw['name']}: {var} {length}\n⏳ Batsman...", parse_mode="HTML")
         except Exception: pass
         context.bot_data.pop(lock_key, None)  # release before next step
-        await _show_shot(context, s["chat_id"], mid)
+        # vsbot: if bot is batting, auto-pick shot
+        if s.get("is_vsbot") and s.get("bat_user_tg") == BOT_TG_ID_:
+            from handlers.vsbot import _bot_play_shot
+            await _bot_play_shot(context, mid)
+        else:
+            await render_screen(context, mid)
     except Exception:
         logger.exception(f"length_callback failed mid={mid}")
         await _recover_stuck(context, mid, "length")
@@ -1105,12 +1252,17 @@ async def spinner_delivery_callback(update: Update, context: ContextTypes.DEFAUL
         if d == "Surprise":
             ns = [x for x in opts["deliveries"] if x != "Surprise"]
             d = random.choice(ns) + " (Surprise)"
-        s["current_delivery"] = d; _ss(context, mid, s)
+        s["current_delivery"] = d
+        _ss(context, mid, s, next_action=A_PICK_SHOT)
         try:
             await q.edit_message_text(f"✅ {bw['name']}: {d}\n⏳ Batsman...", parse_mode="HTML")
         except Exception: pass
         context.bot_data.pop(lock_key, None)
-        await _show_shot(context, s["chat_id"], mid)
+        if s.get("is_vsbot") and s.get("bat_user_tg") == BOT_TG_ID_:
+            from handlers.vsbot import _bot_play_shot
+            await _bot_play_shot(context, mid)
+        else:
+            await render_screen(context, mid)
     except Exception:
         logger.exception(f"spinner_delivery_callback failed mid={mid}")
         await _recover_stuck(context, mid, "spinner_delivery")
@@ -1125,6 +1277,11 @@ async def _show_shot(ctx, cid, mid):
     s = _gs(ctx, mid)
     if not s:
         return
+    # Brief pacing (was 1.2s)
+    import asyncio as _asyncio
+    await _asyncio.sleep(0.4)
+    s = _gs(ctx, mid)
+    if not s: return
     try:
         st = get_striker(s); bw = get_bowler(s); dl = s.get("current_delivery", "?")
         bs = s["bat_stats"][st["roster_id"]]
@@ -1191,6 +1348,12 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         shot = AVAILABLE_SHOTS[si]; dl = s.get("current_delivery", "?")
         striker = get_striker(s); bowler = get_bowler(s)
+        # Defensive: ensure bat_stats has entry for this striker
+        if striker["roster_id"] not in s["bat_stats"]:
+            s["bat_stats"][striker["roster_id"]] = {
+                "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
+                "out": False, "how_out": "", "bowled_by": ""
+            }
         bs = s["bat_stats"][striker["roster_id"]]
         bws = s["bowl_stats"].setdefault(bowler["roster_id"], {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0})
         oc = _calc(s, striker, bowler, shot, dl)
@@ -1271,17 +1434,38 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Release lock before next step
         context.bot_data.pop(f"processing_{mid}", None)
 
-        # Route to next step — wrap each in try/except so a Telegram API hiccup doesn't strand the match
+        # CRITICAL: Reset current_delivery and selected_variation NOW so any
+        # recovery (resume / _safe_show_next) won't think we're still mid-ball.
+        s["current_delivery"] = None
+        s["selected_variation"] = None
+
+        # Determine canonical next_action and persist
+        if is_innings_over(s):
+            next_act = A_INNINGS_BREAK
+        elif need_new_bat and s["total_wickets"] < 10:
+            next_act = A_PICK_NEW_BATSMAN
+        elif eoo:
+            next_act = A_PICK_NEW_BOWLER
+        else:
+            next_act = A_PICK_DELIVERY
+        _ss(context, mid, s, next_action=next_act)
+        increment_ball_seq(context, mid)
+
+        # Route to next step
         try:
             if is_innings_over(s):
                 await _end_innings(context, mid)
                 return
-            if need_new_bat and s["total_wickets"] < 10:
-                await _show_new_batsman(context, mid)
-            elif eoo:
-                await _show_new_over_bowler(context, mid)
-            else:
-                await _show_delivery(context, s["chat_id"], mid)
+
+            # vsbot: route to bot AI if next step is the bot's turn
+            if s.get("is_vsbot"):
+                from handlers.vsbot import vsbot_auto_continue
+                handled = await vsbot_auto_continue(context, mid)
+                if handled:
+                    return
+
+            # Single dispatcher — knows what to render based on next_action
+            await render_screen(context, mid)
         except Exception:
             logger.exception(f"Next-step routing failed for match {mid}")
             await _recover_stuck(context, mid, "next-step")
@@ -1294,6 +1478,130 @@ async def shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         # Always release the lock — no exception path can leave it stuck
         context.bot_data.pop(f"processing_{mid}", None)
+
+
+async def _bot_process_shot(context, mid, si):
+    """Programmatic shot processing for vsbot — mirrors shot_callback but no q object.
+    Used when bot is batting and AI auto-picks shots.
+    """
+    s = _gs(context, mid)
+    if not s:
+        return
+
+    lock_key = f"processing_{mid}"
+    if context.bot_data.get(lock_key):
+        return
+    context.bot_data[lock_key] = True
+
+    try:
+        _cancel_action_timer(context, mid)
+
+        shot = AVAILABLE_SHOTS[si]
+        dl = s.get("current_delivery", "?")
+        striker = get_striker(s); bowler = get_bowler(s)
+        if striker["roster_id"] not in s["bat_stats"]:
+            s["bat_stats"][striker["roster_id"]] = {
+                "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
+                "out": False, "how_out": "", "bowled_by": ""
+            }
+        bs = s["bat_stats"][striker["roster_id"]]
+        bws = s["bowl_stats"].setdefault(bowler["roster_id"], {
+            "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0,
+        })
+        oc = _calc(s, striker, bowler, shot, dl)
+        legal = True; need_new_bat = False
+
+        if oc["type"] == "wide":
+            s["total_runs"] += 1; s["extras_total"] += 1; s["wides"] += 1; bws["runs"] += 1
+            add_to_timeline(s, SYM["WD"]); legal = False; rtxt = "↔️ <b>WIDE!</b> +1"
+        elif oc["type"] == "noball":
+            runs = oc.get("runs", 1); s["total_runs"] += runs + 1; s["extras_total"] += 1; s["noballs"] += 1
+            bws["runs"] += runs + 1; bs["balls"] += 1
+            if runs > 0: bs["runs"] += runs
+            add_to_timeline(s, SYM["NB"] + (SYM.get(runs, str(runs)) if runs > 0 else "")); legal = False
+            rtxt = f"🄽🄱 <b>NO BALL!</b> +{runs + 1}"
+        elif oc["type"] == "legbye":
+            runs = oc.get("runs", 1); s["total_runs"] += runs; s["extras_total"] += runs; s["legbyes"] += runs
+            bws["runs"] += runs; bs["balls"] += 1; s["partnership_balls"] += 1; s["partnership_runs"] += runs
+            add_to_timeline(s, str(runs) + " 𓂾" if runs > 1 else "𓂾")
+            rtxt = f"𓂾 <b>LEG BYE!</b> +{runs}"
+            if runs % 2 == 1: s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
+        elif oc["type"] == "wicket":
+            runs = oc.get("runs", 0); s["total_runs"] += runs; s["total_wickets"] += 1
+            bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
+            bs["how_out"] = oc.get("how", "Out"); bs["bowled_by"] = bowler["name"]
+            s["partnership_balls"] += 1
+            s["fow"].append({"wicket": s["total_wickets"], "runs": s["total_runs"],
+                            "over": f"{s['current_over']}.{s['current_ball']}",
+                            "batsman": striker["name"], "how": oc.get("how", "Out")})
+            add_to_timeline(s, SYM["W"])
+            rtxt = f"🔴 <b>WICKET!</b> {striker['name']} {oc.get('how', 'Out')}!"
+            need_new_bat = True
+        else:
+            runs = oc.get("runs", 0); s["total_runs"] += runs; bws["runs"] += runs
+            bs["balls"] += 1; bs["runs"] += runs
+            s["partnership_balls"] += 1; s["partnership_runs"] += runs
+            if runs == 4: bs["fours"] += 1
+            if runs == 6: bs["sixes"] += 1
+            sym = SYM.get(runs, str(runs)); add_to_timeline(s, sym)
+            rtxt = f"{sym} <b>{runs} run{'s' if runs != 1 else ''}!</b>" if runs > 0 else "⚫ <b>Dot ball</b>"
+            if runs % 2 == 1: s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
+
+        if legal: s["current_ball"] += 1; bws["this_over_balls"] += 1; bws["balls"] = bws.get("balls", 0) + 1
+        eoo = False
+        if s["current_ball"] >= 6:
+            bws["overs_done"] += 1; bws["this_over_balls"] = 0
+            s["current_over"] += 1; s["current_ball"] = 0
+            s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
+            s["prev_bowler_rid"] = bowler["roster_id"]; eoo = True
+        _ss(context, mid, s)
+
+        sc = build_live_scorecard(s)
+        traits_line = ""
+        activated = oc.get("traits_activated") or []
+        if activated:
+            unique_act = list(dict.fromkeys(activated))[:3]
+            traits_line = "\n💎 " + " · ".join(unique_act)
+
+        head = f"🎳 {bowler['name']} → {dl}\n🏏 {striker['name']} played {shot}\n\n{rtxt}{traits_line}\n\n{sc}"
+        try:
+            await context.bot.send_message(s["chat_id"], head, parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to send scorecard update")
+
+        # Release lock before next step
+        context.bot_data.pop(lock_key, None)
+
+        # Route to next step
+        try:
+            if is_innings_over(s):
+                await _end_innings(context, mid)
+                return
+
+            # Reset current_delivery so next ball starts fresh
+            s["current_delivery"] = None
+            _ss(context, mid, s)
+
+            # Determine next action and persist
+            if need_new_bat and s["total_wickets"] < 10:
+                next_act = A_PICK_NEW_BATSMAN
+            elif eoo:
+                next_act = A_PICK_NEW_BOWLER
+            else:
+                next_act = A_PICK_DELIVERY
+            _ss(context, mid, s, next_action=next_act)
+            increment_ball_seq(context, mid)
+
+            # Single dispatcher routes to user UI or bot AI
+            await render_screen(context, mid)
+        except Exception:
+            logger.exception(f"_bot_process_shot routing failed for match {mid}")
+
+    except Exception:
+        logger.exception(f"_bot_process_shot FATAL for match {mid}")
+    finally:
+        context.bot_data.pop(lock_key, None)
+
 
 def _get_roster_traits(roster_id):
     """Fetch active traits for a roster entry. Returns list of trait dicts
@@ -1400,6 +1708,11 @@ def _calc(s, striker, bowler, shot, delivery):
 async def _show_new_batsman(ctx, mid):
     s = _gs(ctx, mid)
     if not s: return
+    # Brief wicket pause (was 1.8s)
+    import asyncio as _asyncio
+    await _asyncio.sleep(0.7)
+    s = _gs(ctx, mid)
+    if not s: return
     try:
         available = []
         for i, p in enumerate(s["batting_order"]):
@@ -1442,7 +1755,13 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     s = _gs(context, mid)
     if not s or q.from_user.id != s["bat_user_tg"]: await q.answer("Not yours!"); return
     await q.answer(); _cancel_action_timer(context, mid)
-    nb = s["batting_order"][bi]; s["striker_idx"] = bi; _ss(context, mid, s)
+    nb = s["batting_order"][bi]; s["striker_idx"] = bi
+    # Determine what's next: end of over → bowler picker; else next delivery
+    if s["current_ball"] == 0 and s["current_over"] > 1:
+        next_act = A_PICK_NEW_BOWLER
+    else:
+        next_act = A_PICK_DELIVERY
+    _ss(context, mid, s, next_action=next_act)
     try:
         await q.edit_message_text(f"🏏 New batsman: {nb['name']} ({nb['bat_rating']} BAT)", parse_mode="HTML")
     except Exception:
@@ -1457,10 +1776,8 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if is_innings_over(s):
             await _end_innings(context, mid)
             return
-        if s["current_ball"] == 0 and s["current_over"] > 1:
-            await _show_new_over_bowler(context, mid)
-        else:
-            await _show_delivery(context, s["chat_id"], mid)
+        # Single dispatcher — handles vsbot routing internally
+        await render_screen(context, mid)
     except Exception:
         logger.exception(f"new_batsman_callback next-step failed for match {mid}")
         try:
@@ -1475,6 +1792,11 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ═══════════════════════════ NEW OVER BOWLER ═════════════════════════
 
 async def _show_new_over_bowler(ctx, mid):
+    s = _gs(ctx, mid)
+    if not s: return
+    # Brief end-of-over pause (was 1.5s)
+    import asyncio as _asyncio
+    await _asyncio.sleep(0.6)
     s = _gs(ctx, mid)
     if not s: return
     try:
@@ -1515,10 +1837,13 @@ async def new_over_bowler_callback(update: Update, context: ContextTypes.DEFAULT
     if not bw: return
     s["current_bowler"] = bw
     bws = s["bowl_stats"].setdefault(bw["roster_id"], {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0})
-    bws["this_over_balls"] = 0; _ss(context, mid, s)
+    bws["this_over_balls"] = 0
+    _ss(context, mid, s, next_action=A_PICK_DELIVERY)
     await q.edit_message_text(f"🎳 Over {s['current_over']}: {bw['name']} | {bw.get('bowl_hand','R')[:1]}-{bw['bowl_style']}", parse_mode="HTML")
-    await _send_bowler_card(context, s["chat_id"], bw, s["bowl_team_id"])
-    await _show_delivery(context, s["chat_id"], mid)
+    if not bw.get("is_bot_player"):
+        await _send_bowler_card(context, s["chat_id"], bw, s["bowl_team_id"])
+    # Single dispatcher (handles vsbot routing internally)
+    await render_screen(context, mid)
 
 
 # ═══════════════════════════ END INNINGS ═════════════════════════════
@@ -1711,7 +2036,8 @@ async def _end_innings(ctx, mid):
         s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "out": False, "how_out": "", "bowled_by": ""} for p in s["bat_xi"]}
         s["bowl_stats"] = {p["roster_id"]: {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0} for p in s["bowl_xi"]}
         s["fow"] = []  # reset for 2nd innings
-        _ss(ctx, mid, s)
+        # Recovery-safe: set the action pointer so /resume during the pause shows the right thing
+        _ss(ctx, mid, s, next_action=A_PICK_DELIVERY)
         # CRITICAL: Update bot_data so opener callbacks read correct XI
         ctx.bot_data[f"bat_xi_{mid}"] = s["bat_xi"]
         ctx.bot_data[f"bowl_xi_{mid}"] = s["bowl_xi"]
@@ -1857,5 +2183,6 @@ async def _end_innings(ctx, mid):
             session.rollback()
         finally: session.close()
 
-        for k in list(ctx.bot_data.keys()):
-            if str(mid) in k: del ctx.bot_data[k]
+        # Match complete — cleanup persistent state + lock
+        cleanup_state(ctx, mid)
+        release_match_lock(mid)

@@ -174,8 +174,13 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             btns.append([InlineKeyboardButton("❌ Cancel", callback_data="rlcancel")])
 
             text = f"🔍 Found <b>{len(matches)}</b> matching players:\n\nChoose one to release:"
-            await update.message.reply_text(text, parse_mode="HTML",
+            sent = await update.message.reply_text(text, parse_mode="HTML",
                                             reply_markup=InlineKeyboardMarkup(btns))
+            try:
+                from services.button_timeout import schedule_button_timeout
+                schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
+            except Exception:
+                pass
             return
 
         # Single match — show confirm
@@ -199,7 +204,12 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("✅ Release", callback_data=f"rlone_{entry.id}"),
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        try:
+            from services.button_timeout import schedule_button_timeout
+            schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
+        except Exception:
+            pass
 
     except Exception:
         logger.exception("Release error")
@@ -364,7 +374,12 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
                 callback_data=f"rlm_{user.telegram_id}_{pos_from}_{pos_to}"),
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        try:
+            from services.button_timeout import schedule_button_timeout
+            schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
+        except Exception:
+            pass
 
     except Exception:
         logger.exception("ReleaseMultiple handler error")
