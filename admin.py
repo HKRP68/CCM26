@@ -18,7 +18,8 @@ from database import get_session, init_db
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
-                    BotTeam, BotTeamPlayer)
+                    BotTeam, BotTeamPlayer,
+                    Quest, UserQuestProgress)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -1325,6 +1326,160 @@ def admin_bot_team_bulk_add(team_id):
     finally:
         db.close()
     return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# QUESTS ADMIN
+# ═══════════════════════════════════════════════════════════════════════
+
+EVENT_KEYS = [
+    ("claim", "Claim a player (/claim)"),
+    ("gspin", "Spin GSpin (/gspin)"),
+    ("daily", "Collect daily (/daily)"),
+    ("match_played", "Play a match (any result)"),
+    ("match_won", "Win a match"),
+    ("runs_scored", "Total runs scored in a match"),
+    ("wickets_taken", "Total wickets taken in a match"),
+    ("fifty", "Score 50+ in a match"),
+    ("hundred", "Score 100+ in a match"),
+    ("trait_apply", "Apply a trait (/traitapply)"),
+    ("trait_buy", "Buy a trait (/traitshop)"),
+    ("market_buy", "Buy from /playermarket"),
+    ("vsbot_played", "Play a /vsbot match"),
+    ("vsbot_won", "Win a /vsbot match"),
+]
+
+
+@app.route("/quests")
+@login_required
+def admin_quests_list():
+    db = get_session()
+    try:
+        quests = db.query(Quest).order_by(Quest.quest_type, Quest.sort_order, Quest.id).all()
+        # Group by type
+        daily = [q for q in quests if q.quest_type == "daily"]
+        monthly = [q for q in quests if q.quest_type == "monthly"]
+        return render_template("admin_quests.html",
+                               daily_quests=daily, monthly_quests=monthly)
+    finally:
+        db.close()
+
+
+@app.route("/quests/new", methods=["GET", "POST"])
+@login_required
+def admin_quest_new():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            try:
+                q = Quest(
+                    name=request.form.get("name", "").strip(),
+                    description=request.form.get("description", "").strip(),
+                    quest_type=request.form.get("quest_type", "daily"),
+                    event_key=request.form.get("event_key", "claim"),
+                    target_count=max(1, int(request.form.get("target_count", "1") or 1)),
+                    reward_points=int(request.form.get("reward_points", "5") or 5),
+                    reward_coins=int(request.form.get("reward_coins", "0") or 0),
+                    reward_gems=int(request.form.get("reward_gems", "0") or 0),
+                    is_active=bool(request.form.get("is_active")),
+                    emoji=request.form.get("emoji", "🎯") or "🎯",
+                    sort_order=int(request.form.get("sort_order", "0") or 0),
+                )
+                if not q.name:
+                    flash("Name is required.", "error")
+                    return redirect(url_for("admin_quest_new"))
+                db.add(q)
+                db.commit()
+                log_admin(db, "quest_create", "quest", q.id, q.name,
+                          f"Created {q.quest_type} quest: {q.name}")
+                db.commit()
+                flash(f"Quest '{q.name}' created.", "info")
+                return redirect(url_for("admin_quests_list"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+                return redirect(url_for("admin_quest_new"))
+        return render_template("admin_quest_form.html", quest=None, event_keys=EVENT_KEYS)
+    finally:
+        db.close()
+
+
+@app.route("/quests/<int:quest_id>/edit", methods=["GET", "POST"])
+@login_required
+def admin_quest_edit(quest_id):
+    db = get_session()
+    try:
+        q = db.query(Quest).get(quest_id)
+        if not q:
+            flash("Quest not found.", "error")
+            return redirect(url_for("admin_quests_list"))
+
+        if request.method == "POST":
+            try:
+                q.name = request.form.get("name", q.name).strip()
+                q.description = request.form.get("description", q.description).strip()
+                q.quest_type = request.form.get("quest_type", q.quest_type)
+                q.event_key = request.form.get("event_key", q.event_key)
+                q.target_count = max(1, int(request.form.get("target_count") or 1))
+                q.reward_points = int(request.form.get("reward_points") or 0)
+                q.reward_coins = int(request.form.get("reward_coins") or 0)
+                q.reward_gems = int(request.form.get("reward_gems") or 0)
+                q.is_active = bool(request.form.get("is_active"))
+                q.emoji = request.form.get("emoji", q.emoji) or "🎯"
+                q.sort_order = int(request.form.get("sort_order") or 0)
+                db.commit()
+                log_admin(db, "quest_edit", "quest", quest_id, q.name,
+                          f"Edited quest {q.name}")
+                db.commit()
+                flash(f"Quest '{q.name}' updated.", "info")
+                return redirect(url_for("admin_quests_list"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        return render_template("admin_quest_form.html", quest=q, event_keys=EVENT_KEYS)
+    finally:
+        db.close()
+
+
+@app.route("/quests/<int:quest_id>/delete", methods=["POST"])
+@login_required
+def admin_quest_delete(quest_id):
+    db = get_session()
+    try:
+        q = db.query(Quest).get(quest_id)
+        if q:
+            name = q.name
+            # Also delete any user progress on this quest
+            db.query(UserQuestProgress).filter(UserQuestProgress.quest_id == quest_id).delete()
+            db.delete(q)
+            db.commit()
+            log_admin(db, "quest_delete", "quest", quest_id, name, f"Deleted {name}")
+            db.commit()
+            flash(f"Quest '{name}' deleted.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_quests_list"))
+
+
+@app.route("/quests/<int:quest_id>/toggle", methods=["POST"])
+@login_required
+def admin_quest_toggle(quest_id):
+    db = get_session()
+    try:
+        q = db.query(Quest).get(quest_id)
+        if q:
+            q.is_active = not q.is_active
+            db.commit()
+            flash(f"'{q.name}' → {'active' if q.is_active else 'inactive'}.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_quests_list"))
 
 
 # ── Run ──────────────────────────────────────────────────────────────

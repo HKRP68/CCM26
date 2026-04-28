@@ -22,7 +22,8 @@ def init_db():
         PlayerGameStats, Match, AdminLog,
         Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
         PlayerMarket, BotTeam, BotTeamPlayer,
-        MatchState,
+        MatchState, Quest, UserQuestProgress,
+        UserAchievement, PlayerFormHistory,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -66,6 +67,7 @@ def _migrate_add_columns():
         "best_streak": "INTEGER DEFAULT 0",
         "active_days": "INTEGER DEFAULT 0",
         "last_match_date": "TIMESTAMP",
+        "quest_points": "INTEGER DEFAULT 0",
     }
     new_match_cols = {
         "winner_id": "INTEGER",

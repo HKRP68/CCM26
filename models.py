@@ -27,6 +27,7 @@ class User(Base):
     best_streak = Column(Integer, default=0)
     active_days = Column(Integer, default=0)  # days with at least 1 match
     last_match_date = Column(DateTime, nullable=True)
+    quest_points = Column(Integer, default=0)  # earned from completing quests
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -446,3 +447,95 @@ class MatchState(Base):
     last_modified = Column(DateTime, default=datetime.utcnow)
     # ID of the message currently showing buttons (for re-rendering)
     last_prompt_msg_id = Column(Integer, nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# QUESTS — daily/monthly engagement objectives
+# ══════════════════════════════════════════════════════════════════════
+
+class Quest(Base):
+    """Master definition of a quest. Admin-managed."""
+    __tablename__ = "quests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(300), nullable=False)
+    quest_type = Column(String(20), nullable=False)   # 'daily' or 'monthly'
+    event_key = Column(String(50), nullable=False)
+    target_count = Column(Integer, default=1, nullable=False)
+    reward_points = Column(Integer, default=5, nullable=False)
+    reward_coins = Column(Integer, default=0)
+    reward_gems = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    emoji = Column(String(10), default="🎯")
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserQuestProgress(Base):
+    """Per-user progress on a single quest for a single period."""
+    __tablename__ = "user_quest_progress"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    quest_id = Column(Integer, ForeignKey("quests.id"), nullable=False)
+    period_key = Column(String(10), nullable=False)
+    progress = Column(Integer, default=0, nullable=False)
+    completed = Column(Boolean, default=False, nullable=False)
+    claimed = Column(Boolean, default=False, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_uqp_user_period", "user_id", "period_key"),
+        Index("ix_uqp_user_quest_period", "user_id", "quest_id", "period_key", unique=True),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ACHIEVEMENTS — permanent unlockable badges
+# ══════════════════════════════════════════════════════════════════════
+
+class UserAchievement(Base):
+    """Achievements unlocked by a user. The achievement key is hardcoded
+    in services/achievement_service.py (CATALOG)."""
+    __tablename__ = "user_achievements"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    achievement_key = Column(String(50), nullable=False)
+    unlocked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_uach_user_key", "user_id", "achievement_key", unique=True),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PLAYER FORM — last-5 match performances, drives in-match modifier
+# ══════════════════════════════════════════════════════════════════════
+
+class PlayerFormHistory(Base):
+    """Recent match performance for a player owned by a user.
+    Used to compute current 'form' which slightly modifies in-match outcomes.
+    """
+    __tablename__ = "player_form_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False, index=True)
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=True)
+    # Batting performance (if batted)
+    runs = Column(Integer, default=0)
+    balls = Column(Integer, default=0)
+    out = Column(Boolean, default=False)
+    # Bowling performance (if bowled)
+    wickets = Column(Integer, default=0)
+    runs_conceded = Column(Integer, default=0)
+    overs_bowled = Column(Float, default=0.0)
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_pfh_user_player", "user_id", "player_id"),
+    )

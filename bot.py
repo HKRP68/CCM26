@@ -91,6 +91,22 @@ from handlers.vsbot import (
     vsbot_selbowl_callback,
 )
 
+# Quest handlers
+from handlers.quests import (
+    myquest_handler,
+    quest_tab_callback,
+    quest_claim_callback,
+    quest_claimall_callback,
+    quest_close_callback,
+)
+
+# Achievements handlers
+from handlers.achievements import (
+    achievements_handler,
+    achievements_tab_callback,
+    achievements_close_callback,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -278,6 +294,18 @@ def main():
         app.add_handler(CallbackQueryHandler(vsbot_op1_callback, pattern=r"^vsb_op1_"))
         app.add_handler(CallbackQueryHandler(vsbot_op2_callback, pattern=r"^vsb_op2_"))
         app.add_handler(CallbackQueryHandler(vsbot_selbowl_callback, pattern=r"^vsb_selbowl_"))
+
+        # ── Quests ──────────────────────────────────────────────────
+        app.add_handler(CommandHandler(["myquest", "mq", "quests"], myquest_handler))
+        app.add_handler(CallbackQueryHandler(quest_tab_callback, pattern=r"^qst_tab_"))
+        app.add_handler(CallbackQueryHandler(quest_claim_callback, pattern=r"^qst_claim_"))
+        app.add_handler(CallbackQueryHandler(quest_claimall_callback, pattern=r"^qst_claimall_"))
+        app.add_handler(CallbackQueryHandler(quest_close_callback, pattern=r"^qst_close_"))
+
+        # ── Achievements ────────────────────────────────────────────
+        app.add_handler(CommandHandler(["achievements", "ach", "badges"], achievements_handler))
+        app.add_handler(CallbackQueryHandler(achievements_tab_callback, pattern=r"^ach_tab_"))
+        app.add_handler(CallbackQueryHandler(achievements_close_callback, pattern=r"^ach_close_"))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
