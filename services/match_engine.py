@@ -172,10 +172,30 @@ def build_live_scorecard(s):
 
     tl = format_timeline(s)
 
+    # Pitch wear note (only when meaningful)
+    pitch_line = ""
+    try:
+        from services.probability_engine import calc_pitch_wear
+        wear = calc_pitch_wear(s.get("innings", 1), s.get("current_over", 1), s.get("overs", 20))
+        if wear >= 30:
+            pitch_type = s.get("pitch_type", "Flat")
+            if wear >= 60:
+                wear_label = "Heavily Worn 🟫"
+            elif wear >= 45:
+                wear_label = "Worn 🟤"
+            elif wear >= 30:
+                wear_label = "Moderately Worn 🟧"
+            else:
+                wear_label = "Fresh 🟢"
+            pitch_line = f"\n📍 <b>{pitch_type}</b> · {wear_label}\n"
+    except Exception:
+        pass
+
     return (
         f"🏏 <b>LIVE MATCH UPDATE</b>\n\n"
         f"{inn1_line}\n\n"
-        f"{inn2_line}\n\n"
+        f"{inn2_line}\n"
+        f"{pitch_line}\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
         f"🏏 <b>BATSMAN</b>\n"
         f"✦ {striker['name']:<18} {bs_strike['runs']} ({bs_strike['balls']}){strike_mark_s}\n"

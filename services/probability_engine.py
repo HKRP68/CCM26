@@ -144,8 +144,55 @@ PITCH_MODS = {
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# PITCH × BOWLER TYPE SYNERGY (extra bonuses)
+# PITCH WEAR — deterioration over the course of the match
 # ═══════════════════════════════════════════════════════════════════════
+
+# As the pitch wears: more spin grip, lower bounce, slower scoring.
+# wear=0 (fresh) to wear=100 (very worn — typical 2nd innings end).
+# We apply a graduated modifier on top of the base PITCH_MODS.
+
+def _pitch_wear_mods(pitch_type, wear):
+    """Returns a dict of probability modifiers for the current wear level.
+
+    Logic:
+    - As wear increases, dots & wickets go up slightly, fours/sixes go down.
+    - Effect is doubled on Dusty (already spin-friendly) and Dry (gets dustier).
+    - Hard/Flat resist wear better.
+    - All wear effects are subtle — typical ±0.5 to ±1.0 at peak wear.
+    """
+    if wear <= 5:
+        return {}
+    factor = (wear / 100.0)
+    base = {
+        "dot": +1.5 * factor,
+        "W":   +0.8 * factor,
+        "4":   -1.0 * factor,
+        "6":   -1.2 * factor,
+        "1":   +0.5 * factor,
+    }
+    # Pitch-specific multipliers
+    multiplier = {
+        "Dusty": 1.4, "Dry": 1.3,
+        "Green": 1.0, "Flat": 0.6, "Hard": 0.5,
+    }.get(pitch_type, 1.0)
+    return {k: v * multiplier for k, v in base.items()}
+
+
+def calc_pitch_wear(innings, current_over, total_overs):
+    """Compute current pitch wear (0-100) given innings + over.
+
+    1st innings: wear builds 0 → ~30 over the innings
+    2nd innings: starts at ~30, builds to ~75 by end
+    """
+    if innings == 1:
+        progress = current_over / max(1, total_overs)
+        return int(progress * 30)
+    else:  # innings 2
+        progress = current_over / max(1, total_overs)
+        return int(30 + progress * 45)
+
+
+
 
 PITCH_BOWLER_SYNERGY = {
     ("Green",  "Fast Pacer"):    {"W": +1.0, "dot": +1},
@@ -299,8 +346,11 @@ def _get_bowler_key(bowl_style: str) -> str:
 
 def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       over, total_overs, shot, bat_rating, bowl_rating,
-                      striker_traits=None, bowler_traits=None, trait_ctx=None):
+                      striker_traits=None, bowler_traits=None, trait_ctx=None,
+                      pitch_wear=0):
     """Calculate one ball outcome.
+
+    pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
 
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
                    "runs": int, "how": str, "traits_activated": [..]}
@@ -326,6 +376,10 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     # Layer 4: Pitch
     pitch = pitch_type if pitch_type in PITCH_MODS else "Flat"
     _apply_mods(probs, PITCH_MODS.get(pitch, {}))
+
+    # Layer 4b: Pitch wear (deterioration over the match)
+    if pitch_wear > 5:
+        _apply_mods(probs, _pitch_wear_mods(pitch, pitch_wear))
 
     # Layer 5: Pitch × bowler synergy
     _apply_mods(probs, PITCH_BOWLER_SYNERGY.get((pitch, bowler_key), {}))
