@@ -26,6 +26,16 @@ from services.button_timeout import schedule_button_timeout
 logger = logging.getLogger(__name__)
 
 
+def _pitch_hint_vsbot(pitch_type):
+    return {
+        "Flat":  "Batters' paradise — high scores expected.",
+        "Hard":  "Bouncy, true bounce — rewards aggressive shots.",
+        "Green": "Seam movement up front — bowlers will love early overs.",
+        "Dry":   "Slow and low — tough to time the ball cleanly.",
+        "Dusty": "Spinners will turn it square as it wears.",
+    }.get(pitch_type, "A balanced wicket.")
+
+
 # ════════════════════════════════════════════════════════════════════
 # Constants
 # ════════════════════════════════════════════════════════════════════
@@ -222,29 +232,70 @@ async def vsbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         m.toss_winner_id = wid
         session.commit()
 
+        # ── Animated coin toss ──
+        import asyncio as _asyncio
+        try:
+            await q.edit_message_text(
+                "🪙 <b>TOSS</b>\n\n<i>Calling captain to the centre...</i>",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        await _asyncio.sleep(0.6)
+
+        spin_frames = [
+            "🪙 <b>TOSS</b>\n\n     ⬆️\n   ╱  🪙  ╲\n\n<i>Captain flicks the coin into the air...</i>",
+            "🪙 <b>TOSS</b>\n\n          🌀\n        🪙\n\n<i>It spins higher and higher...</i>",
+            "🪙 <b>TOSS</b>\n\n     🌀 🪙 🌀\n\n<i>Tumbling end over end...</i>",
+            "🪙 <b>TOSS</b>\n\n          ⬇️\n        🪙\n\n<i>Coming down now!</i>",
+        ]
+        for f in spin_frames:
+            try:
+                await q.edit_message_text(f, parse_mode="HTML")
+            except Exception:
+                pass
+            await _asyncio.sleep(0.5)
+
         # If bot wins toss, auto-decide
         if wid == bot_user.id:
-            # Bot picks: default to "bowl" 60% of the time, else "bat"
+            try:
+                await q.edit_message_text(
+                    f"🪙 <b>TOSS RESULT</b>\n\n"
+                    f"🏆 <b>{bot_team.name}</b> wins the toss!",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            await _asyncio.sleep(0.5)
             import random as _r
             bot_decision = "bowl" if _r.random() < 0.6 else "bat"
             await _vsbot_apply_toss(context, q.message.chat_id, m.id, bot_decision, bot_user.id)
             return
 
-        # User won toss → show bat/bowl buttons
-        toss_text = (
-            f"🪙 <b>TOSS</b>\n\n"
-            f"<b>{user.first_name or user.username}</b> won the toss vs <b>{bot_team.name}</b>!\n\n"
-            f"📍 {st['pitch_type']} pitch | 🌤️ {st['weather']}\n"
-            f"🏟️ {st['stadium']}\n\n"
-            f"What would you like to do?"
-        )
+        # User won toss → reveal + show bat/bowl buttons
+        try:
+            await q.edit_message_text(
+                f"🪙 <b>TOSS RESULT</b>\n\n"
+                f"🏆 <b>@{user.username or user.first_name}</b> wins the toss vs <b>{bot_team.name}</b>!\n\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"📍 Pitch: <b>{st['pitch_type']}</b> · 🌤️ {st['weather']}\n"
+                f"🏟️ {st['stadium']}\n\n"
+                f"<i>{_pitch_hint_vsbot(st['pitch_type'])}</i>",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        await _asyncio.sleep(0.4)
+
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🏏 Bat First", callback_data=f"vsb_toss_bat_{m.id}_{user.id}"),
             InlineKeyboardButton("🎳 Bowl First", callback_data=f"vsb_toss_bowl_{m.id}_{user.id}"),
         ]])
-        sent = await q.edit_message_text(toss_text, parse_mode="HTML", reply_markup=kb)
+        sent = await context.bot.send_message(q.message.chat_id,
+            f"⚖️ Choose your call:\n\n"
+            f"🏏 Bat First — set a target on a {('fresh' if st['pitch_type'] in ('Flat','Hard') else 'tricky')} pitch\n"
+            f"🎳 Bowl First — pitch typically {('eases' if st['pitch_type'] == 'Green' else 'wears')} later",
+            parse_mode="HTML", reply_markup=kb,
+        )
         try:
-            schedule_button_timeout(context, q.message.chat_id, q.message.message_id,
+            schedule_button_timeout(context, sent.chat_id, sent.message_id,
                                     delay_seconds=120)
         except Exception:
             pass

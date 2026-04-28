@@ -445,6 +445,19 @@ async def trapply_pl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await q.answer("Applied!")
             try: await q.edit_message_text(f"✅ {msg}", parse_mode="HTML")
             except Exception: pass
+            # Quest tracking
+            try:
+                from services.quest_service import safe_track
+                safe_track(session, user.id, "trait_apply", 1)
+                session.commit()
+            except Exception:
+                pass
+            # Achievement check
+            try:
+                from services.achievement_service import check_and_notify
+                await check_and_notify(context, q.message.chat_id, session, user.id)
+            except Exception:
+                pass
         else:
             session.rollback()
             await q.answer(msg, show_alert=True)
@@ -577,6 +590,12 @@ async def trup_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer("Upgraded!")
             try: await q.edit_message_text(msg, parse_mode="HTML")
             except Exception: pass
+            # Achievement check
+            try:
+                from services.achievement_service import check_and_notify
+                await check_and_notify(context, q.message.chat_id, session, user.id)
+            except Exception:
+                pass
         else:
             session.rollback()
             await q.answer(msg, show_alert=True)

@@ -103,6 +103,11 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
                 log_activity(session, user.id, "auto_retain",
                              f"Auto-retained {player.name} (timeout)",
                              player_name=player.name, player_rating=player.rating)
+                try:
+                    from services.quest_service import safe_track
+                    safe_track(session, user.id, "claim", 1)
+                except Exception:
+                    pass
                 session.commit()
                 action_msg = (f"⏱ <b>Time Expired — Auto-Retained</b>\n\n"
                               f"🏏 {player.name} ({player.rating} OVR) added to your roster.")
@@ -295,6 +300,13 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user.roster_count += 1
         new_count = user.roster_count
 
+        # Track quest progress
+        try:
+            from services.quest_service import safe_track
+            safe_track(session, user.id, "claim", 1)
+        except Exception:
+            pass
+
         # Read player data while session is open
         name = player.name
         category = player.category
@@ -320,6 +332,13 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   f"━━━━━━━━━━━━━━\n\n"
                   f"✅ Your Squad Size: {new_count}/25"),
             parse_mode="HTML")
+
+        # Achievement check (post-commit so it sees fresh roster_count)
+        try:
+            from services.achievement_service import check_and_notify
+            await check_and_notify(context, chat_id, session, user.id)
+        except Exception:
+            pass
 
     except Exception:
         session.rollback()

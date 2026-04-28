@@ -129,6 +129,11 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         log_activity(session, user.id, "daily",
                      f"Daily: +{DAILY_COINS} coins, players: {pnames}, streak {streak_count}",
                      coins_change=DAILY_COINS)
+        try:
+            from services.quest_service import safe_track
+            safe_track(session, user.id, "daily", 1)
+        except Exception:
+            pass
         session.commit()
 
         await query.edit_message_text("\n".join(lines), parse_mode="HTML")

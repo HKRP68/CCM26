@@ -168,6 +168,11 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
                              f"Bought {player.name} ({player.rating}) from market for {row.final_price:,}",
                              coins_change=-row.final_price,
                              player_name=player.name, player_rating=player.rating)
+            try:
+                from services.quest_service import safe_track
+                safe_track(session, user.id, "market_buy", 1)
+            except Exception:
+                pass
             session.commit()
             await q.answer("✅ Purchased!", show_alert=False)
 
@@ -191,6 +196,12 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 text=f"{msg}\n💰 Balance: <b>{user.total_coins:,}</b> 🪙\n📊 Roster: {user.roster_count}/25",
                 parse_mode="HTML",
             )
+            # Achievement check
+            try:
+                from services.achievement_service import check_and_notify
+                await check_and_notify(context, q.message.chat_id, session, user.id)
+            except Exception:
+                pass
         else:
             session.rollback()
             await q.answer(msg, show_alert=True)

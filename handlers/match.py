@@ -119,10 +119,25 @@ async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
             bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
         )
 
+        # Compute form for the caption
+        form_caption = ""
+        try:
+            from services.form_service import compute_form_score, form_label
+            session2 = get_session()
+            try:
+                fs = compute_form_score(session2, owner_user_id, player_dict["player_id"])
+                if fs >= 6 or fs <= -6:
+                    # Only show extreme form to keep it punchy
+                    form_caption = f" · {form_label(fs)}"
+            finally:
+                session2.close()
+        except Exception:
+            pass
+
         if card_bytes:
             await ctx.bot.send_photo(
                 chat_id=chat_id, photo=io.BytesIO(card_bytes),
-                caption=f"🏏 <b>{player_dict['name']}</b> walks to the crease",
+                caption=f"🏏 <b>{player_dict['name']}</b> walks to the crease{form_caption}",
                 parse_mode="HTML")
     except Exception:
         logger.warning(f"Failed to send batsman card for {player_dict.get('name')}")
@@ -177,10 +192,24 @@ async def _send_bowler_card(ctx, chat_id, player_dict, owner_user_id):
             bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
         )
 
+        # Compute form for the caption
+        form_caption = ""
+        try:
+            from services.form_service import compute_form_score, form_label
+            session2 = get_session()
+            try:
+                fs = compute_form_score(session2, owner_user_id, player_dict["player_id"])
+                if fs >= 6 or fs <= -6:
+                    form_caption = f" · {form_label(fs)}"
+            finally:
+                session2.close()
+        except Exception:
+            pass
+
         if card_bytes:
             await ctx.bot.send_photo(
                 chat_id=chat_id, photo=io.BytesIO(card_bytes),
-                caption=f"🎳 <b>{player_dict['name']}</b> is bowling",
+                caption=f"🎳 <b>{player_dict['name']}</b> is bowling{form_caption}",
                 parse_mode="HTML")
     except Exception:
         logger.warning(f"Failed to send bowler card for {player_dict.get('name')}")
@@ -555,6 +584,60 @@ async def _save_match_stats(s):
                 pid, uid = bowl_lookup_2[rid_int]
                 _update_bowl(pid, uid, bws)
 
+        # ── Record form history per player (last-5 window) ──
+        try:
+            from services.form_service import record_match_performance
+            mid = s.get("match_id")
+            # Aggregate per (user, player) across both innings
+            agg = {}  # (uid, pid) → {runs, balls, out, wickets, runs_conceded, overs}
+
+            def add_bat(rid, bs, lookup):
+                rid_int = int(rid) if isinstance(rid, str) else rid
+                if rid_int not in lookup or not bs: return
+                pid, uid = lookup[rid_int]
+                if uid is None or pid is None: return
+                d = agg.setdefault((uid, pid), {
+                    "runs": 0, "balls": 0, "out": False,
+                    "wickets": 0, "runs_conceded": 0, "overs": 0.0
+                })
+                d["runs"] += bs.get("runs", 0)
+                d["balls"] += bs.get("balls", 0)
+                d["out"] = d["out"] or bs.get("out", False)
+
+            def add_bowl(rid, bws, lookup):
+                rid_int = int(rid) if isinstance(rid, str) else rid
+                if rid_int not in lookup or not bws: return
+                pid, uid = lookup[rid_int]
+                if uid is None or pid is None: return
+                d = agg.setdefault((uid, pid), {
+                    "runs": 0, "balls": 0, "out": False,
+                    "wickets": 0, "runs_conceded": 0, "overs": 0.0
+                })
+                d["wickets"] += bws.get("wickets", 0)
+                d["runs_conceded"] += bws.get("runs", 0)
+                balls = bws.get("balls", 0) or (bws.get("overs_done", 0) * 6 + bws.get("this_over_balls", 0))
+                d["overs"] += balls / 6.0
+
+            for rid, bs in inn1_bat_stats.items(): add_bat(rid, bs, bat_lookup_1)
+            for rid, bws in inn1_bowl_stats.items(): add_bowl(rid, bws, bowl_lookup_1)
+            for rid, bs in inn2_bat_stats.items(): add_bat(rid, bs, bat_lookup_2)
+            for rid, bws in inn2_bowl_stats.items(): add_bowl(rid, bws, bowl_lookup_2)
+
+            for (uid, pid), d in agg.items():
+                if uid == -1:  # bot
+                    continue
+                # Skip players who didn't actually feature
+                if d["balls"] == 0 and d["overs"] == 0:
+                    continue
+                record_match_performance(
+                    session, uid, pid, mid,
+                    runs=d["runs"], balls=d["balls"], out=d["out"],
+                    wickets=d["wickets"], runs_conceded=d["runs_conceded"],
+                    overs_bowled=d["overs"],
+                )
+        except Exception:
+            logger.exception("Form history recording failed")
+
         session.commit()
         logger.info(f"Saved match stats for match {s.get('match_id')}")
     except Exception:
@@ -747,12 +830,64 @@ async def overs_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         wid = random.choice([m.user1_id, m.user2_id]); m.toss_winner_id = wid; session.commit()
         w = session.query(User).get(wid)
-        await context.bot.send_message(cid, f"🪙 <b>TOSS!</b>\n\n🏆 @{w.username} wins!\n\n@{w.username}, choose:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+
+        # ── Animated coin toss ──
+        import asyncio as _asyncio
+        toss_msg = await context.bot.send_message(cid,
+            "🪙 <b>TOSS</b>\n\n<i>Calling captain to the centre...</i>", parse_mode="HTML")
+        await _asyncio.sleep(0.7)
+
+        # Spin frames
+        spin_frames = [
+            "🪙 <b>TOSS</b>\n\n     ⬆️\n   ╱  🪙  ╲\n\n<i>Captain flicks the coin into the air...</i>",
+            "🪙 <b>TOSS</b>\n\n          🌀\n        🪙\n\n<i>It spins higher and higher...</i>",
+            "🪙 <b>TOSS</b>\n\n     🌀 🪙 🌀\n\n<i>Tumbling end over end...</i>",
+            "🪙 <b>TOSS</b>\n\n          ⬇️\n        🪙\n\n<i>Coming down now!</i>",
+        ]
+        for f in spin_frames:
+            try:
+                await toss_msg.edit_text(f, parse_mode="HTML")
+            except Exception:
+                pass
+            await _asyncio.sleep(0.55)
+
+        # Final reveal
+        winner_name = w.username or w.first_name or "Captain"
+        try:
+            await toss_msg.edit_text(
+                f"🪙 <b>TOSS RESULT</b>\n\n"
+                f"🏆 <b>@{winner_name}</b> wins the toss!\n\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"📍 Pitch: <b>{m.pitch_type}</b> · 🌤️ {m.weather}\n"
+                f"🏟️ {m.stadium}\n\n"
+                f"<i>{_pitch_hint(m.pitch_type)}</i>",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        await _asyncio.sleep(0.4)
+
+        # Decision prompt
+        await context.bot.send_message(cid,
+            f"⚖️ <b>@{winner_name}</b>, choose your call:\n\n"
+            f"🏏 <b>Bat First:</b> Set a target on a {('fresh' if m.pitch_type in ('Flat','Hard') else 'tricky')} pitch\n"
+            f"🎳 <b>Bowl First:</b> Pitch typically {('eases' if m.pitch_type == 'Green' else 'wears')} as match goes on",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🏏 Bat First", callback_data=f"toss_bat_{mid}_{wid}"),
                 InlineKeyboardButton("🎳 Bowl First", callback_data=f"toss_bowl_{mid}_{wid}")]]))
     except Exception: session.rollback(); logger.exception("Overs err")
     finally: session.close()
+
+
+def _pitch_hint(pitch_type):
+    """One-line tactical hint about the pitch."""
+    return {
+        "Flat":  "Batters' paradise — high scores expected.",
+        "Hard":  "Bouncy, true bounce — rewards aggressive shots.",
+        "Green": "Seam movement up front — bowlers will love early overs.",
+        "Dry":   "Slow and low — tough to time the ball cleanly.",
+        "Dusty": "Spinners will turn it square as it wears.",
+    }.get(pitch_type, "A balanced wicket.")
 
 
 # ═══════════════════════════ TOSS ════════════════════════════════════
@@ -1664,6 +1799,47 @@ def _calc(s, striker, bowler, shot, delivery):
     pitch = s.get("pitch_type", "Flat")
     over = s["current_over"]
     total_overs = s["overs"]
+    innings = s.get("innings", 1)
+
+    # Compute pitch wear for this ball
+    from services.probability_engine import calc_pitch_wear
+    pitch_wear = calc_pitch_wear(innings, over, total_overs)
+
+    # Apply player form (modifies effective rating)
+    from services.form_service import compute_form_score, form_to_rating_mod
+    bat_form_mod = 0.0
+    bowl_form_mod = 0.0
+    try:
+        # Find the owning user_id for striker/bowler (positive roster_id = real)
+        striker_rid = striker.get("roster_id", 0)
+        bowler_rid = bowler.get("roster_id", 0)
+        if striker_rid > 0:
+            from database import get_session as _gs_db
+            from models import UserRoster as _UR
+            ses = _gs_db()
+            try:
+                ur = ses.query(_UR).get(striker_rid)
+                if ur:
+                    bat_form_mod = form_to_rating_mod(
+                        compute_form_score(ses, ur.user_id, ur.player_id))
+            finally:
+                ses.close()
+        if bowler_rid > 0:
+            from database import get_session as _gs_db
+            from models import UserRoster as _UR
+            ses = _gs_db()
+            try:
+                ur = ses.query(_UR).get(bowler_rid)
+                if ur:
+                    bowl_form_mod = form_to_rating_mod(
+                        compute_form_score(ses, ur.user_id, ur.player_id))
+            finally:
+                ses.close()
+    except Exception:
+        pass
+
+    eff_bat = striker["bat_rating"] + bat_form_mod
+    eff_bowl = bowler["bowl_rating"] + bowl_form_mod
 
     # Fetch traits for striker and bowler
     striker_traits = _get_roster_traits(striker.get("roster_id"))
@@ -1696,10 +1872,11 @@ def _calc(s, striker, bowler, shot, delivery):
         bowler.get("bowl_hand", "Right"),
         variation, length, pitch,
         over, total_overs, shot,
-        striker["bat_rating"], bowler["bowl_rating"],
+        eff_bat, eff_bowl,
         striker_traits=striker_traits,
         bowler_traits=bowler_traits,
         trait_ctx=trait_ctx,
+        pitch_wear=pitch_wear,
     )
 
 
@@ -2143,6 +2320,57 @@ async def _end_innings(ctx, mid):
                     if not last or last.date() != today:
                         u.active_days = (u.active_days or 0) + 1
                     u.last_match_date = datetime.utcnow()
+
+                    # Quest tracking — skip bot user (telegram_id = -1)
+                    try:
+                        if u.telegram_id != -1:
+                            from services.quest_service import safe_track
+                            is_vsbot = bool(s.get("is_vsbot"))
+                            safe_track(session, u.id, "match_played", 1)
+                            if is_vsbot:
+                                safe_track(session, u.id, "vsbot_played", 1)
+                            if is_winner:
+                                safe_track(session, u.id, "match_won", 1)
+                                if is_vsbot:
+                                    safe_track(session, u.id, "vsbot_won", 1)
+                            # Aggregate runs/wkts/50s/100s for this user across innings
+                            from models import UserRoster
+                            runs_total = wkts_total = fifties = hundreds = 0
+                            for xi_key, stats_key, is_bat in [
+                                ("inn1_bat_xi", "inn1_bat_stats", True),
+                                ("inn1_bowl_xi", "inn1_bowl_stats", False),
+                                ("bat_xi", "bat_stats", True),
+                                ("bowl_xi", "bowl_stats", False),
+                            ]:
+                                xi = s.get(xi_key, [])
+                                stats = s.get(stats_key, {})
+                                for p in xi:
+                                    rid = p.get("roster_id")
+                                    if rid is None or rid <= 0:
+                                        continue
+                                    pst = stats.get(rid)
+                                    if not pst:
+                                        continue
+                                    ur = session.query(UserRoster).get(rid)
+                                    if not ur or ur.user_id != u.id:
+                                        continue
+                                    if is_bat:
+                                        r = pst.get("runs", 0)
+                                        runs_total += r
+                                        if r >= 100: hundreds += 1
+                                        elif r >= 50: fifties += 1
+                                    else:
+                                        wkts_total += pst.get("wickets", 0)
+                            if runs_total > 0:
+                                safe_track(session, u.id, "runs_scored", runs_total)
+                            if wkts_total > 0:
+                                safe_track(session, u.id, "wickets_taken", wkts_total)
+                            for _ in range(fifties):
+                                safe_track(session, u.id, "fifty", 1)
+                            for _ in range(hundreds):
+                                safe_track(session, u.id, "hundred", 1)
+                    except Exception:
+                        logger.exception("Match-end quest tracking failed")
             session.commit()
         except Exception:
             session.rollback()
@@ -2182,6 +2410,23 @@ async def _end_innings(ctx, mid):
         except Exception:
             session.rollback()
         finally: session.close()
+
+        # ── Achievement check for both users ──
+        try:
+            from services.achievement_service import check_and_notify
+            ach_session = get_session()
+            try:
+                # Re-fetch user IDs from match record
+                m = ach_session.query(Match).get(mid)
+                if m:
+                    for uid in [m.user1_id, m.user2_id]:
+                        u = ach_session.query(User).get(uid)
+                        if u and u.telegram_id != -1:
+                            await check_and_notify(ctx, cid, ach_session, u.id)
+            finally:
+                ach_session.close()
+        except Exception:
+            logger.exception("Achievement check after match failed")
 
         # Match complete — cleanup persistent state + lock
         cleanup_state(ctx, mid)

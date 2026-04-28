@@ -153,6 +153,11 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         stats.last_gspin = datetime.utcnow()
         log_activity(session, user.id, "gspin", f"GSpin: {colour} → {outcome_type}")
+        try:
+            from services.quest_service import safe_track
+            safe_track(session, user.id, "gspin", 1)
+        except Exception:
+            pass
         session.commit()
 
         text = (

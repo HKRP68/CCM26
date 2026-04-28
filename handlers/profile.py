@@ -55,13 +55,29 @@ def _format_info(session, user):
     avg = _avg_ovr(session, user.id)
     team = user.team_name or f"@{user.username or user.first_name}'s XI"
 
+    # Top 3 most recent achievements
+    badges_line = ""
+    try:
+        from services.achievement_service import get_top_unlocked
+        top = get_top_unlocked(session, user.id, limit=3)
+        if top:
+            emojis = " ".join(f"{a['emoji']}" for a in top)
+            names = " · ".join(a['name'] for a in top)
+            badges_line = (
+                f"\n🏆 <b>Badges:</b> {emojis}\n"
+                f"   <i>{names}</i>"
+            )
+    except Exception:
+        pass
+
     return (
         f"👤 <b>MY PROFILE</b>\n\n"
         f"🏏 <b>Owner:</b> @{user.username or user.first_name}\n"
         f"👑 <b>Team:</b> {team}\n"
         f"⭐ <b>Captain:</b> {captain_name}\n"
         f"📈 <b>Overall:</b> {avg}\n"
-        f"💎 <b>Value:</b> {value:,} Coins\n\n"
+        f"💎 <b>Value:</b> {value:,} Coins"
+        f"{badges_line}\n\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"💰 <b>Purse</b>\n"
         f"🪙 Coins: {user.total_coins:,}\n"
