@@ -17,7 +17,8 @@ load_dotenv()
 from database import get_session, init_db
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog,
-                    Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily)
+                    Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
+                    BotTeam, BotTeamPlayer)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -1127,7 +1128,207 @@ def status():
     return render_template("status.html", checks=checks)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# BOT TEAMS ADMIN (for /vsbot)
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/bot-teams")
+@login_required
+def admin_bot_teams_list():
+    db = get_session()
+    try:
+        from services.bot_team_service import team_summary
+        teams = db.query(BotTeam).order_by(BotTeam.name).all()
+        team_data = [(t, team_summary(db, t.id)) for t in teams]
+        return render_template("admin_bot_teams.html", team_data=team_data)
+    finally:
+        db.close()
+
+
+@app.route("/bot-teams/new", methods=["GET", "POST"])
+@login_required
+def admin_bot_team_new():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            from services.bot_team_service import create_team
+            team, err = create_team(
+                db,
+                request.form.get("name", "").strip(),
+                request.form.get("description", "").strip(),
+                request.form.get("difficulty", "Medium"),
+            )
+            if err:
+                flash(err, "error")
+                return redirect(url_for("admin_bot_team_new"))
+            db.commit()
+            log_admin(db, "bot_team_create", "bot_team", team.id, team.name,
+                      f"Created team {team.name}")
+            db.commit()
+            flash(f"Team '{team.name}' created.", "info")
+            return redirect(url_for("admin_bot_team_edit", team_id=team.id))
+        return render_template("admin_bot_team_form.html", team=None)
+    finally:
+        db.close()
+
+
+@app.route("/bot-teams/<int:team_id>/edit", methods=["GET", "POST"])
+@login_required
+def admin_bot_team_edit(team_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import (
+            get_team_with_players, update_team, team_summary
+        )
+        team, rows = get_team_with_players(db, team_id)
+        if not team:
+            flash("Team not found.", "error")
+            return redirect(url_for("admin_bot_teams_list"))
+
+        if request.method == "POST":
+            t, err = update_team(
+                db, team_id,
+                name=request.form.get("name", team.name).strip(),
+                description=request.form.get("description", team.description or "").strip(),
+                difficulty=request.form.get("difficulty", team.difficulty),
+                is_active=bool(request.form.get("is_active")),
+            )
+            if err:
+                flash(err, "error")
+            else:
+                db.commit()
+                log_admin(db, "bot_team_edit", "bot_team", team_id, t.name,
+                          f"Edited team {t.name}")
+                db.commit()
+                flash(f"Team '{t.name}' updated.", "info")
+            return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+        summary = team_summary(db, team_id)
+        all_players = (db.query(Player)
+                       .filter(Player.is_active == True)
+                       .order_by(Player.name).all())
+        return render_template("admin_bot_team_form.html",
+                               team=team, rows=rows, summary=summary,
+                               all_players=all_players)
+    finally:
+        db.close()
+
+
+@app.route("/bot-teams/<int:team_id>/delete", methods=["POST"])
+@login_required
+def admin_bot_team_delete(team_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import delete_team
+        team = db.query(BotTeam).get(team_id)
+        if team:
+            name = team.name
+            ok, err = delete_team(db, team_id)
+            if ok:
+                db.commit()
+                log_admin(db, "bot_team_delete", "bot_team", team_id, name,
+                          f"Deleted team {name}")
+                db.commit()
+                flash(f"Team '{name}' deleted.", "info")
+            else:
+                flash(err, "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_bot_teams_list"))
+
+
+@app.route("/bot-teams/<int:team_id>/add-player", methods=["POST"])
+@login_required
+def admin_bot_team_add_player(team_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import add_player_to_team
+        btp, err = add_player_to_team(db, team_id, int(request.form.get("player_id", 0)))
+        if err: flash(err, "error")
+        else: db.commit(); flash("Player added.", "info")
+    except Exception as e:
+        db.rollback(); flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+
+@app.route("/bot-teams/<int:team_id>/remove-player/<int:player_id>", methods=["POST"])
+@login_required
+def admin_bot_team_remove_player(team_id, player_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import remove_player_from_team
+        ok, err = remove_player_from_team(db, team_id, player_id)
+        if err: flash(err, "error")
+        else: db.commit(); flash("Player removed.", "info")
+    finally:
+        db.close()
+    return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+
+@app.route("/bot-teams/<int:team_id>/move-player", methods=["POST"])
+@login_required
+def admin_bot_team_move_player(team_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import reorder_player
+        ok, err = reorder_player(
+            db, team_id,
+            int(request.form.get("player_id", 0)),
+            int(request.form.get("new_position", 1)),
+        )
+        if err: flash(err, "error")
+        else: db.commit(); flash("Moved.", "info")
+    except (ValueError, TypeError):
+        flash("Invalid position.", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+
+@app.route("/bot-teams/<int:team_id>/set-captain", methods=["POST"])
+@login_required
+def admin_bot_team_set_captain(team_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import set_captain
+        ok, err = set_captain(db, team_id, int(request.form.get("player_id", 0)))
+        if err: flash(err, "error")
+        else: db.commit(); flash("Captain updated.", "info")
+    except (ValueError, TypeError):
+        flash("Invalid.", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+
+@app.route("/bot-teams/<int:team_id>/bulk-add", methods=["POST"])
+@login_required
+def admin_bot_team_bulk_add(team_id):
+    db = get_session()
+    try:
+        from services.bot_team_service import bulk_add_players
+        names = [l.strip() for l in request.form.get("bulk_text", "").splitlines() if l.strip()]
+        if not names:
+            flash("No names provided.", "error")
+            return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+        added, skipped = bulk_add_players(db, team_id, names)
+        db.commit()
+        msg = f"Added {added} player{'s' if added != 1 else ''}."
+        if skipped:
+            msg += f" Skipped: {', '.join(skipped[:5])}"
+            if len(skipped) > 5: msg += f" (+{len(skipped) - 5} more)"
+        flash(msg, "info")
+    except Exception as e:
+        db.rollback(); flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_bot_team_edit", team_id=team_id))
+
+
 # ── Run ──────────────────────────────────────────────────────────────
+
 
 if __name__ == "__main__":
     init_db()

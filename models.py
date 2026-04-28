@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index
+    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -366,3 +366,83 @@ class TraitDaily(Base):
     __table_args__ = (
         Index("ix_td_user_day", "user_id", "day_key"),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PLAYER MARKET — daily 5-slot 87+ shop
+# ══════════════════════════════════════════════════════════════════════
+
+class PlayerMarket(Base):
+    """Daily player market snapshot. 5 slots per user, refreshes every 24h.
+    Each slot = a high-rated (87+) player at 10% off buy price."""
+    __tablename__ = "player_market"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    slot_index = Column(Integer, nullable=False)  # 1..5 (display)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    base_price = Column(Integer, nullable=False)
+    final_price = Column(Integer, nullable=False)  # 10% off
+    purchased = Column(Boolean, default=False)
+    refreshed_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_pm_user_slot", "user_id", "slot_index"),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# BOT TEAMS (for /vsbot)
+# ══════════════════════════════════════════════════════════════════════
+
+class BotTeam(Base):
+    """A pre-built team users can play against via /vsbot. Admin-managed."""
+    __tablename__ = "bot_teams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(String(300), nullable=True)
+    difficulty = Column(String(20), default="Medium")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BotTeamPlayer(Base):
+    """Members of a bot team. Players are real Player records.
+    batting_order = 1..N for batting position."""
+    __tablename__ = "bot_team_players"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bot_team_id = Column(Integer, ForeignKey("bot_teams.id"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    batting_order = Column(Integer, default=1)
+    is_captain = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_btp_team_order", "bot_team_id", "batting_order"),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MATCH STATE — persistent state for in-progress matches
+# Source of truth for the match flow; survives bot restarts/redeploys.
+# ══════════════════════════════════════════════════════════════════════
+
+class MatchState(Base):
+    __tablename__ = "match_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id"), unique=True, nullable=False, index=True)
+    # Full game state serialized as JSON
+    state_json = Column(Text, nullable=False)
+    # Explicit state-machine pointer: PICK_DELIVERY / PICK_LENGTH / PICK_SHOT /
+    # PICK_NEW_BATSMAN / PICK_NEW_BOWLER / INNINGS_BREAK / COMPLETED
+    next_action = Column(String(40), nullable=False, default="PICK_DELIVERY")
+    # Optimistic concurrency token — incremented on every save
+    version = Column(Integer, default=0, nullable=False)
+    # Sequential ball number — used for callback idempotency
+    ball_seq = Column(Integer, default=0, nullable=False)
+    last_modified = Column(DateTime, default=datetime.utcnow)
+    # ID of the message currently showing buttons (for re-rendering)
+    last_prompt_msg_id = Column(Integer, nullable=True)

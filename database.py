@@ -21,6 +21,8 @@ def init_db():
         User, Player, UserRoster, UserStats, Trade, ActivityLog,
         PlayerGameStats, Match, AdminLog,
         Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
+        PlayerMarket, BotTeam, BotTeamPlayer,
+        MatchState,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()

@@ -41,7 +41,11 @@ from handlers.trade import (
 
 # Phase 3 handlers
 from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback
-from handlers.search import searchpl_handler, searchovr_handler
+from handlers.search import (
+    searchpl_handler, searchovr_handler,
+    searchpl_page_callback, searchovr_page_callback,
+    search_cancel_callback, noop_callback,
+)
 from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback
 from handlers.team import teamname_handler, purse_handler, stats_handler
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
@@ -62,11 +66,29 @@ from handlers.match import (
 from handlers.traits import (
     traits_handler, traitshop_handler, traitapply_handler,
     traitupgrade_handler, traitreplace_handler,
-    traitbuy_callback, traitreroll_callback,
+    traitbuy_callback, traitreroll_callback, traitshop_cancel_callback,
     trapply_inv_callback, trapply_pl_callback,
     trup_pt_callback, trup_inv_callback,
     trrep_pt_callback, trrep_inv_callback,
     trait_cancel_callback,
+)
+
+# Player market handlers
+from handlers.playermarket import (
+    playermarket_handler,
+    playermarket_buy_callback,
+    playermarket_cancel_callback,
+)
+
+# vsbot handlers
+from handlers.vsbot import (
+    vsbot_handler,
+    vsbot_pick_callback,
+    vsbot_cancel_callback,
+    vsbot_toss_callback,
+    vsbot_op1_callback,
+    vsbot_op2_callback,
+    vsbot_selbowl_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,6 +233,10 @@ def main():
         app.add_handler(CommandHandler(["setcaptain", "captain", "cap"], setcaptain_handler))
         app.add_handler(CommandHandler(["searchpl", "search", "sp"], searchpl_handler))
         app.add_handler(CommandHandler(["searchovr", "so"], searchovr_handler))
+        app.add_handler(CallbackQueryHandler(searchpl_page_callback, pattern=r"^spl_"))
+        app.add_handler(CallbackQueryHandler(searchovr_page_callback, pattern=r"^sovr_"))
+        app.add_handler(CallbackQueryHandler(search_cancel_callback, pattern=r"^searchcancel_"))
+        app.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
         app.add_handler(CommandHandler(["buypl", "buy", "b"], buypl_handler))
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
@@ -229,7 +255,8 @@ def main():
         app.add_handler(CommandHandler(["traitreplace", "trep"], traitreplace_handler))
 
         app.add_handler(CallbackQueryHandler(traitbuy_callback, pattern=r"^trbuy_"))
-        app.add_handler(CallbackQueryHandler(traitreroll_callback, pattern=r"^trreroll$"))
+        app.add_handler(CallbackQueryHandler(traitreroll_callback, pattern=r"^trreroll_"))
+        app.add_handler(CallbackQueryHandler(traitshop_cancel_callback, pattern=r"^trshopcancel_"))
         app.add_handler(CallbackQueryHandler(trapply_inv_callback, pattern=r"^trapply_inv_"))
         app.add_handler(CallbackQueryHandler(trapply_pl_callback, pattern=r"^trapply_pl_"))
         app.add_handler(CallbackQueryHandler(trup_pt_callback, pattern=r"^trup_pt_"))
@@ -237,6 +264,20 @@ def main():
         app.add_handler(CallbackQueryHandler(trrep_pt_callback, pattern=r"^trrep_pt_"))
         app.add_handler(CallbackQueryHandler(trrep_inv_callback, pattern=r"^trrep_inv_"))
         app.add_handler(CallbackQueryHandler(trait_cancel_callback, pattern=r"^trcancel$"))
+
+        # ── Player Market ────────────────────────────────────────────
+        app.add_handler(CommandHandler(["playermarket", "pmarket", "market"], playermarket_handler))
+        app.add_handler(CallbackQueryHandler(playermarket_buy_callback, pattern=r"^pmbuy_"))
+        app.add_handler(CallbackQueryHandler(playermarket_cancel_callback, pattern=r"^pmcancel_"))
+
+        # ── vsbot ────────────────────────────────────────────────────
+        app.add_handler(CommandHandler(["vsbot", "vsb"], vsbot_handler))
+        app.add_handler(CallbackQueryHandler(vsbot_pick_callback, pattern=r"^vsb_pick_"))
+        app.add_handler(CallbackQueryHandler(vsbot_cancel_callback, pattern=r"^vsb_cancel_"))
+        app.add_handler(CallbackQueryHandler(vsbot_toss_callback, pattern=r"^vsb_toss_"))
+        app.add_handler(CallbackQueryHandler(vsbot_op1_callback, pattern=r"^vsb_op1_"))
+        app.add_handler(CallbackQueryHandler(vsbot_op2_callback, pattern=r"^vsb_op2_"))
+        app.add_handler(CallbackQueryHandler(vsbot_selbowl_callback, pattern=r"^vsb_selbowl_"))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))
@@ -261,7 +302,7 @@ def main():
 
         # ── Buy callbacks ────────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
-        app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel$"))
+        app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel"))
 
         # ── Match callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
@@ -303,6 +344,14 @@ def main():
         print(f"   Admin: http://0.0.0.0:{admin_port}")
         print(f"   Bot: polling for Telegram updates")
         print("=" * 50)
+
+        # Start the match heartbeat (keeps in-progress matches from getting stuck)
+        try:
+            from services.match_heartbeat import start_heartbeat
+            start_heartbeat(app)
+        except Exception:
+            logger.exception("Failed to start match heartbeat")
+
         app.run_polling(drop_pending_updates=True)
 
     except Exception:
