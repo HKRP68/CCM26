@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Quests{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+  <h1>🎯 Quests</h1>
+  <a href="{{ url_for('admin_quest_new') }}"
+     style="background:var(--accent); color:#000; padding:.6rem 1.2rem; border-radius:6px; font-weight:600; text-decoration:none;">
+    + New Quest
+  </a>
+</div>
+
+{% macro quest_table(quests, label, icon) %}
+<h2 style="margin-top:2rem;">{{ icon }} {{ label }} ({{ quests|length }})</h2>
+{% if quests %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Name</th>
+      <th style="padding:.6rem; text-align:left;">Event</th>
+      <th style="padding:.6rem; text-align:center;">Target</th>
+      <th style="padding:.6rem; text-align:center;">Rewards</th>
+      <th style="padding:.6rem; text-align:center;">Active</th>
+      <th style="padding:.6rem; text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for q in quests %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">
+        <strong>{{ q.emoji }} {{ q.name }}</strong>
+        <div style="color:var(--muted); font-size:.8rem;">{{ q.description }}</div>
+      </td>
+      <td style="padding:.6rem;">
+        <code style="background:var(--bg); padding:.15rem .4rem; border-radius:4px; font-size:.8rem;">{{ q.event_key }}</code>
+      </td>
+      <td style="padding:.6rem; text-align:center;">{{ q.target_count }}</td>
+      <td style="padding:.6rem; text-align:center; font-size:.85rem;">
+        {% if q.reward_points %}+{{ q.reward_points }} pts{% endif %}
+        {% if q.reward_coins %}<br>+{{ q.reward_coins }} 🪙{% endif %}
+        {% if q.reward_gems %}<br>+{{ q.reward_gems }} 💎{% endif %}
+      </td>
+      <td style="padding:.6rem; text-align:center;">
+        <form method="POST" action="{{ url_for('admin_quest_toggle', quest_id=q.id) }}" style="display:inline;">
+          {% if q.is_active %}
+          <button style="background:none; border:none; color:var(--green); cursor:pointer;">✓</button>
+          {% else %}
+          <button style="background:none; border:none; color:var(--red); cursor:pointer;">✗</button>
+          {% endif %}
+        </form>
+      </td>
+      <td style="padding:.6rem; text-align:right; white-space:nowrap;">
+        <a href="{{ url_for('admin_quest_edit', quest_id=q.id) }}"
+           style="color:var(--accent2); text-decoration:none; font-size:.85rem;">Edit</a>
+        <form method="POST" action="{{ url_for('admin_quest_delete', quest_id=q.id) }}"
+              style="display:inline; margin-left:.5rem;"
+              onsubmit="return confirm('Delete quest {{ q.name }}? User progress will also be deleted.');">
+          <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; text-align:center; color:var(--muted);">
+  No {{ label|lower }} quests yet.
+</div>
+{% endif %}
+{% endmacro %}
+
+{{ quest_table(daily_quests, "Daily Quests", "📅") }}
+{{ quest_table(monthly_quests, "Monthly Quests", "🗓️") }}
+
+{% endblock %}

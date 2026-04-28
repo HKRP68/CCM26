@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}{% if quest %}Edit Quest{% else %}New Quest{% endif %}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_quests_list') }}" style="color:var(--muted); text-decoration:none;">← Back to quests</a>
+
+<h1 style="margin:1rem 0;">
+  {% if quest %}🎯 Edit: {{ quest.name }}{% else %}🎯 New Quest{% endif %}
+</h1>
+
+<form method="POST"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:700px;">
+
+  <div style="display:grid; grid-template-columns: 1fr 100px; gap:1rem; margin-bottom:1rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Quest Name *</label>
+      <input type="text" name="name" required
+             value="{{ quest.name if quest else '' }}"
+             placeholder="e.g. Daily Grinder"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Emoji</label>
+      <input type="text" name="emoji" maxlength="4"
+             value="{{ quest.emoji if quest else '🎯' }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); text-align:center; font-size:1.2rem;">
+    </div>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Description *</label>
+    <textarea name="description" required rows="2"
+              placeholder="e.g. Claim 3 players today"
+              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">{{ quest.description if quest else '' }}</textarea>
+  </div>
+
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-bottom:1rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Type *</label>
+      <select name="quest_type" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+        <option value="daily" {% if quest and quest.quest_type == 'daily' %}selected{% endif %}>📅 Daily (resets every 24h)</option>
+        <option value="monthly" {% if quest and quest.quest_type == 'monthly' %}selected{% endif %}>🗓️ Monthly (resets every 30d)</option>
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Sort Order</label>
+      <input type="number" name="sort_order" value="{{ quest.sort_order if quest else 0 }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Event Trigger *</label>
+    <select name="event_key" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      {% for key, label in event_keys %}
+        <option value="{{ key }}" {% if quest and quest.event_key == key %}selected{% endif %}>
+          {{ key }} — {{ label }}
+        </option>
+      {% endfor %}
+    </select>
+    <small style="color:var(--muted); display:block; margin-top:.3rem;">
+      The user's progress increments by 1 each time this event fires
+      (except <code>runs_scored</code> and <code>wickets_taken</code> which use the actual count).
+    </small>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Target Count *</label>
+    <input type="number" name="target_count" min="1" required
+           value="{{ quest.target_count if quest else 3 }}"
+           style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    <small style="color:var(--muted);">User must reach this count to complete the quest.</small>
+  </div>
+
+  <h3 style="margin-top:1.5rem; margin-bottom:.6rem; font-size:1rem;">Rewards</h3>
+  <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:1rem; margin-bottom:1rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Quest Points</label>
+      <input type="number" name="reward_points" min="0"
+             value="{{ quest.reward_points if quest else 5 }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Coins 🪙</label>
+      <input type="number" name="reward_coins" min="0"
+             value="{{ quest.reward_coins if quest else 0 }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Gems 💎</label>
+      <input type="number" name="reward_gems" min="0"
+             value="{{ quest.reward_gems if quest else 0 }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+  <small style="color:var(--muted);">Recommended: <strong>5 points</strong> for daily quests, <strong>10 points</strong> for monthly.</small>
+
+  <div style="margin:1.5rem 0 1rem; padding:.6rem; background:var(--bg); border-radius:6px;">
+    <label style="font-size:.95rem;">
+      <input type="checkbox" name="is_active" {% if not quest or quest.is_active %}checked{% endif %}>
+      Active (users will see this quest)
+    </label>
+  </div>
+
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+    {% if quest %}Save Changes{% else %}Create Quest{% endif %}
+  </button>
+</form>
+
+{% endblock %}
