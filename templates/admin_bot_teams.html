@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Bot Teams{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+  <h1>🤖 Bot Teams ({{ team_data|length }})</h1>
+  <a href="{{ url_for('admin_bot_team_new') }}"
+     style="background:var(--accent); color:#000; padding:.6rem 1.2rem; border-radius:6px; font-weight:600; text-decoration:none;">
+    + New Team
+  </a>
+</div>
+
+{% if team_data %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.5px;">
+      <th style="padding:.75rem; text-align:left;">Name</th>
+      <th style="padding:.75rem; text-align:left;">Difficulty</th>
+      <th style="padding:.75rem; text-align:center;">Players</th>
+      <th style="padding:.75rem; text-align:center;">Avg OVR</th>
+      <th style="padding:.75rem; text-align:center;">Captain</th>
+      <th style="padding:.75rem; text-align:center;">Active</th>
+      <th style="padding:.75rem; text-align:center;">XI Valid</th>
+      <th style="padding:.75rem; text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for team, summary in team_data %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.75rem;">
+        <strong>{{ team.name }}</strong>
+        {% if team.description %}
+          <div style="color:var(--muted); font-size:.8rem;">{{ team.description }}</div>
+        {% endif %}
+      </td>
+      <td style="padding:.75rem;">
+        <span style="background:var(--bg); padding:.2rem .5rem; border-radius:4px; font-size:.8rem;">
+          {{ team.difficulty }}
+        </span>
+      </td>
+      <td style="padding:.75rem; text-align:center;">{{ summary.players }}/25</td>
+      <td style="padding:.75rem; text-align:center;">{{ summary.avg_rating }}</td>
+      <td style="padding:.75rem; text-align:center; color:var(--muted); font-size:.85rem;">
+        {{ summary.captain or "—" }}
+      </td>
+      <td style="padding:.75rem; text-align:center;">
+        {% if team.is_active %}<span style="color:var(--green);">✓</span>
+        {% else %}<span style="color:var(--red);">✗</span>{% endif %}
+      </td>
+      <td style="padding:.75rem; text-align:center;">
+        {% if summary.players == 11 and summary.valid %}
+          <span style="color:var(--green);">✓</span>
+        {% elif summary.players == 11 %}
+          <span style="color:var(--red);" title="{{ summary.errors|join('; ') }}">✗</span>
+        {% else %}
+          <span style="color:var(--muted);">—</span>
+        {% endif %}
+      </td>
+      <td style="padding:.75rem; text-align:right; white-space:nowrap;">
+        <a href="{{ url_for('admin_bot_team_edit', team_id=team.id) }}"
+           style="color:var(--accent2); text-decoration:none; font-size:.85rem;">Edit</a>
+        <form method="POST" action="{{ url_for('admin_bot_team_delete', team_id=team.id) }}"
+              style="display:inline; margin-left:.5rem;"
+              onsubmit="return confirm('Delete team {{ team.name }}? This cannot be undone.');">
+          <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:2rem; text-align:center; color:var(--muted);">
+  No bot teams yet. Click "+ New Team" to create one.
+</div>
+{% endif %}
+
+{% endblock %}

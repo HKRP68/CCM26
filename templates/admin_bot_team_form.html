@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}{% if team %}Edit Team{% else %}New Team{% endif %}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_bot_teams_list') }}" style="color:var(--muted); text-decoration:none;">← Back to teams</a>
+
+<h1 style="margin:1rem 0;">
+  {% if team %}🤖 {{ team.name }}{% else %}🤖 New Team{% endif %}
+</h1>
+
+<!-- ───── TEAM PROPERTIES FORM ───── -->
+<form method="POST"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; margin-bottom:2rem; max-width:700px;">
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Name</label>
+    <input type="text" name="name" value="{{ team.name if team else '' }}" required
+           style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Description</label>
+    <textarea name="description" rows="2"
+              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">{{ team.description or '' if team else '' }}</textarea>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Difficulty</label>
+    <select name="difficulty" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      {% for d in ['Easy', 'Medium', 'Hard', 'Legendary'] %}
+        <option value="{{ d }}" {% if team and team.difficulty == d %}selected{% endif %}>{{ d }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  {% if team %}
+  <div style="margin-bottom:1.5rem;">
+    <label style="font-size:.9rem;">
+      <input type="checkbox" name="is_active" {% if team.is_active %}checked{% endif %}>
+      Active (selectable in /vsbot)
+    </label>
+  </div>
+  {% endif %}
+
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+    {% if team %}Save Changes{% else %}Create Team{% endif %}
+  </button>
+</form>
+
+{% if team %}
+
+<!-- ───── ROSTER & SUMMARY ───── -->
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; margin-bottom:2rem;">
+  <h2 style="font-size:1.2rem; margin-bottom:1rem;">📊 Team Summary</h2>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:1rem;">
+    <div>
+      <div style="color:var(--muted); font-size:.8rem;">Players</div>
+      <div style="font-size:1.5rem; font-weight:bold;">{{ summary.players }}/25</div>
+    </div>
+    <div>
+      <div style="color:var(--muted); font-size:.8rem;">Avg Rating</div>
+      <div style="font-size:1.5rem; font-weight:bold;">{{ summary.avg_rating }}</div>
+    </div>
+    <div>
+      <div style="color:var(--muted); font-size:.8rem;">Total OVR</div>
+      <div style="font-size:1.5rem; font-weight:bold;">{{ summary.total_ovr }}</div>
+    </div>
+    <div>
+      <div style="color:var(--muted); font-size:.8rem;">Captain</div>
+      <div style="font-size:1rem;">{{ summary.captain or '—' }}</div>
+    </div>
+  </div>
+  {% if summary.players == 11 and not summary.valid %}
+    <div style="margin-top:1rem; padding:.6rem; background:rgba(255, 50, 50, 0.1); border:1px solid var(--red); border-radius:6px; color:var(--red); font-size:.85rem;">
+      ⚠️ XI invalid: {{ summary.errors|join('; ') }}
+    </div>
+  {% elif summary.players == 11 and summary.valid %}
+    <div style="margin-top:1rem; padding:.6rem; background:rgba(0, 200, 100, 0.1); border:1px solid var(--green); border-radius:6px; color:var(--green); font-size:.85rem;">
+      ✓ Valid 11-player XI — ready to use in /vsbot
+    </div>
+  {% elif summary.players != 11 %}
+    <div style="margin-top:1rem; padding:.6rem; background:rgba(200, 200, 50, 0.1); border:1px solid var(--accent); border-radius:6px; color:var(--accent); font-size:.85rem;">
+      ⚠️ Need exactly 11 players (currently {{ summary.players }}) for /vsbot to use this team
+    </div>
+  {% endif %}
+</div>
+
+<!-- ───── ROSTER LIST ───── -->
+<h2 style="font-size:1.2rem; margin-bottom:1rem;">📋 Roster ({{ rows|length }})</h2>
+
+{% if rows %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:2rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left; width:60px;">Order</th>
+      <th style="padding:.6rem; text-align:left;">Player</th>
+      <th style="padding:.6rem; text-align:center;">OVR</th>
+      <th style="padding:.6rem; text-align:left;">Category</th>
+      <th style="padding:.6rem; text-align:left;">Country</th>
+      <th style="padding:.6rem; text-align:center;">Captain</th>
+      <th style="padding:.6rem; text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for btp, p in rows %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">
+        <form method="POST" action="{{ url_for('admin_bot_team_move_player', team_id=team.id) }}"
+              style="display:inline-flex; gap:.3rem;">
+          <input type="hidden" name="player_id" value="{{ p.id }}">
+          <input type="number" name="new_position" value="{{ btp.batting_order }}"
+                 min="1" max="{{ rows|length }}"
+                 style="width:50px; padding:.2rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+          <button type="submit" style="background:none; border:1px solid var(--border); border-radius:4px; padding:.2rem .4rem; cursor:pointer; color:var(--muted); font-size:.7rem;">Move</button>
+        </form>
+      </td>
+      <td style="padding:.6rem;">
+        <strong>{{ p.name }}</strong>
+        {% if btp.is_captain %} 👑{% endif %}
+      </td>
+      <td style="padding:.6rem; text-align:center;">{{ p.rating }}</td>
+      <td style="padding:.6rem; color:var(--muted); font-size:.85rem;">{{ p.category }}</td>
+      <td style="padding:.6rem; color:var(--muted); font-size:.85rem;">{{ p.country or '—' }}</td>
+      <td style="padding:.6rem; text-align:center;">
+        {% if not btp.is_captain %}
+          <form method="POST" action="{{ url_for('admin_bot_team_set_captain', team_id=team.id) }}" style="display:inline;">
+            <input type="hidden" name="player_id" value="{{ p.id }}">
+            <button type="submit" style="background:none; border:none; cursor:pointer; color:var(--muted); font-size:.85rem;">Set</button>
+          </form>
+        {% else %}
+          <span style="color:var(--accent);">👑</span>
+        {% endif %}
+      </td>
+      <td style="padding:.6rem; text-align:right;">
+        <form method="POST" action="{{ url_for('admin_bot_team_remove_player', team_id=team.id, player_id=p.id) }}"
+              style="display:inline;" onsubmit="return confirm('Remove {{ p.name }} from team?');">
+          <button type="submit" style="background:none; border:1px solid var(--red); color:var(--red); padding:.2rem .5rem; border-radius:4px; cursor:pointer; font-size:.75rem;">Remove</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:var(--muted); margin-bottom:2rem;">No players yet. Add some below.</p>
+{% endif %}
+
+<!-- ───── ADD INDIVIDUAL PLAYER ───── -->
+<h2 style="font-size:1.2rem; margin-bottom:1rem;">➕ Add Player</h2>
+<form method="POST" action="{{ url_for('admin_bot_team_add_player', team_id=team.id) }}"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:2rem; display:flex; gap:.5rem;">
+  <select name="player_id" required
+          style="flex:1; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    <option value="">Choose a player...</option>
+    {% for p in all_players %}
+      <option value="{{ p.id }}">{{ p.name }} ({{ p.rating }}, {{ p.category }})</option>
+    {% endfor %}
+  </select>
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:6px; font-weight:600; cursor:pointer;">Add</button>
+</form>
+
+<!-- ───── BULK UPLOAD ───── -->
+<h2 style="font-size:1.2rem; margin-bottom:1rem;">📥 Bulk Add Players</h2>
+<form method="POST" action="{{ url_for('admin_bot_team_bulk_add', team_id=team.id) }}"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:2rem;">
+  <textarea name="bulk_text" rows="8" placeholder="One player name per line, e.g.:&#10;Virat Kohli&#10;Rohit Sharma&#10;Jasprit Bumrah"
+            style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace; resize:vertical;"></textarea>
+  <button type="submit" style="margin-top:.5rem; background:var(--accent2); color:#000; border:none; padding:.5rem 1rem; border-radius:6px; font-weight:600; cursor:pointer;">Add All</button>
+  <small style="color:var(--muted); display:block; margin-top:.5rem;">
+    Tip: Type one name per line. Partial matches work (e.g. "Bumrah" finds "Jasprit Bumrah"). Duplicates skipped.
+  </small>
+</form>
+
+{% endif %}
+
+{% endblock %}
