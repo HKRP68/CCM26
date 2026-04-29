@@ -107,6 +107,13 @@ from handlers.achievements import (
     achievements_close_callback,
 )
 
+# /howto handler
+from handlers.howto import (
+    howto_handler,
+    howto_tab_callback,
+    howto_close_callback,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -306,6 +313,11 @@ def main():
         app.add_handler(CommandHandler(["achievements", "ach", "badges"], achievements_handler))
         app.add_handler(CallbackQueryHandler(achievements_tab_callback, pattern=r"^ach_tab_"))
         app.add_handler(CallbackQueryHandler(achievements_close_callback, pattern=r"^ach_close_"))
+
+        # ── /howto Tutorial ─────────────────────────────────────────
+        app.add_handler(CommandHandler(["howto", "help", "guide"], howto_handler))
+        app.add_handler(CallbackQueryHandler(howto_tab_callback, pattern=r"^howto_tab_"))
+        app.add_handler(CallbackQueryHandler(howto_close_callback, pattern=r"^howto_close_"))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))

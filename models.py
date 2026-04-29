@@ -539,3 +539,47 @@ class PlayerFormHistory(Base):
     __table_args__ = (
         Index("ix_pfh_user_player", "user_id", "player_id"),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LIVE COMMENTARY — admin-managed text bank for in-match flavour
+# ══════════════════════════════════════════════════════════════════════
+
+class CommentaryEntry(Base):
+    """A single commentary line. event_key buckets like 'dot', 'four', 'six',
+    'wicket_bowled', etc. Text supports placeholders: {batsman}, {bowler},
+    {fielder}, {keeper}, {runs}.
+    """
+    __tablename__ = "commentary_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_key = Column(String(40), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True)
+    weight = Column(Integer, default=1)  # higher = more likely to be chosen
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CUSTOM PLAYER CARD IMAGES — admin can upload custom card art per player
+# ══════════════════════════════════════════════════════════════════════
+
+class PlayerImage(Base):
+    """Custom card image for a player. If active, replaces the auto-generated
+    card in /claim, /buy, /myroster previews, and match in-play cards.
+    Falls back to the default generator if no row exists or is_active=False.
+    """
+    __tablename__ = "player_images"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False, unique=True, index=True)
+    # Image kind: 'default' (regular card), 'batsman' (in-match), 'bowler' (in-match)
+    # v1 supports just 'default' which overrides all card displays.
+    image_kind = Column(String(20), default="default")
+    # Path on disk relative to project root (e.g. data/player_images/123.png)
+    image_path = Column(String(300), nullable=False)
+    # Optional admin-set caption / variant name
+    label = Column(String(100), nullable=True)
+    is_active = Column(Boolean, default=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by = Column(String(100), nullable=True)

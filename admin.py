@@ -19,7 +19,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
                     BotTeam, BotTeamPlayer,
-                    Quest, UserQuestProgress)
+                    Quest, UserQuestProgress,
+                    CommentaryEntry)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -213,6 +214,10 @@ def players_list():
         categories = [r[0] for r in db.query(Player.category).distinct().order_by(Player.category).all()]
         countries = [r[0] for r in db.query(Player.country).distinct().order_by(Player.country).all()]
 
+        # Set of player IDs with active custom images (for 🎨 indicator)
+        from services.player_image_service import list_players_with_custom_images
+        custom_image_ids = list_players_with_custom_images(db)
+
         return render_template(
             "players.html",
             players=players, total=total, page=page, total_pages=total_pages,
@@ -222,6 +227,7 @@ def players_list():
             bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active,
             sort=sort,
             categories=categories, countries=countries,
+            custom_image_ids=custom_image_ids,
         )
     finally:
         db.close()
@@ -532,13 +538,113 @@ def player_edit(player_id):
             flash(f"Player '{player.name}' updated", "success")
             return redirect(url_for("players_list"))
 
-        return render_template("player_form.html", player=player)
+        from services.player_image_service import get_metadata
+        image_meta = get_metadata(db, player.id)
+        return render_template("player_form.html", player=player, image_meta=image_meta)
     except Exception as e:
         db.rollback()
         flash(f"Error: {e}", "error")
         return redirect(url_for("players_list"))
     finally:
         db.close()
+
+
+@app.route("/players/<int:player_id>/image/upload", methods=["POST"])
+@login_required
+def admin_player_image_upload(player_id):
+    db = get_session()
+    try:
+        player = db.query(Player).get(player_id)
+        if not player:
+            flash("Player not found.", "error")
+            return redirect(url_for("players_list"))
+        file = request.files.get("image_file")
+        if not file or not file.filename:
+            flash("No file selected.", "error")
+            return redirect(url_for("player_edit", player_id=player_id))
+        try:
+            file_bytes = file.read()
+        except Exception as e:
+            flash(f"Error reading file: {e}", "error")
+            return redirect(url_for("player_edit", player_id=player_id))
+
+        from services.player_image_service import save_custom_image
+        ok, msg = save_custom_image(
+            db, player_id, file_bytes, file.filename,
+            label=request.form.get("label", "").strip() or None,
+            uploaded_by=session.get("admin_user", "admin"),
+        )
+        if ok:
+            db.commit()
+            log_admin(db, "player_image_upload", "player", player_id, player.name,
+                      f"Uploaded custom image ({len(file_bytes)//1024} KB)")
+            db.commit()
+            flash(f"✅ Custom image uploaded for {player.name}.", "success")
+        else:
+            db.rollback()
+            flash(msg, "error")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("player_edit", player_id=player_id))
+
+
+@app.route("/players/<int:player_id>/image/remove", methods=["POST"])
+@login_required
+def admin_player_image_remove(player_id):
+    db = get_session()
+    try:
+        player = db.query(Player).get(player_id)
+        if not player:
+            return redirect(url_for("players_list"))
+        from services.player_image_service import remove_custom_image
+        ok, msg = remove_custom_image(db, player_id)
+        if ok:
+            db.commit()
+            log_admin(db, "player_image_remove", "player", player_id, player.name,
+                      "Removed custom image")
+            db.commit()
+            flash(f"Custom image removed for {player.name}.", "info")
+        else:
+            flash(msg, "error")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("player_edit", player_id=player_id))
+
+
+@app.route("/players/<int:player_id>/image/toggle", methods=["POST"])
+@login_required
+def admin_player_image_toggle(player_id):
+    db = get_session()
+    try:
+        from services.player_image_service import toggle_active
+        ok, new_state = toggle_active(db, player_id)
+        if ok:
+            db.commit()
+            flash(f"Custom image is now {'active' if new_state else 'inactive'}.", "info")
+        else:
+            flash("No custom image set.", "error")
+    finally:
+        db.close()
+    return redirect(url_for("player_edit", player_id=player_id))
+
+
+@app.route("/players/<int:player_id>/image/preview")
+@login_required
+def admin_player_image_preview(player_id):
+    """Serve the custom image bytes (for inline preview in admin)."""
+    from services.player_image_service import get_custom_image_bytes
+    img = get_custom_image_bytes(player_id)
+    if not img:
+        from flask import abort
+        abort(404)
+    from flask import Response
+    return Response(img, mimetype="image/png")
 
 
 # ── Delete player ────────────────────────────────────────────────────
@@ -1480,6 +1586,154 @@ def admin_quest_toggle(quest_id):
     finally:
         db.close()
     return redirect(url_for("admin_quests_list"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# COMMENTARY ADMIN
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/commentary")
+@login_required
+def admin_commentary_list():
+    db = get_session()
+    try:
+        from services.commentary_service import list_event_keys, get_stats
+        # Filter
+        event_filter = request.args.get("event", "all")
+        q = db.query(CommentaryEntry).order_by(CommentaryEntry.event_key, CommentaryEntry.id)
+        if event_filter and event_filter != "all":
+            q = q.filter(CommentaryEntry.event_key == event_filter)
+        entries = q.all()
+        stats = get_stats(db)
+        keys = list_event_keys()
+        return render_template("admin_commentary.html",
+                               entries=entries, stats=stats, keys=keys,
+                               event_filter=event_filter)
+    finally:
+        db.close()
+
+
+@app.route("/commentary/new", methods=["GET", "POST"])
+@login_required
+def admin_commentary_new():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            event_key = request.form.get("event_key", "").strip()
+            text = request.form.get("text", "").strip()
+            weight = int(request.form.get("weight", "1") or 1)
+            is_active = bool(request.form.get("is_active"))
+            if not event_key or not text:
+                flash("Event key and text are required.", "error")
+                return redirect(url_for("admin_commentary_new"))
+            entry = CommentaryEntry(event_key=event_key, text=text,
+                                    weight=weight, is_active=is_active)
+            db.add(entry); db.commit()
+            log_admin(db, "commentary_create", "commentary", entry.id, event_key,
+                      f"Added commentary line for {event_key}")
+            db.commit()
+            flash("Commentary line added.", "info")
+            return redirect(url_for("admin_commentary_list", event=event_key))
+        from services.commentary_service import list_event_keys
+        return render_template("admin_commentary_form.html",
+                               entry=None, keys=list_event_keys())
+    finally:
+        db.close()
+
+
+@app.route("/commentary/<int:entry_id>/edit", methods=["GET", "POST"])
+@login_required
+def admin_commentary_edit(entry_id):
+    db = get_session()
+    try:
+        entry = db.query(CommentaryEntry).get(entry_id)
+        if not entry:
+            flash("Entry not found.", "error")
+            return redirect(url_for("admin_commentary_list"))
+        if request.method == "POST":
+            entry.event_key = request.form.get("event_key", entry.event_key).strip()
+            entry.text = request.form.get("text", entry.text).strip()
+            entry.weight = int(request.form.get("weight", entry.weight) or 1)
+            entry.is_active = bool(request.form.get("is_active"))
+            db.commit()
+            log_admin(db, "commentary_edit", "commentary", entry_id, entry.event_key,
+                      f"Edited commentary {entry_id}")
+            db.commit()
+            flash("Saved.", "info")
+            return redirect(url_for("admin_commentary_list", event=entry.event_key))
+        from services.commentary_service import list_event_keys
+        return render_template("admin_commentary_form.html",
+                               entry=entry, keys=list_event_keys())
+    finally:
+        db.close()
+
+
+@app.route("/commentary/<int:entry_id>/delete", methods=["POST"])
+@login_required
+def admin_commentary_delete(entry_id):
+    db = get_session()
+    try:
+        entry = db.query(CommentaryEntry).get(entry_id)
+        if entry:
+            event_key = entry.event_key
+            db.delete(entry); db.commit()
+            log_admin(db, "commentary_delete", "commentary", entry_id, event_key,
+                      f"Deleted commentary {entry_id}")
+            db.commit()
+            flash("Deleted.", "info")
+            return redirect(url_for("admin_commentary_list", event=event_key))
+    finally:
+        db.close()
+    return redirect(url_for("admin_commentary_list"))
+
+
+@app.route("/commentary/import", methods=["GET", "POST"])
+@login_required
+def admin_commentary_import():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            from services.commentary_service import parse_commentary_py, bulk_import
+            replace = bool(request.form.get("replace"))
+            file = request.files.get("file")
+            text_content = request.form.get("text_content", "").strip()
+            content = ""
+            if file and file.filename:
+                content = file.read().decode("utf-8", errors="replace")
+            elif text_content:
+                content = text_content
+            else:
+                flash("Provide a file or paste content.", "error")
+                return redirect(url_for("admin_commentary_import"))
+            try:
+                parsed = parse_commentary_py(content)
+            except ValueError as e:
+                flash(f"Parse error: {e}", "error")
+                return redirect(url_for("admin_commentary_import"))
+            added, skipped = bulk_import(db, parsed, replace=replace)
+            db.commit()
+            log_admin(db, "commentary_import", "commentary", 0, "bulk",
+                      f"Bulk import: +{added} added, {skipped} skipped, replace={replace}")
+            db.commit()
+            flash(f"✅ Imported {added} lines ({skipped} skipped). Replace mode: {replace}", "info")
+            return redirect(url_for("admin_commentary_list"))
+        return render_template("admin_commentary_import.html")
+    finally:
+        db.close()
+
+
+@app.route("/commentary/export.py")
+@login_required
+def admin_commentary_export():
+    db = get_session()
+    try:
+        from services.commentary_service import export_as_py
+        content = export_as_py(db)
+        from flask import Response
+        return Response(content, mimetype="text/x-python",
+                        headers={"Content-Disposition": "attachment; filename=cricket_commentary.py"})
+    finally:
+        db.close()
 
 
 # ── Run ──────────────────────────────────────────────────────────────

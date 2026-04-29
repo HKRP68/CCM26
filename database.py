@@ -23,7 +23,7 @@ def init_db():
         Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
         PlayerMarket, BotTeam, BotTeamPlayer,
         MatchState, Quest, UserQuestProgress,
-        UserAchievement, PlayerFormHistory,
+        UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
