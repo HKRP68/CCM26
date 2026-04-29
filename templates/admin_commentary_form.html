@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{% if entry %}Edit Commentary{% else %}New Commentary{% endif %}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_commentary_list') }}" style="color:var(--muted); text-decoration:none;">← Back to commentary</a>
+
+<h1 style="margin:1rem 0;">
+  {% if entry %}💬 Edit Line{% else %}💬 New Line{% endif %}
+</h1>
+
+<form method="POST"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:800px;">
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Event Key *</label>
+    <select name="event_key" required
+            style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      {% for k in keys %}
+        <option value="{{ k }}" {% if entry and entry.event_key == k %}selected{% endif %}>{{ k }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div style="margin-bottom:1rem;">
+    <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Commentary Text *</label>
+    <textarea name="text" required rows="4"
+              placeholder="e.g. {batsman} drives it crisply through covers for FOUR! ⚡"
+              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:inherit;">{{ entry.text if entry else '' }}</textarea>
+    <small style="color:var(--muted); display:block; margin-top:.4rem;">
+      Placeholders: <code>{batsman}</code>, <code>{bowler}</code>, <code>{fielder}</code>, <code>{keeper}</code>, <code>{runs}</code>
+    </small>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Weight</label>
+      <input type="number" name="weight" min="1" max="100"
+             value="{{ entry.weight if entry else 1 }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      <small style="color:var(--muted);">Higher weight = more likely to be picked.</small>
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Active</label>
+      <div style="padding:.6rem;">
+        <input type="checkbox" name="is_active" {% if not entry or entry.is_active %}checked{% endif %}>
+        <span style="margin-left:.5rem;">Show this line in matches</span>
+      </div>
+    </div>
+  </div>
+
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+    {% if entry %}Save Changes{% else %}Create Line{% endif %}
+  </button>
+</form>
+
+{% endblock %}

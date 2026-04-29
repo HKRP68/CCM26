@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Import Commentary{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_commentary_list') }}" style="color:var(--muted); text-decoration:none;">← Back to commentary</a>
+
+<h1 style="margin:1rem 0;">📥 Bulk Import Commentary</h1>
+
+<form method="POST" enctype="multipart/form-data"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:900px;">
+
+  <h3 style="margin-bottom:.6rem;">Option 1: Upload .py file</h3>
+  <input type="file" name="file" accept=".py,.txt"
+         style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); margin-bottom:1.2rem;">
+
+  <h3 style="margin-bottom:.6rem;">Option 2: Paste content</h3>
+  <textarea name="text_content" rows="14" placeholder='cricket_commentary = {
+    "dot": [
+        "Excellent variation from {bowler}, keeps {batsman} guessing.",
+        ...
+    ],
+    "four": [...],
+    ...
+}'
+            style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace; font-size:.85rem;"></textarea>
+
+  <div style="margin:1rem 0; padding:.7rem; background:var(--bg); border-radius:6px;">
+    <label style="font-size:.95rem;">
+      <input type="checkbox" name="replace">
+      <strong>Replace mode</strong> — delete existing lines for affected event keys before import
+    </label>
+    <div style="font-size:.8rem; color:var(--muted); margin-top:.3rem;">
+      Off = additive (skip duplicates). On = wipe and reload (use carefully!).
+    </div>
+  </div>
+
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+    Import Commentary
+  </button>
+</form>
+
+<div style="margin-top:1.5rem; padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:10px; max-width:900px;">
+  <h3 style="margin-bottom:.6rem; font-size:1rem;">📖 Format reference</h3>
+  <p style="color:var(--muted); font-size:.9rem;">
+    The file should contain a single Python dict named <code>cricket_commentary</code> (or any name — the parser finds it automatically).
+    Keys are event names, values are lists of strings. Standard event keys:
+  </p>
+  <code style="display:block; padding:.6rem; background:var(--bg); border-radius:6px; font-size:.8rem; margin-top:.5rem;">
+    dot, one, two, three, four, six,<br>
+    wicket_bowled, wicket_caught_fielder, wicket_caught_keeper, wicket_lbw, wicket_stumped,<br>
+    extras, milestones, general
+  </code>
+  <p style="color:var(--muted); font-size:.9rem; margin-top:.7rem;">
+    Use <code>{batsman}</code>, <code>{bowler}</code>, <code>{fielder}</code>, <code>{keeper}</code>, <code>{runs}</code> as placeholders.
+  </p>
+</div>
+
+{% endblock %}

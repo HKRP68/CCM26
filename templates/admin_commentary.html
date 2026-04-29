@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Commentary{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
+  <h1>💬 Live Commentary</h1>
+  <div style="display:flex; gap:.5rem;">
+    <a href="{{ url_for('admin_commentary_import') }}"
+       style="background:var(--accent2); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📥 Bulk Import</a>
+    <a href="{{ url_for('admin_commentary_export') }}"
+       style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📤 Export .py</a>
+    <a href="{{ url_for('admin_commentary_new') }}"
+       style="background:var(--accent); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">+ New Line</a>
+  </div>
+</div>
+
+<!-- Stats summary -->
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1.5rem;">
+  <div style="font-size:.85rem; color:var(--muted); margin-bottom:.5rem;">Lines per event:</div>
+  <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
+    {% for k in keys %}
+      <a href="{{ url_for('admin_commentary_list', event=k) }}"
+         style="background:{{ 'var(--accent)' if event_filter == k else 'var(--bg)' }};
+                color:{{ '#000' if event_filter == k else 'var(--text)' }};
+                padding:.3rem .7rem; border-radius:6px; font-size:.85rem; text-decoration:none;
+                border:1px solid var(--border);">
+        {{ k }}: <strong>{{ stats.get(k, 0) }}</strong>
+      </a>
+    {% endfor %}
+    <a href="{{ url_for('admin_commentary_list') }}"
+       style="background:{{ 'var(--accent)' if event_filter == 'all' else 'var(--bg)' }};
+              color:{{ '#000' if event_filter == 'all' else 'var(--text)' }};
+              padding:.3rem .7rem; border-radius:6px; font-size:.85rem; text-decoration:none;
+              border:1px solid var(--border);">
+      all: <strong>{{ entries|length if event_filter == 'all' else (stats.values()|sum) }}</strong>
+    </a>
+  </div>
+</div>
+
+{% if entries %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left; width:140px;">Event</th>
+      <th style="padding:.6rem; text-align:left;">Text</th>
+      <th style="padding:.6rem; text-align:center; width:80px;">Weight</th>
+      <th style="padding:.6rem; text-align:center; width:80px;">Active</th>
+      <th style="padding:.6rem; text-align:right; width:140px;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for e in entries %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;"><code style="font-size:.85rem;">{{ e.event_key }}</code></td>
+      <td style="padding:.6rem; font-size:.9rem;">{{ e.text }}</td>
+      <td style="padding:.6rem; text-align:center;">{{ e.weight }}</td>
+      <td style="padding:.6rem; text-align:center;">
+        {% if e.is_active %}<span style="color:var(--green);">✓</span>
+        {% else %}<span style="color:var(--red);">✗</span>{% endif %}
+      </td>
+      <td style="padding:.6rem; text-align:right; white-space:nowrap;">
+        <a href="{{ url_for('admin_commentary_edit', entry_id=e.id) }}"
+           style="color:var(--accent2); text-decoration:none; font-size:.85rem;">Edit</a>
+        <form method="POST" action="{{ url_for('admin_commentary_delete', entry_id=e.id) }}"
+              style="display:inline; margin-left:.5rem;"
+              onsubmit="return confirm('Delete this line?');">
+          <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; text-align:center; color:var(--muted);">
+  No commentary lines{% if event_filter != 'all' %} for "{{ event_filter }}"{% endif %}.<br>
+  <a href="{{ url_for('admin_commentary_import') }}" style="color:var(--accent2);">Bulk import</a> a .py file to get started.
+</div>
+{% endif %}
+
+{% endblock %}

@@ -82,7 +82,9 @@
     <tbody>
     {% for p in players %}
     <tr>
-      <td style="font-weight:600;">{{ p.name }}</td>
+      <td style="font-weight:600;">
+        {{ p.name }}{% if custom_image_ids and p.id in custom_image_ids %} <span title="Has custom card image" style="cursor:help;">🎨</span>{% endif %}
+      </td>
       <td><span class="rating-badge tier-{{ p._tier_css }}">{{ p.rating }}</span></td>
       <td>{{ p.category }}</td>
       <td>{{ p.country }}</td>

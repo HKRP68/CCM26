@@ -130,4 +130,91 @@
     </div>
   </form>
 </div>
+
+{% if player %}
+<!-- ───── CUSTOM CARD IMAGE ───── -->
+<div class="form-card" style="margin-top:1.5rem;">
+  <h3 style="margin:0 0 .8rem;">🎨 Custom Card Image</h3>
+  <p style="color:var(--muted); font-size:.9rem; margin-bottom:1rem;">
+    Upload a custom image to override the auto-generated card. The bot will use this image
+    everywhere (claim, market, in-match, etc) instead of generating a card.
+    Recommended size: <strong>600×800 (3:4 ratio)</strong>. Max 5 MB.
+    Supported: PNG, JPG, WebP. Min 200×200.
+  </p>
+
+  {% if image_meta %}
+    <div style="display:grid; grid-template-columns: 250px 1fr; gap:1.5rem; margin-bottom:1rem; padding:1rem; background:var(--bg); border-radius:8px;">
+      <div>
+        <img src="{{ url_for('admin_player_image_preview', player_id=player.id) }}?t={{ image_meta.uploaded_at.timestamp()|int }}"
+             style="width:100%; border-radius:8px; border:1px solid var(--border); display:block;"
+             alt="Custom card preview">
+      </div>
+      <div style="font-size:.9rem;">
+        <div style="margin-bottom:.5rem;">
+          <strong>Status:</strong>
+          {% if image_meta.is_active %}
+            <span style="color:var(--green);">✓ Active (showing in bot)</span>
+          {% else %}
+            <span style="color:var(--red);">✗ Inactive (default card showing)</span>
+          {% endif %}
+        </div>
+        {% if image_meta.label %}
+          <div style="margin-bottom:.5rem;"><strong>Label:</strong> {{ image_meta.label }}</div>
+        {% endif %}
+        <div style="margin-bottom:.5rem; color:var(--muted);">
+          📏 {{ "%.1f"|format(image_meta.file_size / 1024) }} KB ·
+          📅 {{ image_meta.uploaded_at.strftime('%Y-%m-%d %H:%M UTC') }}
+          {% if image_meta.uploaded_by %} · 👤 {{ image_meta.uploaded_by }}{% endif %}
+        </div>
+        {% if not image_meta.exists_on_disk %}
+          <div style="color:var(--red); margin-bottom:.5rem;">
+            ⚠️ Image file is missing on disk! Re-upload to fix.
+          </div>
+        {% endif %}
+
+        <div style="display:flex; gap:.5rem; margin-top:1rem; flex-wrap:wrap;">
+          <form method="POST" action="{{ url_for('admin_player_image_toggle', player_id=player.id) }}" style="display:inline;">
+            <button type="submit" class="btn btn-ghost btn-sm">
+              {% if image_meta.is_active %}Disable{% else %}Enable{% endif %}
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('admin_player_image_remove', player_id=player.id) }}"
+                style="display:inline;"
+                onsubmit="return confirm('Remove the custom image for {{ player.name }}? This cannot be undone.');">
+            <button type="submit" class="btn btn-sm" style="color:var(--red); border:1px solid var(--red); background:transparent; padding:.35rem .8rem; border-radius:6px; cursor:pointer;">Remove</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div style="padding:1rem; background:var(--bg); border-radius:8px; color:var(--muted); margin-bottom:1rem; font-size:.9rem;">
+      <em>No custom image uploaded — using auto-generated card.</em>
+    </div>
+  {% endif %}
+
+  <!-- Upload form -->
+  <form method="POST" action="{{ url_for('admin_player_image_upload', player_id=player.id) }}"
+        enctype="multipart/form-data" style="display:flex; flex-direction:column; gap:.7rem;">
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
+        {{ 'Replace with new image' if image_meta else 'Upload custom image' }}
+      </label>
+      <input type="file" name="image_file" accept="image/png,image/jpeg,image/webp" required
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
+        Optional label (e.g. "Gold Edition", "World Cup 2023")
+      </label>
+      <input type="text" name="label" maxlength="100"
+             value="{{ image_meta.label if image_meta and image_meta.label else '' }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <button type="submit" class="btn btn-primary" style="align-self:flex-start; padding:.5rem 1.2rem;">
+      📤 {{ 'Replace Image' if image_meta else 'Upload Image' }}
+    </button>
+  </form>
+</div>
+{% endif %}
+
 {% endblock %}
