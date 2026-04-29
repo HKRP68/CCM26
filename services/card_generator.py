@@ -145,7 +145,21 @@ def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
 
 
 def generate_card(player) -> bytes | None:
-    """Generate a premium card PNG matching the reference design."""
+    """Generate a premium card PNG matching the reference design.
+
+    If the admin has uploaded a custom card image for this player and it's
+    active, returns those bytes instead. Falls back to the auto-generated
+    card otherwise.
+    """
+    # Custom image override — short-circuit if admin uploaded one
+    try:
+        from services.player_image_service import get_custom_image_bytes
+        custom = get_custom_image_bytes(player.id)
+        if custom:
+            return custom
+    except Exception:
+        pass  # Fall through to auto-generation
+
     try:
         # Read all attributes
         name = str(player.name)
