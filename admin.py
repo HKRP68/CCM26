@@ -16,7 +16,7 @@ load_dotenv()
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
-                    PlayerGameStats, AdminLog,
+                    PlayerGameStats, AdminLog, Match, UserAchievement,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
                     BotTeam, BotTeamPlayer,
                     Quest, UserQuestProgress,
@@ -568,6 +568,14 @@ def player_edit(player_id):
             log_admin(db, "player_edit", target_type="player", target_id=player.id,
                       target_name=player.name, detail=detail)
             db.commit()
+            # Bust caches — the player row changed
+            try:
+                from services.player_cache import invalidate as _inv_pc
+                from services.card_generator import invalidate_card_cache
+                _inv_pc()
+                invalidate_card_cache(player.id)
+            except Exception:
+                pass
             flash(f"Player '{player.name}' updated", "success")
             return redirect(url_for("players_list"))
 
@@ -698,6 +706,13 @@ def player_delete(player_id):
                   target_name=name, detail=f"Rating {rating}, {player.category}")
         db.delete(player)
         db.commit()
+        try:
+            from services.player_cache import invalidate as _inv_pc
+            from services.card_generator import invalidate_card_cache
+            _inv_pc()
+            invalidate_card_cache(player_id)
+        except Exception:
+            pass
         flash(f"Player '{name}' deleted", "success")
     except Exception as e:
         db.rollback()
@@ -721,6 +736,11 @@ def player_toggle(player_id):
             log_admin(db, "player_toggle", target_type="player", target_id=player.id,
                       target_name=player.name, detail=f"Player {status}")
             db.commit()
+            try:
+                from services.player_cache import invalidate as _inv_pc
+                _inv_pc()
+            except Exception:
+                pass
             flash(f"Player '{player.name}' {status}", "info")
     except Exception as e:
         db.rollback()
@@ -2229,6 +2249,75 @@ def admin_economy_reset():
     finally:
         db.close()
     return redirect(url_for("admin_economy"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DIAGNOSTICS — cache stats, egress hints, system info
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/diagnostics")
+@login_required
+def admin_diagnostics():
+    db = get_session()
+    try:
+        # Cache stats
+        try:
+            from services.player_cache import stats as pc_stats
+            cache = pc_stats()
+        except Exception as e:
+            cache = {"error": str(e)}
+
+        # Image cache stats
+        try:
+            from services.player_image_service import _IMG_CACHE
+            img_cache_count = len(_IMG_CACHE)
+        except Exception:
+            img_cache_count = 0
+
+        # Generated card cache stats
+        try:
+            from services.card_generator import _CARD_CACHE
+            gen_card_count = len(_CARD_CACHE)
+        except Exception:
+            gen_card_count = 0
+
+        # Table sizes (cheap counts)
+        from sqlalchemy import func
+        sizes = {
+            "users": db.query(func.count(User.id)).scalar(),
+            "players": db.query(func.count(Player.id)).scalar(),
+            "user_roster": db.query(func.count(UserRoster.id)).scalar(),
+            "matches": db.query(func.count(Match.id)).scalar(),
+            "activity_log": db.query(func.count(ActivityLog.id)).scalar(),
+            "trades": db.query(func.count(Trade.id)).scalar(),
+            "notifications": db.query(func.count(NotificationSchedule.id)).scalar(),
+            "commentary": db.query(func.count(CommentaryEntry.id)).scalar(),
+            "achievements_unlocked": db.query(func.count(UserAchievement.id)).scalar(),
+        }
+
+        return render_template("admin_diagnostics.html",
+                               cache=cache,
+                               img_cache_count=img_cache_count,
+                               gen_card_count=gen_card_count,
+                               sizes=sizes)
+    finally:
+        db.close()
+
+
+@app.route("/diagnostics/refresh_cache", methods=["POST"])
+@login_required
+def admin_diagnostics_refresh_cache():
+    try:
+        from services.player_cache import invalidate as _inv_pc
+        from services.card_generator import invalidate_card_cache
+        from services.player_image_service import _invalidate_image_cache
+        _inv_pc()
+        invalidate_card_cache()
+        _invalidate_image_cache()
+        flash("✅ All caches cleared. Will rebuild on next access.", "info")
+    except Exception as e:
+        flash(f"Error: {e}", "error")
+    return redirect(url_for("admin_diagnostics"))
 
 
 # ── Run ──────────────────────────────────────────────────────────────
