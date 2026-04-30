@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Economy{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
+  <h1>💰 Economy</h1>
+  <form method="POST" action="{{ url_for('admin_economy_reset') }}" style="display:inline;"
+        onsubmit="return confirm('Reset all economy values to recommended defaults?');">
+    <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">↺ Reset to Defaults</button>
+  </form>
+</div>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
+  ℹ️ Tune coin and gem rewards for /daily, /gspin, match wins/losses, and /debut.
+  Changes apply immediately to all future events.
+  Defaults shown in grey next to each field — recommended for balanced economy.
+</div>
+
+<form method="POST"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:900px;">
+
+  <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🏏 Match Rewards (per over)</h2>
+  <p style="color:var(--muted); font-size:.85rem; margin-bottom:1rem;">
+    A 5-over match would give the winner: <code>5 × win_coins_per_over</code> coins
+    and <code>5 × win_gems_per_over</code> gems.
+  </p>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Win coins per over <span style="color:var(--muted);">(default: {{ defaults.match_win_coins_per_over }})</span>
+      </label>
+      <input type="number" name="match_win_coins_per_over" min="0" required
+             value="{{ cfg.match_win_coins_per_over }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Win gems per over <span style="color:var(--muted);">(default: {{ defaults.match_win_gems_per_over }})</span>
+      </label>
+      <input type="number" name="match_win_gems_per_over" min="0" step="0.1" required
+             value="{{ cfg.match_win_gems_per_over }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Loss coins per over <span style="color:var(--muted);">(default: {{ defaults.match_loss_coins_per_over }})</span>
+      </label>
+      <input type="number" name="match_loss_coins_per_over" min="0" required
+             value="{{ cfg.match_loss_coins_per_over }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Loss gems per over <span style="color:var(--muted);">(default: {{ defaults.match_loss_gems_per_over }})</span>
+      </label>
+      <input type="number" name="match_loss_gems_per_over" min="0" step="0.1" required
+             value="{{ cfg.match_loss_gems_per_over }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+
+  <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🎰 GSpin Gem Range</h2>
+  <p style="color:var(--muted); font-size:.85rem; margin-bottom:1rem;">
+    When the GSpin lands on the gem outcome (~13% of spins), award a random amount in this range.
+    Recommended: <strong>5-50</strong>. Original was 10-500 (way too generous).
+  </p>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Min gems <span style="color:var(--muted);">(default: {{ defaults.gspin_gem_min }})</span>
+      </label>
+      <input type="number" name="gspin_gem_min" min="0" required
+             value="{{ cfg.gspin_gem_min }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Max gems <span style="color:var(--muted);">(default: {{ defaults.gspin_gem_max }})</span>
+      </label>
+      <input type="number" name="gspin_gem_max" min="0" required
+             value="{{ cfg.gspin_gem_max }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+
+  <h2 style="margin-bottom:.7rem; font-size:1.1rem;">📅 Daily Reward</h2>
+  <p style="color:var(--muted); font-size:.85rem; margin-bottom:1rem;">
+    Plus a streak bonus added per consecutive day (i.e. day-2 streak adds 1×bonus, day-7 adds 6×).
+  </p>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Base coins <span style="color:var(--muted);">(default: {{ defaults.daily_coins }})</span>
+      </label>
+      <input type="number" name="daily_coins" min="0" required
+             value="{{ cfg.daily_coins }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Base gems <span style="color:var(--muted);">(default: {{ defaults.daily_gems }})</span>
+      </label>
+      <input type="number" name="daily_gems" min="0" required
+             value="{{ cfg.daily_gems }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Streak bonus coins <span style="color:var(--muted);">(default: {{ defaults.daily_streak_bonus_coins }})</span>
+      </label>
+      <input type="number" name="daily_streak_bonus_coins" min="0" required
+             value="{{ cfg.daily_streak_bonus_coins }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Streak bonus gems <span style="color:var(--muted);">(default: {{ defaults.daily_streak_bonus_gems }})</span>
+      </label>
+      <input type="number" name="daily_streak_bonus_gems" min="0" required
+             value="{{ cfg.daily_streak_bonus_gems }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+
+  <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🎉 Debut Bonus</h2>
+  <p style="color:var(--muted); font-size:.85rem; margin-bottom:1rem;">
+    Given to new users on /debut. Should be enough to start playing but not buy 95+ players.
+  </p>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Starting coins <span style="color:var(--muted);">(default: {{ defaults.debut_coins }})</span>
+      </label>
+      <input type="number" name="debut_coins" min="0" required
+             value="{{ cfg.debut_coins }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Starting gems <span style="color:var(--muted);">(default: {{ defaults.debut_gems }})</span>
+      </label>
+      <input type="number" name="debut_gems" min="0" required
+             value="{{ cfg.debut_gems }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.8rem 1.6rem; border-radius:6px; font-weight:600; cursor:pointer; font-size:1rem;">
+    💾 Save Economy Config
+  </button>
+</form>
+
+{% endblock %}

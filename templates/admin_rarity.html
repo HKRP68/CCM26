@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Claim Rarity{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
+  <h1>🎲 Claim Rarity Distribution</h1>
+  <div style="display:flex; gap:.5rem;">
+    <a href="{{ url_for('admin_rarity_simulate') }}"
+       style="background:var(--accent2); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📊 Simulate 10k pulls</a>
+    <form method="POST" action="{{ url_for('admin_rarity_reset_defaults') }}" style="display:inline;"
+          onsubmit="return confirm('Wipe current tiers and reset to the default 7? This cannot be undone.');">
+      <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">↺ Reset to Defaults</button>
+    </form>
+    <form method="POST" action="{{ url_for('admin_rarity_new') }}" style="display:inline;">
+      <button type="submit" class="btn btn-primary" style="padding:.4rem 1rem;">+ New Tier</button>
+    </form>
+  </div>
+</div>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
+  ℹ️ These probabilities apply to <code>/claim</code> pulls. The /gspin wheel
+  uses its own (separate) outcome table.
+  Rating bands: <strong>50-100</strong>. Probabilities are normalized — they don't have to sum
+  to exactly 100 (e.g. 26 + 25 + 38 + 6 + 3.5 + 1.45 + 0.05 = 100). Higher number = more likely.
+  If no tiers are active, the bot falls back to the built-in defaults.
+</div>
+
+<!-- Total active probability indicator -->
+<div style="background:var(--card); padding:.7rem 1rem; border-radius:8px; margin-bottom:1rem; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+  <div>
+    <strong>Total active probability:</strong>
+    <span style="color:{{ 'var(--green)' if 99 <= total_active <= 101 else 'var(--accent2)' }};">{{ "%.2f"|format(total_active) }}%</span>
+  </div>
+  <div style="color:var(--muted); font-size:.85rem;">
+    {% if total_active < 99 or total_active > 101 %}
+      <em>(Will be normalized to 100% automatically — bot still works)</em>
+    {% else %}
+      ✓ Sums to 100%
+    {% endif %}
+  </div>
+</div>
+
+{% if tiers %}
+<form method="POST" action="{{ url_for('admin_rarity_save') }}">
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:center; width:60px;">Order</th>
+      <th style="padding:.6rem; text-align:center; width:60px;">Emoji</th>
+      <th style="padding:.6rem; text-align:left; width:140px;">Label</th>
+      <th style="padding:.6rem; text-align:center; width:140px;">Rating Range</th>
+      <th style="padding:.6rem; text-align:center; width:120px;">Probability %</th>
+      <th style="padding:.6rem; text-align:center; width:100px;">Players in DB</th>
+      <th style="padding:.6rem; text-align:center; width:60px;">Active</th>
+      <th style="padding:.6rem; text-align:right; width:80px;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in tiers %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.4rem;">
+        <input type="hidden" name="tier_id" value="{{ t.id }}">
+        <input type="number" name="sort_order_{{ t.id }}" value="{{ t.sort_order }}" min="0" max="999"
+               style="width:50px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+      </td>
+      <td style="padding:.4rem; text-align:center;">
+        <input type="text" name="emoji_{{ t.id }}" value="{{ t.emoji or '🃏' }}" maxlength="4"
+               style="width:40px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center; font-size:1rem;">
+      </td>
+      <td style="padding:.4rem;">
+        <input type="text" name="label_{{ t.id }}" value="{{ t.label }}"
+               style="width:100%; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text);">
+      </td>
+      <td style="padding:.4rem; text-align:center;">
+        <input type="number" name="rating_min_{{ t.id }}" value="{{ t.rating_min }}" min="50" max="100"
+               style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+        <span style="color:var(--muted);">→</span>
+        <input type="number" name="rating_max_{{ t.id }}" value="{{ t.rating_max }}" min="50" max="100"
+               style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+      </td>
+      <td style="padding:.4rem; text-align:center;">
+        <input type="number" step="0.01" name="probability_{{ t.id }}" value="{{ '%.2f'|format(t.probability) }}" min="0" max="100"
+               style="width:80px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+      </td>
+      <td style="padding:.4rem; text-align:center; color:var(--muted); font-size:.85rem;">
+        {{ pool.get(t.id, 0) }}
+      </td>
+      <td style="padding:.4rem; text-align:center;">
+        <input type="checkbox" name="is_active_{{ t.id }}" {% if t.is_active %}checked{% endif %}>
+      </td>
+      <td style="padding:.4rem; text-align:right;">
+        <button type="button"
+                onclick="if(confirm('Delete tier {{ t.label }}?')) document.getElementById('delete-{{ t.id }}').submit();"
+                style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">
+          ✕
+        </button>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top:1rem; display:flex; gap:.5rem;">
+  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+    💾 Save All Changes
+  </button>
+</div>
+</form>
+
+<!-- Hidden delete forms (one per tier, to avoid nested forms) -->
+{% for t in tiers %}
+<form id="delete-{{ t.id }}" method="POST" action="{{ url_for('admin_rarity_delete', tid=t.id) }}" style="display:none;"></form>
+{% endfor %}
+
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:2rem; text-align:center; color:var(--muted);">
+  No rarity tiers configured yet.<br>
+  Click <strong>↺ Reset to Defaults</strong> for the standard 7-tier setup,
+  or <strong>+ New Tier</strong> to start from scratch.<br>
+  <em>(While empty, the bot uses the built-in defaults from config.py.)</em>
+</div>
+{% endif %}
+
+{% endblock %}

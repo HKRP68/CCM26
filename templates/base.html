@@ -129,6 +129,8 @@ select { cursor:pointer; }
     <a href="{{ url_for('admin_quests_list') }}" class="{{ 'active' if request.endpoint in ('admin_quests_list','admin_quest_new','admin_quest_edit') }}">Quests</a>
     <a href="{{ url_for('admin_commentary_list') }}" class="{{ 'active' if request.endpoint in ('admin_commentary_list','admin_commentary_new','admin_commentary_edit','admin_commentary_import') }}">Commentary</a>
     <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">Notifications</a>
+    <a href="{{ url_for('admin_rarity_list') }}" class="{{ 'active' if request.endpoint in ('admin_rarity_list','admin_rarity_simulate') }}">Rarity</a>
+    <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">Economy</a>
     <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">Seed</a>
     <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">Status</a>
     <a href="{{ url_for('logout') }}" class="logout">Logout</a>
