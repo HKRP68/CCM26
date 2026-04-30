@@ -1,0 +1,7 @@
+python-telegram-bot>=21.3
+sqlalchemy>=2.0.40
+python-dotenv>=1.0.1
+Pillow>=10.4.0
+psycopg2-binary>=2.9.9
+flask>=3.0.3
+gunicorn>=22.0.0
