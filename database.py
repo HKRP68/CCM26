@@ -24,6 +24,7 @@ def init_db():
         PlayerMarket, BotTeam, BotTeamPlayer,
         MatchState, Quest, UserQuestProgress,
         UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
+        NotificationSchedule, NotificationLog, ClaimRarityTier, GameConfig,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -58,7 +59,13 @@ def _seed_traits():
 
 
 def _migrate_add_columns():
-    """Add any missing columns in-place. Safe to run every start."""
+    """Add any missing columns in-place. Safe to run every start.
+
+    IMPORTANT: each ALTER runs in its own transaction so a failure on one
+    column (e.g. it already exists) does NOT abort the whole migration.
+    Without this, Postgres rolls back the whole transaction on first error
+    and subsequent columns silently never get added.
+    """
     new_user_cols = {
         "matches_played": "INTEGER DEFAULT 0",
         "matches_won": "INTEGER DEFAULT 0",
@@ -83,27 +90,23 @@ def _migrate_add_columns():
         "potm_impact": "INTEGER",
     }
 
-    try:
-        with engine.begin() as conn:
-            for col, coltype in new_user_cols.items():
-                try:
-                    conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype}"))
-                except Exception:
-                    # SQLite doesn't support IF NOT EXISTS on ADD COLUMN, try without
-                    try:
-                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {coltype}"))
-                    except Exception:
-                        pass  # column already exists
-            for col, coltype in new_match_cols.items():
-                try:
-                    conn.execute(text(f"ALTER TABLE matches ADD COLUMN IF NOT EXISTS {col} {coltype}"))
-                except Exception:
-                    try:
-                        conn.execute(text(f"ALTER TABLE matches ADD COLUMN {col} {coltype}"))
-                    except Exception:
-                        pass
-    except Exception:
-        pass  # migration is best-effort, don't crash startup
+    def _try_add(table, col, coltype):
+        # Each attempt is independent — failure on this column doesn't poison others
+        for sql in (
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype}",
+            f"ALTER TABLE {table} ADD COLUMN {col} {coltype}",
+        ):
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(sql))
+                return  # success
+            except Exception:
+                continue  # try next form, or just give up
+
+    for col, coltype in new_user_cols.items():
+        _try_add("users", col, coltype)
+    for col, coltype in new_match_cols.items():
+        _try_add("matches", col, coltype)
 
 
 def reset_db():

@@ -392,6 +392,18 @@ def main():
         except Exception:
             logger.exception("Failed to start match heartbeat")
 
+        # Wire up cross-thread bot ref for admin Send-Now button
+        try:
+            import asyncio as _asyncio
+            from admin import set_bot_for_admin
+            try:
+                loop = _asyncio.get_event_loop()
+            except RuntimeError:
+                loop = _asyncio.new_event_loop()
+            set_bot_for_admin(app.bot, loop)
+        except Exception:
+            logger.exception("Failed to wire bot for admin notifications")
+
         app.run_polling(drop_pending_updates=True)
 
     except Exception:

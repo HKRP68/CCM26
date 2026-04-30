@@ -583,3 +583,98 @@ class PlayerImage(Base):
     is_active = Column(Boolean, default=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(String(100), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NOTIFICATIONS — scheduled FOMO-style push messages from the bot
+# ══════════════════════════════════════════════════════════════════════
+
+class NotificationSchedule(Base):
+    """A notification rule. The cron-like job fires it when conditions match."""
+    __tablename__ = "notification_schedules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)            # admin label
+    message = Column(Text, nullable=False)                # template — supports {first_name}, {coins}, {gems}, {streak}
+    # Timing
+    schedule_type = Column(String(20), default="daily")   # 'daily' | 'interval' | 'one_off'
+    # For 'daily': fires once per day at hour:minute IST
+    fire_hour = Column(Integer, default=18)               # 0-23 IST
+    fire_minute = Column(Integer, default=0)              # 0-59 IST
+    # For 'interval': repeats every N hours after last_fired_at
+    interval_hours = Column(Integer, default=24)
+    # Time window — only fire if current IST hour is between these two
+    window_start_hour = Column(Integer, default=10)       # 0-23 IST
+    window_end_hour = Column(Integer, default=22)         # 0-23 IST (exclusive)
+    # Targeting filters
+    target_filter = Column(String(20), default="all")     # 'all' | 'inactive_24h' | 'active' | 'low_coins' | 'has_streak'
+    # State
+    is_active = Column(Boolean, default=True)
+    last_fired_at = Column(DateTime, nullable=True)       # last time the job actually fired
+    sent_count = Column(Integer, default=0)               # cumulative recipients
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NotificationLog(Base):
+    """Per-user delivery record for a single notification fire."""
+    __tablename__ = "notification_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    schedule_id = Column(Integer, ForeignKey("notification_schedules.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, index=True)
+    delivered = Column(Boolean, default=True)
+    error_text = Column(String(500), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CLAIM RARITY TIERS — admin-configurable distribution for /claim
+# ══════════════════════════════════════════════════════════════════════
+
+class ClaimRarityTier(Base):
+    """Rating tier definition for /claim pulls. Sum of probabilities should be ~100.
+    If empty (no rows), code falls back to CLAIM_RARITY in config.py.
+    """
+    __tablename__ = "claim_rarity_tiers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    label = Column(String(40), nullable=False)               # 'Bronze', 'Legendary', etc
+    rating_min = Column(Integer, nullable=False)             # inclusive
+    rating_max = Column(Integer, nullable=False)             # inclusive
+    probability = Column(Float, nullable=False)              # 0.0 to 100.0 (percent)
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    emoji = Column(String(10), default="🃏")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# GAME CONFIG — admin-tunable economy values
+# ══════════════════════════════════════════════════════════════════════
+
+class GameConfig(Base):
+    """Single-row configuration for tunable game values.
+    Admin-managed via /economy. Code reads via config_service.get_config()
+    which falls back to baked defaults if row missing.
+    """
+    __tablename__ = "game_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Match rewards
+    match_win_coins_per_over = Column(Integer, default=300)
+    match_win_gems_per_over = Column(Float, default=1.0)       # Float to allow 0.5
+    match_loss_coins_per_over = Column(Integer, default=150)
+    match_loss_gems_per_over = Column(Float, default=0.5)
+    # GSpin gem range (for blue outcome)
+    gspin_gem_min = Column(Integer, default=5)
+    gspin_gem_max = Column(Integer, default=50)
+    # Daily reward
+    daily_coins = Column(Integer, default=1000)
+    daily_gems = Column(Integer, default=0)
+    daily_streak_bonus_coins = Column(Integer, default=200)    # extra per day of streak
+    daily_streak_bonus_gems = Column(Integer, default=0)
+    # Debut bonus
+    debut_coins = Column(Integer, default=100000)
+    debut_gems = Column(Integer, default=20)                    # was 100
+    # Updated tracking
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String(80), nullable=True)

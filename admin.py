@@ -20,13 +20,46 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
                     BotTeam, BotTeamPlayer,
                     Quest, UserQuestProgress,
-                    CommentaryEntry)
+                    CommentaryEntry,
+                    NotificationSchedule, NotificationLog,
+                    ClaimRarityTier, GameConfig)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 PER_PAGE = 30
+
+
+@app.errorhandler(500)
+@app.errorhandler(Exception)
+def _handle_internal_error(e):
+    """Catch-all error handler — shows traceback inline so issues are debuggable."""
+    import traceback
+    tb = traceback.format_exc()
+    try:
+        # Log to the log file too
+        import logging
+        logging.getLogger("admin").error(f"Internal error on {request.path}: {tb}")
+    except Exception:
+        pass
+    # Render a simple error page that shows the issue
+    safe_tb = tb.replace("<", "&lt;").replace(">", "&gt;")
+    return f"""<!DOCTYPE html>
+<html><head><title>Error</title>
+<style>
+  body {{ font-family: -apple-system, sans-serif; background:#0f1419; color:#dde; padding:2rem; max-width:1100px; margin:0 auto; }}
+  pre {{ background:#1a1f24; padding:1rem; border-radius:8px; overflow-x:auto; font-size:.85rem; line-height:1.4; }}
+  .err {{ color:#ff6b6b; font-weight:600; font-size:1.1rem; margin-bottom:.5rem; }}
+  a {{ color:#4cafef; }}
+</style></head><body>
+<h1>⚠️ Internal Error</h1>
+<div class="err">{type(e).__name__}: {str(e)[:300]}</div>
+<p>Path: <code>{request.path}</code></p>
+<p>Send this traceback to fix the bug:</p>
+<pre>{safe_tb}</pre>
+<p><a href="/">← Back to dashboard</a></p>
+</body></html>""", 500
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -1734,6 +1767,468 @@ def admin_commentary_export():
                         headers={"Content-Disposition": "attachment; filename=cricket_commentary.py"})
     finally:
         db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# NOTIFICATIONS ADMIN
+# ═══════════════════════════════════════════════════════════════════════
+
+# Cross-thread bot reference — set by bot.py at startup so Flask can send
+_BOT_REF = {"bot": None, "loop": None}
+
+
+def set_bot_for_admin(bot, loop):
+    """Called by bot.py at startup with the bot instance + asyncio loop.
+    Lets the Flask 'Send Now' button schedule sends on the bot's event loop.
+    """
+    _BOT_REF["bot"] = bot
+    _BOT_REF["loop"] = loop
+
+
+@app.route("/notifications")
+@login_required
+def admin_notifications_list():
+    db = get_session()
+    try:
+        schedules = (db.query(NotificationSchedule)
+                     .order_by(NotificationSchedule.is_active.desc(),
+                               NotificationSchedule.fire_hour, NotificationSchedule.id).all())
+        # Recent log
+        recent = (db.query(NotificationLog)
+                  .order_by(NotificationLog.sent_at.desc()).limit(20).all())
+        # Map schedule_id → schedule.name
+        sched_names = {s.id: s.name for s in db.query(NotificationSchedule).all()}
+        return render_template("admin_notifications.html",
+                               schedules=schedules, recent_logs=recent,
+                               sched_names=sched_names)
+    finally:
+        db.close()
+
+
+@app.route("/notifications/new", methods=["GET", "POST"])
+@login_required
+def admin_notification_new():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            try:
+                ns = NotificationSchedule(
+                    name=request.form.get("name", "").strip() or "Untitled",
+                    message=request.form.get("message", "").strip(),
+                    schedule_type=request.form.get("schedule_type", "daily"),
+                    fire_hour=int(request.form.get("fire_hour", 18) or 18),
+                    fire_minute=int(request.form.get("fire_minute", 0) or 0),
+                    interval_hours=int(request.form.get("interval_hours", 24) or 24),
+                    window_start_hour=int(request.form.get("window_start_hour", 10) or 10),
+                    window_end_hour=int(request.form.get("window_end_hour", 22) or 22),
+                    target_filter=request.form.get("target_filter", "all"),
+                    is_active=bool(request.form.get("is_active")),
+                )
+                if not ns.message:
+                    flash("Message required.", "error")
+                    return redirect(url_for("admin_notification_new"))
+                db.add(ns); db.commit()
+                log_admin(db, "notif_create", "notification", ns.id, ns.name,
+                          f"Created notification: {ns.name}")
+                db.commit()
+                flash(f"Notification '{ns.name}' created.", "info")
+                return redirect(url_for("admin_notifications_list"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+                return redirect(url_for("admin_notification_new"))
+        return render_template("admin_notification_form.html", schedule=None)
+    finally:
+        db.close()
+
+
+@app.route("/notifications/<int:sid>/edit", methods=["GET", "POST"])
+@login_required
+def admin_notification_edit(sid):
+    db = get_session()
+    try:
+        ns = db.query(NotificationSchedule).get(sid)
+        if not ns:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_notifications_list"))
+        if request.method == "POST":
+            try:
+                ns.name = request.form.get("name", ns.name).strip()
+                ns.message = request.form.get("message", ns.message).strip()
+                ns.schedule_type = request.form.get("schedule_type", ns.schedule_type)
+                ns.fire_hour = int(request.form.get("fire_hour", ns.fire_hour) or 0)
+                ns.fire_minute = int(request.form.get("fire_minute", ns.fire_minute) or 0)
+                ns.interval_hours = int(request.form.get("interval_hours", ns.interval_hours) or 24)
+                ns.window_start_hour = int(request.form.get("window_start_hour", ns.window_start_hour) or 0)
+                ns.window_end_hour = int(request.form.get("window_end_hour", ns.window_end_hour) or 0)
+                ns.target_filter = request.form.get("target_filter", ns.target_filter)
+                ns.is_active = bool(request.form.get("is_active"))
+                db.commit()
+                log_admin(db, "notif_edit", "notification", sid, ns.name,
+                          f"Edited notification {sid}")
+                db.commit()
+                flash("Saved.", "info")
+                return redirect(url_for("admin_notifications_list"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        return render_template("admin_notification_form.html", schedule=ns)
+    finally:
+        db.close()
+
+
+@app.route("/notifications/<int:sid>/delete", methods=["POST"])
+@login_required
+def admin_notification_delete(sid):
+    db = get_session()
+    try:
+        ns = db.query(NotificationSchedule).get(sid)
+        if ns:
+            name = ns.name
+            db.delete(ns); db.commit()
+            log_admin(db, "notif_delete", "notification", sid, name, f"Deleted {name}")
+            db.commit()
+            flash(f"Deleted '{name}'.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_notifications_list"))
+
+
+@app.route("/notifications/<int:sid>/toggle", methods=["POST"])
+@login_required
+def admin_notification_toggle(sid):
+    db = get_session()
+    try:
+        ns = db.query(NotificationSchedule).get(sid)
+        if ns:
+            ns.is_active = not ns.is_active
+            db.commit()
+            flash(f"'{ns.name}' is now {'active' if ns.is_active else 'inactive'}.", "info")
+    finally:
+        db.close()
+    return redirect(url_for("admin_notifications_list"))
+
+
+@app.route("/notifications/<int:sid>/send_now", methods=["POST"])
+@login_required
+def admin_notification_send_now(sid):
+    """Manually fire a schedule immediately (ignores time window)."""
+    bot = _BOT_REF.get("bot")
+    loop = _BOT_REF.get("loop")
+    if not bot or not loop:
+        flash("Bot not running — cannot send.", "error")
+        return redirect(url_for("admin_notifications_list"))
+
+    # Run the async send on the bot's event loop, blocking until done
+    import asyncio as _asyncio
+    db = get_session()
+    try:
+        ns = db.query(NotificationSchedule).get(sid)
+        if not ns:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_notifications_list"))
+
+        async def _do():
+            from services.notification_service import fire_one_off
+            from database import get_session as _gs
+            ses = _gs()
+            try:
+                sent, failed = await fire_one_off(bot, ses, sid)
+                ses.commit()
+                return sent, failed
+            finally:
+                ses.close()
+
+        future = _asyncio.run_coroutine_threadsafe(_do(), loop)
+        try:
+            sent, failed = future.result(timeout=120)
+            log_admin(db, "notif_send_now", "notification", sid, ns.name,
+                      f"Manual send: {sent} delivered, {failed} failed")
+            db.commit()
+            flash(f"✅ Sent to {sent} users ({failed} failed).", "info")
+        except Exception as e:
+            flash(f"Send error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_notifications_list"))
+
+
+@app.route("/notifications/seed_starters", methods=["POST"])
+@login_required
+def admin_notification_seed_starters():
+    """Quick-add the 6 built-in FOMO templates."""
+    db = get_session()
+    try:
+        from services.notification_service import STARTER_TEMPLATES
+        added = 0
+        existing_names = {s.name for s in db.query(NotificationSchedule).all()}
+        for t in STARTER_TEMPLATES:
+            if t["name"] in existing_names:
+                continue
+            ns = NotificationSchedule(
+                name=t["name"], message=t["message"],
+                schedule_type="daily",
+                fire_hour=t["fire_hour"], fire_minute=t["fire_minute"],
+                window_start_hour=t["window_start_hour"],
+                window_end_hour=t["window_end_hour"],
+                target_filter=t["target_filter"],
+                is_active=False,  # admin manually activates after review
+            )
+            db.add(ns); added += 1
+        db.commit()
+        log_admin(db, "notif_seed", "notification", 0, "starter_pack",
+                  f"Seeded {added} starter notifications")
+        db.commit()
+        flash(f"✅ Added {added} starter templates (inactive — review and activate them).", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_notifications_list"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CLAIM RARITY TIER ADMIN — control chance per rating band
+# ═══════════════════════════════════════════════════════════════════════
+
+# Default starter set if admin clicks "Reset to defaults"
+DEFAULT_RARITY_TIERS = [
+    {"label": "Bronze",    "rating_min": 50, "rating_max": 59, "probability": 26.0,  "emoji": "🟫", "sort_order": 1},
+    {"label": "Silver",    "rating_min": 60, "rating_max": 69, "probability": 25.0,  "emoji": "⚪", "sort_order": 2},
+    {"label": "Super",     "rating_min": 70, "rating_max": 79, "probability": 38.0,  "emoji": "🟦", "sort_order": 3},
+    {"label": "Rare",      "rating_min": 80, "rating_max": 84, "probability": 6.0,   "emoji": "🟩", "sort_order": 4},
+    {"label": "Epic",      "rating_min": 85, "rating_max": 89, "probability": 3.5,   "emoji": "🟪", "sort_order": 5},
+    {"label": "Legendary", "rating_min": 90, "rating_max": 94, "probability": 1.45,  "emoji": "🟨", "sort_order": 6},
+    {"label": "Ultimate",  "rating_min": 95, "rating_max": 100, "probability": 0.05, "emoji": "⭐", "sort_order": 7},
+]
+
+
+@app.route("/rarity")
+@login_required
+def admin_rarity_list():
+    db = get_session()
+    try:
+        tiers = (db.query(ClaimRarityTier)
+                 .order_by(ClaimRarityTier.sort_order, ClaimRarityTier.id).all())
+        # Compute total + normalized %
+        total_active = sum(t.probability for t in tiers if t.is_active)
+        # For each tier, count actual players in range so admin sees pool size
+        from models import Player
+        pool = {}
+        for t in tiers:
+            count = (db.query(Player)
+                     .filter(Player.rating >= t.rating_min,
+                             Player.rating <= t.rating_max,
+                             Player.is_active == True).count())
+            pool[t.id] = count
+        return render_template("admin_rarity.html",
+                               tiers=tiers, total_active=total_active, pool=pool)
+    finally:
+        db.close()
+
+
+@app.route("/rarity/save", methods=["POST"])
+@login_required
+def admin_rarity_save():
+    """Bulk-save all tiers in one form submit."""
+    db = get_session()
+    try:
+        tier_ids = request.form.getlist("tier_id")
+        for tid_str in tier_ids:
+            tid = int(tid_str)
+            t = db.query(ClaimRarityTier).get(tid)
+            if not t:
+                continue
+            try:
+                t.label = request.form.get(f"label_{tid}", t.label).strip() or t.label
+                t.rating_min = int(request.form.get(f"rating_min_{tid}", t.rating_min) or 50)
+                t.rating_max = int(request.form.get(f"rating_max_{tid}", t.rating_max) or 100)
+                t.probability = float(request.form.get(f"probability_{tid}", t.probability) or 0)
+                t.sort_order = int(request.form.get(f"sort_order_{tid}", t.sort_order) or 0)
+                t.emoji = request.form.get(f"emoji_{tid}", t.emoji)[:10] or "🃏"
+                t.is_active = bool(request.form.get(f"is_active_{tid}"))
+                # Sanity-clamp
+                if t.rating_min < 50: t.rating_min = 50
+                if t.rating_max > 100: t.rating_max = 100
+                if t.rating_min > t.rating_max:
+                    t.rating_min, t.rating_max = t.rating_max, t.rating_min
+                if t.probability < 0: t.probability = 0
+            except Exception as e:
+                flash(f"Tier {tid} skipped (bad input): {e}", "error")
+        db.commit()
+        log_admin(db, "rarity_save", "rarity", 0, "bulk", "Saved rarity tiers")
+        db.commit()
+        flash("✅ Rarity tiers saved.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+@app.route("/rarity/new", methods=["POST"])
+@login_required
+def admin_rarity_new():
+    db = get_session()
+    try:
+        max_so = (db.query(func.coalesce(func.max(ClaimRarityTier.sort_order), 0)).scalar() or 0)
+        t = ClaimRarityTier(
+            label="New Tier",
+            rating_min=50, rating_max=59,
+            probability=10.0,
+            sort_order=max_so + 1,
+            is_active=False,  # admin must review + activate
+            emoji="🃏",
+        )
+        db.add(t); db.commit()
+        flash("New tier added (inactive — review and enable).", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+@app.route("/rarity/<int:tid>/delete", methods=["POST"])
+@login_required
+def admin_rarity_delete(tid):
+    db = get_session()
+    try:
+        t = db.query(ClaimRarityTier).get(tid)
+        if t:
+            label = t.label
+            db.delete(t); db.commit()
+            log_admin(db, "rarity_delete", "rarity", tid, label, f"Deleted {label}")
+            db.commit()
+            flash(f"Deleted '{label}'.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+@app.route("/rarity/reset_defaults", methods=["POST"])
+@login_required
+def admin_rarity_reset_defaults():
+    """Wipe + reinsert the default 7 tiers. Useful after experimenting."""
+    db = get_session()
+    try:
+        db.query(ClaimRarityTier).delete()
+        for t in DEFAULT_RARITY_TIERS:
+            db.add(ClaimRarityTier(**t, is_active=True))
+        db.commit()
+        log_admin(db, "rarity_reset", "rarity", 0, "defaults", "Reset to defaults")
+        db.commit()
+        flash("✅ Reset to default 7 tiers.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+@app.route("/rarity/simulate", methods=["GET"])
+@login_required
+def admin_rarity_simulate():
+    """Simulate 10,000 pulls and show actual distribution.
+    Lets the admin visualize the impact of their config before committing."""
+    db = get_session()
+    try:
+        from services.player_service import get_random_player_by_rarity
+        N = 10000
+        bands = {}  # rating_band → count
+        # Pre-compute band labels from active tiers
+        tiers = (db.query(ClaimRarityTier)
+                 .filter(ClaimRarityTier.is_active == True)
+                 .order_by(ClaimRarityTier.sort_order, ClaimRarityTier.id).all())
+        if not tiers:
+            flash("No active tiers — set some up first.", "error")
+            return redirect(url_for("admin_rarity_list"))
+
+        for _ in range(N):
+            p = get_random_player_by_rarity(db)
+            if not p:
+                continue
+            for t in tiers:
+                if t.rating_min <= p.rating <= t.rating_max:
+                    bands[t.label] = bands.get(t.label, 0) + 1
+                    break
+            else:
+                bands["(out of range)"] = bands.get("(out of range)", 0) + 1
+
+        return render_template("admin_rarity_simulate.html",
+                               bands=bands, total=N, tiers=tiers)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ECONOMY ADMIN — tunable rewards (coins/gems per match, daily, gspin, debut)
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/economy", methods=["GET", "POST"])
+@login_required
+def admin_economy():
+    db = get_session()
+    try:
+        from services.config_service import get_config, save_config, DEFAULTS
+        if request.method == "POST":
+            try:
+                updates = {
+                    "match_win_coins_per_over": int(request.form.get("match_win_coins_per_over", 300)),
+                    "match_win_gems_per_over": float(request.form.get("match_win_gems_per_over", 1.0)),
+                    "match_loss_coins_per_over": int(request.form.get("match_loss_coins_per_over", 150)),
+                    "match_loss_gems_per_over": float(request.form.get("match_loss_gems_per_over", 0.5)),
+                    "gspin_gem_min": int(request.form.get("gspin_gem_min", 5)),
+                    "gspin_gem_max": int(request.form.get("gspin_gem_max", 50)),
+                    "daily_coins": int(request.form.get("daily_coins", 1000)),
+                    "daily_gems": int(request.form.get("daily_gems", 0)),
+                    "daily_streak_bonus_coins": int(request.form.get("daily_streak_bonus_coins", 200)),
+                    "daily_streak_bonus_gems": int(request.form.get("daily_streak_bonus_gems", 0)),
+                    "debut_coins": int(request.form.get("debut_coins", 100000)),
+                    "debut_gems": int(request.form.get("debut_gems", 20)),
+                }
+                save_config(db, updates, updated_by=session.get("admin_user", "admin"))
+                db.commit()
+                log_admin(db, "economy_save", "config", 0, "economy", "Updated economy config")
+                db.commit()
+                flash("✅ Economy config saved.", "info")
+                return redirect(url_for("admin_economy"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        cfg = get_config(db)
+        return render_template("admin_economy.html", cfg=cfg, defaults=DEFAULTS)
+    finally:
+        db.close()
+
+
+@app.route("/economy/reset", methods=["POST"])
+@login_required
+def admin_economy_reset():
+    db = get_session()
+    try:
+        from services.config_service import reset_to_defaults
+        reset_to_defaults(db, updated_by=session.get("admin_user", "admin"))
+        db.commit()
+        log_admin(db, "economy_reset", "config", 0, "economy", "Reset to defaults")
+        db.commit()
+        flash("✅ Reset to defaults.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_economy"))
 
 
 # ── Run ──────────────────────────────────────────────────────────────
