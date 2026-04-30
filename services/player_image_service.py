@@ -55,7 +55,13 @@ def get_custom_image_bytes(player_id):
     Looks up DB → reads file. Cheap operation (single small DB query + file read).
     Designed to be called every time a card is needed; the bot returns this
     instead of calling the generator if non-None.
+
+    Result is cached in-memory with an LRU. Cache invalidated when admin
+    uploads/removes/toggles. Cuts disk I/O + DB round-trips on hot paths.
     """
+    # Check cache first
+    if player_id in _IMG_CACHE:
+        return _IMG_CACHE[player_id]
     try:
         from database import get_session
         session = get_session()
@@ -64,18 +70,38 @@ def get_custom_image_bytes(player_id):
                    .filter(PlayerImage.player_id == player_id,
                            PlayerImage.is_active == True).first())
             if not row:
+                _IMG_CACHE[player_id] = None
                 return None
             path = row.image_path
             if not path or not os.path.isfile(path):
                 logger.warning(f"PlayerImage row exists for player {player_id} but file missing: {path}")
+                _IMG_CACHE[player_id] = None
                 return None
             with open(path, "rb") as f:
-                return f.read()
+                data = f.read()
+            # Cap cache size to avoid runaway memory
+            if len(_IMG_CACHE) > 200:
+                _IMG_CACHE.clear()
+            _IMG_CACHE[player_id] = data
+            return data
         finally:
             session.close()
     except Exception:
         logger.exception(f"get_custom_image_bytes failed for player {player_id}")
         return None
+
+
+def _invalidate_image_cache(player_id=None):
+    """Drop cached image bytes. Call after upload/remove/toggle.
+    If player_id is None, drops all."""
+    if player_id is None:
+        _IMG_CACHE.clear()
+    else:
+        _IMG_CACHE.pop(player_id, None)
+
+
+# Module-level image bytes cache (LRU-ish, capped at 200 entries)
+_IMG_CACHE = {}
 
 
 def save_custom_image(session, player_id, file_bytes, original_filename,
@@ -144,6 +170,8 @@ def save_custom_image(session, player_id, file_bytes, original_filename,
         )
         session.add(row)
     session.flush()
+    # Invalidate the image cache so next read fetches the new file
+    _invalidate_image_cache(player_id)
     return True, "Saved."
 
 
@@ -162,6 +190,7 @@ def remove_custom_image(session, player_id):
             logger.exception(f"Failed to remove {row.image_path}")
     session.delete(row)
     session.flush()
+    _invalidate_image_cache(player_id)
     return True, "Removed."
 
 
@@ -173,6 +202,7 @@ def toggle_active(session, player_id):
         return False, None
     row.is_active = not row.is_active
     session.flush()
+    _invalidate_image_cache(player_id)
     return True, row.is_active
 
 
