@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Notifications{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
+  <h1>📣 Notifications</h1>
+  <div style="display:flex; gap:.5rem;">
+    <form method="POST" action="{{ url_for('admin_notification_seed_starters') }}" style="display:inline;">
+      <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">+ Add Starter Pack</button>
+    </form>
+    <a href="{{ url_for('admin_notification_new') }}" class="btn btn-primary" style="padding:.4rem 1rem;">+ New Notification</a>
+  </div>
+</div>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
+  ⏰ All times in <strong>IST (UTC+5:30)</strong>. Notifications fire at the configured time
+  but only if current time is also inside the time window. Matches the user's local timezone in India.
+</div>
+
+{% if schedules %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Name / Message</th>
+      <th style="padding:.6rem; text-align:left; width:180px;">Schedule</th>
+      <th style="padding:.6rem; text-align:left; width:140px;">Target</th>
+      <th style="padding:.6rem; text-align:center; width:80px;">Sent</th>
+      <th style="padding:.6rem; text-align:center; width:80px;">Active</th>
+      <th style="padding:.6rem; text-align:right; width:230px;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for s in schedules %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.7rem;">
+        <strong>{{ s.name }}</strong>
+        <div style="color:var(--muted); font-size:.85rem; margin-top:.2rem;">
+          {{ s.message[:120] }}{% if s.message|length > 120 %}…{% endif %}
+        </div>
+      </td>
+      <td style="padding:.6rem; font-size:.85rem;">
+        {% if s.schedule_type == 'daily' %}
+          📅 Daily at <code>{{ '%02d:%02d'|format(s.fire_hour, s.fire_minute) }}</code>
+        {% elif s.schedule_type == 'interval' %}
+          🔁 Every {{ s.interval_hours }}h
+        {% else %}
+          1️⃣ One-off
+        {% endif %}
+        <div style="color:var(--muted); margin-top:.2rem;">
+          🪟 {{ '%02d:00'|format(s.window_start_hour) }}–{{ '%02d:00'|format(s.window_end_hour) }} IST
+        </div>
+      </td>
+      <td style="padding:.6rem; font-size:.85rem;">
+        <code>{{ s.target_filter }}</code>
+      </td>
+      <td style="padding:.6rem; text-align:center; font-size:.85rem;">
+        {{ s.sent_count or 0 }}
+      </td>
+      <td style="padding:.6rem; text-align:center;">
+        <form method="POST" action="{{ url_for('admin_notification_toggle', sid=s.id) }}" style="display:inline;">
+          {% if s.is_active %}
+          <button style="background:none; border:none; color:var(--green); cursor:pointer;">✓</button>
+          {% else %}
+          <button style="background:none; border:none; color:var(--red); cursor:pointer;">✗</button>
+          {% endif %}
+        </form>
+      </td>
+      <td style="padding:.6rem; text-align:right; white-space:nowrap;">
+        <form method="POST" action="{{ url_for('admin_notification_send_now', sid=s.id) }}"
+              style="display:inline;"
+              onsubmit="return confirm('Send {{ s.name }} now to all targeted users?');">
+          <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.3rem .8rem; border-radius:6px; font-size:.85rem; font-weight:600; cursor:pointer;">📤 Send Now</button>
+        </form>
+        <a href="{{ url_for('admin_notification_edit', sid=s.id) }}"
+           style="color:var(--accent2); text-decoration:none; font-size:.85rem; margin-left:.4rem;">Edit</a>
+        <form method="POST" action="{{ url_for('admin_notification_delete', sid=s.id) }}"
+              style="display:inline; margin-left:.3rem;"
+              onsubmit="return confirm('Delete {{ s.name }}?');">
+          <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% if s.last_fired_at %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td colspan="6" style="padding:.3rem .7rem; font-size:.75rem; color:var(--muted);">
+        Last fired: {{ s.last_fired_at.strftime('%Y-%m-%d %H:%M UTC') }}
+      </td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:2rem; text-align:center; color:var(--muted);">
+  No notifications yet.<br>
+  Click <strong>+ Add Starter Pack</strong> for 6 ready-made FOMO templates,
+  or <strong>+ New Notification</strong> to write your own.
+</div>
+{% endif %}
+
+<!-- Recent log -->
+{% if recent_logs %}
+<h2 style="margin-top:2rem;">📨 Recent Deliveries</h2>
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.6rem;">
+  <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
+    <thead>
+      <tr style="color:var(--muted); text-transform:uppercase; font-size:.7rem;">
+        <th style="padding:.4rem; text-align:left;">When</th>
+        <th style="padding:.4rem; text-align:left;">Schedule</th>
+        <th style="padding:.4rem; text-align:left;">User</th>
+        <th style="padding:.4rem; text-align:left;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for log in recent_logs %}
+      <tr>
+        <td style="padding:.3rem .4rem;">{{ log.sent_at.strftime('%Y-%m-%d %H:%M UTC') }}</td>
+        <td style="padding:.3rem .4rem;">{{ sched_names.get(log.schedule_id, '—') }}</td>
+        <td style="padding:.3rem .4rem;">user #{{ log.user_id }}</td>
+        <td style="padding:.3rem .4rem;">
+          {% if log.delivered %}
+          <span style="color:var(--green);">✓</span>
+          {% else %}
+          <span style="color:var(--red);" title="{{ log.error_text }}">✗ {{ log.error_text[:40] }}</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}
