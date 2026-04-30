@@ -943,46 +943,58 @@ async def _bot_play_shot(context, mid):
 # ════════════════════════════════════════════════════════════════════
 
 async def vsbot_auto_continue(context, mid):
-    """Called by the master match flow when it's a bot's turn to act.
-    Routes to the appropriate auto-decision (delivery, shot, batsman, bowler).
+    """Called by render_screen when /vsbot match needs the next action.
+
+    Returns True if the bot took an action (and downstream handler should
+    NOT also try to render). Returns False only when it's the user's turn.
+
+    The bot side handles ALL its own selections automatically:
+      - When bot bats: picks new batsmen, picks shots
+      - When bot bowls: picks delivery (variation+length OR spinner-line)
+      - End of over with bot bowling: picks new bowler (excluding prev)
     """
-    from handlers.match import _gs
+    from handlers.match import (
+        _gs, _ss, A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+        A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER, A_INNINGS_BREAK,
+    )
+    from services.match_state_store import get_next_action, set_next_action
+
     s = _gs(context, mid)
     if not s or not s.get("is_vsbot"):
         return False
 
-    # Check if striker is out (need new batsman)
-    striker = s["bat_xi"][s["striker_idx"]] if s["striker_idx"] < len(s["bat_xi"]) else None
-    if striker:
-        bs = s["bat_stats"].get(striker["roster_id"], {})
-        if bs.get("out", False) and s["total_wickets"] < 10:
-            # Bot batting needs new batsman?
-            if s.get("bat_user_tg") == BOT_TG_ID:
-                from services.bot_ai import pick_bot_next_batsman
-                idx, p = pick_bot_next_batsman(
-                    s["batting_order"], s["striker_idx"], s["non_striker_idx"], s["bat_stats"],
-                )
-                if p:
-                    s["striker_idx"] = idx
-                    from handlers.match import _ss
-                    _ss(context, mid, s)
-                    try:
-                        await context.bot.send_message(
-                            s["chat_id"],
-                            f"🤖 New batsman: <b>{p['name']}</b>",
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
-                    # Continue to next ball (bot bowls or user bowls?)
-                    if s.get("bowl_user_tg") == BOT_TG_ID:
-                        await _bot_bowl_delivery(context, mid)
-                    return True
-            return False  # User-controlled, let normal flow handle it
+    bat_is_bot = s.get("bat_user_tg") == BOT_TG_ID
+    bowl_is_bot = s.get("bowl_user_tg") == BOT_TG_ID
+    next_act = get_next_action(context, mid) or A_PICK_DELIVERY
 
-    # End of over: pick new bowler
-    if s.get("current_ball", 0) == 0 and s.get("current_over", 1) > 1:
-        if s.get("bowl_user_tg") == BOT_TG_ID:
+    # ── New batsman needed?
+    if next_act == A_PICK_NEW_BATSMAN:
+        if bat_is_bot:
+            from services.bot_ai import pick_bot_next_batsman
+            idx, p = pick_bot_next_batsman(
+                s["batting_order"], s["striker_idx"], s["non_striker_idx"], s["bat_stats"],
+            )
+            if p:
+                s["striker_idx"] = idx
+                _ss(context, mid, s, next_action=A_PICK_DELIVERY)
+                try:
+                    await context.bot.send_message(
+                        s["chat_id"],
+                        f"🤖 New batsman: <b>{p['name']}</b>",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                # Continue to next ball — recurse so next bot action also fires
+                return await vsbot_auto_continue(context, mid)
+            return False
+        else:
+            # User batting — let normal UI handle
+            return False
+
+    # ── New bowler needed (end of over)?
+    if next_act == A_PICK_NEW_BOWLER:
+        if bowl_is_bot:
             from services.bot_ai import pick_bot_next_bowler
             new_bowler = pick_bot_next_bowler(
                 s["bowl_xi"],
@@ -991,32 +1003,42 @@ async def vsbot_auto_continue(context, mid):
                 s["overs"],
             )
             s["current_bowler"] = new_bowler
-            from handlers.match import _ss
-            _ss(context, mid, s)
+            _ss(context, mid, s, next_action=A_PICK_DELIVERY)
             try:
                 await context.bot.send_message(
                     s["chat_id"],
-                    f"🤖 New bowler: <b>{new_bowler['name']}</b>",
+                    f"🤖 New bowler: <b>{new_bowler['name']}</b> | {new_bowler.get('bowl_hand','R')[:1]}-{new_bowler['bowl_style']}",
                     parse_mode="HTML",
                 )
             except Exception:
                 pass
-            await _bot_bowl_delivery(context, mid)
-            return True
+            # Recurse to handle next ball
+            return await vsbot_auto_continue(context, mid)
+        else:
+            # User bowling — let UI handle
+            return False
 
-    # Fresh delivery
-    if not s.get("current_delivery"):
-        if s.get("bowl_user_tg") == BOT_TG_ID:
+    # ── Fresh delivery to be picked
+    if next_act == A_PICK_DELIVERY:
+        if bowl_is_bot:
             await _bot_bowl_delivery(context, mid)
             return True
         else:
-            # User to bowl — let normal flow handle
             return False
 
-    # Delivery picked, need shot
-    if s.get("current_delivery"):
-        if s.get("bat_user_tg") == BOT_TG_ID:
+    # ── Length awaiting
+    if next_act == A_PICK_LENGTH:
+        # Only happens when bowler is human + chose pace variation.
+        # If bowler is bot, _bot_bowl_delivery sets full delivery directly,
+        # so we never enter A_PICK_LENGTH for bot.
+        return False
+
+    # ── Shot awaiting
+    if next_act == A_PICK_SHOT:
+        if bat_is_bot:
             await _bot_play_shot(context, mid)
             return True
+        else:
+            return False
 
     return False
