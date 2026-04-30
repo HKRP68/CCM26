@@ -28,7 +28,14 @@ HEARTBEAT_JOB_NAME = "match_heartbeat_global"
 
 
 async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
-    """Periodic scan over all active match states."""
+    """Periodic scan: re-renders stuck matches + fires notifications."""
+    # Notification tick (deduped to once per minute internally)
+    try:
+        from services.notification_service import maybe_tick
+        await maybe_tick(context.application)
+    except Exception:
+        logger.exception("notification tick error")
+
     try:
         from services.match_state_store import (
             list_active_match_ids, get_state, get_next_action,
