@@ -38,12 +38,46 @@ def get_random_player_by_rating_range(session: Session, low: int, high: int) -> 
     return random.choice(all_players) if all_players else None
 
 
+def _get_rarity_distribution(session: Session):
+    """Return list of (cumulative_threshold, low, high) tuples.
+
+    Tries the admin-configurable ClaimRarityTier table first.
+    Falls back to CLAIM_RARITY from config.py if no rows exist.
+    """
+    try:
+        from models import ClaimRarityTier
+        rows = (session.query(ClaimRarityTier)
+                .filter(ClaimRarityTier.is_active == True)
+                .order_by(ClaimRarityTier.sort_order, ClaimRarityTier.id).all())
+        if rows:
+            # Build cumulative thresholds
+            total = sum(r.probability for r in rows)
+            if total <= 0:
+                return CLAIM_RARITY
+            # Normalize probabilities so they sum to 1.0 (allows admin to use percentages)
+            cumulative = 0.0
+            out = []
+            for r in rows:
+                cumulative += (r.probability / total)
+                out.append((cumulative, r.rating_min, r.rating_max))
+            return out
+    except Exception:
+        pass
+    return CLAIM_RARITY
+
+
 def get_random_player_by_rarity(session: Session) -> Player | None:
-    """Pick a random player using the claim rarity distribution."""
+    """Pick a random player using the claim rarity distribution.
+    Uses admin-configured tiers if any exist; otherwise falls back to config."""
+    dist = _get_rarity_distribution(session)
     roll = random.random()
-    for threshold, low, high in CLAIM_RARITY:
+    for threshold, low, high in dist:
         if roll <= threshold:
             return get_random_player_by_rating_range(session, low, high)
+    # If we somehow fall off the end, use the last tier's range
+    if dist:
+        _, low, high = dist[-1]
+        return get_random_player_by_rating_range(session, low, high)
     return get_random_player_by_rating_range(session, 50, 58)
 
 
