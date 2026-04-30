@@ -321,10 +321,14 @@ async def _action_timeout(context):
 async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
     session = get_session()
     try:
+        from services.config_service import get_config
+        cfg = get_config(session)
         w = session.query(User).filter(User.telegram_id == winner_tg).first()
         l = session.query(User).filter(User.telegram_id == loser_tg).first()
-        w_coins = overs * 300; w_gems = overs * 1
-        l_coins = overs * 150; l_gems = max(1, int(overs * 0.5))
+        w_coins = int(overs * cfg["match_win_coins_per_over"])
+        w_gems = max(0, int(overs * cfg["match_win_gems_per_over"]))
+        l_coins = int(overs * cfg["match_loss_coins_per_over"])
+        l_gems = max(0, int(overs * cfg["match_loss_gems_per_over"]))
         if w:
             w.total_coins += w_coins; w.total_gems += w_gems
             log_activity(session, w.id, "match_reward", f"Win reward: +{w_coins} coins, +{w_gems} gems",

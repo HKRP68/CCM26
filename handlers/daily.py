@@ -77,8 +77,20 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Update streak
         streak_count, milestone = update_streak(stats)
 
-        # Award coins always
-        user.total_coins += DAILY_COINS
+        # Pull daily coins/gems from admin config
+        from services.config_service import get_config
+        cfg = get_config(session)
+        coins_award = cfg["daily_coins"]
+        gems_award = cfg["daily_gems"]
+        # Streak bonus
+        if streak_count > 1:
+            coins_award += cfg["daily_streak_bonus_coins"] * (streak_count - 1)
+            gems_award += cfg["daily_streak_bonus_gems"] * (streak_count - 1)
+
+        # Award coins + gems
+        user.total_coins += coins_award
+        if gems_award:
+            user.total_gems = (user.total_gems or 0) + gems_award
 
         # Generate 2 players
         players = []
@@ -97,9 +109,11 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         remaining_days = STREAK_MILESTONE - streak_count if streak_count > 0 else STREAK_MILESTONE
 
         # Build result text
+        gems_line = f"💎 +{gems_award} gems\n" if gems_award else ""
         lines = [
             f"📅 <b>Daily Reward Claimed!</b>\n",
-            f"✅ +{DAILY_COINS:,} coins",
+            f"✅ +{coins_award:,} coins",
+            *([f"💎 +{gems_award} gems"] if gems_award else []),
             f"📊 Streak: {streak_count}/{STREAK_MILESTONE}",
             f"⏳ {remaining_days} days until bonus card\n",
         ]
@@ -127,8 +141,8 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         pnames = ", ".join(p.name for p in all_players if p)
         log_activity(session, user.id, "daily",
-                     f"Daily: +{DAILY_COINS} coins, players: {pnames}, streak {streak_count}",
-                     coins_change=DAILY_COINS)
+                     f"Daily: +{coins_award} coins{', +' + str(gems_award) + ' gems' if gems_award else ''}, players: {pnames}, streak {streak_count}",
+                     coins_change=coins_award, gems_change=gems_award)
         try:
             from services.quest_service import safe_track
             safe_track(session, user.id, "daily", 1)

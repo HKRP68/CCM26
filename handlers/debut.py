@@ -27,12 +27,17 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        from services.config_service import get_config
+        cfg = get_config(session)
+        debut_coins = cfg["debut_coins"]
+        debut_gems = cfg["debut_gems"]
+
         user = User(
             telegram_id=tg_user.id,
             username=tg_user.username or "",
             first_name=tg_user.first_name or "",
-            total_coins=DEBUT_COINS,
-            total_gems=DEBUT_GEMS,
+            total_coins=debut_coins,
+            total_gems=debut_gems,
             roster_count=0,
         )
         session.add(user)
@@ -56,7 +61,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.add(entry)
 
         user.roster_count = len(players)
-        log_activity(session, user.id, 'debut', f'Debut: {len(players)} players, {DEBUT_COINS} coins, {DEBUT_GEMS} gems', coins_change=DEBUT_COINS, gems_change=DEBUT_GEMS)
+        log_activity(session, user.id, 'debut', f'Debut: {len(players)} players, {debut_coins} coins, {debut_gems} gems', coins_change=debut_coins, gems_change=debut_gems)
         session.commit()
 
         lines = []
@@ -69,8 +74,8 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ You received {len(players)} starting players\n\n"
             + "\n".join(lines) + "\n\n"
             f"📊 Your Roster: {len(players)}/25 players\n"
-            f"💰 Coins: {DEBUT_COINS:,}\n"
-            f"💎 Gems: {DEBUT_GEMS}\n\n"
+            f"💰 Coins: {debut_coins:,}\n"
+            f"💎 Gems: {debut_gems}\n\n"
             "<b>Commands:</b>\n"
             "/claim - Get 1 player + 500 coins (hourly)\n"
             "/myroster - View your players\n"

@@ -107,39 +107,47 @@ def _format_stats(session, user):
 
 
 def _format_news(session, user):
+    """Recent activity feed (last 15 events)."""
     news = (session.query(ActivityLog)
             .filter(ActivityLog.user_id == user.id)
-            .order_by(desc(ActivityLog.timestamp)).limit(15).all())
+            .order_by(desc(ActivityLog.created_at)).limit(15).all())
 
     if not news:
-        return "📰 <b>TEAM NEWS</b>\n\n<i>No activity yet.</i>"
+        return ("📰 <b>TEAM NEWS</b>\n\n"
+                "<i>No activity yet.</i>\n\n"
+                "Try <b>/daily</b>, <b>/claim</b>, or <b>/playmatch</b> to start your career!")
 
     lines = ["📰 <b>TEAM NEWS</b>\n"]
+    # Comprehensive action → emoji map (covers everything that calls log_activity)
+    EMOJI = {
+        "claim": "🎁", "retain": "✅", "release": "💸", "auto_retain": "⏱",
+        "auto_release": "🗑", "buy": "🛒", "buy_market": "🛒",
+        "daily": "📅", "gspin": "🎰", "trade": "🔄",
+        "captain": "👑", "swap": "🔁", "debut": "🎉",
+        "match_start": "🏏", "match_reward": "🎁", "match_won": "🏆",
+        "match_lost": "💔", "endmatch": "🛑", "match_fine": "⚠️",
+        "replace": "🔁", "teamname": "🏷",
+        "trait_buy": "💎", "trait_apply": "✨", "trait_upgrade": "⬆",
+        "trait_replace": "🔄", "trait_market": "💎",
+    }
     for n in news:
-        t = n.timestamp.strftime("%b %d")
-        act = n.action
-        detail = n.detail or ""
-
-        # Map action to emoji
-        emoji = {
-            "claim": "🎁", "release": "💸", "buy": "🛒",
-            "daily": "📅", "gspin": "🎰", "trade": "🔄",
-            "captain": "👑", "swap": "🔁", "debut": "🎉",
-            "match_start": "🏏", "match_reward": "🎁",
-            "endmatch": "🛑", "match_fine": "⚠️",
-        }.get(act, "•")
-
-        # Coins/gems info
+        t = n.created_at.strftime("%b %d, %H:%M")
+        emoji = EMOJI.get(n.action, "•")
+        # Use detail if present, else fall back to action
+        detail = (n.detail or n.action or "").strip()
+        # Trim very long details for the news feed
+        if len(detail) > 80:
+            detail = detail[:77] + "…"
+        # Coins/gems change
         extras = []
         if n.coins_change:
             sign = "+" if n.coins_change > 0 else ""
-            extras.append(f"{sign}{n.coins_change:,} 🪙")
+            extras.append(f"{sign}{n.coins_change:,}🪙")
         if n.gems_change:
             sign = "+" if n.gems_change > 0 else ""
-            extras.append(f"{sign}{n.gems_change} 💎")
-        extra_str = f" ({', '.join(extras)})" if extras else ""
-
-        lines.append(f"{emoji} <i>{t}</i> — {detail}{extra_str}")
+            extras.append(f"{sign}{n.gems_change}💎")
+        extra_str = f"  <code>{' '.join(extras)}</code>" if extras else ""
+        lines.append(f"{emoji} <i>{t}</i>  {detail}{extra_str}")
 
     return "\n".join(lines)
 

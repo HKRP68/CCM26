@@ -95,7 +95,13 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             reward_lines = f"CONGRATULATIONS YOU GET {amount:,} COINS!\n💰 +{amount:,} coins added"
 
         elif outcome_type == "gems":
-            amount = random.randint(outcome_range[0], outcome_range[1])
+            # Use admin-configurable range, falls back to outcome_range if config 0
+            from services.config_service import get_config
+            cfg = get_config(session)
+            lo = cfg["gspin_gem_min"] if cfg["gspin_gem_min"] > 0 else outcome_range[0]
+            hi = cfg["gspin_gem_max"] if cfg["gspin_gem_max"] > 0 else outcome_range[1]
+            if hi < lo: hi = lo
+            amount = random.randint(lo, hi)
             user.total_gems += amount
             reward_lines = f"CONGRATULATIONS YOU GET GEMS!\n💎 +{amount} gems added"
 
