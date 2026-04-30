@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Diagnostics{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+  <h1>🔧 Diagnostics</h1>
+  <form method="POST" action="{{ url_for('admin_diagnostics_refresh_cache') }}" style="display:inline;">
+    <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">↻ Clear All Caches</button>
+  </form>
+</div>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; border:1px solid var(--border); font-size:.9rem; color:var(--muted);">
+  ℹ️ This page helps diagnose performance and egress issues. Caches dramatically reduce
+  database round-trips on hot paths (claim, market, scorecards). If a player edit doesn't
+  show up in the bot, click <strong>Clear All Caches</strong>.
+</div>
+
+<!-- Cache stats -->
+<h2 style="margin-bottom:.7rem;">💾 In-Memory Caches</h2>
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:1.5rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Cache</th>
+      <th style="padding:.6rem; text-align:right;">Items</th>
+      <th style="padding:.6rem;">Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">Player table cache</td>
+      <td style="padding:.6rem; text-align:right; font-family:monospace;">
+        {{ cache.get('active_count', 0) }} active
+      </td>
+      <td style="padding:.6rem; color:var(--muted); font-size:.85rem;">
+        Loaded: {{ cache.loaded_at.strftime('%H:%M:%S') if cache.get('loaded_at') else 'never' }}
+        · Auto-refresh every 5 min
+      </td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">Custom image bytes</td>
+      <td style="padding:.6rem; text-align:right; font-family:monospace;">{{ img_cache_count }}</td>
+      <td style="padding:.6rem; color:var(--muted); font-size:.85rem;">
+        Cached image files (max 200 entries before reset)
+      </td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;">Generated card PNGs</td>
+      <td style="padding:.6rem; text-align:right; font-family:monospace;">{{ gen_card_count }}</td>
+      <td style="padding:.6rem; color:var(--muted); font-size:.85rem;">
+        Auto-generated player cards (max 500 entries)
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- Table sizes -->
+<h2 style="margin-bottom:.7rem;">📊 Table Sizes</h2>
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:1.5rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Table</th>
+      <th style="padding:.6rem; text-align:right;">Rows</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for name, n in sizes.items() %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem;"><code>{{ name }}</code></td>
+      <td style="padding:.6rem; text-align:right; font-family:monospace;">{{ "{:,}".format(n) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<!-- Egress optimization tips -->
+<h2 style="margin-bottom:.7rem;">💡 Egress Optimization Notes</h2>
+<div style="background:var(--card); padding:1rem 1.4rem; border-radius:10px; border:1px solid var(--border); font-size:.9rem;">
+  <p>Hot paths now use in-memory caches:</p>
+  <ul style="margin-left:1rem; line-height:1.8;">
+    <li><code>/claim</code>, <code>/daily</code>, <code>/gspin</code> — random player picked from cache, only the chosen ID hits the DB</li>
+    <li><code>/playerinfo</code>, <code>/buy</code>, <code>/searchpl</code> — cache-first lookup; DB hit only for fresh data</li>
+    <li>Match scorecard cards — generated card PNGs cached, regenerate only on player edit</li>
+    <li>Custom card images — bytes cached after first read</li>
+  </ul>
+  <p style="margin-top:.8rem; color:var(--muted);">
+    If you suspect a query is leaking egress, check <code>activity_log</code>: every action logs there.
+    A user repeatedly browsing rosters or running searches can each generate ~10 KB of egress per view.
+    Old activity log entries are <em>safe to delete</em> — they're for the news feed, which only shows
+    the last 15 entries per user.
+  </p>
+</div>
+
+{% endblock %}
