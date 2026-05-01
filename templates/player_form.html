@@ -215,6 +215,93 @@
     </button>
   </form>
 </div>
+
+<!-- ───── PLAYER VERSIONS ───── -->
+{% if not player.parent_player_id %}
+<!-- Only show on the BASE player. Variants don't manage versions. -->
+<div class="form-card" style="margin-top:1.5rem;">
+  <h3 style="margin:0 0 .8rem;">🎴 Card Versions</h3>
+  <p style="color:var(--muted); font-size:.9rem; margin-bottom:1rem;">
+    Create alternate cosmetic editions of this player (e.g. "World Cup 2023", "Gold Edition").
+    Each version requires its own custom card image. Stats are inherited from the base — versions
+    are cosmetic only. Users can only own ONE version per player.
+  </p>
+
+  {% set variants = versions | rejectattr('id', 'eq', player.id) | list %}
+  {% if variants %}
+  <div style="margin-bottom:1.2rem;">
+    <strong style="display:block; margin-bottom:.5rem; font-size:.95rem;">Existing versions:</strong>
+    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:1rem;">
+      {% for v in variants %}
+      <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.7rem;">
+        <div style="background:#222; border-radius:6px; height:140px; display:flex; align-items:center; justify-content:center; overflow:hidden; margin-bottom:.5rem;">
+          <img src="{{ url_for('admin_player_image_preview', player_id=v.id) }}"
+               style="max-width:100%; max-height:100%; object-fit:contain;"
+               alt="version preview"
+               onerror="this.style.display='none'; this.parentNode.innerHTML='<span style=color:var(--muted);font-size:.85rem;>(no image)</span>';">
+        </div>
+        <div style="font-weight:600;">{{ v.version or 'Variant' }}</div>
+        <div style="color:var(--muted); font-size:.8rem; margin-bottom:.5rem;">
+          ID: {{ v.id }} · Rating: {{ v.rating }}
+        </div>
+        <div style="display:flex; gap:.4rem;">
+          <a href="{{ url_for('player_edit', player_id=v.id) }}"
+             style="flex:1; text-align:center; padding:.3rem; background:var(--card); border:1px solid var(--border); border-radius:4px; text-decoration:none; color:var(--text); font-size:.85rem;">Edit</a>
+          <form method="POST" action="{{ url_for('admin_player_version_delete', version_id=v.id) }}"
+                style="display:inline;"
+                onsubmit="return confirm('Delete version {{ v.version }} of {{ player.name }}? This refuses if any user owns it.');">
+            <button type="submit"
+                    style="padding:.3rem .6rem; background:transparent; border:1px solid var(--red); border-radius:4px; color:var(--red); cursor:pointer; font-size:.85rem;">✕</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div style="padding:.8rem; background:var(--bg); border-radius:6px; color:var(--muted); margin-bottom:1.2rem; font-size:.9rem;">
+    <em>No alternate versions yet. {{ player.name }} has only the base card.</em>
+  </div>
+  {% endif %}
+
+  <!-- Add new version form -->
+  <form method="POST" action="{{ url_for('admin_player_version_new', base_id=player.id) }}"
+        enctype="multipart/form-data" style="display:flex; flex-direction:column; gap:.7rem; padding:1rem; background:var(--bg); border-radius:8px; border:1px dashed var(--border);">
+    <strong style="font-size:.95rem;">+ Add new version</strong>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
+        Version label *
+      </label>
+      <input type="text" name="version_label" required maxlength="100"
+             placeholder="e.g. Gold, World Cup 2023, Centurion"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
+        Custom card image * <span style="color:var(--muted);">(required for versions)</span>
+      </label>
+      <input type="file" name="version_image" accept="image/png,image/jpeg,image/webp" required
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      <small style="color:var(--muted); display:block; margin-top:.3rem;">
+        PNG/JPG/WebP, max 5 MB, min 200×200. Recommended: 600×800.
+      </small>
+    </div>
+    <button type="submit" class="btn btn-primary" style="align-self:flex-start; padding:.5rem 1.2rem;">
+      + Create Version
+    </button>
+  </form>
+</div>
+{% else %}
+<!-- This is a variant — show a back-link to the base -->
+<div class="form-card" style="margin-top:1.5rem; background:var(--bg);">
+  <p style="margin:0; font-size:.9rem;">
+    🎴 This is a <b>variant</b> ({{ player.version }}) of
+    <a href="{{ url_for('player_edit', player_id=player.parent_player_id) }}"
+       style="color:var(--accent2);">the base player (#{{ player.parent_player_id }})</a>.
+    Manage versions on the base player's page.
+  </p>
+</div>
+{% endif %}
 {% endif %}
 
 {% endblock %}
