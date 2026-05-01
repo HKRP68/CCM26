@@ -39,8 +39,11 @@ class Player(Base):
     __tablename__ = "players"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(150), unique=True, nullable=False, index=True)
-    version = Column(String(50), default="Base")
+    # name no longer unique — multiple versions can share a name
+    name = Column(String(150), nullable=False, index=True)
+    version = Column(String(50), default="Base")  # 'Base', 'Gold', 'World Cup 2023', etc.
+    # NULL for base cards. Set to base player's id for variant versions.
+    parent_player_id = Column(Integer, ForeignKey("players.id"), nullable=True, index=True)
     rating = Column(Integer, nullable=False)
     category = Column(String(30), nullable=False)
     country = Column(String(60), nullable=False)
@@ -61,7 +64,10 @@ class Player(Base):
     image_url = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    __table_args__ = (Index("ix_players_rating", "rating"),)
+    __table_args__ = (
+        Index("ix_players_rating", "rating"),
+        Index("ix_players_parent", "parent_player_id"),
+    )
 
 
 class UserRoster(Base):
@@ -678,3 +684,9 @@ class GameConfig(Base):
     # Updated tracking
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# (Player versioning is implemented at the Player table level via
+# parent_player_id — see services/version_service.py for behavior.)
+# ══════════════════════════════════════════════════════════════════════

@@ -108,6 +108,25 @@ def _migrate_add_columns():
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
 
+    # Player versions support
+    _try_add("players", "parent_player_id", "INTEGER")
+
+    # Drop the unique constraint on players.name (was blocking multiple versions).
+    # Best-effort — different DBs name the constraint differently.
+    for sql in (
+        # Postgres: usually named players_name_key
+        "ALTER TABLE players DROP CONSTRAINT IF EXISTS players_name_key",
+        # Postgres alt naming
+        "ALTER TABLE players DROP CONSTRAINT IF EXISTS uq_players_name",
+        # SQLite: requires recreate, skip — new rows will work since we don't enforce
+        # the constraint in code, and SQLAlchemy ORM no longer declares unique=True on name.
+    ):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+        except Exception:
+            continue
+
 
 def reset_db():
     """Drop ALL tables and recreate. Destroys all data."""

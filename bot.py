@@ -24,7 +24,7 @@ from handlers.claim import (
 from handlers.gspin import gspin_handler, gspin_spin_callback
 from handlers.daily import daily_handler, daily_claim_callback
 from handlers.myroster import myroster_handler, roster_page_callback
-from handlers.playerinfo import playerinfo_handler
+from handlers.playerinfo import playerinfo_handler, player_version_callback
 
 # Phase 2 handlers
 from handlers.release import (
@@ -112,6 +112,22 @@ from handlers.howto import (
     howto_handler,
     howto_tab_callback,
     howto_close_callback,
+)
+
+# Bot vs Bot
+from handlers.botvsbot import (
+    botvsbot_handler,
+    bvb_pickA_callback,
+    bvb_pickB_callback,
+    bvb_cancel_callback,
+)
+
+# /botmatch spectator mode
+from handlers.botmatch import (
+    botmatch_handler,
+    botmatch_pick_a_callback,
+    botmatch_pick_b_callback,
+    botmatch_cancel_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +264,7 @@ def main():
         app.add_handler(CommandHandler(["daily", "dl"], daily_handler))
         app.add_handler(CommandHandler(["myroster", "mr", "roster"], myroster_handler))
         app.add_handler(CommandHandler(["playerinfo", "pi", "info"], playerinfo_handler))
+        app.add_handler(CallbackQueryHandler(player_version_callback, pattern=r"^plv_"))
         app.add_handler(CommandHandler(["releasepl", "release", "rel"], releasepl_handler))
         app.add_handler(CommandHandler(["releasemultiple", "relm", "rm"], releasemultiple_handler))
         app.add_handler(CommandHandler(["trade", "tr"], trade_handler))
@@ -318,6 +335,18 @@ def main():
         app.add_handler(CommandHandler(["howto", "help", "guide"], howto_handler))
         app.add_handler(CallbackQueryHandler(howto_tab_callback, pattern=r"^howto_tab_"))
         app.add_handler(CallbackQueryHandler(howto_close_callback, pattern=r"^howto_close_"))
+
+        # ── Bot vs Bot spectator mode ─────────────────────────────────
+        app.add_handler(CommandHandler(["botvsbot", "bvb"], botvsbot_handler))
+        app.add_handler(CallbackQueryHandler(bvb_pickA_callback, pattern=r"^bvb_pickA_"))
+        app.add_handler(CallbackQueryHandler(bvb_pickB_callback, pattern=r"^bvb_pickB_"))
+        app.add_handler(CallbackQueryHandler(bvb_cancel_callback, pattern=r"^bvb_cancel_"))
+
+        # ── /botmatch Spectator Mode ────────────────────────────────
+        app.add_handler(CommandHandler(["botmatch", "spectate"], botmatch_handler))
+        app.add_handler(CallbackQueryHandler(botmatch_pick_a_callback, pattern=r"^botmatch_a_"))
+        app.add_handler(CallbackQueryHandler(botmatch_pick_b_callback, pattern=r"^botmatch_b_"))
+        app.add_handler(CallbackQueryHandler(botmatch_cancel_callback, pattern=r"^botmatch_cancel_"))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))

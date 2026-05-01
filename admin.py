@@ -581,7 +581,12 @@ def player_edit(player_id):
 
         from services.player_image_service import get_metadata
         image_meta = get_metadata(db, player.id)
-        return render_template("player_form.html", player=player, image_meta=image_meta)
+        # Versions: this player's siblings (if it's a variant) or children (if it's a base)
+        from services.version_service import get_all_versions
+        base_id = player.parent_player_id or player.id
+        versions = get_all_versions(db, base_id)
+        return render_template("player_form.html", player=player,
+                               image_meta=image_meta, versions=versions, base_id=base_id)
     except Exception as e:
         db.rollback()
         flash(f"Error: {e}", "error")
@@ -686,6 +691,194 @@ def admin_player_image_preview(player_id):
         abort(404)
     from flask import Response
     return Response(img, mimetype="image/png")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PLAYER VERSIONS — alternate cosmetic editions of a base player
+# Backend: each version is a Player row with parent_player_id set + a
+# PlayerImage row attached. Stats are inherited from the base player.
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/players/<int:base_id>/versions/new", methods=["POST"])
+@login_required
+def admin_player_version_new(base_id):
+    """Create a new version of a base player. Requires a custom image upload."""
+    db = get_session()
+    try:
+        base = db.query(Player).get(base_id)
+        if not base:
+            flash("Base player not found.", "error")
+            return redirect(url_for("players_list"))
+
+        # Disallow creating a version of a version
+        if base.parent_player_id:
+            flash("Can't add a version to a variant. Pick the base player instead.", "error")
+            return redirect(url_for("player_edit", player_id=base.parent_player_id))
+
+        version_label = (request.form.get("version_label") or "").strip()
+        if not version_label:
+            flash("Version label required (e.g. 'Gold', 'World Cup 2023').", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        file = request.files.get("version_image")
+        if not file or not file.filename:
+            flash("⚠️ A custom card image is required to create a new version.", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        try:
+            file_bytes = file.read()
+        except Exception as e:
+            flash(f"Error reading file: {e}", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        # Validate the image FIRST — don't create a Player row if image is bad
+        from services.player_image_service import (
+            ALLOWED_EXT, MAX_BYTES, MIN_DIM, _ext_from_filename,
+        )
+        ext = _ext_from_filename(file.filename)
+        if ext not in ALLOWED_EXT:
+            flash(f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXT))}", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+        if len(file_bytes) > MAX_BYTES:
+            flash(f"File too large. Max {MAX_BYTES//1024//1024} MB.", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+        try:
+            from PIL import Image
+            import io as _io
+            img = Image.open(_io.BytesIO(file_bytes))
+            img.verify()
+            img = Image.open(_io.BytesIO(file_bytes))
+            if img.size[0] < MIN_DIM or img.size[1] < MIN_DIM:
+                flash(f"Image too small ({img.size[0]}×{img.size[1]}). Min {MIN_DIM}×{MIN_DIM}.", "error")
+                return redirect(url_for("player_edit", player_id=base_id))
+        except Exception as e:
+            flash(f"Not a valid image: {e}", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        # Make sure label is unique among existing versions of this base
+        existing_labels = set()
+        # Base player itself implicitly has label "Base"
+        existing_labels.add("Base")
+        for v in (db.query(Player)
+                  .filter(Player.parent_player_id == base_id).all()):
+            existing_labels.add((v.version or "").lower())
+        if version_label.lower() in {l.lower() for l in existing_labels}:
+            flash(f"Version label '{version_label}' already exists. Use a unique name.", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        # Create the variant Player row (clone stats from base)
+        variant = Player(
+            name=base.name,
+            country=base.country,
+            category=base.category,
+            rating=base.rating,
+            bat_rating=base.bat_rating,
+            bowl_rating=base.bowl_rating,
+            bat_hand=base.bat_hand,
+            bowl_hand=base.bowl_hand,
+            bowl_style=base.bowl_style,
+            bat_avg=getattr(base, "bat_avg", 0.0) or 0.0,
+            strike_rate=getattr(base, "strike_rate", 0.0) or 0.0,
+            bowl_avg=getattr(base, "bowl_avg", 0.0) or 0.0,
+            economy=getattr(base, "economy", 0.0) or 0.0,
+            runs=getattr(base, "runs", 0) or 0,
+            centuries=getattr(base, "centuries", 0) or 0,
+            wickets=getattr(base, "wickets", 0) or 0,
+            image_url=getattr(base, "image_url", None),
+            is_active=True,
+            version=version_label,
+            parent_player_id=base.id,
+        )
+        db.add(variant)
+        db.flush()
+
+        # Save the custom image for the new variant Player row
+        from services.player_image_service import save_custom_image
+        ok, msg = save_custom_image(
+            db, variant.id, file_bytes, file.filename,
+            label=version_label,
+            uploaded_by=session.get("admin_user", "admin"),
+        )
+        if not ok:
+            db.rollback()
+            flash(f"Error saving image: {msg}", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        db.commit()
+        log_admin(db, "player_version_create", "player", variant.id,
+                  f"{variant.name} ({version_label})",
+                  f"Created version '{version_label}' of {base.name}")
+        db.commit()
+
+        # Bust caches so bot picks up the new variant
+        try:
+            from services.player_cache import invalidate as _inv_pc
+            from services.card_generator import invalidate_card_cache
+            _inv_pc()
+            invalidate_card_cache()
+        except Exception:
+            pass
+
+        flash(f"✅ Created version '{version_label}' of {base.name}.", "success")
+        return redirect(url_for("player_edit", player_id=base_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("player_edit", player_id=base_id))
+
+
+@app.route("/players/<int:version_id>/versions/delete", methods=["POST"])
+@login_required
+def admin_player_version_delete(version_id):
+    """Delete a variant Player. Refuses if the version is owned by anyone."""
+    db = get_session()
+    try:
+        v = db.query(Player).get(version_id)
+        if not v or not v.parent_player_id:
+            flash("Not a valid variant.", "error")
+            return redirect(url_for("players_list"))
+        base_id = v.parent_player_id
+
+        # Refuse if any user owns this variant
+        from models import UserRoster
+        owners = db.query(UserRoster).filter(UserRoster.player_id == version_id).count()
+        if owners > 0:
+            flash(f"Cannot delete: {owners} user(s) own this version. Deactivate instead.", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
+        # Delete attached image
+        from services.player_image_service import remove_custom_image
+        try:
+            remove_custom_image(db, version_id)
+        except Exception:
+            pass
+        # Delete attached PlayerVersion (if exists) is now redundant since we don't use it
+
+        version_name = v.version or "variant"
+        db.delete(v)
+        db.commit()
+        log_admin(db, "player_version_delete", "player", version_id,
+                  f"version {version_name}", f"Deleted version of player_id={base_id}")
+        db.commit()
+
+        try:
+            from services.player_cache import invalidate as _inv_pc
+            from services.card_generator import invalidate_card_cache
+            _inv_pc()
+            invalidate_card_cache()
+        except Exception:
+            pass
+
+        flash(f"✅ Version '{version_name}' deleted.", "info")
+        return redirect(url_for("player_edit", player_id=base_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("players_list"))
 
 
 # ── Delete player ────────────────────────────────────────────────────
