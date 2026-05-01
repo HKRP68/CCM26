@@ -113,8 +113,10 @@ def should_fire(schedule):
     if not schedule.is_active:
         return False
 
-    # Time window gate
-    if not in_window(schedule.window_start_hour, schedule.window_end_hour):
+    # Window gate — but only if window is meaningful.
+    # If start == end, treat it as "no window restriction" (always allowed).
+    has_window = schedule.window_start_hour != schedule.window_end_hour
+    if has_window and not in_window(schedule.window_start_hour, schedule.window_end_hour):
         return False
 
     now_local = now_ist()
@@ -122,7 +124,7 @@ def should_fire(schedule):
     if schedule.schedule_type == "daily":
         target_h = schedule.fire_hour or 0
         target_m = schedule.fire_minute or 0
-        # Has it fired today already?
+        # Has it fired today already (in IST date)?
         if schedule.last_fired_at:
             last_local = schedule.last_fired_at.replace(tzinfo=timezone.utc).astimezone(IST)
             if last_local.date() == now_local.date():
@@ -131,6 +133,8 @@ def should_fire(schedule):
         return (now_local.hour, now_local.minute) >= (target_h, target_m)
 
     elif schedule.schedule_type == "interval":
+        # Interval respects window if set, but the timing is "every N hours since
+        # last fire", not tied to wall-clock time
         if not schedule.last_fired_at:
             return True
         delta = datetime.utcnow() - schedule.last_fired_at

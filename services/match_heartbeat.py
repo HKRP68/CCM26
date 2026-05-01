@@ -198,20 +198,46 @@ async def _auto_decide(context, mid, state, next_act):
 
 
 def start_heartbeat(application):
-    """Register the global heartbeat job. Idempotent — only adds once."""
+    """Register the global heartbeat job. Idempotent — only adds once.
+
+    Tries job_queue first. If unavailable (e.g. python-telegram-bot was installed
+    without the [job-queue] extra), falls back to a plain asyncio task that
+    schedules itself in the application's event loop on startup.
+    """
+    if application.job_queue:
+        try:
+            existing = application.job_queue.get_jobs_by_name(HEARTBEAT_JOB_NAME)
+            if existing:
+                return
+            application.job_queue.run_repeating(
+                _heartbeat_tick,
+                interval=HEARTBEAT_INTERVAL,
+                first=HEARTBEAT_INTERVAL,
+                name=HEARTBEAT_JOB_NAME,
+            )
+            logger.info(f"Heartbeat scheduled via JobQueue (every {HEARTBEAT_INTERVAL}s)")
+            return
+        except Exception:
+            logger.exception("Failed to schedule via JobQueue — falling back to asyncio task")
+
+    # Fallback: register a post_init handler that creates an asyncio loop task.
+    # This works even when python-telegram-bot[job-queue] is not installed.
+    async def _post_init(app):
+        import asyncio
+        async def _loop():
+            class _FakeContext:
+                def __init__(self, app): self.application = app
+            ctx = _FakeContext(app)
+            while True:
+                try:
+                    await _heartbeat_tick(ctx)
+                except Exception:
+                    logger.exception("heartbeat fallback tick failed")
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+        asyncio.create_task(_loop())
+        logger.info(f"Heartbeat scheduled via asyncio fallback (every {HEARTBEAT_INTERVAL}s)")
+
     try:
-        if not application.job_queue:
-            return
-        # Don't double-register
-        existing = application.job_queue.get_jobs_by_name(HEARTBEAT_JOB_NAME)
-        if existing:
-            return
-        application.job_queue.run_repeating(
-            _heartbeat_tick,
-            interval=HEARTBEAT_INTERVAL,
-            first=HEARTBEAT_INTERVAL,  # wait one interval before first run
-            name=HEARTBEAT_JOB_NAME,
-        )
-        logger.info(f"Heartbeat scheduled (every {HEARTBEAT_INTERVAL}s)")
+        application.post_init = _post_init
     except Exception:
-        logger.exception("Failed to start heartbeat")
+        logger.exception("Failed to register heartbeat fallback")

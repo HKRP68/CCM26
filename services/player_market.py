@@ -93,6 +93,15 @@ def buy_from_player_market(session, user, slot_index):
     if not player:
         return False, "Player no longer available."
 
+    # Block if user already owns ANY version of this player
+    try:
+        from services.version_service import user_owns_any_version
+        if user_owns_any_version(session, user.id, player.id):
+            return False, f"You already own a version of <b>{player.name}</b>."
+    except Exception:
+        # Conservative: continue if version check fails — better than blocking valid buys
+        pass
+
     # Roster full check
     from config import MAX_ROSTER
     if user.roster_count >= MAX_ROSTER:
