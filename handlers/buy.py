@@ -35,13 +35,36 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Roster full (25/25)! Release players first.")
             return
 
-        player = (
-            session.query(Player)
-            .filter(Player.name.ilike(f"%{search}%"), Player.is_active == True)
-            .first()
-        )
+        # Default to base card; fall back to any version
+        player = (session.query(Player)
+                  .filter(Player.name.ilike(f"%{search}%"),
+                          Player.parent_player_id.is_(None),
+                          Player.is_active == True).first())
+        if not player:
+            player = (session.query(Player)
+                      .filter(Player.name.ilike(f"%{search}%"),
+                              Player.is_active == True).first())
         if not player:
             await update.message.reply_text(f"❌ No player found matching '{search}'")
+            return
+
+        # Ownership check across all versions of this base
+        from services.version_service import user_owns_any_version, get_all_versions
+        if user_owns_any_version(session, user.id, player.id):
+            base_id = player.parent_player_id or player.id
+            versions = get_all_versions(session, base_id)
+            owned_v = None
+            owned_row = (session.query(UserRoster)
+                         .filter(UserRoster.user_id == user.id,
+                                 UserRoster.player_id.in_([v.id for v in versions])).first())
+            if owned_row:
+                owned_v = next((v for v in versions if v.id == owned_row.player_id), None)
+            await update.message.reply_text(
+                f"❌ You already own a version of <b>{player.name}</b>"
+                + (f" (<i>{owned_v.version}</i>)" if owned_v else "")
+                + ".\n\nYou can only own one version of any player at a time.",
+                parse_mode="HTML",
+            )
             return
 
         buy_val = get_buy_value(player.rating)
@@ -116,6 +139,16 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         if user.roster_count >= MAX_ROSTER:
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text("❌ Roster full! Release players first.")
+            return
+
+        # Re-check version ownership (user might have bought another version since)
+        from services.version_service import user_owns_any_version
+        if user_owns_any_version(session, user.id, player.id):
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                f"❌ You already own a version of <b>{player.name}</b>.",
+                parse_mode="HTML",
+            )
             return
 
         # Buy the player

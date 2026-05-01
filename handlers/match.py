@@ -2265,8 +2265,12 @@ async def _end_innings(ctx, mid):
             margin_val = target - 1 - chasing
             margin = f"by {margin_val} runs"
 
-        wc, wg, lc, lg = await _award_match_rewards(ctx, s, winner_tg, loser_tg, overs)
-        await _save_match_stats(s)
+        # Skip all real-economy effects for spectator matches AND bot-vs-bot
+        if s.get("is_spectator") or s.get("is_bot_vs_bot"):
+            wc, wg, lc, lg = 0, 0, 0, 0
+        else:
+            wc, wg, lc, lg = await _award_match_rewards(ctx, s, winner_tg, loser_tg, overs)
+            await _save_match_stats(s)
         potm_name, potm_impact, potm_stats = _calc_potm(s)
 
         # Get POTM player_id and the OWNER USER ID
@@ -2323,24 +2327,27 @@ async def _end_innings(ctx, mid):
                 m.inn2_runs = s["total_runs"]; m.inn2_wickets = s["total_wickets"]
                 m.potm_player_id = potm_pid; m.potm_impact = potm_impact
 
-            # Update user counters
+            # Update user counters — skip entirely for spectator matches AND bot-vs-bot
             today = datetime.utcnow().date()
-            for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
-                u = session.query(User).get(uid)
-                if u:
-                    u.matches_played = (u.matches_played or 0) + 1
-                    if is_winner:
-                        u.matches_won = (u.matches_won or 0) + 1
-                        u.win_streak = (u.win_streak or 0) + 1
-                        u.best_streak = max(u.best_streak or 0, u.win_streak)
-                    else:
-                        u.matches_lost = (u.matches_lost or 0) + 1
-                        u.win_streak = 0
-                    # Active days
-                    last = u.last_match_date
-                    if not last or last.date() != today:
-                        u.active_days = (u.active_days or 0) + 1
-                    u.last_match_date = datetime.utcnow()
+            if s.get("is_spectator") or s.get("is_bot_vs_bot"):
+                pass  # No user stats update
+            else:
+                for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
+                    u = session.query(User).get(uid)
+                    if u:
+                        u.matches_played = (u.matches_played or 0) + 1
+                        if is_winner:
+                            u.matches_won = (u.matches_won or 0) + 1
+                            u.win_streak = (u.win_streak or 0) + 1
+                            u.best_streak = max(u.best_streak or 0, u.win_streak)
+                        else:
+                            u.matches_lost = (u.matches_lost or 0) + 1
+                            u.win_streak = 0
+                        # Active days
+                        last = u.last_match_date
+                        if not last or last.date() != today:
+                            u.active_days = (u.active_days or 0) + 1
+                        u.last_match_date = datetime.utcnow()
 
                     # Quest tracking — skip bot user (telegram_id = -1)
                     try:
@@ -2411,10 +2418,15 @@ async def _end_innings(ctx, mid):
                     f"{potm_stats}\n"
                     f"💫 Impact Points: {potm_impact}\n\n"
                     f"━━━━━━━━━━━━━━━━━━━\n\n")
-        msg += (f"🎁 <b>REWARDS</b>\n"
-                f"🏆 {winner_name}: +{wc:,} Coins 💰 +{wg} Gems 💎\n"
-                f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
-                f"━━━━━━━━━━━━━━━━━━━")
+        if s.get("is_spectator"):
+            msg += (f"🎬 <b>SPECTATOR MATCH</b>\n"
+                    f"<i>No rewards distributed — pure entertainment.</i>\n"
+                    f"━━━━━━━━━━━━━━━━━━━")
+        else:
+            msg += (f"🎁 <b>REWARDS</b>\n"
+                    f"🏆 {winner_name}: +{wc:,} Coins 💰 +{wg} Gems 💎\n"
+                    f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
+                    f"━━━━━━━━━━━━━━━━━━━")
 
         # Send 2nd innings scorecards (bowling then batting) BEFORE result message
         await _send_innings_scorecards(ctx, mid, innings_num=2)
@@ -2432,22 +2444,23 @@ async def _end_innings(ctx, mid):
             session.rollback()
         finally: session.close()
 
-        # ── Achievement check for both users ──
-        try:
-            from services.achievement_service import check_and_notify
-            ach_session = get_session()
+        # ── Achievement check for both users — skip for spectator matches
+        if not s.get("is_spectator"):
             try:
-                # Re-fetch user IDs from match record
-                m = ach_session.query(Match).get(mid)
-                if m:
-                    for uid in [m.user1_id, m.user2_id]:
-                        u = ach_session.query(User).get(uid)
-                        if u and u.telegram_id != -1:
-                            await check_and_notify(ctx, cid, ach_session, u.id)
-            finally:
-                ach_session.close()
-        except Exception:
-            logger.exception("Achievement check after match failed")
+                from services.achievement_service import check_and_notify
+                ach_session = get_session()
+                try:
+                    # Re-fetch user IDs from match record
+                    m = ach_session.query(Match).get(mid)
+                    if m:
+                        for uid in [m.user1_id, m.user2_id]:
+                            u = ach_session.query(User).get(uid)
+                            if u and u.telegram_id != -1:
+                                await check_and_notify(ctx, cid, ach_session, u.id)
+                finally:
+                    ach_session.close()
+            except Exception:
+                logger.exception("Achievement check after match failed")
 
         # Match complete — cleanup persistent state + lock
         cleanup_state(ctx, mid)
