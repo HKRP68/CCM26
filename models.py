@@ -681,7 +681,19 @@ class GameConfig(Base):
     # Debut bonus
     debut_coins = Column(Integer, default=100000)
     debut_gems = Column(Integer, default=20)                    # was 100
-    # Updated tracking
+
+    # ── Simulation tuning (additive percentage points applied at end) ──
+    # These nudge final probabilities to fix systemic biases (e.g. too many dots).
+    # Applied AFTER all per-ball modifiers but BEFORE normalization.
+    # Default 0 = no adjustment (matches old behavior).
+    sim_dot_adjust = Column(Float, default=-8.0)        # -8 = fewer dot balls
+    sim_one_adjust = Column(Float, default=+5.0)        # +5 = more singles
+    sim_two_adjust = Column(Float, default=+2.0)        # +2 = more twos
+    sim_four_adjust = Column(Float, default=0.0)
+    sim_six_adjust = Column(Float, default=0.0)
+    sim_wicket_adjust = Column(Float, default=0.0)
+    sim_extras_adjust = Column(Float, default=0.0)
+    # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
 
@@ -690,3 +702,76 @@ class GameConfig(Base):
 # (Player versioning is implemented at the Player table level via
 # parent_player_id — see services/version_service.py for behavior.)
 # ══════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MESSAGE TEMPLATES — admin-editable fixed strings used by the bot
+# ══════════════════════════════════════════════════════════════════════
+
+class MessageTemplate(Base):
+    """Editable bot message. Bot code reads via message_service.get(key, ...).
+    If a row exists with this key, it's used; otherwise the hardcoded default.
+    """
+    __tablename__ = "message_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(80), unique=True, nullable=False, index=True)
+    label = Column(String(120), nullable=False)        # Human-readable name
+    description = Column(String(400), nullable=True)   # explains where it shows + placeholders
+    body = Column(Text, nullable=False)                # the message itself
+    category = Column(String(40), default="general")   # group in admin UI
+    is_active = Column(Boolean, default=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String(80), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# GLOBAL MARKETS — single shared market for ALL users (admin-managed)
+# ══════════════════════════════════════════════════════════════════════
+# These replace the per-user PlayerMarket / TraitMarket with a single
+# market shared by all users. Admin controls slots, prices, quantities,
+# and refreshes via the website.
+
+class GlobalPlayerMarket(Base):
+    """Single shared player market. Admin manages slots."""
+    __tablename__ = "global_player_market"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slot_index = Column(Integer, nullable=False, unique=True, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    base_price = Column(Integer, nullable=False)        # price before discount
+    final_price = Column(Integer, nullable=False)       # actual sell price
+    quantity = Column(Integer, default=1)               # how many can be bought
+    purchased_count = Column(Integer, default=0)        # how many already sold
+    listed_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+
+
+class GlobalTraitMarket(Base):
+    """Single shared trait market. Admin manages slots."""
+    __tablename__ = "global_trait_market"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slot_index = Column(Integer, nullable=False, unique=True, index=True)
+    trait_id = Column(Integer, ForeignKey("traits.id"), nullable=False)
+    base_price = Column(Integer, nullable=False)
+    discount_pct = Column(Integer, default=0)
+    final_price = Column(Integer, nullable=False)
+    quantity = Column(Integer, default=10)              # traits can be re-bought
+    purchased_count = Column(Integer, default=0)
+    listed_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+
+
+class MarketPurchase(Base):
+    """Audit log of all global market purchases."""
+    __tablename__ = "market_purchases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    market_type = Column(String(20), nullable=False)    # 'player' or 'trait'
+    slot_index = Column(Integer, nullable=False)
+    item_id = Column(Integer, nullable=False)            # player_id or trait_id
+    item_name = Column(String(200), nullable=True)
+    price_paid = Column(Integer, nullable=False)
+    purchased_at = Column(DateTime, default=datetime.utcnow, index=True)

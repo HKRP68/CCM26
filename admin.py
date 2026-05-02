@@ -22,7 +22,9 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     Quest, UserQuestProgress,
                     CommentaryEntry,
                     NotificationSchedule, NotificationLog,
-                    ClaimRarityTier, GameConfig)
+                    ClaimRarityTier, GameConfig,
+                    MessageTemplate,
+                    GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
@@ -766,24 +768,45 @@ def admin_player_version_new(base_id):
             flash(f"Version label '{version_label}' already exists. Use a unique name.", "error")
             return redirect(url_for("player_edit", player_id=base_id))
 
-        # Create the variant Player row (clone stats from base)
+        # Create the variant Player row.
+        # Override fields if admin provided them; fall back to base otherwise.
+        def _f(form_key, default):
+            """Take form value if non-empty, else default."""
+            v = (request.form.get(form_key) or "").strip()
+            return v if v else default
+
+        try:
+            v_rating = int(_f("rating", str(base.rating)))
+            v_bat_rating = int(_f("bat_rating", str(base.bat_rating)))
+            v_bowl_rating = int(_f("bowl_rating", str(base.bowl_rating)))
+            v_bat_avg = float(_f("bat_avg", str(getattr(base, "bat_avg", 0.0) or 0.0)))
+            v_strike_rate = float(_f("strike_rate", str(getattr(base, "strike_rate", 0.0) or 0.0)))
+            v_bowl_avg = float(_f("bowl_avg", str(getattr(base, "bowl_avg", 0.0) or 0.0)))
+            v_economy = float(_f("economy", str(getattr(base, "economy", 0.0) or 0.0)))
+            v_runs = int(_f("runs", str(getattr(base, "runs", 0) or 0)))
+            v_centuries = int(_f("centuries", str(getattr(base, "centuries", 0) or 0)))
+            v_wickets = int(_f("wickets", str(getattr(base, "wickets", 0) or 0)))
+        except ValueError as ve:
+            flash(f"Invalid number in form: {ve}", "error")
+            return redirect(url_for("player_edit", player_id=base_id))
+
         variant = Player(
             name=base.name,
-            country=base.country,
-            category=base.category,
-            rating=base.rating,
-            bat_rating=base.bat_rating,
-            bowl_rating=base.bowl_rating,
-            bat_hand=base.bat_hand,
-            bowl_hand=base.bowl_hand,
-            bowl_style=base.bowl_style,
-            bat_avg=getattr(base, "bat_avg", 0.0) or 0.0,
-            strike_rate=getattr(base, "strike_rate", 0.0) or 0.0,
-            bowl_avg=getattr(base, "bowl_avg", 0.0) or 0.0,
-            economy=getattr(base, "economy", 0.0) or 0.0,
-            runs=getattr(base, "runs", 0) or 0,
-            centuries=getattr(base, "centuries", 0) or 0,
-            wickets=getattr(base, "wickets", 0) or 0,
+            country=_f("country", base.country),
+            category=_f("category", base.category),
+            rating=v_rating,
+            bat_rating=v_bat_rating,
+            bowl_rating=v_bowl_rating,
+            bat_hand=_f("bat_hand", base.bat_hand),
+            bowl_hand=_f("bowl_hand", base.bowl_hand),
+            bowl_style=_f("bowl_style", base.bowl_style),
+            bat_avg=v_bat_avg,
+            strike_rate=v_strike_rate,
+            bowl_avg=v_bowl_avg,
+            economy=v_economy,
+            runs=v_runs,
+            centuries=v_centuries,
+            wickets=v_wickets,
             image_url=getattr(base, "image_url", None),
             is_active=True,
             version=version_label,
@@ -1007,10 +1030,120 @@ def user_detail(user_id):
             .all()
         )
 
+        # Active matches the user is in (any non-completed/abandoned status)
+        from models import Match
+        active_matches = (
+            db.query(Match)
+            .filter(((Match.user1_id == user.id) | (Match.user2_id == user.id))
+                    & (Match.status.in_(("active", "in_progress", "playing", "pending"))))
+            .order_by(Match.id.desc())
+            .all()
+        )
+        # Map opponents
+        match_meta = []
+        for m in active_matches:
+            opp_id = m.user2_id if m.user1_id == user.id else m.user1_id
+            opp = db.query(User).get(opp_id) if opp_id else None
+            match_meta.append({
+                "match": m,
+                "opp_name": (opp.first_name or opp.username) if opp else "Bot/Unknown",
+                "opp_username": (opp.username if opp else "bot"),
+            })
+
+        # Recent finished matches (last 10)
+        recent_matches = (
+            db.query(Match)
+            .filter(((Match.user1_id == user.id) | (Match.user2_id == user.id))
+                    & (Match.status == "completed"))
+            .order_by(Match.id.desc())
+            .limit(10).all()
+        )
+
+        # Trade counts
+        from models import Trade
+        pending_trades = (db.query(Trade)
+                          .filter(((Trade.initiator_id == user.id) |
+                                   (Trade.receiver_id == user.id))
+                                  & (Trade.status == "pending"))
+                          .count())
+
         return render_template("user_detail.html", user=user, stats=stats,
-                               roster=roster, activities=activities)
+                               roster=roster, activities=activities,
+                               active_matches=match_meta,
+                               recent_matches=recent_matches,
+                               pending_trades=pending_trades)
     finally:
         db.close()
+
+
+@app.route("/users/<int:user_id>/match/<int:match_id>/force_end", methods=["POST"])
+@login_required
+def admin_force_end_match(user_id, match_id):
+    """Admin-cancel a stuck match. Cleans up MatchState + sets Match.status='abandoned'."""
+    db = get_session()
+    try:
+        from models import Match, MatchState
+        match = db.query(Match).get(match_id)
+        if not match:
+            flash("Match not found.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        # Verify the user is actually in this match (safety check)
+        if match.user1_id != user_id and match.user2_id != user_id:
+            flash("This user isn't part of that match.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        match.status = "abandoned"
+        # Drop the match state so the bot doesn't try to revive it
+        ms = db.query(MatchState).filter(MatchState.match_id == match_id).first()
+        if ms:
+            db.delete(ms)
+        db.commit()
+
+        # Drop the in-process lock + cached state so heartbeat won't pick it up
+        try:
+            from services.match_state_store import release_match_lock, cleanup_state
+            release_match_lock(match_id)
+            cleanup_state(None, match_id)
+        except Exception:
+            pass
+
+        log_admin(db, "match_force_end", "match", match_id,
+                  f"match #{match_id}",
+                  f"Force-ended for user_id={user_id}")
+        db.commit()
+        flash(f"✅ Match #{match_id} force-ended. User can start a new one.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/cancel_pending_trades", methods=["POST"])
+@login_required
+def admin_cancel_pending_trades(user_id):
+    """Cancel all pending trades for a user (helps unstick edge cases)."""
+    db = get_session()
+    try:
+        from models import Trade
+        n = (db.query(Trade)
+             .filter(((Trade.initiator_id == user_id) |
+                      (Trade.receiver_id == user_id))
+                     & (Trade.status == "pending"))
+             .update({"status": "cancelled"}))
+        db.commit()
+        log_admin(db, "trades_cancel", "user", user_id, f"user_id={user_id}",
+                  f"Cancelled {n} pending trade(s)")
+        db.commit()
+        flash(f"✅ Cancelled {n} pending trade(s).", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
 
 
 @app.route("/users/<int:user_id>/edit-purse", methods=["POST"])
@@ -2448,6 +2581,93 @@ def admin_economy_reset():
 # DIAGNOSTICS — cache stats, egress hints, system info
 # ═══════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════
+# SIMULATION ENGINE — admin tunable probability adjustments
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/simulation", methods=["GET", "POST"])
+@login_required
+def admin_simulation():
+    db = get_session()
+    try:
+        from services.config_service import get_config, save_config, DEFAULTS
+        if request.method == "POST":
+            try:
+                updates = {
+                    "sim_dot_adjust": float(request.form.get("sim_dot_adjust", 0)),
+                    "sim_one_adjust": float(request.form.get("sim_one_adjust", 0)),
+                    "sim_two_adjust": float(request.form.get("sim_two_adjust", 0)),
+                    "sim_four_adjust": float(request.form.get("sim_four_adjust", 0)),
+                    "sim_six_adjust": float(request.form.get("sim_six_adjust", 0)),
+                    "sim_wicket_adjust": float(request.form.get("sim_wicket_adjust", 0)),
+                    "sim_extras_adjust": float(request.form.get("sim_extras_adjust", 0)),
+                }
+                save_config(db, updates, updated_by=session.get("admin_user", "admin"))
+                db.commit()
+                log_admin(db, "sim_save", "config", 0, "simulation",
+                          f"Updated simulation tuning: dot={updates['sim_dot_adjust']}, 1={updates['sim_one_adjust']}")
+                db.commit()
+                flash("✅ Simulation tuning saved. Applies to next ball.", "info")
+                return redirect(url_for("admin_simulation"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        cfg = get_config(db)
+        return render_template("admin_simulation.html", cfg=cfg, defaults=DEFAULTS)
+    finally:
+        db.close()
+
+
+@app.route("/simulation/run_test", methods=["POST"])
+@login_required
+def admin_simulation_test():
+    """Run N balls through the engine with current settings, show outcome distribution."""
+    db = get_session()
+    try:
+        N = int(request.form.get("n", 1000))
+        N = max(100, min(20000, N))
+
+        from services.probability_engine import calculate_outcome
+        # Simulate a typical mid-rated matchup
+        counts = {"dot": 0, "1": 0, "2": 0, "3": 0, "4": 0, "6": 0,
+                  "wicket": 0, "wide": 0, "noball": 0, "legbye": 0}
+        runs_total = 0
+        for i in range(N):
+            # Spread balls across phases for a realistic mix
+            over = (i % 20) + 1
+            oc = calculate_outcome(
+                bowl_style="Medium Pacer", bowl_hand="Right",
+                variation="Seam Up", length="Good",
+                pitch_type="Flat", over=over, total_overs=20,
+                shot="Drive",
+                bat_rating=80, bowl_rating=80,
+            )
+            t = oc.get("type")
+            if t == "runs":
+                r = oc.get("runs", 0)
+                key = str(r) if r in (0, 1, 2, 3, 4, 6) else "1"
+                if key == "0": key = "dot"
+                counts[key] += 1
+                runs_total += r
+            else:
+                counts[t] = counts.get(t, 0) + 1
+                runs_total += oc.get("runs", 0)
+                if t in ("wide", "noball"):
+                    runs_total += 1  # extras add 1
+        rpo = runs_total / (N / 6) if N else 0
+
+        # Build percentages
+        pct = {k: (v / N * 100) for k, v in counts.items()}
+        return render_template("admin_simulation_result.html",
+                               counts=counts, pct=pct, total=N,
+                               rpo=rpo, runs_total=runs_total)
+    except Exception as e:
+        flash(f"Error: {e}", "error")
+        return redirect(url_for("admin_simulation"))
+    finally:
+        db.close()
+
+
 @app.route("/diagnostics")
 @login_required
 def admin_diagnostics():
@@ -2511,6 +2731,257 @@ def admin_diagnostics_refresh_cache():
     except Exception as e:
         flash(f"Error: {e}", "error")
     return redirect(url_for("admin_diagnostics"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MESSAGE TEMPLATES — admin-editable bot strings
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/messages")
+@login_required
+def admin_messages_list():
+    db = get_session()
+    try:
+        from services.message_service import all_with_metadata
+        templates = all_with_metadata(db)
+        # Group by category
+        by_cat = {}
+        for t in templates:
+            by_cat.setdefault(t["category"], []).append(t)
+        return render_template("admin_messages.html",
+                               by_category=by_cat, total=len(templates))
+    finally:
+        db.close()
+
+
+@app.route("/messages/<key>/edit", methods=["GET", "POST"])
+@login_required
+def admin_message_edit(key):
+    db = get_session()
+    try:
+        from services.message_service import REGISTRY, save_template
+        if key not in REGISTRY:
+            flash(f"Unknown template key: {key}", "error")
+            return redirect(url_for("admin_messages_list"))
+        meta = REGISTRY[key]
+
+        if request.method == "POST":
+            body = request.form.get("body", "").strip()
+            if not body:
+                flash("Body cannot be empty.", "error")
+                return redirect(url_for("admin_message_edit", key=key))
+            ok, msg = save_template(db, key, body,
+                                    updated_by=session.get("admin_user", "admin"))
+            if ok:
+                db.commit()
+                log_admin(db, "msg_edit", "message", 0, key, f"Edited template {key}")
+                db.commit()
+                flash(f"✅ Saved '{meta['label']}'.", "info")
+                return redirect(url_for("admin_messages_list"))
+            else:
+                flash(f"Error: {msg}", "error")
+
+        # Load current
+        row = db.query(MessageTemplate).filter(MessageTemplate.key == key).first()
+        current_body = row.body if row else meta["default"]
+        is_overridden = row is not None
+        return render_template("admin_message_form.html",
+                               key=key, meta=meta,
+                               current_body=current_body,
+                               is_overridden=is_overridden,
+                               default_body=meta["default"])
+    finally:
+        db.close()
+
+
+@app.route("/messages/<key>/reset", methods=["POST"])
+@login_required
+def admin_message_reset(key):
+    db = get_session()
+    try:
+        from services.message_service import reset_to_default, REGISTRY
+        if key not in REGISTRY:
+            flash("Unknown key", "error")
+            return redirect(url_for("admin_messages_list"))
+        reset_to_default(db, key)
+        db.commit()
+        log_admin(db, "msg_reset", "message", 0, key, f"Reset to default")
+        db.commit()
+        flash(f"✅ '{REGISTRY[key]['label']}' reset to default.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_messages_list"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GLOBAL MARKETS — admin manages shared player + trait market
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/markets")
+@login_required
+def admin_markets_overview():
+    db = get_session()
+    try:
+        from services.global_market import list_player_market, list_trait_market
+        p_slots = list_player_market(db)
+        t_slots = list_trait_market(db)
+        # Resolve names
+        p_data = []
+        for s in p_slots:
+            player = db.query(Player).get(s.player_id)
+            p_data.append({"row": s, "player": player})
+        t_data = []
+        for s in t_slots:
+            trait = db.query(Trait).get(s.trait_id)
+            t_data.append({"row": s, "trait": trait})
+
+        # Recent purchases (audit)
+        recent = (db.query(MarketPurchase)
+                  .order_by(MarketPurchase.purchased_at.desc()).limit(20).all())
+        return render_template("admin_markets.html",
+                               p_data=p_data, t_data=t_data, recent=recent)
+    finally:
+        db.close()
+
+
+@app.route("/markets/players/reroll", methods=["POST"])
+@login_required
+def admin_market_player_reroll():
+    db = get_session()
+    try:
+        n = int(request.form.get("num_slots", 8))
+        n = max(1, min(20, n))
+        from services.global_market import reroll_player_market
+        count = reroll_player_market(db, num_slots=n)
+        db.commit()
+        log_admin(db, "market_reroll", "market", 0, "player_market",
+                  f"Rerolled with {count} slots")
+        db.commit()
+        flash(f"✅ Player market rerolled — {count} new slots.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/traits/reroll", methods=["POST"])
+@login_required
+def admin_market_trait_reroll():
+    db = get_session()
+    try:
+        n = int(request.form.get("num_slots", 5))
+        n = max(1, min(20, n))
+        from services.global_market import reroll_trait_market
+        count = reroll_trait_market(db, num_slots=n)
+        db.commit()
+        log_admin(db, "market_reroll", "market", 0, "trait_market",
+                  f"Rerolled with {count} slots")
+        db.commit()
+        flash(f"✅ Trait market rerolled — {count} new slots.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/players/<int:slot_id>/edit", methods=["POST"])
+@login_required
+def admin_market_player_edit(slot_id):
+    db = get_session()
+    try:
+        from services.global_market import update_player_slot
+        # Build update dict from form
+        data = {}
+        for k in ("base_price", "final_price", "quantity", "purchased_count", "player_id"):
+            v = request.form.get(k)
+            if v is not None and v != "":
+                data[k] = v
+        data["is_active"] = bool(request.form.get("is_active"))
+        ok, msg = update_player_slot(db, slot_id, **data)
+        if ok:
+            db.commit()
+            log_admin(db, "market_edit", "market", slot_id, "player_slot",
+                      f"Edited slot {slot_id}: {data}")
+            db.commit()
+            flash("✅ Slot updated.", "info")
+        else:
+            flash(f"Error: {msg}", "error")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/traits/<int:slot_id>/edit", methods=["POST"])
+@login_required
+def admin_market_trait_edit(slot_id):
+    db = get_session()
+    try:
+        from services.global_market import update_trait_slot
+        data = {}
+        for k in ("base_price", "final_price", "discount_pct", "quantity", "purchased_count", "trait_id"):
+            v = request.form.get(k)
+            if v is not None and v != "":
+                data[k] = v
+        data["is_active"] = bool(request.form.get("is_active"))
+        ok, msg = update_trait_slot(db, slot_id, **data)
+        if ok:
+            db.commit()
+            log_admin(db, "market_edit", "market", slot_id, "trait_slot",
+                      f"Edited slot {slot_id}: {data}")
+            db.commit()
+            flash("✅ Slot updated.", "info")
+        else:
+            flash(f"Error: {msg}", "error")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/players/<int:slot_id>/delete", methods=["POST"])
+@login_required
+def admin_market_player_delete(slot_id):
+    db = get_session()
+    try:
+        s = db.query(GlobalPlayerMarket).get(slot_id)
+        if s:
+            db.delete(s); db.commit()
+            flash("✅ Slot removed.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/traits/<int:slot_id>/delete", methods=["POST"])
+@login_required
+def admin_market_trait_delete(slot_id):
+    db = get_session()
+    try:
+        s = db.query(GlobalTraitMarket).get(slot_id)
+        if s:
+            db.delete(s); db.commit()
+            flash("✅ Slot removed.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
 
 
 # ── Run ──────────────────────────────────────────────────────────────

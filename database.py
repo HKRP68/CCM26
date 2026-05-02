@@ -25,6 +25,8 @@ def init_db():
         MatchState, Quest, UserQuestProgress,
         UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
         NotificationSchedule, NotificationLog, ClaimRarityTier, GameConfig,
+        MessageTemplate,
+        GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -107,6 +109,19 @@ def _migrate_add_columns():
         _try_add("users", col, coltype)
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
+
+    # GameConfig: new simulation-tuning columns
+    new_gameconfig_cols = {
+        "sim_dot_adjust": "FLOAT DEFAULT -8.0",
+        "sim_one_adjust": "FLOAT DEFAULT 5.0",
+        "sim_two_adjust": "FLOAT DEFAULT 2.0",
+        "sim_four_adjust": "FLOAT DEFAULT 0.0",
+        "sim_six_adjust": "FLOAT DEFAULT 0.0",
+        "sim_wicket_adjust": "FLOAT DEFAULT 0.0",
+        "sim_extras_adjust": "FLOAT DEFAULT 0.0",
+    }
+    for col, coltype in new_gameconfig_cols.items():
+        _try_add("game_config", col, coltype)
 
     # Player versions support
     _try_add("players", "parent_player_id", "INTEGER")
