@@ -5,8 +5,68 @@
 <h1>🛒 Markets</h1>
 
 <div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ Both markets are <strong>shared by all users</strong>. Same slots, same prices, race-safe (atomic stock updates).
-  Player slots usually have <code>quantity=1</code> (one buyer wins). Trait slots have <code>quantity=10</code> (multiple buyers).
+  ℹ️ Markets are <strong>shared by all users</strong>. Player market auto-refreshes every 24 hours.
+  Cards always sell at <strong>10% off</strong>. Race-safe (atomic stock updates).
+  {% if next_refresh %}
+  <br><span style="color:var(--accent2);">Next auto-refresh: {{ next_refresh.strftime('%d %b %H:%M UTC') }}</span>
+  {% endif %}
+</div>
+
+<!-- ── Market settings ── -->
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.2rem; margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .8rem; font-size:1rem;">⚙️ Market Settings</h3>
+  <form method="POST" action="{{ url_for('admin_market_settings_save') }}"
+        style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Minimum rating
+      </label>
+      <input type="number" name="market_min_rating" min="50" max="100" required
+             value="{{ cfg.market_min_rating or 87 }}"
+             style="width:100px; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Default slot count
+      </label>
+      <input type="number" name="market_default_slots" min="1" max="20" required
+             value="{{ cfg.market_default_slots or 6 }}"
+             style="width:100px; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer;">💾 Save</button>
+    <span style="color:var(--muted); font-size:.8rem; align-self:center;">Applied on next reroll.</span>
+  </form>
+</div>
+
+<!-- ── Add Player to Market ── -->
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.2rem; margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .8rem; font-size:1rem;">➕ Add Player to Market</h3>
+  <form method="POST" action="{{ url_for('admin_market_player_add') }}"
+        style="display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap;">
+    <div style="flex:1; min-width:300px;">
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Player (versions are listed too)
+      </label>
+      <select name="player_id" required
+              style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">
+        <option value="">— pick a player —</option>
+        {% for opt in dropdown_options %}
+        <option value="{{ opt.id }}">{{ opt.label }}{% if opt.is_variant %} 🎴{% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Price (optional, 🪙)
+      </label>
+      <input type="number" name="price" min="0" placeholder="auto"
+             style="width:120px; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer;">+ Add</button>
+  </form>
+  <small style="color:var(--muted); display:block; margin-top:.5rem;">
+    Variants (alt versions) show 🎴. The player goes to the next available slot at full sell value (or your custom price).
+  </small>
 </div>
 
 <!-- ── Player Market ── -->
@@ -14,10 +74,10 @@
   <h2 style="margin:0;">🌟 Player Market</h2>
   <form method="POST" action="{{ url_for('admin_market_player_reroll') }}"
         style="display:inline;"
-        onsubmit="return confirm('Wipe current player market and generate new slots?');">
-    <input type="number" name="num_slots" value="8" min="1" max="20"
+        onsubmit="return confirm('Wipe current player market and generate new random slots?');">
+    <input type="number" name="num_slots" value="{{ cfg.market_default_slots or 6 }}" min="1" max="20"
            style="width:70px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll</button>
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll Now</button>
   </form>
 </div>
 
