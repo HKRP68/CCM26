@@ -846,7 +846,18 @@ def admin_player_version_new(base_id):
         return redirect(url_for("player_edit", player_id=base_id))
     except Exception as e:
         db.rollback()
-        flash(f"Error: {e}", "error")
+        # Detect the specific unique-constraint case so the admin gets a clear
+        # actionable message instead of a raw psycopg2 traceback.
+        err_str = str(e).lower()
+        if "uniqueviolation" in err_str or ("unique" in err_str and "name" in err_str):
+            flash(
+                "Database has a legacy unique-on-name constraint blocking versions. "
+                "Restart the app once to run the auto-migration that drops it. "
+                f"(Underlying error: {type(e).__name__})",
+                "error",
+            )
+        else:
+            flash(f"Error: {e}", "error")
     finally:
         db.close()
     return redirect(url_for("player_edit", player_id=base_id))
@@ -2827,6 +2838,7 @@ def admin_markets_overview():
     try:
         from services.global_market import (
             list_player_market, list_trait_market, get_next_refresh_at,
+            get_next_trait_refresh_at,
         )
         from services.config_service import get_config
         cfg = get_config(db)
@@ -2873,12 +2885,14 @@ def admin_markets_overview():
                       .order_by(Trait.name).all())
 
         next_refresh = get_next_refresh_at(db)
+        next_trait_refresh = get_next_trait_refresh_at(db)
 
         return render_template("admin_markets.html",
                                p_data=p_data, t_data=t_data, recent=recent,
                                cfg=cfg, dropdown_options=dropdown_options,
                                all_traits=all_traits,
-                               next_refresh=next_refresh)
+                               next_refresh=next_refresh,
+                               next_trait_refresh=next_trait_refresh)
     finally:
         db.close()
 
@@ -2892,17 +2906,23 @@ def admin_market_settings_save():
         updates = {
             "market_min_rating": int(request.form.get("market_min_rating", 87)),
             "market_default_slots": int(request.form.get("market_default_slots", 6)),
+            "market_refresh_hour_ist": int(request.form.get("market_refresh_hour_ist", 0)),
+            "trait_market_default_slots": int(request.form.get("trait_market_default_slots", 5)),
         }
         # Clamp
         updates["market_min_rating"] = max(50, min(100, updates["market_min_rating"]))
         updates["market_default_slots"] = max(1, min(20, updates["market_default_slots"]))
+        updates["market_refresh_hour_ist"] = max(0, min(23, updates["market_refresh_hour_ist"]))
+        updates["trait_market_default_slots"] = max(1, min(15, updates["trait_market_default_slots"]))
         save_config(db, updates,
                     updated_by=session.get("admin_user", "admin"))
         db.commit()
         log_admin(db, "market_settings", "config", 0, "market",
-                  f"min_rating={updates['market_min_rating']}, slots={updates['market_default_slots']}")
+                  f"min_rating={updates['market_min_rating']}, slots={updates['market_default_slots']}, "
+                  f"refresh@{updates['market_refresh_hour_ist']}:00 IST, "
+                  f"trait_slots={updates['trait_market_default_slots']}")
         db.commit()
-        flash("✅ Market settings saved. Next reroll uses these values.", "info")
+        flash("✅ Market settings saved. Applied on next refresh.", "info")
     except Exception as e:
         db.rollback()
         flash(f"Error: {e}", "error")
@@ -2981,6 +3001,42 @@ def admin_market_trait_reroll():
                   f"Rerolled with {count} slots")
         db.commit()
         flash(f"✅ Trait market rerolled — {count} new slots.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/traits/add", methods=["POST"])
+@login_required
+def admin_market_trait_add():
+    db = get_session()
+    try:
+        trait_id = int(request.form.get("trait_id", 0))
+        if not trait_id:
+            flash("Pick a trait from the dropdown.", "error")
+            return redirect(url_for("admin_markets_overview"))
+
+        custom_price = request.form.get("price", "").strip()
+        custom_price_int = int(custom_price) if custom_price else None
+        quantity = request.form.get("quantity", "10").strip()
+        quantity_int = int(quantity) if quantity else 10
+
+        from services.global_market import add_trait_to_market
+        ok, result = add_trait_to_market(db, trait_id,
+                                         custom_price=custom_price_int,
+                                         quantity=quantity_int)
+        if ok:
+            db.commit()
+            trait = db.query(Trait).get(trait_id)
+            log_admin(db, "market_add_trait", "market", result, trait.name,
+                      f"Added trait to slot {result}, qty={quantity_int}")
+            db.commit()
+            flash(f"✅ Added {trait.name} to slot #{result} (qty {quantity_int}).", "info")
+        else:
+            flash(f"⚠️ {result}", "error")
     except Exception as e:
         db.rollback()
         flash(f"Error: {e}", "error")

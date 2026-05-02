@@ -122,6 +122,9 @@ def _migrate_add_columns():
         "market_min_rating": "INTEGER DEFAULT 87",
         "market_default_slots": "INTEGER DEFAULT 6",
         "market_last_refresh_at": "TIMESTAMP",
+        "market_refresh_hour_ist": "INTEGER DEFAULT 0",
+        "trait_market_default_slots": "INTEGER DEFAULT 5",
+        "trait_market_last_refresh_at": "TIMESTAMP",
     }
     for col, coltype in new_gameconfig_cols.items():
         _try_add("game_config", col, coltype)
@@ -129,21 +132,40 @@ def _migrate_add_columns():
     # Player versions support
     _try_add("players", "parent_player_id", "INTEGER")
 
-    # Drop the unique constraint on players.name (was blocking multiple versions).
-    # Best-effort — different DBs name the constraint differently.
-    for sql in (
-        # Postgres: usually named players_name_key
+    # ─────────────────────────────────────────────────────────────
+    # Player versioning: name was originally UNIQUE, but with versions
+    # multiple rows legitimately share a name (one base + N variants).
+    # Migration:
+    #   1. Drop any unique index/constraint on players.name
+    #   2. Recreate ix_players_name as a non-unique index
+    #   3. Ensure (name, version) is unique so we don't dup-create variants
+    # Best-effort across Postgres + SQLite. Each statement wrapped in its
+    # own transaction so a failure doesn't poison the rest.
+    # ─────────────────────────────────────────────────────────────
+    migration_sql = [
+        # Postgres: drop any legacy named unique constraints
         "ALTER TABLE players DROP CONSTRAINT IF EXISTS players_name_key",
-        # Postgres alt naming
         "ALTER TABLE players DROP CONSTRAINT IF EXISTS uq_players_name",
-        # SQLite: requires recreate, skip — new rows will work since we don't enforce
-        # the constraint in code, and SQLAlchemy ORM no longer declares unique=True on name.
-    ):
+        # Drop the unique index variant (this is what the error message references)
+        "DROP INDEX IF EXISTS ix_players_name",
+        # Recreate as a NON-UNIQUE index (kept for query performance on name lookups)
+        "CREATE INDEX IF NOT EXISTS ix_players_name ON players (name)",
+        # Composite unique on (name, version) — prevents creating two
+        # 'Abhishek Sharma' rows with version='IPL 2026' but allows
+        # one with version='Base card' and one with version='IPL 2026'.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_players_name_version "
+        "ON players (name, version)",
+    ]
+    for sql in migration_sql:
         try:
             with engine.begin() as conn:
                 conn.execute(text(sql))
-        except Exception:
-            continue
+        except Exception as e:
+            # Log but don't fail startup — these are best-effort
+            import logging
+            logging.getLogger(__name__).warning(
+                f"migration step skipped ({sql[:60]}…): {e}"
+            )
 
 
 def reset_db():

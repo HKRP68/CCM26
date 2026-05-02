@@ -697,6 +697,11 @@ class GameConfig(Base):
     market_min_rating = Column(Integer, default=87)
     market_default_slots = Column(Integer, default=6)
     market_last_refresh_at = Column(DateTime, nullable=True)
+    # Refresh schedule (IST). 0 = midnight IST, 9 = 9 AM IST, etc.
+    market_refresh_hour_ist = Column(Integer, default=0)
+    # Trait market settings
+    trait_market_default_slots = Column(Integer, default=5)
+    trait_market_last_refresh_at = Column(DateTime, nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
