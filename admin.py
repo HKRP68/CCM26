@@ -2825,10 +2825,13 @@ def admin_message_reset(key):
 def admin_markets_overview():
     db = get_session()
     try:
-        from services.global_market import list_player_market, list_trait_market
+        from services.global_market import (
+            list_player_market, list_trait_market, get_next_refresh_at,
+        )
+        from services.config_service import get_config
+        cfg = get_config(db)
         p_slots = list_player_market(db)
         t_slots = list_trait_market(db)
-        # Resolve names
         p_data = []
         for s in p_slots:
             player = db.query(Player).get(s.player_id)
@@ -2837,14 +2840,109 @@ def admin_markets_overview():
         for s in t_slots:
             trait = db.query(Trait).get(s.trait_id)
             t_data.append({"row": s, "trait": trait})
-
-        # Recent purchases (audit)
         recent = (db.query(MarketPurchase)
                   .order_by(MarketPurchase.purchased_at.desc()).limit(20).all())
+
+        # Build dropdown options: every active player with version label visible
+        all_players = (db.query(Player)
+                       .filter(Player.is_active == True)
+                       .order_by(Player.rating.desc(), Player.name).all())
+        dropdown_options = []
+        for p in all_players:
+            label_parts = [p.name]
+            # The seed uses version="Base card" for original players; treat that
+            # (and NULL) as "Base", everything else is a true variant label.
+            v = (p.version or "").strip()
+            if v and v.lower() not in ("", "base card", "base"):
+                label_parts.append(f"[{v}]")
+            else:
+                label_parts.append("[Base]")
+            label_parts.append(f"({p.rating} OVR)")
+            if p.country:
+                label_parts.append(f"· {p.country}")
+            dropdown_options.append({
+                "id": p.id,
+                "label": " ".join(label_parts),
+                "rating": p.rating,
+                "is_variant": bool(p.parent_player_id),
+            })
+
+        # Trait list for trait dropdowns
+        all_traits = (db.query(Trait)
+                      .filter(Trait.is_active == True)
+                      .order_by(Trait.name).all())
+
+        next_refresh = get_next_refresh_at(db)
+
         return render_template("admin_markets.html",
-                               p_data=p_data, t_data=t_data, recent=recent)
+                               p_data=p_data, t_data=t_data, recent=recent,
+                               cfg=cfg, dropdown_options=dropdown_options,
+                               all_traits=all_traits,
+                               next_refresh=next_refresh)
     finally:
         db.close()
+
+
+@app.route("/markets/settings/save", methods=["POST"])
+@login_required
+def admin_market_settings_save():
+    db = get_session()
+    try:
+        from services.config_service import save_config
+        updates = {
+            "market_min_rating": int(request.form.get("market_min_rating", 87)),
+            "market_default_slots": int(request.form.get("market_default_slots", 6)),
+        }
+        # Clamp
+        updates["market_min_rating"] = max(50, min(100, updates["market_min_rating"]))
+        updates["market_default_slots"] = max(1, min(20, updates["market_default_slots"]))
+        save_config(db, updates,
+                    updated_by=session.get("admin_user", "admin"))
+        db.commit()
+        log_admin(db, "market_settings", "config", 0, "market",
+                  f"min_rating={updates['market_min_rating']}, slots={updates['market_default_slots']}")
+        db.commit()
+        flash("✅ Market settings saved. Next reroll uses these values.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
+
+
+@app.route("/markets/players/add", methods=["POST"])
+@login_required
+def admin_market_player_add():
+    db = get_session()
+    try:
+        player_id = int(request.form.get("player_id", 0))
+        if not player_id:
+            flash("Pick a player from the dropdown.", "error")
+            return redirect(url_for("admin_markets_overview"))
+
+        # Optional custom price
+        custom_price = request.form.get("price", "").strip()
+        custom_price_int = int(custom_price) if custom_price else None
+
+        from services.global_market import add_player_to_market
+        ok, result = add_player_to_market(db, player_id, custom_price=custom_price_int)
+        if ok:
+            db.commit()
+            player = db.query(Player).get(player_id)
+            label = player.name + (f" [{player.version}]" if player.version else "")
+            log_admin(db, "market_add_player", "market", result, label,
+                      f"Added to slot {result}")
+            db.commit()
+            flash(f"✅ Added {label} to slot #{result}.", "info")
+        else:
+            flash(f"⚠️ {result}", "error")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_markets_overview"))
 
 
 @app.route("/markets/players/reroll", methods=["POST"])

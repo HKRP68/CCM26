@@ -78,6 +78,9 @@ from handlers.playermarket import (
     playermarket_handler,
     playermarket_buy_callback,
     playermarket_cancel_callback,
+    playermarket_select_callback,
+    playermarket_back_callback,
+    playermarket_noop_callback,
 )
 
 # vsbot handlers
@@ -307,7 +310,10 @@ def main():
 
         # ── Player Market ────────────────────────────────────────────
         app.add_handler(CommandHandler(["playermarket", "pmarket", "market"], playermarket_handler))
+        app.add_handler(CallbackQueryHandler(playermarket_select_callback, pattern=r"^pmsel_"))
         app.add_handler(CallbackQueryHandler(playermarket_buy_callback, pattern=r"^pmbuy_"))
+        app.add_handler(CallbackQueryHandler(playermarket_back_callback, pattern=r"^pmback_"))
+        app.add_handler(CallbackQueryHandler(playermarket_noop_callback, pattern=r"^pmnoop_"))
         app.add_handler(CallbackQueryHandler(playermarket_cancel_callback, pattern=r"^pmcancel_"))
 
         # ── vsbot ────────────────────────────────────────────────────

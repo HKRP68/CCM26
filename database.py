@@ -119,6 +119,9 @@ def _migrate_add_columns():
         "sim_six_adjust": "FLOAT DEFAULT 0.0",
         "sim_wicket_adjust": "FLOAT DEFAULT 0.0",
         "sim_extras_adjust": "FLOAT DEFAULT 0.0",
+        "market_min_rating": "INTEGER DEFAULT 87",
+        "market_default_slots": "INTEGER DEFAULT 6",
+        "market_last_refresh_at": "TIMESTAMP",
     }
     for col, coltype in new_gameconfig_cols.items():
         _try_add("game_config", col, coltype)

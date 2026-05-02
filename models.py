@@ -693,6 +693,10 @@ class GameConfig(Base):
     sim_six_adjust = Column(Float, default=0.0)
     sim_wicket_adjust = Column(Float, default=0.0)
     sim_extras_adjust = Column(Float, default=0.0)
+    # ── Player market settings ──
+    market_min_rating = Column(Integer, default=87)
+    market_default_slots = Column(Integer, default=6)
+    market_last_refresh_at = Column(DateTime, nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
