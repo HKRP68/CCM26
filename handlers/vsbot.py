@@ -985,8 +985,20 @@ async def vsbot_auto_continue(context, mid):
                     )
                 except Exception:
                     pass
-                # Continue to next ball — recurse so next bot action also fires
-                return await vsbot_auto_continue(context, mid)
+                # We handled the batsman selection. Now try to continue:
+                # if bot is also bowling, recurse to fire the next ball; otherwise
+                # let the user's UI take over for the bowling step.
+                # CRITICAL: Always return True here — we handled the batsman pick.
+                # If we returned the recursive result, a False (= "user must act now")
+                # would cause render_screen to re-show the batsman picker and override
+                # our pick.
+                if bowl_is_bot:
+                    await vsbot_auto_continue(context, mid)
+                else:
+                    # User must bowl — show them the delivery picker
+                    from handlers.match import render_screen
+                    await render_screen(context, mid)
+                return True
             return False
         else:
             # User batting — let normal UI handle
@@ -1012,8 +1024,15 @@ async def vsbot_auto_continue(context, mid):
                 )
             except Exception:
                 pass
-            # Recurse to handle next ball
-            return await vsbot_auto_continue(context, mid)
+            # Same fix: always return True after we handled the bowler pick.
+            if bat_is_bot:
+                # Bot also bats — bowl the next delivery automatically
+                await vsbot_auto_continue(context, mid)
+            else:
+                # User bats — they'll wait for the bot's delivery
+                from handlers.match import render_screen
+                await render_screen(context, mid)
+            return True
         else:
             # User bowling — let UI handle
             return False

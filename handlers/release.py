@@ -34,14 +34,16 @@ def _do_release(session, user, entries):
     """Release a list of (UserRoster, Player) tuples atomically.
     Returns dict with success, released list, total_coins, new_balance, new_count.
     """
-    from models import Trade
+    from models import Trade, PlayerTrait, TraitInventory
 
     total_coins = 0
     released = []
     captain_released = False
+    traits_returned = 0  # how many traits went back to inventory
 
-    # First: clean up any pending trades that reference these roster entries
     roster_ids = [e.id for e, _ in entries]
+
+    # 1. Cancel pending trades that reference these roster entries
     if roster_ids:
         stale_trades = (session.query(Trade)
                         .filter(Trade.status == "pending")
@@ -57,6 +59,25 @@ def _do_release(session, user, entries):
                 t.receiver_roster_id = None
         session.flush()
 
+    # 2. Return any equipped traits to inventory before deleting roster
+    # (PlayerTrait has a NOT NULL FK to user_roster.id, so without this the
+    # delete would raise ForeignKeyViolation.)
+    if roster_ids:
+        equipped = (session.query(PlayerTrait)
+                    .filter(PlayerTrait.roster_id.in_(roster_ids)).all())
+        for pt in equipped:
+            # Return to inventory at its current level
+            inv = TraitInventory(
+                user_id=pt.user_id,
+                trait_id=pt.trait_id,
+                level=pt.level,
+            )
+            session.add(inv)
+            session.delete(pt)
+            traits_returned += 1
+        session.flush()
+
+    # 3. Delete the roster entries
     for entry, player in entries:
         sv = get_sell_value(player.rating)
         # Captain check — clear captain if captain is released
@@ -82,6 +103,7 @@ def _do_release(session, user, entries):
         "new_balance": user.total_coins,
         "new_count": user.roster_count,
         "captain_released": captain_released,
+        "traits_returned": traits_returned,
     }
 
 
@@ -268,6 +290,8 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         if result["captain_released"]:
             text += "\n\n⚠️ Captain slot cleared. Use /setcaptain to assign new one."
+        if result.get("traits_returned"):
+            text += f"\n💎 {result['traits_returned']} trait(s) returned to inventory."
 
         await query.edit_message_text(text, parse_mode="HTML")
 
@@ -459,6 +483,8 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
         )
         if result["captain_released"]:
             text += "\n\n⚠️ Captain slot cleared. Use /setcaptain."
+        if result.get("traits_returned"):
+            text += f"\n💎 {result['traits_returned']} trait(s) returned to inventory."
 
         await query.edit_message_text(text, parse_mode="HTML")
 

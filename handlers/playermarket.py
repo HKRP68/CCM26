@@ -1,4 +1,9 @@
-"""/playermarket — daily 5-slot 87+ player shop at 10% off."""
+"""/playermarket — shared global player market.
+
+Replaces the per-user market with a single shared market visible to all users.
+Admin manages slots, prices, and reroll via the website. Everyone sees the
+same market.
+"""
 
 import io
 import logging
@@ -7,9 +12,8 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player
-from services.player_market import (
-    get_or_refresh_market, buy_from_player_market,
-    PLAYER_MARKET_REFRESH_HOURS, PLAYER_MARKET_MIN_RATING, PLAYER_MARKET_DISCOUNT,
+from services.global_market import (
+    list_player_market, buy_player, reroll_player_market,
 )
 from services.card_generator import generate_card
 from services.activity_service import log_activity
@@ -17,10 +21,6 @@ from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# /playermarket
-# ═══════════════════════════════════════════════════════════════════════
 
 async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
@@ -31,53 +31,63 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        pairs = get_or_refresh_market(session, user.id)
-        session.commit()
+        slots = list_player_market(session)
 
-        if not pairs:
+        # If empty, auto-create the first market (admin can reroll later)
+        if not slots:
+            try:
+                reroll_player_market(session)
+                session.commit()
+                slots = list_player_market(session)
+            except Exception:
+                logger.exception("Failed initial market generation")
+                session.rollback()
+
+        if not slots:
             await update.message.reply_text(
-                f"❌ No {PLAYER_MARKET_MIN_RATING}+ rated players currently available.")
+                "❌ Market is currently empty. Check back later!")
             return
 
-        # Calculate "next refresh" time for footer info
-        oldest = min(p[0].refreshed_at for p in pairs)
-        from datetime import datetime, timedelta
-        next_refresh = oldest + timedelta(hours=PLAYER_MARKET_REFRESH_HOURS)
-        delta = next_refresh - datetime.utcnow()
-        hrs = max(0, int(delta.total_seconds() // 3600))
-        mins = max(0, int((delta.total_seconds() % 3600) // 60))
-
-        # ── Header message ──
         header_lines = [
             "🌟 <b>PLAYER MARKET</b>",
-            f"💎 Premium players ({PLAYER_MARKET_MIN_RATING}+) at {int(PLAYER_MARKET_DISCOUNT*100)}% off",
             f"💰 Balance: <b>{user.total_coins:,}</b> 🪙",
-            f"🕛 Next refresh: ~{hrs}h {mins}m",
+            f"📊 {len(slots)} slot(s) — same for all players!",
             "━━━━━━━━━━━━━━━━━━━",
         ]
-
-        # Send each player as its own card image with a Buy button
         sent_messages = []
-
-        # Header text first
         header_msg = await update.message.reply_text(
             "\n".join(header_lines), parse_mode="HTML")
         sent_messages.append(header_msg)
 
-        for row, player in pairs:
-            cap = (
-                f"<b>#{row.slot_index}.</b> {player.name}\n"
-                f"⭐ {player.rating} OVR | {player.category} | {player.country or '—'}\n"
-                f"💸 <s>{row.base_price:,}</s>  <b>{row.final_price:,}</b> 🪙"
-                f"  <i>(-{int(PLAYER_MARKET_DISCOUNT*100)}%)</i>"
-            )
-            if row.purchased:
-                cap += "\n\n✅ <i>Purchased</i>"
+        for row in slots:
+            player = session.query(Player).get(row.player_id)
+            if not player:
+                continue
+            sold_out = row.purchased_count >= row.quantity
+            stock_left = row.quantity - row.purchased_count
+            discount_pct = 0
+            if row.base_price > row.final_price and row.base_price > 0:
+                discount_pct = int((1 - row.final_price / row.base_price) * 100)
+
+            cap_lines = [
+                f"<b>#{row.slot_index}.</b> {player.name}",
+                f"⭐ {player.rating} OVR | {player.category} | {player.country or '—'}",
+            ]
+            if discount_pct > 0:
+                cap_lines.append(f"💸 <s>{row.base_price:,}</s>  <b>{row.final_price:,}</b> 🪙  <i>(-{discount_pct}%)</i>")
+            else:
+                cap_lines.append(f"💸 <b>{row.final_price:,}</b> 🪙")
+            if row.quantity > 1:
+                cap_lines.append(f"📦 Stock: {stock_left}/{row.quantity}")
+            cap = "\n".join(cap_lines)
+
+            if sold_out:
+                cap += "\n\n❌ <i>Sold out</i>"
                 kb = None
             else:
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton(
-                        f"💰 Buy #{row.slot_index} ({row.final_price:,} 🪙)",
+                        f"💰 Buy ({row.final_price:,} 🪙)",
                         callback_data=f"pmbuy_{tg_user.id}_{row.slot_index}",
                     ),
                 ]])
@@ -100,7 +110,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 logger.exception(f"Failed to send slot {row.slot_index}")
 
-        # Footer: cancel button (closes the whole market)
+        # Footer
         footer_kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Close Market", callback_data=f"pmcancel_{tg_user.id}"),
         ]])
@@ -110,7 +120,6 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         sent_messages.append(footer_msg)
 
-        # Schedule 2-minute auto-cleanup for ALL the messages we sent
         for m in sent_messages:
             try:
                 schedule_button_timeout(
@@ -130,10 +139,6 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         session.close()
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Buy callback — pmbuy_<owner_tg>_<slot>
-# ═══════════════════════════════════════════════════════════════════════
-
 async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     tg = q.from_user
@@ -145,7 +150,7 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
         return
 
     if tg.id != owner_tg:
-        await q.answer("This isn't your market!", show_alert=True)
+        await q.answer("Open your own /playermarket!", show_alert=True)
         return
 
     session = get_session()
@@ -155,19 +160,11 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             await q.answer("Do /debut first")
             return
 
-        ok, msg = buy_from_player_market(session, user, slot)
+        ok, msg = buy_player(session, user, slot)
         if ok:
-            # Need player_name for activity log
-            from models import PlayerMarket
-            row = (session.query(PlayerMarket)
-                   .filter(PlayerMarket.user_id == user.id,
-                           PlayerMarket.slot_index == slot).first())
-            player = session.query(Player).get(row.player_id) if row else None
-            if player:
-                log_activity(session, user.id, "buy_market",
-                             f"Bought {player.name} ({player.rating}) from market for {row.final_price:,}",
-                             coins_change=-row.final_price,
-                             player_name=player.name, player_rating=player.rating)
+            log_activity(session, user.id, "buy_market",
+                         f"Bought {msg} from market",
+                         coins_change=0, player_name=msg)
             try:
                 from services.quest_service import safe_track
                 safe_track(session, user.id, "market_buy", 1)
@@ -176,9 +173,7 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             session.commit()
             await q.answer("✅ Purchased!", show_alert=False)
 
-            # Update the original message to remove buttons + show purchased state
             try:
-                from telegram import InlineKeyboardMarkup
                 if q.message.caption:
                     new_cap = q.message.caption + "\n\n✅ <b>Purchased</b>"
                     await q.edit_message_caption(caption=new_cap, parse_mode="HTML",
@@ -190,13 +185,13 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             except Exception:
                 pass
 
-            # Confirmation message in chat
             await context.bot.send_message(
                 chat_id=q.message.chat_id,
-                text=f"{msg}\n💰 Balance: <b>{user.total_coins:,}</b> 🪙\n📊 Roster: {user.roster_count}/25",
+                text=f"✅ <b>{msg}</b> added to your roster!\n"
+                     f"💰 Balance: <b>{user.total_coins:,}</b> 🪙\n"
+                     f"📊 Roster: {user.roster_count}/25",
                 parse_mode="HTML",
             )
-            # Achievement check
             try:
                 from services.achievement_service import check_and_notify
                 await check_and_notify(context, q.message.chat_id, session, user.id)
@@ -213,10 +208,6 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
         session.close()
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Cancel callback — pmcancel_<owner_tg>
-# ═══════════════════════════════════════════════════════════════════════
-
 async def playermarket_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     tg = q.from_user
@@ -225,11 +216,9 @@ async def playermarket_cancel_callback(update: Update, context: ContextTypes.DEF
     except (IndexError, ValueError):
         await q.answer("Invalid")
         return
-
     if tg.id != owner_tg:
         await q.answer("Not your market!", show_alert=True)
         return
-
     await q.answer("Closed")
     try:
         await q.edit_message_text(

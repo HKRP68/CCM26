@@ -2243,10 +2243,55 @@ async def _end_innings(ctx, mid):
         ctx.bot_data[f"bowl_uname_{mid}"] = s["bowl_username"]
         ctx.bot_data[f"bat_uid_{mid}"] = s["bat_team_id"]
         ctx.bot_data[f"bowl_uid_{mid}"] = s["bowl_team_id"]
-        # Show ALL 11 players for 2nd innings opener
-        buid = s["bat_team_id"]
-        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{buid}_{p['roster_id']}")] for p in s["bat_xi"]]
-        await ctx.bot.send_message(cid, f"🏏 <b>2ND INNINGS — SELECT OPENER 1</b>\n\n@{s['bat_username']}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+
+        # If 2nd innings batting side is the bot, auto-pick openers (no UI)
+        if s.get("is_vsbot") and s["bat_user_tg"] == BOT_TG_ID_:
+            op1 = s["bat_xi"][0]
+            op2 = s["bat_xi"][1]
+            ctx.bot_data[f"opener1_{mid}"] = op1
+            ctx.bot_data[f"opener2_{mid}"] = op2
+            s["striker_idx"] = 0
+            s["non_striker_idx"] = 1
+            # Rebuild batting_order so openers are at index 0/1
+            s["batting_order"] = list(s["bat_xi"])
+            _ss(ctx, mid, s, next_action=A_PICK_DELIVERY)
+            await ctx.bot.send_message(
+                cid,
+                f"🤖 Bot openers: <b>{op1['name']}</b> & <b>{op2['name']}</b>",
+                parse_mode="HTML",
+            )
+            # If bowling user is human, ask them for opening bowler.
+            # If bowling user is also bot (botvsbot), pick automatically.
+            if s["bowl_user_tg"] == BOT_TG_ID_:
+                # Bot vs bot — pick opening bowler too
+                opening_bowler = max(s["bowl_xi"], key=lambda p: p.get("bowl_rating", 0))
+                s["current_bowler"] = opening_bowler
+                s["prev_bowler_rid"] = None
+                _ss(ctx, mid, s, next_action=A_PICK_DELIVERY)
+                await ctx.bot.send_message(
+                    cid,
+                    f"🤖 Opening bowler: <b>{opening_bowler['name']}</b>",
+                    parse_mode="HTML",
+                )
+                # Kick off the match loop
+                from handlers.vsbot import vsbot_auto_continue
+                await vsbot_auto_continue(ctx, mid)
+            else:
+                # User bowling — show bowler picker for the user
+                from handlers.vsbot import _show_user_opening_bowler
+                from database import get_session as _gs2
+                _ses = _gs2()
+                try:
+                    user_obj = _ses.query(User).filter(User.telegram_id == s["bowl_user_tg"]).first()
+                    if user_obj:
+                        await _show_user_opening_bowler(ctx, cid, mid, user_obj, s["bowl_xi"])
+                finally:
+                    _ses.close()
+        else:
+            # Show ALL 11 players for 2nd innings opener (user batting)
+            buid = s["bat_team_id"]
+            btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{buid}_{p['roster_id']}")] for p in s["bat_xi"]]
+            await ctx.bot.send_message(cid, f"🏏 <b>2ND INNINGS — SELECT OPENER 1</b>\n\n@{s['bat_username']}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     else:
         # Match complete — give rewards
         target = s["target"]; chasing = s["total_runs"]; overs = s.get("overs", 10)

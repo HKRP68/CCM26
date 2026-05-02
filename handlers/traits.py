@@ -122,14 +122,30 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        rows = refresh_shop(session, user.id)
-        session.commit()
+        # Use shared global trait market (admin-managed)
+        from services.global_market import list_trait_market, reroll_trait_market
+        rows = list_trait_market(session)
+        if not rows:
+            # First-time auto-generation
+            try:
+                reroll_trait_market(session)
+                session.commit()
+                rows = list_trait_market(session)
+            except Exception:
+                logger.exception("Initial trait market generation failed")
+                session.rollback()
+
+        if not rows:
+            await update.message.reply_text("❌ Trait market is empty. Check back later!")
+            return
+
         daily = _get_or_create_daily(session, user.id)
         remaining = max(0, TRAIT_SHOP_DAILY_PURCHASE_LIMIT - daily.purchases)
 
         lines = [
             "🏪 <b>TRAIT MARKET</b>",
             f"💎 Gems: <b>{user.total_gems:,}</b>  |  Purchases left today: <b>{remaining}/{TRAIT_SHOP_DAILY_PURCHASE_LIMIT}</b>",
+            f"📊 Same shop for all players — admin-managed.",
             "━━━━━━━━━━━━━━━━━━━",
         ]
 
@@ -138,37 +154,34 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             trait = session.query(Trait).get(row.trait_id)
             if not trait:
                 continue
-            status = " ✅" if row.purchased else ""
+            sold_out = row.purchased_count >= row.quantity
+            status = " ❌ <i>sold out</i>" if sold_out else ""
             discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
+            stock = f"  📦 {row.quantity - row.purchased_count}/{row.quantity}" if row.quantity > 1 else ""
             lines.append(
                 f"\n<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
-                f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{status}\n"
+                f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
                 f"   <i>{trait.description}</i>"
             )
-            if not row.purchased:
-                # Embed owner tg_id in callback so we can verify on click
+            if not sold_out:
                 btns.append([InlineKeyboardButton(
-                    f"Buy Slot {row.slot_index + 1}: {trait.emoji} {trait.name} ({row.final_price} 💎)",
+                    f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
                     callback_data=f"trbuy_{tg.id}_{row.slot_index}"
                 )])
 
         if btns:
             btns.append([
-                InlineKeyboardButton(f"🔄 Reroll ({TRAIT_REROLL_COST} 💎)",
-                                     callback_data=f"trreroll_{tg.id}"),
-                InlineKeyboardButton("❌ Cancel",
+                InlineKeyboardButton("❌ Close",
                                      callback_data=f"trshopcancel_{tg.id}"),
             ])
 
         lines.append("\n━━━━━━━━━━━━━━━━━━━")
-        lines.append("🕛 Shop refreshes every 24 hours.")
         lines.append("⏱ Buttons expire in 60 seconds if unused.")
 
         kb = InlineKeyboardMarkup(btns) if btns else None
         sent = await update.message.reply_text(
             "\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
-        # 60s auto-expire
         if kb:
             from services.button_timeout import schedule_button_timeout
             schedule_button_timeout(
@@ -209,14 +222,21 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer("Do /debut first")
             return
 
-        ok, msg, inv = buy_trait_from_shop(session, user, slot)
+        from services.global_market import buy_trait
+        ok, name_or_msg = buy_trait(session, user, slot)
         if ok:
+            # Daily-limit tracking still applies
+            try:
+                daily = _get_or_create_daily(session, user.id)
+                daily.purchases = (daily.purchases or 0) + 1
+            except Exception:
+                pass
             session.commit()
-            await q.answer(msg, show_alert=False)
+            await q.answer(f"✅ {name_or_msg} added to inventory!", show_alert=False)
             await _refresh_shop_display(q, session, user)
         else:
             session.rollback()
-            await q.answer(msg, show_alert=True)
+            await q.answer(name_or_msg, show_alert=True)
     except Exception:
         session.rollback()
         logger.exception("traitbuy_callback error")
@@ -226,38 +246,10 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def traitreroll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: trreroll_<owner_tg_id>"""
+    """Reroll button removed — shop is now global. Show a message if hit via stale UI."""
     q = update.callback_query
-    tg = q.from_user
-    try:
-        owner_tg = int(q.data.split("_")[1])
-    except (IndexError, ValueError):
-        await q.answer("Invalid")
-        return
-    if tg.id != owner_tg:
-        await q.answer("Not your shop!", show_alert=True)
-        return
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg.id).first()
-        if not user:
-            await q.answer("Do /debut first")
-            return
-        ok, msg = reroll_shop(session, user)
-        if ok:
-            session.commit()
-            await q.answer(msg)
-            await _refresh_shop_display(q, session, user)
-        else:
-            session.rollback()
-            await q.answer(msg, show_alert=True)
-    except Exception:
-        session.rollback()
-        logger.exception("traitreroll_callback error")
-        await q.answer("⚠️ Error", show_alert=True)
-    finally:
-        session.close()
+    await q.answer("Trait market is now shared by all players. Only admin can reroll.",
+                   show_alert=True)
 
 
 async def traitshop_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -282,9 +274,9 @@ async def traitshop_cancel_callback(update: Update, context: ContextTypes.DEFAUL
 
 
 async def _refresh_shop_display(q, session, user):
-    """Re-render the shop message after a buy/reroll."""
-    rows = refresh_shop(session, user.id)
-    session.commit()
+    """Re-render the shop message after a buy."""
+    from services.global_market import list_trait_market
+    rows = list_trait_market(session)
     daily = _get_or_create_daily(session, user.id)
     remaining = max(0, TRAIT_SHOP_DAILY_PURCHASE_LIMIT - daily.purchases)
     owner_tg = user.telegram_id
@@ -299,27 +291,26 @@ async def _refresh_shop_display(q, session, user):
         trait = session.query(Trait).get(row.trait_id)
         if not trait:
             continue
-        status = " ✅" if row.purchased else ""
+        sold_out = row.purchased_count >= row.quantity
+        status = " ❌ <i>sold out</i>" if sold_out else ""
         discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
+        stock = f"  📦 {row.quantity - row.purchased_count}/{row.quantity}" if row.quantity > 1 else ""
         lines.append(
             f"\n<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
-            f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{status}\n"
+            f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
             f"   <i>{trait.description}</i>"
         )
-        if not row.purchased:
+        if not sold_out:
             btns.append([InlineKeyboardButton(
-                f"Buy Slot {row.slot_index + 1}: {trait.emoji} {trait.name} ({row.final_price} 💎)",
+                f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
                 callback_data=f"trbuy_{owner_tg}_{row.slot_index}"
             )])
     if btns:
         btns.append([
-            InlineKeyboardButton(f"🔄 Reroll ({TRAIT_REROLL_COST} 💎)",
-                                 callback_data=f"trreroll_{owner_tg}"),
-            InlineKeyboardButton("❌ Cancel",
+            InlineKeyboardButton("❌ Close",
                                  callback_data=f"trshopcancel_{owner_tg}"),
         ])
     lines.append("\n━━━━━━━━━━━━━━━━━━━")
-    lines.append("🕛 Shop refreshes every 24 hours.")
     lines.append("⏱ Buttons expire in 60 seconds if unused.")
 
     try:
