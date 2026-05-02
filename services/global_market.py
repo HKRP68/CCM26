@@ -43,20 +43,16 @@ PLAYER_RATING_BUCKETS = [           # (weight, low, high)
 ]
 
 
-def _pick_player_for_slot(session):
-    """Pick a random player based on rating buckets. Excludes inactive + variants."""
-    weights = [w for w, _, _ in PLAYER_RATING_BUCKETS]
-    bucket = random.choices(PLAYER_RATING_BUCKETS, weights=weights, k=1)[0]
-    _, low, high = bucket
-    # Pick from base players only (parent_player_id IS NULL)
-    pool = (session.query(Player)
-            .filter(Player.is_active == True,
-                    Player.parent_player_id.is_(None),
-                    Player.rating >= low,
-                    Player.rating <= high)
-            .all())
+def _pick_player_for_slot(session, min_rating=None):
+    """Pick a random player at or above min_rating. Excludes inactive + variants."""
+    q = (session.query(Player)
+         .filter(Player.is_active == True,
+                 Player.parent_player_id.is_(None)))
+    if min_rating is not None:
+        q = q.filter(Player.rating >= min_rating)
+    pool = q.all()
     if not pool:
-        # Widen if empty
+        # Drop the rating filter as a fallback
         pool = (session.query(Player)
                 .filter(Player.is_active == True,
                         Player.parent_player_id.is_(None))
@@ -75,30 +71,45 @@ def _calc_player_price(player):
     return 7500
 
 
-def reroll_player_market(session, num_slots=DEFAULT_PLAYER_SLOTS):
-    """Wipe and regenerate the player market. Returns count generated."""
-    # Wipe
+def reroll_player_market(session, num_slots=None, min_rating=None):
+    """Wipe and regenerate the player market.
+
+    Reads market_min_rating + market_default_slots from GameConfig if not
+    explicitly provided. Returns count generated.
+    """
+    try:
+        from services.config_service import get_config
+        cfg = get_config(session)
+        if num_slots is None:
+            num_slots = cfg.get("market_default_slots", 6)
+        if min_rating is None:
+            min_rating = cfg.get("market_min_rating", 87)
+    except Exception:
+        if num_slots is None:
+            num_slots = 6
+        if min_rating is None:
+            min_rating = 87
+
     session.query(GlobalPlayerMarket).delete()
     session.flush()
-    # Generate
+
     generated = 0
     used_player_ids = set()
     for slot in range(num_slots):
-        # Avoid duplicate players in the same market (across slots)
-        for _ in range(20):  # retry to find unique
-            p = _pick_player_for_slot(session)
+        for _ in range(20):
+            p = _pick_player_for_slot(session, min_rating=min_rating)
             if not p:
                 break
             if p.id not in used_player_ids:
                 used_player_ids.add(p.id)
                 break
         else:
-            continue  # gave up after 20 retries
+            continue
         if not p:
             continue
         base_price = _calc_player_price(p)
-        # Random discount 0-15%
-        discount_pct = random.choice([0, 0, 0, 5, 10, 15])
+        # Flat 10% discount off normal sell price
+        discount_pct = 10
         final_price = int(base_price * (1 - discount_pct / 100))
         row = GlobalPlayerMarket(
             slot_index=slot,
@@ -113,7 +124,59 @@ def reroll_player_market(session, num_slots=DEFAULT_PLAYER_SLOTS):
         session.add(row)
         generated += 1
     session.flush()
+
+    # Mark the refresh time so /playermarket knows when to auto-reroll next
+    try:
+        from models import GameConfig
+        cfg_row = session.query(GameConfig).first()
+        if cfg_row:
+            cfg_row.market_last_refresh_at = datetime.utcnow()
+            session.flush()
+    except Exception:
+        logger.exception("failed to update market_last_refresh_at")
+
     return generated
+
+
+REFRESH_INTERVAL_HOURS = 24
+
+
+def ensure_player_market_fresh(session):
+    """If market hasn't been refreshed in REFRESH_INTERVAL_HOURS, reroll it.
+    Called from the bot before showing the market to a user.
+    Returns True if a reroll happened.
+    """
+    from models import GameConfig
+    cfg_row = session.query(GameConfig).first()
+    last = cfg_row.market_last_refresh_at if cfg_row else None
+    needs_refresh = False
+    if last is None:
+        needs_refresh = True  # first run
+    else:
+        elapsed = datetime.utcnow() - last
+        if elapsed.total_seconds() >= REFRESH_INTERVAL_HOURS * 3600:
+            needs_refresh = True
+    if needs_refresh:
+        try:
+            n = reroll_player_market(session)
+            session.commit()
+            logger.info(f"Auto-rerolled player market with {n} slots")
+            return True
+        except Exception:
+            session.rollback()
+            logger.exception("Auto-reroll failed")
+    return False
+
+
+def get_next_refresh_at(session):
+    """Returns the datetime when the next auto-refresh will happen, or None."""
+    from models import GameConfig
+    cfg_row = session.query(GameConfig).first()
+    last = cfg_row.market_last_refresh_at if cfg_row else None
+    if not last:
+        return None
+    from datetime import timedelta
+    return last + timedelta(hours=REFRESH_INTERVAL_HOURS)
 
 
 def list_player_market(session):
@@ -121,6 +184,44 @@ def list_player_market(session):
     return (session.query(GlobalPlayerMarket)
             .filter(GlobalPlayerMarket.is_active == True)
             .order_by(GlobalPlayerMarket.slot_index).all())
+
+
+def add_player_to_market(session, player_id, custom_price=None):
+    """Add a single player (base or variant) to the market in the next free slot.
+    Returns (success, message_or_slot_index).
+    """
+    player = session.query(Player).get(player_id)
+    if not player:
+        return False, "Player not found."
+    if not player.is_active:
+        return False, "Player is inactive."
+
+    # Don't allow duplicates of the same player_id in the market
+    existing = (session.query(GlobalPlayerMarket)
+                .filter(GlobalPlayerMarket.player_id == player_id).first())
+    if existing:
+        return False, f"{player.name} is already at slot #{existing.slot_index}."
+
+    # Find next available slot_index
+    max_slot = (session.query(GlobalPlayerMarket.slot_index)
+                .order_by(GlobalPlayerMarket.slot_index.desc()).first())
+    next_slot = (max_slot[0] + 1) if max_slot else 0
+
+    base_price = custom_price if custom_price else _calc_player_price(player)
+    final_price = custom_price if custom_price else int(base_price * 0.9)
+    row = GlobalPlayerMarket(
+        slot_index=next_slot,
+        player_id=player.id,
+        base_price=base_price,
+        final_price=final_price,
+        quantity=1,
+        purchased_count=0,
+        listed_at=datetime.utcnow(),
+        is_active=True,
+    )
+    session.add(row)
+    session.flush()
+    return True, next_slot
 
 
 def buy_player(session, user, slot_index):

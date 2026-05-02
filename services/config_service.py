@@ -35,6 +35,9 @@ DEFAULTS = {
     "sim_six_adjust": 0.0,
     "sim_wicket_adjust": 0.0,
     "sim_extras_adjust": 0.0,
+    # Player market
+    "market_min_rating": 87,
+    "market_default_slots": 6,
 }
 
 
