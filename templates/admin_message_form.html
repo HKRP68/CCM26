@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Edit: {{ meta.label }}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_messages_list') }}" style="color:var(--muted); text-decoration:none;">← Back to messages</a>
+
+<h1 style="margin:1rem 0;">📝 {{ meta.label }}</h1>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; border:1px solid var(--border); font-size:.9rem;">
+  <div style="margin-bottom:.5rem;">
+    <code style="background:var(--bg); padding:.15rem .4rem; border-radius:4px;">{{ key }}</code>
+    {% if is_overridden %}
+    <span style="color:var(--accent2); font-size:.85rem; margin-left:.6rem;">✏️ Custom override active</span>
+    {% else %}
+    <span style="color:var(--muted); font-size:.85rem; margin-left:.6rem;">Using default text</span>
+    {% endif %}
+  </div>
+  <div style="color:var(--muted); font-size:.85rem;">
+    {{ meta.description }}
+  </div>
+</div>
+
+<form method="POST" style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem;">
+  <label style="display:block; font-size:.9rem; margin-bottom:.4rem;">
+    Message body
+  </label>
+  <textarea name="body" required rows="14"
+            style="width:100%; padding:.7rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace; font-size:.9rem; line-height:1.5;">{{ current_body }}</textarea>
+  <small style="color:var(--muted); display:block; margin-top:.4rem;">
+    HTML formatting supported (Telegram tags only): <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=...&gt;</code>.
+    Use <code>\n</code>... actually use literal newlines in the textarea.
+  </small>
+
+  <div style="display:flex; gap:.6rem; margin-top:1.2rem;">
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+      💾 Save
+    </button>
+    {% if is_overridden %}
+    <form method="POST" action="{{ url_for('admin_message_reset', key=key) }}"
+          onsubmit="return confirm('Reset to default? Your custom text will be lost.');"
+          style="display:inline;">
+      <button type="submit" style="background:transparent; border:1px solid var(--border); color:var(--text); padding:.7rem 1.2rem; border-radius:6px; cursor:pointer;">
+        ↺ Reset to Default
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</form>
+
+<!-- Default reference -->
+<details style="margin-top:1.5rem;">
+  <summary style="cursor:pointer; color:var(--muted);">▸ Show default text (read-only)</summary>
+  <pre style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:1rem; margin-top:.5rem; white-space:pre-wrap; font-size:.85rem; line-height:1.4;">{{ default_body }}</pre>
+</details>
+
+{% endblock %}

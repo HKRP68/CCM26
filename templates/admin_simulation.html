@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Simulation{% endblock %}
+{% block content %}
+
+<h1>🎲 Simulation Engine</h1>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
+  ℹ️ The match engine layers ~10 modifiers (bowler, variation, pitch, phase, shot, rating, traits…) onto a base probability table. Sometimes those layers stack up and bias outcomes — e.g. too many dot balls because every layer adds <code>+1 to dot</code>.
+  <br><br>
+  These sliders apply <strong>after</strong> all per-ball modifiers and let you correct systemic biases globally without redeploying. Values are <strong>added</strong> to that outcome's probability (in percentage points). <strong>Default <code>-8</code> on dots</strong> fixes the "too many dots" feedback you reported.
+</div>
+
+<!-- Test simulation -->
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .5rem; font-size:1rem;">🧪 Quick Test</h3>
+  <p style="color:var(--muted); font-size:.85rem; margin-bottom:.7rem;">
+    Run a Monte Carlo simulation with the current settings to see what your match output will look like.
+  </p>
+  <form method="POST" action="{{ url_for('admin_simulation_test') }}" style="display:flex; gap:.5rem; align-items:center;">
+    <label style="font-size:.85rem;">Balls:</label>
+    <input type="number" name="n" value="2000" min="100" max="20000"
+           style="width:100px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer;">▶ Run</button>
+  </form>
+</div>
+
+<form method="POST"
+      style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem;">
+
+  <h3 style="margin:0 0 .8rem; font-size:1rem;">🎯 Outcome Adjustments</h3>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Dot balls <span style="color:var(--muted);">(default {{ defaults.sim_dot_adjust }})</span>
+      </label>
+      <input type="number" name="sim_dot_adjust" step="0.5" required
+             value="{{ cfg.sim_dot_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+      <small style="color:var(--muted);">negative = fewer dots</small>
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Singles (1) <span style="color:var(--muted);">(default {{ defaults.sim_one_adjust }})</span>
+      </label>
+      <input type="number" name="sim_one_adjust" step="0.5" required
+             value="{{ cfg.sim_one_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+      <small style="color:var(--muted);">positive = more singles</small>
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Twos (2) <span style="color:var(--muted);">(default {{ defaults.sim_two_adjust }})</span>
+      </label>
+      <input type="number" name="sim_two_adjust" step="0.5" required
+             value="{{ cfg.sim_two_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Fours (4) <span style="color:var(--muted);">(default {{ defaults.sim_four_adjust }})</span>
+      </label>
+      <input type="number" name="sim_four_adjust" step="0.5" required
+             value="{{ cfg.sim_four_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Sixes (6) <span style="color:var(--muted);">(default {{ defaults.sim_six_adjust }})</span>
+      </label>
+      <input type="number" name="sim_six_adjust" step="0.5" required
+             value="{{ cfg.sim_six_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Wickets (W) <span style="color:var(--muted);">(default {{ defaults.sim_wicket_adjust }})</span>
+      </label>
+      <input type="number" name="sim_wicket_adjust" step="0.5" required
+             value="{{ cfg.sim_wicket_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+      <small style="color:var(--muted);">positive = more wickets</small>
+    </div>
+    <div>
+      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.25rem;">
+        Extras (wide/noball/legbye) <span style="color:var(--muted);">(default {{ defaults.sim_extras_adjust }})</span>
+      </label>
+      <input type="number" name="sim_extras_adjust" step="0.5" required
+             value="{{ cfg.sim_extras_adjust }}"
+             style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:monospace;">
+      <small style="color:var(--muted);">applied across wide/noball/legbye</small>
+    </div>
+  </div>
+
+  <button type="submit" style="margin-top:1.2rem; background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+    💾 Save & Apply
+  </button>
+</form>
+
+{% endblock %}

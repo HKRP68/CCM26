@@ -266,27 +266,186 @@
 
   <!-- Add new version form -->
   <form method="POST" action="{{ url_for('admin_player_version_new', base_id=player.id) }}"
-        enctype="multipart/form-data" style="display:flex; flex-direction:column; gap:.7rem; padding:1rem; background:var(--bg); border-radius:8px; border:1px dashed var(--border);">
-    <strong style="font-size:.95rem;">+ Add new version</strong>
-    <div>
-      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
-        Version label *
-      </label>
-      <input type="text" name="version_label" required maxlength="100"
-             placeholder="e.g. Gold, World Cup 2023, Centurion"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+        enctype="multipart/form-data"
+        style="display:flex; flex-direction:column; gap:.9rem; padding:1.2rem; background:var(--bg); border-radius:8px; border:1px dashed var(--border);">
+    <strong style="font-size:1rem;">+ Add new version</strong>
+    <p style="margin:0; color:var(--muted); font-size:.85rem;">
+      Version label and image are required. Other fields default to the base
+      player's values — change them only if this edition has different stats
+      (e.g. a "World Cup 2023" boost edition).
+    </p>
+
+    <!-- Required: label + image -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:.8rem;">
+      <div>
+        <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
+          Version label <span style="color:var(--red);">*</span>
+        </label>
+        <input type="text" name="version_label" required maxlength="100"
+               placeholder="e.g. Gold, World Cup 2023"
+               style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
+          Custom card image <span style="color:var(--red);">*</span>
+        </label>
+        <input type="file" name="version_image" accept="image/png,image/jpeg,image/webp" required
+               style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      </div>
     </div>
-    <div>
-      <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
-        Custom card image * <span style="color:var(--muted);">(required for versions)</span>
-      </label>
-      <input type="file" name="version_image" accept="image/png,image/jpeg,image/webp" required
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
-      <small style="color:var(--muted); display:block; margin-top:.3rem;">
-        PNG/JPG/WebP, max 5 MB, min 200×200. Recommended: 600×800.
-      </small>
-    </div>
-    <button type="submit" class="btn btn-primary" style="align-self:flex-start; padding:.5rem 1.2rem;">
+    <small style="color:var(--muted); margin-top:-.5rem;">
+      PNG/JPG/WebP, max 5 MB, min 200×200. Recommended: 600×800.
+    </small>
+
+    <!-- Stats (optional overrides) -->
+    <details style="margin-top:.4rem;">
+      <summary style="cursor:pointer; font-size:.9rem; color:var(--accent2);">
+        ▸ Override stats (defaults to base)
+      </summary>
+      <div style="margin-top:.8rem; padding:.8rem; background:var(--card); border-radius:6px; display:flex; flex-direction:column; gap:.7rem;">
+
+        <!-- Row: rating, category -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:.7rem;">
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Overall rating
+            </label>
+            <input type="number" name="rating" min="50" max="100"
+                   placeholder="{{ player.rating }}"
+                   style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Category
+            </label>
+            <select name="category"
+                    style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+              <option value="">— same as base ({{ player.category }}) —</option>
+              {% for c in ['Batsman','Bowler','All-rounder','Wicket Keeper'] %}
+              <option value="{{ c }}">{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <!-- Row: country, bat_hand, bowl_hand -->
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.7rem;">
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Country
+            </label>
+            <input type="text" name="country" maxlength="60"
+                   placeholder="{{ player.country }}"
+                   style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Bat hand
+            </label>
+            <select name="bat_hand"
+                    style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+              <option value="">— same as base ({{ player.bat_hand }}) —</option>
+              <option value="Right">Right</option>
+              <option value="Left">Left</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Bowl hand
+            </label>
+            <select name="bowl_hand"
+                    style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+              <option value="">— same as base ({{ player.bowl_hand }}) —</option>
+              <option value="Right">Right</option>
+              <option value="Left">Left</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row: bowl_style + bat_rating + bowl_rating -->
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.7rem;">
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Bowl style
+            </label>
+            <select name="bowl_style"
+                    style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+              <option value="">— same as base ({{ player.bowl_style }}) —</option>
+              {% for s in ['Fast','Medium Pacer','Off Spinner','Leg Spinner'] %}
+              <option value="{{ s }}">{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Bat rating
+            </label>
+            <input type="number" name="bat_rating" min="0" max="100"
+                   placeholder="{{ player.bat_rating }}"
+                   style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+              Bowl rating
+            </label>
+            <input type="number" name="bowl_rating" min="0" max="100"
+                   placeholder="{{ player.bowl_rating }}"
+                   style="width:100%; padding:.45rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+          </div>
+        </div>
+
+        <!-- Career stats -->
+        <details>
+          <summary style="cursor:pointer; font-size:.85rem; color:var(--muted);">▸ Career stats (rarely needed)</summary>
+          <div style="margin-top:.6rem; display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:.6rem;">
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Bat avg</label>
+              <input type="number" name="bat_avg" step="0.01" min="0"
+                     placeholder="{{ '%.2f'|format(player.bat_avg or 0) }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Strike rate</label>
+              <input type="number" name="strike_rate" step="0.01" min="0"
+                     placeholder="{{ '%.2f'|format(player.strike_rate or 0) }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Runs</label>
+              <input type="number" name="runs" min="0"
+                     placeholder="{{ player.runs or 0 }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Centuries</label>
+              <input type="number" name="centuries" min="0"
+                     placeholder="{{ player.centuries or 0 }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Bowl avg</label>
+              <input type="number" name="bowl_avg" step="0.01" min="0"
+                     placeholder="{{ '%.2f'|format(player.bowl_avg or 0) }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Economy</label>
+              <input type="number" name="economy" step="0.01" min="0"
+                     placeholder="{{ '%.2f'|format(player.economy or 0) }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block; font-size:.75rem; color:var(--muted);">Wickets</label>
+              <input type="number" name="wickets" min="0"
+                     placeholder="{{ player.wickets or 0 }}"
+                     style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+            </div>
+          </div>
+        </details>
+      </div>
+    </details>
+
+    <button type="submit" class="btn btn-primary" style="align-self:flex-start; padding:.55rem 1.4rem; margin-top:.3rem;">
       + Create Version
     </button>
   </form>

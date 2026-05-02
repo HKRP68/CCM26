@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Markets{% endblock %}
+{% block content %}
+
+<h1>🛒 Markets</h1>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
+  ℹ️ Both markets are <strong>shared by all users</strong>. Same slots, same prices, race-safe (atomic stock updates).
+  Player slots usually have <code>quantity=1</code> (one buyer wins). Trait slots have <code>quantity=10</code> (multiple buyers).
+</div>
+
+<!-- ── Player Market ── -->
+<div style="display:flex; justify-content:space-between; align-items:center; margin:1rem 0;">
+  <h2 style="margin:0;">🌟 Player Market</h2>
+  <form method="POST" action="{{ url_for('admin_market_player_reroll') }}"
+        style="display:inline;"
+        onsubmit="return confirm('Wipe current player market and generate new slots?');">
+    <input type="number" name="num_slots" value="8" min="1" max="20"
+           style="width:70px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll</button>
+  </form>
+</div>
+
+{% if p_data %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:1.5rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
+      <th style="padding:.5rem;">Slot</th>
+      <th style="padding:.5rem; text-align:left;">Player</th>
+      <th style="padding:.5rem;">Base 🪙</th>
+      <th style="padding:.5rem;">Sell 🪙</th>
+      <th style="padding:.5rem;">Stock</th>
+      <th style="padding:.5rem;">Active</th>
+      <th style="padding:.5rem;"></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for d in p_data %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <form method="POST" action="{{ url_for('admin_market_player_edit', slot_id=d.row.id) }}">
+        <td style="padding:.4rem; text-align:center;">{{ d.row.slot_index }}</td>
+        <td style="padding:.4rem;">
+          {% if d.player %}
+            <strong>{{ d.player.name }}</strong>
+            <span style="color:var(--muted); font-size:.8rem;">— {{ d.player.rating }} OVR · {{ d.player.country }}</span>
+          {% else %}
+            <em style="color:var(--red);">player {{ d.row.player_id }} missing</em>
+          {% endif %}
+        </td>
+        <td style="padding:.4rem;">
+          <input type="number" name="base_price" value="{{ d.row.base_price }}" min="0"
+                 style="width:90px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
+        </td>
+        <td style="padding:.4rem;">
+          <input type="number" name="final_price" value="{{ d.row.final_price }}" min="0"
+                 style="width:90px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
+        </td>
+        <td style="padding:.4rem; text-align:center;">
+          <input type="number" name="quantity" value="{{ d.row.quantity }}" min="0" max="999"
+                 style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+          <span style="color:var(--muted); font-size:.75rem;">/ {{ d.row.purchased_count }} sold</span>
+        </td>
+        <td style="padding:.4rem; text-align:center;">
+          <input type="checkbox" name="is_active" {% if d.row.is_active %}checked{% endif %}>
+        </td>
+        <td style="padding:.4rem; text-align:right; white-space:nowrap;">
+          <button type="submit" style="background:var(--accent2); color:#000; border:none; padding:.3rem .7rem; border-radius:4px; font-size:.8rem; cursor:pointer;">Save</button>
+      </form>
+          <form method="POST" action="{{ url_for('admin_market_player_delete', slot_id=d.row.id) }}"
+                style="display:inline;"
+                onsubmit="return confirm('Delete slot?');">
+            <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem;">✕</button>
+          </form>
+        </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; text-align:center; color:var(--muted); margin-bottom:1.5rem;">
+  Player market is empty. Click <strong>Reroll</strong> to generate slots.
+</div>
+{% endif %}
+
+<!-- ── Trait Market ── -->
+<div style="display:flex; justify-content:space-between; align-items:center; margin:1rem 0;">
+  <h2 style="margin:0;">💎 Trait Market</h2>
+  <form method="POST" action="{{ url_for('admin_market_trait_reroll') }}"
+        style="display:inline;"
+        onsubmit="return confirm('Wipe current trait market and generate new slots?');">
+    <input type="number" name="num_slots" value="5" min="1" max="15"
+           style="width:70px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll</button>
+  </form>
+</div>
+
+{% if t_data %}
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0; margin-bottom:1.5rem;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
+      <th style="padding:.5rem;">Slot</th>
+      <th style="padding:.5rem; text-align:left;">Trait</th>
+      <th style="padding:.5rem;">Base 💎</th>
+      <th style="padding:.5rem;">Discount %</th>
+      <th style="padding:.5rem;">Sell 💎</th>
+      <th style="padding:.5rem;">Stock</th>
+      <th style="padding:.5rem;">Active</th>
+      <th style="padding:.5rem;"></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for d in t_data %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <form method="POST" action="{{ url_for('admin_market_trait_edit', slot_id=d.row.id) }}">
+        <td style="padding:.4rem; text-align:center;">{{ d.row.slot_index }}</td>
+        <td style="padding:.4rem;">
+          {% if d.trait %}
+          <strong>{{ d.trait.emoji }} {{ d.trait.name }}</strong>
+          <div style="color:var(--muted); font-size:.78rem;">{{ d.trait.description[:60] }}{% if d.trait.description|length > 60 %}…{% endif %}</div>
+          {% else %}
+          <em>trait {{ d.row.trait_id }} missing</em>
+          {% endif %}
+        </td>
+        <td style="padding:.4rem;">
+          <input type="number" name="base_price" value="{{ d.row.base_price }}" min="0"
+                 style="width:80px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
+        </td>
+        <td style="padding:.4rem;">
+          <input type="number" name="discount_pct" value="{{ d.row.discount_pct }}" min="0" max="80"
+                 style="width:60px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
+        </td>
+        <td style="padding:.4rem;">
+          <input type="number" name="final_price" value="{{ d.row.final_price }}" min="0"
+                 style="width:80px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
+        </td>
+        <td style="padding:.4rem; text-align:center;">
+          <input type="number" name="quantity" value="{{ d.row.quantity }}" min="0" max="999"
+                 style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
+          <span style="color:var(--muted); font-size:.75rem;">/ {{ d.row.purchased_count }}</span>
+        </td>
+        <td style="padding:.4rem; text-align:center;">
+          <input type="checkbox" name="is_active" {% if d.row.is_active %}checked{% endif %}>
+        </td>
+        <td style="padding:.4rem; text-align:right; white-space:nowrap;">
+          <button type="submit" style="background:var(--accent2); color:#000; border:none; padding:.3rem .7rem; border-radius:4px; font-size:.8rem; cursor:pointer;">Save</button>
+      </form>
+          <form method="POST" action="{{ url_for('admin_market_trait_delete', slot_id=d.row.id) }}"
+                style="display:inline;"
+                onsubmit="return confirm('Delete slot?');">
+            <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem;">✕</button>
+          </form>
+        </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; text-align:center; color:var(--muted);">
+  Trait market is empty. Click <strong>Reroll</strong> to generate slots.
+</div>
+{% endif %}
+
+<!-- Recent purchases -->
+{% if recent %}
+<h2 style="margin-top:1.5rem;">📨 Recent Purchases</h2>
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
+      <th style="padding:.5rem; text-align:left;">When</th>
+      <th style="padding:.5rem; text-align:left;">Type</th>
+      <th style="padding:.5rem; text-align:left;">User</th>
+      <th style="padding:.5rem; text-align:left;">Item</th>
+      <th style="padding:.5rem; text-align:right;">Price</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in recent %}
+    <tr style="border-bottom:1px solid var(--border); font-size:.85rem;">
+      <td style="padding:.4rem;">{{ r.purchased_at.strftime('%d %b %H:%M') }}</td>
+      <td style="padding:.4rem;">{{ r.market_type }}</td>
+      <td style="padding:.4rem;">user #{{ r.user_id }}</td>
+      <td style="padding:.4rem;">{{ r.item_name or '-' }}</td>
+      <td style="padding:.4rem; text-align:right; font-family:monospace;">{{ r.price_paid }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endblock %}

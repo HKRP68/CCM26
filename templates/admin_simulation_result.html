@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Simulation Result{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_simulation') }}" style="color:var(--muted); text-decoration:none;">← Back to simulation</a>
+
+<h1 style="margin:1rem 0;">📊 Simulation Result — {{ "{:,}".format(total) }} balls</h1>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; border:1px solid var(--border);">
+  <h3 style="margin:0 0 .5rem; font-size:1rem;">Summary</h3>
+  <div style="display:flex; gap:2rem; font-size:.9rem;">
+    <div><strong>Total runs:</strong> {{ runs_total }}</div>
+    <div><strong>RPO:</strong> <span style="color:var(--accent);">{{ "%.2f"|format(rpo) }}</span></div>
+    <div><strong>Dot %:</strong> {{ "%.1f"|format(pct.dot) }}%</div>
+    <div><strong>Boundary %:</strong> {{ "%.1f"|format(pct['4'] + pct['6']) }}%</div>
+  </div>
+</div>
+
+<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
+  <thead>
+    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
+      <th style="padding:.6rem; text-align:left;">Outcome</th>
+      <th style="padding:.6rem; text-align:right;">Count</th>
+      <th style="padding:.6rem; text-align:right;">%</th>
+      <th style="padding:.6rem;">Distribution</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for label, key in [('⚫ Dot', 'dot'), ('1️⃣ Single', '1'), ('2️⃣ Two', '2'), ('3️⃣ Three', '3'), ('4️⃣ Four', '4'), ('6️⃣ Six', '6'), ('🟥 Wicket', 'wicket'), ('↔️ Wide', 'wide'), ('🄽🄱 Noball', 'noball'), ('𓂾 Legbye', 'legbye')] %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.5rem;">{{ label }}</td>
+      <td style="padding:.5rem; text-align:right; font-family:monospace;">{{ counts.get(key, 0) }}</td>
+      <td style="padding:.5rem; text-align:right; font-family:monospace;">{{ "%.2f"|format(pct.get(key, 0)) }}%</td>
+      <td style="padding:.5rem;">
+        <div style="background:var(--bg); border-radius:4px; height:18px; position:relative; overflow:hidden;">
+          <div style="background:var(--accent); height:100%; width:{{ (pct.get(key, 0) * 2)|round(1) }}%; max-width:100%;"></div>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div style="background:var(--card); padding:1rem; border-radius:8px; margin-top:1rem; font-size:.85rem; color:var(--muted); border:1px solid var(--border);">
+  <strong>Realistic targets (T20 cricket):</strong><br>
+  Dots ~30-35% · Singles ~28-35% · Twos ~6-10% · Fours ~10-13% · Sixes ~4-7% · Wickets ~4-6% · RPO 7-10
+</div>
+
+{% endblock %}

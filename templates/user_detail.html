@@ -122,4 +122,82 @@
     </tbody>
   </table>
 </div>
+
+<!-- ── Active matches (with force-end button) ── -->
+<h2 style="margin-top:1.5rem;">🎮 Active Matches
+  {% if active_matches %}
+  <span style="color:var(--accent2); font-size:.75rem; vertical-align:middle; padding:.15rem .5rem; background:var(--card); border-radius:4px;">
+    {{ active_matches|length }} active
+  </span>
+  {% endif %}
+</h2>
+{% if active_matches %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem;">
+  {% for m in active_matches %}
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:.6rem 0; {% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}">
+    <div>
+      <strong>Match #{{ m.match.id }}</strong>
+      vs <span style="color:var(--accent2);">{{ m.opp_name }}</span>
+      <span style="color:var(--muted); font-size:.85rem;">
+        · {{ m.match.overs }}ov · status: {{ m.match.status }}
+        {% if m.match.created_at %}· started {{ m.match.created_at.strftime('%d %b %H:%M') }}{% endif %}
+      </span>
+    </div>
+    <form method="POST"
+          action="{{ url_for('admin_force_end_match', user_id=user.id, match_id=m.match.id) }}"
+          onsubmit="return confirm('Force-end match #{{ m.match.id }}? Use only for stuck matches.');"
+          style="display:inline;">
+      <button type="submit"
+              style="background:var(--red); color:white; border:none; padding:.4rem .9rem; border-radius:5px; font-weight:600; cursor:pointer; font-size:.85rem;">
+        🛑 Force End
+      </button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; color:var(--muted); text-align:center; margin-bottom:1rem;">
+  No active matches.
+</div>
+{% endif %}
+
+{% if pending_trades > 0 %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
+  <span>🔄 <strong>{{ pending_trades }}</strong> pending trade(s)</span>
+  <form method="POST"
+        action="{{ url_for('admin_cancel_pending_trades', user_id=user.id) }}"
+        onsubmit="return confirm('Cancel all {{ pending_trades }} pending trades?');"
+        style="display:inline;">
+    <button type="submit"
+            style="background:transparent; border:1px solid var(--border); color:var(--text); padding:.3rem .8rem; border-radius:5px; cursor:pointer; font-size:.85rem;">
+      Cancel All
+    </button>
+  </form>
+</div>
+{% endif %}
+
+{% if recent_matches %}
+<h2 style="margin-top:1.5rem;">📋 Recent Finished Matches</h2>
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; font-size:.85rem;">
+  {% for m in recent_matches %}
+  <div style="padding:.4rem 0; {% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}">
+    <strong>Match #{{ m.id }}</strong>
+    <span style="color:var(--muted);">
+      · {{ m.overs }}ov ·
+      {% if m.user1_id == user.id %}user1{% else %}user2{% endif %}
+      · {{ m.status }}
+      {% if m.created_at %}· {{ m.created_at.strftime('%d %b %H:%M') }}{% endif %}
+    </span>
+    {% if m.winner_id %}
+      {% if m.winner_id == user.id %}
+        <span style="color:var(--green);">🏆 won {{ m.margin_value }} {{ m.margin_type }}</span>
+      {% else %}
+        <span style="color:var(--red);">💔 lost {{ m.margin_value }} {{ m.margin_type }}</span>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% endblock %}
