@@ -38,6 +38,8 @@ DEFAULTS = {
     # Player market
     "market_min_rating": 87,
     "market_default_slots": 6,
+    "market_refresh_hour_ist": 0,
+    "trait_market_default_slots": 5,
 }
 
 

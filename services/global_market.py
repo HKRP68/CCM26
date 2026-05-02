@@ -61,14 +61,11 @@ def _pick_player_for_slot(session, min_rating=None):
 
 
 def _calc_player_price(player):
-    """Pricing curve based on rating."""
-    r = player.rating
-    if r >= 95: return 250000
-    if r >= 90: return 120000
-    if r >= 85: return 60000
-    if r >= 80: return 30000
-    if r >= 75: return 15000
-    return 7500
+    """Use the same pricing curve as /buy — keeps market consistent with all
+    other parts of the game.
+    """
+    from config import get_buy_value
+    return get_buy_value(player.rating)
 
 
 def reroll_player_market(session, num_slots=None, min_rating=None):
@@ -129,54 +126,135 @@ def reroll_player_market(session, num_slots=None, min_rating=None):
     try:
         from models import GameConfig
         cfg_row = session.query(GameConfig).first()
-        if cfg_row:
-            cfg_row.market_last_refresh_at = datetime.utcnow()
+        if not cfg_row:
+            cfg_row = GameConfig()
+            session.add(cfg_row)
             session.flush()
+        cfg_row.market_last_refresh_at = datetime.utcnow()
+        session.flush()
     except Exception:
         logger.exception("failed to update market_last_refresh_at")
 
     return generated
 
 
-REFRESH_INTERVAL_HOURS = 24
+IST_OFFSET_HOURS = 5.5  # India Standard Time = UTC+5:30
+
+
+def _now_utc():
+    return datetime.utcnow()
+
+
+def _utc_to_ist(dt):
+    """Convert a naive UTC datetime to a naive IST datetime."""
+    from datetime import timedelta
+    return dt + timedelta(hours=5, minutes=30)
+
+
+def _ist_to_utc(dt):
+    """Convert a naive IST datetime to a naive UTC datetime."""
+    from datetime import timedelta
+    return dt - timedelta(hours=5, minutes=30)
+
+
+def _next_refresh_utc(refresh_hour_ist, last_refresh_utc=None):
+    """Return the next UTC datetime when the market should refresh.
+
+    The market refreshes once a day at refresh_hour_ist (in IST). Given we
+    last refreshed at last_refresh_utc, return the next time refresh_hour_ist
+    will occur AFTER that (or after now if no last_refresh).
+    """
+    from datetime import timedelta
+    now_utc = _now_utc()
+    # The reference point is "today's refresh hour in IST"
+    now_ist = _utc_to_ist(now_utc)
+    today_ist_refresh = now_ist.replace(
+        hour=int(refresh_hour_ist) % 24, minute=0, second=0, microsecond=0,
+    )
+    # Convert today's refresh time to UTC
+    today_refresh_utc = _ist_to_utc(today_ist_refresh)
+
+    if last_refresh_utc is None:
+        # Never refreshed — next is today's refresh time if still ahead, else tomorrow
+        if today_refresh_utc > now_utc:
+            return today_refresh_utc
+        return today_refresh_utc + timedelta(days=1)
+
+    # Find next refresh time that's after last_refresh_utc
+    candidate = today_refresh_utc
+    # If today's refresh time was already past at last_refresh, jump forward
+    while candidate <= last_refresh_utc:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _is_due(last_refresh_utc, refresh_hour_ist):
+    """Has the next scheduled refresh time already passed?"""
+    if last_refresh_utc is None:
+        return True  # never refreshed
+    next_at = _next_refresh_utc(refresh_hour_ist, last_refresh_utc)
+    return _now_utc() >= next_at
 
 
 def ensure_player_market_fresh(session):
-    """If market hasn't been refreshed in REFRESH_INTERVAL_HOURS, reroll it.
-    Called from the bot before showing the market to a user.
-    Returns True if a reroll happened.
+    """Reroll the player market if today's refresh time has passed since last reroll.
+    Called from the bot before showing the market.
     """
     from models import GameConfig
     cfg_row = session.query(GameConfig).first()
     last = cfg_row.market_last_refresh_at if cfg_row else None
-    needs_refresh = False
-    if last is None:
-        needs_refresh = True  # first run
-    else:
-        elapsed = datetime.utcnow() - last
-        if elapsed.total_seconds() >= REFRESH_INTERVAL_HOURS * 3600:
-            needs_refresh = True
-    if needs_refresh:
+    refresh_hour = (cfg_row.market_refresh_hour_ist if cfg_row else 0) or 0
+
+    if _is_due(last, refresh_hour):
         try:
             n = reroll_player_market(session)
             session.commit()
-            logger.info(f"Auto-rerolled player market with {n} slots")
+            logger.info(f"Auto-rerolled player market: {n} slots")
             return True
         except Exception:
             session.rollback()
-            logger.exception("Auto-reroll failed")
+            logger.exception("Auto-reroll player market failed")
+    return False
+
+
+def ensure_trait_market_fresh(session):
+    """Reroll the trait market if today's refresh time has passed since last reroll."""
+    from models import GameConfig
+    cfg_row = session.query(GameConfig).first()
+    last = cfg_row.trait_market_last_refresh_at if cfg_row else None
+    refresh_hour = (cfg_row.market_refresh_hour_ist if cfg_row else 0) or 0
+
+    if _is_due(last, refresh_hour):
+        try:
+            n = reroll_trait_market(session)
+            session.commit()
+            logger.info(f"Auto-rerolled trait market: {n} slots")
+            return True
+        except Exception:
+            session.rollback()
+            logger.exception("Auto-reroll trait market failed")
     return False
 
 
 def get_next_refresh_at(session):
-    """Returns the datetime when the next auto-refresh will happen, or None."""
+    """UTC datetime when the next auto-refresh will fire (or None)."""
     from models import GameConfig
     cfg_row = session.query(GameConfig).first()
-    last = cfg_row.market_last_refresh_at if cfg_row else None
-    if not last:
+    if not cfg_row:
         return None
-    from datetime import timedelta
-    return last + timedelta(hours=REFRESH_INTERVAL_HOURS)
+    last = cfg_row.market_last_refresh_at
+    refresh_hour = cfg_row.market_refresh_hour_ist or 0
+    return _next_refresh_utc(refresh_hour, last)
+
+
+def get_next_trait_refresh_at(session):
+    from models import GameConfig
+    cfg_row = session.query(GameConfig).first()
+    if not cfg_row:
+        return None
+    last = cfg_row.trait_market_last_refresh_at
+    refresh_hour = cfg_row.market_refresh_hour_ist or 0
+    return _next_refresh_utc(refresh_hour, last)
 
 
 def list_player_market(session):
@@ -306,8 +384,16 @@ def _calc_trait_price(trait):
     return getattr(trait, "base_price", None) or 200
 
 
-def reroll_trait_market(session, num_slots=DEFAULT_TRAIT_SLOTS):
-    """Wipe and regenerate the trait market."""
+def reroll_trait_market(session, num_slots=None):
+    """Wipe and regenerate the trait market. Reads slot count from config."""
+    if num_slots is None:
+        try:
+            from services.config_service import get_config
+            cfg = get_config(session)
+            num_slots = cfg.get("trait_market_default_slots", 5)
+        except Exception:
+            num_slots = 5
+
     session.query(GlobalTraitMarket).delete()
     session.flush()
     traits = (session.query(Trait)
@@ -334,6 +420,20 @@ def reroll_trait_market(session, num_slots=DEFAULT_TRAIT_SLOTS):
         session.add(row)
         generated += 1
     session.flush()
+
+    # Update last refresh marker
+    try:
+        from models import GameConfig
+        cfg_row = session.query(GameConfig).first()
+        if not cfg_row:
+            cfg_row = GameConfig()
+            session.add(cfg_row)
+            session.flush()
+        cfg_row.trait_market_last_refresh_at = datetime.utcnow()
+        session.flush()
+    except Exception:
+        logger.exception("failed to update trait_market_last_refresh_at")
+
     return generated
 
 
@@ -341,6 +441,44 @@ def list_trait_market(session):
     return (session.query(GlobalTraitMarket)
             .filter(GlobalTraitMarket.is_active == True)
             .order_by(GlobalTraitMarket.slot_index).all())
+
+
+def add_trait_to_market(session, trait_id, custom_price=None, quantity=10):
+    """Add a single trait to the trait market in the next free slot.
+    Returns (success, message_or_slot_index).
+    """
+    trait = session.query(Trait).get(trait_id)
+    if not trait:
+        return False, "Trait not found."
+    if not trait.is_active:
+        return False, "Trait is inactive."
+
+    # Don't allow duplicates
+    existing = (session.query(GlobalTraitMarket)
+                .filter(GlobalTraitMarket.trait_id == trait_id).first())
+    if existing:
+        return False, f"{trait.name} is already at slot #{existing.slot_index}."
+
+    max_slot = (session.query(GlobalTraitMarket.slot_index)
+                .order_by(GlobalTraitMarket.slot_index.desc()).first())
+    next_slot = (max_slot[0] + 1) if max_slot else 0
+
+    base_price = custom_price if custom_price else _calc_trait_price(trait)
+    final_price = custom_price if custom_price else base_price
+    row = GlobalTraitMarket(
+        slot_index=next_slot,
+        trait_id=trait.id,
+        base_price=base_price,
+        discount_pct=0,
+        final_price=final_price,
+        quantity=int(quantity) if quantity else 10,
+        purchased_count=0,
+        listed_at=datetime.utcnow(),
+        is_active=True,
+    )
+    session.add(row)
+    session.flush()
+    return True, next_slot
 
 
 def buy_trait(session, user, slot_index):
