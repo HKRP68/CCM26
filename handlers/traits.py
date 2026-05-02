@@ -122,19 +122,12 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        # Use shared global trait market (admin-managed)
-        from services.global_market import list_trait_market, reroll_trait_market
+        # Use shared global trait market (admin-managed, auto-refreshes daily)
+        from services.global_market import (
+            list_trait_market, ensure_trait_market_fresh,
+        )
+        ensure_trait_market_fresh(session)
         rows = list_trait_market(session)
-        if not rows:
-            # First-time auto-generation
-            try:
-                reroll_trait_market(session)
-                session.commit()
-                rows = list_trait_market(session)
-            except Exception:
-                logger.exception("Initial trait market generation failed")
-                session.rollback()
-
         if not rows:
             await update.message.reply_text("❌ Trait market is empty. Check back later!")
             return
