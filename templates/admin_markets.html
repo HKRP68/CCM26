@@ -5,37 +5,58 @@
 <h1>🛒 Markets</h1>
 
 <div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ Markets are <strong>shared by all users</strong>. Player market auto-refreshes every 24 hours.
-  Cards always sell at <strong>10% off</strong>. Race-safe (atomic stock updates).
-  {% if next_refresh %}
-  <br><span style="color:var(--accent2);">Next auto-refresh: {{ next_refresh.strftime('%d %b %H:%M UTC') }}</span>
-  {% endif %}
+  ℹ️ Markets are <strong>shared by all users</strong>. Both refresh once daily at <strong>{{ '%02d:00 IST' | format(cfg.market_refresh_hour_ist or 0) }}</strong>. Player cards always sell at <strong>10% off</strong>. Race-safe atomic stock updates.
 </div>
 
 <!-- ── Market settings ── -->
 <div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.2rem; margin-bottom:1.5rem;">
   <h3 style="margin:0 0 .8rem; font-size:1rem;">⚙️ Market Settings</h3>
   <form method="POST" action="{{ url_for('admin_market_settings_save') }}"
-        style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+        style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:.9rem; align-items:end;">
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Minimum rating
       </label>
       <input type="number" name="market_min_rating" min="50" max="100" required
              value="{{ cfg.market_min_rating or 87 }}"
-             style="width:100px; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
-        Default slot count
+        Player slots / reroll
       </label>
       <input type="number" name="market_default_slots" min="1" max="20" required
              value="{{ cfg.market_default_slots or 6 }}"
-             style="width:100px; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     </div>
-    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer;">💾 Save</button>
-    <span style="color:var(--muted); font-size:.8rem; align-self:center;">Applied on next reroll.</span>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Trait slots / reroll
+      </label>
+      <input type="number" name="trait_market_default_slots" min="1" max="15" required
+             value="{{ cfg.trait_market_default_slots or 5 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Daily refresh time (IST)
+      </label>
+      <select name="market_refresh_hour_ist" required
+              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+        {% set current_hour = cfg.market_refresh_hour_ist or 0 %}
+        {% for h in range(24) %}
+          {% set lbl = '12:00 AM' if h == 0 else ('12:00 PM' if h == 12 else (h ~ ':00 AM' if h < 12 else (h - 12) ~ ':00 PM')) %}
+          <option value="{{ h }}" {% if h == current_hour %}selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer; width:100%;">💾 Save</button>
+    </div>
   </form>
+  <small style="color:var(--muted); display:block; margin-top:.6rem;">
+    Both player and trait markets refresh once daily at this IST time. Settings apply on the next refresh; click <strong>Reroll Now</strong> below to apply immediately.
+  </small>
 </div>
 
 <!-- ── Add Player to Market ── -->
@@ -71,7 +92,13 @@
 
 <!-- ── Player Market ── -->
 <div style="display:flex; justify-content:space-between; align-items:center; margin:1rem 0;">
-  <h2 style="margin:0;">🌟 Player Market</h2>
+  <h2 style="margin:0;">🌟 Player Market
+    {% if next_refresh %}
+    <span style="font-size:.7rem; color:var(--muted); font-weight:normal; vertical-align:middle; margin-left:.5rem;">
+      next refresh: {{ next_refresh.strftime('%d %b %H:%M UTC') }}
+    </span>
+    {% endif %}
+  </h2>
   <form method="POST" action="{{ url_for('admin_market_player_reroll') }}"
         style="display:inline;"
         onsubmit="return confirm('Wipe current player market and generate new random slots?');">
@@ -142,15 +169,56 @@
 </div>
 {% endif %}
 
+<!-- ── Add Trait to Market ── -->
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.2rem; margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .8rem; font-size:1rem;">➕ Add Trait to Market</h3>
+  <form method="POST" action="{{ url_for('admin_market_trait_add') }}"
+        style="display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap;">
+    <div style="flex:1; min-width:240px;">
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Trait
+      </label>
+      <select name="trait_id" required
+              style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">
+        <option value="">— pick a trait —</option>
+        {% for t in all_traits %}
+        <option value="{{ t.id }}">{{ t.emoji }} {{ t.name }} — {{ t.description[:50] }}{% if t.description|length > 50 %}…{% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Price 💎 (optional)
+      </label>
+      <input type="number" name="price" min="0" placeholder="auto"
+             style="width:100px; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Quantity
+      </label>
+      <input type="number" name="quantity" min="1" max="999" value="10"
+             style="width:80px; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer;">+ Add</button>
+  </form>
+</div>
+
 <!-- ── Trait Market ── -->
 <div style="display:flex; justify-content:space-between; align-items:center; margin:1rem 0;">
-  <h2 style="margin:0;">💎 Trait Market</h2>
+  <h2 style="margin:0;">💎 Trait Market
+    {% if next_trait_refresh %}
+    <span style="font-size:.7rem; color:var(--muted); font-weight:normal; vertical-align:middle; margin-left:.5rem;">
+      next refresh: {{ next_trait_refresh.strftime('%d %b %H:%M UTC') }}
+    </span>
+    {% endif %}
+  </h2>
   <form method="POST" action="{{ url_for('admin_market_trait_reroll') }}"
         style="display:inline;"
         onsubmit="return confirm('Wipe current trait market and generate new slots?');">
-    <input type="number" name="num_slots" value="5" min="1" max="15"
+    <input type="number" name="num_slots" value="{{ cfg.trait_market_default_slots or 5 }}" min="1" max="15"
            style="width:70px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll</button>
+    <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll Now</button>
   </form>
 </div>
 
