@@ -408,6 +408,30 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         except Exception:
             logger.exception("Trait engine failed; ignoring traits this ball")
 
+    # Layer 10: Admin-tuned global adjustments (cached, read once per ball)
+    # These let the admin fix systemic biases without redeploying — e.g. if all
+    # the per-layer dot bumps stack up too much, sim_dot_adjust=-8 brings it back.
+    try:
+        from services.config_service import get_config
+        cfg = get_config()
+        global_adj = {
+            "dot": cfg.get("sim_dot_adjust", 0.0) or 0.0,
+            "1":   cfg.get("sim_one_adjust", 0.0) or 0.0,
+            "2":   cfg.get("sim_two_adjust", 0.0) or 0.0,
+            "4":   cfg.get("sim_four_adjust", 0.0) or 0.0,
+            "6":   cfg.get("sim_six_adjust", 0.0) or 0.0,
+            "W":   cfg.get("sim_wicket_adjust", 0.0) or 0.0,
+        }
+        # Extras adjustment splits across wide/noball/legbye proportionally
+        extras_adj = cfg.get("sim_extras_adjust", 0.0) or 0.0
+        if extras_adj:
+            global_adj["wide"] = extras_adj * 0.4
+            global_adj["noball"] = extras_adj * 0.2
+            global_adj["legbye"] = extras_adj * 0.4
+        _apply_mods(probs, global_adj)
+    except Exception:
+        logger.exception("Failed to apply admin sim adjustments")
+
     # Final normalize
     _normalize(probs)
 
