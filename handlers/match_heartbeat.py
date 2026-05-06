@@ -21,9 +21,9 @@ from telegram.ext import ContextTypes
 logger = logging.getLogger(__name__)
 
 # Tunables
-HEARTBEAT_INTERVAL = 30        # seconds between scans
-RERENDER_THRESHOLD = 90        # seconds idle before we re-render the screen
-AUTODECIDE_THRESHOLD = 300     # seconds idle (5 min) before AI auto-decides
+HEARTBEAT_INTERVAL = 6         # seconds between scans
+RERENDER_THRESHOLD = 12        # seconds idle before we re-render the screen
+AUTODECIDE_THRESHOLD = 45      # seconds idle before AI auto-decides
 HEARTBEAT_JOB_NAME = "match_heartbeat_global"
 
 
