@@ -3,7 +3,7 @@
 import io
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -14,6 +14,41 @@ from services.activity_service import log_activity
 from services.card_text import format_player_card
 
 logger = logging.getLogger(__name__)
+
+
+def _buypl_versions_keyboard(versions, current_idx, owner_user_id, owner_tg_id):
+    current = versions[current_idx]
+    nav = []
+    if current_idx > 0:
+        nav.append(InlineKeyboardButton(
+            "⬅️ Previous",
+            callback_data=f"buypage_{owner_user_id}_{owner_tg_id}_{current_idx - 1}",
+        ))
+    nav.append(InlineKeyboardButton(
+        f"{current_idx + 1}/{len(versions)}",
+        callback_data="noop",
+    ))
+    if current_idx < len(versions) - 1:
+        nav.append(InlineKeyboardButton(
+            "Next ➡️",
+            callback_data=f"buypage_{owner_user_id}_{owner_tg_id}_{current_idx + 1}",
+        ))
+    return InlineKeyboardMarkup([
+        nav,
+        [InlineKeyboardButton("💰 Buy", callback_data=f"buypl_{current.id}_{owner_user_id}_{owner_tg_id}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"buycancel_{owner_tg_id}")],
+    ])
+
+
+def _buypl_versions_text(player, user, index, total):
+    version_name = player.version or "Base"
+    return (
+        f"🧾 <b>{player.name}</b> — <i>{version_name}</i>\n"
+        f"📄 Card {index + 1}/{total}\n\n"
+        + format_player_card(player)
+        + "\n\n"
+        + f"💳 Your Balance: {user.total_coins:,} 🪙"
+    )
 
 
 async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,19 +102,19 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        buy_val = get_buy_value(player.rating)
-
-        text = (
-            format_player_card(player) + "\n\n"
-            f"💳 Your Balance: {user.total_coins:,} 🪙"
+        from services.version_service import get_all_versions
+        base_id = player.parent_player_id or player.id
+        versions = get_all_versions(session, base_id)
+        versions = sorted(
+            versions,
+            key=lambda v: (0 if (v.version or "").strip().lower() == "base" else 1, v.id),
         )
+        current_idx = next((i for i, v in enumerate(versions) if v.id == player.id), 0)
+        context.bot_data[f"buypl_base_{tg_user.id}"] = versions[current_idx].id
+        text = _buypl_versions_text(versions[current_idx], user, current_idx, len(versions))
+        keyboard = _buypl_versions_keyboard(versions, current_idx, user.id, tg_user.id)
 
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💰 Buy", callback_data=f"buypl_{player.id}_{user.id}_{tg_user.id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"buycancel_{tg_user.id}"),
-        ]])
-
-        card_bytes = generate_card(player)
+        card_bytes = generate_card(versions[current_idx])
         if card_bytes:
             sent = await update.message.reply_photo(
                 photo=io.BytesIO(card_bytes), caption=text,
@@ -98,6 +133,60 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception(f"BuyPl error for {tg_user.id}")
         await update.message.reply_text("⚠️ Error. Try again.")
+    finally:
+        session.close()
+
+
+async def buypl_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tg_user = query.from_user
+    try:
+        _, owner_user_id, owner_tg_id, idx = query.data.split("_")
+        owner_user_id = int(owner_user_id)
+        owner_tg_id = int(owner_tg_id)
+        idx = int(idx)
+    except (ValueError, IndexError):
+        return
+    if tg_user.id != owner_tg_id:
+        await query.answer("This isn't your purchase view!", show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        user = session.query(User).get(owner_user_id)
+        if not user or user.telegram_id != owner_tg_id:
+            return
+        from services.version_service import get_all_versions
+        seed_player_id = context.bot_data.get(f"buypl_base_{owner_tg_id}")
+        if not seed_player_id:
+            await query.edit_message_reply_markup(reply_markup=None)
+            return
+        seed = session.query(Player).get(seed_player_id)
+        if not seed:
+            return
+        base_id = seed.parent_player_id or seed.id
+        versions = get_all_versions(session, base_id)
+        versions = sorted(
+            versions,
+            key=lambda v: (0 if (v.version or "").strip().lower() == "base" else 1, v.id),
+        )
+        if not versions:
+            return
+        idx = max(0, min(idx, len(versions) - 1))
+        player = versions[idx]
+        text = _buypl_versions_text(player, user, idx, len(versions))
+        kb = _buypl_versions_keyboard(versions, idx, owner_user_id, owner_tg_id)
+        card_bytes = generate_card(player)
+        if card_bytes:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=io.BytesIO(card_bytes), caption=text, parse_mode="HTML"),
+                reply_markup=kb,
+            )
+        else:
+            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        logger.exception("buypl_page_callback error")
     finally:
         session.close()
 

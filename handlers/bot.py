@@ -46,7 +46,7 @@ from handlers.search import (
     searchpl_page_callback, searchovr_page_callback,
     search_cancel_callback, noop_callback,
 )
-from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback
+from handlers.buy import buypl_handler, buypl_confirm_callback, buypl_cancel_callback, buypl_page_callback
 from handlers.team import teamname_handler, purse_handler, stats_handler
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
 from handlers.profile import myprofile_handler, myprofile_callback
@@ -341,6 +341,7 @@ def main():
         app.add_handler(CallbackQueryHandler(bench_callback, pattern=r"^viewbench_"))
 
         # ── Buy callbacks ────────────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(buypl_page_callback, pattern=r"^buypage_"))
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
         app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel"))
 
