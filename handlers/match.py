@@ -1,6 +1,6 @@
 """Handler for /playmatch — full match with endmatch, timeouts, rewards."""
 
-import io, random, logging, asyncio
+import io, random, logging
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -79,28 +79,6 @@ def _bowl_label(p, s):
     ov_str = f"{od}.{tb}" if tb else str(od)
     h = p.get("bowl_hand", "R")[:1]
     return f"{p['name']} | {h}-{p['bowl_style']} | {ov_str}•{bws.get('runs',0)}•{bws.get('wickets',0)}"
-
-
-def _schedule_quick_rerender(ctx, mid, *, delay_seconds: float = 1.5):
-    """Small self-heal retry when Telegram delivery/edit briefly fails.
-
-    Guarded by a per-match key so repeated failures don't spawn retry storms.
-    """
-    key = f"rerender_retry_{mid}"
-    if ctx.bot_data.get(key):
-        return
-    ctx.bot_data[key] = True
-
-    async def _retry_once():
-        try:
-            await asyncio.sleep(delay_seconds)
-            await render_screen(ctx, mid)
-        except Exception:
-            logger.exception(f"quick rerender retry failed for match {mid}")
-        finally:
-            ctx.bot_data.pop(key, None)
-
-    asyncio.create_task(_retry_once())
 
 
 async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
@@ -1261,7 +1239,7 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Resume a stuck match — finds the live match for this chat and re-renders buttons."""
     cid = update.effective_chat.id
 
-    # Find any ms_* state with this chat_id (fast path: in-memory cache)
+    # Find any ms_* state with this chat_id
     found_mid = None
     for k, v in list(context.bot_data.items()):
         if k.startswith("ms_") and isinstance(v, dict) and v.get("chat_id") == cid:
@@ -1270,22 +1248,6 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
             except (ValueError, IndexError):
                 continue
-
-    # Cold-cache fallback: check persistent MatchState rows by chat_id.
-    # This handles bot restarts or memory evictions where ms_* is missing.
-    if not found_mid:
-        session = get_session()
-        try:
-            ms = (session.query(MatchState)
-                  .filter(MatchState.chat_id == cid)
-                  .order_by(MatchState.last_modified.desc())
-                  .first())
-            if ms and ms.next_action != A_COMPLETED:
-                found_mid = ms.match_id
-        except Exception:
-            logger.exception("resume_handler DB fallback failed")
-        finally:
-            session.close()
 
     if not found_mid:
         await update.message.reply_text("❌ No active match in this chat to resume.")
@@ -1341,7 +1303,6 @@ async def _show_delivery(ctx, cid, mid):
         _start_action_timer(ctx, mid, s["bowl_user_tg"], "select delivery")
     except Exception:
         logger.exception(f"_show_delivery failed for match {mid}")
-        _schedule_quick_rerender(ctx, mid)
         try:
             await ctx.bot.send_message(
                 cid,
@@ -1518,7 +1479,6 @@ async def _show_shot(ctx, cid, mid):
         _start_action_timer(ctx, mid, s["bat_user_tg"], "choose shot")
     except Exception:
         logger.exception(f"_show_shot failed for match {mid}")
-        _schedule_quick_rerender(ctx, mid)
         # Last-ditch: send a plain text fallback so user knows what to do
         try:
             await ctx.bot.send_message(

@@ -32,58 +32,99 @@ def _renumber_roster(session, user_id):
 
 def _do_release(session, user, entries):
     """Release a list of (UserRoster, Player) tuples atomically.
+
+    Cleans up all known references to the doomed roster rows BEFORE deleting,
+    so foreign key constraints don't bite us:
+      - PlayerTrait rows (returns each trait to inventory)
+      - pending Trade rows (cancelled, FKs nulled)
+      - User.captain_roster_id (nulled if it points to a doomed row)
+      - any other lingering references caught by the catch-all SQL below
+
     Returns dict with success, released list, total_coins, new_balance, new_count.
     """
+    from sqlalchemy import text
     from models import Trade, PlayerTrait, TraitInventory
 
     total_coins = 0
     released = []
     captain_released = False
-    traits_returned = 0  # how many traits went back to inventory
+    traits_returned = 0
 
     roster_ids = [e.id for e, _ in entries]
+    if not roster_ids:
+        return {
+            "success": True, "released": [],
+            "total_coins": 0, "new_balance": user.total_coins,
+            "new_count": user.roster_count,
+            "captain_released": False, "traits_returned": 0,
+        }
 
     # 1. Cancel pending trades that reference these roster entries
-    if roster_ids:
-        stale_trades = (session.query(Trade)
-                        .filter(Trade.status == "pending")
-                        .filter((Trade.initiator_roster_id.in_(roster_ids)) |
-                                (Trade.receiver_roster_id.in_(roster_ids)))
-                        .all())
-        for t in stale_trades:
-            t.status = "cancelled"
-            # Null out the FK so deletion doesn't cascade or block
-            if t.initiator_roster_id in roster_ids:
-                t.initiator_roster_id = None
-            if t.receiver_roster_id in roster_ids:
-                t.receiver_roster_id = None
+    stale_trades = (session.query(Trade)
+                    .filter(Trade.status == "pending")
+                    .filter((Trade.initiator_roster_id.in_(roster_ids)) |
+                            (Trade.receiver_roster_id.in_(roster_ids)))
+                    .all())
+    for t in stale_trades:
+        t.status = "cancelled"
+        if t.initiator_roster_id in roster_ids:
+            t.initiator_roster_id = None
+        if t.receiver_roster_id in roster_ids:
+            t.receiver_roster_id = None
+
+    # ALSO null FK on completed/cancelled trades — even those still hold a FK
+    # pointer in Postgres, and "ON DELETE NO ACTION" (default) blocks the delete.
+    historical_trades = (session.query(Trade)
+                         .filter(Trade.status != "pending")
+                         .filter((Trade.initiator_roster_id.in_(roster_ids)) |
+                                 (Trade.receiver_roster_id.in_(roster_ids)))
+                         .all())
+    for t in historical_trades:
+        if t.initiator_roster_id in roster_ids:
+            t.initiator_roster_id = None
+        if t.receiver_roster_id in roster_ids:
+            t.receiver_roster_id = None
+    session.flush()
+
+    # 2. Return any equipped traits to inventory
+    equipped = (session.query(PlayerTrait)
+                .filter(PlayerTrait.roster_id.in_(roster_ids)).all())
+    for pt in equipped:
+        inv = TraitInventory(
+            user_id=pt.user_id,
+            trait_id=pt.trait_id,
+            level=pt.level,
+        )
+        session.add(inv)
+        session.delete(pt)
+        traits_returned += 1
+    session.flush()
+
+    # 3. Captain check: null user.captain_roster_id BEFORE deleting roster rows.
+    # We check ALL the entries being deleted up front so the captain reference
+    # is gone before any row delete is flushed.
+    if user.captain_roster_id in roster_ids:
+        user.captain_roster_id = None
+        captain_released = True
         session.flush()
 
-    # 2. Return any equipped traits to inventory before deleting roster
-    # (PlayerTrait has a NOT NULL FK to user_roster.id, so without this the
-    # delete would raise ForeignKeyViolation.)
-    if roster_ids:
-        equipped = (session.query(PlayerTrait)
-                    .filter(PlayerTrait.roster_id.in_(roster_ids)).all())
-        for pt in equipped:
-            # Return to inventory at its current level
-            inv = TraitInventory(
-                user_id=pt.user_id,
-                trait_id=pt.trait_id,
-                level=pt.level,
-            )
-            session.add(inv)
-            session.delete(pt)
-            traits_returned += 1
-        session.flush()
+    # 4. Catch-all: production DB may have FK constraints not in the model
+    # (e.g. legacy users.captain_roster_id FK from an old migration). Use raw
+    # SQL UPDATE that's safe-on-no-match — these are idempotent best-effort
+    # cleanups. Wrapped in try/except so missing tables don't crash the release.
+    safety_updates = [
+        ("UPDATE users SET captain_roster_id = NULL WHERE captain_roster_id IN :ids",
+         {"ids": tuple(roster_ids) if len(roster_ids) > 1 else (roster_ids[0],)}),
+    ]
+    for sql, params in safety_updates:
+        try:
+            session.execute(text(sql), params)
+        except Exception:
+            pass  # best-effort
 
-    # 3. Delete the roster entries
+    # 5. Delete the roster entries
     for entry, player in entries:
         sv = get_sell_value(player.rating)
-        # Captain check — clear captain if captain is released
-        if user.captain_roster_id == entry.id:
-            user.captain_roster_id = None
-            captain_released = True
         session.delete(entry)
         user.total_coins += sv
         user.roster_count = max(0, user.roster_count - 1)
@@ -298,9 +339,15 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         session.rollback()
         logger.exception(f"Release one callback FAILED: {type(e).__name__}: {e}")
+        msg = str(e)
+        import re
+        m = re.search(r'constraint "([^"]+)"', msg)
+        constraint_hint = f"\nConstraint: <code>{m.group(1)}</code>" if m else ""
         try:
             await query.edit_message_text(
-                f"⚠️ Error releasing player.\n<code>{type(e).__name__}: {str(e)[:80]}</code>",
+                f"⚠️ Error releasing player.\n"
+                f"<code>{type(e).__name__}</code>{constraint_hint}\n\n"
+                f"<i>{msg[:300]}</i>",
                 parse_mode="HTML")
         except Exception:
             pass
@@ -491,8 +538,21 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
     except Exception as e:
         session.rollback()
         logger.exception(f"ReleaseMultiple confirm FAILED: {type(e).__name__}: {e}")
+        # Extract the actual constraint name from psycopg2 errors so we can
+        # diagnose which lingering reference is blocking the delete.
+        msg = str(e)
+        # Postgres FK violations look like:
+        #   ... violates foreign key constraint "fk_name" on table "x"
+        constraint_hint = ""
+        import re
+        m = re.search(r'constraint "([^"]+)"', msg)
+        if m:
+            constraint_hint = f"\nConstraint: <code>{m.group(1)}</code>"
+        # Snippet of underlying error (longer than before)
         try: await query.edit_message_text(
-            f"⚠️ Error releasing players.\n<code>{type(e).__name__}: {str(e)[:80]}</code>",
+            f"⚠️ Error releasing players.\n"
+            f"<code>{type(e).__name__}</code>{constraint_hint}\n\n"
+            f"<i>{msg[:300]}</i>",
             parse_mode="HTML")
         except Exception: pass
     finally:

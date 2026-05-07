@@ -3,7 +3,7 @@
 import io
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -14,41 +14,6 @@ from services.activity_service import log_activity
 from services.card_text import format_player_card
 
 logger = logging.getLogger(__name__)
-
-
-def _buypl_versions_keyboard(versions, current_idx, owner_user_id, owner_tg_id):
-    current = versions[current_idx]
-    nav = []
-    if current_idx > 0:
-        nav.append(InlineKeyboardButton(
-            "⬅️ Previous",
-            callback_data=f"buypage_{owner_user_id}_{owner_tg_id}_{current_idx - 1}",
-        ))
-    nav.append(InlineKeyboardButton(
-        f"{current_idx + 1}/{len(versions)}",
-        callback_data="noop",
-    ))
-    if current_idx < len(versions) - 1:
-        nav.append(InlineKeyboardButton(
-            "Next ➡️",
-            callback_data=f"buypage_{owner_user_id}_{owner_tg_id}_{current_idx + 1}",
-        ))
-    return InlineKeyboardMarkup([
-        nav,
-        [InlineKeyboardButton("💰 Buy", callback_data=f"buypl_{current.id}_{owner_user_id}_{owner_tg_id}")],
-        [InlineKeyboardButton("❌ Cancel", callback_data=f"buycancel_{owner_tg_id}")],
-    ])
-
-
-def _buypl_versions_text(player, user, index, total):
-    version_name = player.version or "Base"
-    return (
-        f"🧾 <b>{player.name}</b> — <i>{version_name}</i>\n"
-        f"📄 Card {index + 1}/{total}\n\n"
-        + format_player_card(player)
-        + "\n\n"
-        + f"💳 Your Balance: {user.total_coins:,} 🪙"
-    )
 
 
 async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,65 +35,30 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Roster full (25/25)! Release players first.")
             return
 
-        # Default to base card; fall back to any version
-        player = (session.query(Player)
-                  .filter(Player.name.ilike(f"%{search}%"),
-                          Player.parent_player_id.is_(None),
-                          Player.is_active == True).first())
-        if not player:
-            player = (session.query(Player)
-                      .filter(Player.name.ilike(f"%{search}%"),
-                              Player.is_active == True).first())
+        # Find any matching player
+        from services.version_paginator import (
+            find_player_for_search, get_versions_ordered,
+            build_pagination_keyboard, page_number_for, _format_version_label,
+        )
+        player = find_player_for_search(session, search)
         if not player:
             await update.message.reply_text(f"❌ No player found matching '{search}'")
             return
 
-        # Ownership check across all versions of this base
-        from services.version_service import user_owns_any_version, get_all_versions
-        if user_owns_any_version(session, user.id, player.id):
-            base_id = player.parent_player_id or player.id
-            versions = get_all_versions(session, base_id)
-            owned_v = None
-            owned_row = (session.query(UserRoster)
-                         .filter(UserRoster.user_id == user.id,
-                                 UserRoster.player_id.in_([v.id for v in versions])).first())
-            if owned_row:
-                owned_v = next((v for v in versions if v.id == owned_row.player_id), None)
-            await update.message.reply_text(
-                f"❌ You already own a version of <b>{player.name}</b>"
-                + (f" (<i>{owned_v.version}</i>)" if owned_v else "")
-                + ".\n\nYou can only own one version of any player at a time.",
-                parse_mode="HTML",
-            )
-            return
-
-        from services.version_service import get_all_versions
+        # Build the version list and pick which page to start on
         base_id = player.parent_player_id or player.id
-        versions = get_all_versions(session, base_id)
-        versions = sorted(
-            versions,
-            key=lambda v: (0 if (v.version or "").strip().lower() == "base" else 1, v.id),
+        versions = get_versions_ordered(session, base_id)
+        if not versions:
+            versions = [player]
+        # Always start on the first page (Base) — user can navigate from there
+        start_player = versions[0]
+        current_idx = 0
+
+        await _send_version_page(
+            session=session, user=user, versions=versions,
+            current_idx=current_idx, owner_tg=tg_user.id,
+            send_to=update.message, context=context,
         )
-        current_idx = next((i for i, v in enumerate(versions) if v.id == player.id), 0)
-        context.bot_data[f"buypl_base_{tg_user.id}"] = versions[current_idx].id
-        text = _buypl_versions_text(versions[current_idx], user, current_idx, len(versions))
-        keyboard = _buypl_versions_keyboard(versions, current_idx, user.id, tg_user.id)
-
-        card_bytes = generate_card(versions[current_idx])
-        if card_bytes:
-            sent = await update.message.reply_photo(
-                photo=io.BytesIO(card_bytes), caption=text,
-                parse_mode="HTML", reply_markup=keyboard,
-            )
-        else:
-            sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-
-        # 2-minute auto-cleanup
-        try:
-            from services.button_timeout import schedule_button_timeout
-            schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
-        except Exception:
-            pass
 
     except Exception:
         logger.exception(f"BuyPl error for {tg_user.id}")
@@ -137,58 +67,133 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
-async def buypl_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    tg_user = query.from_user
-    try:
-        _, owner_user_id, owner_tg_id, idx = query.data.split("_")
-        owner_user_id = int(owner_user_id)
-        owner_tg_id = int(owner_tg_id)
-        idx = int(idx)
-    except (ValueError, IndexError):
+async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
+                             send_to, context, edit_query=None):
+    """Render one version page. If edit_query is set, edit that message in
+    place; otherwise send a new one via send_to.
+    """
+    from services.version_paginator import build_pagination_keyboard, _format_version_label
+    import io as _io
+
+    player = versions[current_idx]
+    n = len(versions)
+
+    # Caption text
+    caption_lines = []
+    page_label = f"<b>Page {current_idx + 1}/{n}</b>" if n > 1 else ""
+    if page_label:
+        caption_lines.append(page_label)
+    caption_lines.append(format_player_card(player))
+    if n > 1:
+        version_label = _format_version_label(player)
+        caption_lines.append(f"\n🎴 <i>Version: <b>{version_label}</b></i>")
+    caption_lines.append(f"\n💳 Your Balance: <b>{user.total_coins:,}</b> 🪙")
+    caption = "\n".join(caption_lines)
+
+    keyboard = build_pagination_keyboard(
+        session=session, user=user, versions=versions,
+        current_index=current_idx, owner_tg=owner_tg, flow="buy",
+    )
+
+    card_bytes = generate_card(player)
+
+    if edit_query is not None:
+        # Edit existing message: try edit_message_media for photo, fall back to caption-only
+        try:
+            if card_bytes and edit_query.message.photo:
+                from telegram import InputMediaPhoto
+                await edit_query.edit_message_media(
+                    media=InputMediaPhoto(
+                        media=_io.BytesIO(card_bytes),
+                        caption=caption, parse_mode="HTML",
+                    ),
+                    reply_markup=keyboard,
+                )
+            elif edit_query.message.photo:
+                # Photo message but new card failed — just update caption + keyboard
+                await edit_query.edit_message_caption(
+                    caption=caption, parse_mode="HTML", reply_markup=keyboard,
+                )
+            else:
+                # Text-only message
+                await edit_query.edit_message_text(
+                    text=caption, parse_mode="HTML", reply_markup=keyboard,
+                )
+        except Exception:
+            logger.exception("edit_version_page failed")
         return
-    if tg_user.id != owner_tg_id:
-        await query.answer("This isn't your purchase view!", show_alert=True)
+
+    # New message
+    if card_bytes:
+        sent = await send_to.reply_photo(
+            photo=_io.BytesIO(card_bytes), caption=caption,
+            parse_mode="HTML", reply_markup=keyboard,
+        )
+    else:
+        sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
+
+    try:
+        from services.button_timeout import schedule_button_timeout
+        schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
+    except Exception:
+        pass
+
+
+async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback for plpg_<flow>_<owner_tg>_<player_id> — navigate between pages."""
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        parts = q.data.split("_")
+        # plpg_<flow>_<owner_tg>_<player_id>
+        flow = parts[1]
+        owner_tg = int(parts[2])
+        target_player_id = int(parts[3])
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+    if tg.id != owner_tg:
+        await q.answer("Not your card!", show_alert=True)
         return
 
     session = get_session()
     try:
-        user = session.query(User).get(owner_user_id)
-        if not user or user.telegram_id != owner_tg_id:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await q.answer("Do /debut first")
             return
-        from services.version_service import get_all_versions
-        seed_player_id = context.bot_data.get(f"buypl_base_{owner_tg_id}")
-        if not seed_player_id:
-            await query.edit_message_reply_markup(reply_markup=None)
+
+        target = session.query(Player).get(target_player_id)
+        if not target:
+            await q.answer("Player not found")
             return
-        seed = session.query(Player).get(seed_player_id)
-        if not seed:
-            return
-        base_id = seed.parent_player_id or seed.id
-        versions = get_all_versions(session, base_id)
-        versions = sorted(
-            versions,
-            key=lambda v: (0 if (v.version or "").strip().lower() == "base" else 1, v.id),
-        )
+
+        from services.version_paginator import get_versions_ordered, page_number_for
+        base_id = target.parent_player_id or target.id
+        versions = get_versions_ordered(session, base_id)
         if not versions:
-            return
-        idx = max(0, min(idx, len(versions) - 1))
-        player = versions[idx]
-        text = _buypl_versions_text(player, user, idx, len(versions))
-        kb = _buypl_versions_keyboard(versions, idx, owner_user_id, owner_tg_id)
-        card_bytes = generate_card(player)
-        if card_bytes:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=io.BytesIO(card_bytes), caption=text, parse_mode="HTML"),
-                reply_markup=kb,
-            )
-        else:
-            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
+            versions = [target]
+        idx = page_number_for(versions, target.id)
+
+        await q.answer()
+        await _send_version_page(
+            session=session, user=user, versions=versions,
+            current_idx=idx, owner_tg=tg.id,
+            send_to=None, context=context, edit_query=q,
+        )
     except Exception:
-        logger.exception("buypl_page_callback error")
+        logger.exception("player_page_callback failed")
+        try: await q.answer("⚠️ Error", show_alert=True)
+        except Exception: pass
     finally:
         session.close()
+
+
+async def player_page_noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback for plpgnoop_ — page indicator / owned-marker. Just acknowledge."""
+    q = update.callback_query
+    if "owned" in (q.data or "").lower() or True:
+        await q.answer()
 
 
 async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

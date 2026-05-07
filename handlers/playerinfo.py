@@ -98,21 +98,30 @@ async def playerinfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        # Default to base card matches first
-        player = (session.query(Player)
-                  .filter(Player.name.ilike(f"%{search_name}%"),
-                          Player.parent_player_id.is_(None),
-                          Player.is_active == True).first())
-        if not player:
-            # Fall back to any version
-            player = (session.query(Player)
-                      .filter(Player.name.ilike(f"%{search_name}%"),
-                              Player.is_active == True).first())
+        # Find the player; if multiple versions exist, use the paginator UI
+        from services.version_paginator import (
+            find_player_for_search, get_versions_ordered,
+        )
+        player = find_player_for_search(session, search_name)
         if not player:
             await update.message.reply_text(f"❌ Player not found: {search_name}")
             return
 
-        await _send_player_card(session, user, player, update.message, tg_user.id)
+        base_id = player.parent_player_id or player.id
+        versions = get_versions_ordered(session, base_id)
+
+        # If only one version exists, use the simpler legacy view (with traits etc.)
+        if len(versions) <= 1:
+            await _send_player_card(session, user, player, update.message, tg_user.id)
+            return
+
+        # Multiple versions → paginated carousel
+        from handlers.buy import _send_version_page
+        await _send_version_page(
+            session=session, user=user, versions=versions,
+            current_idx=0, owner_tg=tg_user.id,
+            send_to=update.message, context=context,
+        )
 
     except Exception:
         logger.exception(f"PlayerInfo error for {tg_user.id}")

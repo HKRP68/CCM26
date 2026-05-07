@@ -228,6 +228,27 @@ def validate_xi(roster_list):
                 f"doesn't qualify."
             )
 
+    # Duplicate-version rule: each player (regardless of which version) can
+    # only appear ONCE in the XI. So if user has the Base + IPL 2026 cards
+    # of the same player, only ONE of them can be in the playing XI.
+    seen_base_ids = {}  # base_id -> first variant we saw
+    duplicate_pairs = []
+    for entry, player in top_11:
+        base_id = player.parent_player_id or player.id
+        if base_id in seen_base_ids:
+            duplicate_pairs.append((seen_base_ids[base_id], player))
+        else:
+            seen_base_ids[base_id] = player
+    if duplicate_pairs:
+        for first, second in duplicate_pairs:
+            label_first = first.version or "Base"
+            label_second = second.version or "Base"
+            errors.append(
+                f"Duplicate of <b>{first.name}</b> in XI: "
+                f"<i>{label_first}</i> and <i>{label_second}</i>. "
+                f"Pick only one version. Use /swap to swap one out."
+            )
+
     return len(errors) == 0, errors
 
 
