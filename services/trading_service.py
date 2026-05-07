@@ -154,6 +154,40 @@ def accept_trade(session: Session, trade_id: int, user: User) -> dict:
     if receiver.total_coins < fee:
         return {"success": False, "message": f"You need {fee:,} coins for the trade fee"}
 
+    # Version-ownership rule: a trade swap must not leave either side owning
+    # two versions of the same player. Check what each side will RECEIVE
+    # against the OTHER versions they already own (excluding the entry they're
+    # giving away).
+    from services.version_service import user_owns_any_version
+    from models import Player as _P, UserRoster as _UR
+
+    init_player = session.query(_P).get(init_entry.player_id)
+    recv_player = session.query(_P).get(recv_entry.player_id)
+
+    def _would_dupe(receiving_user_id, receiving_player, giving_up_roster_id):
+        """Would receiving_user end up with two versions of receiving_player's family?"""
+        if not receiving_player:
+            return False
+        base_id = receiving_player.parent_player_id or receiving_player.id
+        version_ids = [base_id]
+        for v in (session.query(_P.id)
+                  .filter(_P.parent_player_id == base_id).all()):
+            version_ids.append(v[0])
+        # Look for any roster entry of receiving_user that's a version,
+        # EXCLUDING the entry they're giving up
+        existing = (session.query(_UR)
+                    .filter(_UR.user_id == receiving_user_id,
+                            _UR.player_id.in_(version_ids),
+                            _UR.id != giving_up_roster_id).first())
+        return existing is not None
+
+    if _would_dupe(receiver.id, init_player, recv_entry.id):
+        return {"success": False,
+                "message": f"Trade rejected: you already own a version of {init_player.name}."}
+    if _would_dupe(initiator.id, recv_player, init_entry.id):
+        return {"success": False,
+                "message": f"Trade rejected: initiator already owns a version of {recv_player.name}."}
+
     # Swap ownership
     init_entry.user_id = receiver.id
     recv_entry.user_id = initiator.id
