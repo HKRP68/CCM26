@@ -161,7 +161,11 @@ def _migrate_add_columns():
             with engine.begin() as conn:
                 conn.execute(text(sql))
         except Exception as e:
-            # Log but don't fail startup — these are best-effort
+            # SQLite doesn't support ALTER TABLE DROP CONSTRAINT — that's expected,
+            # don't spam the log. Only log unexpected errors.
+            err = str(e).lower()
+            if "drop constraint" in err or "syntax error" in err:
+                continue
             import logging
             logging.getLogger(__name__).warning(
                 f"migration step skipped ({sql[:60]}…): {e}"
