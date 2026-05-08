@@ -23,7 +23,19 @@ Standard event_keys:
   'market_buy'     — fired when /playermarket buy succeeds
   'vsbot_played'   — fired when /vsbot match completes
   'vsbot_won'      — fired when user wins a /vsbot match
-"""
+
+Per-match event_keys (added for the v2 quest list):
+  'sixes_hit'             — fired with N sixes at match end (cumulative quests)
+  'sixes_in_match'        — fired with max(N) once if N >= target (single-match quests)
+  'boundaries_hit'        — fired with N (4s+6s) at match end
+  'boundaries_in_match'   — fired with N once if N >= target
+  'wickets_in_match'      — fired with N once at match end (single-match)
+  'runs_in_innings'       — fired with N once at match end (single-match)
+  'hattrick'              — fired once if at least one bowler took a hat-trick
+
+Manual event_key:
+  'manual' — quest is admin-only progressed (e.g. yorker counts, super overs).
+             Admin can bump UserQuestProgress.progress directly via the website."""
 
 import logging
 from datetime import datetime
@@ -58,27 +70,29 @@ def period_key_for(quest_type, now=None):
 # EVENT TRACKING
 # ════════════════════════════════════════════════════════════════════
 
-def track_event(session, user_id, event_key, count=1):
-    """Increment progress on every active quest matching this event.
+def track_event(session, user_id, event_key, count=1, mode="add"):
+    """Increment (or set-to-max) progress on every active quest matching this event.
 
     Args:
       session: open SQLAlchemy session
       user_id: User.id
       event_key: standard event identifier (see module docstring)
       count: how much to increment (default 1)
+      mode: 'add' (default) increments by count;
+            'max' sets progress = max(current, count) — used for "X+ in a single
+                  match" quests where we only care about the BEST single attempt,
+                  not the sum across many.
 
     Returns: list of newly-completed Quest IDs (those that just hit target).
     """
     now = datetime.utcnow()
     newly_completed = []
     try:
-        # Find all active quests matching this event
         quests = (session.query(Quest)
                   .filter(Quest.event_key == event_key,
                           Quest.is_active == True).all())
         for q in quests:
             period = period_key_for(q.quest_type, now)
-            # Get or create progress record
             uqp = (session.query(UserQuestProgress)
                    .filter(UserQuestProgress.user_id == user_id,
                            UserQuestProgress.quest_id == q.id,
@@ -92,22 +106,23 @@ def track_event(session, user_id, event_key, count=1):
                 session.add(uqp)
                 session.flush()
 
-            # If already claimed, skip (user finished this period)
             if uqp.claimed:
                 continue
 
-            # Increment, cap at target
-            old_progress = uqp.progress
-            uqp.progress = min(uqp.progress + count, q.target_count)
+            # Apply mode
+            if mode == "max":
+                # Set progress to max(current, count), capped at target
+                new_progress = max(uqp.progress, count)
+            else:
+                new_progress = uqp.progress + count
+            uqp.progress = min(new_progress, q.target_count)
             uqp.last_updated = now
 
-            # Check completion
             if not uqp.completed and uqp.progress >= q.target_count:
                 uqp.completed = True
                 uqp.completed_at = now
                 newly_completed.append(q.id)
 
-        # Don't commit here — caller controls transaction
         session.flush()
     except IntegrityError:
         session.rollback()
@@ -216,11 +231,11 @@ def claim_all_completed(session, user_id, quest_type):
 # Standard event helpers (call these from the relevant handlers)
 # ════════════════════════════════════════════════════════════════════
 
-def safe_track(session, user_id, event_key, count=1):
+def safe_track(session, user_id, event_key, count=1, mode="add"):
     """Wrapper that swallows any exception — quest tracking should never break
     the calling handler if a quest service bug happens."""
     try:
-        return track_event(session, user_id, event_key, count)
+        return track_event(session, user_id, event_key, count, mode=mode)
     except Exception:
         logger.exception(f"safe_track failed: user={user_id} event={event_key}")
         return []

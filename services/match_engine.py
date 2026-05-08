@@ -22,6 +22,8 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
         bowl_stats[p["roster_id"]] = {
             "balls": 0, "runs": 0, "wickets": 0,
             "overs_done": 0, "this_over_balls": 0,
+            "maidens": 0,            # NEW: count of overs with 0 runs conceded
+            "this_over_runs": 0,     # NEW: runs in current over (reset every over)
         }
 
     order = [opener1, opener2]
