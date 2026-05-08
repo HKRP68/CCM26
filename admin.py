@@ -1078,13 +1078,83 @@ def user_detail(user_id):
                                   & (Trade.status == "pending"))
                           .count())
 
+        # Quest progress for this user — current daily + monthly periods
+        from services.quest_service import (
+            daily_period_key, monthly_period_key,
+        )
+        from models import Quest, UserQuestProgress
+        today_key = daily_period_key()
+        month_key = monthly_period_key()
+        quest_rows = (db.query(UserQuestProgress, Quest)
+                      .join(Quest, Quest.id == UserQuestProgress.quest_id)
+                      .filter(UserQuestProgress.user_id == user.id,
+                              ((Quest.quest_type == "daily") &
+                               (UserQuestProgress.period_key == today_key)) |
+                              ((Quest.quest_type == "monthly") &
+                               (UserQuestProgress.period_key == month_key)))
+                      .order_by(Quest.quest_type, Quest.sort_order, Quest.id).all())
+        quest_progress = [
+            {"progress": p, "quest": q,
+             "pct": min(100, int(100 * p.progress / max(1, q.target_count)))}
+            for p, q in quest_rows
+        ]
+
         return render_template("user_detail.html", user=user, stats=stats,
                                roster=roster, activities=activities,
                                active_matches=match_meta,
                                recent_matches=recent_matches,
-                               pending_trades=pending_trades)
+                               pending_trades=pending_trades,
+                               quest_progress=quest_progress,
+                               today_key=today_key, month_key=month_key)
     finally:
         db.close()
+
+
+@app.route("/users/<int:user_id>/quest_progress/<int:progress_id>/edit",
+           methods=["POST"])
+@login_required
+def admin_user_quest_progress_edit(user_id, progress_id):
+    """Manually adjust a UserQuestProgress.progress value. Auto-flips
+    completed=True if progress >= target.
+    """
+    db = get_session()
+    try:
+        from models import UserQuestProgress, Quest
+        uqp = db.query(UserQuestProgress).get(progress_id)
+        if not uqp or uqp.user_id != user_id:
+            flash("Progress entry not found.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+        new_progress = max(0, int(request.form.get("progress", 0) or 0))
+        q = db.query(Quest).get(uqp.quest_id)
+        if not q:
+            flash("Quest not found.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+        # Cap at target
+        new_progress = min(new_progress, q.target_count)
+        old = uqp.progress
+        uqp.progress = new_progress
+        # Reset / set completion based on new progress
+        if new_progress >= q.target_count:
+            if not uqp.completed:
+                uqp.completed = True
+                uqp.completed_at = datetime.utcnow()
+        else:
+            uqp.completed = False
+            uqp.completed_at = None
+            # Don't undo a claim — but if admin sets back below target, we DO
+            # warn it was previously claimed
+        uqp.last_updated = datetime.utcnow()
+        db.commit()
+        log_admin(db, "quest_progress_edit", "user", user_id, q.name,
+                  f"Quest '{q.name}' progress {old}→{new_progress}/{q.target_count}")
+        db.commit()
+        flash(f"✅ Progress for '{q.name}' set to {new_progress}/{q.target_count}.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id) + "#quest-progress")
 
 
 @app.route("/users/<int:user_id>/match/<int:match_id>/force_end", methods=["POST"])
@@ -1834,16 +1904,91 @@ EVENT_KEYS = [
     ("daily", "Collect daily (/daily)"),
     ("match_played", "Play a match (any result)"),
     ("match_won", "Win a match"),
-    ("runs_scored", "Total runs scored in a match"),
-    ("wickets_taken", "Total wickets taken in a match"),
+    ("runs_scored", "Total runs scored across matches (cumulative)"),
+    ("wickets_taken", "Total wickets taken across matches (cumulative)"),
     ("fifty", "Score 50+ in a match"),
     ("hundred", "Score 100+ in a match"),
+    ("sixes_hit", "Sixes hit (cumulative across matches)"),
+    ("sixes_in_match", "Sixes in a single match (uses MAX, not sum)"),
+    ("boundaries_hit", "Boundaries 4s+6s (cumulative)"),
+    ("boundaries_in_match", "Boundaries in a single match (uses MAX)"),
+    ("wickets_in_match", "Wickets in a single match (uses MAX)"),
+    ("runs_in_innings", "Runs in a single innings (uses MAX)"),
+    ("hattrick", "Take a hat-trick"),
+    ("maiden_over", "Bowl a maiden over (cumulative)"),
+    ("not_out_innings", "Stay not out in an innings (cumulative)"),
+    ("allrounder_match", "30+ runs AND 2+ wickets in same match"),
+    ("chase_won", "Win a match while batting second"),
+    ("clean_spell", "4-over spell with 1+ maiden and 3+ wickets"),
+    ("economy_under_4_5", "4+ over spell with economy < 4.5"),
+    ("economy_under_5", "4+ over spell with economy < 5.0"),
+    ("economy_under_6", "4+ over spell with economy < 6.0"),
+    ("economy_under_7", "4+ over spell with economy < 7.0"),
     ("trait_apply", "Apply a trait (/traitapply)"),
     ("trait_buy", "Buy a trait (/traitshop)"),
     ("market_buy", "Buy from /playermarket"),
     ("vsbot_played", "Play a /vsbot match"),
     ("vsbot_won", "Win a /vsbot match"),
+    ("manual", "Manual — admin bumps progress directly"),
 ]
+
+
+@app.route("/quests/convert_manual", methods=["POST"])
+@login_required
+def admin_quests_convert_manual():
+    """Bulk convert all manual-only quests to auto-tracked or delete them."""
+    db = get_session()
+    try:
+        from convert_manual_quests import convert_manual_quests
+        result = convert_manual_quests(db)
+        log_admin(db, "quest_convert_manual", "quest", 0, "bulk_convert",
+                  f"Converted {result['converted']}, deleted {result['deleted']}, "
+                  f"kept manual {result['kept_manual']}")
+        db.commit()
+        flash(
+            f"✅ Manual quest cleanup: "
+            f"{result['converted']} converted to auto-tracked, "
+            f"{result['deleted']} deleted, "
+            f"{result['kept_manual']} still manual.",
+            "info",
+        )
+    except Exception as e:
+        db.rollback()
+        flash(f"Conversion failed: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_quests_list"))
+
+
+@app.route("/quests/import", methods=["POST"])
+@login_required
+def admin_quests_import():
+    """Bulk-import quests from data/quests_table.md."""
+    import os
+    db = get_session()
+    try:
+        from seed_quests_v2 import import_quests
+        md_path = os.path.join(os.path.dirname(__file__), "data", "quests_table.md")
+        if not os.path.exists(md_path):
+            flash(f"Markdown file not found at {md_path}.", "error")
+            return redirect(url_for("admin_quests_list"))
+        result = import_quests(db, md_path)
+        log_admin(db, "quest_import", "quest", 0, "bulk_import",
+                  f"Imported {result['inserted']} quests "
+                  f"({result['auto_tracked']} auto-tracked, {result['manual']} manual)")
+        db.commit()
+        flash(
+            f"✅ Imported {result['inserted']} quests "
+            f"({result['auto_tracked']} auto-tracked, {result['manual']} manual). "
+            f"Skipped {result['skipped_existing']} existing.",
+            "info",
+        )
+    except Exception as e:
+        db.rollback()
+        flash(f"Import failed: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_quests_list"))
 
 
 @app.route("/quests")
