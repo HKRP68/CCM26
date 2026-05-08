@@ -2,12 +2,35 @@
 {% block title %}Quests{% endblock %}
 {% block content %}
 
-<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.6rem;">
   <h1>🎯 Quests</h1>
-  <a href="{{ url_for('admin_quest_new') }}"
-     style="background:var(--accent); color:#000; padding:.6rem 1.2rem; border-radius:6px; font-weight:600; text-decoration:none;">
-    + New Quest
-  </a>
+  <div style="display:flex; gap:.5rem;">
+    <form method="POST" action="{{ url_for('admin_quests_import') }}"
+          onsubmit="return confirm('Import all quests from data/quests_table.md? Existing quests with the same name will be skipped.');"
+          style="display:inline;">
+      <button type="submit"
+              style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
+        📥 Bulk Import (data/quests_table.md)
+      </button>
+    </form>
+    <form method="POST" action="{{ url_for('admin_quests_convert_manual') }}"
+          onsubmit="return confirm('Convert all manual quests to auto-tracked or delete the untrackable ones? This rewrites descriptions and resets in-progress entries to 0.');"
+          style="display:inline;">
+      <button type="submit"
+              style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
+        🔧 Convert Manual → Auto
+      </button>
+    </form>
+    <a href="{{ url_for('admin_quest_new') }}"
+       style="background:var(--accent); color:#000; padding:.6rem 1.2rem; border-radius:6px; font-weight:600; text-decoration:none;">
+      + New Quest
+    </a>
+  </div>
+</div>
+
+<div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-bottom:1.2rem; font-size:.85rem; color:var(--muted);">
+  ℹ️ Quest progress is event-driven. Each quest has an <strong>event_key</strong> the engine fires.
+  Quests with <code>event_key=manual</code> are admin-tracked — bump user progress on the user detail page.
 </div>
 
 {% macro quest_table(quests, label, icon) %}

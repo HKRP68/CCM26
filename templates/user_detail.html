@@ -200,4 +200,74 @@
 </div>
 {% endif %}
 
+<!-- ── Quest Progress (current period) ── -->
+<h2 id="quest-progress" style="margin-top:1.5rem;">🎯 Quest Progress
+  <span style="color:var(--muted); font-size:.7rem; font-weight:normal;">
+    daily: {{ today_key }} · monthly: {{ month_key }}
+  </span>
+</h2>
+{% if quest_progress %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden;">
+  <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
+    <thead>
+      <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
+        <th style="padding:.6rem; text-align:left;">Quest</th>
+        <th style="padding:.6rem; text-align:left;">Type</th>
+        <th style="padding:.6rem; text-align:center;">Progress</th>
+        <th style="padding:.6rem; text-align:center;">State</th>
+        <th style="padding:.6rem; text-align:right;">Edit</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for qp in quest_progress %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem .6rem;">
+          {{ qp.quest.emoji }} <strong>{{ qp.quest.name }}</strong>
+          <div style="color:var(--muted); font-size:.7rem;">
+            <code>{{ qp.quest.event_key }}</code>
+            {% if qp.quest.event_key == 'manual' %}
+              <span style="color:var(--accent2);">· manual-only</span>
+            {% endif %}
+          </div>
+        </td>
+        <td style="padding:.5rem .6rem;">{{ qp.quest.quest_type }}</td>
+        <td style="padding:.5rem .6rem; text-align:center;">
+          <div>{{ qp.progress.progress }} / {{ qp.quest.target_count }}</div>
+          <div style="background:var(--bg); height:6px; border-radius:3px; margin-top:.2rem; overflow:hidden;">
+            <div style="background:var(--accent); height:100%; width:{{ qp.pct }}%;"></div>
+          </div>
+        </td>
+        <td style="padding:.5rem .6rem; text-align:center;">
+          {% if qp.progress.claimed %}
+            <span style="color:var(--green);">✓ Claimed</span>
+          {% elif qp.progress.completed %}
+            <span style="color:var(--accent);">● Done</span>
+          {% else %}
+            <span style="color:var(--muted);">—</span>
+          {% endif %}
+        </td>
+        <td style="padding:.5rem .6rem; text-align:right;">
+          <form method="POST"
+                action="{{ url_for('admin_user_quest_progress_edit', user_id=user.id, progress_id=qp.progress.id) }}"
+                style="display:inline-flex; gap:.3rem; align-items:center;">
+            <input type="number" name="progress" value="{{ qp.progress.progress }}"
+                   min="0" max="{{ qp.quest.target_count }}"
+                   style="width:60px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:.8rem;">
+            <button type="submit"
+                    style="background:var(--accent); color:#000; border:none; padding:.3rem .7rem; border-radius:4px; font-size:.75rem; cursor:pointer;">
+              Save
+            </button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; color:var(--muted); font-size:.85rem;">
+  No active quest progress for current daily/monthly periods. Progress rows are created lazily when the user triggers an event or when admin bumps progress.
+</div>
+{% endif %}
+
 {% endblock %}
