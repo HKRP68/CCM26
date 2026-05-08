@@ -1558,17 +1558,20 @@ async def _process_shot_core(context, mid, si, *, q=None):
             # Apply outcome
             if oc["type"] == "wide":
                 s["total_runs"] += 1; s["extras_total"] += 1; s["wides"] += 1; bws["runs"] += 1
+                bws["this_over_runs"] = bws.get("this_over_runs", 0) + 1
                 add_to_timeline(s, SYM["WD"]); legal = False
                 rtxt = "↔️ <b>WIDE!</b> +1"
             elif oc["type"] == "noball":
                 runs = oc.get("runs", 1); s["total_runs"] += runs + 1; s["extras_total"] += 1; s["noballs"] += 1
                 bws["runs"] += runs + 1; bs["balls"] += 1
+                bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs + 1
                 if runs > 0: bs["runs"] += runs
                 add_to_timeline(s, SYM["NB"] + (SYM.get(runs, str(runs)) if runs > 0 else "")); legal = False
                 rtxt = f"🄽🄱 <b>NO BALL!</b> +{runs + 1}"
             elif oc["type"] == "legbye":
                 runs = oc.get("runs", 1); s["total_runs"] += runs; s["extras_total"] += runs; s["legbyes"] += runs
                 bws["runs"] += runs; bs["balls"] += 1
+                bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
                 s["partnership_balls"] += 1; s["partnership_runs"] += runs
                 add_to_timeline(s, str(runs) + " 𓂾" if runs > 1 else "𓂾")
                 rtxt = f"𓂾 <b>LEG BYE!</b> +{runs}"
@@ -1577,13 +1580,13 @@ async def _process_shot_core(context, mid, si, *, q=None):
             elif oc["type"] == "wicket":
                 runs = oc.get("runs", 0); s["total_runs"] += runs; s["total_wickets"] += 1
                 bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
+                bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
                 bs["how_out"] = oc.get("how", "Bowled"); bs["bowled_by"] = bowler["name"]
                 add_to_timeline(s, SYM["W"])
                 s["partnership_runs"] = 0; s["partnership_balls"] = 0
                 need_new_bat = True
                 if "fow" not in s:
                     s["fow"] = []
-                # Compute over string at moment of wicket
                 over_now = s["current_over"] - 1
                 ball_now = s["current_ball"] + 1
                 if ball_now >= 6:
@@ -1594,6 +1597,7 @@ async def _process_shot_core(context, mid, si, *, q=None):
             else:
                 runs = oc.get("runs", 0); s["total_runs"] += runs; bs["runs"] += runs; bs["balls"] += 1
                 bws["runs"] += runs; s["partnership_runs"] += runs; s["partnership_balls"] += 1
+                bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
                 if runs == 4: bs["fours"] += 1
                 elif runs == 6: bs["sixes"] += 1
                 add_to_timeline(s, SYM.get(runs, str(runs)))
@@ -1617,6 +1621,10 @@ async def _process_shot_core(context, mid, si, *, q=None):
             if s["current_ball"] >= 6:
                 bws["overs_done"] += 1
                 bws["this_over_balls"] = 0
+                # Maiden over: 0 runs conceded across all 6 legal balls
+                if bws.get("this_over_runs", 0) == 0:
+                    bws["maidens"] = bws.get("maidens", 0) + 1
+                bws["this_over_runs"] = 0  # reset for next over
                 s["current_over"] += 1
                 s["current_ball"] = 0
                 s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
@@ -2408,7 +2416,26 @@ async def _end_innings(ctx, mid):
                                     safe_track(session, u.id, "vsbot_won", 1)
                             # Aggregate runs/wkts/50s/100s for this user across innings
                             from models import UserRoster
+                            # Aggregates across all of this user's players
                             runs_total = wkts_total = fifties = hundreds = 0
+                            sixes_total = fours_total = 0
+                            hattricks_total = 0
+                            maidens_total = 0
+                            # Single-match maxes
+                            max_runs_in_innings = 0
+                            max_wickets_in_match = 0
+                            max_sixes_in_innings = 0
+                            max_boundaries_in_innings = 0
+                            # Per-match accumulators (for allrounder match — best single
+                            # match this game, not summed across innings)
+                            user_match_runs = 0    # batting runs this match
+                            user_match_wkts = 0    # bowling wkts this match
+                            user_match_not_outs = 0  # batters who remained not out
+                            # Economy thresholds (any user bowler with ≥4 overs that beat the threshold)
+                            cleanest_econ = None  # smallest economy seen this match (≥4 overs)
+                            # Bowler with 4+ overs and ZERO extras (wides+nb=0) → clean spell
+                            had_clean_spell = False
+
                             for xi_key, stats_key, is_bat in [
                                 ("inn1_bat_xi", "inn1_bat_stats", True),
                                 ("inn1_bowl_xi", "inn1_bowl_stats", False),
@@ -2429,19 +2456,98 @@ async def _end_innings(ctx, mid):
                                         continue
                                     if is_bat:
                                         r = pst.get("runs", 0)
+                                        balls = pst.get("balls", 0)
                                         runs_total += r
+                                        user_match_runs += r
+                                        max_runs_in_innings = max(max_runs_in_innings, r)
                                         if r >= 100: hundreds += 1
                                         elif r >= 50: fifties += 1
+                                        # Not-out check: batter played (balls > 0) and didn't get out
+                                        if balls > 0 and not pst.get("out"):
+                                            user_match_not_outs += 1
+                                        sixes_p = pst.get("sixes", 0)
+                                        fours_p = pst.get("fours", 0)
+                                        sixes_total += sixes_p
+                                        fours_total += fours_p
+                                        max_sixes_in_innings = max(max_sixes_in_innings, sixes_p)
+                                        max_boundaries_in_innings = max(
+                                            max_boundaries_in_innings, sixes_p + fours_p)
                                     else:
-                                        wkts_total += pst.get("wickets", 0)
+                                        w = pst.get("wickets", 0)
+                                        wkts_total += w
+                                        user_match_wkts += w
+                                        max_wickets_in_match = max(max_wickets_in_match, w)
+                                        if pst.get("hattrick"): hattricks_total += 1
+                                        # Maidens count
+                                        maidens_total += pst.get("maidens", 0)
+                                        # Economy / clean spell — only if bowler bowled enough
+                                        balls_b = pst.get("balls", 0)
+                                        runs_b = pst.get("runs", 0)
+                                        if balls_b >= 24:  # 4+ overs
+                                            econ = (runs_b * 6.0) / balls_b if balls_b else 999
+                                            if cleanest_econ is None or econ < cleanest_econ:
+                                                cleanest_econ = econ
+                                            # Clean spell: 4+ overs, 0 wides, 0 no-balls,
+                                            # 3+ wickets (per the quest "No-Ball Nightmare" / "No Extras Challenge")
+                                            # We don't track per-bowler extras separately, so use a
+                                            # heuristic: if maidens > 0 AND wkts >= 3, count it.
+                                            if pst.get("maidens", 0) >= 1 and w >= 3:
+                                                had_clean_spell = True
+
+                            # Fire cumulative events (existing)
                             if runs_total > 0:
                                 safe_track(session, u.id, "runs_scored", runs_total)
                             if wkts_total > 0:
                                 safe_track(session, u.id, "wickets_taken", wkts_total)
+                            if sixes_total > 0:
+                                safe_track(session, u.id, "sixes_hit", sixes_total)
+                            if (sixes_total + fours_total) > 0:
+                                safe_track(session, u.id, "boundaries_hit", sixes_total + fours_total)
                             for _ in range(fifties):
                                 safe_track(session, u.id, "fifty", 1)
                             for _ in range(hundreds):
                                 safe_track(session, u.id, "hundred", 1)
+                            for _ in range(hattricks_total):
+                                safe_track(session, u.id, "hattrick", 1)
+                            if maidens_total > 0:
+                                safe_track(session, u.id, "maiden_over", maidens_total)
+                            for _ in range(user_match_not_outs):
+                                safe_track(session, u.id, "not_out_innings", 1)
+
+                            # Single-match max events
+                            if max_runs_in_innings > 0:
+                                safe_track(session, u.id, "runs_in_innings", max_runs_in_innings, mode="max")
+                            if max_wickets_in_match > 0:
+                                safe_track(session, u.id, "wickets_in_match", max_wickets_in_match, mode="max")
+                            if max_sixes_in_innings > 0:
+                                safe_track(session, u.id, "sixes_in_match", max_sixes_in_innings, mode="max")
+                            if max_boundaries_in_innings > 0:
+                                safe_track(session, u.id, "boundaries_in_match", max_boundaries_in_innings, mode="max")
+
+                            # Allrounder match: 30+ runs AND 2+ wickets in same game
+                            if user_match_runs >= 30 and user_match_wkts >= 2:
+                                safe_track(session, u.id, "allrounder_match", 1)
+
+                            # Economy tier triggers (cumulative count of "clean spells")
+                            if cleanest_econ is not None:
+                                if cleanest_econ < 4.5:
+                                    safe_track(session, u.id, "economy_under_4_5", 1)
+                                if cleanest_econ < 5.0:
+                                    safe_track(session, u.id, "economy_under_5", 1)
+                                if cleanest_econ < 6.0:
+                                    safe_track(session, u.id, "economy_under_6", 1)
+                                if cleanest_econ < 7.0:
+                                    safe_track(session, u.id, "economy_under_7", 1)
+
+                            if had_clean_spell:
+                                safe_track(session, u.id, "clean_spell", 1)
+
+                            # Chase win: user won AND batted second
+                            if winner_id == u.id:
+                                # In our state, "bat_xi" is the second-innings batting lineup
+                                second_inn_user = s.get("bat_team_id")
+                                if second_inn_user == u.id:
+                                    safe_track(session, u.id, "chase_won", 1)
                     except Exception:
                         logger.exception("Match-end quest tracking failed")
             session.commit()
