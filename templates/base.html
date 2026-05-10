@@ -94,7 +94,6 @@ nav .brand {
 }
 nav .links { display:flex; align-items:center; justify-content:space-between; gap:.75rem; width:100%; min-width:0; }
 nav .nav-links { display:flex; gap:.2rem; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; padding-bottom:.15rem; }
-nav .nav-actions { display:flex; gap:.45rem; align-items:center; flex-shrink:0; }
 nav .links a {
   color: var(--muted);
   text-decoration: none;
@@ -355,7 +354,6 @@ hr.pitch-line {
   nav { height:auto; min-height:60px; padding:.6rem .8rem; }
   nav .links { flex-direction:column; align-items:stretch; }
   nav .nav-links { width:100%; }
-  nav .nav-actions { justify-content:flex-end; }
   .form-row { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
   table { font-size: .78rem; }
@@ -395,10 +393,8 @@ hr.pitch-line {
     <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">Seed</a>
     <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">Status</a>
     </div>
-    <div class="nav-actions">
-      <button type="button" id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">🌙 Dark</button>
-      <a href="{{ url_for('logout') }}" class="logout">Logout</a>
-    </div>
+    <button type="button" id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">🌙 Dark</button>
+    <a href="{{ url_for('logout') }}" class="logout">Logout</a>
   </div>
 </nav>
 {% endif %}
