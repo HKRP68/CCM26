@@ -177,6 +177,39 @@ async def myquest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        # Trigger rollover for both quest types so the user sees up-to-date
+        # auto-claim totals before the message is rendered.
+        from services.quest_service import consume_pending_auto_claims
+        auto_claimed = []
+        for qt in ("daily", "monthly"):
+            auto_claimed.extend(consume_pending_auto_claims(session, user.id, qt))
+        session.commit()
+
+        if auto_claimed:
+            total_pts = sum(a.get("points", 0) for a in auto_claimed)
+            total_coins = sum(a.get("coins", 0) for a in auto_claimed)
+            total_gems = sum(a.get("gems", 0) for a in auto_claimed)
+            lines = [
+                "🎁 <b>AUTO-CLAIMED FROM LAST PERIOD!</b>",
+                "━━━━━━━━━━━━━━━━━━━",
+            ]
+            for a in auto_claimed[:8]:  # cap shown to avoid spam
+                bits = []
+                if a.get("points"): bits.append(f"+{a['points']}pt")
+                if a.get("coins"):  bits.append(f"+{a['coins']:,}🪙")
+                if a.get("gems"):   bits.append(f"+{a['gems']}💎")
+                lines.append(f"✅ {a['name']} — {' '.join(bits)}")
+            if len(auto_claimed) > 8:
+                lines.append(f"…and {len(auto_claimed) - 8} more")
+            lines.append(
+                f"\n<b>Total:</b> +{total_pts}pt · "
+                f"+{total_coins:,}🪙 · +{total_gems}💎"
+            )
+            try:
+                await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            except Exception:
+                pass
+
         quests_data = get_user_quests(session, user.id, "daily")
         text, kb = _render_quest_list(quests_data, "daily", user, tg.id)
 
