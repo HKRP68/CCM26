@@ -8,6 +8,7 @@
 
 <div class="form-card">
   <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <div class="form-group">
         <label>Player Name *</label>
@@ -174,6 +175,7 @@
 
         <div style="display:flex; gap:.5rem; margin-top:1rem; flex-wrap:wrap;">
           <form method="POST" action="{{ url_for('admin_player_image_toggle', player_id=player.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-ghost btn-sm">
               {% if image_meta.is_active %}Disable{% else %}Enable{% endif %}
             </button>
@@ -181,6 +183,7 @@
           <form method="POST" action="{{ url_for('admin_player_image_remove', player_id=player.id) }}"
                 style="display:inline;"
                 onsubmit="return confirm('Remove the custom image for {{ player.name }}? This cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm" style="color:var(--red); border:1px solid var(--red); background:transparent; padding:.35rem .8rem; border-radius:6px; cursor:pointer;">Remove</button>
           </form>
         </div>
@@ -195,6 +198,7 @@
   <!-- Upload form -->
   <form method="POST" action="{{ url_for('admin_player_image_upload', player_id=player.id) }}"
         enctype="multipart/form-data" style="display:flex; flex-direction:column; gap:.7rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div>
       <label style="display:block; font-size:.85rem; color:var(--muted); margin-bottom:.3rem;">
         {{ 'Replace with new image' if image_meta else 'Upload custom image' }}
@@ -250,6 +254,7 @@
           <form method="POST" action="{{ url_for('admin_player_version_delete', version_id=v.id) }}"
                 style="display:inline;"
                 onsubmit="return confirm('Delete version {{ v.version }} of {{ player.name }}? This refuses if any user owns it.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit"
                     style="padding:.3rem .6rem; background:transparent; border:1px solid var(--red); border-radius:4px; color:var(--red); cursor:pointer; font-size:.85rem;">✕</button>
           </form>
@@ -268,6 +273,7 @@
   <form method="POST" action="{{ url_for('admin_player_version_new', base_id=player.id) }}"
         enctype="multipart/form-data"
         style="display:flex; flex-direction:column; gap:.9rem; padding:1.2rem; background:var(--bg); border-radius:8px; border:1px dashed var(--border);">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <strong style="font-size:1rem;">+ Add new version</strong>
     <p style="margin:0; color:var(--muted); font-size:.85rem;">
       Version label and image are required. Other fields default to the base

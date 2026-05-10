@@ -40,6 +40,7 @@
       <td style="padding:.75rem; text-align:center; white-space:nowrap;">
         <a href="{{ url_for('admin_trait_edit', trait_id=t.id) }}" style="color:var(--accent2); text-decoration:none; font-size:.85rem;">Edit</a>
         <form method="POST" action="{{ url_for('admin_trait_toggle', trait_id=t.id) }}" style="display:inline; margin-left:.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:none; color:var(--muted); cursor:pointer; font-size:.85rem;">Toggle</button>
         </form>
       </td>

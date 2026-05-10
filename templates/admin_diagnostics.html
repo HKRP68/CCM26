@@ -5,6 +5,7 @@
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
   <h1>🔧 Diagnostics</h1>
   <form method="POST" action="{{ url_for('admin_diagnostics_refresh_cache') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">↻ Clear All Caches</button>
   </form>
 </div>

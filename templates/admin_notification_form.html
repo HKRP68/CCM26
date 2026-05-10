@@ -10,6 +10,7 @@
 
 <form method="POST"
       style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:800px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <div style="margin-bottom:1rem;">
     <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Name *</label>

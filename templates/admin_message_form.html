@@ -21,6 +21,7 @@
 </div>
 
 <form method="POST" style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label style="display:block; font-size:.9rem; margin-bottom:.4rem;">
     Message body
   </label>
@@ -39,6 +40,7 @@
     <form method="POST" action="{{ url_for('admin_message_reset', key=key) }}"
           onsubmit="return confirm('Reset to default? Your custom text will be lost.');"
           style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" style="background:transparent; border:1px solid var(--border); color:var(--text); padding:.7rem 1.2rem; border-radius:6px; cursor:pointer;">
         ↺ Reset to Default
       </button>

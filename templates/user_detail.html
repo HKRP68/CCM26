@@ -36,6 +36,7 @@
 <div class="form-card" style="max-width:500px;margin-bottom:1.5rem;">
   <h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--accent);text-transform:uppercase;">Edit Purse & Gems</h3>
   <form method="POST" action="{{ url_for('user_edit_purse', user_id=user.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <div class="form-group">
         <label>Coins</label>
@@ -63,6 +64,7 @@
     <b>Joined:</b> {{ user.created_at.strftime('%d %b %Y %H:%M') if user.created_at else '—' }}
   </div>
   <form method="POST" action="{{ url_for('user_reset_cooldowns', user_id=user.id) }}" style="margin-top:.75rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-ghost btn-sm">Reset All Cooldowns</button>
   </form>
 </div>
@@ -72,6 +74,7 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem;">
   <h3 style="font-size:.9rem;color:var(--muted);text-transform:uppercase;">Roster ({{ roster|length }})</h3>
   <form method="POST" action="{{ url_for('user_add_player', user_id=user.id) }}" style="display:flex;gap:.5rem;align-items:center;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="text" name="player_name" placeholder="Add player by name..." style="width:200px;padding:.35rem .6rem;font-size:.8rem;">
     <button type="submit" class="btn btn-green btn-sm">+ Add</button>
   </form>
@@ -88,6 +91,7 @@
       <td style="font-size:.8rem;">{{ entry.acquired_date.strftime('%d %b') if entry.acquired_date else '—' }}</td>
       <td>
         <form method="POST" action="{{ url_for('user_remove_player', user_id=user.id, roster_id=entry.id) }}" style="display:inline;" onsubmit="return confirm('Remove {{ player.name }}?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-red btn-sm">Remove</button>
         </form>
       </td>
@@ -147,6 +151,7 @@
           action="{{ url_for('admin_force_end_match', user_id=user.id, match_id=m.match.id) }}"
           onsubmit="return confirm('Force-end match #{{ m.match.id }}? Use only for stuck matches.');"
           style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit"
               style="background:var(--red); color:white; border:none; padding:.4rem .9rem; border-radius:5px; font-weight:600; cursor:pointer; font-size:.85rem;">
         🛑 Force End
@@ -168,6 +173,7 @@
         action="{{ url_for('admin_cancel_pending_trades', user_id=user.id) }}"
         onsubmit="return confirm('Cancel all {{ pending_trades }} pending trades?');"
         style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit"
             style="background:transparent; border:1px solid var(--border); color:var(--text); padding:.3rem .8rem; border-radius:5px; cursor:pointer; font-size:.85rem;">
       Cancel All
@@ -250,6 +256,7 @@
           <form method="POST"
                 action="{{ url_for('admin_user_quest_progress_edit', user_id=user.id, progress_id=qp.progress.id) }}"
                 style="display:inline-flex; gap:.3rem; align-items:center;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="number" name="progress" value="{{ qp.progress.progress }}"
                    min="0" max="{{ qp.quest.target_count }}"
                    style="width:60px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:.8rem;">

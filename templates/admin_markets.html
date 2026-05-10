@@ -13,6 +13,7 @@
   <h3 style="margin:0 0 .8rem; font-size:1rem;">⚙️ Market Settings</h3>
   <form method="POST" action="{{ url_for('admin_market_settings_save') }}"
         style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:.9rem; align-items:end;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Minimum rating
@@ -64,6 +65,7 @@
   <h3 style="margin:0 0 .8rem; font-size:1rem;">➕ Add Player to Market</h3>
   <form method="POST" action="{{ url_for('admin_market_player_add') }}"
         style="display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div style="flex:1; min-width:300px;">
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Player (versions are listed too)
@@ -102,6 +104,7 @@
   <form method="POST" action="{{ url_for('admin_market_player_reroll') }}"
         style="display:inline;"
         onsubmit="return confirm('Wipe current player market and generate new random slots?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="number" name="num_slots" value="{{ cfg.market_default_slots or 6 }}" min="1" max="20"
            style="width:70px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll Now</button>
@@ -125,6 +128,7 @@
   {% for d in p_data %}
     <tr style="border-bottom:1px solid var(--border);">
       <form method="POST" action="{{ url_for('admin_market_player_edit', slot_id=d.row.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <td style="padding:.4rem; text-align:center;">{{ d.row.slot_index }}</td>
         <td style="padding:.4rem;">
           {% if d.player %}
@@ -156,6 +160,7 @@
           <form method="POST" action="{{ url_for('admin_market_player_delete', slot_id=d.row.id) }}"
                 style="display:inline;"
                 onsubmit="return confirm('Delete slot?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem;">✕</button>
           </form>
         </td>
@@ -174,6 +179,7 @@
   <h3 style="margin:0 0 .8rem; font-size:1rem;">➕ Add Trait to Market</h3>
   <form method="POST" action="{{ url_for('admin_market_trait_add') }}"
         style="display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div style="flex:1; min-width:240px;">
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Trait
@@ -216,6 +222,7 @@
   <form method="POST" action="{{ url_for('admin_market_trait_reroll') }}"
         style="display:inline;"
         onsubmit="return confirm('Wipe current trait market and generate new slots?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="number" name="num_slots" value="{{ cfg.trait_market_default_slots or 5 }}" min="1" max="15"
            style="width:70px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.5rem 1rem; border-radius:5px; font-weight:600; cursor:pointer;">🔄 Reroll Now</button>
@@ -240,6 +247,7 @@
   {% for d in t_data %}
     <tr style="border-bottom:1px solid var(--border);">
       <form method="POST" action="{{ url_for('admin_market_trait_edit', slot_id=d.row.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <td style="padding:.4rem; text-align:center;">{{ d.row.slot_index }}</td>
         <td style="padding:.4rem;">
           {% if d.trait %}
@@ -275,6 +283,7 @@
           <form method="POST" action="{{ url_for('admin_market_trait_delete', slot_id=d.row.id) }}"
                 style="display:inline;"
                 onsubmit="return confirm('Delete slot?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.8rem;">✕</button>
           </form>
         </td>

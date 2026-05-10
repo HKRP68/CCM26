@@ -11,6 +11,7 @@
 <!-- ───── TEAM PROPERTIES FORM ───── -->
 <form method="POST"
       style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; margin-bottom:2rem; max-width:700px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <div style="margin-bottom:1rem;">
     <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Name</label>
@@ -107,6 +108,7 @@
       <td style="padding:.6rem;">
         <form method="POST" action="{{ url_for('admin_bot_team_move_player', team_id=team.id) }}"
               style="display:inline-flex; gap:.3rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="player_id" value="{{ p.id }}">
           <input type="number" name="new_position" value="{{ btp.batting_order }}"
                  min="1" max="{{ rows|length }}"
@@ -124,6 +126,7 @@
       <td style="padding:.6rem; text-align:center;">
         {% if not btp.is_captain %}
           <form method="POST" action="{{ url_for('admin_bot_team_set_captain', team_id=team.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="player_id" value="{{ p.id }}">
             <button type="submit" style="background:none; border:none; cursor:pointer; color:var(--muted); font-size:.85rem;">Set</button>
           </form>
@@ -134,6 +137,7 @@
       <td style="padding:.6rem; text-align:right;">
         <form method="POST" action="{{ url_for('admin_bot_team_remove_player', team_id=team.id, player_id=p.id) }}"
               style="display:inline;" onsubmit="return confirm('Remove {{ p.name }} from team?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:1px solid var(--red); color:var(--red); padding:.2rem .5rem; border-radius:4px; cursor:pointer; font-size:.75rem;">Remove</button>
         </form>
       </td>
@@ -149,6 +153,7 @@
 <h2 style="font-size:1.2rem; margin-bottom:1rem;">➕ Add Player</h2>
 <form method="POST" action="{{ url_for('admin_bot_team_add_player', team_id=team.id) }}"
       style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:2rem; display:flex; gap:.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <select name="player_id" required
           style="flex:1; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
     <option value="">Choose a player...</option>
@@ -163,6 +168,7 @@
 <h2 style="font-size:1.2rem; margin-bottom:1rem;">📥 Bulk Add Players</h2>
 <form method="POST" action="{{ url_for('admin_bot_team_bulk_add', team_id=team.id) }}"
       style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:2rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <textarea name="bulk_text" rows="8" placeholder="One player name per line, e.g.:&#10;Virat Kohli&#10;Rohit Sharma&#10;Jasprit Bumrah"
             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace; resize:vertical;"></textarea>
   <button type="submit" style="margin-top:.5rem; background:var(--accent2); color:#000; border:none; padding:.5rem 1rem; border-radius:6px; font-weight:600; cursor:pointer;">Add All</button>

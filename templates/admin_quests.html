@@ -8,6 +8,7 @@
     <form method="POST" action="{{ url_for('admin_quests_import') }}"
           onsubmit="return confirm('Import all quests from data/quests_table.md? Existing quests with the same name will be skipped.');"
           style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit"
               style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
         📥 Bulk Import (data/quests_table.md)
@@ -16,6 +17,7 @@
     <form method="POST" action="{{ url_for('admin_quests_convert_manual') }}"
           onsubmit="return confirm('Convert all manual quests to auto-tracked or delete the untrackable ones? This rewrites descriptions and resets in-progress entries to 0.');"
           style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit"
               style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
         🔧 Convert Manual → Auto
@@ -65,6 +67,7 @@
       </td>
       <td style="padding:.6rem; text-align:center;">
         <form method="POST" action="{{ url_for('admin_quest_toggle', quest_id=q.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           {% if q.is_active %}
           <button style="background:none; border:none; color:var(--green); cursor:pointer;">✓</button>
           {% else %}
@@ -78,6 +81,7 @@
         <form method="POST" action="{{ url_for('admin_quest_delete', quest_id=q.id) }}"
               style="display:inline; margin-left:.5rem;"
               onsubmit="return confirm('Delete quest {{ q.name }}? User progress will also be deleted.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
         </form>
       </td>

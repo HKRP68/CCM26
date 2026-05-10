@@ -62,6 +62,7 @@
         <form method="POST" action="{{ url_for('admin_bot_team_delete', team_id=team.id) }}"
               style="display:inline; margin-left:.5rem;"
               onsubmit="return confirm('Delete team {{ team.name }}? This cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
         </form>
       </td>

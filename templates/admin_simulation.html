@@ -17,6 +17,7 @@
     Run a Monte Carlo simulation with the current settings to see what your match output will look like.
   </p>
   <form method="POST" action="{{ url_for('admin_simulation_test') }}" style="display:flex; gap:.5rem; align-items:center;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label style="font-size:.85rem;">Balls:</label>
     <input type="number" name="n" value="2000" min="100" max="20000"
            style="width:100px; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
@@ -26,6 +27,7 @@
 
 <form method="POST"
       style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <h3 style="margin:0 0 .8rem; font-size:1rem;">🎯 Outcome Adjustments</h3>
 

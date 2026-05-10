@@ -7,6 +7,7 @@
     <h2 style="margin-bottom:.25rem;">Cricket Bot Admin</h2>
     <p style="color:var(--muted);font-size:.875rem;margin-bottom:1.5rem;">Enter password to continue</p>
     <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group">
         <input type="password" name="password" placeholder="Admin password" autofocus required>
       </div>

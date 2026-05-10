@@ -9,9 +9,11 @@
        style="background:var(--accent2); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📊 Simulate 10k pulls</a>
     <form method="POST" action="{{ url_for('admin_rarity_reset_defaults') }}" style="display:inline;"
           onsubmit="return confirm('Wipe current tiers and reset to the default 7? This cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">↺ Reset to Defaults</button>
     </form>
     <form method="POST" action="{{ url_for('admin_rarity_new') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-primary" style="padding:.4rem 1rem;">+ New Tier</button>
     </form>
   </div>
@@ -42,6 +44,7 @@
 
 {% if tiers %}
 <form method="POST" action="{{ url_for('admin_rarity_save') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
   <thead>
     <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
@@ -109,7 +112,8 @@
 
 <!-- Hidden delete forms (one per tier, to avoid nested forms) -->
 {% for t in tiers %}
-<form id="delete-{{ t.id }}" method="POST" action="{{ url_for('admin_rarity_delete', tid=t.id) }}" style="display:none;"></form>
+<form id="delete-{{ t.id }}" method="POST" action="{{ url_for('admin_rarity_delete', tid=t.id) }}" style="display:none;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
 {% endfor %}
 
 {% else %}

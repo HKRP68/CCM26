@@ -37,6 +37,7 @@ Jos Buttler, 89, Wicket Keeper, England, Right, Right, Medium Pacer, 87, 20</cod
 </div>
 
 <form method="POST" action="{{ url_for('players_bulk_upload') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label style="display:block;margin-bottom:.5rem;font-weight:600;">Paste CSV data:</label>
   <textarea
     name="csv_text"

@@ -41,6 +41,7 @@
       <td style="padding:.6rem; text-align:right;">
         <form method="POST" action="{{ url_for('admin_revoke_player_trait', user_id=user.id, player_trait_id=pt.id) }}" style="display:inline;"
               onsubmit="return confirm('Revoke this trait? This is permanent.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:1px solid var(--red); color:var(--red); padding:.3rem .6rem; border-radius:4px; cursor:pointer; font-size:.8rem;">Revoke</button>
         </form>
       </td>
@@ -74,6 +75,7 @@
       <td style="padding:.6rem; text-align:right;">
         <form method="POST" action="{{ url_for('admin_delete_inventory', user_id=user.id, inv_id=inv.id) }}" style="display:inline;"
               onsubmit="return confirm('Delete this inventory entry?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:1px solid var(--red); color:var(--red); padding:.3rem .6rem; border-radius:4px; cursor:pointer; font-size:.8rem;">Delete</button>
         </form>
       </td>
@@ -90,6 +92,7 @@
 
 <form method="POST" action="{{ url_for('admin_grant_trait', user_id=user.id) }}"
       style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:500px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div style="margin-bottom:1rem;">
     <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Trait</label>
     <select name="trait_id" required style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">

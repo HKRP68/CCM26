@@ -6,6 +6,7 @@
   <h1>📣 Notifications</h1>
   <div style="display:flex; gap:.5rem;">
     <form method="POST" action="{{ url_for('admin_notification_seed_starters') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">+ Add Starter Pack</button>
     </form>
     <a href="{{ url_for('admin_notification_new') }}" class="btn btn-primary" style="padding:.4rem 1rem;">+ New Notification</a>
@@ -58,6 +59,7 @@
       </td>
       <td style="padding:.6rem; text-align:center;">
         <form method="POST" action="{{ url_for('admin_notification_toggle', sid=s.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           {% if s.is_active %}
           <button style="background:none; border:none; color:var(--green); cursor:pointer;">✓</button>
           {% else %}
@@ -69,6 +71,7 @@
         <form method="POST" action="{{ url_for('admin_notification_send_now', sid=s.id) }}"
               style="display:inline;"
               onsubmit="return confirm('Send {{ s.name }} now to all targeted users?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.3rem .8rem; border-radius:6px; font-size:.85rem; font-weight:600; cursor:pointer;">📤 Send Now</button>
         </form>
         <a href="{{ url_for('admin_notification_edit', sid=s.id) }}"
@@ -76,6 +79,7 @@
         <form method="POST" action="{{ url_for('admin_notification_delete', sid=s.id) }}"
               style="display:inline; margin-left:.3rem;"
               onsubmit="return confirm('Delete {{ s.name }}?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">Delete</button>
         </form>
       </td>

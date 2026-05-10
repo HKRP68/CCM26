@@ -99,14 +99,17 @@
         <div class="actions">
           <a href="{{ url_for('player_edit', player_id=p.id) }}" class="btn btn-blue btn-sm">Edit</a>
           <form method="POST" action="{{ url_for('player_delete', player_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Delete {{ p.name }}?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-red btn-sm">Del</button>
           </form>
           {% if p.is_active %}
           <form method="POST" action="{{ url_for('player_toggle', player_id=p.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-ghost btn-sm" title="Deactivate">⏸</button>
           </form>
           {% else %}
           <form method="POST" action="{{ url_for('player_toggle', player_id=p.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-green btn-sm" title="Activate">▶</button>
           </form>
           {% endif %}

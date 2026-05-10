@@ -54,6 +54,7 @@
         <form method="POST" action="{{ url_for('admin_message_reset', key=t.key) }}"
               style="display:inline; margin-left:.3rem;"
               onsubmit="return confirm('Reset {{ t.label }} to default?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit"
                   style="background:none; border:none; color:var(--muted); cursor:pointer; font-size:.85rem;">Reset</button>
         </form>
