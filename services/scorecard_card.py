@@ -83,7 +83,8 @@ def _tw(draw, text, font):
 
 def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wickets,
                                overs_str, batsmen_rows, fall_of_wickets, extras_dict,
-                               is_first_innings=True, match_title="MATCH") -> bytes | None:
+                               is_first_innings=True, match_title="MATCH",
+                               target=None, chase_outcome=None) -> bytes | None:
     """Generate batting scorecard.
 
     Args:
@@ -96,6 +97,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         extras_dict: {wd, nb, b, lb, total}
         is_first_innings: True = primary (red), False = secondary (teal)
         match_title: subtitle text (e.g. "SUPER LEAGUE FINAL")
+        target: int — only for innings 2; the runs needed to win
+        chase_outcome: 'won' | 'lost' | 'tied' | None — used when innings 2 ends
 
     Returns PNG bytes.
     """
@@ -205,6 +208,38 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         overs_x = score_x + score_w + slash_w + wkt_w + 25
         draw.text((overs_x, score_y + 45), str(overs_str), fill=TEXT, font=f_overs_num)
         draw.text((overs_x + overs_num_w + 10, score_y + 63), "OVERS", fill=DIM, font=f_overs_label)
+
+        # ── Target ribbon (innings 2 only) ────
+        if not is_first_innings and target is not None:
+            ribbon_y = 196
+            ribbon_h = 28
+            # Build ribbon text
+            if chase_outcome == "won":
+                badge_text = f"TARGET {target}  ·  WON"
+                ribbon_color = (34, 197, 94, 230)  # green
+                tx_color = TEXT
+            elif chase_outcome == "lost":
+                gap = max(0, target - total_runs - 1)
+                badge_text = f"TARGET {target}  ·  LOST BY {gap} RUN{'S' if gap != 1 else ''}"
+                ribbon_color = (220, 38, 38, 230)  # red
+                tx_color = TEXT
+            elif chase_outcome == "tied":
+                badge_text = f"TARGET {target}  ·  TIED"
+                ribbon_color = (251, 191, 36, 230)  # yellow
+                tx_color = (15, 23, 42)
+            else:
+                # In-progress (shouldn't happen on final card but safe)
+                need = max(0, target - total_runs)
+                badge_text = f"TARGET {target}  ·  NEED {need}"
+                ribbon_color = (*accent, 230)
+                tx_color = TEXT
+            f_ribbon = _font(15, bold=True)
+            tw = _tw(draw, badge_text, f_ribbon)
+            ribbon_w = tw + 30
+            ribbon_x = W - 50 - ribbon_w
+            draw.rounded_rectangle([ribbon_x, ribbon_y, ribbon_x + ribbon_w, ribbon_y + ribbon_h],
+                                   radius=4, fill=ribbon_color)
+            draw.text((ribbon_x + 15, ribbon_y + 6), badge_text, fill=tx_color, font=f_ribbon)
 
         # ── Separator line below header ────
         header_bot = 225
