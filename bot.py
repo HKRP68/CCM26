@@ -86,6 +86,19 @@ from handlers.playermarket import (
     playermarket_noop_callback,
 )
 
+# Pack handlers
+from handlers.packs import (
+    buypack_handler,
+    pack_view_callback,
+    pack_back_callback,
+    pack_close_callback,
+    pack_buy_callback,
+    pack_noop_callback,
+    openpack_handler,
+    pack_open_inventory_callback,
+    pack_open_close_callback,
+)
+
 # vsbot handlers
 from handlers.vsbot import (
     vsbot_handler,
@@ -104,6 +117,9 @@ from handlers.quests import (
     quest_claim_callback,
     quest_claimall_callback,
     quest_close_callback,
+    quest_filter_callback,
+    quest_page_callback,
+    quest_noop_callback,
 )
 
 # Achievements handlers
@@ -319,6 +335,18 @@ def main():
         app.add_handler(CallbackQueryHandler(playermarket_noop_callback, pattern=r"^pmnoop_"))
         app.add_handler(CallbackQueryHandler(playermarket_cancel_callback, pattern=r"^pmcancel_"))
 
+        # ── Packs ──────────────────────────────────────────────────
+        app.add_handler(CommandHandler(["buypack", "packs", "shop"], buypack_handler))
+        app.add_handler(CallbackQueryHandler(pack_view_callback, pattern=r"^pkv_"))
+        app.add_handler(CallbackQueryHandler(pack_back_callback, pattern=r"^pkbk_"))
+        app.add_handler(CallbackQueryHandler(pack_close_callback, pattern=r"^pkc_"))
+        app.add_handler(CallbackQueryHandler(pack_buy_callback, pattern=r"^pkb_"))
+        app.add_handler(CallbackQueryHandler(pack_noop_callback, pattern=r"^pknoop_"))
+        app.add_handler(CommandHandler(["openpack", "open"], openpack_handler))
+        # opkc_ before opk_ so longer prefix matches first
+        app.add_handler(CallbackQueryHandler(pack_open_close_callback, pattern=r"^opkc_"))
+        app.add_handler(CallbackQueryHandler(pack_open_inventory_callback, pattern=r"^opk_"))
+
         # ── vsbot ────────────────────────────────────────────────────
         app.add_handler(CommandHandler(["vsbot", "vsb"], vsbot_handler))
         app.add_handler(CallbackQueryHandler(vsbot_pick_callback, pattern=r"^vsb_pick_"))
@@ -331,8 +359,12 @@ def main():
         # ── Quests ──────────────────────────────────────────────────
         app.add_handler(CommandHandler(["myquest", "mq", "quests"], myquest_handler))
         app.add_handler(CallbackQueryHandler(quest_tab_callback, pattern=r"^qst_tab_"))
-        app.add_handler(CallbackQueryHandler(quest_claim_callback, pattern=r"^qst_claim_"))
+        app.add_handler(CallbackQueryHandler(quest_filter_callback, pattern=r"^qst_flt_"))
+        app.add_handler(CallbackQueryHandler(quest_page_callback, pattern=r"^qst_pg_"))
+        app.add_handler(CallbackQueryHandler(quest_noop_callback, pattern=r"^qst_noop_"))
+        # IMPORTANT: claimall must register BEFORE claim so the longer pattern wins
         app.add_handler(CallbackQueryHandler(quest_claimall_callback, pattern=r"^qst_claimall_"))
+        app.add_handler(CallbackQueryHandler(quest_claim_callback, pattern=r"^qst_claim_"))
         app.add_handler(CallbackQueryHandler(quest_close_callback, pattern=r"^qst_close_"))
 
         # ── Achievements ────────────────────────────────────────────

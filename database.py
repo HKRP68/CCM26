@@ -132,6 +132,10 @@ def _migrate_add_columns():
     # Player versions support
     _try_add("players", "parent_player_id", "INTEGER")
 
+    # Pack table additions (versions filtering)
+    _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
+    _try_add("packs", "main_versions_json", "VARCHAR(500)")
+
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions
     # multiple rows legitimately share a name (one base + N variants).
@@ -170,6 +174,24 @@ def _migrate_add_columns():
             logging.getLogger(__name__).warning(
                 f"migration step skipped ({sql[:60]}…): {e}"
             )
+
+    # Seed default packs (idempotent)
+    try:
+        from services.pack_service import seed_default_packs
+        sess = SessionLocal()
+        try:
+            n = seed_default_packs(sess)
+            sess.commit()
+            if n:
+                import logging
+                logging.getLogger(__name__).info(f"Seeded {n} default packs")
+        except Exception:
+            sess.rollback()
+        finally:
+            sess.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Pack seed skipped (non-fatal)")
 
 
 def reset_db():

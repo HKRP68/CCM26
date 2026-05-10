@@ -784,3 +784,80 @@ class MarketPurchase(Base):
     item_name = Column(String(200), nullable=True)
     price_paid = Column(Integer, nullable=False)
     purchased_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Pack system — buyable bundles that give 1 main + N bonus players
+# ══════════════════════════════════════════════════════════════════════
+
+class Pack(Base):
+    """Admin-configurable pack definitions for /buypack."""
+    __tablename__ = "packs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slot_number = Column(Integer, nullable=False, unique=True)  # display order 1, 2, 3...
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    emoji = Column(String(10), default="📦")
+
+    # Cost — at least one of these should be > 0
+    cost_coins = Column(Integer, default=0)
+    cost_quest_points = Column(Integer, default=0)
+    cost_gems = Column(Integer, default=0)
+
+    # Filter mode for the MAIN player slot:
+    #   'rating'  — match by rating range only (any version)
+    #   'version' — match by version name only (any rating)
+    #   'both'    — match BOTH (rating range AND version name)
+    main_filter_mode = Column(String(10), default="rating")
+
+    # Main player(s) — guaranteed
+    main_min_rating = Column(Integer, default=85)
+    main_max_rating = Column(Integer, default=87)
+    main_count = Column(Integer, default=1)
+    # JSON list of weights, one per integer rating in [min, max]. If null,
+    # we use uniform distribution. Example for 85-87: "[60, 30, 10]"
+    main_weights_json = Column(String(500), nullable=True)
+    # JSON list of acceptable version names (case-insensitive match).
+    # e.g. ["Star", "Star Card", "Star Player"]. Used when filter_mode is
+    # 'version' or 'both'.
+    main_versions_json = Column(String(500), nullable=True)
+
+    # Bonus player(s) — extras included with the pack. Always rating-based,
+    # any version (we don't restrict bonus pulls).
+    bonus_min_rating = Column(Integer, default=74)
+    bonus_max_rating = Column(Integer, default=80)
+    bonus_count = Column(Integer, default=2)
+    bonus_weights_json = Column(String(500), nullable=True)
+
+    # Limits
+    daily_limit = Column(Integer, default=0)  # 0 = unlimited
+
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PackPurchase(Base):
+    """Audit log + daily-limit enforcement source."""
+    __tablename__ = "pack_purchases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    pack_id = Column(Integer, ForeignKey("packs.id"), nullable=False, index=True)
+    cost_paid = Column(Integer, nullable=False)
+    currency = Column(String(20), nullable=False)   # 'coins' / 'quest_points' / 'gems'
+    players_json = Column(Text, nullable=True)      # serialized list of player_ids/names received
+    purchased_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class UnopenedPack(Base):
+    """A pack the user has bought but not yet opened.
+    Created on /buypack purchase, removed when /openpack opens it."""
+    __tablename__ = "unopened_packs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    pack_id = Column(Integer, ForeignKey("packs.id"), nullable=False)
+    acquired_at = Column(DateTime, default=datetime.utcnow, index=True)
+    source = Column(String(40), default="buypack")  # 'buypack' / 'admin' / 'reward' etc.

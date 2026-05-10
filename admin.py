@@ -33,6 +33,19 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 PER_PAGE = 30
 
 
+@app.template_filter("fromjson")
+def _fromjson_filter(s):
+    """Parse a JSON string in templates. Returns [] on failure."""
+    if not s:
+        return []
+    try:
+        import json as _j
+        v = _j.loads(s)
+        return v if v is not None else []
+    except Exception:
+        return []
+
+
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def _handle_internal_error(e):
@@ -1989,6 +2002,198 @@ def admin_quests_import():
     finally:
         db.close()
     return redirect(url_for("admin_quests_list"))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Pack admin (CRUD)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/packs")
+@login_required
+def admin_packs_list():
+    db = get_session()
+    try:
+        from models import Pack, PackPurchase
+        from services.pack_service import count_main_pool, count_bonus_pool
+        packs = db.query(Pack).order_by(Pack.slot_number).all()
+        rows = []
+        for p in packs:
+            rows.append({
+                "pack": p,
+                "main_pool": count_main_pool(db, p),
+                "bonus_pool": count_bonus_pool(db, p),
+            })
+        recent_purchases = (db.query(PackPurchase)
+                            .order_by(PackPurchase.purchased_at.desc())
+                            .limit(20).all())
+        return render_template("admin_packs.html",
+                               rows=rows, recent_purchases=recent_purchases)
+    finally:
+        db.close()
+
+
+@app.route("/packs/seed_defaults", methods=["POST"])
+@login_required
+def admin_packs_seed_defaults():
+    db = get_session()
+    try:
+        from services.pack_service import seed_default_packs
+        n = seed_default_packs(db)
+        db.commit()
+        if n:
+            log_admin(db, "pack_seed_defaults", "pack", 0, "defaults",
+                      f"Seeded {n} default packs")
+            db.commit()
+            flash(f"✅ Seeded {n} default packs.", "info")
+        else:
+            flash("ℹ️ All default packs already exist.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_packs_list"))
+
+
+@app.route("/packs/new", methods=["GET", "POST"])
+@login_required
+def admin_pack_new():
+    db = get_session()
+    try:
+        from models import Pack
+        if request.method == "POST":
+            try:
+                p = _save_pack_from_form(db, Pack(), is_new=True)
+                db.commit()
+                log_admin(db, "pack_new", "pack", p.id, p.name,
+                          f"Created pack slot={p.slot_number}")
+                db.commit()
+                flash(f"✅ Created '{p.name}'.", "info")
+                return redirect(url_for("admin_packs_list"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        return render_template("admin_pack_form.html", pack=None)
+    finally:
+        db.close()
+
+
+@app.route("/packs/<int:pack_id>/edit", methods=["GET", "POST"])
+@login_required
+def admin_pack_edit(pack_id):
+    db = get_session()
+    try:
+        from models import Pack
+        from services.pack_service import count_main_pool, count_bonus_pool
+        p = db.query(Pack).get(pack_id)
+        if not p:
+            flash("Pack not found.", "error")
+            return redirect(url_for("admin_packs_list"))
+        if request.method == "POST":
+            try:
+                _save_pack_from_form(db, p, is_new=False)
+                db.commit()
+                log_admin(db, "pack_edit", "pack", p.id, p.name,
+                          "Updated pack")
+                db.commit()
+                flash(f"✅ Updated '{p.name}'.", "info")
+                return redirect(url_for("admin_packs_list"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        # GET — show form with pool counts
+        return render_template("admin_pack_form.html", pack=p,
+                               main_pool=count_main_pool(db, p),
+                               bonus_pool=count_bonus_pool(db, p))
+    finally:
+        db.close()
+
+
+@app.route("/packs/<int:pack_id>/delete", methods=["POST"])
+@login_required
+def admin_pack_delete(pack_id):
+    db = get_session()
+    try:
+        from models import Pack
+        p = db.query(Pack).get(pack_id)
+        if not p:
+            flash("Pack not found.", "error")
+            return redirect(url_for("admin_packs_list"))
+        name = p.name
+        db.delete(p)
+        db.commit()
+        log_admin(db, "pack_delete", "pack", pack_id, name, "Deleted pack")
+        db.commit()
+        flash(f"🗑️ Deleted '{name}'.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_packs_list"))
+
+
+def _save_pack_from_form(db, pack, *, is_new=False):
+    """Helper: populate pack fields from request.form. Returns the pack."""
+    import json as _j
+    f = request.form
+
+    pack.slot_number = int(f.get("slot_number") or 1)
+    pack.name = f.get("name", "").strip() or "Untitled Pack"
+    pack.description = f.get("description", "").strip() or None
+    pack.emoji = f.get("emoji", "📦").strip() or "📦"
+
+    pack.cost_coins = int(f.get("cost_coins") or 0)
+    pack.cost_quest_points = int(f.get("cost_quest_points") or 0)
+    pack.cost_gems = int(f.get("cost_gems") or 0)
+
+    mode = f.get("main_filter_mode", "rating").strip().lower()
+    if mode not in ("rating", "version", "both"):
+        mode = "rating"
+    pack.main_filter_mode = mode
+
+    pack.main_min_rating = max(50, min(100, int(f.get("main_min_rating") or 70)))
+    pack.main_max_rating = max(pack.main_min_rating, min(100, int(f.get("main_max_rating") or 99)))
+    pack.main_count = max(1, min(10, int(f.get("main_count") or 1)))
+
+    # Weights — comma-separated list of integers
+    weights_raw = (f.get("main_weights") or "").strip()
+    if weights_raw:
+        try:
+            weights = [int(x.strip()) for x in weights_raw.split(",") if x.strip()]
+            expected = pack.main_max_rating - pack.main_min_rating + 1
+            if len(weights) == expected and all(w >= 0 for w in weights):
+                pack.main_weights_json = _j.dumps(weights)
+            else:
+                # Mismatched length — store as null and warn
+                pack.main_weights_json = None
+                flash(f"⚠️ Weights count ({len(weights)}) doesn't match rating range "
+                      f"({expected}). Using uniform.", "error")
+        except ValueError:
+            pack.main_weights_json = None
+            flash("⚠️ Weights must be comma-separated integers. Using uniform.", "error")
+    else:
+        pack.main_weights_json = None
+
+    # Versions — comma-separated names
+    versions_raw = (f.get("main_versions") or "").strip()
+    if versions_raw:
+        versions = [v.strip() for v in versions_raw.split(",") if v.strip()]
+        pack.main_versions_json = _j.dumps(versions) if versions else None
+    else:
+        pack.main_versions_json = None
+
+    pack.bonus_min_rating = max(50, min(100, int(f.get("bonus_min_rating") or 70)))
+    pack.bonus_max_rating = max(pack.bonus_min_rating, min(100, int(f.get("bonus_max_rating") or 80)))
+    pack.bonus_count = max(0, min(10, int(f.get("bonus_count") or 0)))
+
+    pack.daily_limit = max(0, int(f.get("daily_limit") or 0))
+    pack.is_active = (f.get("is_active") == "on")
+
+    if is_new:
+        db.add(pack)
+    db.flush()
+    return pack
 
 
 @app.route("/quests")
