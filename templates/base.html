@@ -92,12 +92,12 @@ nav .brand {
   color: var(--accent);
   display: flex; align-items: center; gap: .5rem;
 }
-nav .links { display: flex; gap: .15rem; flex-wrap: wrap; }
+nav .links { display:flex; align-items:center; justify-content:space-between; gap:.75rem; width:100%; min-width:0; }
 nav .links a {
   color: var(--muted);
   text-decoration: none;
-  padding: .5rem .75rem;
-  border-radius: 4px;
+  padding: .5rem .78rem;
+  border-radius: 999px;
   font-size: .82rem;
   font-weight: 500;
   transition: all .15s;
@@ -130,9 +130,13 @@ nav .logout:hover { background: var(--red); color: #fff; }
 /* Main */
 main {
   max-width: 1280px;
-  margin: 0 auto;
+  margin: 1rem auto 1.5rem;
   padding: 1.5rem;
   position: relative; z-index: 1;
+  background: color-mix(in oklab, var(--card) 86%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(66, 96, 141, 0.08);
 }
 
 /* Stat cards */
@@ -140,8 +144,8 @@ main {
 .stat-card {
   background: linear-gradient(145deg, var(--card) 0%, var(--bg-soft) 100%);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 8px;
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
   padding: 1.1rem 1.25rem;
   position: relative;
   overflow: hidden;
@@ -346,6 +350,8 @@ hr.pitch-line {
 
 /* Mobile */
 @media (max-width: 768px) {
+  nav { height:auto; min-height:60px; padding:.6rem .8rem; }
+  nav .links { flex-direction:column; align-items:stretch; }
   .form-row { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
   table { font-size: .78rem; }
