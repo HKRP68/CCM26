@@ -93,7 +93,6 @@ nav .brand {
   display: flex; align-items: center; gap: .5rem;
 }
 nav .links { display:flex; align-items:center; justify-content:space-between; gap:.75rem; width:100%; min-width:0; }
-nav .nav-links { display:flex; gap:.2rem; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; padding-bottom:.15rem; }
 nav .links a {
   color: var(--muted);
   text-decoration: none;
@@ -353,7 +352,6 @@ hr.pitch-line {
 @media (max-width: 768px) {
   nav { height:auto; min-height:60px; padding:.6rem .8rem; }
   nav .links { flex-direction:column; align-items:stretch; }
-  nav .nav-links { width:100%; }
   .form-row { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
   table { font-size: .78rem; }
@@ -374,7 +372,6 @@ hr.pitch-line {
 <nav>
   <div class="brand">🏏 CRICMASTER ULTRA</div>
   <div class="links">
-    <div class="nav-links">
     <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
     <a href="{{ url_for('players_list') }}" class="{{ 'active' if request.endpoint in ('players_list','player_edit','player_add') }}">Players</a>
     <a href="{{ url_for('users_list') }}" class="{{ 'active' if request.endpoint in ('users_list','user_detail','admin_user_traits') }}">Users</a>
@@ -392,7 +389,6 @@ hr.pitch-line {
     <a href="{{ url_for('admin_diagnostics') }}" class="{{ 'active' if request.endpoint == 'admin_diagnostics' }}">Diagnostics</a>
     <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">Seed</a>
     <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">Status</a>
-    </div>
     <button type="button" id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">🌙 Dark</button>
     <a href="{{ url_for('logout') }}" class="logout">Logout</a>
   </div>
