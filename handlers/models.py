@@ -486,6 +486,10 @@ class UserQuestProgress(Base):
     completed_at = Column(DateTime, nullable=True)
     claimed_at = Column(DateTime, nullable=True)
     last_updated = Column(DateTime, default=datetime.utcnow)
+    # Whether this quest is one of the user's randomly-selected quests for the
+    # current period. Only assigned quests show in /mq, count for tracking,
+    # and are eligible for auto-claim at period end.
+    assigned = Column(Boolean, default=True, nullable=False)
 
     __table_args__ = (
         Index("ix_uqp_user_period", "user_id", "period_key"),
