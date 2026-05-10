@@ -135,6 +135,7 @@ def _migrate_add_columns():
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
     _try_add("packs", "main_versions_json", "VARCHAR(500)")
+    _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT 1")
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions

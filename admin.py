@@ -5,7 +5,7 @@ Shares the same database as the bot. Any changes here reflect in the bot instant
 import os
 import io
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
 from sqlalchemy import func, or_, desc, asc
@@ -29,8 +29,48 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
 app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
 
+# ── Security configuration ────────────────────────────────────────────
+# Cookie hardening: HttpOnly stops JS reading the cookie, SameSite mitigates
+# CSRF, Secure-only when running over HTTPS (production).
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("ADMIN_HTTPS", "false").lower() == "true",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=24),  # idle timeout
+    WTF_CSRF_TIME_LIMIT=86400,  # 24h CSRF token validity
+)
+
+# CSRF protection for all POST/PUT/DELETE forms
+try:
+    from flask_wtf.csrf import CSRFProtect, generate_csrf
+    csrf = CSRFProtect(app)
+
+    @app.context_processor
+    def _inject_csrf():
+        # Makes csrf_token() available in every template
+        return {"csrf_token": generate_csrf}
+except ImportError:
+    # flask-wtf not available — log a warning, fall back to no-op
+    import logging
+    logging.getLogger("admin").warning(
+        "flask-wtf not installed; CSRF protection DISABLED. "
+        "Add 'flask-wtf' to requirements.txt to enable.")
+    csrf = None
+
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+# If ADMIN_PASSWORD_HASH is set (bcrypt hash format starting with $2b$), it
+# takes priority over the plaintext ADMIN_PASSWORD. Generate one with:
+#   python3 -c "import bcrypt; print(bcrypt.hashpw(b'mypassword', bcrypt.gensalt()).decode())"
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
+
 PER_PAGE = 30
+
+# ── Login rate limiting (in-memory, per-process) ──────────────────────
+# Locks login for an IP after too many failed attempts. Reset every hour.
+_LOGIN_ATTEMPTS = {}  # {ip: [count, first_attempt_dt]}
+_LOGIN_LOCKOUT_THRESHOLD = 5
+_LOGIN_LOCKOUT_WINDOW_SEC = 600  # 10 minutes
+_LOGIN_LOCKOUT_DURATION_SEC = 1800  # 30 minutes
 
 
 @app.template_filter("fromjson")
@@ -49,16 +89,24 @@ def _fromjson_filter(s):
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def _handle_internal_error(e):
-    """Catch-all error handler — shows traceback inline so issues are debuggable."""
+    """Catch-all error handler — shows traceback inline so issues are debuggable.
+    HTTP exceptions (including 400 CSRF errors and 401/403/404) keep their
+    original status code and don't get a traceback shown to the user."""
+    # HTTP exceptions: pass through with their actual status
+    try:
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            return e
+    except Exception:
+        pass
+
     import traceback
     tb = traceback.format_exc()
     try:
-        # Log to the log file too
         import logging
         logging.getLogger("admin").error(f"Internal error on {request.path}: {tb}")
     except Exception:
         pass
-    # Render a simple error page that shows the issue
     safe_tb = tb.replace("<", "&lt;").replace(">", "&gt;")
     return f"""<!DOCTYPE html>
 <html><head><title>Error</title>
@@ -101,11 +149,86 @@ def log_admin(db, action, target_type=None, target_id=None, target_name=None, de
         pass
 
 
+def _verify_password(submitted: str) -> bool:
+    """Check the password against (in priority order):
+      1. ADMIN_PASSWORD_HASH bcrypt hash, if set
+      2. ADMIN_PASSWORD plaintext
+    """
+    if not submitted:
+        return False
+    if ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_HASH.startswith("$2"):
+        try:
+            import bcrypt
+            return bcrypt.checkpw(submitted.encode("utf-8"),
+                                  ADMIN_PASSWORD_HASH.encode("utf-8"))
+        except Exception:
+            return False
+    # Constant-time comparison even for plaintext path
+    import hmac
+    return hmac.compare_digest(submitted, ADMIN_PASSWORD)
+
+
+def _client_ip():
+    """Best-effort client IP including proxy header."""
+    return (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote_addr or "unknown")
+
+
+def _is_login_locked(ip: str):
+    """Returns (locked: bool, retry_after_seconds: int)."""
+    rec = _LOGIN_ATTEMPTS.get(ip)
+    if not rec:
+        return (False, 0)
+    count, first_at = rec
+    age_sec = (datetime.utcnow() - first_at).total_seconds()
+    # Window expired — reset
+    if age_sec > _LOGIN_LOCKOUT_DURATION_SEC:
+        _LOGIN_ATTEMPTS.pop(ip, None)
+        return (False, 0)
+    if count >= _LOGIN_LOCKOUT_THRESHOLD:
+        retry = int(_LOGIN_LOCKOUT_DURATION_SEC - age_sec)
+        return (True, max(1, retry))
+    return (False, 0)
+
+
+def _record_login_failure(ip: str):
+    rec = _LOGIN_ATTEMPTS.get(ip)
+    if rec:
+        count, first_at = rec
+        age_sec = (datetime.utcnow() - first_at).total_seconds()
+        if age_sec > _LOGIN_LOCKOUT_WINDOW_SEC:
+            # Stale window — restart counter
+            _LOGIN_ATTEMPTS[ip] = [1, datetime.utcnow()]
+        else:
+            _LOGIN_ATTEMPTS[ip] = [count + 1, first_at]
+    else:
+        _LOGIN_ATTEMPTS[ip] = [1, datetime.utcnow()]
+
+
+def _record_login_success(ip: str):
+    _LOGIN_ATTEMPTS.pop(ip, None)
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("admin"):
             return redirect(url_for("login"))
+        # Idle timeout check: if last activity is older than the configured
+        # lifetime, log out. Using session cookie expiry alone isn't enough
+        # because Flask only refreshes the cookie on response.
+        last_seen = session.get("last_seen")
+        if last_seen:
+            try:
+                ts = datetime.fromisoformat(last_seen)
+                if (datetime.utcnow() - ts).total_seconds() > 86400:
+                    session.clear()
+                    flash("Session expired. Please log in again.", "info")
+                    return redirect(url_for("login"))
+            except Exception:
+                pass
+        session["last_seen"] = datetime.utcnow().isoformat()
+        session.permanent = True  # uses PERMANENT_SESSION_LIFETIME
         return f(*args, **kwargs)
     return decorated
 
@@ -114,10 +237,43 @@ def login_required(f):
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    ip = _client_ip()
+    locked, retry = _is_login_locked(ip)
+    if locked:
+        flash(f"Too many failed attempts. Try again in {retry // 60}m {retry % 60}s.", "error")
+        return render_template("login.html"), 429
+
     if request.method == "POST":
-        if request.form.get("password") == ADMIN_PASSWORD:
+        submitted = request.form.get("password", "")
+        if _verify_password(submitted):
+            _record_login_success(ip)
+            session.clear()  # rotate session ID on login
             session["admin"] = True
+            session["last_seen"] = datetime.utcnow().isoformat()
+            session.permanent = True
+            try:
+                # Log success (best-effort)
+                db = get_session()
+                try:
+                    log_admin(db, "login_success", "auth", 0, ip, "Admin login")
+                    db.commit()
+                finally:
+                    db.close()
+            except Exception:
+                pass
             return redirect(url_for("dashboard"))
+        # Failed
+        _record_login_failure(ip)
+        try:
+            db = get_session()
+            try:
+                log_admin(db, "login_fail", "auth", 0, ip,
+                          f"Failed login attempt (count: {_LOGIN_ATTEMPTS.get(ip, [0])[0]})")
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            pass
         flash("Wrong password", "error")
     return render_template("login.html")
 
