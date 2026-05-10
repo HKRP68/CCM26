@@ -476,6 +476,68 @@ def _calc_potm(s):
     return best_name, int(best_impact), best_stats
 
 
+def _gather_top_performers(s):
+    """Return (top_scorer_dict, top_wicket_dict) across both innings.
+
+    Each dict has: name, rating, team, plus sport-specific stats.
+    Either may be None if no qualifying player exists.
+    """
+    top_bat = None  # (runs, dict)
+    top_bowl = None  # (wickets, -runs_conceded, dict) — break ties by economy
+
+    def _walk(xi, stats, team_name):
+        nonlocal top_bat, top_bowl
+        for p in xi:
+            rid = p.get("roster_id")
+            if rid is None:
+                continue
+            ps = stats.get(rid)
+            if not ps:
+                continue
+            if "runs" in ps and "balls" in ps and ps.get("balls", 0) > 0:
+                # Batting
+                runs = ps.get("runs", 0)
+                if runs > 0 and (top_bat is None or runs > top_bat[0]):
+                    top_bat = (runs, {
+                        "name": p.get("name", "—"),
+                        "rating": p.get("rating", "—"),
+                        "team": team_name,
+                        "runs": runs,
+                        "balls": ps.get("balls", 0),
+                        "fours": ps.get("fours", 0),
+                        "sixes": ps.get("sixes", 0),
+                    })
+            if "wickets" in ps and ps.get("balls", 0) > 0:
+                # Bowling
+                wk = ps.get("wickets", 0)
+                rc = ps.get("runs", 0)
+                ov_balls = ps.get("balls", 0)
+                ov_str = f"{ov_balls // 6}.{ov_balls % 6}" if ov_balls % 6 else str(ov_balls // 6)
+                key = (wk, -rc)
+                if wk > 0 and (top_bowl is None or key > (top_bowl[0], -top_bowl[1].get("runs", 0))):
+                    top_bowl = (wk, {
+                        "name": p.get("name", "—"),
+                        "rating": p.get("rating", "—"),
+                        "team": team_name,
+                        "wickets": wk,
+                        "runs": rc,
+                        "overs": ov_str,
+                    })
+
+    # 1st innings
+    inn1_bat_team = s.get("inn1_team", "")
+    inn1_bowl_team = s["bat_team_name"] if s.get("innings", 1) == 2 else s.get("bowl_team_name", "")
+    _walk(s.get("inn1_bat_xi", []), s.get("inn1_bat_stats", {}), inn1_bat_team)
+    _walk(s.get("inn1_bowl_xi", []), s.get("inn1_bowl_stats", {}), inn1_bowl_team)
+    # 2nd innings (current)
+    if s.get("innings") == 2:
+        _walk(s.get("bat_xi", []), s.get("bat_stats", {}), s.get("bat_team_name", ""))
+        _walk(s.get("bowl_xi", []), s.get("bowl_stats", {}), s.get("bowl_team_name", ""))
+
+    return (top_bat[1] if top_bat else None,
+            top_bowl[1] if top_bowl else None)
+
+
 async def _save_match_stats(s):
     session = get_session()
     try:
@@ -2167,12 +2229,26 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
 
         is_first = (innings_num == 1)
 
+        # Compute target + chase outcome for innings 2
+        target = None
+        chase_outcome = None
+        if not is_first:
+            target = (s.get("inn1_runs", 0) or 0) + 1
+            inn2_runs = total_runs
+            if inn2_runs >= target:
+                chase_outcome = "won"
+            elif inn2_runs == target - 1:
+                chase_outcome = "tied"
+            else:
+                chase_outcome = "lost"
+
         # Generate batting scorecard
         bat_card_bytes = generate_batting_scorecard(
             bat_team, bowl_team,
             total_runs, total_wickets, overs_str,
             batsmen_rows, fow, extras,
             is_first_innings=is_first, match_title=match_title,
+            target=target, chase_outcome=chase_outcome,
         )
 
         # Generate bowling scorecard — team name is the bowling team
@@ -2581,6 +2657,64 @@ async def _end_innings(ctx, mid):
 
         # Send 2nd innings scorecards (bowling then batting) BEFORE result message
         await _send_innings_scorecards(ctx, mid, innings_num=2)
+
+        # ── Match summary card ──────────────────────────
+        try:
+            from services.match_summary_card import generate_match_summary
+            top_scorer, top_wicket = _gather_top_performers(s)
+            # Determine POTM team (which side they were on)
+            potm_team = None
+            if potm_name:
+                for xi_list, team_name in (
+                    (s.get("inn1_bat_xi", []), s.get("inn1_team", "")),
+                    (s.get("inn1_bowl_xi", []),
+                     s["bat_team_name"] if s.get("innings", 1) == 2 else s.get("bowl_team_name", "")),
+                    (s.get("bat_xi", []), s.get("bat_team_name", "")),
+                    (s.get("bowl_xi", []), s.get("bowl_team_name", "")),
+                ):
+                    if any(p.get("name") == potm_name for p in xi_list):
+                        potm_team = team_name
+                        break
+            potm_rating = None
+            if potm_name:
+                for xi_list in (s.get("inn1_bat_xi", []), s.get("inn1_bowl_xi", []),
+                                s.get("bat_xi", []), s.get("bowl_xi", [])):
+                    for p in xi_list:
+                        if p.get("name") == potm_name:
+                            potm_rating = p.get("rating")
+                            break
+                    if potm_rating: break
+
+            summary_bytes = generate_match_summary(
+                inn1_team=s.get("inn1_team", "Team 1"),
+                inn1_runs=s.get("inn1_runs", 0),
+                inn1_wickets=s.get("inn1_wickets", 0),
+                inn1_overs=s.get("inn1_overs", "0"),
+                inn2_team=s.get("bat_team_name", "Team 2"),
+                inn2_runs=s.get("total_runs", 0),
+                inn2_wickets=s.get("total_wickets", 0),
+                inn2_overs=format_overs(s),
+                winner_name=winner_name,
+                win_margin_text=margin,
+                overs_total=overs,
+                potm_name=potm_name,
+                potm_rating=potm_rating,
+                potm_team=potm_team,
+                potm_stats=potm_stats,
+                potm_impact=potm_impact,
+                top_scorer=top_scorer,
+                top_wicket=top_wicket,
+                match_date=datetime.utcnow(),
+                is_spectator=bool(s.get("is_spectator")),
+            )
+            if summary_bytes:
+                await ctx.bot.send_photo(
+                    chat_id=cid, photo=io.BytesIO(summary_bytes),
+                    caption=f"🏆 <b>Match Summary</b> — {winner_name} wins {margin}!",
+                    parse_mode="HTML",
+                )
+        except Exception:
+            logger.exception("match summary card failed (non-fatal)")
 
         sent = await ctx.bot.send_message(cid, msg, parse_mode="HTML")
 

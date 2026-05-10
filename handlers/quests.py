@@ -20,78 +20,148 @@ def _progress_bar(percent):
     return "█" * filled + "░" * (10 - filled)
 
 
-def _render_quest_list(quests_data, quest_type, user, owner_tg):
-    """Render the message text + keyboard for a quest tab."""
+QUESTS_PER_PAGE = 8
+
+
+def _render_quest_list(quests_data, quest_type, user, owner_tg, *,
+                       page: int = 0, filter_mode: str = "all"):
+    """Render the message text + keyboard for a quest tab.
+
+    Args:
+      quests_data: full list of quest dicts (we paginate inside)
+      filter_mode: 'all' | 'ready' | 'progress' (in-progress, not ready)
+      page: 0-indexed page
+    """
     type_label = "DAILY" if quest_type == "daily" else "MONTHLY"
     type_icon = "📅" if quest_type == "daily" else "🗓️"
     reset_label = "every 24 hours" if quest_type == "daily" else "every 30 days"
 
+    # Apply filter
+    if filter_mode == "ready":
+        filtered = [it for it in quests_data
+                    if it["completed"] and not it["claimed"]]
+    elif filter_mode == "progress":
+        filtered = [it for it in quests_data
+                    if not it["completed"] and not it["claimed"] and it["progress"] > 0]
+    else:
+        filtered = quests_data
+
+    # Counters across the WHOLE list (for tab badges)
+    total_ready = sum(1 for it in quests_data
+                      if it["completed"] and not it["claimed"])
+    total_in_progress = sum(1 for it in quests_data
+                            if not it["completed"] and not it["claimed"]
+                            and it["progress"] > 0)
+
+    # Pagination
+    total_pages = max(1, (len(filtered) + QUESTS_PER_PAGE - 1) // QUESTS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * QUESTS_PER_PAGE
+    end = start + QUESTS_PER_PAGE
+    page_items = filtered[start:end]
+
     lines = [
-        f"{type_icon} <b>{type_label} QUESTS</b>",
-        f"💎 Quest Points: <b>{user.quest_points or 0}</b>  |  Resets {reset_label}",
+        f"{type_icon} <b>{type_label} QUESTS</b>"
+        + (f" · Page {page + 1}/{total_pages}" if total_pages > 1 else ""),
+        f"💎 Quest Points: <b>{user.quest_points or 0}</b>  ·  Resets {reset_label}",
+        f"🎁 Ready: <b>{total_ready}</b>  ·  ⏳ In Progress: <b>{total_in_progress}</b>"
+        + (f"  ·  Showing: <i>{filter_mode}</i>" if filter_mode != "all" else ""),
         "━━━━━━━━━━━━━━━━━━━",
     ]
 
-    if not quests_data:
-        lines.append(f"\n<i>No active {quest_type} quests right now.</i>")
-        lines.append(f"<i>Check back later or ask admin to add some.</i>")
+    if not page_items:
+        if filter_mode == "ready":
+            lines.append("\n<i>No quests ready to claim right now.</i>")
+        elif filter_mode == "progress":
+            lines.append("\n<i>No quests currently in progress.</i>")
+        else:
+            lines.append(f"\n<i>No active {quest_type} quests.</i>")
 
-    completed_unclaimed = 0
-    for it in quests_data:
+    for it in page_items:
         q = it["quest"]
         bar = _progress_bar(it["percent"])
         status = ""
         if it["claimed"]:
-            status = " ✅ <i>Claimed</i>"
+            status = " ✅"
         elif it["completed"]:
-            status = " 🎁 <b>READY TO CLAIM</b>"
-            completed_unclaimed += 1
+            status = " 🎁"
         rewards = []
-        if q.reward_points:
-            rewards.append(f"+{q.reward_points} pts")
-        if q.reward_coins:
-            rewards.append(f"+{q.reward_coins:,} 🪙")
-        if q.reward_gems:
-            rewards.append(f"+{q.reward_gems} 💎")
-        reward_str = " · ".join(rewards) if rewards else ""
+        if q.reward_points: rewards.append(f"+{q.reward_points}pt")
+        if q.reward_coins: rewards.append(f"+{q.reward_coins:,}🪙")
+        if q.reward_gems: rewards.append(f"+{q.reward_gems}💎")
+        reward_str = " ".join(rewards)
 
         lines.append(
             f"\n{q.emoji} <b>{q.name}</b>{status}\n"
-            f"   <i>{q.description}</i>\n"
-            f"   {bar} <code>{it['progress']}/{it['target']}</code>"
-            f"{'  · ' + reward_str if reward_str else ''}"
+            f"  <i>{q.description}</i>\n"
+            f"  {bar} <code>{it['progress']}/{it['target']}</code>"
+            f"{'  ' + reward_str if reward_str else ''}"
         )
 
-    # Build keyboard — tab switcher + claim buttons + claim-all
+    # ── Build keyboard
     btns = []
-    # Tab switcher row
-    daily_label = "📅 Daily" + ("  •" if quest_type == "daily" else "")
-    monthly_label = "🗓️ Monthly" + ("  •" if quest_type == "monthly" else "")
+
+    # Tab row: Daily / Monthly
+    daily_lbl = ("• 📅 Daily •" if quest_type == "daily" else "📅 Daily")
+    monthly_lbl = ("• 🗓️ Monthly •" if quest_type == "monthly" else "🗓️ Monthly")
     btns.append([
-        InlineKeyboardButton(daily_label, callback_data=f"qst_tab_{owner_tg}_daily"),
-        InlineKeyboardButton(monthly_label, callback_data=f"qst_tab_{owner_tg}_monthly"),
+        InlineKeyboardButton(daily_lbl, callback_data=f"qst_tab_{owner_tg}_daily"),
+        InlineKeyboardButton(monthly_lbl, callback_data=f"qst_tab_{owner_tg}_monthly"),
     ])
 
-    # Per-quest claim buttons (only for completed-unclaimed)
-    for it in quests_data:
+    # Filter row: All / Ready / In Progress
+    def _flt_lbl(name, code, count=None):
+        prefix = "• " if filter_mode == code else ""
+        suffix = " •" if filter_mode == code else ""
+        ct = f" ({count})" if count is not None else ""
+        return f"{prefix}{name}{ct}{suffix}"
+    btns.append([
+        InlineKeyboardButton(_flt_lbl("All", "all"),
+                             callback_data=f"qst_flt_{owner_tg}_{quest_type}_all"),
+        InlineKeyboardButton(_flt_lbl("🎁 Ready", "ready", total_ready or None),
+                             callback_data=f"qst_flt_{owner_tg}_{quest_type}_ready"),
+        InlineKeyboardButton(_flt_lbl("⏳ In Progress", "progress", total_in_progress or None),
+                             callback_data=f"qst_flt_{owner_tg}_{quest_type}_progress"),
+    ])
+
+    # Pagination row
+    if total_pages > 1:
+        prev_p = (page - 1) % total_pages
+        next_p = (page + 1) % total_pages
+        btns.append([
+            InlineKeyboardButton("◀ Prev",
+                                 callback_data=f"qst_pg_{owner_tg}_{quest_type}_{filter_mode}_{prev_p}"),
+            InlineKeyboardButton(f"{page + 1}/{total_pages}",
+                                 callback_data=f"qst_noop_{owner_tg}"),
+            InlineKeyboardButton("Next ▶",
+                                 callback_data=f"qst_pg_{owner_tg}_{quest_type}_{filter_mode}_{next_p}"),
+        ])
+
+    # Per-quest claim buttons (only for completed-unclaimed visible on this page)
+    for it in page_items:
         if it["completed"] and not it["claimed"]:
             q = it["quest"]
+            label = q.name if len(q.name) <= 24 else q.name[:23] + "…"
             btns.append([InlineKeyboardButton(
-                f"🎁 Claim: {q.emoji} {q.name}",
+                f"🎁 {q.emoji} {label}",
                 callback_data=f"qst_claim_{owner_tg}_{q.id}",
             )])
 
-    # Claim All button (if multiple ready)
-    if completed_unclaimed >= 2:
+    # Claim All (always reflect TOTAL ready, not page-only)
+    if total_ready >= 2:
         btns.append([InlineKeyboardButton(
-            f"🎁 CLAIM ALL ({completed_unclaimed})",
+            f"🎁 CLAIM ALL READY ({total_ready})",
             callback_data=f"qst_claimall_{owner_tg}_{quest_type}",
         )])
 
-    # Close
-    btns.append([InlineKeyboardButton("❌ Close", callback_data=f"qst_close_{owner_tg}")])
+    btns.append([InlineKeyboardButton("❌ Close",
+                                      callback_data=f"qst_close_{owner_tg}")])
 
-    return "\n".join(lines), InlineKeyboardMarkup(btns)
+    text = "\n".join(lines)
+    # Final safety: if somehow over 4096, truncate trailing items with notice
+    if len(text) > 4000:
+        text = text[:3950] + "\n\n<i>… (truncated, use Next ▶ for more)</i>"
+    return text, InlineKeyboardMarkup(btns)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -121,6 +191,91 @@ async def myquest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Error loading quests.")
     finally:
         session.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Filter callback — qst_flt_<owner_tg>_<type>_<filter_mode>
+# ════════════════════════════════════════════════════════════════════
+
+async def quest_filter_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        parts = q.data.split("_")
+        owner_tg = int(parts[2])
+        quest_type = parts[3]
+        filter_mode = parts[4]
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+    if tg.id != owner_tg:
+        await q.answer("Not yours!", show_alert=True)
+        return
+    if quest_type not in ("daily", "monthly") or filter_mode not in ("all", "ready", "progress"):
+        await q.answer("Unknown")
+        return
+
+    await q.answer()
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            return
+        quests_data = get_user_quests(session, user.id, quest_type)
+        text, kb = _render_quest_list(quests_data, quest_type, user, tg.id,
+                                       page=0, filter_mode=filter_mode)
+        try:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
+    except Exception:
+        logger.exception("quest_filter_callback error")
+    finally:
+        session.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Page callback — qst_pg_<owner_tg>_<type>_<filter_mode>_<page>
+# ════════════════════════════════════════════════════════════════════
+
+async def quest_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        parts = q.data.split("_")
+        owner_tg = int(parts[2])
+        quest_type = parts[3]
+        filter_mode = parts[4]
+        page = int(parts[5])
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+    if tg.id != owner_tg:
+        await q.answer("Not yours!", show_alert=True)
+        return
+
+    await q.answer()
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            return
+        quests_data = get_user_quests(session, user.id, quest_type)
+        text, kb = _render_quest_list(quests_data, quest_type, user, tg.id,
+                                       page=page, filter_mode=filter_mode)
+        try:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
+    except Exception:
+        logger.exception("quest_page_callback error")
+    finally:
+        session.close()
+
+
+async def quest_noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Page indicator button — just answer the callback."""
+    await update.callback_query.answer()
 
 
 # ════════════════════════════════════════════════════════════════════
