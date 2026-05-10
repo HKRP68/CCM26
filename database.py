@@ -135,20 +135,7 @@ def _migrate_add_columns():
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
     _try_add("packs", "main_versions_json", "VARCHAR(500)")
-    _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT TRUE")
-
-    # Backfill/normalize for Postgres + SQLite: ensure non-null and true by default
-    for sql in (
-        "UPDATE user_quest_progress SET assigned = TRUE WHERE assigned IS NULL",
-        "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET DEFAULT TRUE",
-        "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET NOT NULL",
-    ):
-        try:
-            with engine.begin() as conn:
-                conn.execute(text(sql))
-        except Exception:
-            # SQLite and older schemas may not support ALTER COLUMN forms; safe to ignore.
-            pass
+    _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT 1")
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions
