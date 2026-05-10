@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Packs{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.6rem;">
+  <h1>📦 Packs</h1>
+  <div style="display:flex; gap:.5rem;">
+    <form method="POST" action="{{ url_for('admin_packs_seed_defaults') }}"
+          onsubmit="return confirm('Insert the 5 default packs (skip any that already exist)?');"
+          style="display:inline;">
+      <button type="submit"
+              style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
+        🌱 Seed Default Packs
+      </button>
+    </form>
+    <a href="{{ url_for('admin_pack_new') }}"
+       style="background:var(--accent); color:#000; padding:.6rem 1.2rem; border-radius:6px; font-weight:600; text-decoration:none;">
+      + New Pack
+    </a>
+  </div>
+</div>
+
+<div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-bottom:1.2rem; font-size:.85rem; color:var(--muted);">
+  ℹ️ Packs sell via <code>/buypack</code>. Each pack gives 1 main + N bonus players.
+  Main filter mode: <strong>rating</strong> (rating range only), <strong>version</strong>
+  (version name only — e.g. Star/Legend cards), or <strong>both</strong> (intersection).
+  Pool counts shown below — <span style="color:var(--red);">red</span> means 0 matching players.
+</div>
+
+{% if rows %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:auto;">
+  <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
+    <thead>
+      <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
+        <th style="padding:.6rem; text-align:left;">#</th>
+        <th style="padding:.6rem; text-align:left;">Pack</th>
+        <th style="padding:.6rem; text-align:left;">Cost</th>
+        <th style="padding:.6rem; text-align:left;">Main</th>
+        <th style="padding:.6rem; text-align:center;">Pool</th>
+        <th style="padding:.6rem; text-align:left;">Bonus</th>
+        <th style="padding:.6rem; text-align:center;">Status</th>
+        <th style="padding:.6rem; text-align:right;">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+    {% set p = r.pack %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem .6rem;"><strong>{{ p.slot_number }}</strong></td>
+        <td style="padding:.5rem .6rem;">
+          {{ p.emoji }} <strong>{{ p.name }}</strong>
+          {% if p.description %}
+          <div style="color:var(--muted); font-size:.72rem;">{{ p.description[:60] }}{% if p.description|length > 60 %}…{% endif %}</div>
+          {% endif %}
+        </td>
+        <td style="padding:.5rem .6rem; font-size:.78rem;">
+          {% if p.cost_coins %}{{ '{:,}'.format(p.cost_coins) }} 🪙<br>{% endif %}
+          {% if p.cost_quest_points %}{{ '{:,}'.format(p.cost_quest_points) }} QP<br>{% endif %}
+          {% if p.cost_gems %}{{ p.cost_gems }} 💎{% endif %}
+        </td>
+        <td style="padding:.5rem .6rem; font-size:.78rem;">
+          <code>{{ p.main_filter_mode }}</code><br>
+          {% if p.main_filter_mode in ('rating', 'both') %}
+            {{ p.main_min_rating }}–{{ p.main_max_rating }}<br>
+          {% endif %}
+          {% if p.main_filter_mode in ('version', 'both') and p.main_versions_json %}
+            <span style="color:var(--accent2);">{{ p.main_versions_json|truncate(30) }}</span>
+          {% endif %}
+          ×{{ p.main_count }}
+        </td>
+        <td style="padding:.5rem .6rem; text-align:center;">
+          <span style="color:{% if r.main_pool == 0 %}var(--red){% elif r.main_pool < 5 %}var(--accent2){% else %}var(--green){% endif %}; font-weight:600;">
+            {{ r.main_pool }}
+          </span>
+        </td>
+        <td style="padding:.5rem .6rem; font-size:.78rem;">
+          {{ p.bonus_min_rating }}–{{ p.bonus_max_rating }} ×{{ p.bonus_count }}
+          <div style="color:var(--muted); font-size:.7rem;">pool: {{ r.bonus_pool }}</div>
+        </td>
+        <td style="padding:.5rem .6rem; text-align:center;">
+          {% if p.is_active %}
+            <span style="color:var(--green);">●</span> Active
+          {% else %}
+            <span style="color:var(--muted);">○</span> Disabled
+          {% endif %}
+        </td>
+        <td style="padding:.5rem .6rem; text-align:right;">
+          <a href="{{ url_for('admin_pack_edit', pack_id=p.id) }}"
+             style="color:var(--accent); text-decoration:none; margin-right:.5rem;">Edit</a>
+          <form method="POST" action="{{ url_for('admin_pack_delete', pack_id=p.id) }}"
+                style="display:inline;"
+                onsubmit="return confirm('Delete pack \'{{ p.name }}\'? This cannot be undone.');">
+            <button type="submit"
+                    style="background:none; border:none; color:var(--red); cursor:pointer; padding:0; font-size:.85rem;">
+              Delete
+            </button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:2rem; text-align:center; color:var(--muted);">
+  <p>No packs yet. Click <strong>Seed Default Packs</strong> above for a 5-pack starter set, or <strong>+ New Pack</strong> to build one from scratch.</p>
+</div>
+{% endif %}
+
+<!-- Recent purchases -->
+<h2 style="margin-top:2rem;">📋 Recent Purchases</h2>
+{% if recent_purchases %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:auto;">
+  <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
+    <thead>
+      <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
+        <th style="padding:.6rem; text-align:left;">When</th>
+        <th style="padding:.6rem; text-align:left;">User</th>
+        <th style="padding:.6rem; text-align:left;">Pack</th>
+        <th style="padding:.6rem; text-align:left;">Cost</th>
+        <th style="padding:.6rem; text-align:left;">Got</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for pp in recent_purchases %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem .6rem; font-size:.75rem; color:var(--muted);">
+          {{ pp.purchased_at.strftime('%d %b %H:%M') }}
+        </td>
+        <td style="padding:.5rem .6rem;">
+          <a href="{{ url_for('user_detail', user_id=pp.user_id) }}"
+             style="color:var(--accent); text-decoration:none;">#{{ pp.user_id }}</a>
+        </td>
+        <td style="padding:.5rem .6rem;">Pack #{{ pp.pack_id }}</td>
+        <td style="padding:.5rem .6rem;">{{ '{:,}'.format(pp.cost_paid) }} {{ pp.currency }}</td>
+        <td style="padding:.5rem .6rem; font-size:.78rem; color:var(--muted);">
+          {{ pp.players_json|truncate(80) if pp.players_json else '—' }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; color:var(--muted); font-size:.85rem;">
+  No pack purchases yet.
+</div>
+{% endif %}
+
+{% endblock %}

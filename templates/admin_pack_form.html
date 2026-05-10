@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit Pack' if pack else 'New Pack' }}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_packs_list') }}" style="color:var(--muted); text-decoration:none;">← Back to Packs</a>
+
+<h1>{{ '✏️ Edit Pack' if pack else '➕ New Pack' }}</h1>
+
+{% if pack %}
+<div style="background:var(--card); padding:.75rem 1rem; border-radius:8px; margin-bottom:1rem; font-size:.85rem; border:1px solid var(--border);">
+  <strong>Pool counts</strong> with current settings:
+  Main pool = <span style="color:{% if main_pool == 0 %}var(--red){% else %}var(--green){% endif %};">{{ main_pool }}</span>,
+  Bonus pool = <span style="color:{% if bonus_pool == 0 %}var(--red){% else %}var(--green){% endif %};">{{ bonus_pool }}</span>
+  &nbsp;·&nbsp; <em>Save changes to refresh.</em>
+</div>
+{% endif %}
+
+<form method="POST" style="background:var(--card); padding:1.5rem; border:1px solid var(--border); border-radius:10px; max-width:900px;">
+
+  <h3 style="margin-top:0;">Basic info</h3>
+  <div style="display:grid; grid-template-columns:80px 1fr 80px; gap:.8rem;">
+    <div>
+      <label>Slot #</label>
+      <input type="number" name="slot_number" min="1" max="99" required
+             value="{{ pack.slot_number if pack else '' }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Name</label>
+      <input type="text" name="name" required maxlength="100"
+             value="{{ pack.name if pack else '' }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Emoji</label>
+      <input type="text" name="emoji" maxlength="10"
+             value="{{ pack.emoji if pack else '📦' }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+  </div>
+
+  <div style="margin-top:.8rem;">
+    <label>Description</label>
+    <textarea name="description" rows="2" maxlength="500"
+              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">{{ pack.description if pack else '' }}</textarea>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Cost (set at least one)</h3>
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.8rem;">
+    <div>
+      <label>Coins 🪙</label>
+      <input type="number" name="cost_coins" min="0"
+             value="{{ pack.cost_coins if pack else 0 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Quest Points 🎯</label>
+      <input type="number" name="cost_quest_points" min="0"
+             value="{{ pack.cost_quest_points if pack else 0 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Gems 💎</label>
+      <input type="number" name="cost_gems" min="0"
+             value="{{ pack.cost_gems if pack else 0 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Main player slot</h3>
+  <div style="display:grid; grid-template-columns:1fr 100px 100px 80px; gap:.8rem; align-items:end;">
+    <div>
+      <label>Filter mode</label>
+      <select name="main_filter_mode"
+              style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+        <option value="rating" {% if pack and pack.main_filter_mode == 'rating' %}selected{% endif %}>rating — by rating range only</option>
+        <option value="version" {% if pack and pack.main_filter_mode == 'version' %}selected{% endif %}>version — by version name only</option>
+        <option value="both" {% if pack and pack.main_filter_mode == 'both' %}selected{% endif %}>both — rating AND version</option>
+      </select>
+    </div>
+    <div>
+      <label>Min rating</label>
+      <input type="number" name="main_min_rating" min="50" max="100" required
+             value="{{ pack.main_min_rating if pack else 85 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Max rating</label>
+      <input type="number" name="main_max_rating" min="50" max="100" required
+             value="{{ pack.main_max_rating if pack else 87 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Count</label>
+      <input type="number" name="main_count" min="1" max="10" required
+             value="{{ pack.main_count if pack else 1 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+  </div>
+
+  <div style="margin-top:.8rem;">
+    <label>Versions <span style="color:var(--muted); font-weight:normal;">(comma-separated, used in version/both modes)</span></label>
+    <input type="text" name="main_versions"
+           placeholder="e.g. Star, Star Card, Star Player"
+           value="{% if pack and pack.main_versions_json %}{% set vs = pack.main_versions_json|fromjson %}{{ vs|join(', ') }}{% endif %}"
+           style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    <small style="color:var(--muted);">Match is case-insensitive. Leave empty for rating-only filtering.</small>
+  </div>
+
+  <div style="margin-top:.8rem;">
+    <label>Rating weights <span style="color:var(--muted); font-weight:normal;">(comma-separated, one per rating in range — leave empty for uniform)</span></label>
+    <input type="text" name="main_weights"
+           placeholder="e.g. 60, 30, 10"
+           value="{% if pack and pack.main_weights_json %}{% set ws = pack.main_weights_json|fromjson %}{{ ws|join(', ') }}{% endif %}"
+           style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    <small style="color:var(--muted);">For range 85-87, "60, 30, 10" means 60% chance of 85, 30% of 86, 10% of 87.</small>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Bonus player slot(s)</h3>
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.8rem;">
+    <div>
+      <label>Min rating</label>
+      <input type="number" name="bonus_min_rating" min="50" max="100" required
+             value="{{ pack.bonus_min_rating if pack else 74 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Max rating</label>
+      <input type="number" name="bonus_max_rating" min="50" max="100" required
+             value="{{ pack.bonus_max_rating if pack else 80 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
+      <label>Count</label>
+      <input type="number" name="bonus_count" min="0" max="10" required
+             value="{{ pack.bonus_count if pack else 2 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Limits & status</h3>
+  <div style="display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:center;">
+    <div>
+      <label>Daily purchase limit per user <span style="color:var(--muted); font-weight:normal;">(0 = unlimited)</span></label>
+      <input type="number" name="daily_limit" min="0" max="999"
+             value="{{ pack.daily_limit if pack else 0 }}"
+             style="width:120px; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div style="padding:.6rem 1rem; background:var(--bg); border-radius:5px; align-self:end;">
+      <label style="display:flex; align-items:center; gap:.5rem; cursor:pointer; margin:0;">
+        <input type="checkbox" name="is_active"
+               {% if pack is none or pack.is_active %}checked{% endif %}>
+        <span>Active</span>
+      </label>
+    </div>
+  </div>
+
+  <div style="margin-top:1.5rem; display:flex; gap:.5rem;">
+    <button type="submit"
+            style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
+      💾 Save
+    </button>
+    <a href="{{ url_for('admin_packs_list') }}"
+       style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.7rem 1.5rem; border-radius:6px; text-decoration:none;">
+      Cancel
+    </a>
+  </div>
+</form>
+
+{% endblock %}
