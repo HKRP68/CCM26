@@ -2352,6 +2352,191 @@ def _save_pack_from_form(db, pack, *, is_new=False):
     return pack
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Tours admin (read + force-expire + delete)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/tours")
+@login_required
+def admin_tours_list():
+    db = get_session()
+    try:
+        from models import Tour, TourMatch
+        status_filter = request.args.get("status", "all")
+        page = int(request.args.get("page", 1))
+        per = 25
+
+        q = db.query(Tour)
+        if status_filter != "all":
+            q = q.filter(Tour.status == status_filter)
+        q = q.order_by(Tour.created_at.desc())
+
+        total = q.count()
+        tours = q.offset((page - 1) * per).limit(per).all()
+
+        # Pre-load user labels + match progress for the table
+        rows = []
+        from models import User
+        for t in tours:
+            u1 = db.query(User).get(t.user1_id)
+            u2 = db.query(User).get(t.user2_id)
+            done_count = (db.query(func.count(TourMatch.id))
+                          .filter(TourMatch.tour_id == t.id,
+                                  TourMatch.status == "done").scalar()) or 0
+            rows.append({
+                "tour": t,
+                "u1_label": f"@{u1.username}" if u1 and u1.username else (
+                    u1.first_name if u1 else "?"),
+                "u2_label": f"@{u2.username}" if u2 and u2.username else (
+                    u2.first_name if u2 else "?"),
+                "u1_id": u1.id if u1 else None,
+                "u2_id": u2.id if u2 else None,
+                "matches_done": done_count,
+            })
+
+        # Stat summary (status counts)
+        stats = {}
+        for st in ("pending", "active", "completed", "expired", "declined"):
+            stats[st] = (db.query(func.count(Tour.id))
+                         .filter(Tour.status == st).scalar()) or 0
+        stats["total"] = sum(stats.values())
+
+        total_pages = max(1, (total + per - 1) // per)
+        return render_template("admin_tours.html",
+                               rows=rows, stats=stats,
+                               status_filter=status_filter,
+                               page=page, total_pages=total_pages)
+    finally:
+        db.close()
+
+
+@app.route("/tours/<int:tour_id>")
+@login_required
+def admin_tour_detail(tour_id):
+    db = get_session()
+    try:
+        from models import Tour, TourMatch, User, Match
+        from services.tour_service import get_tour_stats, get_tour_matches
+
+        tour = db.query(Tour).get(tour_id)
+        if not tour:
+            flash("Tour not found.", "error")
+            return redirect(url_for("admin_tours_list"))
+
+        u1 = db.query(User).get(tour.user1_id)
+        u2 = db.query(User).get(tour.user2_id)
+
+        # Match list with linked Match info (winner, scores)
+        tour_matches = get_tour_matches(db, tour_id)
+        match_rows = []
+        for tm in tour_matches:
+            entry = {
+                "tm": tm,
+                "winner_label": None,
+                "match": None,
+            }
+            if tm.match_id:
+                m = db.query(Match).get(tm.match_id)
+                entry["match"] = m
+                if m and m.winner_id:
+                    w = db.query(User).get(m.winner_id)
+                    entry["winner_label"] = (f"@{w.username}" if w and w.username
+                                              else (w.first_name if w else "?"))
+            match_rows.append(entry)
+
+        # Tour leaderboard
+        stats = get_tour_stats(db, tour_id, top_n=5)
+
+        # Labels
+        def _ulabel(u):
+            if not u: return "?"
+            return f"@{u.username}" if u.username else (u.first_name or "?")
+
+        return render_template("admin_tour_detail.html",
+                               tour=tour,
+                               u1=u1, u2=u2,
+                               u1_label=_ulabel(u1), u2_label=_ulabel(u2),
+                               match_rows=match_rows,
+                               stats=stats)
+    finally:
+        db.close()
+
+
+@app.route("/tours/<int:tour_id>/expire", methods=["POST"])
+@login_required
+def admin_tour_force_expire(tour_id):
+    """Force a tour to 'expired' (or 'completed' if it had matches played)."""
+    db = get_session()
+    try:
+        from models import Tour, TourMatch
+        from services.tour_service import _decide_winner
+        tour = db.query(Tour).get(tour_id)
+        if not tour:
+            flash("Tour not found.", "error")
+            return redirect(url_for("admin_tours_list"))
+        if tour.status not in ("pending", "active"):
+            flash(f"Tour is already {tour.status}.", "error")
+            return redirect(url_for("admin_tour_detail", tour_id=tour_id))
+
+        # If at least one match played → completed (winner decided)
+        # Otherwise → expired
+        if tour.user1_wins or tour.user2_wins:
+            tour.status = "completed"
+            tour.winner_id = _decide_winner(tour)
+        else:
+            tour.status = "expired"
+        tour.completed_at = datetime.utcnow()
+        # Mark unplayed TourMatches as expired
+        (db.query(TourMatch)
+         .filter(TourMatch.tour_id == tour.id,
+                 TourMatch.status.in_(["pending", "playing"]))
+         .update({"status": "expired"}, synchronize_session=False))
+        db.commit()
+        log_admin(db, "tour_expire", "tour", tour_id, f"#{tour_id}",
+                  f"Force-expired tour (final score {tour.user1_wins}-{tour.user2_wins})")
+        db.commit()
+        flash(f"✅ Tour #{tour_id} marked {tour.status}.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_tour_detail", tour_id=tour_id))
+
+
+@app.route("/tours/<int:tour_id>/delete", methods=["POST"])
+@login_required
+def admin_tour_delete(tour_id):
+    """Permanently delete a tour and its TourMatch rows.
+
+    NOTE: Does NOT delete the underlying Match records or per-match stats —
+    those represent real cricket history and should be preserved.
+    """
+    db = get_session()
+    try:
+        from models import Tour, TourMatch
+        tour = db.query(Tour).get(tour_id)
+        if not tour:
+            flash("Tour not found.", "error")
+            return redirect(url_for("admin_tours_list"))
+
+        # Delete TourMatch rows first (FK)
+        db.query(TourMatch).filter(TourMatch.tour_id == tour_id).delete(
+            synchronize_session=False)
+        db.delete(tour)
+        db.commit()
+        log_admin(db, "tour_delete", "tour", tour_id, f"#{tour_id}",
+                  "Hard-deleted tour")
+        db.commit()
+        flash(f"🗑️ Tour #{tour_id} deleted.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_tours_list"))
+
+
 @app.route("/quests")
 @login_required
 def admin_quests_list():
@@ -3092,6 +3277,124 @@ def admin_economy_reset():
     finally:
         db.close()
     return redirect(url_for("admin_economy"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SCORECARD APPEARANCE — color customization for innings cards
+# ═══════════════════════════════════════════════════════════════════════
+
+# Curated color presets — chosen for good contrast on the dark scorecard bg
+SCORECARD_COLOR_PRESETS = [
+    ("Lava Red",     "#c41e3a"),   # default innings 1
+    ("Teal",         "#00c9a7"),   # default innings 2
+    ("Trophy Gold",  "#fbbf24"),
+    ("Royal Purple", "#8b5cf6"),
+    ("Ocean Blue",   "#3b82f6"),
+    ("Forest Green", "#22c55e"),
+    ("Sunset Orange", "#f97316"),
+    ("Hot Pink",     "#ec4899"),
+    ("Cyan",         "#06b6d4"),
+    ("Lime",         "#84cc16"),
+    ("Crimson",      "#dc2626"),
+    ("Indigo",       "#6366f1"),
+]
+
+
+@app.route("/settings/scorecard", methods=["GET", "POST"])
+@login_required
+def admin_scorecard_settings():
+    """Per-innings accent color customization for scorecard graphics."""
+    db = get_session()
+    try:
+        from services.config_service import get_config, save_config
+        import re as _re
+
+        def _validate_hex(s, fallback):
+            """Accept #rrggbb (7 chars) only."""
+            if not s:
+                return fallback
+            s = s.strip()
+            if _re.fullmatch(r"#[0-9a-fA-F]{6}", s):
+                return s.lower()
+            return fallback
+
+        if request.method == "POST":
+            try:
+                c1 = _validate_hex(
+                    request.form.get("scorecard_color_inn1"), "#c41e3a")
+                c2 = _validate_hex(
+                    request.form.get("scorecard_color_inn2"), "#00c9a7")
+                save_config(db, {
+                    "scorecard_color_inn1": c1,
+                    "scorecard_color_inn2": c2,
+                }, updated_by=session.get("admin_user", "admin"))
+                db.commit()
+                log_admin(db, "scorecard_colors_save", "config", 0,
+                          "scorecard", f"inn1={c1} inn2={c2}")
+                db.commit()
+                flash("✅ Scorecard colors saved.", "info")
+                return redirect(url_for("admin_scorecard_settings"))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+
+        cfg = get_config(db)
+        return render_template("admin_scorecard_settings.html",
+                               cfg=cfg, presets=SCORECARD_COLOR_PRESETS)
+    finally:
+        db.close()
+
+
+@app.route("/settings/scorecard/preview")
+@login_required
+def admin_scorecard_preview():
+    """Render a sample scorecard PNG with current colors for live preview.
+
+    Returns a small sample card so admins can see the effect of color changes
+    without playing a real match.
+    """
+    db = get_session()
+    try:
+        from services.config_service import get_config
+        from services.scorecard_card import generate_batting_scorecard
+        cfg = get_config(db)
+        innings = request.args.get("innings", "1")
+        is_first = (innings == "1")
+
+        # Sample data — 5 batsmen with each status type
+        sample_rows = [
+            {"rating": 92, "name": "Captain Star", "dismissal": "not out",
+             "runs": 78, "balls": 54, "fours": 7, "sixes": 3, "strike_rate": 144.4,
+             "status": "not_out"},
+            {"rating": 88, "name": "Top Order Bat", "dismissal": "c slip b spinner",
+             "runs": 42, "balls": 31, "fours": 4, "sixes": 1, "strike_rate": 135.5,
+             "status": "out"},
+            {"rating": 85, "name": "Middle Order", "dismissal": "b pacer",
+             "runs": 21, "balls": 18, "fours": 2, "sixes": 0, "strike_rate": 116.7,
+             "status": "out"},
+            {"rating": 80, "name": "All Rounder", "dismissal": "not out",
+             "runs": 15, "balls": 9, "fours": 1, "sixes": 1, "strike_rate": 166.7,
+             "status": "not_out"},
+            {"rating": 76, "name": "Tail Ender", "dismissal": "did not bat",
+             "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "strike_rate": 0.0,
+             "status": "dnb"},
+        ]
+        png = generate_batting_scorecard(
+            "Sample Team A", "Sample Team B", 156, 3, "15.2",
+            sample_rows, [(1, 12, "1.3"), (2, 78, "9.1"), (3, 134, "13.5")],
+            {"wd": 4, "nb": 1, "b": 0, "lb": 2, "total": 7},
+            is_first_innings=is_first,
+            match_title="PREVIEW",
+            match_no=42,
+            accent_hex=(cfg.get("scorecard_color_inn1") if is_first
+                        else cfg.get("scorecard_color_inn2")),
+        )
+        if not png:
+            return "Preview render failed", 500
+        from flask import Response
+        return Response(png, mimetype="image/png")
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -62,7 +62,7 @@ from handlers.match import (
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
-    resume_handler,
+    resume_handler, lastmatch_handler, info_handler,
 )
 
 # Trait handlers
@@ -120,6 +120,15 @@ from handlers.quests import (
     quest_filter_callback,
     quest_page_callback,
     quest_noop_callback,
+)
+
+# Tour handlers
+from handlers.tours import (
+    cmtours_handler, mytours_handler,
+    cmt_matches_callback, cmt_overs_callback, cmt_cancel_callback,
+    tour_accept_callback, tour_decline_callback,
+    mytours_play_callback, mytours_info_callback,
+    mytours_stats_callback, mytours_back_callback,
 )
 
 # Achievements handlers
@@ -308,6 +317,8 @@ def main():
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
+        app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
+        app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
 
         # ── Trait system ─────────────────────────────────────────────
         app.add_handler(CommandHandler(["traits", "tt"], traits_handler))
@@ -346,6 +357,21 @@ def main():
         # opkc_ before opk_ so longer prefix matches first
         app.add_handler(CallbackQueryHandler(pack_open_close_callback, pattern=r"^opkc_"))
         app.add_handler(CallbackQueryHandler(pack_open_inventory_callback, pattern=r"^opk_"))
+
+        # ── Tours ──────────────────────────────────────────────────
+        app.add_handler(CommandHandler(["cmtours", "createtour"], cmtours_handler))
+        app.add_handler(CommandHandler(["mytours", "tours"], mytours_handler))
+        # `cancel_cmt_` must be registered before `ctm_` to avoid regex confusion;
+        # all three picker patterns start with distinct prefixes anyway.
+        app.add_handler(CallbackQueryHandler(cmt_cancel_callback, pattern=r"^cancel_cmt_"))
+        app.add_handler(CallbackQueryHandler(cmt_matches_callback, pattern=r"^ctm_"))
+        app.add_handler(CallbackQueryHandler(cmt_overs_callback, pattern=r"^cto_"))
+        app.add_handler(CallbackQueryHandler(tour_accept_callback, pattern=r"^tac_"))
+        app.add_handler(CallbackQueryHandler(tour_decline_callback, pattern=r"^tdc_"))
+        app.add_handler(CallbackQueryHandler(mytours_play_callback, pattern=r"^mtp_"))
+        app.add_handler(CallbackQueryHandler(mytours_info_callback, pattern=r"^mti_"))
+        app.add_handler(CallbackQueryHandler(mytours_stats_callback, pattern=r"^mts_"))
+        app.add_handler(CallbackQueryHandler(mytours_back_callback, pattern=r"^mtb_"))
 
         # ── vsbot ────────────────────────────────────────────────────
         app.add_handler(CommandHandler(["vsbot", "vsb"], vsbot_handler))
@@ -463,6 +489,29 @@ def main():
             start_heartbeat(app)
         except Exception:
             logger.exception("Failed to start match heartbeat")
+
+        # Schedule periodic tour expiry (every hour)
+        try:
+            async def _tour_expiry_job(ctx):
+                from database import get_session as _gs
+                from services.tour_service import expire_old_tours, expire_overdue_invites
+                s = _gs()
+                try:
+                    n1 = expire_overdue_invites(s)
+                    n2 = expire_old_tours(s)
+                    s.commit()
+                    if n1 or n2:
+                        logger.info(f"Tour expiry: {n1} invites, {n2} tours")
+                except Exception:
+                    s.rollback()
+                    logger.exception("Tour expiry job failed")
+                finally:
+                    s.close()
+            if app.job_queue:
+                app.job_queue.run_repeating(_tour_expiry_job, interval=3600, first=60,
+                                             name="tour_expiry")
+        except Exception:
+            logger.exception("Failed to schedule tour expiry")
 
         # Wire up cross-thread bot ref for admin Send-Now button
         try:

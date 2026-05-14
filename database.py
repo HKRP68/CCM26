@@ -125,6 +125,8 @@ def _migrate_add_columns():
         "market_refresh_hour_ist": "INTEGER DEFAULT 0",
         "trait_market_default_slots": "INTEGER DEFAULT 5",
         "trait_market_last_refresh_at": "TIMESTAMP",
+        "scorecard_color_inn1": "VARCHAR(9) DEFAULT '#c41e3a'",
+        "scorecard_color_inn2": "VARCHAR(9) DEFAULT '#00c9a7'",
     }
     for col, coltype in new_gameconfig_cols.items():
         _try_add("game_config", col, coltype)
@@ -135,7 +137,21 @@ def _migrate_add_columns():
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
     _try_add("packs", "main_versions_json", "VARCHAR(500)")
-    _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT 1")
+    _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT TRUE")
+    _try_add("users", "pack_pity_counter", "INTEGER DEFAULT 0")
+
+    # Backfill/normalize for Postgres + SQLite: ensure non-null and true by default
+    for sql in (
+        "UPDATE user_quest_progress SET assigned = TRUE WHERE assigned IS NULL",
+        "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET DEFAULT TRUE",
+        "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET NOT NULL",
+    ):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+        except Exception:
+            # SQLite and older schemas may not support ALTER COLUMN forms; safe to ignore.
+            pass
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions

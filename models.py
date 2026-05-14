@@ -28,6 +28,9 @@ class User(Base):
     active_days = Column(Integer, default=0)  # days with at least 1 match
     last_match_date = Column(DateTime, nullable=True)
     quest_points = Column(Integer, default=0)  # earned from completing quests
+    # Pack pity timer — increments on low rolls, resets on a max-rating roll.
+    # When ≥ PITY_THRESHOLD, the next pack guarantees max-rating from the band.
+    pack_pity_counter = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -706,6 +709,12 @@ class GameConfig(Base):
     # Trait market settings
     trait_market_default_slots = Column(Integer, default=5)
     trait_market_last_refresh_at = Column(DateTime, nullable=True)
+    # ── Scorecard color customization ──
+    # Hex strings like "#c41e3a". Used as accent (header border, table-header
+    # bottom border, RTG color, FoW labels, target line) on the per-innings
+    # scorecard. Defaults match the original PRIMARY (red) / SECONDARY (teal).
+    scorecard_color_inn1 = Column(String(9), default="#c41e3a")
+    scorecard_color_inn2 = Column(String(9), default="#00c9a7")
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
@@ -865,3 +874,107 @@ class UnopenedPack(Base):
     pack_id = Column(Integer, ForeignKey("packs.id"), nullable=False)
     acquired_at = Column(DateTime, default=datetime.utcnow, index=True)
     source = Column(String(40), default="buypack")  # 'buypack' / 'admin' / 'reward' etc.
+
+
+class Tour(Base):
+    """A tour: a multi-match challenge between two users."""
+    __tablename__ = "tours"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user1_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # creator
+    user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # invitee
+    chat_id = Column(BigInteger, nullable=True)  # group chat where tour was created
+
+    match_count = Column(Integer, nullable=False)        # 3, 4, 5, or 6
+    overs_per_match = Column(Integer, nullable=False)    # 5+
+
+    # Status flow:
+    #   pending  → invite sent, awaiting user2's accept
+    #   active   → user2 accepted; matches being played
+    #   completed→ all matches played, winner decided
+    #   expired  → either: user2 didn't accept in 30s,
+    #              OR tour lifetime ended with unfinished matches
+    #   declined → user2 explicitly declined
+    status = Column(String(20), default="pending", index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    accepted_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)        # invite expiry (30s after create)
+    lifetime_expires_at = Column(DateTime, nullable=True)  # tour expiry (matches*2 days)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Score after every completed match (denormalized for fast leaderboard)
+    user1_wins = Column(Integer, default=0)
+    user2_wins = Column(Integer, default=0)
+
+    # Winner once tour is decided
+    winner_id = Column(Integer, nullable=True)  # null = ongoing OR drawn
+
+    user1 = relationship("User", foreign_keys=[user1_id])
+    user2 = relationship("User", foreign_keys=[user2_id])
+
+    __table_args__ = (
+        Index("ix_tours_user1_status", "user1_id", "status"),
+        Index("ix_tours_user2_status", "user2_id", "status"),
+    )
+
+
+class TourMatch(Base):
+    """A single match within a tour."""
+    __tablename__ = "tour_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
+    match_number = Column(Integer, nullable=False)  # 1, 2, 3, ...
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=True)  # null until played
+
+    # Pre-decided settings (so each tour match has its own venue)
+    stadium = Column(String(100), nullable=True)
+    pitch_type = Column(String(30), nullable=True)
+
+    # Status:
+    #   pending → not started yet
+    #   playing → match_id set, match in progress
+    #   done    → match completed
+    #   forfeit → one side forfeited (idle)
+    status = Column(String(20), default="pending")
+
+    winner_id = Column(Integer, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_tour_matches_tour", "tour_id", "match_number"),
+    )
+
+
+class PlayerMatchStats(Base):
+    """Per-player per-match stats — written at match-end so we can compute
+    tour aggregates (most runs in a tour, etc.).
+
+    This is in addition to the cumulative PlayerGameStats. PlayerGameStats
+    is the lifetime total; PlayerMatchStats is the single-match snapshot.
+    """
+    __tablename__ = "player_match_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Batting (this match)
+    bat_runs = Column(Integer, default=0)
+    bat_balls = Column(Integer, default=0)
+    bat_fours = Column(Integer, default=0)
+    bat_sixes = Column(Integer, default=0)
+    bat_out = Column(Boolean, default=False)
+
+    # Bowling (this match)
+    bowl_wickets = Column(Integer, default=0)
+    bowl_runs = Column(Integer, default=0)
+    bowl_balls = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_pms_match_user", "match_id", "user_id"),
+    )
