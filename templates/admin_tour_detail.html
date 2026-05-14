@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Tour #{{ tour.id }}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_tours_list') }}" style="color:var(--muted); text-decoration:none;">← All Tours</a>
+
+<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-top:.5rem; flex-wrap:wrap;">
+  <h1 style="margin:0;">🏆 Tour #{{ tour.id }}</h1>
+
+  <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+    {% if tour.status in ['pending', 'active'] %}
+    <form method="POST" action="{{ url_for('admin_tour_force_expire', tour_id=tour.id) }}"
+          style="display:inline;"
+          onsubmit="return confirm('Force-expire tour #{{ tour.id }}? If matches were played, winner is decided by current score. This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-red btn-sm">⏰ Force Expire</button>
+    </form>
+    {% endif %}
+    <form method="POST" action="{{ url_for('admin_tour_delete', tour_id=tour.id) }}"
+          style="display:inline;"
+          onsubmit="return confirm('PERMANENTLY DELETE tour #{{ tour.id }}? The underlying matches and stats are preserved. This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-red btn-sm">🗑️ Delete Tour</button>
+    </form>
+  </div>
+</div>
+
+<!-- Scoreboard hero -->
+<div class="form-card" style="margin-top:1rem; max-width:100%; background:linear-gradient(145deg, var(--card) 0%, var(--bg-soft) 100%);">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:2rem; flex-wrap:wrap;">
+    <!-- User 1 -->
+    <div style="flex:1; min-width:200px;">
+      <div style="color:var(--muted); font-size:.7rem; text-transform:uppercase; letter-spacing:.12em;">User 1</div>
+      <div style="font-size:1.3rem; font-weight:700; color:var(--text); margin-top:.25rem;">
+        {% if u1 %}<a href="{{ url_for('user_detail', user_id=u1.id) }}" style="color:var(--accent); text-decoration:none;">{{ u1_label }}</a>{% else %}{{ u1_label }}{% endif %}
+      </div>
+    </div>
+
+    <!-- Score -->
+    <div style="text-align:center;">
+      <div style="font-family:'Bebas Neue', sans-serif; font-size:3.5rem; line-height:1; letter-spacing:.05em;">
+        <span style="color:{% if tour.winner_id == tour.user1_id %}var(--accent){% else %}var(--text){% endif %};">{{ tour.user1_wins }}</span>
+        <span style="color:var(--muted); margin:0 .5rem;">—</span>
+        <span style="color:{% if tour.winner_id == tour.user2_id %}var(--accent){% else %}var(--text){% endif %};">{{ tour.user2_wins }}</span>
+      </div>
+      <div style="margin-top:.5rem;">
+        {% set color_map = {'pending':'var(--accent)','active':'var(--green)','completed':'var(--accent2)','expired':'var(--muted)','declined':'var(--red)'} %}
+        <span style="padding:.25rem .8rem; border-radius:4px; background:rgba(212, 168, 42, 0.1); color:{{ color_map.get(tour.status, 'var(--muted)') }}; font-weight:700; text-transform:uppercase; font-size:.75rem; letter-spacing:.1em;">
+          {{ tour.status }}
+        </span>
+      </div>
+    </div>
+
+    <!-- User 2 -->
+    <div style="flex:1; min-width:200px; text-align:right;">
+      <div style="color:var(--muted); font-size:.7rem; text-transform:uppercase; letter-spacing:.12em;">User 2</div>
+      <div style="font-size:1.3rem; font-weight:700; color:var(--text); margin-top:.25rem;">
+        {% if u2 %}<a href="{{ url_for('user_detail', user_id=u2.id) }}" style="color:var(--accent); text-decoration:none;">{{ u2_label }}</a>{% else %}{{ u2_label }}{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if tour.status == 'completed' %}
+  <hr class="pitch-line">
+  <div style="text-align:center;">
+    {% if tour.winner_id == tour.user1_id %}
+      <strong style="color:var(--accent); font-size:1.1rem;">🏆 {{ u1_label }} wins the tour!</strong>
+    {% elif tour.winner_id == tour.user2_id %}
+      <strong style="color:var(--accent); font-size:1.1rem;">🏆 {{ u2_label }} wins the tour!</strong>
+    {% else %}
+      <strong style="color:var(--muted);">🤝 Tour drawn</strong>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- Metadata grid -->
+<div class="stats-grid" style="margin-top:1.5rem;">
+  <div class="stat-card">
+    <div class="label">Format</div>
+    <div class="value">{{ tour.match_count }}M · {{ tour.overs_per_match }}O</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Created</div>
+    <div class="value" style="font-size:1rem;">{{ tour.created_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+  </div>
+  {% if tour.accepted_at %}
+  <div class="stat-card">
+    <div class="label">Accepted</div>
+    <div class="value" style="font-size:1rem;">{{ tour.accepted_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+  </div>
+  {% endif %}
+  {% if tour.lifetime_expires_at %}
+  <div class="stat-card">
+    <div class="label">Ends</div>
+    <div class="value" style="font-size:1rem;">{{ tour.lifetime_expires_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+  </div>
+  {% endif %}
+  {% if tour.completed_at %}
+  <div class="stat-card">
+    <div class="label">Completed</div>
+    <div class="value" style="font-size:1rem;">{{ tour.completed_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Matches list -->
+<h2 style="margin-top:2rem;">📋 Matches</h2>
+{% if match_rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Stadium</th>
+        <th>Pitch</th>
+        <th>Status</th>
+        <th>Winner</th>
+        <th>Result</th>
+        <th>Played</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in match_rows %}
+    {% set tm = r.tm %}
+      <tr>
+        <td><strong>{{ tm.match_number }}</strong></td>
+        <td>{{ tm.stadium or '—' }}</td>
+        <td>{{ tm.pitch_type or '—' }}</td>
+        <td>
+          {% set status_color = {'pending':'var(--muted)','playing':'var(--green)','done':'var(--accent2)','forfeit':'var(--red)','expired':'var(--muted)'} %}
+          <span style="color:{{ status_color.get(tm.status, 'var(--muted)') }}; text-transform:uppercase; font-weight:600; font-size:.72rem; letter-spacing:.06em;">
+            {{ tm.status }}
+          </span>
+        </td>
+        <td>{{ r.winner_label or '—' }}</td>
+        <td>
+          {% if r.match and r.match.status == 'completed' %}
+            <span style="font-size:.78rem; color:var(--muted);">
+              {{ r.match.inn1_runs or 0 }}/{{ r.match.inn1_wickets or 0 }}
+              vs
+              {{ r.match.inn2_runs or 0 }}/{{ r.match.inn2_wickets or 0 }}
+            </span>
+          {% else %}—{% endif %}
+        </td>
+        <td style="font-size:.72rem; color:var(--muted);">
+          {% if tm.completed_at %}{{ tm.completed_at.strftime('%d %b %H:%M') }}{% else %}—{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="color:var(--muted);">No matches scheduled.</div>
+{% endif %}
+
+<!-- Tour leaderboard -->
+<h2 style="margin-top:2rem;">📈 Tour Stats</h2>
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+  <!-- Most runs -->
+  <div class="form-card" style="max-width:100%;">
+    <h3 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">🏏 Most Runs</h3>
+    {% if stats.most_runs %}
+    <table style="font-size:.85rem;">
+      {% for e in stats.most_runs %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem 0; width:30px; color:var(--muted);">#{{ loop.index }}</td>
+        <td style="padding:.5rem 0;"><strong>{{ e.player_name }}</strong></td>
+        <td style="padding:.5rem 0; color:var(--muted); font-size:.78rem;">{{ e.team_name }}</td>
+        <td style="padding:.5rem 0; text-align:right; font-family:'Bebas Neue', sans-serif; font-size:1.2rem; color:var(--accent);">{{ e.value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div style="color:var(--muted); padding:.5rem 0;">No batting stats yet.</div>
+    {% endif %}
+  </div>
+
+  <!-- Most wickets -->
+  <div class="form-card" style="max-width:100%;">
+    <h3 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">🎯 Most Wickets</h3>
+    {% if stats.most_wickets %}
+    <table style="font-size:.85rem;">
+      {% for e in stats.most_wickets %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem 0; width:30px; color:var(--muted);">#{{ loop.index }}</td>
+        <td style="padding:.5rem 0;"><strong>{{ e.player_name }}</strong></td>
+        <td style="padding:.5rem 0; color:var(--muted); font-size:.78rem;">{{ e.team_name }}</td>
+        <td style="padding:.5rem 0; text-align:right; font-family:'Bebas Neue', sans-serif; font-size:1.2rem; color:var(--accent);">{{ e.value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div style="color:var(--muted); padding:.5rem 0;">No bowling stats yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div style="margin-top:1rem; color:var(--muted); font-size:.85rem;">
+  Across <strong>{{ stats.total_matches_played }}</strong> match(es) played:
+  <strong style="color:var(--text);">{{ stats.total_runs }}</strong> total runs · 
+  <strong style="color:var(--text);">{{ stats.total_wickets }}</strong> total wickets
+</div>
+
+{% endblock %}

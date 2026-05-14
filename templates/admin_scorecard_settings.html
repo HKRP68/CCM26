@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Scorecard Colors{% endblock %}
+{% block content %}
+
+<h1>🎨 Scorecard Colors</h1>
+<p style="color:var(--muted); margin-bottom:1.5rem;">
+  Customize the accent color used for each innings' scorecard graphic.
+  The accent color is used for the header border, table header border, RTG column,
+  W/ECON highlights, target line, and Fall of Wickets labels.
+</p>
+
+<form method="POST" action="{{ url_for('admin_scorecard_settings') }}"
+      style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <!-- Innings 1 -->
+  <div class="form-card" style="max-width:100%;">
+    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
+      🔴 Innings 1 Accent
+    </h2>
+
+    <label>Color
+      <input type="color" name="scorecard_color_inn1"
+             id="color_inn1"
+             value="{{ cfg.scorecard_color_inn1 or '#c41e3a' }}"
+             style="width:100%; height:60px; cursor:pointer; border:2px solid var(--border); border-radius:6px;">
+    </label>
+
+    <div style="margin-top:.75rem;">
+      <div style="color:var(--muted); font-size:.78rem; margin-bottom:.4rem;">Quick presets:</div>
+      <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
+        {% for name, hex in presets %}
+        <button type="button" class="preset-swatch"
+                data-target="color_inn1" data-color="{{ hex }}"
+                title="{{ name }}"
+                style="width:36px; height:36px; border-radius:6px; border:2px solid var(--border); background:{{ hex }}; cursor:pointer; padding:0;"></button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <hr class="pitch-line" style="margin:1rem 0;">
+
+    <div style="text-align:center;">
+      <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">Live preview</div>
+      <img id="preview_inn1" src="{{ url_for('admin_scorecard_preview', innings=1) }}"
+           style="width:100%; border:1px solid var(--border); border-radius:6px;">
+    </div>
+  </div>
+
+  <!-- Innings 2 -->
+  <div class="form-card" style="max-width:100%;">
+    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
+      🟢 Innings 2 Accent
+    </h2>
+
+    <label>Color
+      <input type="color" name="scorecard_color_inn2"
+             id="color_inn2"
+             value="{{ cfg.scorecard_color_inn2 or '#00c9a7' }}"
+             style="width:100%; height:60px; cursor:pointer; border:2px solid var(--border); border-radius:6px;">
+    </label>
+
+    <div style="margin-top:.75rem;">
+      <div style="color:var(--muted); font-size:.78rem; margin-bottom:.4rem;">Quick presets:</div>
+      <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
+        {% for name, hex in presets %}
+        <button type="button" class="preset-swatch"
+                data-target="color_inn2" data-color="{{ hex }}"
+                title="{{ name }}"
+                style="width:36px; height:36px; border-radius:6px; border:2px solid var(--border); background:{{ hex }}; cursor:pointer; padding:0;"></button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <hr class="pitch-line" style="margin:1rem 0;">
+
+    <div style="text-align:center;">
+      <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">Live preview</div>
+      <img id="preview_inn2" src="{{ url_for('admin_scorecard_preview', innings=2) }}"
+           style="width:100%; border:1px solid var(--border); border-radius:6px;">
+    </div>
+  </div>
+
+  <div style="grid-column: 1 / -1; display:flex; gap:.75rem; justify-content:flex-end;">
+    <a href="{{ url_for('admin_economy') }}" class="btn btn-ghost">Cancel</a>
+    <button type="submit" class="btn">💾 Save Colors</button>
+  </div>
+</form>
+
+<div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-top:1.2rem; font-size:.85rem; color:var(--muted);">
+  ℹ️ <strong>Tip:</strong> The previews use the saved colors. Pick a color, save, and reload to see the actual scorecard preview update.
+  Row colors (green/red/gray for batsmen status) are fixed and not user-customizable — they convey meaning.
+</div>
+
+<script>
+// Preset swatch → set the color input
+document.querySelectorAll('.preset-swatch').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.getAttribute('data-target');
+    const color = btn.getAttribute('data-color');
+    const input = document.getElementById(target);
+    if (input) input.value = color;
+  });
+});
+</script>
+
+{% endblock %}

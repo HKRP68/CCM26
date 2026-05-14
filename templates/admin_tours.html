@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Tours{% endblock %}
+{% block content %}
+
+<h1>🏆 Tours</h1>
+
+<!-- Stats cards: status breakdown -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="label">Total</div>
+    <div class="value">{{ stats.total }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Pending</div>
+    <div class="value gold">{{ stats.pending }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Active</div>
+    <div class="value green">{{ stats.active }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Completed</div>
+    <div class="value blue">{{ stats.completed }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Expired</div>
+    <div class="value">{{ stats.expired }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Declined</div>
+    <div class="value red">{{ stats.declined }}</div>
+  </div>
+</div>
+
+<div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-bottom:1.2rem; font-size:.85rem; color:var(--muted);">
+  ℹ️ Tours are multi-match challenges between two users. Lifetime is <code>matches × 2 days</code>.
+  A periodic job expires overdue tours automatically. Use <strong>Force Expire</strong> to end a stuck tour;
+  use <strong>Delete</strong> for cleanup only (it preserves the underlying matches and stats).
+</div>
+
+<!-- Status filter tabs -->
+<div class="toolbar" style="margin-bottom:1rem;">
+  {% for st in ['all', 'pending', 'active', 'completed', 'expired', 'declined'] %}
+  <a href="{{ url_for('admin_tours_list', status=st) }}"
+     style="padding:.4rem .8rem; border-radius:5px; text-decoration:none;
+            border:1px solid var(--border);
+            {% if status_filter == st %}background:var(--accent); color:#1a1209; font-weight:700;
+            {% else %}background:var(--card); color:var(--muted);{% endif %}">
+    {{ st|title }}
+  </a>
+  {% endfor %}
+</div>
+
+{% if rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>User 1</th>
+        <th>User 2</th>
+        <th>Score</th>
+        <th>Format</th>
+        <th>Progress</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+    {% set t = r.tour %}
+      <tr>
+        <td><strong>#{{ t.id }}</strong></td>
+        <td>
+          {% if r.u1_id %}
+          <a href="{{ url_for('user_detail', user_id=r.u1_id) }}"
+             style="color:var(--accent); text-decoration:none;">{{ r.u1_label }}</a>
+          {% else %}{{ r.u1_label }}{% endif %}
+        </td>
+        <td>
+          {% if r.u2_id %}
+          <a href="{{ url_for('user_detail', user_id=r.u2_id) }}"
+             style="color:var(--accent); text-decoration:none;">{{ r.u2_label }}</a>
+          {% else %}{{ r.u2_label }}{% endif %}
+        </td>
+        <td>
+          <strong style="font-family:'Bebas Neue', sans-serif; font-size:1.1rem;">
+            {{ t.user1_wins }} – {{ t.user2_wins }}
+          </strong>
+          {% if t.winner_id and t.status == 'completed' %}
+            {% if t.winner_id == r.u1_id %}
+              <span style="color:var(--green); font-size:.7rem;">🏆 U1</span>
+            {% elif t.winner_id == r.u2_id %}
+              <span style="color:var(--green); font-size:.7rem;">🏆 U2</span>
+            {% endif %}
+          {% elif t.status == 'completed' %}
+            <span style="color:var(--muted); font-size:.7rem;">🤝 Draw</span>
+          {% endif %}
+        </td>
+        <td style="font-size:.78rem;">{{ t.match_count }}M · {{ t.overs_per_match }}O</td>
+        <td style="font-size:.78rem;">{{ r.matches_done }}/{{ t.match_count }}</td>
+        <td>
+          {% set color_map = {'pending':'var(--accent)','active':'var(--green)','completed':'var(--accent2)','expired':'var(--muted)','declined':'var(--red)'} %}
+          <span style="color:{{ color_map.get(t.status, 'var(--muted)') }}; font-weight:600; text-transform:uppercase; font-size:.72rem; letter-spacing:.06em;">
+            {{ t.status }}
+          </span>
+        </td>
+        <td style="font-size:.72rem; color:var(--muted);">
+          {{ t.created_at.strftime('%d %b %H:%M') }}
+        </td>
+        <td>
+          <a href="{{ url_for('admin_tour_detail', tour_id=t.id) }}"
+             class="btn btn-sm btn-ghost">View</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+  <a href="{{ url_for('admin_tours_list', status=status_filter, page=page-1) }}">← Prev</a>
+  {% endif %}
+  <span class="current">{{ page }}</span>
+  <span class="info">of {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a href="{{ url_for('admin_tours_list', status=status_filter, page=page+1) }}">Next →</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="table-wrap" style="padding:2rem; text-align:center; color:var(--muted);">
+  <p>No tours found.</p>
+</div>
+{% endif %}
+
+{% endblock %}

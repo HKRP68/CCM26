@@ -371,10 +371,12 @@ hr.pitch-line {
     <a href="{{ url_for('admin_bot_teams_list') }}" class="{{ 'active' if request.endpoint in ('admin_bot_teams_list','admin_bot_team_new','admin_bot_team_edit') }}">Bot Teams</a>
     <a href="{{ url_for('admin_quests_list') }}" class="{{ 'active' if request.endpoint in ('admin_quests_list','admin_quest_new','admin_quest_edit') }}">Quests</a>
     <a href="{{ url_for('admin_packs_list') }}" class="{{ 'active' if request.endpoint in ('admin_packs_list','admin_pack_new','admin_pack_edit') }}">Packs</a>
+    <a href="{{ url_for('admin_tours_list') }}" class="{{ 'active' if request.endpoint in ('admin_tours_list','admin_tour_detail') }}">Tours</a>
     <a href="{{ url_for('admin_commentary_list') }}" class="{{ 'active' if request.endpoint in ('admin_commentary_list','admin_commentary_new','admin_commentary_edit','admin_commentary_import') }}">Commentary</a>
     <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">Notifications</a>
     <a href="{{ url_for('admin_rarity_list') }}" class="{{ 'active' if request.endpoint in ('admin_rarity_list','admin_rarity_simulate') }}">Rarity</a>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">Economy</a>
+    <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint in ('admin_scorecard_settings',) }}">Scorecard</a>
     <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">Simulation</a>
     <a href="{{ url_for('admin_markets_overview') }}" class="{{ 'active' if request.endpoint in ('admin_markets_overview','admin_market_player_edit','admin_market_trait_edit') }}">Markets</a>
     <a href="{{ url_for('admin_messages_list') }}" class="{{ 'active' if request.endpoint in ('admin_messages_list','admin_message_edit') }}">Messages</a>
