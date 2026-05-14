@@ -140,13 +140,17 @@ def _weighted_pick_rating(min_r, max_r, weights_json):
 
 
 def _pick_main_player(session, pack, *, exclude_player_ids=None,
-                       user_owned_base_ids=None):
+                       user_owned_base_ids=None, force_rating=None):
     """Pick a player for the MAIN slot honoring pack.main_filter_mode.
 
     For 'rating': pick a rating from the band, then a base-card at that rating.
     For 'version': pick any active player whose version matches one of the
                    configured names.
     For 'both': filter by version AND rating range; pick from the matches.
+
+    `force_rating`: if set, overrides the random rating pick. Used by the pack
+    pity timer to guarantee a max-rating pull. Has no effect on version-only
+    packs (no rating selection happens there anyway).
     """
     exclude = set(exclude_player_ids or [])
     owned = set(user_owned_base_ids or [])
@@ -164,15 +168,15 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
             pass
 
     if mode == "rating":
-        rating = _weighted_pick_rating(
+        rating = force_rating if force_rating is not None else _weighted_pick_rating(
             pack.main_min_rating, pack.main_max_rating, pack.main_weights_json,
         )
-        # Base-card pick at exact rating
         return _pick_base_at_rating(session, rating,
                                      exclude_player_ids=exclude,
                                      user_owned_base_ids=owned)
 
     if mode == "version":
+        # Version-only packs ignore force_rating — there's no rating selection here.
         if not versions:
             logger.warning(f"Pack {pack.id} mode=version but no versions configured")
             return None
@@ -200,7 +204,7 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
                                      user_owned_base_ids=owned)
         from sqlalchemy import func as _func
         lowered = [v.lower() for v in versions]
-        rating = _weighted_pick_rating(
+        rating = force_rating if force_rating is not None else _weighted_pick_rating(
             pack.main_min_rating, pack.main_max_rating, pack.main_weights_json,
         )
         # Try exact rating first
@@ -284,6 +288,12 @@ def _pick_player_at_rating(session, rating, *, exclude_player_ids=None,
 
 
 MAX_INVENTORY = 50  # max unopened packs a user can hold
+
+# Pack pity timer — guarantees a max-rating pull after PITY_THRESHOLD
+# consecutive "non-max" pulls. Resets to 0 on every max-rating roll
+# (or when the guaranteed pull fires). Only applies to rating/both mode
+# packs with min < max — single-rating packs and version-only packs skip pity.
+PITY_THRESHOLD = 10
 
 
 def buy_pack(session, user, pack):
@@ -387,14 +397,41 @@ def open_unopened_pack(session, user, inventory_id):
 
     rolled = []
     used_player_ids = set()
-    for _ in range(pack.main_count or 1):
+
+    # Pity check — applies only if this pack has a rating range with >1 step
+    # and user has hit the threshold. We force a one-time override.
+    pity_force_max = False
+    mode = (pack.main_filter_mode or "rating").lower()
+    rating_band = (pack.main_max_rating or 0) - (pack.main_min_rating or 0)
+    pity_eligible = (mode in ("rating", "both")) and rating_band > 0
+    if pity_eligible and (user.pack_pity_counter or 0) >= PITY_THRESHOLD:
+        pity_force_max = True
+
+    for i in range(pack.main_count or 1):
+        # Force max rating on this pull when pity triggers, but only for the
+        # first main pull (so packs with multi-main only get one bumped pick).
+        force_rating = pack.main_max_rating if (pity_force_max and i == 0) else None
         p = _pick_main_player(session, pack,
                               exclude_player_ids=used_player_ids,
-                              user_owned_base_ids=owned_base_ids)
+                              user_owned_base_ids=owned_base_ids,
+                              force_rating=force_rating)
         if p:
             used_player_ids.add(p.id)
             rolled.append((p, "main"))
             owned_base_ids.add(p.parent_player_id or p.id)
+
+    # Update pity counter based on the first main pull
+    pity_was_triggered = False
+    if pity_eligible and rolled:
+        first_main = rolled[0][0]
+        if pity_force_max:
+            pity_was_triggered = True
+            user.pack_pity_counter = 0
+        elif first_main.rating >= (pack.main_max_rating or 0):
+            user.pack_pity_counter = 0  # max-rating natural roll resets pity
+        else:
+            user.pack_pity_counter = (user.pack_pity_counter or 0) + 1
+
     for _ in range(pack.bonus_count or 0):
         p = _pick_bonus_player(session, pack,
                                 exclude_player_ids=used_player_ids,
@@ -446,7 +483,9 @@ def open_unopened_pack(session, user, inventory_id):
     session.flush()
 
     return {"success": True, "pack": pack, "players": rolled,
-            "added": added, "players_to_claim": to_claim}
+            "added": added, "players_to_claim": to_claim,
+            "pity_triggered": pity_was_triggered,
+            "pity_counter": user.pack_pity_counter or 0}
 
 
 def grant_pack(session, user_id, pack_id, *, source="admin"):

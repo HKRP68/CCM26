@@ -40,6 +40,9 @@ DEFAULTS = {
     "market_default_slots": 6,
     "market_refresh_hour_ist": 0,
     "trait_market_default_slots": 5,
+    # Scorecard accent colors (hex strings)
+    "scorecard_color_inn1": "#c41e3a",
+    "scorecard_color_inn2": "#00c9a7",
 }
 
 
