@@ -2,6 +2,7 @@
 
 import io, random, logging
 from datetime import datetime, timedelta
+from sqlalchemy import or_
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -23,12 +24,14 @@ from handlers.lineup import format_xi_text
 
 logger = logging.getLogger(__name__)
 
-# ACTION_TIMEOUT no longer triggers a forfeit — the heartbeat (every 30s, with
-# auto-decide at 5min idle) keeps matches alive without ever forcefully ending them.
-# Set high so the timer effectively never fires before the heartbeat does.
-ACTION_TIMEOUT = 900  # 15 minutes — safety net only; heartbeat acts at 5min
-FINE_COINS = 10000
-FINE_GEMS = 20
+# Inactivity timeout — two-stage to avoid surprise forfeits.
+#   ACTION_WARN_SECONDS: send a "hurry up" warning to the chat
+#   ACTION_TIMEOUT:      force a forfeit, with reduced fine
+# Bot players (vsbot AI) are not subject to this — only humans are.
+ACTION_WARN_SECONDS = 45
+ACTION_TIMEOUT = 90
+FINE_COINS = 2000   # reduced from 10000 — the forfeit itself is the bigger penalty
+FINE_GEMS = 5       # reduced from 20
 
 # Sentinel telegram ID for the AI bot opponent in /vsbot
 BOT_TG_ID_ = -1
@@ -239,41 +242,55 @@ async def _send_bowler_card(ctx, chat_id, player_dict, owner_user_id):
 # ── Timeout helpers ──────────────────────────────────────────────────
 
 def _cancel_action_timer(ctx, mid):
+    """Cancel both the warning and the forfeit timer."""
     try:
-        for j in ctx.job_queue.get_jobs_by_name(f"act_{mid}"):
-            j.schedule_removal()
+        for name in (f"act_{mid}", f"actwarn_{mid}"):
+            for j in ctx.job_queue.get_jobs_by_name(name):
+                j.schedule_removal()
     except Exception: pass
 
 def _start_action_timer(ctx, mid, user_tg_id, action_label):
+    """Start inactivity timers. Two stages:
+      - At ACTION_WARN_SECONDS (45s): send a warning that they'll forfeit soon
+      - At ACTION_TIMEOUT (90s): forfeit the match
+
+    Bot players (vsbot AI) and spectator/bot-vs-bot matches are exempt.
+    """
     _cancel_action_timer(ctx, mid)
+    if user_tg_id == BOT_TG_ID_:
+        return
     try:
         if ctx.job_queue:
             s = _gs(ctx, mid)
             if not s: return
+            if s.get("is_spectator") or s.get("is_bot_vs_bot"):
+                return
             snapshot = (
                 s.get("current_over"), s.get("current_ball"),
                 s.get("total_runs"), s.get("total_wickets"),
                 s.get("striker_idx"), s.get("current_delivery"),
             )
+            data = {"match_id": mid, "chat_id": s["chat_id"],
+                    "user_tg": user_tg_id, "action": action_label,
+                    "state_snapshot": snapshot}
             ctx.job_queue.run_once(
-                _action_timeout, ACTION_TIMEOUT, name=f"act_{mid}",
-                data={"match_id": mid, "chat_id": s["chat_id"],
-                      "user_tg": user_tg_id, "action": action_label,
-                      "state_snapshot": snapshot})
+                _action_warning, ACTION_WARN_SECONDS,
+                name=f"actwarn_{mid}", data=data)
+            ctx.job_queue.run_once(
+                _action_timeout, ACTION_TIMEOUT,
+                name=f"act_{mid}", data=data)
     except Exception: pass
 
-async def _action_timeout(context):
+
+async def _action_warning(context):
+    """45s mark: poke the idle user. No forfeit yet."""
     d = context.job.data; mid = d["match_id"]
     s = _gs(context, mid)
     if not s: return
 
-    # SAFETY: Don't fine if a click is currently being processed.
-    # The lock means the user did click — they just haven't finished yet.
+    # Same safety checks as the forfeit handler
     if context.bot_data.get(f"processing_{mid}"):
         return
-
-    # SAFETY: Don't fine if the match has already moved on (state changed).
-    # Compare a snapshot taken when the timer was started against current state.
     snapshot = d.get("state_snapshot")
     if snapshot:
         current_signature = (
@@ -282,38 +299,209 @@ async def _action_timeout(context):
             s.get("striker_idx"), s.get("current_delivery"),
         )
         if current_signature != snapshot:
-            # State has advanced — user already acted, don't fine.
-            return
+            return  # User acted, no warning needed
 
-    # Fine the user who didn't act
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == d["user_tg"]).first()
-        if u:
-            u.total_coins = max(0, u.total_coins - FINE_COINS)
-            u.total_gems = max(0, u.total_gems - FINE_GEMS)
-            log_activity(session, u.id, "match_fine", f"Timeout fine ({d['action']}): -{FINE_COINS} coins, -{FINE_GEMS} gems",
-                         coins_change=-FINE_COINS, gems_change=-FINE_GEMS)
-            session.commit()
-            uname = u.username or u.first_name
-            await context.bot.send_message(d["chat_id"],
-                f"⏱️ <b>TIME'S UP!</b>\n\n@{uname} did not {d['action']} within 1 minute.\n"
-                f"⚠️ Fine: -{FINE_COINS:,} coins 💰 -{FINE_GEMS} gems 💎\n\nMatch forfeited.",
-                parse_mode="HTML")
-        # End match
-        m_session = get_session()
+        if not u:
+            return
+        uname = u.username or u.first_name or "Player"
+        remaining = ACTION_TIMEOUT - ACTION_WARN_SECONDS
         try:
-            m = m_session.query(Match).get(mid)
-            if m and m.status == "playing": m.status = "completed"; m_session.commit()
-        except Exception: m_session.rollback()
-        finally: m_session.close()
-        # Save stats before cleanup
-        await _save_match_stats(s)
+            await context.bot.send_message(
+                d["chat_id"],
+                f"⏱️ @{uname} — <b>{remaining} seconds</b> to <b>{d['action']}</b> "
+                f"or you'll forfeit the match.",
+                parse_mode="HTML")
+        except Exception:
+            pass
+    except Exception:
+        logger.exception("Action warning failed")
+    finally:
+        session.close()
+
+
+async def _action_timeout(context):
+    """90s inactivity → forfeit. The idle user loses; the opponent wins.
+
+    Side effects:
+      - Match record: status=completed, winner_id=opponent, margin='forfeit'
+      - Idle user fined coins+gems
+      - Tour hook fired (if match is part of a tour)
+      - Match state cleaned up
+      - Announcement message sent to chat
+    """
+    d = context.job.data; mid = d["match_id"]
+    s = _gs(context, mid)
+    if not s: return
+
+    # SAFETY: Don't forfeit if a click is currently being processed.
+    if context.bot_data.get(f"processing_{mid}"):
+        return
+
+    # SAFETY: Don't forfeit if the match has already moved on.
+    snapshot = d.get("state_snapshot")
+    if snapshot:
+        current_signature = (
+            s.get("current_over"), s.get("current_ball"),
+            s.get("total_runs"), s.get("total_wickets"),
+            s.get("striker_idx"), s.get("current_delivery"),
+        )
+        if current_signature != snapshot:
+            return
+
+    # Determine winner = the OTHER user (not the idle one)
+    idle_tg = d["user_tg"]
+    if s.get("bat_user_tg") == idle_tg:
+        winner_tg = s.get("bowl_user_tg")
+        loser_tg = idle_tg
+    elif s.get("bowl_user_tg") == idle_tg:
+        winner_tg = s.get("bat_user_tg")
+        loser_tg = idle_tg
+    else:
+        # Idle user isn't part of this match (stale timer?) — abort
+        return
+
+    # If the "winner" would be the bot (vsbot AI), don't apply tour/economy
+    # effects — just clean up the match as forfeited.
+    winner_is_bot = (winner_tg == BOT_TG_ID_)
+
+    session = get_session()
+    try:
+        idle_user = session.query(User).filter(User.telegram_id == idle_tg).first()
+        winner_user = (None if winner_is_bot
+                       else session.query(User).filter(User.telegram_id == winner_tg).first())
+
+        if idle_user:
+            idle_user.total_coins = max(0, idle_user.total_coins - FINE_COINS)
+            idle_user.total_gems = max(0, idle_user.total_gems - FINE_GEMS)
+            log_activity(session, idle_user.id, "match_forfeit",
+                         f"Auto-forfeit ({d['action']}): -{FINE_COINS} coins, -{FINE_GEMS} gems",
+                         coins_change=-FINE_COINS, gems_change=-FINE_GEMS)
+
+        # Finalize Match record
+        m = session.query(Match).get(mid)
+        tour_announce = None
+        if m and m.status != "completed":
+            m.status = "completed"
+            m.completed_at = datetime.utcnow()
+            m.margin_type = "forfeit"
+            m.margin_value = 0
+            if winner_user:
+                m.winner_id = winner_user.id
+                m.loser_id = idle_user.id if idle_user else None
+            elif idle_user:
+                # Edge: vsbot, human forfeited → no human winner to credit
+                m.loser_id = idle_user.id
+            # Save innings snapshots from state so the scorecard endpoint isn't empty
+            if "inn1_runs" in s:
+                m.inn1_runs = s.get("inn1_runs"); m.inn1_wickets = s.get("inn1_wickets")
+            m.inn2_runs = s.get("total_runs"); m.inn2_wickets = s.get("total_wickets")
+
+            # Update user stats (skip for vsbot — no real-economy effect on bot losses)
+            if not s.get("is_vsbot") and not winner_is_bot:
+                if winner_user:
+                    winner_user.matches_played = (winner_user.matches_played or 0) + 1
+                    winner_user.matches_won = (winner_user.matches_won or 0) + 1
+                    winner_user.win_streak = (winner_user.win_streak or 0) + 1
+                    winner_user.best_streak = max(winner_user.best_streak or 0,
+                                                   winner_user.win_streak)
+                if idle_user:
+                    idle_user.matches_played = (idle_user.matches_played or 0) + 1
+                    idle_user.matches_lost = (idle_user.matches_lost or 0) + 1
+                    idle_user.win_streak = 0
+
+            # Tour hook — if this match is part of a tour, update it
+            if not s.get("is_vsbot") and winner_user:
+                try:
+                    from services.tour_service import record_match_result
+                    tour_obj = record_match_result(session, mid, winner_user.id, forfeit=True)
+                    if tour_obj:
+                        u1 = session.query(User).get(tour_obj.user1_id)
+                        u2 = session.query(User).get(tour_obj.user2_id)
+                        tour_announce = {
+                            "completed": tour_obj.status == "completed",
+                            "winner_id": tour_obj.winner_id,
+                            "u1_label": (f"@{u1.username}" if u1 and u1.username
+                                          else (u1.first_name if u1 else "U1")),
+                            "u2_label": (f"@{u2.username}" if u2 and u2.username
+                                          else (u2.first_name if u2 else "U2")),
+                            "u1_id": tour_obj.user1_id,
+                            "u1w": tour_obj.user1_wins, "u2w": tour_obj.user2_wins,
+                            "match_count": tour_obj.match_count,
+                        }
+                except Exception:
+                    logger.exception("Tour-result hook in forfeit failed")
+
+            session.commit()
+
+        # Save accumulated stats before cleanup
+        try:
+            await _save_match_stats(s)
+        except Exception:
+            logger.exception("Stats save during forfeit failed (non-fatal)")
+
+        # Announcement
+        idle_name = (idle_user.username if idle_user and idle_user.username
+                     else (idle_user.first_name if idle_user else "Player"))
+        winner_label = ("🤖 Bot" if winner_is_bot
+                        else (f"@{winner_user.username}" if winner_user and winner_user.username
+                              else (winner_user.first_name if winner_user else "Opponent")))
+        try:
+            await context.bot.send_message(
+                d["chat_id"],
+                f"⏱️ <b>AUTO-FORFEIT</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"@{idle_name} did not <b>{d['action']}</b> within {ACTION_TIMEOUT}s.\n\n"
+                f"🏆 <b>{winner_label}</b> wins by forfeit!\n"
+                f"⚠️ Fine on @{idle_name}: -{FINE_COINS:,} coins · -{FINE_GEMS} gems",
+                parse_mode="HTML")
+        except Exception:
+            pass
+
+        # Tour announcement after match forfeit
+        if tour_announce:
+            try:
+                if tour_announce["completed"]:
+                    if tour_announce["winner_id"] is None:
+                        text = (f"🤝 <b>TOUR DRAWN "
+                                f"{tour_announce['u1w']}-{tour_announce['u2w']}</b>")
+                    else:
+                        wlabel = (tour_announce["u1_label"]
+                                  if tour_announce["winner_id"] == tour_announce["u1_id"]
+                                  else tour_announce["u2_label"])
+                        text = (f"🏆 <b>{wlabel} WINS THE TOUR "
+                                f"{max(tour_announce['u1w'], tour_announce['u2w'])}-"
+                                f"{min(tour_announce['u1w'], tour_announce['u2w'])}!</b>")
+                    await context.bot.send_message(d["chat_id"],
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🏆 <b>TOUR COMPLETE</b>\n\n"
+                        f"{tour_announce['u1_label']} {tour_announce['u1w']} — "
+                        f"{tour_announce['u2w']} {tour_announce['u2_label']}\n\n"
+                        f"{text}\n━━━━━━━━━━━━━━━━━━━",
+                        parse_mode="HTML")
+                else:
+                    done = tour_announce["u1w"] + tour_announce["u2w"]
+                    remaining = tour_announce["match_count"] - done
+                    await context.bot.send_message(d["chat_id"],
+                        f"📋 <b>TOUR UPDATE</b>\n"
+                        f"{tour_announce['u1_label']} {tour_announce['u1w']} — "
+                        f"{tour_announce['u2w']} {tour_announce['u2_label']}\n"
+                        f"<i>{remaining} match{'es' if remaining != 1 else ''} left</i>\n"
+                        f"Use /mytours to continue.",
+                        parse_mode="HTML")
+            except Exception:
+                logger.exception("Tour announce in forfeit failed")
+
         # Cleanup persistent state + lock
         cleanup_state(context, mid)
         release_match_lock(mid)
-    except Exception: session.rollback(); logger.exception("Timeout fine err")
-    finally: session.close()
+    except Exception:
+        session.rollback()
+        logger.exception("Forfeit handler err")
+    finally:
+        session.close()
 
 
 # ── Reward helper ────────────────────────────────────────────────────
@@ -538,6 +726,91 @@ def _gather_top_performers(s):
             top_bowl[1] if top_bowl else None)
 
 
+def _gather_top_per_team(s, top_n=4):
+    """Group top batters and bowlers by their team (innings).
+
+    Returns dict:
+      {
+        'inn1': {'team': str, 'batters': [{name, runs, balls},...],
+                          'bowlers': [{name, overs, runs, wickets, econ},...]},
+        'inn2': {...same shape...},
+      }
+    Used by the new match summary card.
+    """
+    def _top_batters(xi, stats, top_n):
+        rows = []
+        for p in xi:
+            rid = p.get("roster_id")
+            if rid is None: continue
+            ps = stats.get(rid)
+            if not ps: continue
+            if ps.get("balls", 0) <= 0: continue
+            rows.append({
+                "name": p.get("name", "—"),
+                "rating": p.get("rating", "—"),
+                "runs": ps.get("runs", 0),
+                "balls": ps.get("balls", 0),
+                "fours": ps.get("fours", 0),
+                "sixes": ps.get("sixes", 0),
+                "out": ps.get("out", False),
+            })
+        rows.sort(key=lambda r: (-r["runs"], r["balls"]))
+        return rows[:top_n]
+
+    def _top_bowlers(xi, stats, top_n):
+        rows = []
+        for p in xi:
+            rid = p.get("roster_id")
+            if rid is None: continue
+            ps = stats.get(rid)
+            if not ps: continue
+            if ps.get("balls", 0) <= 0: continue
+            balls = ps.get("balls", 0)
+            ov_str = f"{balls // 6}.{balls % 6}" if balls % 6 else f"{balls // 6}"
+            ov_dec = balls / 6.0
+            runs = ps.get("runs", 0)
+            econ = (runs / ov_dec) if ov_dec > 0 else 0.0
+            rows.append({
+                "name": p.get("name", "—"),
+                "rating": p.get("rating", "—"),
+                "overs": ov_str,
+                "runs": runs,
+                "wickets": ps.get("wickets", 0),
+                "econ": econ,
+            })
+        rows.sort(key=lambda r: (-r["wickets"], r["econ"]))
+        return rows[:top_n]
+
+    # inn1: snapshot tables
+    inn1_team = s.get("inn1_team", "Team 1")
+    inn1_bowl_team = (s.get("bat_team_name", "")
+                      if s.get("innings", 1) == 2
+                      else s.get("bowl_team_name", "Team 2"))
+    inn1 = {
+        "team": inn1_team,
+        "bowl_team": inn1_bowl_team,
+        "batters": _top_batters(s.get("inn1_bat_xi", []),
+                                  s.get("inn1_bat_stats", {}), top_n),
+        "bowlers": _top_bowlers(s.get("inn1_bowl_xi", []),
+                                  s.get("inn1_bowl_stats", {}), top_n),
+    }
+
+    # inn2: current state's tables (if we're past innings 1)
+    if s.get("innings") == 2:
+        inn2 = {
+            "team": s.get("bat_team_name", "Team 2"),
+            "bowl_team": s.get("bowl_team_name", inn1_team),
+            "batters": _top_batters(s.get("bat_xi", []),
+                                      s.get("bat_stats", {}), top_n),
+            "bowlers": _top_bowlers(s.get("bowl_xi", []),
+                                      s.get("bowl_stats", {}), top_n),
+        }
+    else:
+        inn2 = {"team": "", "bowl_team": "", "batters": [], "bowlers": []}
+
+    return {"inn1": inn1, "inn2": inn2}
+
+
 async def _save_match_stats(s):
     session = get_session()
     try:
@@ -725,6 +998,42 @@ async def _save_match_stats(s):
         except Exception:
             logger.exception("Form history recording failed")
 
+        # ── Per-match stats snapshot (for tour leaderboards) ──
+        try:
+            from models import PlayerMatchStats as _PMS
+            mid_v = s.get("match_id")
+            if mid_v:
+                # Clear any prior snapshot for this match (re-runs)
+                session.query(_PMS).filter(_PMS.match_id == mid_v).delete(
+                    synchronize_session=False)
+                # `agg` was built above with per-(uid, pid) totals
+                for (uid_v, pid_v), d in agg.items():
+                    if uid_v == -1:  # bot
+                        continue
+                    if d["balls"] == 0 and d["overs"] == 0:
+                        continue
+                    # Derive bat fours/sixes from inn1+inn2 bat_stats
+                    fours = sixes = 0
+                    for inn_stats, lookup in [
+                        (inn1_bat_stats, bat_lookup_1),
+                        (inn2_bat_stats, bat_lookup_2),
+                    ]:
+                        for rid, bs in inn_stats.items():
+                            rid_int = int(rid) if isinstance(rid, str) else rid
+                            if rid_int in lookup and lookup[rid_int] == (pid_v, uid_v):
+                                fours += bs.get("fours", 0)
+                                sixes += bs.get("sixes", 0)
+                    pms = _PMS(
+                        match_id=mid_v, player_id=pid_v, user_id=uid_v,
+                        bat_runs=d["runs"], bat_balls=d["balls"],
+                        bat_fours=fours, bat_sixes=sixes, bat_out=d["out"],
+                        bowl_wickets=d["wickets"], bowl_runs=d["runs_conceded"],
+                        bowl_balls=int(d["overs"] * 6),
+                    )
+                    session.add(pms)
+        except Exception:
+            logger.exception("PlayerMatchStats snapshot failed (non-fatal)")
+
         session.commit()
         logger.info(f"Saved match stats for match {s.get('match_id')}")
     except Exception:
@@ -737,6 +1046,204 @@ async def _save_match_stats(s):
 # ═══════════════════════════ /resume ═════════════════════════════════
 # NOTE: resume_handler is defined further below (in the RECOVERY section).
 # The new version is more robust and uses _safe_show_next.
+
+
+# ═══════════════════════════ /lastmatch ══════════════════════════════
+
+async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the user's most recent completed match by re-sending a summary
+    and (if we still have it) the original result message id for a jump link."""
+    tg = update.effective_user
+    cid = update.effective_chat.id
+    session = get_session()
+    try:
+        u = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not u:
+            await update.message.reply_text(
+                "❌ You haven't played yet. Use /debut to start, then /playmatch to play.")
+            return
+
+        # Most recent completed match this user was in
+        m = (session.query(Match)
+             .filter(Match.status == "completed",
+                     or_(Match.user1_id == u.id, Match.user2_id == u.id))
+             .order_by(Match.completed_at.desc().nullslast(),
+                       Match.id.desc())
+             .first())
+        if not m:
+            await update.message.reply_text(
+                "🏏 <b>No completed matches yet.</b>\n\n"
+                "Play one with <code>/playmatch @user</code> or "
+                "<code>/vsbot</code>.", parse_mode="HTML")
+            return
+
+        # Build a compact recap. Re-fetch user labels.
+        u1 = session.query(User).get(m.user1_id)
+        u2 = session.query(User).get(m.user2_id)
+        u1_label = f"@{u1.username}" if u1 and u1.username else (
+            u1.first_name if u1 else "User1")
+        u2_label = f"@{u2.username}" if u2 and u2.username else (
+            u2.first_name if u2 else "User2")
+        # If a side is the bot, label it
+        if u1 and u1.telegram_id == BOT_TG_ID_:
+            u1_label = "🤖 Bot"
+        if u2 and u2.telegram_id == BOT_TG_ID_:
+            u2_label = "🤖 Bot"
+
+        winner = session.query(User).get(m.winner_id) if m.winner_id else None
+        winner_label = "—"
+        if winner:
+            winner_label = (f"@{winner.username}" if winner.username
+                            else (winner.first_name or "Winner"))
+            if winner.telegram_id == BOT_TG_ID_:
+                winner_label = "🤖 Bot"
+
+        margin = ""
+        if m.margin_type == "forfeit":
+            margin = "by forfeit"
+        elif m.margin_type and m.margin_value is not None:
+            margin = f"by {m.margin_value} {m.margin_type}"
+
+        when = m.completed_at.strftime("%d %b, %H:%M UTC") if m.completed_at else "?"
+
+        lines = [
+            f"🏏 <b>YOUR LAST MATCH</b>",
+            f"━━━━━━━━━━━━━━━━━━━",
+            f"{u1_label} <b>vs</b> {u2_label}",
+            f"📅 {when}",
+            f"🏟️ {m.stadium or '—'} · {m.pitch_type or '—'}",
+            f"",
+        ]
+        if m.inn1_runs is not None:
+            lines.append(f"🔴 1st: <b>{m.inn1_runs}/{m.inn1_wickets or 0}</b>")
+        if m.inn2_runs is not None:
+            lines.append(f"🟢 2nd: <b>{m.inn2_runs}/{m.inn2_wickets or 0}</b>")
+        lines.append("")
+        if winner:
+            lines.append(f"🏆 <b>{winner_label}</b> won {margin}".strip())
+        else:
+            lines.append("🤝 No winner recorded")
+
+        # POTM
+        if m.potm_player_id:
+            from models import Player as _P
+            pl = session.query(_P).get(m.potm_player_id)
+            if pl:
+                lines.append(f"⭐ POTM: <b>{pl.name}</b>")
+
+        # Jump link to original result message (if we still have it AND we're
+        # in the same chat where the match was played)
+        if m.result_message_id and m.chat_id == cid:
+            try:
+                await update.message.reply_text(
+                    "\n".join(lines), parse_mode="HTML",
+                    reply_to_message_id=m.result_message_id,
+                )
+                return
+            except Exception:
+                # Old message may have been deleted — fall through
+                pass
+
+        await update.message.reply_text(
+            "\n".join(lines), parse_mode="HTML")
+    except Exception:
+        logger.exception("lastmatch_handler err")
+        await update.message.reply_text(
+            "⚠️ Couldn't load your last match. Try again in a moment.")
+    finally:
+        session.close()
+
+
+# ═══════════════════════════ /info (during match) ═════════════════════
+
+async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """While a match is in progress, show striker / non-striker / bowler /
+    score / target so the user can see what's happening without scrolling.
+    Outside a match, fall through to /playerinfo for a player lookup."""
+    tg = update.effective_user
+    cid = update.effective_chat.id
+
+    # Find active match for this user (same lookup endmatch uses)
+    mid = None
+    s = None
+    for k, v in context.bot_data.items():
+        if k.startswith("ms_") and isinstance(v, dict):
+            if v.get("bat_user_tg") == tg.id or v.get("bowl_user_tg") == tg.id:
+                mid = int(k.replace("ms_", ""))
+                s = v
+                break
+
+    # Fallback: load from DB if nothing in memory but the user thinks they're in a match
+    if not s:
+        await update.message.reply_text(
+            "ℹ️ <b>No active match.</b>\n\n"
+            "Use <code>/playerinfo @player_name</code> to look up a specific player, "
+            "or <code>/lastmatch</code> to see your most recent match.",
+            parse_mode="HTML")
+        return
+
+    # Pull current striker / non-striker / bowler from state
+    bat_order = s.get("batting_order", [])
+    striker = bat_order[s.get("striker_idx", 0)] if bat_order else None
+    non_striker = bat_order[s.get("non_striker_idx", 1)] if len(bat_order) > 1 else None
+    bowler = s.get("current_bowler")
+
+    bat_stats = s.get("bat_stats", {})
+    bowl_stats = s.get("bowl_stats", {})
+
+    lines = [
+        f"ℹ️ <b>MATCH INFO</b> — Innings {s.get('innings', 1)}/2",
+        f"━━━━━━━━━━━━━━━━━━━",
+        f"🏏 Batting: <b>{s.get('bat_team_name', '?')}</b>",
+        f"   {format_score(s)} ({format_overs(s)})",
+    ]
+    if s.get("target"):
+        rem = s["target"] - s.get("total_runs", 0)
+        balls_left = (s.get("overs", 20) * 6
+                       - s.get("current_over", 1) * 6 + 6
+                       - s.get("current_ball", 0))
+        lines.append(f"   🎯 Target: <b>{s['target']}</b> · "
+                      f"need <b>{rem}</b> off <b>{max(0, balls_left)}</b>")
+    lines.append("")
+
+    # Current batters
+    if striker:
+        bs = bat_stats.get(striker["roster_id"], {})
+        runs = bs.get("runs", 0); balls = bs.get("balls", 0)
+        lines.append(
+            f"🔴 <b>{striker['name']}</b> ({striker.get('rating', '?')}) "
+            f"— {runs} ({balls})*")
+    if non_striker:
+        bs = bat_stats.get(non_striker["roster_id"], {})
+        runs = bs.get("runs", 0); balls = bs.get("balls", 0)
+        lines.append(
+            f"⚪ <b>{non_striker['name']}</b> ({non_striker.get('rating', '?')}) "
+            f"— {runs} ({balls})")
+    lines.append("")
+
+    # Current bowler
+    if bowler:
+        bws = bowl_stats.get(bowler["roster_id"], {})
+        balls = bws.get("balls", 0)
+        ov_done = balls // 6
+        ov_balls = balls % 6
+        overs_str = f"{ov_done}.{ov_balls}"
+        runs = bws.get("runs", 0); wkts = bws.get("wickets", 0)
+        style = bowler.get("bowl_style", "")
+        lines.append(
+            f"🎳 Bowling: <b>{bowler['name']}</b> ({bowler.get('rating', '?')})\n"
+            f"   {overs_str} ov · {runs} runs · {wkts} wkt"
+            + (f" · <i>{style}</i>" if style else ""))
+
+    # Pitch + stadium for context
+    if s.get("pitch_type") or s.get("stadium"):
+        lines.append("")
+        bits = []
+        if s.get("stadium"): bits.append(f"🏟️ {s['stadium']}")
+        if s.get("pitch_type"): bits.append(f"📍 {s['pitch_type']}")
+        lines.append(" · ".join(bits))
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 # ═══════════════════════════ /endmatch ═══════════════════════════════
@@ -2175,14 +2682,24 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
         batsmen_rows = []
         for p in bat_order_unique:
             bs = bat_stats_map.get(p["roster_id"], {})
-            # Only include players who actually batted (faced a ball) OR were marked out
-            if bs.get("balls", 0) == 0 and not bs.get("out"):
-                # Did not bat — skip
-                continue
-            runs = bs.get("runs", 0)
             balls = bs.get("balls", 0)
+            is_out = bs.get("out", False)
+            # Three statuses to render:
+            #   out      → batted and dismissed
+            #   not_out  → batted and survived (or marked retired)
+            #   dnb      → in XI but never faced a ball and not given out
+            if balls == 0 and not is_out:
+                status = "dnb"
+                dismissal = "did not bat"
+            elif is_out:
+                status = "out"
+                dismissal = bs.get("how_out", "—") or "—"
+            else:
+                status = "not_out"
+                dismissal = "not out"
+
+            runs = bs.get("runs", 0)
             sr = (runs / balls * 100) if balls > 0 else 0.0
-            dismissal = bs.get("how_out", "") if bs.get("out") else "not out"
             batsmen_rows.append({
                 "rating": p.get("rating", 0),
                 "name": p.get("name", "?"),
@@ -2192,6 +2709,7 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                 "fours": bs.get("fours", 0),
                 "sixes": bs.get("sixes", 0),
                 "strike_rate": round(sr, 1),
+                "status": status,
             })
 
         # Build bowlers rows
@@ -2242,6 +2760,12 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             else:
                 chase_outcome = "lost"
 
+        # Load admin-tunable accent color
+        from services.config_service import get_config as _get_cfg
+        _cfg = _get_cfg()
+        accent_hex = (_cfg.get("scorecard_color_inn1") if is_first
+                      else _cfg.get("scorecard_color_inn2"))
+
         # Generate batting scorecard
         bat_card_bytes = generate_batting_scorecard(
             bat_team, bowl_team,
@@ -2249,12 +2773,19 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             batsmen_rows, fow, extras,
             is_first_innings=is_first, match_title=match_title,
             target=target, chase_outcome=chase_outcome,
+            match_no=mid, accent_hex=accent_hex,
         )
 
         # Generate bowling scorecard — team name is the bowling team
+        # Pass the opponent's (batting) score so the "RUN SCORED BY OPPONENTS"
+        # panel can render.
         bowl_card_bytes = generate_bowling_scorecard(
             bowl_team, bowlers_rows, fow,
             is_first_innings=is_first, match_title=match_title,
+            opponent_name=bat_team,
+            opp_score=total_runs, opp_wickets=total_wickets, opp_overs=overs_str,
+            stadium=s.get("stadium"),
+            match_no=mid, accent_hex=accent_hex,
         )
 
         # Send in the order asked: Bowling first, then Batting (per user spec)
@@ -2316,7 +2847,11 @@ async def _end_innings(ctx, mid):
         s["batting_order"] = list(s["bat_xi"]); s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
         s["prev_bowler_rid"] = None; s["selected_variation"] = None
         s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "out": False, "how_out": "", "bowled_by": ""} for p in s["bat_xi"]}
-        s["bowl_stats"] = {p["roster_id"]: {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0} for p in s["bowl_xi"]}
+        s["bowl_stats"] = {p["roster_id"]: {
+            "balls": 0, "runs": 0, "wickets": 0,
+            "overs_done": 0, "this_over_balls": 0,
+            "maidens": 0, "this_over_runs": 0,
+        } for p in s["bowl_xi"]}
         s["fow"] = []  # reset for 2nd innings
         # Recovery-safe: set the action pointer so /resume during the pause shows the right thing
         _ss(ctx, mid, s, next_action=A_PICK_DELIVERY)
@@ -2455,6 +2990,25 @@ async def _end_innings(ctx, mid):
                 m.inn1_runs = s["inn1_runs"]; m.inn1_wickets = s["inn1_wickets"]
                 m.inn2_runs = s["total_runs"]; m.inn2_wickets = s["total_wickets"]
                 m.potm_player_id = potm_pid; m.potm_impact = potm_impact
+
+            # ── Tour result hook ──
+            # If this match is part of a tour, mark the TourMatch done and
+            # finalize the Tour if all matches are complete.
+            if not s.get("is_spectator") and not s.get("is_bot_vs_bot") and not s.get("is_vsbot"):
+                try:
+                    from services.tour_service import record_match_result
+                    tour_after = record_match_result(session, mid, winner_uid)
+                    if tour_after is not None:
+                        # Stash a flag for the post-commit announcement below
+                        s["_tour_update"] = {
+                            "tour_id": tour_after.id,
+                            "completed": tour_after.status == "completed",
+                            "winner_id": tour_after.winner_id,
+                            "u1_wins": tour_after.user1_wins,
+                            "u2_wins": tour_after.user2_wins,
+                        }
+                except Exception:
+                    logger.exception("Tour-result hook failed (non-fatal)")
 
             # Update user counters — skip entirely for spectator matches AND bot-vs-bot
             today = datetime.utcnow().date()
@@ -2655,13 +3209,16 @@ async def _end_innings(ctx, mid):
                     f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
                     f"━━━━━━━━━━━━━━━━━━━")
 
-        # Send 2nd innings scorecards (bowling then batting) BEFORE result message
+        # ── Send innings-2 scorecards (new graphics request: every innings
+        # ends with bat + bowl cards). The match summary card below adds
+        # the high-level recap on top.
         await _send_innings_scorecards(ctx, mid, innings_num=2)
 
-        # ── Match summary card ──────────────────────────
+        # ── Match summary card (NEW design: team-sections + result bar)
         try:
             from services.match_summary_card import generate_match_summary
             top_scorer, top_wicket = _gather_top_performers(s)
+            top_per_team = _gather_top_per_team(s, top_n=4)
             # Determine POTM team (which side they were on)
             potm_team = None
             if potm_name:
@@ -2704,6 +3261,8 @@ async def _end_innings(ctx, mid):
                 potm_impact=potm_impact,
                 top_scorer=top_scorer,
                 top_wicket=top_wicket,
+                top_per_team=top_per_team,
+                stadium=s.get("stadium"),
                 match_date=datetime.utcnow(),
                 is_spectator=bool(s.get("is_spectator")),
             )
@@ -2717,6 +3276,56 @@ async def _end_innings(ctx, mid):
             logger.exception("match summary card failed (non-fatal)")
 
         sent = await ctx.bot.send_message(cid, msg, parse_mode="HTML")
+
+        # ── Tour update announcement ──
+        # If this match was part of a tour, send a follow-up showing the
+        # tour score (and the tour winner if it just completed).
+        tour_update = s.get("_tour_update")
+        if tour_update:
+            try:
+                tu_session = get_session()
+                try:
+                    from models import Tour as _Tour
+                    tour_obj = tu_session.query(_Tour).get(tour_update["tour_id"])
+                    if tour_obj:
+                        u1 = tu_session.query(User).get(tour_obj.user1_id)
+                        u2 = tu_session.query(User).get(tour_obj.user2_id)
+                        u1_label = f"@{u1.username}" if u1 and u1.username else (
+                            u1.first_name if u1 else "User1")
+                        u2_label = f"@{u2.username}" if u2 and u2.username else (
+                            u2.first_name if u2 else "User2")
+                        u1w = tour_update["u1_wins"]; u2w = tour_update["u2_wins"]
+                        if tour_update["completed"]:
+                            if tour_update["winner_id"] is None:
+                                outcome = f"🤝 <b>TOUR DRAWN {u1w}-{u2w}</b>"
+                            else:
+                                wlabel = u1_label if tour_update["winner_id"] == tour_obj.user1_id else u2_label
+                                outcome = f"🏆 <b>{wlabel} WINS THE TOUR {max(u1w, u2w)}-{min(u1w, u2w)}!</b>"
+                            await ctx.bot.send_message(
+                                cid,
+                                f"━━━━━━━━━━━━━━━━━━━\n"
+                                f"🏆 <b>TOUR COMPLETE</b>\n\n"
+                                f"{u1_label} {u1w} — {u2w} {u2_label}\n\n"
+                                f"{outcome}\n"
+                                f"━━━━━━━━━━━━━━━━━━━",
+                                parse_mode="HTML")
+                        else:
+                            # Tour ongoing — show next match cue
+                            from services.tour_service import get_tour_matches
+                            tour_matches = get_tour_matches(tu_session, tour_obj.id)
+                            done = sum(1 for tm in tour_matches if tm.status == "done")
+                            remaining = tour_obj.match_count - done
+                            await ctx.bot.send_message(
+                                cid,
+                                f"📋 <b>TOUR UPDATE</b>\n"
+                                f"{u1_label} {u1w} — {u2w} {u2_label}\n"
+                                f"<i>{remaining} match{'es' if remaining != 1 else ''} left</i>\n"
+                                f"Use /mytours to continue.",
+                                parse_mode="HTML")
+                finally:
+                    tu_session.close()
+            except Exception:
+                logger.exception("Tour announcement failed (non-fatal)")
 
         # Save message id for /jump
         session = get_session()

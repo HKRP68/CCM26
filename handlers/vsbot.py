@@ -693,11 +693,55 @@ async def vsbot_selbowl_callback(update: Update, context: ContextTypes.DEFAULT_T
             await q.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
+
+        # ── INNINGS 2 path: state already exists, just plug in the bowler ──
+        # If we ALSO build a fresh state here, we'd reset innings, target, and
+        # all the inn1_* snapshots — sending the user back to bat from scratch.
+        from handlers.match import _gs, _ss, render_screen, _send_batsman_card, _send_bowler_card
+        from services.match_state_store import A_PICK_DELIVERY
+        existing = _gs(context, mid)
+        if existing and existing.get("innings") == 2:
+            await q.edit_message_text(
+                f"✅ Opening bowler: <b>{bowler['name']}</b>\n\n⏳ 2nd Innings starting…",
+                parse_mode="HTML",
+            )
+            existing["current_bowler"] = bowler
+            existing["prev_bowler_rid"] = None
+            existing["selected_variation"] = None
+            existing["current_delivery"] = None
+            _ss(context, mid, existing, next_action=A_PICK_DELIVERY)
+
+            # Show the 2nd-innings opener cards + bowler card so the user
+            # has the same experience as innings 1.
+            try:
+                op1 = existing["bat_xi"][existing.get("striker_idx", 0)]
+                op2 = existing["bat_xi"][existing.get("non_striker_idx", 1)]
+                bat_team_id = existing.get("bat_team_id")
+                bowl_team_id = existing.get("bowl_team_id")
+                target = existing.get("target", "?")
+                await context.bot.send_message(
+                    q.message.chat_id,
+                    f"🏏 <b>2ND INNINGS!</b>\n\n"
+                    f"🟢 {existing.get('bat_team_name','')} needs {target} to win\n"
+                    f"🏏 {op1.get('name','?')} & {op2.get('name','?')}\n"
+                    f"🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
+                    parse_mode="HTML",
+                )
+                await _send_batsman_card(context, q.message.chat_id, op1, bat_team_id)
+                await _send_batsman_card(context, q.message.chat_id, op2, bat_team_id)
+                await _send_bowler_card(context, q.message.chat_id, bowler, bowl_team_id)
+            except Exception:
+                logger.exception("inn2 cards failed (non-fatal)")
+
+            # Hand off to render_screen — this fires _bot_bowl_delivery if bot
+            # is bowling, or shows the user the picker if user is bowling.
+            await render_screen(context, mid)
+            return
+
+        # ── INNINGS 1 path: build fresh state from scratch (existing flow) ──
         await q.edit_message_text(
             f"✅ Opening bowler: <b>{bowler['name']}</b>\n\n⏳ Starting match...",
             parse_mode="HTML")
-
-        # Now actually start the match!
         await _vsbot_start_match(context, q.message.chat_id, mid, bowler)
 
     except Exception:
@@ -794,7 +838,9 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
                 "out": False, "how_out": "", "bowled_by": "",
             } for p in bat_xi},
             "bowl_stats": {p["roster_id"]: {
-                "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "this_over_balls": 0,
+                "balls": 0, "runs": 0, "wickets": 0,
+                "overs_done": 0, "this_over_balls": 0,
+                "maidens": 0, "this_over_runs": 0,
             } for p in bowl_xi},
 
             "pitch_type": m.pitch_type or "Flat",

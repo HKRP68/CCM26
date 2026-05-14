@@ -612,6 +612,7 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         rolled = result["players"]
         added = result["added"]
         to_claim = result["players_to_claim"]
+        pity_triggered = result.get("pity_triggered", False)
         main_players = [(p, s) for p, s in rolled if s == "main"]
         bonus_players = [(p, s) for p, s in rolled if s == "bonus"]
         added_ids = {p.id for p, _ in added}
@@ -619,13 +620,18 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         session.commit()
 
         # ── Animation: replace the listing with a sealed-pack message ──
-        try:
-            await q.edit_message_text(
-                f"🎴 <b>OPENING…</b>\n\n"
-                f"{pack.emoji} <b>{pack.name}</b>\n\n"
-                f"<i>The seal cracks open…</i>",
-                parse_mode="HTML",
+        opening_text = (
+            f"🎴 <b>OPENING…</b>\n\n"
+            f"{pack.emoji} <b>{pack.name}</b>\n\n"
+            f"<i>The seal cracks open…</i>"
+        )
+        if pity_triggered:
+            opening_text += (
+                f"\n\n💎 <b>PITY PULL ACTIVE!</b>\n"
+                f"<i>Guaranteed max-rating main!</i>"
             )
+        try:
+            await q.edit_message_text(opening_text, parse_mode="HTML")
         except Exception:
             pass
         await asyncio.sleep(1.5)

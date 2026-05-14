@@ -76,7 +76,18 @@ async def myroster_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entries, total, total_pages = get_user_roster(session, user.id, page, ROSTER_PAGE_SIZE)
 
         if total == 0:
-            await update.message.reply_text("📊 Your roster is empty. Use /claim to get players!")
+            await update.message.reply_text(
+                f"📊 <b>YOUR ROSTER</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"You have <b>0 players</b>. Build your squad with:\n\n"
+                f"🎁 <code>/claim</code> — free daily player\n"
+                f"🎰 <code>/gspin</code> — spin for a player\n"
+                f"💰 <code>/buypl</code> — buy a player\n"
+                f"📦 <code>/buypack</code> — open a pack\n\n"
+                f"<i>You'll need 11 players (with at least 5 batsmen, 1 keeper, "
+                f"and 3 bowlers) before you can play matches.</i>",
+                parse_mode="HTML",
+            )
             return
 
         stats = get_roster_stats(session, user.id)

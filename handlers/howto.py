@@ -61,7 +61,9 @@ SECTIONS = {
             "<b>/daily</b> (or <b>/dl</b>) — daily login bonus + free player\n"
             "<b>/gspin</b> (or <b>/gs</b>) — spin the wheel for coins, gems, or rare players\n"
             "<b>/playermarket</b> (or <b>/market</b>) — 5 random 87+ rated players at 10% off, refreshed every 24h\n"
-            "<b>/buypl &lt;name&gt;</b> (or <b>/buy</b>) — buy any player at full price\n\n"
+            "<b>/buypl &lt;name&gt;</b> (or <b>/buy</b>) — buy any player at full price\n"
+            "<b>/buypack</b> (or <b>/packs</b>) — buy player packs (Bronze, Silver, Star, Legend, Ultimate)\n"
+            "<b>/openpack</b> (or <b>/open</b>) — open packs from your inventory with reveal animation\n\n"
             "<b>🔍 Finding players</b>\n"
             "<b>/searchpl &lt;name&gt;</b> (or <b>/search</b>) — search by name (15 per page)\n"
             "<b>/searchovr &lt;rating&gt;</b> (or <b>/so</b>) — search by rating\n"
@@ -141,7 +143,36 @@ SECTIONS = {
             "When you score / take a wicket / play a dot, randomized commentary lines appear in the scorecard for flavor.\n\n"
             "<b>🆘 Stuck?</b>\n"
             "<b>/resume</b> or <b>/r</b> — recover any stuck match instantly\n"
+            "<b>/lastmatch</b> or <b>/lm</b> — see your last completed match\n"
             "<b>/howto</b> — show this help (you're here!)"
+        ),
+    },
+    "tours": {
+        "emoji": "🏆",
+        "title": "Tours — Multi-match Challenges",
+        "body": (
+            "<b>🏆 Tours</b>\n\n"
+            "A tour is a multi-match series between you and another player. "
+            "First to win more matches wins the tour. Ties get marked as drawn.\n\n"
+            "<b>📨 Creating a tour</b>\n"
+            "<b>/cmtours @user</b> — challenge another user (group chats only)\n"
+            "Then pick:\n"
+            "  • Match count: 3, 4, 5, or 6\n"
+            "  • Overs per match: 5, 8, 10, 15, or 20\n"
+            "Invite expires in <b>30 seconds</b> if not accepted.\n\n"
+            "<b>📋 Playing a tour</b>\n"
+            "<b>/mytours</b> (or <b>/tours</b>) — view your active tour\n"
+            "Tap <b>▶️ Play Match N</b> to start the next match.\n"
+            "The match runs exactly like <code>/playmatch</code> — both users participate.\n\n"
+            "<b>🏟️ Each match has its own venue</b>\n"
+            "Stadium and pitch type are randomized per match — adapt your strategy!\n\n"
+            "<b>📈 Tour Stats button</b>\n"
+            "Shows top run-scorers and top wicket-takers across the tour.\n\n"
+            "<b>⏰ Tour lifetime</b>\n"
+            "Tour expires after <code>matches × 2 days</code>. Unfinished matches mark "
+            "the tour complete with the current score deciding the winner.\n\n"
+            "<b>One tour at a time</b>\n"
+            "You can't create a new tour while you're in another."
         ),
     },
 }
@@ -154,7 +185,7 @@ def _build_keyboard(active_section, owner_tg):
         label = f"{data['emoji']} {key.title()}"
         if key == active_section:
             label = "• " + label
-        if len(rows[-1]) >= 2:
+        if len(rows[-1]) >= 3:
             rows.append([])
         rows[-1].append(InlineKeyboardButton(
             label, callback_data=f"howto_tab_{owner_tg}_{key}"))

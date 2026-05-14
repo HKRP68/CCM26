@@ -84,9 +84,24 @@ async def _send_player_card(session, user, player, target, owner_tg):
 async def playerinfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
 
+    # If invoked as /info with no args AND user is currently in a match,
+    # show match info (striker/non-striker/bowler) instead of asking for a name.
     if not context.args:
+        try:
+            for k, v in context.bot_data.items():
+                if k.startswith("ms_") and isinstance(v, dict):
+                    if (v.get("bat_user_tg") == tg_user.id
+                            or v.get("bowl_user_tg") == tg_user.id):
+                        from handlers.match import info_handler
+                        await info_handler(update, context)
+                        return
+        except Exception:
+            pass
         await update.message.reply_text(
-            "Usage: /playerinfo <player name>\nExample: /playerinfo Virat Kohli"
+            "Usage: <code>/playerinfo &lt;player name&gt;</code>\n"
+            "Example: <code>/playerinfo Virat Kohli</code>\n\n"
+            "<i>Tip: while in a match, /info shows the live state.</i>",
+            parse_mode="HTML",
         )
         return
 
