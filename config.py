@@ -10,6 +10,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///cricket_bot.db")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# ── Media storage channel ───────────────────────────────────────────
+# Optional: a private Telegram channel where the bot is admin, used as
+# a persistent file_id store for uploaded GIFs. If set, file uploads via
+# the admin website go to this channel and we save the resulting file_id
+# instead of a disk path (which gets wiped on every deploy).
+# Format: a chat_id like "-1001234567890" (negative for channels/groups).
+MEDIA_STORAGE_CHAT_ID = os.getenv("MEDIA_STORAGE_CHAT_ID", "").strip()
+
 # ── Cooldowns (seconds) ─────────────────────────────────────────────
 CLAIM_COOLDOWN = 3600
 DAILY_COOLDOWN = 86400

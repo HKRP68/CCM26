@@ -978,3 +978,28 @@ class PlayerMatchStats(Base):
     __table_args__ = (
         Index("ix_pms_match_user", "match_id", "user_id"),
     )
+
+
+class EventMedia(Base):
+    """Media (GIF/animation) shown during matches for specific events.
+
+    Admin uploads or links GIFs for each event_key. When the matching in-match
+    event fires, a random enabled item (weighted) is picked and sent via
+    Telegram's send_animation API.
+
+    event_key values: see services.event_media_service.EVENT_KEYS
+    source_type:
+      'url'  → source is a public URL (Telegram fetches it directly)
+      'file' → source is a path/filename under data/event_media/
+    """
+    __tablename__ = "event_media"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_key = Column(String(30), nullable=False, index=True)
+    source_type = Column(String(10), default="url")
+    source = Column(Text, nullable=False)
+    label = Column(String(120), nullable=True)
+    weight = Column(Integer, default=1)
+    enabled = Column(Boolean, default=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by = Column(String(80), nullable=True)

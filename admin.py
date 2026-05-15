@@ -3398,6 +3398,221 @@ def admin_scorecard_preview():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# EVENT MEDIA — GIFs sent for in-match events (six, four, wicket, etc.)
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/media")
+@login_required
+def admin_media_list():
+    """List all event keys with their media counts."""
+    db = get_session()
+    try:
+        from models import EventMedia
+        from services.event_media_service import EVENT_KEYS
+        # Count enabled / total per event_key
+        all_rows = db.query(EventMedia).all()
+        counts = {}
+        for row in all_rows:
+            d = counts.setdefault(row.event_key, {"total": 0, "enabled": 0})
+            d["total"] += 1
+            if row.enabled:
+                d["enabled"] += 1
+        return render_template("admin_media_list.html",
+                               event_keys=EVENT_KEYS, counts=counts)
+    finally:
+        db.close()
+
+
+@app.route("/media/<event_key>", methods=["GET", "POST"])
+@login_required
+def admin_media_detail(event_key):
+    """List/upload/delete media for a single event_key."""
+    db = get_session()
+    try:
+        from models import EventMedia
+        from services.event_media_service import EVENT_KEYS, MEDIA_DIR
+        import os as _os
+        import uuid as _uuid
+        from werkzeug.utils import secure_filename
+
+        # Validate event_key
+        valid_keys = {k for k, _, _ in EVENT_KEYS}
+        if event_key not in valid_keys:
+            flash(f"Unknown event_key: {event_key}", "error")
+            return redirect(url_for("admin_media_list"))
+
+        event_meta = next((m for m in EVENT_KEYS if m[0] == event_key), None)
+
+        if request.method == "POST":
+            action = request.form.get("action", "add")
+            try:
+                if action == "add":
+                    url_input = (request.form.get("url") or "").strip()
+                    label = (request.form.get("label") or "").strip()[:120]
+                    weight_str = (request.form.get("weight") or "1").strip()
+                    try:
+                        weight = max(1, min(100, int(weight_str)))
+                    except ValueError:
+                        weight = 1
+
+                    uploaded = request.files.get("upload")
+                    if uploaded and uploaded.filename:
+                        ext = _os.path.splitext(uploaded.filename)[1].lower()
+                        if ext not in (".gif", ".mp4", ".webp"):
+                            flash("File must be .gif, .mp4, or .webp", "error")
+                            return redirect(url_for("admin_media_detail",
+                                                    event_key=event_key))
+
+                        # Read file once into memory so we can both forward
+                        # to Telegram AND save to disk if the channel isn't
+                        # configured.
+                        file_bytes = uploaded.read()
+                        if not file_bytes:
+                            flash("Uploaded file is empty.", "error")
+                            return redirect(url_for("admin_media_detail",
+                                                    event_key=event_key))
+
+                        # 50MB Telegram limit for bot uploads
+                        if len(file_bytes) > 50 * 1024 * 1024:
+                            flash(f"File too large ({len(file_bytes)/1024/1024:.1f}MB). "
+                                  f"Telegram limit is 50MB.", "error")
+                            return redirect(url_for("admin_media_detail",
+                                                    event_key=event_key))
+
+                        # Prefer Telegram storage if env var set
+                        from config import MEDIA_STORAGE_CHAT_ID
+                        em = None
+                        if MEDIA_STORAGE_CHAT_ID:
+                            from services.event_media_service import upload_to_storage_channel
+                            up = upload_to_storage_channel(
+                                file_bytes, uploaded.filename,
+                                original_label=label or None,
+                            )
+                            if up["success"]:
+                                em = EventMedia(
+                                    event_key=event_key,
+                                    source_type="telegram",
+                                    source=up["file_id"],
+                                    label=label or uploaded.filename,
+                                    weight=weight, enabled=True,
+                                    uploaded_by=session.get("admin_user", "admin"),
+                                )
+                                db.add(em); db.commit()
+                                log_admin(db, "media_add_telegram",
+                                          "event_media", em.id, event_key,
+                                          f"file_id={up['file_id'][:20]}…")
+                                db.commit()
+                                flash(f"✅ Uploaded to Telegram channel "
+                                      f"(persistent, never resets). "
+                                      f"file_id stored.", "info")
+                            else:
+                                # Telegram upload failed — fall back to disk
+                                # save but tell the admin what went wrong
+                                flash(f"⚠️ Telegram channel upload failed: "
+                                      f"{up['error']}. Saved to disk instead "
+                                      f"(may not persist on deploy).", "error")
+
+                        if em is None:
+                            # Disk fallback (also when no channel configured)
+                            safe_stem = secure_filename(_os.path.splitext(uploaded.filename)[0]) or "media"
+                            unique = f"{safe_stem}_{_uuid.uuid4().hex[:8]}{ext}"
+                            event_dir = _os.path.join(MEDIA_DIR, event_key)
+                            _os.makedirs(event_dir, exist_ok=True)
+                            full_path = _os.path.join(event_dir, unique)
+                            with open(full_path, "wb") as f:
+                                f.write(file_bytes)
+                            em = EventMedia(
+                                event_key=event_key,
+                                source_type="file",
+                                source=_os.path.join(event_key, unique),
+                                label=label or uploaded.filename,
+                                weight=weight, enabled=True,
+                                uploaded_by=session.get("admin_user", "admin"),
+                            )
+                            db.add(em); db.commit()
+                            log_admin(db, "media_add_file", "event_media",
+                                      em.id, event_key, f"file={unique}")
+                            db.commit()
+                            if not MEDIA_STORAGE_CHAT_ID:
+                                flash(f"✅ Uploaded {uploaded.filename}. "
+                                      f"<i>For persistence across deploys, "
+                                      f"set MEDIA_STORAGE_CHAT_ID env var to "
+                                      f"a private channel id.</i>", "info")
+                    elif url_input:
+                        # URL path
+                        if not (url_input.startswith("http://")
+                                or url_input.startswith("https://")):
+                            flash("URL must start with http:// or https://", "error")
+                            return redirect(url_for("admin_media_detail",
+                                                    event_key=event_key))
+                        em = EventMedia(
+                            event_key=event_key, source_type="url",
+                            source=url_input, label=label or None,
+                            weight=weight, enabled=True,
+                            uploaded_by=session.get("admin_user", "admin"),
+                        )
+                        db.add(em); db.commit()
+                        log_admin(db, "media_add_url", "event_media", em.id,
+                                  event_key, f"url={url_input[:60]}")
+                        db.commit()
+                        flash("✅ Added URL", "info")
+                    else:
+                        flash("Provide either a URL or a file upload.", "error")
+
+                elif action == "delete":
+                    mid = int(request.form.get("media_id", 0))
+                    em = db.query(EventMedia).get(mid)
+                    if em and em.event_key == event_key:
+                        # If file-backed, try to remove from disk too
+                        if em.source_type == "file":
+                            full_path = _os.path.join(MEDIA_DIR, em.source)
+                            if _os.path.exists(full_path):
+                                try: _os.remove(full_path)
+                                except OSError: pass
+                        db.delete(em); db.commit()
+                        log_admin(db, "media_delete", "event_media", mid,
+                                  event_key, "deleted")
+                        db.commit()
+                        flash("Deleted.", "info")
+
+                elif action == "toggle":
+                    mid = int(request.form.get("media_id", 0))
+                    em = db.query(EventMedia).get(mid)
+                    if em and em.event_key == event_key:
+                        em.enabled = not em.enabled
+                        db.commit()
+                        flash(f"{'Enabled' if em.enabled else 'Disabled'}.", "info")
+
+                elif action == "update":
+                    mid = int(request.form.get("media_id", 0))
+                    em = db.query(EventMedia).get(mid)
+                    if em and em.event_key == event_key:
+                        em.label = (request.form.get("label") or "").strip()[:120] or None
+                        try:
+                            em.weight = max(1, min(100, int(request.form.get("weight", 1))))
+                        except ValueError:
+                            pass
+                        db.commit()
+                        flash("Updated.", "info")
+            except Exception as e:
+                db.rollback()
+                logger.exception("media admin error")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_media_detail", event_key=event_key))
+
+        rows = (db.query(EventMedia)
+                .filter(EventMedia.event_key == event_key)
+                .order_by(EventMedia.enabled.desc(),
+                          EventMedia.uploaded_at.desc())
+                .all())
+        return render_template("admin_media_detail.html",
+                               event_key=event_key, event_meta=event_meta,
+                               rows=rows)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # DIAGNOSTICS — cache stats, egress hints, system info
 # ═══════════════════════════════════════════════════════════════════════
 

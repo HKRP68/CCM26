@@ -40,7 +40,7 @@ from handlers.trade import (
 )
 
 # Phase 3 handlers
-from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback
+from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback, autobuild_handler
 from handlers.search import (
     searchpl_handler, searchovr_handler,
     searchpl_page_callback, searchovr_page_callback,
@@ -300,6 +300,7 @@ def main():
         app.add_handler(CommandHandler(["releasemultiple", "relm", "rm"], releasemultiple_handler))
         app.add_handler(CommandHandler(["trade", "tr"], trade_handler))
         app.add_handler(CommandHandler(["playingxi", "pxi", "xi"], playingxi_handler))
+        app.add_handler(CommandHandler(["autobuild", "ab", "best11"], autobuild_handler))
         app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
         app.add_handler(CommandHandler(["setcaptain", "captain", "cap"], setcaptain_handler))
         app.add_handler(CommandHandler(["searchpl", "search", "sp"], searchpl_handler))
