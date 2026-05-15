@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ event_meta[1] if event_meta else event_key }}{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_media_list') }}" style="color:var(--muted); text-decoration:none; font-size:.9rem;">← All events</a>
+
+<h1 style="margin-top:.5rem;">
+  {% if event_meta %}{{ event_meta[1] }}{% else %}{{ event_key }}{% endif %}
+</h1>
+{% if event_meta %}
+  <p style="color:var(--muted); margin-bottom:1.5rem;">{{ event_meta[2] }}</p>
+{% endif %}
+
+<!-- Add new media form -->
+<div class="form-card" style="margin-bottom:2rem; max-width: 720px;">
+  <h2 style="margin-top:0;">➕ Add new GIF</h2>
+  <form method="POST" enctype="multipart/form-data"
+        action="{{ url_for('admin_media_detail', event_key=event_key) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="add">
+
+    <label>GIF URL (Giphy / Tenor / direct .gif or .mp4 link)
+      <input type="url" name="url" placeholder="https://media.giphy.com/media/.../giphy.gif">
+    </label>
+
+    <div style="text-align:center; color:var(--muted); margin:.5rem 0;">— OR —</div>
+
+    <label>Upload file (.gif / .mp4 / .webp)
+      <input type="file" name="upload" accept=".gif,.mp4,.webp">
+    </label>
+
+    <div style="display:grid; grid-template-columns: 1fr 120px; gap:.75rem;">
+      <label>Label (optional)
+        <input type="text" name="label" maxlength="120" placeholder="e.g. Bumrah celebration">
+      </label>
+      <label>Weight
+        <input type="number" name="weight" value="1" min="1" max="100">
+      </label>
+    </div>
+
+    <button type="submit" class="btn" style="margin-top:.75rem;">Add</button>
+  </form>
+</div>
+
+<!-- Existing media list -->
+<h2>Existing ({{ rows|length }})</h2>
+{% if not rows %}
+  <p style="color:var(--muted);">No GIFs configured for this event yet. Add one above.</p>
+{% else %}
+<div style="display:flex; flex-direction:column; gap:.75rem;">
+  {% for r in rows %}
+  <div style="display:grid; grid-template-columns: 1fr auto; gap:1rem; align-items:center; padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:8px; {% if not r.enabled %}opacity:.55;{% endif %}">
+    <div style="overflow:hidden;">
+      <div style="font-weight:600; margin-bottom:.25rem;">
+        {{ r.label or "Untitled" }}
+        {% if not r.enabled %}<span style="color:var(--muted); font-size:.8rem; margin-left:.5rem;">(disabled)</span>{% endif %}
+      </div>
+      <div style="color:var(--muted); font-size:.82rem; word-break:break-all;">
+        {% if r.source_type == "url" %}
+          🔗 <a href="{{ r.source }}" target="_blank" style="color:var(--muted);">{{ r.source }}</a>
+        {% elif r.source_type == "telegram" %}
+          📡 <span style="color:#22c55e;">Telegram-hosted (persistent)</span>
+          <span style="color:var(--muted); font-size:.75rem; margin-left:.4rem;">
+            file_id: <code>{{ r.source[:24] }}…</code>
+          </span>
+        {% else %}
+          📁 {{ r.source }}
+          <span style="color:#f59e0b; margin-left:.5rem;">(disk file — may not persist on deploy)</span>
+        {% endif %}
+      </div>
+      <div style="color:var(--muted); font-size:.78rem; margin-top:.25rem;">
+        Weight: {{ r.weight }} · Added {{ r.uploaded_at.strftime('%d %b %Y %H:%M') if r.uploaded_at else '—' }}
+        {% if r.uploaded_by %} by {{ r.uploaded_by }}{% endif %}
+      </div>
+    </div>
+
+    <div style="display:flex; gap:.5rem; flex-shrink:0;">
+      <form method="POST" style="display:inline;"
+            action="{{ url_for('admin_media_detail', event_key=event_key) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="toggle">
+        <input type="hidden" name="media_id" value="{{ r.id }}">
+        <button type="submit" class="btn btn-ghost" style="font-size:.8rem;">
+          {{ "🚫 Disable" if r.enabled else "✅ Enable" }}
+        </button>
+      </form>
+      <form method="POST" style="display:inline;"
+            action="{{ url_for('admin_media_detail', event_key=event_key) }}"
+            onsubmit="return confirm('Delete this GIF?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="media_id" value="{{ r.id }}">
+        <button type="submit" class="btn btn-ghost" style="font-size:.8rem; color:#ef4444;">
+          🗑️ Delete
+        </button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}

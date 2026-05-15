@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Event Media{% endblock %}
+{% block content %}
+
+<h1>🎬 Event Media (GIFs)</h1>
+<p style="color:var(--muted); margin-bottom:1.5rem; max-width:760px;">
+  Upload GIFs that the bot sends during matches for milestone events.
+  When a six is hit, a wicket falls, or a batsman reaches 50/100, the bot picks
+  a random enabled GIF for that event and sends it to the chat.
+  An 8-second cooldown prevents spam during heavy overs.
+</p>
+
+<div style="background:rgba(34, 197, 94, 0.1); border:1px solid rgba(34, 197, 94, 0.4); border-radius:8px; padding:.75rem 1rem; margin-bottom:1rem; font-size:.85rem; color:var(--muted);">
+  💡 <strong>Telegram-channel storage (recommended for uploads):</strong>
+  Set the <code>MEDIA_STORAGE_CHAT_ID</code> env var to a private Telegram channel
+  where the bot is an admin. With this configured, uploaded files are forwarded
+  to the channel and Telegram stores them forever — your uploads survive every
+  redeploy. URLs always work regardless.
+  <br><br>
+  <strong>Setup:</strong> create a private channel, add your bot as admin
+  (with "post messages" permission), then add a message in the channel (any).
+  Forward that message to <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a>
+  to see the channel's chat_id (starts with <code>-100</code>). Set that as
+  <code>MEDIA_STORAGE_CHAT_ID</code> in your hosting env.
+</div>
+
+<div style="background:rgba(245, 158, 11, 0.1); border:1px solid rgba(245, 158, 11, 0.4); border-radius:8px; padding:.75rem 1rem; margin-bottom:1.5rem; font-size:.85rem; color:var(--muted);">
+  ⚠️ <strong>Without the channel set up:</strong> uploaded files go to local disk
+  at <code>data/event_media/</code>. On free hosting tiers (Render etc.) this
+  directory <strong>resets on every deploy</strong>. URLs always survive.
+</div>
+
+<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:1rem;">
+  {% for key, label, desc in event_keys %}
+    {% set c = counts.get(key, {"total": 0, "enabled": 0}) %}
+    <a href="{{ url_for('admin_media_detail', event_key=key) }}"
+       style="display:block; padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:10px; text-decoration:none; color:var(--text); transition: transform .1s, border-color .1s;"
+       onmouseover="this.style.borderColor='var(--accent)'; this.style.transform='translateY(-2px)';"
+       onmouseout="this.style.borderColor='var(--border)'; this.style.transform='translateY(0)';">
+      <div style="font-size:1.3rem; font-weight:700; margin-bottom:.25rem;">{{ label }}</div>
+      <div style="color:var(--muted); font-size:.85rem; margin-bottom:.75rem;">{{ desc }}</div>
+      <div style="display:flex; gap:.5rem; align-items:center; font-size:.85rem;">
+        <span style="color:{% if c.enabled > 0 %}var(--accent){% else %}var(--muted){% endif %};">
+          ●
+        </span>
+        <span>{{ c.enabled }} active</span>
+        {% if c.total != c.enabled %}
+          <span style="color:var(--muted);">/ {{ c.total }} total</span>
+        {% endif %}
+      </div>
+    </a>
+  {% endfor %}
+</div>
+
+{% endblock %}

@@ -377,6 +377,7 @@ hr.pitch-line {
     <a href="{{ url_for('admin_rarity_list') }}" class="{{ 'active' if request.endpoint in ('admin_rarity_list','admin_rarity_simulate') }}">Rarity</a>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">Economy</a>
     <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint in ('admin_scorecard_settings',) }}">Scorecard</a>
+    <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">Media</a>
     <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">Simulation</a>
     <a href="{{ url_for('admin_markets_overview') }}" class="{{ 'active' if request.endpoint in ('admin_markets_overview','admin_market_player_edit','admin_market_trait_edit') }}">Markets</a>
     <a href="{{ url_for('admin_messages_list') }}" class="{{ 'active' if request.endpoint in ('admin_messages_list','admin_message_edit') }}">Messages</a>
