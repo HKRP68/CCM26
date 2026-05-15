@@ -250,12 +250,12 @@ def generate_match_summary(*,
         _gradient(img, BG, BG_DARK)
         draw = ImageDraw.Draw(img, "RGBA")
 
-        f_brand = _font(20, bold=True, italic=True)
-        f_title = _font(40, bold=True, italic=True)
-        f_subtitle = _font(28, bold=True, italic=True)
-        f_team = _font(34, bold=True, italic=True)
-        f_score = _font(48, bold=True)
-        f_overs = _font(18, bold=True)
+        f_brand = _font(26, bold=True, italic=True)
+        f_title = _font(56, bold=True, italic=True)
+        f_subtitle = _font(38, bold=True, italic=True)
+        f_team = _font(44, bold=True, italic=True)
+        f_score = _font(62, bold=True)
+        f_overs = _font(22, bold=True)
         f_table_title = _font(18, bold=True)
         f_row = _font(22, bold=True)
         f_res_label = _font(14, bold=True)
@@ -266,20 +266,20 @@ def generate_match_summary(*,
         f_trophy = _font(36)
 
         # Header
-        logo = _load_logo(target=70)
+        logo = _load_logo(target=100)
         header_y = 30
         if logo:
             img.paste(logo, (50, header_y), logo)
-            brand_x = 130
+            brand_x = 170
         else:
             brand_x = 50
 
-        draw.text((brand_x, header_y + 5), "CRICMASTERULTRA",
+        draw.text((brand_x, header_y + 8), "CRICMASTERULTRA",
                   fill=GOLD, font=f_brand)
-        draw.text((brand_x, header_y + 33), "MATCH SUMMARY",
+        draw.text((brand_x, header_y + 44), "MATCH SUMMARY",
                   fill=TEXT, font=f_title)
 
-        right_y = header_y + 12
+        right_y = header_y + 16
         if match_date:
             date_text = match_date.strftime("%d %b %Y").upper()
             dw = _tw(draw, date_text, f_overs)
@@ -288,18 +288,18 @@ def generate_match_summary(*,
         if is_spectator:
             spec_text = "SPECTATOR MATCH"
             sw = _tw(draw, spec_text, f_overs)
-            draw.text((W - 50 - sw, right_y + 30),
+            draw.text((W - 50 - sw, right_y + 36),
                       spec_text, fill=SECONDARY, font=f_overs)
 
-        subtitle_y = header_y + 80
+        subtitle_y = header_y + 116
         sub_text = f"{inn1_team.upper()}  vs  {inn2_team.upper()}"
         sub_w = _tw(draw, sub_text, f_subtitle)
         draw.text(((W - sub_w) // 2, subtitle_y),
                   sub_text, fill=TEXT, font=f_subtitle)
 
-        line_y = subtitle_y + 50
-        draw.line([(W // 2 - 200, line_y), (W // 2 + 200, line_y)],
-                  fill=GOLD, width=2)
+        line_y = subtitle_y + 60
+        draw.line([(W // 2 - 240, line_y), (W // 2 + 240, line_y)],
+                  fill=GOLD, width=3)
 
         # Sections
         section_x = 50

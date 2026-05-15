@@ -128,82 +128,113 @@ def _draw_logo_block(img, draw, x, y, size=60):
 def _draw_header(draw, img, *, x, y, w, accent, label, match_title, match_no,
                  home_team, away_team, score, wickets, overs,
                  bowling=False):
-    """Shared header for batting + bowling scorecards."""
-    H = 100
+    """Shared header for batting + bowling scorecards.
+
+    Layout (top to bottom, ~140px tall):
+      ┌─ Brand strip (small) ──────────────────────────────────────┐
+      │ CRICMASTERULTRA                              MATCH #42      │
+      ├─ Main row ─────────────────────────────────────────────────┤
+      │ [logo]  [BAT 1 SCORECARD]                  230/10           │
+      │         TEAM A vs TEAM B                  49.1 OVERS        │
+      └────────────────────────────────────────────────────────────┘
+                  ▲ accent-colored bottom border
+    """
+    H = 170
+    # Gradient bg
     _draw_horizontal_gradient(draw, x, y, w, H, HEADER_BG, CARD_BG)
-    # Bottom border in accent color
-    draw.line([(x, y + H), (x + w, y + H)], fill=accent, width=2)
+    # Bottom accent border
+    draw.line([(x, y + H), (x + w, y + H)], fill=accent, width=3)
 
-    f_brand = _font(13, bold=True, italic=True)
-    f_label = _font(14, bold=True)
-    f_title = _font(28, bold=True, italic=True)
-    f_overs = _font(13, bold=True)
-    f_score = _font(46, bold=True)
-    f_match_no = _font(11, bold=True)
+    # Fonts — bumped for mobile readability after Telegram compression
+    f_brand = _font(16, bold=True, italic=True)
+    f_match_no = _font(16, bold=True)
+    f_badge = _font(18, bold=True)
+    f_title = _font(42, bold=True, italic=True)
+    f_vs = _font(28, bold=True, italic=True)
+    f_score = _font(72, bold=True)
+    f_overs = _font(18, bold=True)
+    f_match_title = _font(14, bold=True)
 
-    # Brand top-left
-    draw.text((x + 20, y + 8), "CRICMASTERULTRA",
+    # ── Top strip: brand left, match-no chip right ──
+    strip_pad_x = 24
+    strip_y = y + 14
+
+    # Brand text
+    draw.text((x + strip_pad_x, strip_y), "CRICMASTERULTRA",
               fill=accent, font=f_brand)
 
-    # Bot logo (replaces weather icon)
-    icon_x = x + 20
-    icon_y = y + 28
-    _draw_logo_block(img, draw, icon_x, icon_y, size=60)
-
-    # Title section to the right of the logo
-    title_x = icon_x + 60 + 15
-    title_y = y + 32
-
-    # First line: SCORECARD LABEL  •  MATCH NO XX  •  MATCH TITLE
-    label_text = label
-    draw.text((title_x, title_y), label_text,
-              fill=DIM, font=f_label)
-    label_w = _tw(draw, label_text, f_label)
-    cursor_x = title_x + label_w
-
+    # Match no chip (top right) — rounded badge sized to font
     if match_no:
-        sep_text = "  •  "
-        sep_w = _tw(draw, sep_text, f_label)
-        draw.text((cursor_x, title_y), sep_text, fill=MUTED, font=f_label)
-        cursor_x += sep_w
         mn_text = f"MATCH #{match_no}"
-        draw.text((cursor_x, title_y), mn_text,
-                  fill=accent, font=f_label)
-        cursor_x += _tw(draw, mn_text, f_label)
+        mn_w = _tw(draw, mn_text, f_match_no)
+        chip_pad = 12
+        chip_w = mn_w + chip_pad * 2
+        chip_h = 28
+        chip_x = x + w - strip_pad_x - chip_w
+        chip_y = strip_y - 4
+        draw.rounded_rectangle(
+            [chip_x, chip_y, chip_x + chip_w, chip_y + chip_h],
+            radius=5, fill=accent)
+        draw.text((chip_x + chip_pad, chip_y + 5),
+                  mn_text, fill=BG, font=f_match_no)
 
+    # Optional match-title text under the chip (small, dim) — e.g. "SUPER LEAGUE"
     if match_title and match_title.strip() and match_title.upper() != "MATCH":
-        sep_text = "  •  "
-        sep_w = _tw(draw, sep_text, f_label)
-        draw.text((cursor_x, title_y), sep_text, fill=MUTED, font=f_label)
-        cursor_x += sep_w
-        draw.text((cursor_x, title_y),
-                  match_title.upper(), fill=DIM, font=f_label)
+        mt_text = match_title.upper()
+        mt_w = _tw(draw, mt_text, f_match_title)
+        draw.text((x + w - strip_pad_x - mt_w, strip_y + 32),
+                  mt_text, fill=MUTED, font=f_match_title)
 
-    # Second line: team names
-    title_text_y = title_y + 22
+    # ── Main row: logo + badge + title (left), score (right) ──
+    main_y = y + 56
+
+    # Logo (left) — bumped up to match larger fonts
+    logo_size = 100
+    logo_x = x + strip_pad_x
+    logo_y = main_y
+    _draw_logo_block(img, draw, logo_x, logo_y, size=logo_size)
+
+    # Badge with "BAT 1 SCORECARD" label, color-filled, sized to font
+    badge_text = label
+    badge_w = _tw(draw, badge_text, f_badge) + 28
+    badge_h = 34
+    badge_x = logo_x + logo_size + 22
+    badge_y = main_y + 4
+    draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+        radius=5, fill=accent)
+    draw.text((badge_x + 14, badge_y + 8),
+              badge_text, fill=BG, font=f_badge)
+
+    # Title line (TEAM A vs TEAM B  or  TEAM BOWLING)
+    title_y = badge_y + badge_h + 14
     if bowling:
         team_str = home_team.upper()
         tag_str = " BOWLING"
-        team_w = _tw(draw, team_str, f_title)
-        draw.text((title_x, title_text_y),
+        draw.text((badge_x, title_y),
                   team_str, fill=TEXT, font=f_title)
-        draw.text((title_x + team_w, title_text_y),
+        team_w = _tw(draw, team_str, f_title)
+        draw.text((badge_x + team_w, title_y),
                   tag_str, fill=accent, font=f_title)
     else:
-        f_vs = _font(20, bold=True, italic=True)
-        a_w = _tw(draw, home_team.upper(), f_title)
-        v_w = _tw(draw, "vs", f_vs)
-        vs_y_adjust = (f_title.size - f_vs.size) // 2
-        draw.text((title_x, title_text_y),
-                  home_team.upper(), fill=TEXT, font=f_title)
-        draw.text((title_x + a_w + 12, title_text_y + vs_y_adjust + 2),
-                  "vs", fill=DIM, font=f_vs)
-        draw.text((title_x + a_w + 12 + v_w + 12, title_text_y),
-                  away_team.upper(), fill=accent, font=f_title)
+        a_text = home_team.upper()
+        vs_text = "vs"
+        b_text = away_team.upper()
+        a_w = _tw(draw, a_text, f_title)
+        v_w = _tw(draw, vs_text, f_vs)
+        # vertically nudge "vs" down a bit because it's smaller
+        vs_y_adjust = (f_title.size - f_vs.size) // 2 + 2
 
-    # Right side: score for batting, blank for bowling
+        draw.text((badge_x, title_y),
+                  a_text, fill=TEXT, font=f_title)
+        draw.text((badge_x + a_w + 14, title_y + vs_y_adjust),
+                  vs_text, fill=DIM, font=f_vs)
+        draw.text((badge_x + a_w + 14 + v_w + 14, title_y),
+                  b_text, fill=accent, font=f_title)
+
+    # ── Right side: score block (batting only) ──
     if not bowling:
-        right_x = x + w - 20
+        right_x = x + w - strip_pad_x
         runs_text = str(score)
         sep_text = "/"
         wkts_text = str(wickets)
@@ -214,15 +245,15 @@ def _draw_header(draw, img, *, x, y, w, accent, label, match_title, match_no,
         wkts_w = _tw(draw, wkts_text, f_score)
         overs_w = _tw(draw, overs_text, f_overs)
 
-        score_total_w = runs_w + sep_w + wkts_w + 18
-        score_y = y + 25
+        score_total_w = runs_w + sep_w + wkts_w + 20
+        score_y = main_y + 8
         sx = right_x - score_total_w
 
         draw.text((sx, score_y), runs_text, fill=TEXT, font=f_score)
-        draw.text((sx + runs_w + 6, score_y), sep_text, fill=accent, font=f_score)
-        draw.text((sx + runs_w + 6 + sep_w + 6, score_y), wkts_text,
+        draw.text((sx + runs_w + 8, score_y), sep_text, fill=accent, font=f_score)
+        draw.text((sx + runs_w + 8 + sep_w + 8, score_y), wkts_text,
                   fill=TEXT, font=f_score)
-        draw.text((right_x - overs_w, score_y + 55),
+        draw.text((right_x - overs_w, score_y + 80),
                   overs_text, fill=DIM, font=f_overs)
 
     return H
@@ -378,7 +409,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
 
         W = 1400
         row_h = 44
-        header_h = 100
+        header_h = 170
         table_header_h = 38
         bottom_h = 160
         H = header_h + table_header_h + (len(batsmen_rows) * row_h) + bottom_h + 30
@@ -573,7 +604,7 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
 
         W = 1400
         row_h = 44
-        header_h = 100
+        header_h = 170
         table_header_h = 38
         bottom_h = 120
         footer_h = 40
