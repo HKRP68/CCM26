@@ -410,3 +410,186 @@ async def setcaptain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("⚠️ Error.")
     finally:
         session.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# /autobuild — pick best 11 from roster automatically
+# ════════════════════════════════════════════════════════════════════
+
+def _build_best_xi(roster_pairs):
+    """Given a list of (UserRoster entry, Player) pairs, choose the best 11
+    that satisfies validate_xi rules and has the highest total rating.
+
+    Returns:
+        (xi_pairs_in_display_order, bench_pairs, error_str_or_None)
+
+    Display order: Batsmen → Wicket Keepers → All-rounders → Pacers → Spinners,
+    sorted by rating desc within each.
+    """
+    # Bucket by category
+    buckets = {"Batsman": [], "Wicket Keeper": [], "All-rounder": [], "Bowler": []}
+    for pair in roster_pairs:
+        _, player = pair
+        cat = player.category if player.category in buckets else "Batsman"
+        buckets[cat].append(pair)
+
+    # Sort each bucket by rating desc (greedy-pick top N from each)
+    for cat in buckets:
+        buckets[cat].sort(key=lambda pair: pair[1].rating, reverse=True)
+
+    # Enumerate valid compositions (b, bw, k, alr) summing to 11
+    compositions = []
+    for b in range(3, 6):
+        for bw in range(3, 6):
+            for k in range(1, 3):
+                for alr in range(1, 4):
+                    if b + bw + k + alr == 11:
+                        compositions.append((b, bw, k, alr))
+
+    best = None  # (total_rating, xi_pairs)
+
+    for b_cnt, bw_cnt, k_cnt, alr_cnt in compositions:
+        # Need enough in each bucket
+        if (len(buckets["Batsman"]) < b_cnt
+                or len(buckets["Bowler"]) < bw_cnt
+                or len(buckets["Wicket Keeper"]) < k_cnt
+                or len(buckets["All-rounder"]) < alr_cnt):
+            continue
+
+        bat_pick = buckets["Batsman"][:b_cnt]
+        bowl_pick = buckets["Bowler"][:bw_cnt]
+        keep_pick = buckets["Wicket Keeper"][:k_cnt]
+        alr_pick = buckets["All-rounder"][:alr_cnt]
+
+        # 3rd-ALR rule: if 3 ALR, weakest ALR must have bowl_rating
+        # less than min(bowl_rating of pure bowlers picked)
+        if alr_cnt == 3 and bowl_pick:
+            min_bowler_bowl = min(p[1].bowl_rating for p in bowl_pick)
+            weakest_alr = min(alr_pick, key=lambda p: p[1].bowl_rating)
+            if weakest_alr[1].bowl_rating >= min_bowler_bowl:
+                # Try swapping with a lower-bowl-rating ALR from the bench
+                lower_alr = None
+                for cand in buckets["All-rounder"][alr_cnt:]:
+                    if cand[1].bowl_rating < min_bowler_bowl:
+                        lower_alr = cand
+                        break
+                if lower_alr is None:
+                    continue  # composition impossible for this roster
+                alr_pick = [p for p in alr_pick if p[1].id != weakest_alr[1].id]
+                alr_pick.append(lower_alr)
+
+        xi_pairs = bat_pick + bowl_pick + keep_pick + alr_pick
+        if len(xi_pairs) != 11:
+            continue
+
+        total = sum(p[1].rating for p in xi_pairs)
+        if best is None or total > best[0]:
+            best = (total, xi_pairs)
+
+    if best is None:
+        return None, None, (
+            "No valid XI possible from your roster. Need at least: "
+            "3 Batsmen, 3 Bowlers, 1 Wicket Keeper, 1 All-rounder."
+        )
+
+    _, xi_pairs = best
+
+    # Display-order arrangement
+    by_cat = {"Batsman": [], "Wicket Keeper": [], "All-rounder": [],
+              "Pacer": [], "Spinner": []}
+    for pair in xi_pairs:
+        _, player = pair
+        cat = player.category
+        if cat == "Bowler":
+            sub = "Spinner" if _is_spin(player.bowl_style) else "Pacer"
+            by_cat[sub].append(pair)
+        elif cat in by_cat:
+            by_cat[cat].append(pair)
+        else:
+            by_cat["Batsman"].append(pair)
+
+    for cat in by_cat:
+        by_cat[cat].sort(key=lambda pair: pair[1].rating, reverse=True)
+
+    ordered_xi = (
+        by_cat["Batsman"] + by_cat["Wicket Keeper"] + by_cat["All-rounder"]
+        + by_cat["Pacer"] + by_cat["Spinner"]
+    )
+
+    xi_ids = {p[1].id for p in ordered_xi}
+    bench = [p for p in roster_pairs if p[1].id not in xi_ids]
+    bench.sort(key=lambda pair: pair[1].rating, reverse=True)
+
+    return ordered_xi, bench, None
+
+
+async def autobuild_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-build the user's playing XI: pick top-rated 11 satisfying XI rules,
+    then reorder roster so the chosen 11 occupy positions 1-11."""
+    tg = update.effective_user
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        roster = _get_ordered_roster(session, user.id)
+        if len(roster) < 11:
+            await update.message.reply_text(
+                f"❌ You need at least 11 players to build an XI.\n"
+                f"You have <b>{len(roster)}</b>. Get more with /claim, /gspin, "
+                f"/buypl, or /buypack.", parse_mode="HTML")
+            return
+
+        xi, bench, err = _build_best_xi(roster)
+        if err:
+            await update.message.reply_text(f"❌ {err}")
+            return
+
+        # Apply: reorder roster positions
+        for i, (entry, _) in enumerate(xi, start=1):
+            entry.order_position = i
+        for i, (entry, _) in enumerate(bench, start=12):
+            entry.order_position = i
+        session.commit()
+
+        # Build the response message
+        total_ovr = sum(p.rating for _, p in xi)
+        avg_ovr = total_ovr / 11
+
+        bat_count = sum(1 for _, p in xi if p.category == "Batsman")
+        wk_count = sum(1 for _, p in xi if p.category == "Wicket Keeper")
+        alr_count = sum(1 for _, p in xi if p.category == "All-rounder")
+        bowl_count = sum(1 for _, p in xi if p.category == "Bowler")
+        pacer_count = sum(1 for _, p in xi
+                          if p.category == "Bowler" and not _is_spin(p.bowl_style))
+        spinner_count = bowl_count - pacer_count
+
+        lines = [
+            "🤖 <b>AUTO-BUILT XI</b>",
+            "━━━━━━━━━━━━━━━━━━━",
+            f"📊 Total OVR: <b>{total_ovr}</b>  (avg <b>{avg_ovr:.1f}</b>)",
+            f"🏏 {bat_count} BAT · 🥅 {wk_count} WK · ⚡ {alr_count} ALR · "
+            f"🎯 {pacer_count} PAC · 🌀 {spinner_count} SPIN",
+            "━━━━━━━━━━━━━━━━━━━",
+        ]
+        for i, (_, p) in enumerate(xi, start=1):
+            tag = ""
+            if p.category == "Wicket Keeper":
+                tag = " 🥅"
+            elif p.category == "All-rounder":
+                tag = " ⚡"
+            elif p.category == "Bowler":
+                tag = " 🌀" if _is_spin(p.bowl_style) else " 🎯"
+            lines.append(f"{i:>2}. {p.name} — <b>{p.rating}</b>{tag}")
+
+        lines.append("\n<i>Use /pxi to view, /swap to adjust manually.</i>")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    except Exception:
+        session.rollback()
+        logger.exception("autobuild_handler err")
+        await update.message.reply_text("⚠️ Error building XI. Try again.")
+    finally:
+        session.close()

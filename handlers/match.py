@@ -84,6 +84,73 @@ def _bowl_label(p, s):
     return f"{p['name']} | {h}-{p['bowl_style']} | {ov_str}•{bws.get('runs',0)}•{bws.get('wickets',0)}"
 
 
+def _format_dismissal(how, bowler_name, bowl_xi):
+    """Build a cricket-style dismissal string given the dismissal `how`
+    keyword from probability_engine and the bowler's name.
+
+    Examples:
+        Bowled                  → "b Bumrah"
+        LBW                     → "lbw b Bumrah"
+        Caught                  → "c Kohli b Bumrah"      (random catcher)
+        Caught Behind           → "c †Pant b Bumrah"      (random non-bowler)
+        Caught & Bowled         → "c & b Bumrah"
+        Stumped                 → "st †Pant b Ashwin"     (random non-bowler)
+        Run Out                 → "run out (Kohli)"       (random fielder)
+
+    Catchers / fielders / keepers are picked randomly from `bowl_xi`
+    (excluding the bowler unless the dismissal is Caught & Bowled).
+    """
+    how = (how or "Bowled").strip()
+    bowler = (bowler_name or "?").split()[-1]  # last name for compactness
+
+    # Helpers — pick a random fielder name from the bowling XI
+    def _pick_fielder(exclude_bowler=True):
+        if not bowl_xi:
+            return "Fielder"
+        pool = [p for p in bowl_xi
+                if not (exclude_bowler and p.get("name") == bowler_name)]
+        if not pool:
+            pool = list(bowl_xi)
+        import random as _r
+        pick = _r.choice(pool)
+        # Use last word of the name (cricket convention)
+        return pick.get("name", "Fielder").split()[-1]
+
+    h_lower = how.lower()
+
+    if h_lower == "bowled":
+        return f"b {bowler}"
+    if h_lower == "lbw":
+        return f"lbw b {bowler}"
+    if h_lower == "caught & bowled" or h_lower == "caught and bowled":
+        return f"c & b {bowler}"
+    if h_lower == "caught behind":
+        # Keeper-style; use † prefix so it's visually distinct
+        keeper = _pick_fielder()
+        return f"c †{keeper} b {bowler}"
+    if h_lower == "caught":
+        catcher = _pick_fielder()
+        return f"c {catcher} b {bowler}"
+    if h_lower == "stumped":
+        keeper = _pick_fielder()
+        return f"st †{keeper} b {bowler}"
+    if h_lower == "run out":
+        fielder = _pick_fielder(exclude_bowler=False)
+        return f"run out ({fielder})"
+    if h_lower == "hit wicket":
+        return f"hit wkt b {bowler}"
+
+    # Fallback — unknown dismissal type
+    return f"{how.lower()} b {bowler}"
+
+
+    bws = s["bowl_stats"].get(p["roster_id"], {})
+    od = bws.get("overs_done", 0); tb = bws.get("this_over_balls", 0)
+    ov_str = f"{od}.{tb}" if tb else str(od)
+    h = p.get("bowl_hand", "R")[:1]
+    return f"{p['name']} | {h}-{p['bowl_style']} | {ov_str}•{bws.get('runs',0)}•{bws.get('wickets',0)}"
+
+
 async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
     """Look up PlayerGameStats and send batsman card image."""
     try:
@@ -1561,7 +1628,57 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bwu = session.query(User).get(m.bowling_first_id)
 
         bwxi = context.bot_data.get(f"bowl_xi_{mid}", [])
-        # Show ALL 11 players sorted by bowl rating
+
+        # ── If the bowling user is the bot (vsbot innings 2 with user batting),
+        # auto-pick the bowler instead of showing a picker tagged to the bot
+        # (the bot can't click buttons; it'd freeze the match).
+        if bwu and bwu.telegram_id == BOT_TG_ID_:
+            # Auto-pick best bowler (highest bowl_rating), avoiding prev_bowler if set
+            existing = _gs(context, mid)
+            prev_rid = (existing or {}).get("prev_bowler_rid")
+            candidates = [b for b in bwxi
+                          if b.get("roster_id") != prev_rid] or bwxi
+            opening_bowler = max(candidates, key=lambda p: p.get("bowl_rating", 0))
+
+            if existing and existing.get("innings") == 2:
+                # Wire up the state for innings 2 startup, same as
+                # select_bowler_callback does for the human case.
+                s = existing
+                s["current_bowler"] = opening_bowler
+                # Rebuild batting_order with user-selected openers at index 0/1
+                order = [op1, pk]
+                for p in s["bat_xi"]:
+                    if p["roster_id"] not in (op1.get("roster_id"),
+                                                pk.get("roster_id")):
+                        order.append(p)
+                s["batting_order"] = order
+                s["striker_idx"] = 0
+                s["non_striker_idx"] = 1
+                s["next_batsman_idx"] = 2
+                s["prev_bowler_rid"] = None
+                s["selected_variation"] = None
+                _ss(context, mid, s, next_action=A_PICK_DELIVERY)
+
+                await context.bot.send_message(
+                    cid,
+                    f"🤖 Opening bowler: <b>{opening_bowler['name']}</b>",
+                    parse_mode="HTML")
+                await context.bot.send_message(
+                    cid,
+                    f"🏏 <b>2ND INNINGS!</b>\n\n"
+                    f"🟢 {s['bat_team_name']} needs {s['target']} to win\n"
+                    f"🏏 {op1.get('name', '?')} & {pk['name']}\n"
+                    f"🎳 {opening_bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
+                    parse_mode="HTML")
+                await _send_batsman_card(context, cid, op1, s["bat_team_id"])
+                await _send_batsman_card(context, cid, pk, s["bat_team_id"])
+                await _send_bowler_card(context, cid, opening_bowler, s["bowl_team_id"])
+                await render_screen(context, mid)
+                return
+            # If this is innings 1 (shouldn't happen — vsbot innings 1 has its own
+            # path in handlers/vsbot.py) we fall through to the normal picker.
+
+        # Otherwise: human bowling user, show ALL 11 bowlers sorted by bowl rating
         all_bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
         btns = [[InlineKeyboardButton(
             f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
@@ -1603,7 +1720,9 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
                     order.append(p)
             s["batting_order"] = order
             s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
-            _ss(context, mid, s)
+            s["prev_bowler_rid"] = None
+            s["selected_variation"] = None
+            _ss(context, mid, s, next_action=A_PICK_DELIVERY)
 
             await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ 2nd Innings Starting...", parse_mode="HTML")
             await context.bot.send_message(cid,
@@ -2120,6 +2239,9 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 "overs_done": 0, "this_over_balls": 0,
             })
 
+            # Snapshot pre-ball values for milestone detection (fifty/hundred)
+            prev_bat_runs = bs.get("runs", 0)
+
             oc = _calc(s, striker, bowler, shot, dl)
             legal = True
             need_new_bat = False
@@ -2150,7 +2272,13 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 runs = oc.get("runs", 0); s["total_runs"] += runs; s["total_wickets"] += 1
                 bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
                 bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
-                bs["how_out"] = oc.get("how", "Bowled"); bs["bowled_by"] = bowler["name"]
+                how_raw = oc.get("how", "Bowled")
+                bs["how_out"] = how_raw
+                bs["bowled_by"] = bowler["name"]
+                # Build the full cricket-style dismissal string NOW (with random
+                # catcher/keeper/fielder) so it stays stable across re-renders.
+                bs["dismissal_text"] = _format_dismissal(
+                    how_raw, bowler["name"], s.get("bowl_xi", []))
                 add_to_timeline(s, SYM["W"])
                 s["partnership_runs"] = 0; s["partnership_balls"] = 0
                 need_new_bat = True
@@ -2187,12 +2315,14 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 bws["balls"] = bws.get("balls", 0) + 1
 
             eoo = False
+            is_maiden = False
             if s["current_ball"] >= 6:
                 bws["overs_done"] += 1
                 bws["this_over_balls"] = 0
                 # Maiden over: 0 runs conceded across all 6 legal balls
                 if bws.get("this_over_runs", 0) == 0:
                     bws["maidens"] = bws.get("maidens", 0) + 1
+                    is_maiden = True
                 bws["this_over_runs"] = 0  # reset for next over
                 s["current_over"] += 1
                 s["current_ball"] = 0
@@ -2246,6 +2376,29 @@ async def _process_shot_core(context, mid, si, *, q=None):
                     await context.bot.send_message(s["chat_id"], head, parse_mode="HTML")
             except Exception:
                 logger.exception("Failed to send scorecard update")
+
+            # ── Fire event media (GIFs) for celebratory events ──
+            # Wrapped to NEVER break the match flow if media misbehaves.
+            try:
+                from services.event_media_service import fire_event_media
+                runs_this_ball = oc.get("runs", 0)
+                cur_bat_runs = bs.get("runs", 0)
+                if oc["type"] == "wicket":
+                    await fire_event_media(context, s["chat_id"], "wicket")
+                elif runs_this_ball == 6:
+                    await fire_event_media(context, s["chat_id"], "six")
+                elif runs_this_ball == 4:
+                    await fire_event_media(context, s["chat_id"], "four")
+                # Milestone detection — striker's runs crossed 50 or 100
+                if prev_bat_runs < 50 <= cur_bat_runs:
+                    await fire_event_media(context, s["chat_id"], "fifty")
+                elif prev_bat_runs < 100 <= cur_bat_runs:
+                    await fire_event_media(context, s["chat_id"], "hundred")
+                # Maiden over at end-of-over
+                if eoo and is_maiden:
+                    await fire_event_media(context, s["chat_id"], "maiden_over")
+            except Exception:
+                logger.exception("event media hook failed (non-fatal)")
 
         except Exception:
             logger.exception(f"_process_shot_core FATAL for match {mid}")
@@ -2693,7 +2846,21 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                 dismissal = "did not bat"
             elif is_out:
                 status = "out"
-                dismissal = bs.get("how_out", "—") or "—"
+                # Prefer the pre-formatted dismissal string (set at wicket
+                # fall with a random catcher). Fallback: format on-the-fly
+                # from how_out + bowled_by for backward compat with old states.
+                dismissal = bs.get("dismissal_text")
+                if not dismissal:
+                    how_raw = bs.get("how_out", "—") or "—"
+                    bowler_raw = bs.get("bowled_by", "")
+                    # Use the bowling XI from the appropriate innings
+                    bowl_xi_for_fmt = (s.get("inn1_bowl_xi", []) if innings_num == 1
+                                       else s.get("bowl_xi", []))
+                    if how_raw not in ("—", ""):
+                        dismissal = _format_dismissal(
+                            how_raw, bowler_raw, bowl_xi_for_fmt)
+                    else:
+                        dismissal = "—"
             else:
                 status = "not_out"
                 dismissal = "not out"
@@ -2788,16 +2955,16 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             match_no=mid, accent_hex=accent_hex,
         )
 
-        # Send in the order asked: Bowling first, then Batting (per user spec)
-        if bowl_card_bytes:
-            await ctx.bot.send_photo(
-                chat_id=cid, photo=io.BytesIO(bowl_card_bytes),
-                caption=f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
-                parse_mode="HTML")
+        # Send in the order specified by the user: Batting first, then Bowling
         if bat_card_bytes:
             await ctx.bot.send_photo(
                 chat_id=cid, photo=io.BytesIO(bat_card_bytes),
                 caption=f"🏏 <b>{bat_team}</b> — Batting Scorecard",
+                parse_mode="HTML")
+        if bowl_card_bytes:
+            await ctx.bot.send_photo(
+                chat_id=cid, photo=io.BytesIO(bowl_card_bytes),
+                caption=f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
                 parse_mode="HTML")
     except Exception:
         logger.exception(f"Failed to send innings {innings_num} scorecards")
