@@ -84,6 +84,98 @@ def _bowl_label(p, s):
     return f"{p['name']} | {h}-{p['bowl_style']} | {ov_str}•{bws.get('runs',0)}•{bws.get('wickets',0)}"
 
 
+def _active_match_in_chat(session, chat_id):
+    """Returns the Match row of any currently-active match in this chat,
+    or None. Used to enforce one-match-per-chat.
+
+    A match is "active" if its status is 'active' OR 'pending' (a pending
+    invite blocks a new one too — otherwise rapid /playmatch spam would
+    work around the rule).
+    """
+    if not chat_id:
+        return None
+    return (session.query(Match)
+            .filter(Match.chat_id == chat_id,
+                    Match.status.in_(("active", "pending")))
+            .order_by(Match.id.desc())
+            .first())
+
+
+def _chat_busy_message(match):
+    """Friendly 'a match is already running here' message with what-you-can-do
+    suggestions, plus a peek at who the current match is between."""
+    p1 = p2 = None
+    try:
+        ses = get_session()
+        try:
+            u1 = ses.query(User).get(match.user1_id) if match.user1_id else None
+            u2 = ses.query(User).get(match.user2_id) if match.user2_id else None
+            p1 = (("@" + u1.username) if (u1 and u1.username)
+                  else (u1.first_name if u1 else "Player 1"))
+            p2 = (("@" + u2.username) if (u2 and u2.username)
+                  else (u2.first_name if u2 else "Player 2"))
+            if u2 and u2.telegram_id == BOT_TG_ID_:
+                p2 = "🤖 Bot"
+            if u1 and u1.telegram_id == BOT_TG_ID_:
+                p1 = "🤖 Bot"
+        finally:
+            ses.close()
+    except Exception:
+        pass
+
+    who = ""
+    if p1 and p2:
+        who = f"\n🏏 <b>{p1}</b> vs <b>{p2}</b>"
+
+    return (
+        f"🚫 <b>A match is already going on here.</b>{who}\n"
+        f"<i>Match #{match.id} — status: {match.status}</i>\n\n"
+        f"<b>What you can do:</b>\n"
+        f"  •  Wait for the current match to finish\n"
+        f"  •  Start your match in a different chat or DM the bot\n"
+        f"  •  If the match is stuck, the current players can use "
+        f"/endmatch (fine applies) or /resume\n"
+        f"  •  Spectate with /matchinfo to see the live score"
+    )
+
+
+def _mention(user_or_tg_id, fallback_name=None):
+    """Build an HTML mention. Works whether or not the user has a Telegram
+    @username (clickable mention via tg://user?id=...).
+
+    Accepts either a User row or a raw int telegram_id (with fallback_name).
+    For the bot opponent (BOT_TG_ID_), returns "🤖 Bot" instead of a mention.
+    """
+    if user_or_tg_id is None:
+        return fallback_name or "Player"
+    if isinstance(user_or_tg_id, int):
+        if user_or_tg_id == BOT_TG_ID_:
+            return "🤖 Bot"
+        name = fallback_name or "Player"
+        return f'<a href="tg://user?id={user_or_tg_id}">{name}</a>'
+    u = user_or_tg_id
+    if getattr(u, "telegram_id", None) == BOT_TG_ID_:
+        return "🤖 Bot"
+    name = u.username or u.first_name or fallback_name or "Player"
+    label = f"@{u.username}" if u.username else name
+    return f'<a href="tg://user?id={u.telegram_id}">{label}</a>'
+
+
+def _mention_by_tg_id(session, tg_id, fallback="Player"):
+    """Convenience: look up the user row by telegram_id and return _mention()."""
+    if tg_id == BOT_TG_ID_:
+        return "🤖 Bot"
+    if not tg_id:
+        return fallback
+    try:
+        u = session.query(User).filter(User.telegram_id == tg_id).first()
+        if u:
+            return _mention(u)
+    except Exception:
+        pass
+    return _mention(tg_id, fallback_name=fallback)
+
+
 def _format_dismissal(how, bowler_name, bowl_xi):
     """Build a cricket-style dismissal string given the dismissal `how`
     keyword from probability_engine and the bowler's name.
@@ -373,13 +465,14 @@ async def _action_warning(context):
         u = session.query(User).filter(User.telegram_id == d["user_tg"]).first()
         if not u:
             return
-        uname = u.username or u.first_name or "Player"
+        u_mention = _mention(u)
         remaining = ACTION_TIMEOUT - ACTION_WARN_SECONDS
         try:
             await context.bot.send_message(
                 d["chat_id"],
-                f"⏱️ @{uname} — <b>{remaining} seconds</b> to <b>{d['action']}</b> "
-                f"or you'll forfeit the match.",
+                f"⏱️ <b>{remaining} seconds remaining</b> {u_mention} "
+                f"to {d['action']}.\n"
+                f"<i>Match will be forfeited otherwise.</i>",
                 parse_mode="HTML")
         except Exception:
             pass
@@ -509,23 +602,41 @@ async def _action_timeout(context):
         except Exception:
             logger.exception("Stats save during forfeit failed (non-fatal)")
 
-        # Announcement
-        idle_name = (idle_user.username if idle_user and idle_user.username
-                     else (idle_user.first_name if idle_user else "Player"))
-        winner_label = ("🤖 Bot" if winner_is_bot
-                        else (f"@{winner_user.username}" if winner_user and winner_user.username
-                              else (winner_user.first_name if winner_user else "Opponent")))
+        # Announcement — dramatic forfeit message with clickable mentions
+        idle_mention = _mention(idle_user) if idle_user else "Player"
+        winner_mention = ("🤖 Bot" if winner_is_bot
+                          else (_mention(winner_user) if winner_user else "Opponent"))
         try:
             await context.bot.send_message(
                 d["chat_id"],
-                f"⏱️ <b>AUTO-FORFEIT</b>\n"
+                f"⏰ <b>Time over</b> 😔\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"@{idle_name} did not <b>{d['action']}</b> within {ACTION_TIMEOUT}s.\n\n"
-                f"🏆 <b>{winner_label}</b> wins by forfeit!\n"
-                f"⚠️ Fine on @{idle_name}: -{FINE_COINS:,} coins · -{FINE_GEMS} gems",
+                f"{idle_mention} left the game.\n"
+                f"<i>(did not {d['action']} within {ACTION_TIMEOUT}s)</i>\n\n"
+                f"⚠️ Fined: <b>-{FINE_COINS:,}</b> 🪙   <b>-{FINE_GEMS}</b> 💎\n\n"
+                f"🏆 {winner_mention} won the match!",
                 parse_mode="HTML")
         except Exception:
             pass
+
+        # Send scorecards for whatever innings have data, so the chat has a
+        # visual record of the forfeited match. Wrapped — never block cleanup.
+        try:
+            current_innings = s.get("innings", 1)
+            # Innings 1 scorecards: send if innings 1 was completed (or we're
+            # mid-innings 1 with at least some balls played).
+            inn1_played = (current_innings >= 2
+                           or s.get("total_runs", 0) > 0
+                           or s.get("total_wickets", 0) > 0
+                           or s.get("current_over", 1) > 1
+                           or s.get("current_ball", 0) > 0)
+            if inn1_played:
+                await _send_innings_scorecards(context, mid, innings_num=1)
+            # Innings 2 scorecards: only if we actually reached innings 2
+            if current_innings >= 2:
+                await _send_innings_scorecards(context, mid, innings_num=2)
+        except Exception:
+            logger.exception("Forfeit scorecard send failed (non-fatal)")
 
         # Tour announcement after match forfeit
         if tour_announce:
@@ -1356,13 +1467,30 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
         m = session.query(Match).get(mid)
         if m: m.status = "completed"; m.completed_at = datetime.utcnow()
         session.commit()
-        uname = u.username if u else "Unknown"
+        u_mention = _mention(u) if u else "Player"
         await q.edit_message_text(
-            f"🛑 <b>MATCH ENDED</b>\n\n@{uname} ended the match.\n"
+            f"🛑 <b>MATCH ENDED</b>\n\n{u_mention} ended the match.\n"
             f"⚠️ Fine: -{FINE_COINS:,} Coins 💰 -{FINE_GEMS} Gems 💎\n"
             f"📊 Player stats saved.", parse_mode="HTML")
     except Exception: session.rollback()
     finally: session.close()
+
+    # Scorecards for visual record (best-effort, non-fatal)
+    try:
+        if s:
+            current_innings = s.get("innings", 1)
+            inn1_played = (current_innings >= 2
+                           or s.get("total_runs", 0) > 0
+                           or s.get("total_wickets", 0) > 0
+                           or s.get("current_over", 1) > 1
+                           or s.get("current_ball", 0) > 0)
+            if inn1_played:
+                await _send_innings_scorecards(context, mid, innings_num=1)
+            if current_innings >= 2:
+                await _send_innings_scorecards(context, mid, innings_num=2)
+    except Exception:
+        logger.exception("Endmatch scorecard send failed (non-fatal)")
+
     cleanup_state(context, mid)
     release_match_lock(mid)
 
@@ -1379,6 +1507,13 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = context.args[0].lstrip("@").strip()
     session = get_session()
     try:
+        # One match per chat
+        existing = _active_match_in_chat(session, cid)
+        if existing:
+            await update.message.reply_text(
+                _chat_busy_message(existing), parse_mode="HTML")
+            return
+
         u1 = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u1: await update.message.reply_text("❌ /debut first!"); return
         if t.lower() == (u1.username or "").lower(): await update.message.reply_text("❌ Can't play yourself"); return
@@ -1514,10 +1649,11 @@ async def overs_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Final reveal
         winner_name = w.username or w.first_name or "Captain"
+        w_mention = _mention(w)
         try:
             await toss_msg.edit_text(
                 f"🪙 <b>TOSS RESULT</b>\n\n"
-                f"🏆 <b>@{winner_name}</b> wins the toss!\n\n"
+                f"🏆 {w_mention} wins the toss!\n\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📍 Pitch: <b>{m.pitch_type}</b> · 🌤️ {m.weather}\n"
                 f"🏟️ {m.stadium}\n\n"
@@ -1529,7 +1665,7 @@ async def overs_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Decision prompt
         await context.bot.send_message(cid,
-            f"⚖️ <b>@{winner_name}</b>, choose your call:\n\n"
+            f"⚖️ {w_mention}, choose your call:\n\n"
             f"🏏 <b>Bat First:</b> Set a target on a {('fresh' if m.pitch_type in ('Flat','Hard') else 'tricky')} pitch\n"
             f"🎳 <b>Bowl First:</b> Pitch typically {('eases' if m.pitch_type == 'Green' else 'wears')} as match goes on",
             parse_mode="HTML",
@@ -1580,7 +1716,8 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         context.bot_data[f"bat_uid_{mid}"] = bu.id; context.bot_data[f"bowl_uid_{mid}"] = bwu.id
         # Show ALL 11 players for opener selection
         btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{bu.id}_{p['roster_id']}")] for p in bxi]
-        await context.bot.send_message(cid, f"🏏 <b>SELECT OPENER 1</b>\n\n@{bu.username}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        bu_mention = _mention(bu)
+        await context.bot.send_message(cid, f"🏏 <b>SELECT OPENER 1</b>\n\n{bu_mention}, pick the opening batter:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: session.rollback(); logger.exception("Toss err")
     finally: session.close()
 
@@ -1601,7 +1738,8 @@ async def opener1_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show ALL remaining players for opener 2
         rem = [p for p in bxi if p["roster_id"] != rid]
         btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op2_{mid}_{buid}_{p['roster_id']}")] for p in rem]
-        await q.edit_message_text(f"✅ Opener 1: {pk['name']}\n\n🏏 <b>SELECT OPENER 2</b>\n\n@{u.username}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        u_mention = _mention(u)
+        await q.edit_message_text(f"✅ Opener 1: {pk['name']}\n\n🏏 <b>SELECT OPENER 2</b>\n\n{u_mention}, pick the second opener:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: logger.exception("Op1 err")
     finally: session.close()
 
@@ -1684,7 +1822,8 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
             callback_data=f"selbowl_{mid}_{bwu.id}_{p['roster_id']}"
         )] for p in all_bowlers]
-        await context.bot.send_message(cid, f"🎳 <b>SELECT OPENING BOWLER</b>\n\n@{bwu.username}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        bwu_mention = _mention(bwu)
+        await context.bot.send_message(cid, f"🎳 <b>SELECT OPENING BOWLER</b>\n\n{bwu_mention}, pick your opening bowler:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: logger.exception("Op2 err")
     finally: session.close()
 
@@ -1959,9 +2098,10 @@ async def _show_delivery(ctx, cid, mid):
         bw = get_bowler(s); st = get_striker(s); ph = get_phase(s)
         ov = s["current_over"]; bl = s["current_ball"] + 1
         opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
+        bowl_mention = _mention(s.get("bowl_user_tg"), fallback_name=s.get("bowl_username") or "Bowler")
         hdr = (f"🎳 <b>OVER {ov} • BALL {bl}</b>\n\n📊 {format_score(s)} | {format_overs(s)} ov | CRR {crr(s)}\n\n"
                f"🎳 {bw['name']} ({bw['bowl_rating']} BWL)\n🏏 vs {st['name']} ({st['bat_rating']} BAT)\n📍 {ph}\n\n"
-               f"━━━━━━━━━━━━━━━━━━━\n\n@{s['bowl_username']}, choose your delivery:\n\n")
+               f"━━━━━━━━━━━━━━━━━━━\n\n{bowl_mention}, choose your delivery:\n\n")
         if opts["is_spinner"]:
             ds = opts["deliveries"]; btns = []; row = []
             for i, d in enumerate(ds):
@@ -2143,10 +2283,11 @@ async def _show_shot(ctx, cid, mid):
     try:
         st = get_striker(s); bw = get_bowler(s); dl = s.get("current_delivery", "?")
         bs = s["bat_stats"][st["roster_id"]]
+        bat_mention = _mention(s.get("bat_user_tg"), fallback_name=s.get("bat_username") or "Batsman")
         txt = (f"🏏 <b>OVER {s['current_over']} • BALL {s['current_ball'] + 1}</b>\n\n"
                f"📊 {format_score(s)} | {format_overs(s)} ov | CRR {crr(s)}\n\n"
                f"🎳 {bw['name']}: {dl}\n🏏 {st['name']} ({st['bat_rating']} BAT) — {bs['runs']}({bs['balls']})\n\n"
-               f"━━━━━━━━━━━━━━━━━━━\n\n@{s['bat_username']}, choose your shot:")
+               f"━━━━━━━━━━━━━━━━━━━\n\n{bat_mention}, play your shot:")
         btns = []; row = []
         for i, sh in enumerate(AVAILABLE_SHOTS):
             row.append(InlineKeyboardButton(sh, callback_data=f"bshot_{mid}_{i}"))
@@ -2660,7 +2801,8 @@ async def _show_new_batsman(ctx, mid):
             f"{p['name']} — {s['bat_stats'].get(p['roster_id'], {}).get('runs', 0)}({s['bat_stats'].get(p['roster_id'], {}).get('balls', 0)})",
             callback_data=f"newbat_{mid}_{i}"
         )] for i, p in available]
-        text_to_send = f"🏏 <b>WICKET!</b> Select next batsman:\n\n@{s['bat_username']}, choose:"
+        bat_mention = _mention(s.get("bat_user_tg"), fallback_name=s.get("bat_username") or "Batsman")
+        text_to_send = f"🏏 <b>WICKET!</b> Select next batsman:\n\n{bat_mention}, pick the next batter:"
 
         try:
             await ctx.bot.send_message(s["chat_id"], text_to_send, parse_mode="HTML",
@@ -2732,8 +2874,9 @@ async def _show_new_over_bowler(ctx, mid):
         avail = [p for p in s["bowl_xi"] if p["roster_id"] != prev]
         avail = sorted(avail, key=lambda x: x["bowl_rating"], reverse=True)
         btns = [[InlineKeyboardButton(_bowl_label(p, s), callback_data=f"nbowl_{mid}_{p['roster_id']}")] for p in avail]
+        bowl_mention = _mention(s.get("bowl_user_tg"), fallback_name=s.get("bowl_username") or "Bowler")
         text_to_send = (f"🎳 <b>OVER {s['current_over']}</b> — Select bowler:\n📊 {format_score(s)} | "
-                        f"{format_overs(s)} ov\n\n@{s['bowl_username']}, choose:")
+                        f"{format_overs(s)} ov\n\n{bowl_mention}, pick a new bowler:")
 
         try:
             await ctx.bot.send_message(s["chat_id"], text_to_send, parse_mode="HTML",
@@ -3077,7 +3220,8 @@ async def _end_innings(ctx, mid):
             # Show ALL 11 players for 2nd innings opener (user batting)
             buid = s["bat_team_id"]
             btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{buid}_{p['roster_id']}")] for p in s["bat_xi"]]
-            await ctx.bot.send_message(cid, f"🏏 <b>2ND INNINGS — SELECT OPENER 1</b>\n\n@{s['bat_username']}, pick:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+            bat_mention2 = _mention(s.get("bat_user_tg"), fallback_name=s.get("bat_username") or "Captain")
+            await ctx.bot.send_message(cid, f"🏏 <b>2ND INNINGS — SELECT OPENER 1</b>\n\n{bat_mention2}, pick the opening batter:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     else:
         # Match complete — give rewards
         target = s["target"]; chasing = s["total_runs"]; overs = s.get("overs", 10)

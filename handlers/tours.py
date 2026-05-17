@@ -618,6 +618,14 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         await q.answer()
 
+        # One-match-per-chat: tour matches respect the same rule
+        from handlers.match import _active_match_in_chat, _chat_busy_message
+        existing = _active_match_in_chat(session, chat_id)
+        if existing:
+            await context.bot.send_message(
+                chat_id, _chat_busy_message(existing), parse_mode="HTML")
+            return
+
         # Get random_match_settings for weather/umpire (but use TourMatch's stadium/pitch)
         from datetime import timedelta as _td
         from services.match_constants import random_match_settings

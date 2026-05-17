@@ -22,18 +22,32 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
     session = get_session()
     try:
+        from services.command_config_service import (
+            is_command_enabled, get_disabled_message, get_cooldown,
+            get_coin_amount, get_player_count,
+        )
+        if not is_command_enabled(session, "daily"):
+            await update.message.reply_text(
+                get_disabled_message(session, "daily"), parse_mode="HTML")
+            return
+
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        ready, remaining = check_cooldown(stats, "last_daily", DAILY_COOLDOWN)
+        effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
+        ready, remaining = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
             await update.message.reply_text(
                 f"⏳ Daily on cooldown. Try again in <b>{format_remaining(remaining)}</b>",
                 parse_mode="HTML")
             return
+
+        # Preview the actual amounts
+        coin_amt = get_coin_amount(session, "daily", DAILY_COINS)
+        player_amt = get_player_count(session, "daily", 2)
 
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("🎁 Claim Daily Reward",
@@ -43,8 +57,8 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📅 <b>Daily Reward Available!</b>\n\n"
             "Tap below to claim your reward:\n"
-            "+5,000 coins\n"
-            "+2 Players\n"
+            f"+{coin_amt:,} coins\n"
+            f"+{player_amt} Players\n"
             "+1 Streak\n",
             parse_mode="HTML", reply_markup=keyboard)
 
@@ -77,12 +91,19 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Update streak
         streak_count, milestone = update_streak(stats)
 
-        # Pull daily coins/gems from admin config
+        # Pull daily coins/gems — prefer CommandReward, fall back to GameConfig
         from services.config_service import get_config
+        from services.command_config_service import get_coin_amount, get_player_count, get_reward
         cfg = get_config(session)
-        coins_award = cfg["daily_coins"]
-        gems_award = cfg["daily_gems"]
-        # Streak bonus
+
+        # Coins: CommandReward if set, else GameConfig
+        coins_award = get_coin_amount(session, "daily", cfg["daily_coins"])
+        # Gems: CommandReward if set, else GameConfig
+        cr = get_reward(session, "daily")
+        gems_award = (cr.gem_amount if cr and cr.gem_amount > 0
+                       else cfg["daily_gems"])
+
+        # Streak bonus (uses GameConfig values for now)
         if streak_count > 1:
             coins_award += cfg["daily_streak_bonus_coins"] * (streak_count - 1)
             gems_award += cfg["daily_streak_bonus_gems"] * (streak_count - 1)
@@ -92,9 +113,12 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if gems_award:
             user.total_gems = (user.total_gems or 0) + gems_award
 
-        # Generate 2 players
+        # Number of players to grant (admin-tunable)
+        player_count = get_player_count(session, "daily", 2)
+
+        # Generate players
         players = []
-        for _ in range(2):
+        for _ in range(player_count):
             p = get_random_player_by_rarity(session)
             if p:
                 players.append(p)

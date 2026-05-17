@@ -20,6 +20,13 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
+        # Check enabled flag from BotCommand table
+        from services.command_config_service import is_command_enabled, get_disabled_message, get_reward
+        if not is_command_enabled(session, "debut"):
+            await update.message.reply_text(
+                get_disabled_message(session, "debut"), parse_mode="HTML")
+            return
+
         existing = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if existing:
             await update.message.reply_text(
@@ -27,10 +34,14 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Reward amounts: prefer CommandReward (DB), fall back to GameConfig.
         from services.config_service import get_config
         cfg = get_config(session)
-        debut_coins = cfg["debut_coins"]
-        debut_gems = cfg["debut_gems"]
+        cr = get_reward(session, "debut")
+        debut_coins = (cr.coin_amount if cr and cr.coin_amount > 0
+                        else cfg["debut_coins"])
+        debut_gems = (cr.gem_amount if cr and cr.gem_amount > 0
+                       else cfg["debut_gems"])
 
         user = User(
             telegram_id=tg_user.id,

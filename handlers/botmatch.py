@@ -38,11 +38,20 @@ async def botmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, TypeError):
             overs = 5
 
+    cid = update.effective_chat.id
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        # One match per chat
+        from handlers.match import _active_match_in_chat, _chat_busy_message
+        existing = _active_match_in_chat(session, cid)
+        if existing:
+            await update.message.reply_text(
+                _chat_busy_message(existing), parse_mode="HTML")
             return
 
         teams = (session.query(BotTeam)

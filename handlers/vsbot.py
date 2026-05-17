@@ -92,6 +92,14 @@ async def vsbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        # One match per chat
+        from handlers.match import _active_match_in_chat, _chat_busy_message
+        existing = _active_match_in_chat(session, cid)
+        if existing:
+            await update.message.reply_text(
+                _chat_busy_message(existing), parse_mode="HTML")
+            return
+
         # Roster check
         roster_count = session.query(UserRoster).filter(UserRoster.user_id == user.id).count()
         if roster_count < 11:

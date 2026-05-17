@@ -39,8 +39,17 @@ async def botvsbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
+    cid = update.effective_chat.id
     session = get_session()
     try:
+        # One match per chat
+        from handlers.match import _active_match_in_chat, _chat_busy_message
+        existing = _active_match_in_chat(session, cid)
+        if existing:
+            await update.message.reply_text(
+                _chat_busy_message(existing), parse_mode="HTML")
+            return
+
         # Make sure we have at least 2 active bot teams
         teams = (session.query(BotTeam)
                  .filter(BotTeam.is_active == True)

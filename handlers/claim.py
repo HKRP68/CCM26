@@ -163,13 +163,24 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
+        # Check enabled flag
+        from services.command_config_service import (
+            is_command_enabled, get_disabled_message, get_cooldown,
+            get_coin_amount,
+        )
+        if not is_command_enabled(session, "claim"):
+            await update.message.reply_text(
+                get_disabled_message(session, "claim"), parse_mode="HTML")
+            return
+
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        ready, remaining = check_cooldown(stats, "last_claim", CLAIM_COOLDOWN)
+        effective_cooldown = get_cooldown(session, "claim", CLAIM_COOLDOWN)
+        ready, remaining = check_cooldown(stats, "last_claim", effective_cooldown)
         if not ready:
             await update.message.reply_text(
                 f"⏳ Claim on cooldown. Try again in <b>{format_remaining(remaining)}</b>",
@@ -187,15 +198,16 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         roster_count = user.roster_count
         user_id = user.id
 
-        # DB updates
-        user.total_coins += CLAIM_COINS
+        # DB updates — use admin-configurable claim coin amount
+        coin_reward = get_coin_amount(session, "claim", CLAIM_COINS)
+        user.total_coins += coin_reward
         stats.last_claim = datetime.utcnow()
         log_activity(session, user_id, "claim", f"Claimed {p['name']} ({p['rating']})",
-                     coins_change=CLAIM_COINS, player_name=p["name"], player_rating=p["rating"])
+                     coins_change=coin_reward, player_name=p["name"], player_rating=p["rating"])
         session.commit()
 
         # Build text from dict (safe after commit)
-        text = _build_card_text(p) + f"\n\n💰 +{CLAIM_COINS:,} coins added!"
+        text = _build_card_text(p) + f"\n\n💰 +{coin_reward:,} coins added!"
 
         # Build buttons
         buttons = [
