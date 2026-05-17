@@ -75,10 +75,8 @@ nav {
   justify-content: space-between;
   height: 60px;
   position: sticky; top: 0; z-index: 100;
-  position: relative;
 }
 nav::after {
-  /* Pitch-line under the nav */
   content: ""; position: absolute; left: 0; right: 0; bottom: -3px;
   height: 1px;
   background: repeating-linear-gradient(
@@ -92,38 +90,162 @@ nav .brand {
   color: var(--accent);
   display: flex; align-items: center; gap: .5rem;
 }
-nav .links { display: flex; gap: .15rem; flex-wrap: wrap; }
-nav .links a {
-  color: var(--muted);
-  text-decoration: none;
-  padding: .5rem .75rem;
-  border-radius: 4px;
-  font-size: .82rem;
-  font-weight: 500;
-  transition: all .15s;
-  border-bottom: 2px solid transparent;
-}
-nav .links a:hover {
-  color: var(--text);
-  background: rgba(212, 168, 42, 0.08);
-}
-nav .links a.active {
+
+/* Hamburger button — opens the drawer */
+.nav-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
   color: var(--accent);
-  border-bottom-color: var(--accent);
-  background: rgba(212, 168, 42, 0.06);
+  padding: .4rem .65rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  transition: all .15s;
 }
-nav .logout {
-  color: var(--red);
-  font-size: .78rem;
-  text-decoration: none;
-  padding: .35rem .75rem;
-  border: 1px solid var(--red);
+.nav-toggle:hover {
+  background: rgba(212, 168, 42, 0.08);
+  border-color: var(--accent);
+}
+.nav-toggle span {
+  display: block;
+  width: 22px; height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: transform .25s, opacity .25s;
+}
+
+/* Drawer overlay + drawer panel */
+.nav-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, .55);
+  z-index: 199;
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s ease;
+  backdrop-filter: blur(4px);
+}
+.nav-overlay.open { opacity: 1; pointer-events: auto; }
+
+.nav-drawer {
+  position: fixed;
+  top: 0; right: 0;
+  height: 100vh;
+  width: 340px; max-width: 90vw;
+  background: var(--card);
+  border-left: 2px solid var(--accent);
+  z-index: 200;
+  transform: translateX(100%);
+  transition: transform .28s cubic-bezier(.22, .61, .36, 1);
+  display: flex; flex-direction: column;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, .55);
+}
+.nav-drawer.open { transform: translateX(0); }
+.nav-drawer .drawer-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.nav-drawer .drawer-header h3 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.15rem;
+  letter-spacing: .08em;
+  color: var(--accent);
+  margin: 0;
+}
+.nav-drawer .close-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: .25rem .5rem;
+  font-size: 1.4rem;
+  line-height: 1;
   border-radius: 4px;
-  font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
+  transition: color .15s, background .15s;
 }
-nav .logout:hover { background: var(--red); color: #fff; }
+.nav-drawer .close-btn:hover { color: var(--accent); background: rgba(212, 168, 42, 0.08); }
+
+.nav-drawer .drawer-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: .5rem 0;
+}
+.nav-drawer .section-label {
+  padding: .75rem 1.25rem .25rem;
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--muted);
+  font-weight: 700;
+}
+.nav-drawer a {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .65rem 1.25rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: .9rem;
+  transition: background .12s, color .12s, padding-left .15s;
+  border-left: 3px solid transparent;
+}
+.nav-drawer a:hover {
+  background: rgba(212, 168, 42, 0.08);
+  border-left-color: var(--accent);
+  padding-left: 1.4rem;
+}
+.nav-drawer a.active {
+  background: rgba(212, 168, 42, 0.12);
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+.nav-drawer .logout-link {
+  margin: .5rem 1.25rem 1rem;
+  padding: .55rem .75rem;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  color: var(--red);
+  text-decoration: none;
+  text-align: center;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: .8rem;
+  transition: background .15s, color .15s;
+}
+.nav-drawer .logout-link:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+/* Subtle page-load fade */
+main {
+  animation: pageIn .35s ease;
+}
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Button polish — slightly raise on hover */
+.btn { transition: transform .12s, background .15s, border-color .15s, color .15s; }
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: translateY(0); }
+
+/* Row hover lift for cards & tables */
+.stat-card, .ops-card { transition: transform .15s, border-color .15s; }
+.stat-card:hover, .ops-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(212, 168, 42, 0.3);
+}
+
+table tbody tr {
+  transition: background .12s;
+}
+table tbody tr:hover {
+  background: rgba(212, 168, 42, 0.04);
+}
 
 /* Main */
 main {
@@ -363,30 +485,82 @@ hr.pitch-line {
 {% if session.get('admin') %}
 <nav>
   <div class="brand">🏏 CRICMASTER ULTRA</div>
-  <div class="links">
-    <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
-    <a href="{{ url_for('players_list') }}" class="{{ 'active' if request.endpoint in ('players_list','player_edit','player_add') }}">Players</a>
-    <a href="{{ url_for('users_list') }}" class="{{ 'active' if request.endpoint in ('users_list','user_detail','admin_user_traits') }}">Users</a>
-    <a href="{{ url_for('admin_traits_list') }}" class="{{ 'active' if request.endpoint in ('admin_traits_list','admin_trait_edit') }}">Traits</a>
-    <a href="{{ url_for('admin_bot_teams_list') }}" class="{{ 'active' if request.endpoint in ('admin_bot_teams_list','admin_bot_team_new','admin_bot_team_edit') }}">Bot Teams</a>
-    <a href="{{ url_for('admin_quests_list') }}" class="{{ 'active' if request.endpoint in ('admin_quests_list','admin_quest_new','admin_quest_edit') }}">Quests</a>
-    <a href="{{ url_for('admin_packs_list') }}" class="{{ 'active' if request.endpoint in ('admin_packs_list','admin_pack_new','admin_pack_edit') }}">Packs</a>
-    <a href="{{ url_for('admin_tours_list') }}" class="{{ 'active' if request.endpoint in ('admin_tours_list','admin_tour_detail') }}">Tours</a>
-    <a href="{{ url_for('admin_commentary_list') }}" class="{{ 'active' if request.endpoint in ('admin_commentary_list','admin_commentary_new','admin_commentary_edit','admin_commentary_import') }}">Commentary</a>
-    <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">Notifications</a>
-    <a href="{{ url_for('admin_rarity_list') }}" class="{{ 'active' if request.endpoint in ('admin_rarity_list','admin_rarity_simulate') }}">Rarity</a>
-    <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">Economy</a>
-    <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint in ('admin_scorecard_settings',) }}">Scorecard</a>
-    <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">Media</a>
-    <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">Simulation</a>
-    <a href="{{ url_for('admin_markets_overview') }}" class="{{ 'active' if request.endpoint in ('admin_markets_overview','admin_market_player_edit','admin_market_trait_edit') }}">Markets</a>
-    <a href="{{ url_for('admin_messages_list') }}" class="{{ 'active' if request.endpoint in ('admin_messages_list','admin_message_edit') }}">Messages</a>
-    <a href="{{ url_for('admin_diagnostics') }}" class="{{ 'active' if request.endpoint == 'admin_diagnostics' }}">Diagnostics</a>
-    <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">Seed</a>
-    <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">Status</a>
-    <a href="{{ url_for('logout') }}" class="logout">Logout</a>
-  </div>
+  <button class="nav-toggle" onclick="toggleDrawer()" aria-label="Open menu">
+    <span></span><span></span><span></span>
+  </button>
 </nav>
+
+<!-- Slide-in drawer (mobile-first, used everywhere) -->
+<div class="nav-overlay" id="navOverlay" onclick="closeDrawer()"></div>
+<aside class="nav-drawer" id="navDrawer" aria-hidden="true">
+  <div class="drawer-header">
+    <h3>Admin Panel</h3>
+    <button class="close-btn" onclick="closeDrawer()" aria-label="Close menu">×</button>
+  </div>
+  <nav class="drawer-body">
+    <div class="section-label">Overview</div>
+    <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">📊 Dashboard</a>
+    <a href="{{ url_for('admin_live_matches') }}" class="{{ 'active' if request.endpoint == 'admin_live_matches' }}">⚡ Live Matches</a>
+
+    <div class="section-label">Players & Users</div>
+    <a href="{{ url_for('players_list') }}" class="{{ 'active' if request.endpoint in ('players_list','player_edit','player_add') }}">🃏 Players</a>
+    <a href="{{ url_for('users_list') }}" class="{{ 'active' if request.endpoint in ('users_list','user_detail','admin_user_traits') }}">👥 Users</a>
+    <a href="{{ url_for('admin_bot_teams_list') }}" class="{{ 'active' if request.endpoint in ('admin_bot_teams_list','admin_bot_team_new','admin_bot_team_edit') }}">🤖 Bot Teams</a>
+
+    <div class="section-label">Game Content</div>
+    <a href="{{ url_for('admin_commands') }}" class="{{ 'active' if request.endpoint == 'admin_commands' }}">🎮 Commands</a>
+    <a href="{{ url_for('admin_quests_list') }}" class="{{ 'active' if request.endpoint in ('admin_quests_list','admin_quest_new','admin_quest_edit') }}">🎯 Quests</a>
+    <a href="{{ url_for('admin_traits_list') }}" class="{{ 'active' if request.endpoint in ('admin_traits_list','admin_trait_edit') }}">💎 Traits</a>
+    <a href="{{ url_for('admin_packs_list') }}" class="{{ 'active' if request.endpoint in ('admin_packs_list','admin_pack_new','admin_pack_edit') }}">📦 Packs</a>
+    <a href="{{ url_for('admin_tours_list') }}" class="{{ 'active' if request.endpoint in ('admin_tours_list','admin_tour_detail') }}">🏆 Tours</a>
+    <a href="{{ url_for('admin_commentary_list') }}" class="{{ 'active' if request.endpoint in ('admin_commentary_list','admin_commentary_new','admin_commentary_edit','admin_commentary_import') }}">💬 Commentary</a>
+
+    <div class="section-label">Economy & Rewards</div>
+    <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">💰 Economy</a>
+    <a href="{{ url_for('admin_gspin_rewards') }}" class="{{ 'active' if request.endpoint == 'admin_gspin_rewards' }}">🎡 GSpin Rewards</a>
+    <a href="{{ url_for('admin_rarity_list') }}" class="{{ 'active' if request.endpoint in ('admin_rarity_list','admin_rarity_simulate') }}">🌟 Rarity</a>
+    <a href="{{ url_for('admin_markets_overview') }}" class="{{ 'active' if request.endpoint in ('admin_markets_overview','admin_market_player_edit','admin_market_trait_edit') }}">🛒 Markets</a>
+
+    <div class="section-label">Game Settings</div>
+    <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint == 'admin_scorecard_settings' }}">📊 Scorecard</a>
+    <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">🎲 Simulation</a>
+    <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">🎬 Media</a>
+    <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">📢 Notifications</a>
+    <a href="{{ url_for('admin_messages_list') }}" class="{{ 'active' if request.endpoint in ('admin_messages_list','admin_message_edit') }}">💌 Messages</a>
+
+    <div class="section-label">System</div>
+    <a href="{{ url_for('admin_audit_log') }}" class="{{ 'active' if request.endpoint == 'admin_audit_log' }}">📋 Audit Log</a>
+    <a href="{{ url_for('admin_diagnostics') }}" class="{{ 'active' if request.endpoint == 'admin_diagnostics' }}">🔧 Diagnostics</a>
+    <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">🟢 Status</a>
+    <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">🌱 Seed</a>
+
+    <a href="{{ url_for('logout') }}" class="logout-link">Logout</a>
+  </nav>
+</aside>
+
+<script>
+  function toggleDrawer() {
+    const d = document.getElementById('navDrawer');
+    const o = document.getElementById('navOverlay');
+    if (d.classList.contains('open')) {
+      closeDrawer();
+    } else {
+      d.classList.add('open');
+      o.classList.add('open');
+      d.setAttribute('aria-hidden', 'false');
+    }
+  }
+  function closeDrawer() {
+    const d = document.getElementById('navDrawer');
+    const o = document.getElementById('navOverlay');
+    d.classList.remove('open');
+    o.classList.remove('open');
+    d.setAttribute('aria-hidden', 'true');
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeDrawer();
+  });
+</script>
 {% endif %}
 
 <main>

@@ -1,9 +1,130 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
+
+<style>
+  .ops-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .ops-card {
+    background: var(--card, #181f2a);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 10px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+  }
+  .ops-card .lbl {
+    color: var(--muted, #888);
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    font-weight: 600;
+  }
+  .ops-card .num {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  .ops-card .sub { color: var(--muted, #888); font-size: .75rem; }
+  .ops-card.accent-red { border-left: 3px solid #C41E3A; }
+  .ops-card.accent-teal { border-left: 3px solid #00C9A7; }
+  .ops-card.accent-gold { border-left: 3px solid #FBBF24; }
+  .ops-card.accent-grey { border-left: 3px solid #6b7280; }
+
+  .panel {
+    background: var(--card, #181f2a);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  .panel h3 {
+    margin-top: 0; margin-bottom: .75rem;
+    font-size: 1rem;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: .5rem;
+  }
+
+  .chart-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: .2rem;
+    height: 100px;
+    margin-top: .5rem;
+  }
+  .chart-bar {
+    flex: 1;
+    background: linear-gradient(to top, #00C9A7, #00a888);
+    min-height: 4px;
+    border-radius: 3px 3px 0 0;
+    position: relative;
+  }
+  .chart-bar.match-bar {
+    background: linear-gradient(to top, #C41E3A, #8b0000);
+  }
+  .chart-bar:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: 100%; left: 50%; transform: translateX(-50%);
+    background: #000; color: #fff;
+    padding: 2px 6px; border-radius: 4px;
+    font-size: .7rem; white-space: nowrap;
+    margin-bottom: 2px; z-index: 10;
+  }
+  .chart-labels {
+    display: flex; gap: .2rem;
+    font-size: .65rem; color: var(--muted);
+    margin-top: .25rem;
+  }
+  .chart-labels div { flex: 1; text-align: center; overflow: hidden; }
+
+  .twocol {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  @media (max-width: 720px) {
+    .twocol { grid-template-columns: 1fr; }
+  }
+
+  .recent-list { font-size: .85rem; }
+  .recent-list .row {
+    display: flex; justify-content: space-between;
+    padding: .35rem 0;
+    border-bottom: 1px dashed var(--border, #2a3142);
+  }
+  .recent-list .row:last-child { border: none; }
+  .recent-list .when { color: var(--muted); font-size: .75rem; }
+
+  .top-users-list { font-size: .85rem; }
+  .top-users-list .row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: .4rem 0; border-bottom: 1px dashed var(--border, #2a3142);
+  }
+  .top-users-list .row:last-child { border: none; }
+  .top-users-list .rank {
+    background: var(--card, #181f2a);
+    border-radius: 50%; width: 1.5rem; height: 1.5rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; margin-right: .5rem;
+  }
+</style>
+
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
-  <h2>Dashboard</h2>
-  <a href="{{ url_for('status') }}" class="btn btn-ghost btn-sm">🔍 System Status</a>
+  <h2>🎯 Dashboard</h2>
+  <div style="display:flex;gap:.5rem;">
+    <a href="{{ url_for('admin_live_matches') }}" class="btn btn-blue btn-sm">⚡ Live Matches</a>
+    <a href="{{ url_for('admin_audit_log') }}" class="btn btn-ghost btn-sm">📋 Audit Log</a>
+    <a href="{{ url_for('status') }}" class="btn btn-ghost btn-sm">🔍 Status</a>
+  </div>
 </div>
 
 {% if stats.total_players == 0 %}
@@ -16,54 +137,136 @@
 </div>
 {% endif %}
 
-<div class="stats-grid">
-  <div class="stat-card">
-    <div class="label">Total Players</div>
-    <div class="value gold">{{ stats.total_players | default(0) }}</div>
+<!-- Top stats grid: operations first -->
+<div class="ops-grid">
+  <div class="ops-card accent-red">
+    <span class="lbl">⚡ Live Matches</span>
+    <span class="num">{{ stats.live_matches }}</span>
+    <span class="sub">{{ stats.pending_matches }} pending invites</span>
   </div>
-  <div class="stat-card">
-    <div class="label">Active Players</div>
-    <div class="value green">{{ stats.active_players | default(0) }}</div>
+  <div class="ops-card accent-teal">
+    <span class="lbl">🏆 Completed Today</span>
+    <span class="num">{{ stats.completed_today }}</span>
   </div>
-  <div class="stat-card">
-    <div class="label">Total Users</div>
-    <div class="value blue">{{ stats.total_users | default(0) }}</div>
+  <div class="ops-card accent-gold">
+    <span class="lbl">👤 Daily Active</span>
+    <span class="num">{{ stats.dau }}</span>
+    <span class="sub">{{ stats.wau }} in last 7d</span>
   </div>
-  <div class="stat-card">
-    <div class="label">Total Trades</div>
-    <div class="value">{{ stats.total_trades | default(0) }}</div>
+  <div class="ops-card accent-teal">
+    <span class="lbl">🆕 New Today</span>
+    <span class="num">{{ stats.new_today }}</span>
+    <span class="sub">{{ stats.new_this_week }} this week</span>
+  </div>
+  <div class="ops-card">
+    <span class="lbl">Total Users</span>
+    <span class="num">{{ stats.total_users }}</span>
+    <span class="sub">{{ stats.banned }} banned</span>
   </div>
 </div>
 
-<h3 style="margin-bottom:.75rem;color:var(--muted);font-size:.9rem;text-transform:uppercase;">Rating Distribution</h3>
-<div class="table-wrap" style="max-width:500px;">
-  <table>
-    <thead><tr><th>Rating Range</th><th>Count</th><th>Bar</th></tr></thead>
-    <tbody>
-    {% for tier in tiers %}
-    <tr>
-      <td><span class="rating-badge tier-{{ tier.css }}">{{ tier.label }}</span></td>
-      <td>{{ tier.count }}</td>
-      <td>
-        <div style="background:var(--border);border-radius:3px;height:14px;width:100%;max-width:200px;">
-          <div style="background:{{ tier.color }};height:100%;border-radius:3px;width:{{ tier.pct }}%;min-width:{% if tier.count > 0 %}2px{% else %}0{% endif %};"></div>
+<!-- Charts -->
+<div class="twocol">
+  <div class="panel">
+    <h3>📈 User Growth (last 14 days)</h3>
+    <div class="chart-bars">
+      {% for d in growth %}
+        <div class="chart-bar" style="height: {{ [d.pct, 4]|max }}%;" data-tip="{{ d.label }}: {{ d.count }}"></div>
+      {% endfor %}
+    </div>
+    <div class="chart-labels">
+      {% for d in growth %}
+        <div>{% if loop.index0 % 2 == 0 %}{{ d.label[:3] }}{% endif %}</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>🏏 Match Activity (last 14 days)</h3>
+    <div class="chart-bars">
+      {% for d in match_activity %}
+        <div class="chart-bar match-bar" style="height: {{ [d.pct, 4]|max }}%;" data-tip="{{ d.label }}: {{ d.count }}"></div>
+      {% endfor %}
+    </div>
+    <div class="chart-labels">
+      {% for d in match_activity %}
+        <div>{% if loop.index0 % 2 == 0 %}{{ d.label[:3] }}{% endif %}</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="twocol">
+  <div class="panel">
+    <h3>📜 Recent Admin Actions</h3>
+    {% if recent_logs %}
+    <div class="recent-list">
+      {% for log in recent_logs %}
+        <div class="row">
+          <div>
+            <strong>{{ log.action }}</strong>
+            {% if log.target_name %} → <span style="color:#00C9A7;">{{ log.target_name }}</span>{% endif %}
+            {% if log.detail %} <span style="color:var(--muted);font-size:.78rem;">— {{ log.detail[:80] }}</span>{% endif %}
+          </div>
+          <span class="when">{{ log.timestamp.strftime('%d %b %H:%M') if log.timestamp else '—' }}</span>
         </div>
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+      {% endfor %}
+    </div>
+    <div style="margin-top:.5rem;text-align:right;">
+      <a href="{{ url_for('admin_audit_log') }}" style="color:#00C9A7;font-size:.85rem;">View full audit log →</a>
+    </div>
+    {% else %}
+    <p style="color:var(--muted);">No admin actions logged yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>🏆 Top Users (by wins)</h3>
+    {% if top_users %}
+    <div class="top-users-list">
+      {% for u in top_users %}
+        <div class="row">
+          <div>
+            <span class="rank">{{ loop.index }}</span>
+            <a href="{{ url_for('user_detail', user_id=u.id) }}" style="color:inherit;text-decoration:none;">
+              {{ u.first_name or '—' }}
+              <span style="color:var(--muted);font-size:.75rem;">@{{ u.username or '—' }}</span>
+            </a>
+          </div>
+          <span style="color:#FBBF24;font-weight:700;">{{ u.matches_won }} W</span>
+        </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--muted);">No matches yet.</p>
+    {% endif %}
+  </div>
 </div>
 
-<h3 style="margin:1.5rem 0 .75rem;color:var(--muted);font-size:.9rem;text-transform:uppercase;">Top Countries</h3>
-<div class="table-wrap" style="max-width:400px;">
-  <table>
-    <thead><tr><th>Country</th><th>Players</th></tr></thead>
-    <tbody>
-    {% for c in countries %}
-    <tr><td>{{ c.country }}</td><td>{{ c.count }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+<!-- Content snapshot (compact) -->
+<div class="panel">
+  <h3>📋 Content Snapshot</h3>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;font-size:.85rem;">
+    <div><span style="color:var(--muted);">Players:</span> <strong>{{ stats.total_players }}</strong></div>
+    <div><span style="color:var(--muted);">Active:</span> <strong>{{ stats.active_players }}</strong></div>
+    <div><span style="color:var(--muted);">Total Trades:</span> <strong>{{ stats.total_trades }}</strong></div>
+    <div><span style="color:var(--muted);">Countries:</span> <strong>{{ countries|length }}+</strong></div>
+  </div>
+
+  <div style="margin-top:1rem;">
+    <strong style="font-size:.85rem;color:var(--muted);">Rating Distribution</strong>
+    <div style="display:flex;flex-direction:column;gap:.35rem;margin-top:.5rem;">
+      {% for t in tiers %}
+        <div style="display:flex;align-items:center;gap:.5rem;font-size:.85rem;">
+          <span style="display:inline-block;width:60px;color:var(--muted);">{{ t.label }}</span>
+          <div style="flex:1;background:rgba(255,255,255,.05);border-radius:4px;overflow:hidden;height:14px;">
+            <div style="width:{{ t.pct }}%;background:{{ t.color }};height:100%;"></div>
+          </div>
+          <span style="width:50px;text-align:right;">{{ t.count }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
 </div>
+
 {% endblock %}

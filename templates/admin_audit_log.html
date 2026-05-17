@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+  <h2>📋 Audit Log <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
+  Every administrative action taken through this website. Sorted newest-first.
+</p>
+
+<form method="GET" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.75rem;margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
+  <span style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">Filter:</span>
+
+  <select name="action">
+    <option value="">Any action</option>
+    {% for a in actions %}<option value="{{ a }}" {{ 'selected' if a == action_f }}>{{ a }}</option>{% endfor %}
+  </select>
+
+  <select name="target_type">
+    <option value="">Any target</option>
+    {% for t in targets %}<option value="{{ t }}" {{ 'selected' if t == target_f }}>{{ t }}</option>{% endfor %}
+  </select>
+
+  <input type="date" name="since" value="{{ since }}" title="Show entries from this date forward">
+
+  <select name="per_page">
+    {% for opt in [50, 100, 200] %}
+      <option value="{{ opt }}" {{ 'selected' if per_page == opt }}>{{ opt }}/page</option>
+    {% endfor %}
+  </select>
+
+  <button type="submit" class="btn btn-blue">Apply</button>
+  {% if action_f or target_f or since %}
+  <a href="{{ url_for('admin_audit_log') }}" class="btn btn-ghost">Clear</a>
+  {% endif %}
+</form>
+
+{% if not logs %}
+<div style="text-align:center;padding:2rem;color:var(--muted);">No matching log entries.</div>
+{% else %}
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Action</th>
+        <th>Target</th>
+        <th>Detail</th>
+        <th>IP</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for log in logs %}
+    <tr>
+      <td style="white-space:nowrap;font-size:.85rem;">
+        {{ log.timestamp.strftime('%d %b %Y %H:%M:%S') if log.timestamp else '—' }}
+      </td>
+      <td><strong style="color:#00C9A7;">{{ log.action }}</strong></td>
+      <td>
+        {% if log.target_type %}
+          <span style="color:var(--muted);font-size:.78rem;">{{ log.target_type }}</span>
+          {% if log.target_name %}
+            {% if log.target_type == 'user' and log.target_id %}
+              <br><a href="{{ url_for('user_detail', user_id=log.target_id) }}" style="color:inherit;">{{ log.target_name }}</a>
+            {% else %}
+              <br><strong>{{ log.target_name }}</strong>
+            {% endif %}
+          {% elif log.target_id %}
+            <br>#{{ log.target_id }}
+          {% endif %}
+        {% else %}—{% endif %}
+      </td>
+      <td style="font-size:.85rem;color:var(--muted);max-width:500px;word-break:break-word;">
+        {{ log.detail or '—' }}
+      </td>
+      <td style="font-size:.75rem;color:var(--muted);">{{ log.ip_address or '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% set pa = dict(request.args) %}
+  {% set _ = pa.pop('page', None) %}
+  {% if page > 1 %}<a href="{{ url_for('admin_audit_log', page=page-1, **pa) }}">◀</a>{% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= total_pages - 1 or (p >= page - 1 and p <= page + 1) %}
+      <a href="{{ url_for('admin_audit_log', page=p, **pa) }}">{{ p }}</a>
+    {% elif p == 3 and page > 4 %}<span class="info">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if page < total_pages %}<a href="{{ url_for('admin_audit_log', page=page+1, **pa) }}">▶</a>{% endif %}
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Live Matches{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+  <h2>⚡ Live Matches <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
+  <div>
+    <button onclick="location.reload()" class="btn btn-ghost btn-sm">🔄 Refresh</button>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+  </div>
+</div>
+
+<p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
+  Matches that are currently <strong>active</strong> or have a <strong>pending</strong> invite. Refresh manually to see updates — this page does not auto-poll.
+</p>
+
+{% if not live %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2rem;text-align:center;color:var(--muted);">
+  <p style="font-size:2rem;margin:0;">🌙</p>
+  <p>No live matches right now.</p>
+</div>
+{% else %}
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:1rem;">
+{% for m in live %}
+  <div style="background:var(--card,#181f2a);border:1px solid var(--border,#2a3142);border-radius:10px;padding:1rem;{% if m.status == 'pending' %}border-left:3px solid #FBBF24;{% else %}border-left:3px solid #00C9A7;{% endif %}">
+    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:.5rem;">
+      <div>
+        <div style="font-weight:700;font-size:1.05rem;">
+          {{ m.u1 }} <span style="color:var(--muted);font-weight:400;">vs</span> {{ m.u2 }}
+        </div>
+        <div style="color:var(--muted);font-size:.78rem;">
+          Match #{{ m.id }} · chat {{ m.chat_id or '—' }}
+        </div>
+      </div>
+      <span style="background:{% if m.status == 'pending' %}rgba(251,191,36,.15);color:#FBBF24;border:1px solid rgba(251,191,36,.5){% else %}rgba(0,201,167,.15);color:#00C9A7;border:1px solid rgba(0,201,167,.5){% endif %};padding:.15rem .5rem;border-radius:999px;font-size:.7rem;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">{{ m.status }}</span>
+    </div>
+
+    {% if m.status == 'active' and m.score %}
+    <div style="margin:.5rem 0;padding:.5rem;background:rgba(0,0,0,.2);border-radius:6px;">
+      <div style="font-size:.78rem;color:var(--muted);">Innings {{ m.innings or 1 }} · {{ m.bat_team }}</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#00C9A7;">
+        {{ m.score }} <span style="color:var(--muted);font-size:.85rem;font-weight:400;">({{ m.overs_played or '0.0' }} ov)</span>
+      </div>
+      {% if m.target %}<div style="font-size:.78rem;color:var(--muted);">Target: <strong>{{ m.target }}</strong></div>{% endif %}
+    </div>
+    {% endif %}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.25rem;font-size:.78rem;color:var(--muted);">
+      <div>📍 {{ m.stadium }}</div>
+      <div>🌱 {{ m.pitch }}</div>
+      <div>⏱ {{ m.overs }} overs</div>
+      <div>🏏 Ball #{{ m.ball_seq }}</div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;padding-top:.5rem;border-top:1px dashed var(--border);font-size:.75rem;color:var(--muted);">
+      <span>
+        Started {{ m.created_at.strftime('%d %b %H:%M') if m.created_at else '—' }}
+      </span>
+      <span>
+        {% if m.last_modified %}Last ball: {{ m.last_modified.strftime('%H:%M:%S') }}{% endif %}
+      </span>
+    </div>
+
+    {% if m.next_action %}
+    <div style="margin-top:.4rem;font-size:.7rem;color:var(--muted);">
+      Waiting on: <code>{{ m.next_action }}</code>
+    </div>
+    {% endif %}
+
+    <div style="display:flex;gap:.4rem;margin-top:.6rem;">
+      {% if m.u1_id and m.u1_id > 0 %}
+        <a href="{{ url_for('user_detail', user_id=m.u1_id) }}" class="btn btn-ghost btn-sm">View {{ m.u1 }}</a>
+      {% endif %}
+      {% if m.u2_id and m.u2_id > 0 %}
+        <a href="{{ url_for('user_detail', user_id=m.u2_id) }}" class="btn btn-ghost btn-sm">View {{ m.u2 }}</a>
+      {% endif %}
+    </div>
+  </div>
+{% endfor %}
+</div>
+
+{% endif %}
+{% endblock %}

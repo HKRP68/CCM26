@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block title %}Commands{% endblock %}
+{% block content %}
+
+<style>
+  .cmd-card {
+    background: var(--card, #181f2a);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: .75rem;
+    transition: border-color .2s ease, transform .15s ease;
+    animation: fadeInUp .35s ease;
+    opacity: 0;
+    animation-fill-mode: forwards;
+  }
+  .cmd-card:hover { border-color: rgba(0, 201, 167, 0.3); }
+  .cmd-card.disabled { opacity: .55; border-left: 3px solid #6b7280; }
+  .cmd-card.enabled { border-left: 3px solid #00C9A7; }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .cmd-card:nth-child(1) { animation-delay: .05s }
+  .cmd-card:nth-child(2) { animation-delay: .10s }
+  .cmd-card:nth-child(3) { animation-delay: .15s }
+  .cmd-card:nth-child(4) { animation-delay: .20s }
+  .cmd-card:nth-child(5) { animation-delay: .25s }
+  .cmd-card:nth-child(6) { animation-delay: .30s }
+
+  .cmd-header {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem;
+  }
+  .cmd-name {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 1.1rem; font-weight: 700; color: #00C9A7;
+  }
+  .cmd-aliases {
+    font-family: ui-monospace, monospace;
+    color: var(--muted); font-size: .85rem; margin-left: .5rem;
+  }
+  .cmd-meta {
+    color: var(--muted); font-size: .8rem;
+  }
+  .cmd-status-on, .cmd-status-off {
+    padding: .15rem .55rem; border-radius: 999px;
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .5px;
+    font-weight: 600;
+  }
+  .cmd-status-on {
+    background: rgba(0, 201, 167, 0.15);
+    color: #00C9A7;
+    border: 1px solid rgba(0, 201, 167, 0.5);
+  }
+  .cmd-status-off {
+    background: rgba(196, 30, 58, 0.15);
+    color: #ff4757;
+    border: 1px solid rgba(196, 30, 58, 0.5);
+  }
+
+  details.cmd-edit {
+    margin-top: .65rem;
+    background: rgba(0, 0, 0, .2);
+    border-radius: 8px;
+    padding: .5rem .85rem;
+  }
+  details.cmd-edit[open] {
+    background: rgba(0, 0, 0, .35);
+  }
+  details.cmd-edit summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: .85rem;
+    user-select: none;
+    transition: color .15s;
+  }
+  details.cmd-edit summary:hover { color: #00C9A7; }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: .5rem;
+    margin-top: .75rem;
+  }
+  .form-grid label {
+    display: flex; flex-direction: column; gap: .25rem;
+    font-size: .75rem; color: var(--muted);
+  }
+  .form-grid input, .form-grid select, .form-grid textarea {
+    background: var(--bg, #0f1419);
+    border: 1px solid var(--border, #2a3142);
+    color: #fff;
+    padding: .35rem .55rem;
+    border-radius: 6px;
+    font-size: .85rem;
+    transition: border-color .15s;
+  }
+  .form-grid input:focus, .form-grid select:focus, .form-grid textarea:focus {
+    border-color: #00C9A7;
+    outline: none;
+  }
+
+  .section-divider {
+    margin: .75rem 0 .5rem;
+    padding-bottom: .25rem;
+    border-bottom: 1px dashed var(--border);
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    font-weight: 600;
+  }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🎮 Commands <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ enabled_count }} enabled / {{ total }} total)</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.88rem;margin-bottom:1rem;">
+  Edit command metadata, cooldowns, and simple rewards. Command names and aliases are hardcoded for safety — only behavior is editable.
+  Set cooldown to <strong>0</strong> to use the code default. Reward fields set to <strong>0</strong> fall back to legacy config values.
+</p>
+
+{% if not cmds %}
+<div style="text-align:center;padding:2rem;color:var(--muted);background:var(--card);border-radius:10px;">
+  No commands registered yet. Restart the bot to seed defaults.
+</div>
+{% else %}
+
+{% for c in cmds %}
+<div class="cmd-card {{ 'enabled' if c.enabled else 'disabled' }}">
+  <div class="cmd-header">
+    <div>
+      <span class="cmd-name">{{ c.display_name }}</span>
+      {% if c.aliases %}<span class="cmd-aliases">aliases: /{{ c.aliases.replace(',', ', /') }}</span>{% endif %}
+      <div class="cmd-meta">
+        {{ c.description or '— no description —' }}
+      </div>
+      <div class="cmd-meta" style="margin-top:.25rem;">
+        Category: <strong>{{ c.category }}</strong> ·
+        Cooldown: <strong>{{ c._cooldown_display }}</strong> ·
+        Sort: {{ c.sort_order }}
+      </div>
+    </div>
+    <div style="display:flex;gap:.4rem;align-items:center;">
+      <span class="{{ 'cmd-status-on' if c.enabled else 'cmd-status-off' }}">{{ 'ON' if c.enabled else 'OFF' }}</span>
+      <form method="POST" action="{{ url_for('admin_commands') }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="toggle">
+        <input type="hidden" name="command_key" value="{{ c.command_key }}">
+        <button type="submit" class="btn btn-ghost btn-sm">
+          {{ 'Disable' if c.enabled else 'Enable' }}
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit command metadata -->
+  <details class="cmd-edit">
+    <summary>✏️ Edit metadata</summary>
+    <form method="POST" action="{{ url_for('admin_commands') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_command">
+      <input type="hidden" name="command_key" value="{{ c.command_key }}">
+      <div class="form-grid">
+        <label>Description
+          <input type="text" name="description" maxlength="500" value="{{ c.description or '' }}">
+        </label>
+        <label>Category
+          <input type="text" name="category" maxlength="30" value="{{ c.category }}">
+        </label>
+        <label>Cooldown (seconds, 0 = default)
+          <input type="number" name="cooldown_seconds" min="0" value="{{ c.cooldown_seconds }}">
+        </label>
+        <label>Sort order
+          <input type="number" name="sort_order" value="{{ c.sort_order }}">
+        </label>
+        <label style="flex-direction:row;align-items:center;gap:.4rem;align-self:end;">
+          <input type="checkbox" name="enabled" {{ 'checked' if c.enabled }}> Enabled
+        </label>
+      </div>
+      <button type="submit" class="btn btn-blue" style="margin-top:.5rem;">Save Metadata</button>
+    </form>
+  </details>
+
+  <!-- Edit rewards (only relevant for commands with simple rewards) -->
+  {% if c.command_key in ('debut','claim','daily','gspin') %}
+  <details class="cmd-edit">
+    <summary>💰 Edit rewards</summary>
+    <form method="POST" action="{{ url_for('admin_commands') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_reward">
+      <input type="hidden" name="command_key" value="{{ c.command_key }}">
+
+      {% set r = c._reward %}
+      <div class="section-divider">Direct rewards (0 = use legacy config)</div>
+      <div class="form-grid">
+        <label>🪙 Coins
+          <input type="number" name="coin_amount" min="0" value="{{ r.coin_amount if r else 0 }}">
+        </label>
+        <label>💎 Gems
+          <input type="number" name="gem_amount" min="0" value="{{ r.gem_amount if r else 0 }}">
+        </label>
+        <label>🎯 Quest Points
+          <input type="number" name="quest_points" min="0" value="{{ r.quest_points if r else 0 }}">
+        </label>
+        <label>🃏 Player count
+          <input type="number" name="player_count" min="0" value="{{ r.player_count if r else 0 }}">
+        </label>
+        <label>Player rating min
+          <input type="number" name="player_rating_min" min="0" max="100" value="{{ r.player_rating_min if r else 0 }}">
+        </label>
+        <label>Player rating max
+          <input type="number" name="player_rating_max" min="0" max="100" value="{{ r.player_rating_max if r else 0 }}">
+        </label>
+      </div>
+
+      {% if c.command_key == 'daily' %}
+      <div class="section-divider">Streak milestone bonus</div>
+      <div class="form-grid">
+        <label>Milestone every N
+          <input type="number" name="milestone_every_n" min="0" value="{{ r.milestone_every_n if r else 0 }}">
+        </label>
+        <label>+ Coins
+          <input type="number" name="milestone_bonus_coins" min="0" value="{{ r.milestone_bonus_coins if r else 0 }}">
+        </label>
+        <label>+ Gems
+          <input type="number" name="milestone_bonus_gems" min="0" value="{{ r.milestone_bonus_gems if r else 0 }}">
+        </label>
+        <label>+ Player rating min
+          <input type="number" name="milestone_bonus_player_min" min="0" max="100" value="{{ r.milestone_bonus_player_min if r else 0 }}">
+        </label>
+        <label>+ Player rating max
+          <input type="number" name="milestone_bonus_player_max" min="0" max="100" value="{{ r.milestone_bonus_player_max if r else 0 }}">
+        </label>
+      </div>
+      {% endif %}
+
+      <label style="display:block;margin-top:.65rem;font-size:.75rem;color:var(--muted);">
+        Notes (admin-only)
+        <textarea name="notes" rows="2" style="width:100%;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.35rem .55rem;border-radius:6px;font-size:.85rem;margin-top:.25rem;">{{ r.notes if r else '' }}</textarea>
+      </label>
+      <button type="submit" class="btn btn-blue" style="margin-top:.5rem;">Save Rewards</button>
+
+      {% if c.command_key == 'gspin' %}
+      <p style="color:var(--muted);font-size:.78rem;margin-top:.5rem;">
+        ℹ️ /gspin uses the full <a href="{{ url_for('admin_gspin_rewards') }}" style="color:#00C9A7;">GSpin Rewards</a> table — these fields here are unused.
+      </p>
+      {% endif %}
+    </form>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% endif %}
+{% endblock %}

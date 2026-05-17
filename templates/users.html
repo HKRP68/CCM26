@@ -1,25 +1,267 @@
 {% extends "base.html" %}
 {% block title %}Users{% endblock %}
 {% block content %}
+
+<style>
+  .filter-toolbar {
+    background: var(--card, #181f2a);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  .filter-row {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-row input[type="text"],
+  .filter-row input[type="number"],
+  .filter-row input[type="date"],
+  .filter-row select {
+    background: var(--bg, #0f1419);
+    border: 1px solid var(--border, #2a3142);
+    color: var(--text, #fff);
+    padding: .4rem .6rem;
+    border-radius: 6px;
+    font-size: .85rem;
+  }
+  .filter-row input[type="text"]   { width: 200px; }
+  .filter-row input[type="number"] { width: 90px; }
+  .filter-row input[type="date"]   { width: 145px; }
+  .filter-label {
+    color: var(--muted, #888);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    font-weight: 600;
+    margin-right: .25rem;
+  }
+  .filter-group {
+    display: flex;
+    align-items: center;
+    gap: .25rem;
+    padding: .25rem .5rem;
+    border-right: 1px solid var(--border, #2a3142);
+  }
+  .filter-group:last-child { border-right: none; }
+
+  .active-filters {
+    display: flex;
+    gap: .4rem;
+    flex-wrap: wrap;
+    margin-top: .75rem;
+    padding-top: .75rem;
+    border-top: 1px dashed var(--border, #2a3142);
+  }
+  .filter-chip {
+    background: rgba(0, 201, 167, 0.15);
+    border: 1px solid rgba(0, 201, 167, 0.5);
+    color: #00C9A7;
+    padding: .2rem .6rem;
+    border-radius: 999px;
+    font-size: .8rem;
+  }
+
+  th.sortable a {
+    color: inherit;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+  }
+  th.sortable a:hover { color: var(--accent, #00C9A7); }
+  th.sortable .sort-ind { font-size: .75rem; opacity: .5; }
+  th.sortable .sort-ind.active { opacity: 1; color: var(--accent, #00C9A7); }
+
+  .toolbar-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: .75rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .toolbar-buttons {
+    display: flex;
+    gap: .5rem;
+  }
+  .results-info {
+    color: var(--muted, #888);
+    font-size: .85rem;
+  }
+</style>
+
 <h2 style="margin-bottom:1rem;">Users <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
 
-<form method="GET" class="toolbar">
-  <input class="search" type="text" name="q" value="{{ q }}" placeholder="Search by username or name...">
-  <button type="submit" class="btn btn-blue">Search</button>
-  {% if q %}<a href="{{ url_for('users_list') }}" class="btn btn-ghost">Clear</a>{% endif %}
+<form method="GET" class="filter-toolbar" id="users-filter-form">
+  <div class="filter-row">
+    <div class="filter-group">
+      <span class="filter-label">🔍 Search</span>
+      <input type="text" name="q" value="{{ q }}" placeholder="username or name">
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">🪙 Coins</span>
+      <input type="number" name="coins_min" placeholder="min"
+             value="{{ filters.coins_min if filters.coins_min is not none else '' }}">
+      <span style="color:var(--muted)">–</span>
+      <input type="number" name="coins_max" placeholder="max"
+             value="{{ filters.coins_max if filters.coins_max is not none else '' }}">
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">💎 Gems</span>
+      <input type="number" name="gems_min" placeholder="min"
+             value="{{ filters.gems_min if filters.gems_min is not none else '' }}">
+      <span style="color:var(--muted)">–</span>
+      <input type="number" name="gems_max" placeholder="max"
+             value="{{ filters.gems_max if filters.gems_max is not none else '' }}">
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">🃏 Roster</span>
+      <input type="number" name="roster_min" placeholder="min" min="0" max="25"
+             value="{{ filters.roster_min if filters.roster_min is not none else '' }}">
+      <span style="color:var(--muted)">–</span>
+      <input type="number" name="roster_max" placeholder="max" min="0" max="25"
+             value="{{ filters.roster_max if filters.roster_max is not none else '' }}">
+    </div>
+  </div>
+
+  <div class="filter-row" style="margin-top:.5rem;">
+    <div class="filter-group">
+      <span class="filter-label">🏆 Wins</span>
+      <input type="number" name="wins_min" placeholder="min"
+             value="{{ filters.wins_min if filters.wins_min is not none else '' }}">
+      <span style="color:var(--muted)">–</span>
+      <input type="number" name="wins_max" placeholder="max"
+             value="{{ filters.wins_max if filters.wins_max is not none else '' }}">
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">🎯 Played ≥</span>
+      <input type="number" name="played_min" placeholder="0"
+             value="{{ filters.played_min if filters.played_min is not none else '' }}">
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">📅 Joined</span>
+      <input type="date" name="joined_after"
+             value="{{ filters.joined_after }}" title="after">
+      <span style="color:var(--muted)">–</span>
+      <input type="date" name="joined_before"
+             value="{{ filters.joined_before }}" title="before">
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">⚡ Activity</span>
+      <select name="activity">
+        <option value="">Any</option>
+        <option value="active"   {% if filters.activity == 'active'   %}selected{% endif %}>Active (7d)</option>
+        <option value="inactive" {% if filters.activity == 'inactive' %}selected{% endif %}>Inactive (30d+)</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">Show</span>
+      <select name="per_page">
+        {% for opt in [20, 50, 100] %}
+          <option value="{{ opt }}" {% if per_page == opt %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <input type="hidden" name="sort" value="{{ sort }}">
+  </div>
+
+  <div class="toolbar-row" style="margin-top:.75rem;">
+    <div class="toolbar-buttons">
+      <button type="submit" class="btn btn-blue">Apply Filters</button>
+      {% if active_filters %}
+        <a href="{{ url_for('users_list') }}" class="btn btn-ghost">Clear All</a>
+      {% endif %}
+      <a href="{{ url_for('users_list', **dict(request.args, export='csv')) }}"
+         class="btn btn-ghost">⬇ Export CSV ({{ total }})</a>
+    </div>
+    <div class="results-info">
+      {% if active_filters %}
+        Showing <strong>{{ total }}</strong> filtered users
+      {% else %}
+        All <strong>{{ total }}</strong> users
+      {% endif %}
+    </div>
+  </div>
+
+  {% if active_filters %}
+  <div class="active-filters">
+    <span style="color:var(--muted);font-size:.75rem;align-self:center;">Active:</span>
+    {% for label, val, _key in active_filters %}
+      <span class="filter-chip">{{ label }}: <strong>{{ val }}</strong></span>
+    {% endfor %}
+  </div>
+  {% endif %}
 </form>
+
+<!-- ── Bulk action panel (collapsible) ───────────────────────────────── -->
+<details style="background:var(--card,#181f2a);border:1px solid var(--border,#2a3142);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
+  <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">
+    ⚡ Bulk Actions — apply to all {{ total }} filtered users
+  </summary>
+  <form method="POST" action="{{ url_for('users_bulk_action') }}"
+        onsubmit="return confirm('Apply this bulk action to all {{ total }} filtered (non-banned) users? Cannot be undone.');"
+        style="margin-top:.75rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {# Pass filter params so the server applies to the same set #}
+    <input type="hidden" name="q" value="{{ q }}">
+    {% for k, v in filters.items() %}
+      {% if v is not none and v != '' %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}">
+      {% endif %}
+    {% endfor %}
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
+      <select name="action" style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;">
+        <option value="grant_coins">🪙 Grant Coins</option>
+        <option value="grant_gems">💎 Grant Gems</option>
+        <option value="grant_quest_points">🎯 Grant Quest Points</option>
+      </select>
+      <input type="number" name="amount" placeholder="amount (can be negative)" required
+             style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;width:200px;">
+      <button type="submit" class="btn btn-blue">Apply to {{ total }} users</button>
+    </div>
+    <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">
+      Caps: max ±5,000,000 coins / ±5,000 gems / ±50,000 quest points per user per call. Banned users are skipped.
+    </div>
+  </form>
+</details>
+
+{% macro sortcol(label, sort_key) %}
+  {% set asc_sort = sort_key + '_asc' %}
+  {% set desc_sort = sort_key + '_desc' %}
+  {% set new_sort = asc_sort if sort == desc_sort else desc_sort %}
+  {% set indicator = '↓' if sort == desc_sort else ('↑' if sort == asc_sort else '↕') %}
+  {% set active = sort in (asc_sort, desc_sort) %}
+  <a href="{{ url_for('users_list', **dict(request.args, sort=new_sort, page=1)) }}">
+    {{ label }} <span class="sort-ind {{ 'active' if active }}">{{ indicator }}</span>
+  </a>
+{% endmacro %}
 
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
-        <th>User</th>
+        <th class="sortable">{{ sortcol('User', 'username') }}</th>
         <th>Telegram ID</th>
-        <th>Coins</th>
-        <th>Gems</th>
-        <th>Roster</th>
+        <th class="sortable">{{ sortcol('Coins', 'coins') }}</th>
+        <th class="sortable">{{ sortcol('Gems', 'gems') }}</th>
+        <th class="sortable">{{ sortcol('Roster', 'roster') }}</th>
+        <th class="sortable">{{ sortcol('Wins', 'wins') }}</th>
+        <th>Win%</th>
         <th>Streak</th>
-        <th>Joined</th>
+        <th class="sortable">{{ sortcol('Last Match', 'last_match') }}</th>
+        <th class="sortable">{{ sortcol('Joined', 'created') }}</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -34,7 +276,12 @@
       <td style="color:var(--accent);">{{ "{:,}".format(u.total_coins) }}</td>
       <td style="color:var(--accent2);">{{ u.total_gems }}</td>
       <td>{{ u.roster_count }}/25</td>
+      <td>{{ u.matches_won or 0 }} <span style="color:var(--muted);font-size:.75rem;">/ {{ u.matches_played or 0 }}</span></td>
+      <td style="font-size:.85rem;">{{ u._winpct }}%</td>
       <td>{{ u._streak }}</td>
+      <td style="font-size:.8rem;color:{{ 'var(--accent)' if u.last_match_date else 'var(--muted)' }}">
+        {{ u.last_match_date.strftime('%d %b') if u.last_match_date else 'never' }}
+      </td>
       <td style="font-size:.8rem;">{{ u.created_at.strftime('%d %b %Y') if u.created_at else '—' }}</td>
       <td>
         <a href="{{ url_for('user_detail', user_id=u.id) }}" class="btn btn-blue btn-sm">View</a>
@@ -42,7 +289,12 @@
     </tr>
     {% endfor %}
     {% if not users %}
-    <tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--muted);">No users yet</td></tr>
+    <tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--muted);">
+      No users match the current filters.
+      {% if active_filters %}
+        <a href="{{ url_for('users_list') }}" style="color:var(--accent);">Clear filters</a>?
+      {% endif %}
+    </td></tr>
     {% endif %}
     </tbody>
   </table>
@@ -50,15 +302,17 @@
 
 {% if total_pages > 1 %}
 <div class="pagination">
-  {% if page > 1 %}<a href="{{ url_for('users_list', page=page-1, q=q) }}">◀</a>{% endif %}
+  {% set page_args = dict(request.args) %}
+  {% set _ = page_args.pop('page', None) %}
+  {% if page > 1 %}<a href="{{ url_for('users_list', page=page-1, **page_args) }}">◀</a>{% endif %}
   {% for p in range(1, total_pages + 1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
     {% elif p <= 2 or p >= total_pages - 1 or (p >= page - 1 and p <= page + 1) %}
-      <a href="{{ url_for('users_list', page=p, q=q) }}">{{ p }}</a>
+      <a href="{{ url_for('users_list', page=p, **page_args) }}">{{ p }}</a>
     {% elif p == 3 and page > 4 %}<span class="info">…</span>
     {% endif %}
   {% endfor %}
-  {% if page < total_pages %}<a href="{{ url_for('users_list', page=page+1, q=q) }}">▶</a>{% endif %}
+  {% if page < total_pages %}<a href="{{ url_for('users_list', page=page+1, **page_args) }}">▶</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

@@ -59,8 +59,48 @@
   </select>
 
   <button type="submit" class="btn btn-blue">Apply</button>
-  {% if q or category or country_filter or rating_range or bat_hand or bowl_hand or is_active %}
+  {% if q or category or country_filter or rating_range or bat_hand or bowl_hand or is_active or rating_min is not none or rating_max is not none or bat_rating_min is not none or bat_rating_max is not none or bowl_rating_min is not none or bowl_rating_max is not none or version_mode %}
   <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Clear</a>
+  {% endif %}
+
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.5rem;padding-top:.5rem;border-top:1px dashed var(--border, #2a3142);width:100%;">
+    <span style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">Fine ranges:</span>
+
+    <span style="color:var(--muted);font-size:.78rem;">OVR</span>
+    <input type="number" name="rating_min" placeholder="min" min="1" max="100" style="width:70px;"
+           value="{{ rating_min if rating_min is not none else '' }}">
+    <span style="color:var(--muted)">–</span>
+    <input type="number" name="rating_max" placeholder="max" min="1" max="100" style="width:70px;"
+           value="{{ rating_max if rating_max is not none else '' }}">
+
+    <span style="color:var(--muted);font-size:.78rem;">BAT</span>
+    <input type="number" name="bat_rating_min" placeholder="min" min="0" max="100" style="width:70px;"
+           value="{{ bat_rating_min if bat_rating_min is not none else '' }}">
+    <span style="color:var(--muted)">–</span>
+    <input type="number" name="bat_rating_max" placeholder="max" min="0" max="100" style="width:70px;"
+           value="{{ bat_rating_max if bat_rating_max is not none else '' }}">
+
+    <span style="color:var(--muted);font-size:.78rem;">BOWL</span>
+    <input type="number" name="bowl_rating_min" placeholder="min" min="0" max="100" style="width:70px;"
+           value="{{ bowl_rating_min if bowl_rating_min is not none else '' }}">
+    <span style="color:var(--muted)">–</span>
+    <input type="number" name="bowl_rating_max" placeholder="max" min="0" max="100" style="width:70px;"
+           value="{{ bowl_rating_max if bowl_rating_max is not none else '' }}">
+
+    <select name="version_mode" style="margin-left:.5rem;">
+      <option value="">All variants</option>
+      <option value="base"    {{ 'selected' if version_mode == 'base' }}>Base cards only</option>
+      <option value="version" {{ 'selected' if version_mode == 'version' }}>Versions only</option>
+    </select>
+  </div>
+
+  {% if active_filters %}
+  <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.75rem;padding-top:.75rem;border-top:1px dashed var(--border, #2a3142);width:100%;">
+    <span style="color:var(--muted);font-size:.75rem;align-self:center;">Active:</span>
+    {% for label, val in active_filters %}
+      <span style="background:rgba(0,201,167,.15);border:1px solid rgba(0,201,167,.5);color:#00C9A7;padding:.2rem .6rem;border-radius:999px;font-size:.8rem;">{{ label }}: <strong>{{ val }}</strong></span>
+    {% endfor %}
+  </div>
   {% endif %}
 </form>
 

@@ -3,7 +3,11 @@
 {% block content %}
 <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;">
   <a href="{{ url_for('users_list') }}" class="btn btn-ghost btn-sm">← Users</a>
-  <h2>{{ user.first_name or 'User' }} <span style="color:var(--muted);font-weight:400;">@{{ user.username or '—' }}</span></h2>
+  <h2>{{ user.first_name or 'User' }} <span style="color:var(--muted);font-weight:400;">@{{ user.username or '—' }}</span>
+    {% if user.is_banned %}
+    <span style="background:rgba(196,30,58,.2);border:1px solid rgba(196,30,58,.6);color:#fff;padding:.2rem .6rem;border-radius:6px;font-size:.85rem;margin-left:.5rem;">🚫 BANNED</span>
+    {% endif %}
+  </h2>
   <div style="margin-top:.5rem;">
     <a href="{{ url_for('admin_user_traits', user_id=user.id) }}"
        style="color:var(--accent); text-decoration:none; font-size:.85rem; padding:.3rem .6rem; border:1px solid var(--accent); border-radius:4px; display:inline-block;">
@@ -11,6 +15,34 @@
     </a>
   </div>
 </div>
+
+{% if user.is_banned %}
+<div style="background:rgba(196,30,58,.1);border:1px solid rgba(196,30,58,.5);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;">
+    <div>
+      <strong style="color:#ff4757;">🚫 This user is banned.</strong>
+      {% if user.ban_reason %}<br><span style="font-size:.85rem;color:var(--muted);">Reason: {{ user.ban_reason }}</span>{% endif %}
+      {% if user.banned_at %}<br><span style="font-size:.75rem;color:var(--muted);">Banned {{ user.banned_at.strftime('%d %b %Y %H:%M') }}</span>{% endif %}
+    </div>
+    <form method="POST" action="{{ url_for('user_ban', user_id=user.id) }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="unban">
+      <button type="submit" class="btn btn-green">✅ Unban</button>
+    </form>
+  </div>
+</div>
+{% else %}
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
+  <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">🚫 Ban this user…</summary>
+  <form method="POST" action="{{ url_for('user_ban', user_id=user.id) }}" style="margin-top:.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="ban">
+    <label style="display:block;font-size:.85rem;color:var(--muted);margin-bottom:.4rem;">Reason (optional, visible to user):</label>
+    <input type="text" name="reason" maxlength="500" placeholder="e.g. Spamming match invites" style="width:100%;max-width:500px;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
+    <button type="submit" class="btn btn-red" style="margin-top:.5rem;" onclick="return confirm('Ban {{ user.username or user.first_name }}? They will be refused by the bot until unbanned.')">🚫 Confirm Ban</button>
+  </form>
+</details>
+{% endif %}
 
 <!-- ── Stats cards ────────────────────────────────────────────── -->
 <div class="stats-grid">
