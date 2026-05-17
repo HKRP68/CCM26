@@ -31,6 +31,10 @@ class User(Base):
     # Pack pity timer — increments on low rolls, resets on a max-rating roll.
     # When ≥ PITY_THRESHOLD, the next pack guarantees max-rating from the band.
     pack_pity_counter = Column(Integer, default=0)
+    # Ban / disable — banned users are refused by the bot's middleware
+    is_banned = Column(Boolean, default=False, nullable=False)
+    ban_reason = Column(String(500), nullable=True)
+    banned_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1003,3 +1007,106 @@ class EventMedia(Base):
     enabled = Column(Boolean, default=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(String(80), nullable=True)
+
+
+class GSpinReward(Base):
+    """Admin-configurable rewards for the /gspin wheel.
+
+    Each enabled row is a possible outcome. Probability of any outcome is
+    `weight / sum(enabled weights)`. Inactive rows are skipped.
+
+    reward_type values:
+      'coins'        → random in amount_min..amount_max
+      'gems'         → random in amount_min..amount_max
+      'quest_points' → random in amount_min..amount_max
+      'player'       → random player in player_rating_min..max
+      'pack'         → grants pack_id to user's inventory
+    """
+    __tablename__ = "gspin_rewards"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    label = Column(String(60), nullable=False)
+    emoji = Column(String(10), nullable=True)
+    color = Column(String(7), default="888888")
+    weight = Column(Integer, default=10, nullable=False)
+    sort_order = Column(Integer, default=100)
+    enabled = Column(Boolean, default=True, nullable=False)
+    reward_type = Column(String(20), nullable=False)
+    amount_min = Column(Integer, default=0)
+    amount_max = Column(Integer, default=0)
+    player_rating_min = Column(Integer, default=0)
+    player_rating_max = Column(Integer, default=0)
+    pack_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BotCommand(Base):
+    """Admin-editable metadata for each registered bot command.
+
+    The command's slash name (`/claim`, `/daily`) and code are static — only
+    metadata like description, cooldown_seconds, and enabled toggle are
+    editable. Command handlers read these at runtime; the bot does NOT
+    re-register command names from this table.
+
+    If `enabled` is False, the command handler refuses with a polite message.
+    If `cooldown_seconds` is > 0 and set, it overrides the config constant
+    for that command.
+
+    Reward parameters (coin amounts, etc.) live in CommandReward — linked
+    one-to-one to BotCommand by command_key.
+    """
+    __tablename__ = "bot_commands"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    command_key = Column(String(40), nullable=False, unique=True, index=True)
+    display_name = Column(String(60), nullable=False)
+    aliases = Column(String(200), nullable=True)  # comma-separated
+    description = Column(String(500), nullable=True)
+    category = Column(String(30), default="general")
+    enabled = Column(Boolean, default=True, nullable=False)
+    cooldown_seconds = Column(Integer, default=0)  # 0 = use code default
+    sort_order = Column(Integer, default=100)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CommandReward(Base):
+    """Reward configuration for a specific BotCommand.
+
+    Currently supports the simple-reward commands: claim, daily, debut, etc.
+    For each, admin can set:
+      - coin_amount (or min/max range)
+      - gem_amount (or min/max range)
+      - quest_points (or min/max range)
+      - player_count (how many players are granted)
+      - player_rating_min / max (rating band for granted players)
+
+    Match rewards, trait costs etc. live in their own tables — not here.
+    """
+    __tablename__ = "command_rewards"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    command_key = Column(String(40), nullable=False, unique=True, index=True)
+
+    coin_amount = Column(Integer, default=0)
+    coin_min = Column(Integer, default=0)
+    coin_max = Column(Integer, default=0)
+
+    gem_amount = Column(Integer, default=0)
+    gem_min = Column(Integer, default=0)
+    gem_max = Column(Integer, default=0)
+
+    quest_points = Column(Integer, default=0)
+
+    player_count = Column(Integer, default=0)
+    player_rating_min = Column(Integer, default=0)
+    player_rating_max = Column(Integer, default=0)
+
+    # Bonus on milestone (e.g. daily streak)
+    milestone_bonus_coins = Column(Integer, default=0)
+    milestone_bonus_gems = Column(Integer, default=0)
+    milestone_bonus_player_min = Column(Integer, default=0)
+    milestone_bonus_player_max = Column(Integer, default=0)
+    milestone_every_n = Column(Integer, default=0)  # e.g. 14 for daily streak
+
+    notes = Column(String(500), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

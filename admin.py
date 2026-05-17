@@ -291,53 +291,106 @@ def logout():
 def dashboard():
     db = get_session()
     try:
-        total_players = db.query(func.count(Player.id)).scalar()
-        active_players = db.query(func.count(Player.id)).filter(Player.is_active == True).scalar()
-        total_users = db.query(func.count(User.id)).scalar()
-        total_trades = db.query(func.count(Trade.id)).scalar()
+        from models import Match
+        now = datetime.utcnow()
+
+        # Operations counts
+        live_matches = db.query(func.count(Match.id)).filter(
+            Match.status == "active").scalar() or 0
+        pending_matches = db.query(func.count(Match.id)).filter(
+            Match.status == "pending").scalar() or 0
+        today_0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        completed_today = db.query(func.count(Match.id)).filter(
+            Match.status == "completed", Match.completed_at >= today_0).scalar() or 0
+
+        total_users = db.query(func.count(User.id)).scalar() or 0
+        dau = db.query(func.count(User.id)).filter(
+            User.last_match_date >= now - timedelta(days=1)).scalar() or 0
+        wau = db.query(func.count(User.id)).filter(
+            User.last_match_date >= now - timedelta(days=7)).scalar() or 0
+        new_today = db.query(func.count(User.id)).filter(
+            User.created_at >= today_0).scalar() or 0
+        new_this_week = db.query(func.count(User.id)).filter(
+            User.created_at >= now - timedelta(days=7)).scalar() or 0
+        banned = db.query(func.count(User.id)).filter(
+            User.is_banned == True).scalar() or 0
+
+        # 14-day user growth + match-activity sparklines
+        growth, match_activity = [], []
+        for i in range(13, -1, -1):
+            day_start = (now - timedelta(days=i)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            growth.append({
+                "label": day_start.strftime("%d %b"),
+                "count": db.query(func.count(User.id)).filter(
+                    User.created_at >= day_start, User.created_at < day_end).scalar() or 0,
+            })
+            match_activity.append({
+                "label": day_start.strftime("%d %b"),
+                "count": db.query(func.count(Match.id)).filter(
+                    Match.completed_at >= day_start, Match.completed_at < day_end).scalar() or 0,
+            })
+        mg = max((g["count"] for g in growth), default=1) or 1
+        for g in growth: g["pct"] = round(g["count"] / mg * 100)
+        mm = max((m["count"] for m in match_activity), default=1) or 1
+        for m in match_activity: m["pct"] = round(m["count"] / mm * 100)
+
+        # Recent admin actions + top users
+        from models import AdminLog
+        recent_logs = (db.query(AdminLog).order_by(AdminLog.timestamp.desc())
+                        .limit(10).all())
+        top_users = (db.query(User).order_by(User.matches_won.desc())
+                      .limit(5).all())
+
+        # Player snapshot (kept compact)
+        total_players = db.query(func.count(Player.id)).scalar() or 0
+        active_players = db.query(func.count(Player.id)).filter(
+            Player.is_active == True).scalar() or 0
+        total_trades = db.query(func.count(Trade.id)).scalar() or 0
 
         stats = {
-            "total_players": total_players,
-            "active_players": active_players,
-            "total_users": total_users,
+            "live_matches": live_matches, "pending_matches": pending_matches,
+            "completed_today": completed_today,
+            "total_users": total_users, "dau": dau, "wau": wau,
+            "new_today": new_today, "new_this_week": new_this_week,
+            "banned": banned,
+            "total_players": total_players, "active_players": active_players,
             "total_trades": total_trades,
         }
 
-        # Rating distribution
+        # Rating distribution (compact)
         tier_defs = [
             ("95-100", "legendary", "#e6ac00", 95, 100),
-            ("90-94", "epic", "#9b59b6", 90, 94),
-            ("85-89", "rare", "#2980b9", 85, 89),
-            ("80-84", "uncommon", "#27ae60", 80, 84),
-            ("75-79", "common", "#7f8c8d", 75, 79),
-            ("70-74", "common", "#7f8c8d", 70, 74),
-            ("65-69", "basic", "#95a5a6", 65, 69),
-            ("60-64", "basic", "#95a5a6", 60, 64),
-            ("55-59", "basic", "#95a5a6", 55, 59),
-            ("50-54", "basic", "#bdc3c7", 50, 54),
+            ("90-94",  "epic",      "#9b59b6", 90, 94),
+            ("85-89",  "rare",      "#2980b9", 85, 89),
+            ("80-84",  "uncommon",  "#27ae60", 80, 84),
+            ("75-79",  "common",    "#7f8c8d", 75, 79),
+            ("70-74",  "common",    "#7f8c8d", 70, 74),
+            ("65-69",  "basic",     "#95a5a6", 65, 69),
+            ("60-64",  "basic",     "#95a5a6", 60, 64),
+            ("55-59",  "basic",     "#95a5a6", 55, 59),
+            ("50-54",  "basic",     "#bdc3c7", 50, 54),
         ]
-        max_count = 1
-        tiers = []
+        max_count = 1; tiers = []
         for label, css, color, lo, hi in tier_defs:
             count = db.query(func.count(Player.id)).filter(
-                Player.rating >= lo, Player.rating <= hi
-            ).scalar()
+                Player.rating >= lo, Player.rating <= hi).scalar()
             max_count = max(max_count, count)
-            tiers.append({"label": label, "css": css, "color": color, "count": count, "pct": 0})
+            tiers.append({"label": label, "css": css, "color": color,
+                          "count": count, "pct": 0})
         for t in tiers:
             t["pct"] = round(t["count"] / max_count * 100) if max_count else 0
 
-        # Top countries
-        countries = (
-            db.query(Player.country, func.count(Player.id).label("count"))
-            .group_by(Player.country)
-            .order_by(func.count(Player.id).desc())
-            .limit(10)
-            .all()
-        )
+        countries = (db.query(Player.country, func.count(Player.id).label("count"))
+                      .group_by(Player.country).order_by(func.count(Player.id).desc())
+                      .limit(10).all())
         countries = [{"country": c, "count": n} for c, n in countries]
 
-        return render_template("dashboard.html", stats=stats, tiers=tiers, countries=countries)
+        return render_template("dashboard.html", stats=stats, tiers=tiers,
+                               countries=countries, growth=growth,
+                               match_activity=match_activity,
+                               recent_logs=recent_logs, top_users=top_users)
     finally:
         db.close()
 
@@ -356,6 +409,14 @@ def players_list():
         bat_hand = request.args.get("bat_hand", "").strip()
         bowl_hand = request.args.get("bowl_hand", "").strip()
         is_active = request.args.get("is_active", "").strip()
+        # Numeric ranges
+        rating_min = _parse_int(request.args.get("rating_min", ""))
+        rating_max = _parse_int(request.args.get("rating_max", ""))
+        bat_rating_min = _parse_int(request.args.get("bat_rating_min", ""))
+        bat_rating_max = _parse_int(request.args.get("bat_rating_max", ""))
+        bowl_rating_min = _parse_int(request.args.get("bowl_rating_min", ""))
+        bowl_rating_max = _parse_int(request.args.get("bowl_rating_max", ""))
+        version_mode = request.args.get("version_mode", "").strip()
         sort = request.args.get("sort", "rating_desc").strip()
         page = max(1, int(request.args.get("page", 1)))
 
@@ -384,6 +445,18 @@ def players_list():
         if rating_range and rating_range in RANGE_MAP:
             r_min, r_max = RANGE_MAP[rating_range]
             query = query.filter(Player.rating >= r_min, Player.rating <= r_max)
+        if rating_min is not None:
+            query = query.filter(Player.rating >= rating_min)
+        if rating_max is not None:
+            query = query.filter(Player.rating <= rating_max)
+        if bat_rating_min is not None:
+            query = query.filter(Player.bat_rating >= bat_rating_min)
+        if bat_rating_max is not None:
+            query = query.filter(Player.bat_rating <= bat_rating_max)
+        if bowl_rating_min is not None:
+            query = query.filter(Player.bowl_rating >= bowl_rating_min)
+        if bowl_rating_max is not None:
+            query = query.filter(Player.bowl_rating <= bowl_rating_max)
         if bat_hand:
             query = query.filter(Player.bat_hand == bat_hand)
         if bowl_hand:
@@ -392,6 +465,10 @@ def players_list():
             query = query.filter(Player.is_active == True)
         elif is_active == "0":
             query = query.filter(Player.is_active == False)
+        if version_mode == "base":
+            query = query.filter(Player.parent_player_id.is_(None))
+        elif version_mode == "version":
+            query = query.filter(Player.parent_player_id.isnot(None))
 
         # Sorting
         sort_map = {
@@ -402,7 +479,9 @@ def players_list():
             "category_asc": (Player.category.asc(), Player.rating.desc()),
             "country_asc": (Player.country.asc(), Player.rating.desc()),
             "bat_rating_desc": (Player.bat_rating.desc(), Player.name.asc()),
+            "bat_rating_asc": (Player.bat_rating.asc(), Player.name.asc()),
             "bowl_rating_desc": (Player.bowl_rating.desc(), Player.name.asc()),
+            "bowl_rating_asc": (Player.bowl_rating.asc(), Player.name.asc()),
         }
         order_by = sort_map.get(sort, sort_map["rating_desc"])
         query = query.order_by(*order_by)
@@ -422,6 +501,25 @@ def players_list():
         from services.player_image_service import list_players_with_custom_images
         custom_image_ids = list_players_with_custom_images(db)
 
+        # Build active filter chips
+        active_filters = []
+        if q: active_filters.append(("Search", q))
+        if category: active_filters.append(("Category", category))
+        if country_filter: active_filters.append(("Country", country_filter))
+        if rating_range: active_filters.append(("Rating tier", rating_range))
+        if rating_min is not None or rating_max is not None:
+            active_filters.append(("Rating", f"{rating_min or 0}–{rating_max or 100}"))
+        if bat_rating_min is not None or bat_rating_max is not None:
+            active_filters.append(("Bat", f"{bat_rating_min or 0}–{bat_rating_max or 100}"))
+        if bowl_rating_min is not None or bowl_rating_max is not None:
+            active_filters.append(("Bowl", f"{bowl_rating_min or 0}–{bowl_rating_max or 100}"))
+        if bat_hand: active_filters.append(("Bat hand", bat_hand))
+        if bowl_hand: active_filters.append(("Bowl hand", bowl_hand))
+        if is_active == "1": active_filters.append(("Status", "Active"))
+        elif is_active == "0": active_filters.append(("Status", "Inactive"))
+        if version_mode == "base": active_filters.append(("Type", "Base only"))
+        elif version_mode == "version": active_filters.append(("Type", "Versions only"))
+
         return render_template(
             "players.html",
             players=players, total=total, page=page, total_pages=total_pages,
@@ -432,6 +530,11 @@ def players_list():
             sort=sort,
             categories=categories, countries=countries,
             custom_image_ids=custom_image_ids,
+            active_filters=active_filters,
+            rating_min=rating_min, rating_max=rating_max,
+            bat_rating_min=bat_rating_min, bat_rating_max=bat_rating_max,
+            bowl_rating_min=bowl_rating_min, bowl_rating_max=bowl_rating_max,
+            version_mode=version_mode,
         )
     finally:
         db.close()
@@ -1153,31 +1256,178 @@ def player_toggle(player_id):
 def users_list():
     db = get_session()
     try:
+        # ── Filter params ─────────────────────────────────────────────
         q = request.args.get("q", "").strip()
+        # Numeric range filters
+        coins_min = _parse_int(request.args.get("coins_min", ""))
+        coins_max = _parse_int(request.args.get("coins_max", ""))
+        gems_min = _parse_int(request.args.get("gems_min", ""))
+        gems_max = _parse_int(request.args.get("gems_max", ""))
+        roster_min = _parse_int(request.args.get("roster_min", ""))
+        roster_max = _parse_int(request.args.get("roster_max", ""))
+        # Win-rate filter (computed)
+        wins_min = _parse_int(request.args.get("wins_min", ""))
+        wins_max = _parse_int(request.args.get("wins_max", ""))
+        played_min = _parse_int(request.args.get("played_min", ""))
+        # Joined-date filter
+        joined_after = request.args.get("joined_after", "").strip()
+        joined_before = request.args.get("joined_before", "").strip()
+        # Activity status
+        activity = request.args.get("activity", "").strip()  # 'active' | 'inactive' | ''
+        # Sort
+        sort = request.args.get("sort", "created_desc")
+        # Pagination
         page = max(1, int(request.args.get("page", 1)))
-        per_page = 20
+        per_page = max(10, min(100, int(request.args.get("per_page", 20))))
 
         query = db.query(User)
+
         if q:
             query = query.filter(
                 (User.username.ilike(f"%{q}%")) | (User.first_name.ilike(f"%{q}%"))
             )
 
+        if coins_min is not None: query = query.filter(User.total_coins >= coins_min)
+        if coins_max is not None: query = query.filter(User.total_coins <= coins_max)
+        if gems_min is not None: query = query.filter(User.total_gems >= gems_min)
+        if gems_max is not None: query = query.filter(User.total_gems <= gems_max)
+        if roster_min is not None: query = query.filter(User.roster_count >= roster_min)
+        if roster_max is not None: query = query.filter(User.roster_count <= roster_max)
+        if wins_min is not None: query = query.filter(User.matches_won >= wins_min)
+        if wins_max is not None: query = query.filter(User.matches_won <= wins_max)
+        if played_min is not None: query = query.filter(User.matches_played >= played_min)
+
+        if joined_after:
+            try:
+                d = datetime.strptime(joined_after, "%Y-%m-%d")
+                query = query.filter(User.created_at >= d)
+            except ValueError: pass
+        if joined_before:
+            try:
+                d = datetime.strptime(joined_before, "%Y-%m-%d") + timedelta(days=1)
+                query = query.filter(User.created_at < d)
+            except ValueError: pass
+
+        if activity == "active":
+            # Played a match in last 7 days
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            query = query.filter(User.last_match_date >= cutoff)
+        elif activity == "inactive":
+            # No match in 30+ days, or never played
+            cutoff = datetime.utcnow() - timedelta(days=30)
+            query = query.filter(
+                (User.last_match_date < cutoff) | (User.last_match_date.is_(None))
+            )
+
+        # Sort
+        sort_map = {
+            "created_desc": User.created_at.desc(),
+            "created_asc": User.created_at.asc(),
+            "username_asc": User.username.asc(),
+            "username_desc": User.username.desc(),
+            "coins_desc": User.total_coins.desc(),
+            "coins_asc": User.total_coins.asc(),
+            "gems_desc": User.total_gems.desc(),
+            "gems_asc": User.total_gems.asc(),
+            "roster_desc": User.roster_count.desc(),
+            "roster_asc": User.roster_count.asc(),
+            "wins_desc": User.matches_won.desc(),
+            "wins_asc": User.matches_won.asc(),
+            "played_desc": User.matches_played.desc(),
+            "last_match_desc": User.last_match_date.desc().nullslast(),
+        }
+        query = query.order_by(sort_map.get(sort, User.created_at.desc()))
+
         total = query.count()
         total_pages = max(1, (total + per_page - 1) // per_page)
         page = min(page, total_pages)
 
-        users = query.order_by(User.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        users = query.offset((page - 1) * per_page).limit(per_page).all()
 
-        # Attach streak count
+        # Attach streak count + win%
         for u in users:
             st = db.query(UserStats).filter(UserStats.user_id == u.id).first()
             u._streak = f"{st.streak_count}/14" if st else "0/14"
+            u._winpct = (round(u.matches_won * 100.0 / u.matches_played, 1)
+                          if u.matches_played else 0.0)
+
+        # CSV export — same query, no pagination
+        if request.args.get("export") == "csv":
+            return _users_csv_export(db, query)
+
+        # Build a "filters_active" summary for the chips
+        active_filters = []
+        if q: active_filters.append(("Search", q, "q"))
+        if coins_min is not None or coins_max is not None:
+            label = f"{coins_min if coins_min is not None else '0'}-{coins_max if coins_max is not None else '∞'}"
+            active_filters.append(("Coins", label, "coins"))
+        if gems_min is not None or gems_max is not None:
+            label = f"{gems_min if gems_min is not None else '0'}-{gems_max if gems_max is not None else '∞'}"
+            active_filters.append(("Gems", label, "gems"))
+        if roster_min is not None or roster_max is not None:
+            label = f"{roster_min if roster_min is not None else '0'}-{roster_max if roster_max is not None else '25'}"
+            active_filters.append(("Roster", label, "roster"))
+        if wins_min is not None or wins_max is not None:
+            label = f"{wins_min if wins_min is not None else '0'}-{wins_max if wins_max is not None else '∞'}"
+            active_filters.append(("Wins", label, "wins"))
+        if played_min is not None:
+            active_filters.append(("Played", f"≥{played_min}", "played"))
+        if joined_after: active_filters.append(("Joined after", joined_after, "joined_after"))
+        if joined_before: active_filters.append(("Joined before", joined_before, "joined_before"))
+        if activity: active_filters.append(("Activity", activity, "activity"))
 
         return render_template("users.html", users=users, total=total, page=page,
-                               total_pages=total_pages, q=q)
+                               total_pages=total_pages, per_page=per_page,
+                               q=q, sort=sort, active_filters=active_filters,
+                               filters={
+                                   "coins_min": coins_min, "coins_max": coins_max,
+                                   "gems_min": gems_min, "gems_max": gems_max,
+                                   "roster_min": roster_min, "roster_max": roster_max,
+                                   "wins_min": wins_min, "wins_max": wins_max,
+                                   "played_min": played_min,
+                                   "joined_after": joined_after,
+                                   "joined_before": joined_before,
+                                   "activity": activity,
+                               })
     finally:
         db.close()
+
+
+def _parse_int(s):
+    """Parse a request arg to int, returns None for blank/invalid."""
+    if not s: return None
+    try: return int(s)
+    except (ValueError, TypeError): return None
+
+
+def _users_csv_export(db, base_query):
+    """Stream a CSV of users matching the filter query (no pagination)."""
+    import csv, io
+    from flask import Response
+    rows = base_query.all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["telegram_id", "username", "first_name", "coins", "gems",
+                "quest_points", "roster", "matches_played", "matches_won",
+                "matches_lost", "win_pct", "streak", "best_streak",
+                "last_match", "joined"])
+    for u in rows:
+        st = db.query(UserStats).filter(UserStats.user_id == u.id).first()
+        streak = st.streak_count if st else 0
+        win_pct = (round(u.matches_won * 100.0 / u.matches_played, 1)
+                    if u.matches_played else 0)
+        w.writerow([
+            u.telegram_id, u.username or "", u.first_name or "",
+            u.total_coins, u.total_gems, u.quest_points or 0,
+            u.roster_count, u.matches_played or 0, u.matches_won or 0,
+            u.matches_lost or 0, win_pct, streak, u.best_streak or 0,
+            u.last_match_date.strftime("%Y-%m-%d %H:%M") if u.last_match_date else "",
+            u.created_at.strftime("%Y-%m-%d") if u.created_at else "",
+        ])
+    return Response(buf.getvalue(),
+                    mimetype="text/csv",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=users_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"})
 
 
 @app.route("/users/<int:user_id>")
@@ -1424,6 +1674,171 @@ def user_edit_purse(user_id):
     finally:
         db.close()
     return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/ban", methods=["POST"])
+@login_required
+def user_ban(user_id):
+    """Ban or unban a user. The bot's middleware refuses banned users."""
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash("User not found", "error")
+            return redirect(url_for("users_list"))
+        action = request.form.get("action", "ban")
+        if action == "ban":
+            reason = (request.form.get("reason", "") or "").strip()[:500]
+            user.is_banned = True
+            user.ban_reason = reason or None
+            user.banned_at = datetime.utcnow()
+            log_admin(db, "user_ban", target_type="user", target_id=user.id,
+                      target_name=user.username or user.first_name,
+                      detail=f"Reason: {reason or '—'}")
+            db.commit()
+            flash(f"🚫 Banned {user.username or user.first_name}", "info")
+        elif action == "unban":
+            user.is_banned = False
+            user.ban_reason = None
+            user.banned_at = None
+            log_admin(db, "user_unban", target_type="user", target_id=user.id,
+                      target_name=user.username or user.first_name,
+                      detail="unbanned")
+            db.commit()
+            flash(f"✅ Unbanned {user.username or user.first_name}", "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("Ban action failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/bulk-action", methods=["POST"])
+@login_required
+def users_bulk_action():
+    """Apply a bulk grant to all users matching the supplied filter params.
+
+    Supported actions:
+      - grant_coins (amount=int)
+      - grant_gems (amount=int)
+      - grant_quest_points (amount=int)
+
+    Caps absurd amounts and excludes banned users. Up to 5,000 users per call.
+    """
+    action = (request.form.get("action") or "").strip()
+    if action not in ("grant_coins", "grant_gems", "grant_quest_points"):
+        flash("Unknown bulk action.", "error")
+        return redirect(url_for("users_list"))
+
+    try:
+        amount = int(request.form.get("amount", "0"))
+    except (ValueError, TypeError):
+        flash("Amount must be a number.", "error")
+        return redirect(url_for("users_list"))
+    if amount == 0:
+        flash("Amount cannot be zero.", "error")
+        return redirect(url_for("users_list"))
+
+    cap = {"grant_coins": 5_000_000, "grant_gems": 5_000,
+           "grant_quest_points": 50_000}[action]
+    if abs(amount) > cap:
+        flash(f"Amount too large (max ±{cap:,}).", "error")
+        return redirect(url_for("users_list"))
+
+    db = get_session()
+    try:
+        from services.activity_service import log_activity as _log_act
+
+        # Rebuild the same filter the users_list page used
+        q = request.form.get("q", "").strip()
+        query = db.query(User)
+        if q:
+            query = query.filter(
+                (User.username.ilike(f"%{q}%")) | (User.first_name.ilike(f"%{q}%"))
+            )
+        for k, col in (
+            ("coins_min", User.total_coins), ("gems_min", User.total_gems),
+            ("roster_min", User.roster_count), ("wins_min", User.matches_won),
+            ("played_min", User.matches_played),
+        ):
+            v = _parse_int(request.form.get(k, ""))
+            if v is not None: query = query.filter(col >= v)
+        for k, col in (
+            ("coins_max", User.total_coins), ("gems_max", User.total_gems),
+            ("roster_max", User.roster_count), ("wins_max", User.matches_won),
+        ):
+            v = _parse_int(request.form.get(k, ""))
+            if v is not None: query = query.filter(col <= v)
+
+        joined_after = request.form.get("joined_after", "").strip()
+        joined_before = request.form.get("joined_before", "").strip()
+        if joined_after:
+            try:
+                d = datetime.strptime(joined_after, "%Y-%m-%d")
+                query = query.filter(User.created_at >= d)
+            except ValueError: pass
+        if joined_before:
+            try:
+                d = datetime.strptime(joined_before, "%Y-%m-%d") + timedelta(days=1)
+                query = query.filter(User.created_at < d)
+            except ValueError: pass
+
+        activity = request.form.get("activity", "").strip()
+        now_ = datetime.utcnow()
+        if activity == "active":
+            query = query.filter(User.last_match_date >= now_ - timedelta(days=7))
+        elif activity == "inactive":
+            cutoff = now_ - timedelta(days=30)
+            query = query.filter(
+                (User.last_match_date < cutoff) | (User.last_match_date.is_(None)))
+
+        # Exclude banned users from bulk grants
+        query = query.filter((User.is_banned == False) | (User.is_banned.is_(None)))
+
+        affected = query.all()
+        if len(affected) > 5000:
+            flash(f"Filter matches {len(affected)} users — too many. Narrow first.", "error")
+            return redirect(url_for("users_list"))
+
+        n = 0
+        for u in affected:
+            if action == "grant_coins":
+                u.total_coins = max(0, (u.total_coins or 0) + amount)
+                _log_act(db, u.id, "admin_grant",
+                         f"Admin bulk-granted {amount:+,} coins",
+                         coins_change=amount)
+            elif action == "grant_gems":
+                u.total_gems = max(0, (u.total_gems or 0) + amount)
+                _log_act(db, u.id, "admin_grant",
+                         f"Admin bulk-granted {amount:+,} gems",
+                         gems_change=amount)
+            elif action == "grant_quest_points":
+                u.quest_points = max(0, (u.quest_points or 0) + amount)
+                _log_act(db, u.id, "admin_grant",
+                         f"Admin bulk-granted {amount:+,} quest points")
+            n += 1
+
+        log_admin(db, "bulk_grant", target_type="user_filter", target_id=None,
+                  target_name=f"{n} users",
+                  detail=f"{action}={amount:+,}")
+        db.commit()
+        flash(f"✅ Applied {amount:+,} {action.replace('grant_', '').replace('_', ' ')} to {n} users.", "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("Bulk grant failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    # Preserve filter state on redirect
+    return redirect(url_for("users_list", **{
+        k: request.form.get(k, "") for k in (
+            "q", "coins_min", "coins_max", "gems_min", "gems_max",
+            "roster_min", "roster_max", "wins_min", "wins_max",
+            "played_min", "joined_after", "joined_before", "activity")
+        if request.form.get(k, "").strip()
+    }))
 
 
 @app.route("/users/<int:user_id>/reset-cooldowns", methods=["POST"])
@@ -3608,6 +4023,320 @@ def admin_media_detail(event_key):
         return render_template("admin_media_detail.html",
                                event_key=event_key, event_meta=event_meta,
                                rows=rows)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LIVE MATCHES — operations view
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/live-matches")
+@login_required
+def admin_live_matches():
+    """Shows currently-active matches with state snapshot pulled from MatchState."""
+    db = get_session()
+    try:
+        from models import Match, MatchState
+        import json as _json
+        matches = (db.query(Match)
+                    .filter(Match.status.in_(("active", "pending")))
+                    .order_by(Match.created_at.desc()).all())
+        live = []
+        for m in matches:
+            ms = db.query(MatchState).filter(MatchState.match_id == m.id).first()
+            u1 = db.query(User).get(m.user1_id) if m.user1_id else None
+            u2 = db.query(User).get(m.user2_id) if m.user2_id else None
+            snap = {
+                "id": m.id, "status": m.status,
+                "u1": ((u1.username or u1.first_name) if u1 else "?"),
+                "u2": (("Bot" if (u2 and u2.telegram_id == -1) or m.user2_id == -1
+                        else (u2.username or u2.first_name)) if u2 else "?"),
+                "u1_id": m.user1_id, "u2_id": m.user2_id,
+                "chat_id": m.chat_id, "overs": m.overs,
+                "stadium": m.stadium or "—", "pitch": m.pitch_type or "—",
+                "created_at": m.created_at,
+                "last_modified": ms.last_modified if ms else None,
+                "next_action": ms.next_action if ms else None,
+                "ball_seq": ms.ball_seq if ms else 0,
+            }
+            if ms and ms.state_json:
+                try:
+                    st = _json.loads(ms.state_json)
+                    snap["innings"] = st.get("innings")
+                    snap["score"] = f"{st.get('total_runs',0)}/{st.get('total_wickets',0)}"
+                    co = st.get("current_over", 1) - 1
+                    cb = st.get("current_ball", 0)
+                    snap["overs_played"] = f"{co}.{cb}"
+                    snap["target"] = st.get("target")
+                    snap["bat_team"] = st.get("bat_team_name", "?")
+                    snap["bowl_team"] = st.get("bowl_team_name", "?")
+                except Exception: pass
+            live.append(snap)
+        return render_template("admin_live_matches.html", live=live, total=len(live))
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GSPIN REWARDS — admin CRUD for wheel outcomes
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/gspin-rewards", methods=["GET", "POST"])
+@login_required
+def admin_gspin_rewards():
+    db = get_session()
+    try:
+        from models import GSpinReward, Pack
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "add":
+                    r = GSpinReward(
+                        label=(request.form.get("label", "") or "Reward").strip()[:60],
+                        emoji=(request.form.get("emoji", "") or "🎁").strip()[:10],
+                        color=(request.form.get("color", "888888") or "888888").lstrip("#")[:7],
+                        weight=max(1, int(request.form.get("weight", 10))),
+                        sort_order=int(request.form.get("sort_order", 100)),
+                        enabled=request.form.get("enabled") == "on",
+                        reward_type=(request.form.get("reward_type") or "coins"),
+                        amount_min=max(0, int(request.form.get("amount_min", 0) or 0)),
+                        amount_max=max(0, int(request.form.get("amount_max", 0) or 0)),
+                        player_rating_min=max(0, int(request.form.get("player_rating_min", 0) or 0)),
+                        player_rating_max=max(0, int(request.form.get("player_rating_max", 0) or 0)),
+                        pack_id=int(request.form.get("pack_id")) if request.form.get("pack_id") else None,
+                    )
+                    db.add(r); db.commit()
+                    log_admin(db, "gspin_reward_add", target_type="gspin_reward",
+                              target_id=r.id, target_name=r.label,
+                              detail=f"type={r.reward_type} weight={r.weight}")
+                    db.commit()
+                    flash(f"✅ Added '{r.label}'", "success")
+
+                elif action == "edit":
+                    rid = int(request.form.get("id", 0))
+                    r = db.query(GSpinReward).get(rid)
+                    if r:
+                        r.label = (request.form.get("label", "") or r.label).strip()[:60]
+                        r.emoji = (request.form.get("emoji", "") or r.emoji or "🎁").strip()[:10]
+                        r.color = (request.form.get("color", "") or r.color or "888888").lstrip("#")[:7]
+                        r.weight = max(1, int(request.form.get("weight", r.weight)))
+                        r.sort_order = int(request.form.get("sort_order", r.sort_order))
+                        r.enabled = request.form.get("enabled") == "on"
+                        r.reward_type = request.form.get("reward_type") or r.reward_type
+                        r.amount_min = max(0, int(request.form.get("amount_min", 0) or 0))
+                        r.amount_max = max(0, int(request.form.get("amount_max", 0) or 0))
+                        r.player_rating_min = max(0, int(request.form.get("player_rating_min", 0) or 0))
+                        r.player_rating_max = max(0, int(request.form.get("player_rating_max", 0) or 0))
+                        pid = request.form.get("pack_id", "")
+                        r.pack_id = int(pid) if pid else None
+                        db.commit()
+                        log_admin(db, "gspin_reward_edit", target_type="gspin_reward",
+                                  target_id=r.id, target_name=r.label,
+                                  detail=f"type={r.reward_type} weight={r.weight}")
+                        db.commit()
+                        flash(f"✅ Updated '{r.label}'", "success")
+
+                elif action == "toggle":
+                    rid = int(request.form.get("id", 0))
+                    r = db.query(GSpinReward).get(rid)
+                    if r:
+                        r.enabled = not r.enabled
+                        db.commit()
+                        log_admin(db, "gspin_reward_toggle", target_type="gspin_reward",
+                                  target_id=r.id, target_name=r.label,
+                                  detail=f"enabled={r.enabled}")
+                        db.commit()
+                        flash(f"{'Enabled' if r.enabled else 'Disabled'} '{r.label}'", "info")
+
+                elif action == "delete":
+                    rid = int(request.form.get("id", 0))
+                    r = db.query(GSpinReward).get(rid)
+                    if r:
+                        name = r.label
+                        db.delete(r); db.commit()
+                        log_admin(db, "gspin_reward_delete", target_type="gspin_reward",
+                                  target_id=rid, target_name=name, detail="deleted")
+                        db.commit()
+                        flash(f"Deleted '{name}'", "info")
+            except Exception as e:
+                db.rollback()
+                logger.exception("gspin_rewards mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_gspin_rewards"))
+
+        rewards = (db.query(GSpinReward)
+                    .order_by(GSpinReward.sort_order, GSpinReward.id).all())
+        enabled_rewards = [r for r in rewards if r.enabled]
+        total_weight = sum(max(1, r.weight) for r in enabled_rewards) or 1
+        for r in rewards:
+            r._pct = round(max(1, r.weight) / total_weight * 100, 1) if r.enabled else 0.0
+        packs = db.query(Pack).filter(Pack.is_active == True).order_by(Pack.slot_number).all()
+        return render_template("admin_gspin_rewards.html",
+                               rewards=rewards, packs=packs,
+                               total_weight=total_weight,
+                               enabled_count=len(enabled_rewards))
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# COMMANDS — admin CRUD for command metadata + simple rewards
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/commands", methods=["GET", "POST"])
+@login_required
+def admin_commands():
+    """List + edit BotCommand metadata. For commands with simple rewards
+    (claim, daily, debut), also edit CommandReward values inline.
+
+    Note: command names and aliases stay in code — this page edits behavior
+    (enabled, cooldown, reward amounts), not the slash command name itself.
+    """
+    db = get_session()
+    try:
+        from models import BotCommand, CommandReward
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "save_command":
+                    key = request.form.get("command_key", "").strip()
+                    cmd = (db.query(BotCommand)
+                             .filter(BotCommand.command_key == key).first())
+                    if cmd:
+                        cmd.description = request.form.get("description", "").strip()[:500] or cmd.description
+                        cmd.category = request.form.get("category", cmd.category).strip()[:30]
+                        cmd.enabled = request.form.get("enabled") == "on"
+                        try:
+                            cmd.cooldown_seconds = max(0, int(request.form.get("cooldown_seconds", 0) or 0))
+                        except ValueError: pass
+                        try:
+                            cmd.sort_order = int(request.form.get("sort_order", cmd.sort_order))
+                        except ValueError: pass
+                        db.commit()
+                        log_admin(db, "command_edit", target_type="bot_command",
+                                  target_id=cmd.id, target_name=key,
+                                  detail=f"enabled={cmd.enabled} cooldown={cmd.cooldown_seconds}")
+                        db.commit()
+                        flash(f"✅ Updated /{key}", "success")
+
+                elif action == "save_reward":
+                    key = request.form.get("command_key", "").strip()
+                    r = (db.query(CommandReward)
+                           .filter(CommandReward.command_key == key).first())
+                    if not r:
+                        r = CommandReward(command_key=key)
+                        db.add(r)
+
+                    def _safe_int(field, default=0):
+                        try: return max(0, int(request.form.get(field, default) or 0))
+                        except (ValueError, TypeError): return default
+
+                    r.coin_amount = _safe_int("coin_amount")
+                    r.gem_amount = _safe_int("gem_amount")
+                    r.quest_points = _safe_int("quest_points")
+                    r.player_count = _safe_int("player_count")
+                    r.player_rating_min = _safe_int("player_rating_min")
+                    r.player_rating_max = _safe_int("player_rating_max")
+                    r.milestone_bonus_coins = _safe_int("milestone_bonus_coins")
+                    r.milestone_bonus_gems = _safe_int("milestone_bonus_gems")
+                    r.milestone_bonus_player_min = _safe_int("milestone_bonus_player_min")
+                    r.milestone_bonus_player_max = _safe_int("milestone_bonus_player_max")
+                    r.milestone_every_n = _safe_int("milestone_every_n")
+                    r.notes = (request.form.get("notes", "") or "").strip()[:500]
+
+                    db.commit()
+                    log_admin(db, "command_reward_edit", target_type="command_reward",
+                              target_id=r.id, target_name=key,
+                              detail=f"coins={r.coin_amount} gems={r.gem_amount}")
+                    db.commit()
+                    flash(f"✅ Saved rewards for /{key}", "success")
+
+                elif action == "toggle":
+                    key = request.form.get("command_key", "").strip()
+                    cmd = (db.query(BotCommand)
+                             .filter(BotCommand.command_key == key).first())
+                    if cmd:
+                        cmd.enabled = not cmd.enabled
+                        db.commit()
+                        log_admin(db, "command_toggle", target_type="bot_command",
+                                  target_id=cmd.id, target_name=key,
+                                  detail=f"enabled={cmd.enabled}")
+                        db.commit()
+                        flash(f"{'Enabled' if cmd.enabled else 'Disabled'} /{key}", "info")
+            except Exception as e:
+                db.rollback()
+                logger.exception("commands mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_commands"))
+
+        # GET: build the page model
+        cmds = (db.query(BotCommand)
+                  .order_by(BotCommand.sort_order, BotCommand.command_key).all())
+        rewards = {r.command_key: r
+                    for r in db.query(CommandReward).all()}
+        # Attach reward (or None) to each cmd
+        for c in cmds:
+            c._reward = rewards.get(c.command_key)
+            c._cooldown_display = _format_cooldown(c.cooldown_seconds)
+        return render_template("admin_commands.html", cmds=cmds,
+                               total=len(cmds),
+                               enabled_count=sum(1 for c in cmds if c.enabled))
+    finally:
+        db.close()
+
+
+def _format_cooldown(seconds):
+    """Human label for a cooldown in seconds."""
+    if not seconds: return "code default"
+    if seconds < 60: return f"{seconds}s"
+    if seconds < 3600: return f"{seconds // 60}m"
+    if seconds < 86400: return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# AUDIT LOG — global admin actions feed
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/audit-log")
+@login_required
+def admin_audit_log():
+    """Global feed of every admin action recorded via log_admin()."""
+    db = get_session()
+    try:
+        from models import AdminLog
+        action_f = request.args.get("action", "").strip()
+        target_f = request.args.get("target_type", "").strip()
+        since = request.args.get("since", "").strip()
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = max(20, min(200, int(request.args.get("per_page", 50))))
+
+        query = db.query(AdminLog)
+        if action_f: query = query.filter(AdminLog.action == action_f)
+        if target_f: query = query.filter(AdminLog.target_type == target_f)
+        if since:
+            try:
+                d = datetime.strptime(since, "%Y-%m-%d")
+                query = query.filter(AdminLog.timestamp >= d)
+            except ValueError: pass
+
+        total = query.count()
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+        logs = (query.order_by(AdminLog.timestamp.desc())
+                     .offset((page - 1) * per_page).limit(per_page).all())
+
+        actions = [r[0] for r in db.query(AdminLog.action)
+                    .distinct().order_by(AdminLog.action).all() if r[0]]
+        targets = [r[0] for r in db.query(AdminLog.target_type)
+                    .distinct().order_by(AdminLog.target_type).all() if r[0]]
+
+        return render_template("admin_audit_log.html",
+                               logs=logs, total=total, page=page,
+                               total_pages=total_pages, per_page=per_page,
+                               action_f=action_f, target_f=target_f, since=since,
+                               actions=actions, targets=targets)
     finally:
         db.close()
 

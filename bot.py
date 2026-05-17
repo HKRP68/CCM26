@@ -5,11 +5,14 @@ import logging
 import threading
 from telegram.ext import (
     ApplicationBuilder,
+    ApplicationHandlerStop,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
+from telegram import Update as _TGUpdate
 
 from config import BOT_TOKEN
 from database import init_db
@@ -286,6 +289,38 @@ def main():
         logger.info("Starting bot...")
         app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+        # ── Ban-guard middleware (group=-1, runs before all handlers) ──
+        async def _ban_check(update, context):
+            user = update.effective_user
+            if not user:
+                return
+            try:
+                from database import get_session as _gs
+                from models import User as _User
+                s = _gs()
+                try:
+                    u = s.query(_User).filter(_User.telegram_id == user.id).first()
+                    if u and u.is_banned:
+                        try:
+                            reason = (u.ban_reason or "").strip()
+                            txt = ("🚫 <b>You are banned from CricMaster Ultra.</b>\n"
+                                   + (f"\n<i>Reason: {reason}</i>" if reason else ""))
+                            if update.callback_query:
+                                await update.callback_query.answer(
+                                    "You are banned.", show_alert=True)
+                            elif update.message:
+                                await update.message.reply_text(txt, parse_mode="HTML")
+                        except Exception:
+                            pass
+                        raise ApplicationHandlerStop
+                finally:
+                    s.close()
+            except ApplicationHandlerStop:
+                raise
+            except Exception:
+                logger.exception("Ban-check middleware failed (non-fatal)")
+        app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-1)
+
         # ── Command handlers ─────────────────────────────────────────
         # ── Core commands + short aliases ────────────────────────────
         app.add_handler(CommandHandler(["start", "s"], start_handler))
@@ -513,6 +548,66 @@ def main():
                                              name="tour_expiry")
         except Exception:
             logger.exception("Failed to schedule tour expiry")
+
+        # Schedule periodic stuck-match cleanup (every hour). A match is
+        # "stuck" if its status='active' but its MatchState hasn't been
+        # touched in 24+ hours (server crashed, user vanished, etc).
+        # Pending invites older than 1 hour also get auto-expired.
+        try:
+            async def _stuck_match_cleanup(ctx):
+                from database import get_session as _gs
+                from models import Match, MatchState
+                from datetime import datetime as _dt, timedelta as _td
+                s = _gs()
+                try:
+                    now = _dt.utcnow()
+                    stale_cutoff = now - _td(hours=24)
+                    invite_cutoff = now - _td(hours=1)
+
+                    # Pending invites that have been hanging around
+                    expired_invites = 0
+                    pending = (s.query(Match)
+                                .filter(Match.status == "pending",
+                                        Match.created_at < invite_cutoff)
+                                .all())
+                    for m in pending:
+                        m.status = "expired"
+                        m.completed_at = now
+                        expired_invites += 1
+
+                    # Active matches with no MatchState updates in 24h
+                    abandoned = 0
+                    active = (s.query(Match)
+                                .filter(Match.status == "active",
+                                        Match.created_at < stale_cutoff)
+                                .all())
+                    for m in active:
+                        # Check MatchState's last_modified
+                        ms = (s.query(MatchState)
+                                .filter(MatchState.match_id == m.id)
+                                .first())
+                        if ms is None or ms.last_modified < stale_cutoff:
+                            m.status = "abandoned"
+                            m.completed_at = now
+                            m.margin_type = "abandoned"
+                            m.margin_value = 0
+                            abandoned += 1
+
+                    if expired_invites or abandoned:
+                        s.commit()
+                        logger.info(
+                            f"Match cleanup: {expired_invites} stale invites "
+                            f"expired, {abandoned} stuck matches abandoned")
+                except Exception:
+                    s.rollback()
+                    logger.exception("Stuck-match cleanup job failed")
+                finally:
+                    s.close()
+            if app.job_queue:
+                app.job_queue.run_repeating(_stuck_match_cleanup, interval=3600,
+                                             first=120, name="stuck_match_cleanup")
+        except Exception:
+            logger.exception("Failed to schedule stuck-match cleanup")
 
         # Wire up cross-thread bot ref for admin Send-Now button
         try:

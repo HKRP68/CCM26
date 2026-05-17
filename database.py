@@ -77,6 +77,9 @@ def _migrate_add_columns():
         "active_days": "INTEGER DEFAULT 0",
         "last_match_date": "TIMESTAMP",
         "quest_points": "INTEGER DEFAULT 0",
+        "is_banned": "BOOLEAN DEFAULT FALSE",
+        "ban_reason": "VARCHAR(500)",
+        "banned_at": "TIMESTAMP",
     }
     new_match_cols = {
         "winner_id": "INTEGER",
@@ -209,6 +212,97 @@ def _migrate_add_columns():
     except Exception:
         import logging
         logging.getLogger(__name__).warning("Pack seed skipped (non-fatal)")
+
+    # Seed default GSpin rewards (idempotent — only if table is empty)
+    try:
+        from models import GSpinReward
+        sess = SessionLocal()
+        try:
+            if sess.query(GSpinReward).count() == 0:
+                defaults = [
+                    # weight mirrors old config: 58/24/13/4.2/0.8
+                    dict(label="Coin Stash", emoji="🟥", color="C41E3A", weight=580,
+                         sort_order=10, reward_type="coins",
+                         amount_min=5000, amount_max=10000),
+                    dict(label="Common Pull", emoji="🟨", color="FFD93D", weight=240,
+                         sort_order=20, reward_type="player",
+                         player_rating_min=65, player_rating_max=78),
+                    dict(label="Gem Drop", emoji="🟦", color="2196F3", weight=130,
+                         sort_order=30, reward_type="gems",
+                         amount_min=10, amount_max=500),
+                    dict(label="Rare Pull", emoji="🟩", color="2ECC71", weight=42,
+                         sort_order=40, reward_type="player",
+                         player_rating_min=79, player_rating_max=84),
+                    dict(label="Epic Pull", emoji="⭐", color="9B59B6", weight=8,
+                         sort_order=50, reward_type="player",
+                         player_rating_min=85, player_rating_max=90),
+                ]
+                for d in defaults:
+                    sess.add(GSpinReward(**d))
+                sess.commit()
+                import logging
+                logging.getLogger(__name__).info(f"Seeded {len(defaults)} gspin rewards")
+        except Exception:
+            sess.rollback()
+        finally:
+            sess.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("GSpin reward seed skipped (non-fatal)")
+
+    # Seed default BotCommand + CommandReward rows (idempotent)
+    try:
+        from models import BotCommand, CommandReward
+        sess = SessionLocal()
+        try:
+            # Default command catalog
+            defaults = [
+                # (key, name, aliases, description, category, cooldown, sort, rewards-dict)
+                ("debut", "/debut", "d",
+                 "Sign up for the league. One-time. Grants starter pack.",
+                 "onboarding", 0, 10,
+                 dict(coin_amount=5000, gem_amount=100, player_count=1,
+                      player_rating_min=80, player_rating_max=89)),
+                ("claim", "/claim", "c",
+                 "Pull a free random player. 1-hour cooldown.",
+                 "economy", 3600, 20,
+                 dict(coin_amount=500, player_count=1,
+                      player_rating_min=50, player_rating_max=100)),
+                ("daily", "/daily", "dl",
+                 "Daily login bonus. Coins + 2 players + streak rewards.",
+                 "economy", 86400, 30,
+                 dict(coin_amount=5000, player_count=2,
+                      player_rating_min=50, player_rating_max=100,
+                      milestone_bonus_coins=10000, milestone_bonus_gems=20,
+                      milestone_bonus_player_min=85, milestone_bonus_player_max=100,
+                      milestone_every_n=14)),
+                ("gspin", "/gspin", "gs",
+                 "Spin the wheel. Rewards configured in /gspin-rewards.",
+                 "economy", 28800, 40, dict()),
+            ]
+            n_cmd = 0; n_rwd = 0
+            for key, name, aliases, desc, cat, cd, srt, rwd in defaults:
+                if not sess.query(BotCommand).filter(BotCommand.command_key == key).first():
+                    sess.add(BotCommand(
+                        command_key=key, display_name=name, aliases=aliases,
+                        description=desc, category=cat, cooldown_seconds=cd,
+                        sort_order=srt, enabled=True))
+                    n_cmd += 1
+                if not sess.query(CommandReward).filter(CommandReward.command_key == key).first():
+                    sess.add(CommandReward(command_key=key, **rwd))
+                    n_rwd += 1
+            if n_cmd or n_rwd:
+                sess.commit()
+                import logging
+                logging.getLogger(__name__).info(
+                    f"Seeded {n_cmd} commands + {n_rwd} reward rows")
+        except Exception:
+            sess.rollback()
+        finally:
+            sess.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Command seed skipped (non-fatal)")
 
 
 def reset_db():
