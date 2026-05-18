@@ -25,7 +25,7 @@ def init_db():
         MatchState, Quest, UserQuestProgress,
         UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
         NotificationSchedule, NotificationLog, ClaimRarityTier, GameConfig,
-        MessageTemplate,
+        MessageTemplate, Bowlout, BowloutBall,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
     )
     Base.metadata.create_all(bind=engine)

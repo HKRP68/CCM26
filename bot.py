@@ -57,6 +57,12 @@ from handlers.team import teamname_handler, purse_handler, stats_handler
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
 from handlers.profile import myprofile_handler, myprofile_callback
 
+# Bowl-out handlers
+from handlers.bowlout import (
+    pbo_handler, pbo_accept_callback, pbo_decline_callback,
+    bowlout_pick_callback,
+)
+
 # Match handlers
 from handlers.match import (
     playmatch_handler, match_accept_callback, match_deny_callback,
@@ -356,6 +362,9 @@ def main():
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
         app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
 
+        # ── Bowl-out command ─────────────────────────────────────────
+        app.add_handler(CommandHandler(["pbo", "bowlout"], pbo_handler))
+
         # ── Trait system ─────────────────────────────────────────────
         app.add_handler(CommandHandler(["traits", "tt"], traits_handler))
         app.add_handler(CommandHandler(["traitshop", "tshop"], traitshop_handler))
@@ -491,6 +500,11 @@ def main():
         app.add_handler(CallbackQueryHandler(shot_callback, pattern=r"^bshot_"))
         app.add_handler(CallbackQueryHandler(new_over_bowler_callback, pattern=r"^nbowl_"))
         app.add_handler(CallbackQueryHandler(new_batsman_callback, pattern=r"^newbat_"))
+
+        # ── Bowl-out callbacks ───────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(pbo_accept_callback, pattern=r"^pboacc_"))
+        app.add_handler(CallbackQueryHandler(pbo_decline_callback, pattern=r"^pbodec_"))
+        app.add_handler(CallbackQueryHandler(bowlout_pick_callback, pattern=r"^bopick_"))
         app.add_handler(CallbackQueryHandler(endmatch_yes_callback, pattern=r"^endmatch_"))
         app.add_handler(CallbackQueryHandler(endmatch_no_callback, pattern=r"^endmatchno_"))
 

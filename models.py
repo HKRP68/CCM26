@@ -1110,3 +1110,38 @@ class CommandReward(Base):
 
     notes = Column(String(500), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Bowlout(Base):
+    """Bowl-out tiebreaker — spawned from a tied Match, or standalone /pbo."""
+    __tablename__ = "bowlouts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    user1_id = Column(Integer, nullable=False)
+    user2_id = Column(Integer, nullable=False)
+    user1_team_name = Column(String(80), default="Team 1")
+    user2_team_name = Column(String(80), default="Team 2")
+    status = Column(String(20), default="pending_pick")
+    current_picker = Column(Integer, nullable=True)
+    current_ball = Column(Integer, default=0)
+    user1_hits = Column(Integer, default=0)
+    user2_hits = Column(Integer, default=0)
+    winner_user_id = Column(Integer, nullable=True)
+    message_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class BowloutBall(Base):
+    """One delivery in a Bowlout."""
+    __tablename__ = "bowlout_balls"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bowlout_id = Column(Integer, nullable=False, index=True)
+    ball_index = Column(Integer, nullable=False)
+    bowler_user_id = Column(Integer, nullable=False)
+    bowler_player_id = Column(Integer, nullable=True)
+    bowler_name = Column(String(120), nullable=False)
+    bowler_rating = Column(Integer, default=70)
+    is_hit = Column(Boolean, default=False)
+    bowled_at = Column(DateTime, default=datetime.utcnow)
