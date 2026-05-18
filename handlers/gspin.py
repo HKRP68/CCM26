@@ -70,8 +70,9 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
         ready, remaining = check_cooldown(stats, "last_gspin", GSPIN_COOLDOWN)
         if not ready:
+            from services.message_service import get_msg
             await update.message.reply_text(
-                f"⏳ GSpin on cooldown. Try again in <b>{format_remaining(remaining)}</b>",
+                get_msg("gspin_cooldown", remaining=format_remaining(remaining)),
                 parse_mode="HTML")
             return
 

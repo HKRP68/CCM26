@@ -29,9 +29,9 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         existing = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if existing:
+            from services.message_service import get_msg
             await update.message.reply_text(
-                "⚠️ You've already debuted! Use /myroster to see your team."
-            )
+                get_msg("debut_already"), parse_mode="HTML")
             return
 
         # Reward amounts: prefer CommandReward (DB), fall back to GameConfig.

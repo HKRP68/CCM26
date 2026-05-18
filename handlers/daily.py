@@ -33,15 +33,17 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
-            await update.message.reply_text("❌ Do /debut first!")
+            from services.message_service import get_msg
+            await update.message.reply_text(get_msg("not_debuted"))
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
         effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
         ready, remaining = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
+            from services.message_service import get_msg
             await update.message.reply_text(
-                f"⏳ Daily on cooldown. Try again in <b>{format_remaining(remaining)}</b>",
+                get_msg("daily_cooldown", remaining=format_remaining(remaining)),
                 parse_mode="HTML")
             return
 
@@ -54,12 +56,9 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  callback_data=f"dailyclaim_{user.id}")
         ]])
 
+        from services.message_service import get_msg
         await update.message.reply_text(
-            "📅 <b>Daily Reward Available!</b>\n\n"
-            "Tap below to claim your reward:\n"
-            f"+{coin_amt:,} coins\n"
-            f"+{player_amt} Players\n"
-            "+1 Streak\n",
+            get_msg("daily_available", coins=coin_amt, players=player_amt),
             parse_mode="HTML", reply_markup=keyboard)
 
     except Exception:

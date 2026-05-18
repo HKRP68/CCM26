@@ -175,21 +175,24 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
-            await update.message.reply_text("❌ Do /debut first!")
+            from services.message_service import get_msg
+            await update.message.reply_text(get_msg("not_debuted"))
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
         effective_cooldown = get_cooldown(session, "claim", CLAIM_COOLDOWN)
         ready, remaining = check_cooldown(stats, "last_claim", effective_cooldown)
         if not ready:
+            from services.message_service import get_msg
             await update.message.reply_text(
-                f"⏳ Claim on cooldown. Try again in <b>{format_remaining(remaining)}</b>",
+                get_msg("claim_cooldown", remaining=format_remaining(remaining)),
                 parse_mode="HTML")
             return
 
         player = get_random_player_by_rarity(session)
         if not player:
-            await update.message.reply_text("⚠️ No players available.")
+            from services.message_service import get_msg
+            await update.message.reply_text(get_msg("claim_no_players"))
             return
 
         # Save to dict WHILE session is open

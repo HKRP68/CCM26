@@ -3225,7 +3225,70 @@ async def _end_innings(ctx, mid):
     else:
         # Match complete — give rewards
         target = s["target"]; chasing = s["total_runs"]; overs = s.get("overs", 10)
-        if chasing >= target:
+
+        # ── TIED MATCH → BOWL-OUT TIEBREAKER ──────────────────────────
+        if chasing == target - 1:
+            if (s.get("is_spectator") or s.get("is_bot_vs_bot")
+                    or s.get("bat_user_tg") == BOT_TG_ID_
+                    or s.get("bowl_user_tg") == BOT_TG_ID_):
+                # AI tie — bowling side declared winner for stats; margin=0 → "(tied)"
+                winner_name = s["bowl_team_name"]; loser_name = s["bat_team_name"]
+                winner_tg = s["bowl_user_tg"]; loser_tg = s["bat_user_tg"]
+                winner_uid = s["bowl_team_id"]; loser_uid = s["bat_team_id"]
+                margin_type = "runs"; margin_val = 0; margin = "(tied)"
+            else:
+                # Human vs human — fire bowl-out
+                try:
+                    await ctx.bot.send_message(
+                        s["chat_id"],
+                        f"🤝 <b>TIED!</b>\nBoth teams ended on <b>{chasing}</b>.\n\n"
+                        f"🎯 Bowl-out tiebreaker starting...",
+                        parse_mode="HTML")
+                except Exception: pass
+
+                try:
+                    db_t = get_session()
+                    try:
+                        m = db_t.query(Match).get(mid)
+                        if m:
+                            m.status = "completed"
+                            m.completed_at = datetime.utcnow()
+                            m.margin_type = "bowlout_pending"
+                            m.margin_value = 0
+                            db_t.commit()
+                    finally:
+                        db_t.close()
+                except Exception:
+                    logger.exception("Failed to mark tied match completed")
+
+                try:
+                    await _send_innings_scorecards(ctx, mid, innings_num=1)
+                    await _send_innings_scorecards(ctx, mid, innings_num=2)
+                except Exception:
+                    logger.exception("Tied-match scorecards failed (non-fatal)")
+
+                try:
+                    from handlers.bowlout import start_bowlout
+                    import asyncio as _asyncio
+                    await _asyncio.sleep(1.0)
+                    await start_bowlout(
+                        ctx,
+                        chat_id=s["chat_id"],
+                        user1_id=s["bat_team_id"],
+                        user2_id=s["bowl_team_id"],
+                        user1_team_name=s["bat_team_name"],
+                        user2_team_name=s["bowl_team_name"],
+                        first_picker_user_id=s["bat_team_id"],
+                        match_id=mid,
+                    )
+                except Exception:
+                    logger.exception("start_bowlout failed")
+
+                cleanup_state(ctx, mid)
+                release_match_lock(mid)
+                return
+
+        elif chasing >= target:
             winner_name = s["bat_team_name"]; loser_name = s["bowl_team_name"]
             winner_tg = s["bat_user_tg"]; loser_tg = s["bowl_user_tg"]
             winner_uid = s["bat_team_id"]; loser_uid = s["bowl_team_id"]
