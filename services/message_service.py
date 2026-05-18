@@ -138,6 +138,126 @@ REGISTRY = {
         "description": "Shown above the team/over selectors when /vsbot is run. Placeholders: none",
         "default": "🤖 <b>VS BOT</b> — pick a team and overs to play.",
     },
+    # ── Cooldowns ──────────────────────────────────────────────
+    "daily_cooldown": {
+        "label": "/daily cooldown",
+        "category": "Cooldowns",
+        "description": "Shown when /daily is on cooldown. Placeholders: {remaining}",
+        "default": "⏳ Daily on cooldown. Try again in <b>{remaining}</b>",
+    },
+    "daily_available": {
+        "label": "/daily available (button prompt)",
+        "category": "Rewards",
+        "description": "Intro before tapping the Claim button. Placeholders: {coins}, {players}",
+        "default": (
+            "📅 <b>Daily Reward Available!</b>\n\n"
+            "Tap below to claim your reward:\n"
+            "+{coins:,} coins\n+{players} Players\n+1 Streak"
+        ),
+    },
+    "daily_already_today": {
+        "label": "/daily already claimed",
+        "category": "Cooldowns",
+        "description": "Edits the claim message if user double-taps. Placeholders: none",
+        "default": "⏳ Already claimed today!",
+    },
+    "claim_cooldown": {
+        "label": "/claim cooldown",
+        "category": "Cooldowns",
+        "description": "Shown when /claim is on cooldown. Placeholders: {remaining}",
+        "default": "⏳ Claim on cooldown. Try again in <b>{remaining}</b>",
+    },
+    "claim_no_players": {
+        "label": "/claim no players available",
+        "category": "Errors",
+        "description": "Shown when no players exist in DB (rare). Placeholders: none",
+        "default": "⚠️ No players available.",
+    },
+    "gspin_cooldown": {
+        "label": "/gspin cooldown",
+        "category": "Cooldowns",
+        "description": "Shown when /gspin is on cooldown. Placeholders: {remaining}",
+        "default": "⏳ GSpin on cooldown. Try again in <b>{remaining}</b>",
+    },
+    "debut_already": {
+        "label": "/debut already done",
+        "category": "Onboarding",
+        "description": "Shown when user tries /debut again. Placeholders: none",
+        "default": "⚠️ You've already debuted! Use /myroster to see your team.",
+    },
+    "not_debuted": {
+        "label": "User hasn't debuted yet",
+        "category": "Onboarding",
+        "description": "Shown when a non-user tries any command. Placeholders: none",
+        "default": "❌ Do /debut first!",
+    },
+    # ── Match flow ─────────────────────────────────────────────
+    "match_busy": {
+        "label": "Chat already has a match",
+        "category": "Match",
+        "description": "Shown when a 2nd match is attempted in same chat. Placeholders: {p1}, {p2}, {mid}, {status}",
+        "default": (
+            "🚫 <b>A match is already going on here.</b>\n"
+            "🏏 <b>{p1}</b> vs <b>{p2}</b>\n"
+            "<i>Match #{mid} — status: {status}</i>\n\n"
+            "<b>What you can do:</b>\n"
+            "  •  Wait for the current match to finish\n"
+            "  •  Start your match in a different chat or DM the bot\n"
+            "  •  Players in the match can use /endmatch or /resume\n"
+            "  •  Spectate with /matchinfo"
+        ),
+    },
+    "match_forfeit": {
+        "label": "Match auto-forfeit",
+        "category": "Match",
+        "description": "Sent on auto-forfeit timeout. Placeholders: {idle_mention}, {winner_mention}, {action}, {timeout}, {fine_coins}, {fine_gems}",
+        "default": (
+            "⏰ <b>Time over</b> 😔\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "{idle_mention} left the game.\n"
+            "<i>(did not {action} within {timeout}s)</i>\n\n"
+            "⚠️ Fined: <b>-{fine_coins:,}</b> 🪙   <b>-{fine_gems}</b> 💎\n\n"
+            "🏆 {winner_mention} won the match!"
+        ),
+    },
+    "match_warning": {
+        "label": "Match 45s warning",
+        "category": "Match",
+        "description": "Sent at 45s of inactivity. Placeholders: {remaining}, {mention}, {action}",
+        "default": (
+            "⏱️ <b>{remaining} seconds remaining</b> {mention} to {action}.\n"
+            "<i>Match will be forfeited otherwise.</i>"
+        ),
+    },
+    # ── Bowl-out ───────────────────────────────────────────────
+    "bowlout_tied_intro": {
+        "label": "Tied match → bowl-out intro",
+        "category": "Bowl-out",
+        "description": "Announces tied match and prompts first pick. Placeholders: {first_picker_mention}",
+        "default": (
+            "🤝 <b>TIED!</b>\n\n"
+            "🎯 <b>BOWL-OUT TIEBREAKER</b>\n"
+            "Each team picks 5 bowlers to bowl at unguarded stumps.\n"
+            "Most hits wins.\n\n"
+            "{first_picker_mention}, pick your <b>1st bowler</b>:"
+        ),
+    },
+    "bowlout_pick_prompt": {
+        "label": "Pick next bowler",
+        "category": "Bowl-out",
+        "description": "Sent for each of the 5 picks. Placeholders: {mention}, {n}",
+        "default": "{mention}, pick your <b>bowler #{n}</b>:",
+    },
+    "bowlout_result": {
+        "label": "Bowl-out final result",
+        "category": "Bowl-out",
+        "description": "Sent at end of bowl-out. Placeholders: {winner_team}, {team1}, {team2}, {hits1}, {hits2}",
+        "default": (
+            "🏆 <b>BOWL-OUT RESULT</b>\n\n"
+            "<b>{winner_team}</b> wins!\n"
+            "{team1} {hits1} — {hits2} {team2}"
+        ),
+    },
 }
 
 
