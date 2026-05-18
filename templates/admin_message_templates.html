@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Message Templates{% endblock %}
+{% block content %}
+
+<style>
+  .tpl-card {
+    background: var(--card, #181f2a);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: .65rem;
+    animation: fadeInUp .3s ease;
+  }
+  .tpl-card.disabled { opacity: .55; border-left: 3px solid #6b7280; }
+  .tpl-card.enabled { border-left: 3px solid var(--accent2); }
+
+  .tpl-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: .5rem; margin-bottom: .5rem; flex-wrap: wrap;
+  }
+  .tpl-key {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--accent);
+    font-size: .85rem;
+    background: rgba(212,168,42,.08);
+    padding: .15rem .5rem;
+    border-radius: 4px;
+  }
+  .tpl-label {
+    font-size: 1.05rem;
+    font-weight: 600;
+  }
+  .tpl-desc {
+    color: var(--muted);
+    font-size: .82rem;
+    margin-top: .2rem;
+  }
+  .tpl-vars {
+    color: #00C9A7;
+    font-family: ui-monospace, monospace;
+    font-size: .75rem;
+    background: rgba(0, 201, 167, 0.08);
+    padding: .2rem .5rem;
+    border-radius: 4px;
+    margin-top: .3rem;
+    display: inline-block;
+  }
+
+  .tpl-preview {
+    background: rgba(0,0,0,.25);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .65rem .85rem;
+    font-family: ui-monospace, monospace;
+    font-size: .85rem;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.45;
+    margin-bottom: .5rem;
+  }
+
+  details.tpl-edit summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: .85rem;
+    user-select: none;
+    transition: color .15s;
+  }
+  details.tpl-edit summary:hover { color: var(--accent); }
+  details.tpl-edit textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: .5rem;
+    border-radius: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: .85rem;
+    line-height: 1.5;
+    min-height: 140px;
+    margin-top: .5rem;
+    transition: border-color .15s;
+  }
+  details.tpl-edit textarea:focus { border-color: var(--accent); outline: none; }
+
+  .cat-header {
+    margin: 1.25rem 0 .5rem;
+    padding: .35rem .65rem;
+    background: rgba(0, 201, 167, 0.1);
+    border-left: 3px solid #00C9A7;
+    color: #00C9A7;
+    font-weight: 600;
+    border-radius: 4px;
+    text-transform: capitalize;
+    letter-spacing: .03em;
+  }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>💬 Message Templates <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.88rem;margin-bottom:1rem;">
+  Edit text the bot sends to users. Placeholders like <code>{username}</code> get replaced at send time.
+  If text is empty or template is disabled, the bot falls back to its in-code default.
+</p>
+
+<form method="GET" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.65rem;margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search key, label or text..."
+         style="flex:1;min-width:240px;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
+  <select name="category" style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
+    <option value="">All categories</option>
+    {% for c in categories %}
+      <option value="{{ c }}" {{ 'selected' if c == category }}>{{ c|title }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-blue">Filter</button>
+  {% if q or category %}<a href="{{ url_for('admin_message_templates') }}" class="btn btn-ghost">Clear</a>{% endif %}
+</form>
+
+{% if not templates %}
+<div style="text-align:center;padding:2rem;color:var(--muted);background:var(--card);border-radius:10px;">
+  No templates match.
+</div>
+{% else %}
+
+{% for cat, group in grouped.items() %}
+<div class="cat-header">{{ cat|title }} <span style="color:var(--muted);font-weight:400;font-size:.85rem;">({{ group|length }})</span></div>
+
+{% for t in group %}
+<div class="tpl-card {{ 'enabled' if t.enabled else 'disabled' }}">
+  <div class="tpl-header">
+    <div>
+      <div class="tpl-label">{{ t.label }}</div>
+      <div class="tpl-desc">{{ t.description or '— no description —' }}</div>
+      {% if t.variables %}<span class="tpl-vars">vars: {{ t.variables }}</span>{% endif %}
+    </div>
+    <span class="tpl-key">{{ t.key }}</span>
+  </div>
+
+  <div class="tpl-preview">{{ t.text }}</div>
+
+  <details class="tpl-edit">
+    <summary>✏️ Edit text</summary>
+    <form method="POST" action="{{ url_for('admin_message_templates') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="edit">
+      <input type="hidden" name="key" value="{{ t.key }}">
+      <textarea name="text">{{ t.text }}</textarea>
+      <div style="display:flex;align-items:center;gap:.75rem;margin-top:.5rem;flex-wrap:wrap;">
+        <label style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;color:var(--muted);">
+          <input type="checkbox" name="enabled" {{ 'checked' if t.enabled }}> Enabled
+        </label>
+        <button type="submit" class="btn btn-blue">Save</button>
+        <form method="POST" action="{{ url_for('admin_message_templates') }}" style="display:inline;"
+              onsubmit="return confirm('Reset {{ t.label }} to code default?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="reset">
+          <input type="hidden" name="key" value="{{ t.key }}">
+          <button type="submit" class="btn btn-ghost">↺ Reset to default</button>
+        </form>
+        <span style="color:var(--muted);font-size:.78rem;margin-left:auto;">
+          Last edit: {{ t.updated_at.strftime('%d %b %H:%M') if t.updated_at else '—' }}
+        </span>
+      </div>
+    </form>
+  </details>
+</div>
+{% endfor %}
+{% endfor %}
+
+{% endif %}
+{% endblock %}
