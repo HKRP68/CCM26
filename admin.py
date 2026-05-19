@@ -2201,7 +2201,12 @@ def seed_database():
             import json
             raw_data = json.load(uploaded)
             added = _seed_from_json(raw_data)
-            flash(f"Seeded {added:,} players from uploaded file!", "success")
+            breakdown = getattr(_seed_from_json, "last_breakdown", {})
+            msg = f"✅ Seeded {added:,} players from uploaded file!"
+            if breakdown:
+                detail = ", ".join(f"{v}: {n}" for v, n in sorted(breakdown.items()))
+                msg += f" ({detail})"
+            flash(msg, "success")
             return redirect(url_for("dashboard"))
         except Exception as e:
             flash(f"Upload seed failed: {e}", "error")
@@ -2215,7 +2220,12 @@ def seed_database():
             with open(data_path) as f:
                 raw_data = json.load(f)
             added = _seed_from_json(raw_data)
-            flash(f"Seeded {added:,} players from data/players.json!", "success")
+            breakdown = getattr(_seed_from_json, "last_breakdown", {})
+            msg = f"✅ Seeded {added:,} players from data/players.json!"
+            if breakdown:
+                detail = ", ".join(f"{v}: {n}" for v, n in sorted(breakdown.items()))
+                msg += f" ({detail})"
+            flash(msg, "success")
             return redirect(url_for("dashboard"))
         except Exception as e:
             flash(f"File seed failed: {e}", "error")
@@ -2418,19 +2428,85 @@ def _parse_bowl_style(raw):
     return "Medium Pacer"
 
 def _seed_from_json(raw_data):
-    """Seed players from parsed JSON list. Returns count added."""
+    """Seed players from parsed JSON list. Returns count added.
+
+    Robust to field-name variants:
+      - "Player Name" / "Name"
+      - "Version" / "Version " (trailing space) / "version"
+      - "overall all" / "Overall" / "Rating"
+    And to value variants:
+      - "Base card" / "base" / empty → all normalize to "Base"
+      - Trailing whitespace stripped from version
+    """
     import random
     db = get_session()
     added = 0
+    added_by_version = {}
+    # Track Base rows added in this batch so variant rows in the same upload
+    # can link parent_player_id without an extra DB round-trip per row.
+    batch_base_ids = {}
+
+    def _pick(entry, *keys, default=""):
+        """Get first non-empty value from any of the supplied keys."""
+        for k in keys:
+            if k in entry:
+                v = entry[k]
+                if v is None:
+                    continue
+                if isinstance(v, str):
+                    v = v.strip()
+                    if v:
+                        return v
+                else:
+                    return v
+        return default
+
+    def _normalize_version(raw):
+        """Strip whitespace, collapse 'Base card'/'base'/empty → 'Base'."""
+        if not raw:
+            return "Base"
+        s = str(raw).strip()
+        if not s:
+            return "Base"
+        # Treat "Base", "base", "Base card", "base card" all as canonical "Base"
+        low = s.lower()
+        if low in ("base", "base card"):
+            return "Base"
+        # Collapse interior whitespace runs (so "Star  Card" → "Star Card")
+        s = " ".join(s.split())
+        return s
+
     try:
-        existing_names = {n[0] for n in db.query(Player.name).all()}
+        # Track existing (name, version) pairs so we skip exact duplicates only
+        # — multiple versions of same player are allowed.
+        existing_pairs = set()
+        for n, v in db.query(Player.name, Player.version).all():
+            existing_pairs.add((n, v or "Base"))
 
         for entry in raw_data:
-            name = entry.get("Player Name", "").strip()
-            if not name or name in existing_names:
+            # Accept multiple possible key spellings
+            name = _pick(entry, "Player Name", "Name", "name", "player_name")
+            if not name:
                 continue
+            name = str(name).strip()
+            if not name:
+                continue
+
+            # Version: handle the "Version " (trailing space) typo in the
+            # original file as well as the cleaner "Version" key.
+            version_raw = _pick(entry, "Version", "Version ", "version",
+                                "Card", "card_version", default="")
+            version = _normalize_version(version_raw)
+
+            # Duplicate check by (name, version) — multiple versions allowed
+            if (name, version) in existing_pairs:
+                continue
+
+            # Rating — try several keys
+            rating_raw = _pick(entry, "overall all", "Overall", "overall",
+                               "Rating", "rating", default=0)
             try:
-                rating = int(entry.get("overall all", 0))
+                rating = int(rating_raw)
             except (ValueError, TypeError):
                 continue
             if rating < 50:
@@ -2438,40 +2514,93 @@ def _seed_from_json(raw_data):
             if rating > 100:
                 rating = 100
 
-            category = _normalise_category(entry.get("Category", "Batsman"))
-            bat_hand = "Left" if "left" in entry.get("Batting Style", "").lower() else "Right"
-            bowl_raw = entry.get("Bowling Style", "Right arm medium fast")
-            bowl_hand = "Left" if "left" in bowl_raw.lower() else "Right"
+            category = _normalise_category(
+                _pick(entry, "Category", "category", default="Batsman"))
+
+            bat_style_raw = _pick(entry, "Batting Style", "batting_style",
+                                  "Bat Hand", default="Right")
+            bat_hand = "Left" if "left" in str(bat_style_raw).lower() else "Right"
+
+            bowl_raw = _pick(entry, "Bowling Style", "bowling_style",
+                             "Bowl Style", default="Right arm medium fast")
+            bowl_hand = "Left" if "left" in str(bowl_raw).lower() else "Right"
             bowl_style = _parse_bowl_style(bowl_raw)
-            country = entry.get("Country", "Unknown").strip()
-            version = entry.get("Version ", "Base card").strip() or "Base card"
+
+            country = str(_pick(entry, "Country", "country",
+                                default="Unknown")).strip() or "Unknown"
 
             try:
-                bat_rating = int(entry.get("Batting Rating", 0))
+                bat_rating = int(_pick(entry, "Batting Rating", "bat_rating",
+                                       "Bat Rating", default=0))
             except (ValueError, TypeError):
                 bat_rating = 0
             try:
-                bowl_rating = int(entry.get("Bowling Rating", 0))
+                bowl_rating = int(_pick(entry, "Bowling Rating", "bowl_rating",
+                                        "Bowl Rating", default=0))
             except (ValueError, TypeError):
                 bowl_rating = 0
+
+            # parent_player_id linking for non-Base versions
+            parent_player_id = None
+            if version != "Base":
+                if name in batch_base_ids:
+                    parent_player_id = batch_base_ids[name]
+                else:
+                    base = (db.query(Player)
+                            .filter(Player.name == name,
+                                    Player.version == "Base")
+                            .first())
+                    if base:
+                        parent_player_id = base.id
 
             player = Player(
                 name=name, version=version, rating=rating, category=category,
                 country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
                 bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
+                parent_player_id=parent_player_id,
                 bat_avg=0, strike_rate=0, runs=0, centuries=0,
                 bowl_avg=0, economy=0, wickets=0, is_active=True,
             )
             db.add(player)
-            existing_names.add(name)
+            # If this is a Base row, flush so it's queryable as a parent
+            # for any subsequent variant rows in this batch.
+            if version == "Base":
+                db.flush()
+                batch_base_ids[name] = player.id
+            existing_pairs.add((name, version))
             added += 1
+            added_by_version[version] = added_by_version.get(version, 0) + 1
 
         db.commit()
+
+        # Second pass: link parent_player_id for any orphan variants (Legend
+        # rows that came before their Base row in the upload).
+        try:
+            orphans = (db.query(Player)
+                       .filter(Player.version != "Base",
+                               Player.parent_player_id.is_(None))
+                       .all())
+            linked = 0
+            for variant in orphans:
+                base = (db.query(Player)
+                        .filter(Player.name == variant.name,
+                                Player.version == "Base")
+                        .first())
+                if base and base.id != variant.id:
+                    variant.parent_player_id = base.id
+                    linked += 1
+            if linked:
+                db.commit()
+        except Exception:
+            logger.exception("Second-pass parent link failed (non-fatal)")
+
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+    # Stash breakdown on the function so the caller can show it.
+    _seed_from_json.last_breakdown = added_by_version
     return added
 
 
