@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+{% block title %}Shot Probabilities{% endblock %}
+{% block content %}
+
+<style>
+  .sp-grid {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow-x: auto;
+    margin-bottom: 1rem;
+  }
+  .sp-grid table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .88rem;
+  }
+  .sp-grid th {
+    background: rgba(0,0,0,.25);
+    padding: .6rem .4rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0;
+  }
+  .sp-grid td {
+    padding: .4rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .sp-grid td:first-child {
+    font-weight: 600;
+    color: var(--accent);
+    padding-left: 1rem;
+    min-width: 120px;
+  }
+  .sp-grid input[type=number] {
+    width: 60px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: .3rem .35rem;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-size: .85rem;
+    text-align: center;
+  }
+  .sp-grid input[type=number]:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .sp-grid input[type=number].neg { color: #ff6b6b; }
+  .sp-grid input[type=number].pos { color: #4ade80; }
+  .sp-desc {
+    color: var(--muted);
+    font-size: .75rem;
+    font-style: italic;
+    padding-left: 1rem;
+  }
+
+  .sim-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .sim-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: .75rem;
+    margin-bottom: 1rem;
+  }
+  .sim-controls label {
+    color: var(--muted);
+    font-size: .8rem;
+    font-weight: 600;
+    display: block;
+    margin-bottom: .2rem;
+  }
+  .sim-controls select, .sim-controls input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: .4rem .55rem;
+    border-radius: 6px;
+  }
+  .sim-result {
+    margin-top: 1rem;
+    background: rgba(0,0,0,.3);
+    padding: 1rem;
+    border-radius: 8px;
+    display: none;
+  }
+  .sim-bars {
+    display: grid;
+    grid-template-columns: 50px 1fr 60px;
+    gap: .3rem .5rem;
+    margin-top: .5rem;
+    align-items: center;
+  }
+  .sim-bar-track {
+    background: rgba(255,255,255,.07);
+    height: 18px;
+    border-radius: 9px;
+    overflow: hidden;
+    position: relative;
+  }
+  .sim-bar-fill {
+    height: 100%;
+    border-radius: 9px;
+    transition: width .35s ease;
+  }
+  .sim-bar-label { color: var(--muted); font-size: .85rem; }
+  .sim-bar-pct { color: var(--text); font-size: .82rem; font-family: ui-monospace, monospace; text-align: right; }
+
+  .sim-summary {
+    display: flex; gap: 1rem; flex-wrap: wrap;
+    padding-top: .75rem; border-top: 1px solid var(--border); margin-top: .75rem;
+  }
+  .sim-summary div {
+    flex: 1; min-width: 130px; text-align: center;
+    background: var(--bg); padding: .55rem; border-radius: 6px;
+  }
+  .sim-summary div strong {
+    display: block; font-size: 1.5rem; color: var(--accent);
+    font-family: 'Bebas Neue', sans-serif; letter-spacing: .03em;
+  }
+  .sim-summary div small { color: var(--muted); font-size: .7rem; text-transform: uppercase; }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🎯 Shot Probabilities <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ shots|length }} shots)</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.88rem;margin-bottom:1rem;">
+  Each cell is an <strong>additive percentage point</strong> applied to the base outcome probability for that shot.
+  Positive values make the outcome more likely; negative values less likely.
+  Changes apply on the <strong>next match ball</strong> (cache auto-refreshes on save).
+</p>
+
+<form method="POST" action="{{ url_for('admin_shot_probs') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="action" value="save">
+
+  <div class="sp-grid">
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left;padding-left:1rem;">Shot</th>
+          <th>Dot</th>
+          <th>1</th>
+          <th>2</th>
+          <th>3</th>
+          <th>4</th>
+          <th>6</th>
+          <th>W</th>
+          <th>Extras</th>
+          <th>On</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in shots %}
+        <tr>
+          <td>
+            {{ s.shot_name }}
+            {% if s.description %}<div class="sp-desc">{{ s.description }}</div>{% endif %}
+          </td>
+          {% for key, val in [('dot', s.mod_dot), ('1', s.mod_1), ('2', s.mod_2), ('3', s.mod_3), ('4', s.mod_4), ('6', s.mod_6), ('wicket', s.mod_wicket), ('extras', s.mod_extras)] %}
+          <td>
+            <input type="number" step="0.5" name="shot_{{ s.id }}_{{ key }}" value="{{ val }}"
+                   class="{{ 'neg' if val < 0 else 'pos' if val > 0 else '' }}">
+          </td>
+          {% endfor %}
+          <td style="text-align:center;">
+            <input type="checkbox" name="shot_{{ s.id }}_enabled" {{ 'checked' if s.enabled }}>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+    <button type="submit" class="btn btn-blue">💾 Save All Changes</button>
+    <button type="submit" name="action" value="reset" class="btn btn-ghost"
+            onclick="return confirm('Reset all shot mods to code defaults?')">↺ Reset to defaults</button>
+  </div>
+</form>
+
+<!-- Simulator -->
+<div class="sim-panel">
+  <h3 style="margin-top:0;">🎲 Outcome Simulator</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin-top:0;">
+    Run 5,000 virtual deliveries with current settings to see the actual distribution.
+    <strong>Save first</strong> if you've changed values above — the simulator uses live DB values.
+  </p>
+
+  <div class="sim-controls">
+    <div>
+      <label>Shot</label>
+      <select id="sim_shot">
+        {% for s in shots %}
+        <option value="{{ s.shot_name }}">{{ s.shot_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Bowler style</label>
+      <select id="sim_bowl_style">
+        <option value="Right-arm fast" selected>Right-arm fast</option>
+        <option value="Right-arm medium">Right-arm medium</option>
+        <option value="Right-arm offspin">Right-arm offspin</option>
+        <option value="Right-arm legspin">Right-arm legspin</option>
+        <option value="Left-arm fast">Left-arm fast</option>
+        <option value="Left-arm orthodox">Left-arm orthodox</option>
+      </select>
+    </div>
+    <div>
+      <label>Variation</label>
+      <select id="sim_variation">
+        <option value="Stock" selected>Stock</option>
+        <option value="Slower Ball">Slower Ball</option>
+        <option value="Yorker">Yorker</option>
+        <option value="Bouncer">Bouncer</option>
+        <option value="Outswing">Outswing</option>
+        <option value="Inswing">Inswing</option>
+      </select>
+    </div>
+    <div>
+      <label>Length</label>
+      <select id="sim_length">
+        <option value="Full">Full</option>
+        <option value="Good" selected>Good</option>
+        <option value="Short">Short</option>
+        <option value="Yorker">Yorker</option>
+      </select>
+    </div>
+    <div>
+      <label>Pitch</label>
+      <select id="sim_pitch">
+        <option value="Flat" selected>Flat</option>
+        <option value="Green">Green</option>
+        <option value="Dry">Dry</option>
+        <option value="Dusty">Dusty</option>
+      </select>
+    </div>
+    <div>
+      <label>Over (of 20)</label>
+      <input type="number" id="sim_over" value="10" min="1" max="50">
+    </div>
+    <div>
+      <label>Bat OVR</label>
+      <input type="number" id="sim_bat" value="75" min="1" max="100">
+    </div>
+    <div>
+      <label>Bowl OVR</label>
+      <input type="number" id="sim_bowl" value="75" min="1" max="100">
+    </div>
+    <div>
+      <label>N balls</label>
+      <input type="number" id="sim_n" value="5000" min="100" max="20000">
+    </div>
+  </div>
+
+  <button type="button" class="btn btn-blue" id="sim_btn">🎲 Run Simulation</button>
+  <span id="sim_status" style="color:var(--muted);margin-left:.5rem;font-size:.85rem;"></span>
+
+  <div class="sim-result" id="sim_result">
+    <strong id="sim_title" style="color:var(--accent);"></strong>
+    <div class="sim-bars" id="sim_bars"></div>
+    <div class="sim-summary" id="sim_summary"></div>
+  </div>
+</div>
+
+<script>
+const COLORS = {
+  dot: "#666",
+  "1": "#4a9eff",
+  "2": "#4a9eff",
+  "3": "#4a9eff",
+  "4": "#4ade80",
+  "6": "#f59e0b",
+  W: "#ef4444",
+  extras: "#a78bfa",
+};
+
+document.getElementById("sim_btn").addEventListener("click", async () => {
+  const btn = document.getElementById("sim_btn");
+  const status = document.getElementById("sim_status");
+  btn.disabled = true;
+  status.textContent = "Running...";
+
+  const fd = new FormData();
+  fd.append("csrf_token", "{{ csrf_token() }}");
+  fd.append("shot", document.getElementById("sim_shot").value);
+  fd.append("bowl_style", document.getElementById("sim_bowl_style").value);
+  fd.append("variation", document.getElementById("sim_variation").value);
+  fd.append("length", document.getElementById("sim_length").value);
+  fd.append("pitch_type", document.getElementById("sim_pitch").value);
+  fd.append("over", document.getElementById("sim_over").value);
+  fd.append("total_overs", "20");
+  fd.append("bat_rating", document.getElementById("sim_bat").value);
+  fd.append("bowl_rating", document.getElementById("sim_bowl").value);
+  fd.append("n_balls", document.getElementById("sim_n").value);
+
+  try {
+    const r = await fetch("{{ url_for('admin_shot_simulate') }}", {
+      method: "POST", body: fd,
+    });
+    const data = await r.json();
+    if (!data.ok) {
+      status.textContent = "Error: " + (data.error || "unknown");
+      return;
+    }
+    status.textContent = "";
+
+    const resultDiv = document.getElementById("sim_result");
+    document.getElementById("sim_title").textContent =
+      `${data.shot} — ${data.n.toLocaleString()} balls`;
+    const bars = document.getElementById("sim_bars");
+    bars.innerHTML = "";
+    const order = ["dot", "1", "2", "3", "4", "6", "W", "extras"];
+    const max = Math.max(...order.map(k => data.percentages[k] || 0));
+    for (const k of order) {
+      const pct = data.percentages[k] || 0;
+      const w = max > 0 ? (pct / max * 100) : 0;
+      bars.innerHTML += `
+        <div class="sim-bar-label">${k}</div>
+        <div class="sim-bar-track">
+          <div class="sim-bar-fill" style="width:${w}%; background:${COLORS[k] || '#888'};"></div>
+        </div>
+        <div class="sim-bar-pct">${pct.toFixed(1)}%</div>
+      `;
+    }
+    const summary = document.getElementById("sim_summary");
+    summary.innerHTML = `
+      <div><strong>${data.avg_runs}</strong><small>Avg Runs / Ball</small></div>
+      <div><strong>${data.expected_RR}</strong><small>Expected RPO</small></div>
+      <div><strong>${data.percentages.W.toFixed(1)}%</strong><small>Wicket %</small></div>
+      <div><strong>${(data.percentages["4"] + data.percentages["6"]).toFixed(1)}%</strong><small>Boundary %</small></div>
+    `;
+    resultDiv.style.display = "block";
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+
+{% endblock %}

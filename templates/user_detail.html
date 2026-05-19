@@ -44,6 +44,46 @@
 </details>
 {% endif %}
 
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
+  <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">⚙️ Edit Quest Points (QP)</summary>
+  <form method="POST" action="{{ url_for('admin_edit_qp', user_id=user.id) }}" style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="color:var(--muted);font-size:.85rem;">Current QP: <strong style="color:var(--accent);">{{ user.quest_points or 0 }}</strong></div>
+    <select name="action" style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
+      <option value="set">Set to</option>
+      <option value="add">Add</option>
+      <option value="subtract">Subtract</option>
+    </select>
+    <input type="number" name="amount" placeholder="amount" required min="0"
+           style="width:120px;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
+    <button type="submit" class="btn btn-blue">💾 Apply</button>
+  </form>
+</details>
+
+<details style="background:rgba(196,30,58,.05);border:1px solid rgba(196,30,58,.3);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
+  <summary style="cursor:pointer;color:#ff4757;font-size:.85rem;font-weight:600;">⚠️ Reset User Data (DANGER ZONE)</summary>
+  <div style="margin-top:.6rem;color:var(--muted);font-size:.85rem;line-height:1.5;">
+    Wipes <strong>all</strong> data for this user: roster, stats, activity log, quest progress, achievements, trait inventory, trades. Resets coins/gems/QP/match counts to 0.
+    The User row (telegram_id mapping) is preserved so they can <code>/debut</code> again.
+    Match history rows are kept (so opponents keep their records).
+    <br><br>
+    <strong style="color:#ff4757;">This is permanent and cannot be undone.</strong>
+  </div>
+  <form method="POST" action="{{ url_for('admin_reset_user', user_id=user.id) }}" style="margin-top:.6rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label style="display:block;font-size:.85rem;color:var(--muted);margin-bottom:.4rem;">
+      To confirm, type: <code style="color:#ff4757;background:rgba(196,30,58,.1);padding:.1rem .4rem;border-radius:3px;">RESET {{ user.id }}</code>
+    </label>
+    <input type="text" name="confirmation" placeholder="RESET {{ user.id }}" required
+           style="width:100%;max-width:280px;background:var(--bg);border:1px solid rgba(196,30,58,.5);color:#fff;padding:.4rem .6rem;border-radius:6px;font-family:ui-monospace,monospace;">
+    <br>
+    <button type="submit" class="btn btn-red" style="margin-top:.5rem;"
+            onclick="return confirm('Are you ABSOLUTELY sure? This is permanent.')">
+      ⚠️ Reset All Data
+    </button>
+  </form>
+</details>
+
 <!-- ── Stats cards ────────────────────────────────────────────── -->
 <div class="stats-grid">
   <div class="stat-card">

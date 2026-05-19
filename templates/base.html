@@ -527,8 +527,12 @@ hr.pitch-line {
     <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">🎬 Media</a>
     <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">📢 Notifications</a>
     <a href="{{ url_for('admin_messages_list') }}" class="{{ 'active' if request.endpoint in ('admin_messages_list','admin_message_edit') }}">💌 Messages</a>
+    <a href="{{ url_for('admin_broadcast') }}" class="{{ 'active' if request.endpoint == 'admin_broadcast' }}">📣 Broadcast</a>
+    <a href="{{ url_for('admin_reports') }}" class="{{ 'active' if request.endpoint == 'admin_reports' }}">📨 User Reports</a>
+    <a href="{{ url_for('admin_shot_probs') }}" class="{{ 'active' if request.endpoint == 'admin_shot_probs' }}">🎯 Shot Probs</a>
 
     <div class="section-label">System</div>
+    <a href="{{ url_for('admin_maintenance') }}" class="{{ 'active' if request.endpoint == 'admin_maintenance' }}">🛠️ Maintenance</a>
     <a href="{{ url_for('admin_audit_log') }}" class="{{ 'active' if request.endpoint == 'admin_audit_log' }}">📋 Audit Log</a>
     <a href="{{ url_for('admin_diagnostics') }}" class="{{ 'active' if request.endpoint == 'admin_diagnostics' }}">🔧 Diagnostics</a>
     <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">🟢 Status</a>

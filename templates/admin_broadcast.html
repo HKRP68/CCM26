@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Broadcast{% endblock %}
+{% block content %}
+
+<style>
+  .bc-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: .65rem;
+    margin-bottom: 1rem;
+  }
+  .bc-stat {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .8rem;
+    text-align: center;
+  }
+  .bc-stat strong {
+    display: block;
+    font-size: 1.8rem;
+    color: var(--accent);
+    font-family: 'Bebas Neue', sans-serif;
+  }
+  .bc-stat small {
+    color: var(--muted);
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .composer {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .composer textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: .75rem;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: .95rem;
+    line-height: 1.5;
+    min-height: 160px;
+    resize: vertical;
+  }
+  .composer textarea:focus { border-color: var(--accent); outline: none; }
+
+  .bc-row {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .8rem 1rem;
+    margin-bottom: .55rem;
+    border-left: 3px solid var(--border);
+  }
+  .bc-row.done { border-left-color: #4ade80; }
+  .bc-row.running { border-left-color: var(--accent); animation: pulse-glow 2s infinite; }
+  .bc-row.failed { border-left-color: #ef4444; }
+
+  .bc-meta { color: var(--muted); font-size: .82rem; }
+  .bc-msg {
+    background: rgba(0,0,0,.3);
+    padding: .55rem .75rem;
+    border-radius: 6px;
+    font-size: .85rem;
+    line-height: 1.4;
+    margin-top: .4rem;
+    white-space: pre-wrap;
+    max-height: 100px;
+    overflow-y: auto;
+  }
+  .bc-progress {
+    margin-top: .35rem;
+    height: 4px;
+    background: rgba(255,255,255,.06);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bc-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width .35s;
+  }
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(212,168,42,.4); }
+    50% { box-shadow: 0 0 0 4px rgba(212,168,42,0); }
+  }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📢 Broadcast</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<div class="bc-stats">
+  <div class="bc-stat"><strong>{{ chat_counts.total }}</strong><small>Total Active Chats</small></div>
+  <div class="bc-stat"><strong>{{ chat_counts.groups }}</strong><small>Groups</small></div>
+  <div class="bc-stat"><strong>{{ chat_counts.private }}</strong><small>Private DMs</small></div>
+  <div class="bc-stat"><strong>{{ chat_counts.inactive }}</strong><small>Inactive (kicked)</small></div>
+</div>
+
+<div class="composer">
+  <h3 style="margin-top:0;">Compose Broadcast</h3>
+  <form method="POST" action="{{ url_for('admin_broadcast') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <label style="color:var(--muted);font-size:.85rem;font-weight:600;display:block;margin-bottom:.3rem;">
+      Message (HTML allowed: &lt;b&gt;, &lt;i&gt;, &lt;a href=""&gt;, &lt;code&gt;)
+    </label>
+    <textarea name="message" required maxlength="4000" placeholder="📢 Important announcement!&#10;&#10;Maintenance starts at 6 PM IST. We'll be back in 30 min."></textarea>
+
+    <div style="display:flex;align-items:center;gap:1rem;margin-top:.75rem;flex-wrap:wrap;">
+      <div>
+        <label style="color:var(--muted);font-size:.85rem;font-weight:600;">Send to:</label>
+        <select name="target" style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
+          <option value="all">All chats ({{ chat_counts.total }})</option>
+          <option value="groups">Groups only ({{ chat_counts.groups }})</option>
+          <option value="private">Private DMs only ({{ chat_counts.private }})</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-red"
+              onclick="return confirm('Send this broadcast to all selected chats? This cannot be undone.');">
+        📤 Send Broadcast
+      </button>
+      <span style="color:var(--muted);font-size:.78rem;flex:1;text-align:right;">
+        Sent at ~20 msgs/sec (Telegram rate limit)
+      </span>
+    </div>
+  </form>
+</div>
+
+<h3>Recent Broadcasts</h3>
+{% if not broadcasts %}
+<div style="text-align:center;padding:1.5rem;color:var(--muted);background:var(--card);border-radius:10px;">
+  No broadcasts yet.
+</div>
+{% else %}
+{% for bc in broadcasts %}
+<div class="bc-row {{ bc.status }}">
+  <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;">
+    <div>
+      <strong>Broadcast #{{ bc.id }}</strong>
+      <span style="background:rgba(255,255,255,.06);padding:.15rem .4rem;border-radius:3px;font-size:.72rem;color:var(--muted);">
+        {{ bc.target_type|upper }}
+      </span>
+      <span style="background:rgba(255,255,255,.06);padding:.15rem .4rem;border-radius:3px;font-size:.72rem;color:var(--muted);">
+        {{ bc.status|upper }}
+      </span>
+    </div>
+    <div class="bc-meta">
+      {{ bc.sent_at.strftime('%d %b %Y %H:%M') if bc.sent_at else '—' }}
+      {% if bc.sent_by %} · {{ bc.sent_by }}{% endif %}
+    </div>
+  </div>
+  <div class="bc-msg">{{ bc.message }}</div>
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;font-size:.82rem;color:var(--muted);">
+    <span>✅ Sent: <strong style="color:#4ade80;">{{ bc.sent_count }}</strong></span>
+    {% if bc.failed_count %}
+      <span>❌ Failed: <strong style="color:#ef4444;">{{ bc.failed_count }}</strong></span>
+    {% endif %}
+  </div>
+  {% if bc.status == 'running' %}
+  <div class="bc-progress">
+    <div class="bc-progress-fill" style="width:{{ (bc.sent_count + bc.failed_count) }}%;"></div>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<h3 style="margin-top:1.5rem;">Recently-Seen Chats</h3>
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+  <table style="width:100%;border-collapse:collapse;font-size:.88rem;">
+    <thead>
+      <tr style="background:rgba(0,0,0,.2);color:var(--muted);font-size:.75rem;text-transform:uppercase;">
+        <th style="padding:.55rem .75rem;text-align:left;">Title</th>
+        <th style="padding:.55rem .75rem;text-align:left;">Type</th>
+        <th style="padding:.55rem .75rem;text-align:left;">Chat ID</th>
+        <th style="padding:.55rem .75rem;text-align:right;">Last Seen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in recent_chats %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem .75rem;">{{ c.title or '—' }}{% if c.username %} <span style="color:var(--muted);">@{{ c.username }}</span>{% endif %}</td>
+        <td style="padding:.5rem .75rem;color:var(--muted);">{{ c.chat_type }}</td>
+        <td style="padding:.5rem .75rem;font-family:ui-monospace,monospace;color:var(--muted);">{{ c.chat_id }}</td>
+        <td style="padding:.5rem .75rem;text-align:right;color:var(--muted);font-size:.78rem;">
+          {{ c.last_seen_at.strftime('%d %b %H:%M') if c.last_seen_at else '—' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

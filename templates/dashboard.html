@@ -122,10 +122,32 @@
   <h2>🎯 Dashboard</h2>
   <div style="display:flex;gap:.5rem;">
     <a href="{{ url_for('admin_live_matches') }}" class="btn btn-blue btn-sm">⚡ Live Matches</a>
+    <a href="{{ url_for('admin_maintenance') }}" class="btn {{ 'btn-red' if maint_active else 'btn-ghost' }} btn-sm">🛠️ {{ 'MAINT ON' if maint_active else 'Maintenance' }}</a>
     <a href="{{ url_for('admin_audit_log') }}" class="btn btn-ghost btn-sm">📋 Audit Log</a>
     <a href="{{ url_for('status') }}" class="btn btn-ghost btn-sm">🔍 Status</a>
   </div>
 </div>
+
+{% if maint_active %}
+<div style="background:linear-gradient(135deg, #c41e3a 0%, #8b0000 100%);color:#fff;padding:1rem 1.25rem;border-radius:10px;margin-bottom:1.25rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;box-shadow:0 4px 14px rgba(196,30,58,.3);animation:pulseGlow 2.5s infinite;">
+  <div style="display:flex;align-items:center;gap:.7rem;">
+    <span style="display:inline-block;width:10px;height:10px;background:#fff;border-radius:50%;animation:pulse 1.5s infinite;"></span>
+    <strong>🛠️ MAINTENANCE MODE ACTIVE</strong>
+    <span style="opacity:.85;font-size:.85rem;">— bot blocking new commands</span>
+  </div>
+  <a href="{{ url_for('admin_maintenance') }}" style="background:#fff;color:#c41e3a;padding:.4rem .9rem;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem;">Manage →</a>
+</div>
+<style>
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.3); }
+  }
+  @keyframes pulseGlow {
+    0%, 100% { box-shadow: 0 4px 14px rgba(196,30,58,.3); }
+    50% { box-shadow: 0 4px 20px rgba(196,30,58,.55); }
+  }
+</style>
+{% endif %}
 
 {% if stats.total_players == 0 %}
 <div class="flash flash-error" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;">

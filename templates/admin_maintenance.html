@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}Maintenance{% endblock %}
+{% block content %}
+
+<style>
+  .maint-banner {
+    background: {% if active %}linear-gradient(135deg, #c41e3a 0%, #8b0000 100%){% else %}linear-gradient(135deg, #00C9A7 0%, #008b7a 100%){% endif %};
+    color: #fff;
+    padding: 1.5rem;
+    border-radius: 10px;
+    margin-bottom: 1.5rem;
+    text-align: center;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .3);
+    position: relative;
+    overflow: hidden;
+    animation: fadeInDown .35s ease;
+  }
+  @keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .maint-banner::before {
+    content: ""; position: absolute; inset: 0;
+    background: repeating-linear-gradient(
+      135deg, rgba(255,255,255,0.04) 0 12px,
+      transparent 12px 24px);
+    pointer-events: none;
+  }
+  .maint-banner h2 {
+    margin: 0 0 .5rem;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2rem;
+    letter-spacing: .05em;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, .4);
+  }
+  .maint-banner .pulse {
+    display: inline-block;
+    width: 12px; height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    margin-right: .5rem;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.3); }
+  }
+  .maint-banner small { opacity: .85; }
+
+  .panel {
+    background: var(--card, #181f2a);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    animation: fadeInUp .3s ease;
+  }
+  .panel h3 {
+    margin-top: 0; margin-bottom: .75rem;
+    font-size: 1.05rem;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: .5rem;
+  }
+  .form-row {
+    display: flex; flex-direction: column; gap: .3rem;
+    margin-bottom: .9rem;
+  }
+  .form-row label {
+    color: var(--muted);
+    font-size: .85rem;
+    font-weight: 600;
+  }
+  .form-row input[type="text"],
+  .form-row input[type="datetime-local"],
+  .form-row textarea {
+    background: var(--bg, #0f1419);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: .55rem .75rem;
+    border-radius: 6px;
+    font-size: .9rem;
+    transition: border-color .15s;
+  }
+  .form-row textarea {
+    min-height: 120px;
+    font-family: ui-monospace, monospace;
+    line-height: 1.5;
+  }
+  .form-row input:focus, .form-row textarea:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .form-row .hint {
+    color: var(--muted);
+    font-size: .75rem;
+    margin-top: .15rem;
+  }
+  .btn-big {
+    padding: .8rem 1.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .preview-box {
+    background: #0a0f1a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    color: #e4e8ed;
+    font-family: -apple-system, sans-serif;
+    white-space: pre-wrap;
+    margin-top: .5rem;
+    line-height: 1.5;
+  }
+  .preview-box::before {
+    content: "📱 What users see:";
+    display: block;
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: .5rem;
+    font-family: inherit;
+  }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🛠️ Maintenance Mode</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<div class="maint-banner">
+  {% if active %}
+    <h2><span class="pulse"></span>BOT IS DOWN</h2>
+    <div>Maintenance mode is currently <strong>ACTIVE</strong></div>
+    {% if cfg.maintenance_started_at %}
+      <small>Started: {{ cfg.maintenance_started_at.strftime('%H:%M UTC, %d %b %Y') }}</small>
+    {% endif %}
+  {% else %}
+    <h2>✅ BOT IS LIVE</h2>
+    <div>All commands are running normally.</div>
+  {% endif %}
+</div>
+
+<!-- Toggle panel -->
+<div class="panel">
+  <h3>{{ 'Disable Maintenance' if active else 'Enable Maintenance' }}</h3>
+  <p style="color:var(--muted);font-size:.9rem;margin-top:0;">
+    {% if active %}
+      Disabling will let users run commands normally. The custom message and ETA are preserved for next time.
+    {% else %}
+      Enabling will block all new commands. <strong>Matches already in progress will continue uninterrupted</strong> — only fresh commands are blocked. Callback buttons inside matches still work.
+    {% endif %}
+  </p>
+
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="{{ 'disable' if active else 'enable' }}">
+
+    {% if not active %}
+    <div class="form-row">
+      <label>Custom message (HTML allowed)</label>
+      <textarea name="message" placeholder="🛠️ &lt;b&gt;Quick maintenance — back in 30 min!&lt;/b&gt;&#10;&#10;We're shipping a fix. Match progress is safe.">{{ cfg.maintenance_message or '' }}</textarea>
+      <div class="hint">Leave blank to use the default. Use <code>{eta}</code> as a placeholder to insert the ETA inline. HTML formatting (<b>bold</b>, <i>italic</i>) supported.</div>
+    </div>
+
+    <div class="form-row">
+      <label>ETA — when bot will be back (IST)</label>
+      <input type="datetime-local" name="until" value="{{ until_ist_str }}">
+      <div class="hint">Optional. If set, automatically appended to the message and shown to users. Use IST (Indian time) — stored as UTC internally.</div>
+    </div>
+
+    <div class="form-row">
+      <label>Bypass user IDs (comma-separated)</label>
+      <input type="text" name="bypass_ids" value="{{ cfg.maintenance_bypass_ids }}" placeholder="123456789, 987654321">
+      <div class="hint">Telegram IDs of admins who can keep using the bot during maintenance — useful for testing the fix before going live.</div>
+    </div>
+
+    <button type="submit" class="btn btn-red btn-big" onclick="return confirm('Enable maintenance mode now? All non-bypass users will be blocked from new commands.')">
+      🛠️ Enable Maintenance
+    </button>
+    {% else %}
+    <button type="submit" class="btn btn-green btn-big" onclick="return confirm('Disable maintenance and bring bot back online?')">
+      ✅ Disable & Resume
+    </button>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Edit-while-active panel -->
+{% if active %}
+<div class="panel">
+  <h3>Update Message / ETA (while active)</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin-top:0;">
+    Edit the message or extend the ETA without toggling off and on.
+  </p>
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_message">
+
+    <div class="form-row">
+      <label>Custom message</label>
+      <textarea name="message">{{ cfg.maintenance_message or '' }}</textarea>
+    </div>
+    <div class="form-row">
+      <label>ETA (IST)</label>
+      <input type="datetime-local" name="until" value="{{ until_ist_str }}">
+    </div>
+    <div class="form-row">
+      <label>Bypass user IDs</label>
+      <input type="text" name="bypass_ids" value="{{ cfg.maintenance_bypass_ids }}">
+    </div>
+
+    <button type="submit" class="btn btn-blue">💾 Save Changes</button>
+  </form>
+</div>
+{% endif %}
+
+<!-- Preview -->
+{% if preview %}
+<div class="panel">
+  <h3>Message Preview</h3>
+  <div class="preview-box">{{ preview|safe }}</div>
+</div>
+{% endif %}
+
+<!-- Help -->
+<div class="panel">
+  <h3>How it works</h3>
+  <ul style="color:var(--muted);line-height:1.7;padding-left:1.2rem;">
+    <li><strong>New commands blocked:</strong> /playmatch, /vsbot, /claim, /daily, etc. all return the maintenance message.</li>
+    <li><strong>Live matches continue:</strong> taps on inline buttons (shot selection, fielding, etc.) bypass the lock so users can finish.</li>
+    <li><strong>Auto-expire:</strong> if ETA is set and passes, users are unlocked automatically — but the admin must click "Disable & Resume" to fully turn off maintenance and clear the start time.</li>
+    <li><strong>Bypass list:</strong> admins listed there can use any command for testing. Find your telegram_id by messaging <code>@userinfobot</code>.</li>
+    <li><strong>Cache:</strong> the bot caches config in memory. Saving here auto-invalidates the cache so changes take effect on the next message.</li>
+  </ul>
+</div>
+
+{% endblock %}

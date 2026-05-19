@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}User Reports{% endblock %}
+{% block content %}
+
+<style>
+  .rpt-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: .65rem;
+    border-left: 3px solid var(--border);
+    animation: fadeInUp .3s ease;
+  }
+  .rpt-card.unread { border-left-color: var(--accent); background: rgba(212,168,42,.04); }
+  .rpt-card.resolved { opacity: .65; border-left-color: #4ade80; }
+
+  .rpt-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: .5rem; margin-bottom: .5rem; flex-wrap: wrap;
+  }
+  .rpt-meta { color: var(--muted); font-size: .8rem; }
+  .rpt-body {
+    background: rgba(0,0,0,.25);
+    padding: .65rem .85rem;
+    border-radius: 6px;
+    color: var(--text);
+    font-family: ui-monospace, monospace;
+    font-size: .85rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .rpt-reply {
+    margin-top: .55rem;
+    padding: .6rem .8rem;
+    background: rgba(0, 201, 167, 0.08);
+    border-left: 3px solid #00C9A7;
+    border-radius: 6px;
+    font-size: .85rem;
+  }
+  .rpt-reply .reply-head {
+    color: #00C9A7;
+    font-weight: 600;
+    margin-bottom: .25rem;
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .rpt-actions {
+    display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .6rem;
+  }
+  .filter-tabs {
+    display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: 1rem;
+  }
+  .filter-tabs a {
+    padding: .4rem .8rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: .85rem;
+    transition: .15s;
+  }
+  .filter-tabs a:hover { color: var(--text); border-color: var(--accent); }
+  .filter-tabs a.active {
+    background: rgba(212,168,42,.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: .15rem .45rem;
+    border-radius: 4px;
+    font-size: .72rem;
+    font-weight: 600;
+  }
+  .badge-unread { background: rgba(212,168,42,.2); color: var(--accent); }
+  .badge-resolved { background: rgba(74,222,128,.2); color: #4ade80; }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📨 User Reports <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ counts.total }})</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<div class="filter-tabs">
+  <a href="{{ url_for('admin_reports') }}" class="{{ 'active' if not status_filter }}">All ({{ counts.total }})</a>
+  <a href="{{ url_for('admin_reports', status='unread') }}" class="{{ 'active' if status_filter == 'unread' }}">Unread ({{ counts.unread }})</a>
+  <a href="{{ url_for('admin_reports', status='open') }}" class="{{ 'active' if status_filter == 'open' }}">Open ({{ counts.open }})</a>
+  <a href="{{ url_for('admin_reports', status='resolved') }}" class="{{ 'active' if status_filter == 'resolved' }}">Resolved ({{ counts.resolved }})</a>
+</div>
+
+{% if not reports %}
+<div style="text-align:center;padding:2rem;color:var(--muted);background:var(--card);border-radius:10px;">
+  No reports {% if status_filter %}match this filter{% else %}yet — users can submit via <code>/report &lt;message&gt;</code>{% endif %}.
+</div>
+{% else %}
+
+{% for r in reports %}
+{% set u = users_by_id.get(r.user_id) %}
+<div class="rpt-card {{ 'unread' if not r.is_read }} {{ 'resolved' if r.is_resolved }}">
+  <div class="rpt-head">
+    <div>
+      <strong>
+        {% if u %}
+          <a href="{{ url_for('user_detail', user_id=u.id) }}" style="color:var(--text);text-decoration:none;">
+            {{ u.first_name or '—' }}{% if u.username %} (@{{ u.username }}){% endif %}
+          </a>
+        {% else %}
+          User #{{ r.user_id }} (deleted?)
+        {% endif %}
+      </strong>
+      {% if not r.is_read %}<span class="badge badge-unread">🆕 UNREAD</span>{% endif %}
+      {% if r.is_resolved %}<span class="badge badge-resolved">✅ RESOLVED</span>{% endif %}
+      <div class="rpt-meta">
+        Report #{{ r.id }} · {{ r.created_at.strftime('%d %b %Y %H:%M') if r.created_at else '—' }}
+      </div>
+    </div>
+  </div>
+
+  <div class="rpt-body">{{ r.message }}</div>
+
+  {% if r.admin_response %}
+  <div class="rpt-reply">
+    <div class="reply-head">Reply sent {{ r.replied_at.strftime('%d %b %H:%M') if r.replied_at else '' }}
+      {% if r.replied_by %}by {{ r.replied_by }}{% endif %}
+    </div>
+    {{ r.admin_response }}
+  </div>
+  {% endif %}
+
+  <div class="rpt-actions">
+    {% if not r.is_read %}
+    <form method="POST" action="{{ url_for('admin_reports', status=status_filter) }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="mark_read">
+      <input type="hidden" name="report_id" value="{{ r.id }}">
+      <button type="submit" class="btn btn-ghost btn-sm">👁️ Mark Read</button>
+    </form>
+    {% endif %}
+
+    {% if not r.is_resolved %}
+    <form method="POST" action="{{ url_for('admin_reports', status=status_filter) }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="resolve">
+      <input type="hidden" name="report_id" value="{{ r.id }}">
+      <button type="submit" class="btn btn-green btn-sm">✅ Resolve</button>
+    </form>
+    {% endif %}
+
+    {% if not r.admin_response and u %}
+    <details style="display:inline-block;">
+      <summary style="cursor:pointer;color:var(--accent);font-size:.85rem;padding:.3rem .6rem;border:1px solid var(--accent);border-radius:4px;list-style:none;">↩️ Reply</summary>
+      <form method="POST" action="{{ url_for('admin_reports', status=status_filter) }}" style="margin-top:.5rem;background:var(--bg);padding:.6rem;border-radius:6px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="reply">
+        <input type="hidden" name="report_id" value="{{ r.id }}">
+        <textarea name="reply" required placeholder="Reply to {{ u.first_name or 'user' }}..." rows="4"
+                  style="width:100%;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.5rem;border-radius:6px;font-family:inherit;line-height:1.5;resize:vertical;"></textarea>
+        <button type="submit" class="btn btn-blue btn-sm" style="margin-top:.4rem;">📤 Send reply via bot</button>
+        <span style="color:var(--muted);font-size:.75rem;margin-left:.5rem;">
+          Will be sent as a DM from the bot to @{{ u.username or u.first_name }}.
+        </span>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% endblock %}
