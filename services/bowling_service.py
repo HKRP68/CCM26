@@ -47,7 +47,8 @@ STYLE_MAP = {
     "Slow left-arm orthodox": "Off Spinner",
 }
 
-AVAILABLE_SHOTS = ["Drive", "Cut", "Pull", "Leg Glance", "Flick", "Sweep", "Switch Hit", "Slog", "Loft"]
+AVAILABLE_SHOTS = ["Drive", "Cut", "Pull", "Leg Glance", "Flick", "Sweep",
+                   "Switch Hit", "Slog", "Loft", "Defend", "Leave"]
 
 
 def get_bowler_profile_key(bowl_style):

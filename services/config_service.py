@@ -43,6 +43,12 @@ DEFAULTS = {
     # Scorecard accent colors (hex strings)
     "scorecard_color_inn1": "#c41e3a",
     "scorecard_color_inn2": "#00c9a7",
+    # Maintenance mode
+    "is_maintenance": False,
+    "maintenance_message": None,
+    "maintenance_until": None,
+    "maintenance_started_at": None,
+    "maintenance_bypass_ids": None,
 }
 
 

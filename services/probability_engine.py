@@ -256,7 +256,57 @@ SHOT_MODS = {
     "Switch Hit":  {"4": +1.5, "6": +2, "W": +1.5, "dot": -1, "1": -1},        # all-or-nothing
     "Slog":        {"6": +4, "4": +1, "W": +2, "dot": -2.5, "1": -1.5},        # max boundaries, max risk
     "Loft":        {"4": +1, "6": +3, "W": +1.2, "dot": -1.5, "1": -1},        # aerial big hit
+    "Defend":      {"dot": +20, "1": -2, "2": -1, "4": -3, "6": -1, "W": -0.5},  # block — burn balls, very safe
+    "Leave":       {"dot": +35, "1": -5, "2": -1, "4": -4, "6": -2, "W": -1.5}, # let it pass — no runs, very low risk
 }
+
+
+# DB-backed shot mods cache. Refreshed when admin saves.
+_SHOT_MODS_CACHE = {"data": None}
+
+
+def invalidate_shot_mods_cache():
+    """Called from admin after saving to force a re-read on next ball."""
+    _SHOT_MODS_CACHE["data"] = None
+
+
+def _get_shot_mods(shot):
+    """Get shot mods — DB if available (cached), fallback to SHOT_MODS."""
+    if _SHOT_MODS_CACHE["data"] is not None:
+        return _SHOT_MODS_CACHE["data"].get(shot, SHOT_MODS.get(shot, {}))
+
+    try:
+        from database import get_session
+        from models import ShotProbability
+        s = get_session()
+        try:
+            rows = s.query(ShotProbability).filter(
+                ShotProbability.enabled == True).all()
+            if not rows:
+                _SHOT_MODS_CACHE["data"] = {}
+                return SHOT_MODS.get(shot, {})
+            cache = {}
+            for r in rows:
+                mods = {}
+                if r.mod_dot: mods["dot"] = r.mod_dot
+                if r.mod_1: mods["1"] = r.mod_1
+                if r.mod_2: mods["2"] = r.mod_2
+                if r.mod_3: mods["3"] = r.mod_3
+                if r.mod_4: mods["4"] = r.mod_4
+                if r.mod_6: mods["6"] = r.mod_6
+                if r.mod_wicket: mods["W"] = r.mod_wicket
+                if r.mod_extras: mods["extras"] = r.mod_extras
+                cache[r.shot_name] = mods
+            _SHOT_MODS_CACHE["data"] = cache
+            return cache.get(shot, SHOT_MODS.get(shot, {}))
+        finally:
+            s.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "Couldn't load ShotProbability; using SHOT_MODS fallback")
+        _SHOT_MODS_CACHE["data"] = {}
+        return SHOT_MODS.get(shot, {})
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -388,7 +438,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     _apply_mods(probs, PHASE_MODS.get(phase, {}))
 
     # Layer 7: Shot
-    _apply_mods(probs, SHOT_MODS.get(shot, {}))
+    # Layer 7: Shot — use DB-backed mods if available, fallback to SHOT_MODS
+    _apply_mods(probs, _get_shot_mods(shot))
 
     # Layer 8: Rating differential — the dominance modifier
     _apply_rating_diff(probs, bat_rating, bowl_rating)

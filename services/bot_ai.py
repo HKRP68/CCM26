@@ -152,8 +152,11 @@ def pick_bot_shot(striker, bowler, over, total_overs,
         else:
             prefs = BATTING_PHASE_PREFS[phase]
     elif current_wickets >= 7 and phase != "Death":
-        # Lost lots of wickets — anchor more
-        prefs = BATTING_PHASE_PREFS["Middle"]
+        # Lost lots of wickets — anchor more, occasional defend
+        prefs = {
+            "shots": ["Leg Glance", "Flick", "Drive", "Defend", "Cut"],
+            "weights":  [3, 3, 3, 2, 1],
+        }
     else:
         prefs = BATTING_PHASE_PREFS[phase]
 
