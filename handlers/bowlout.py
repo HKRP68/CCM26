@@ -295,43 +295,40 @@ async def _run_bowlout_deliveries(context, bowlout_id):
             parse_mode="HTML")
     except Exception: pass
 
-    # Sudden-death: each side has up to 6 more bowlers we haven't picked.
-    # Auto-pick the next-best bowler each round.
-    MAX_ROUNDS = 6
-    for _ in range(MAX_ROUNDS):
+    # ── Sudden death ─────────────────────────────────────────────
+    # No ties allowed. Auto-pick the next-best bowler each round.
+    # If a team runs out of unique bowlers, we loop back to the top of
+    # their order. This guarantees the bowl-out ALWAYS produces a winner.
+    MAX_ROUNDS = 999  # effectively infinite; in practice 1-2 rounds resolve it
+    sudden_round = 0
+    while sudden_round < MAX_ROUNDS:
+        sudden_round += 1
         await asyncio.sleep(DELAY)
         session = get_session()
         try:
             bo = session.query(Bowlout).get(bowlout_id)
-            # Auto-pick: best remaining bowler for each side
-            u1_used = set()
-            u2_used = set()
-            for b in (session.query(BowloutBall)
-                              .filter(BowloutBall.bowlout_id == bowlout_id)
-                              .all()):
-                if b.bowler_user_id == bo.user1_id:
-                    u1_used.add(b.bowler_player_id)
-                else:
-                    u2_used.add(b.bowler_player_id)
+            u1_all = _xi_bowlers(session, bo.user1_id)
+            u2_all = _xi_bowlers(session, bo.user2_id)
+            u1_all.sort(key=lambda x: -(x["bowl_rating"] or 0))
+            u2_all.sort(key=lambda x: -(x["bowl_rating"] or 0))
 
-            u1_pool = [b for b in _xi_bowlers(session, bo.user1_id)
-                        if b["player_id"] not in u1_used]
-            u2_pool = [b for b in _xi_bowlers(session, bo.user2_id)
-                        if b["player_id"] not in u2_used]
-            if not u1_pool or not u2_pool:
-                # Out of bowlers — coin flip
-                import random as _r
-                winner = bo.user1_id if _r.random() < 0.5 else bo.user2_id
-                session.commit()
-                await _finalize_bowlout(context, bowlout_id, winner,
-                                         flavor="No more bowlers — coin flip")
-                return
+            # Count how many sudden-death balls each side has bowled
+            sd_balls = (session.query(BowloutBall)
+                                .filter(BowloutBall.bowlout_id == bowlout_id,
+                                        BowloutBall.ball_index >= 10)
+                                .all())
+            u1_sd_count = sum(1 for b in sd_balls if b.bowler_user_id == bo.user1_id)
+            u2_sd_count = sum(1 for b in sd_balls if b.bowler_user_id == bo.user2_id)
 
-            u1_pool.sort(key=lambda x: -(x["bowl_rating"] or 0))
-            u2_pool.sort(key=lambda x: -(x["bowl_rating"] or 0))
+            if not u1_all or not u2_all:
+                break  # safety: a team has no bowlers at all
+
+            # Loop back to top of order if pool exhausted
+            u1_pick = u1_all[u1_sd_count % len(u1_all)]
+            u2_pick = u2_all[u2_sd_count % len(u2_all)]
 
             from services.bowlout_service import queue_sudden_death
-            queue_sudden_death(session, bowlout_id, u1_pool[0], u2_pool[0])
+            queue_sudden_death(session, bowlout_id, u1_pick, u2_pick)
             session.commit()
         finally:
             session.close()
@@ -369,20 +366,23 @@ async def _run_bowlout_deliveries(context, bowlout_id):
             await _finalize_bowlout(context, bowlout_id, winner_id)
             return
 
-    # Still tied after MAX_ROUNDS of sudden death — coin flip
+    # Safety fallback: if we somehow exited the loop without a winner,
+    # whoever has more hits wins (mathematically near-impossible after
+    # 1000+ rounds; this just keeps the function total).
     session = get_session()
     try:
         bo = session.query(Bowlout).get(bowlout_id)
-        import random as _r
-        winner_id = bo.user1_id if _r.random() < 0.5 else bo.user2_id
+        winner_id = bo.user1_id if bo.user1_hits >= bo.user2_hits else bo.user2_id
     finally:
         session.close()
-    await _finalize_bowlout(context, bowlout_id, winner_id,
-                             flavor="Still tied — coin flip")
+    await _finalize_bowlout(context, bowlout_id, winner_id)
 
 
 async def _finalize_bowlout(context, bowlout_id, winner_user_id, flavor=None):
-    """Mark complete + send result message."""
+    """Mark complete + send result message + (if from a tied match) update
+    the parent Match's winner record and send both innings scorecards with
+    the bowl-out winner declared.
+    """
     from services.message_service import get_msg
     session = get_session()
     try:
@@ -392,22 +392,90 @@ async def _finalize_bowlout(context, bowlout_id, winner_user_id, flavor=None):
         bo.completed_at = datetime.utcnow()
         winner_team = (bo.user1_team_name if winner_user_id == bo.user1_id
                         else bo.user2_team_name)
-        text = get_msg(
+        loser_team = (bo.user2_team_name if winner_user_id == bo.user1_id
+                       else bo.user1_team_name)
+        bowlout_result_text = get_msg(
             "bowlout_result",
             winner_team=winner_team,
             team1=bo.user1_team_name, team2=bo.user2_team_name,
             hits1=bo.user1_hits, hits2=bo.user2_hits,
         )
         if flavor:
-            text += f"\n\n<i>{flavor}</i>"
-        session.commit()
+            bowlout_result_text += f"\n\n<i>{flavor}</i>"
         chat_id = bo.chat_id
+        parent_match_id = bo.match_id
+        bo_user1_id = bo.user1_id
+        bo_user2_id = bo.user2_id
+        u1_hits = bo.user1_hits
+        u2_hits = bo.user2_hits
+
+        # If from a tied match, update Match record with real winner
+        if parent_match_id:
+            try:
+                from models import Match
+                m = session.query(Match).get(parent_match_id)
+                if m:
+                    m.winner_id = winner_user_id
+                    m.loser_id = (bo_user2_id if winner_user_id == bo_user1_id
+                                   else bo_user1_id)
+                    m.margin_type = "bowl-out"
+                    m.margin_value = abs(u1_hits - u2_hits)
+                    m.status = "completed"
+                    m.completed_at = datetime.utcnow()
+            except Exception:
+                logger.exception("Failed to update parent Match winner")
+
+        session.commit()
     finally:
         session.close()
+
+    # 1. Send the bowl-out result message
     try:
-        await context.bot.send_message(chat_id, text, parse_mode="HTML")
+        await context.bot.send_message(chat_id, bowlout_result_text,
+                                        parse_mode="HTML")
     except Exception:
         logger.exception("Couldn't send bowl-out result message")
+
+    # 2. If from a tied match: send both scorecards + final winner banner,
+    #    then clean up the match state.
+    if parent_match_id:
+        import asyncio as _asyncio
+        await _asyncio.sleep(0.6)
+        try:
+            from handlers.match import _send_innings_scorecards, cleanup_state
+            try:
+                await _send_innings_scorecards(context, parent_match_id, innings_num=1)
+            except Exception:
+                logger.exception("1st innings scorecard failed (non-fatal)")
+            await _asyncio.sleep(0.4)
+            try:
+                await _send_innings_scorecards(context, parent_match_id, innings_num=2)
+            except Exception:
+                logger.exception("2nd innings scorecard failed (non-fatal)")
+            await _asyncio.sleep(0.4)
+
+            # Final result banner
+            try:
+                if winner_user_id == bo_user1_id:
+                    margin_str = f"{u1_hits}–{u2_hits}"
+                else:
+                    margin_str = f"{u2_hits}–{u1_hits}"
+                final_banner = (
+                    "🏆 <b>MATCH RESULT (via Bowl-out)</b>\n\n"
+                    f"<b>{winner_team}</b> beat <b>{loser_team}</b>\n"
+                    f"<i>Match tied — won the bowl-out {margin_str}</i>"
+                )
+                await context.bot.send_message(chat_id, final_banner,
+                                                parse_mode="HTML")
+            except Exception:
+                logger.exception("Final banner failed (non-fatal)")
+
+            try:
+                cleanup_state(context, parent_match_id)
+            except Exception:
+                logger.exception("cleanup_state failed (non-fatal)")
+        except Exception:
+            logger.exception("Post-bowl-out scorecards routine failed")
 
 
 # ── /pbo standalone command ─────────────────────────────────────────

@@ -253,12 +253,24 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             acquired_date=datetime.utcnow(),
         )
         session.add(entry)
+        session.flush()  # populate entry.id for undo record
         user.roster_count += 1
 
         log_activity(session, user.id, "buy",
                      f"Bought {player.name} ({player.rating} OVR) for {buy_val:,}",
                      coins_change=-buy_val,
                      player_name=player.name, player_rating=player.rating)
+
+        # Record for /cmuundo (60-second window)
+        try:
+            from services.undo_service import record_buy
+            record_buy(session, user.id,
+                       roster_id=entry.id, player_id=player.id,
+                       player_name=player.name, rating=player.rating,
+                       price=buy_val)
+        except Exception:
+            logger.exception("record_buy failed (non-fatal)")
+
         session.commit()
 
         await query.edit_message_reply_markup(reply_markup=None)
@@ -267,7 +279,8 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"📛 {player.name} - {player.rating} OVR\n"
             f"💰 Paid: {buy_val:,} 🪙\n"
             f"💳 Balance: {user.total_coins:,} 🪙\n"
-            f"📊 Roster: {user.roster_count}/25",
+            f"📊 Roster: {user.roster_count}/25\n\n"
+            f"<i>↩️ Made a mistake? /cmuundo within 60 seconds to reverse.</i>",
             parse_mode="HTML",
         )
 

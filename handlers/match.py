@@ -3261,11 +3261,9 @@ async def _end_innings(ctx, mid):
                 except Exception:
                     logger.exception("Failed to mark tied match completed")
 
-                try:
-                    await _send_innings_scorecards(ctx, mid, innings_num=1)
-                    await _send_innings_scorecards(ctx, mid, innings_num=2)
-                except Exception:
-                    logger.exception("Tied-match scorecards failed (non-fatal)")
+                # NOTE: don't send scorecards here. They'll be sent by
+                # _finalize_bowlout in handlers/bowlout.py once the bowl-out
+                # finishes, with the winner declared.
 
                 try:
                     from handlers.bowlout import start_bowlout
@@ -3284,7 +3282,9 @@ async def _end_innings(ctx, mid):
                 except Exception:
                     logger.exception("start_bowlout failed")
 
-                cleanup_state(ctx, mid)
+                # NOTE: do NOT cleanup_state here. The bowl-out's
+                # _finalize_bowlout reads state to render the post-bowl-out
+                # scorecards, and cleans up after.
                 release_match_lock(mid)
                 return
 

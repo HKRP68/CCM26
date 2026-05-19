@@ -123,8 +123,15 @@ def _do_release(session, user, entries):
             pass  # best-effort
 
     # 5. Delete the roster entries
+    undo_items = []  # for /cmuundo
     for entry, player in entries:
         sv = get_sell_value(player.rating)
+        undo_items.append({
+            "player_id": player.id,
+            "player_name": player.name,
+            "rating": player.rating,
+            "price": sv,
+        })
         session.delete(entry)
         user.total_coins += sv
         user.roster_count = max(0, user.roster_count - 1)
@@ -136,6 +143,16 @@ def _do_release(session, user, entries):
 
     session.flush()
     _renumber_roster(session, user.id)
+
+    # Record for /cmuundo
+    if undo_items:
+        try:
+            from services.undo_service import record_release
+            record_release(session, user.id,
+                           items=undo_items, total_refund=total_coins)
+        except Exception:
+            import logging as _lg
+            _lg.getLogger(__name__).exception("record_release failed (non-fatal)")
 
     return {
         "success": True,
@@ -333,6 +350,7 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             text += "\n\n⚠️ Captain slot cleared. Use /setcaptain to assign new one."
         if result.get("traits_returned"):
             text += f"\n💎 {result['traits_returned']} trait(s) returned to inventory."
+        text += "\n\n<i>↩️ Made a mistake? /cmuundo within 60 seconds to reverse.</i>"
 
         await query.edit_message_text(text, parse_mode="HTML")
 
@@ -532,6 +550,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
             text += "\n\n⚠️ Captain slot cleared. Use /setcaptain."
         if result.get("traits_returned"):
             text += f"\n💎 {result['traits_returned']} trait(s) returned to inventory."
+        text += "\n\n<i>↩️ Made a mistake? /cmuundo within 60 seconds to reverse.</i>"
 
         await query.edit_message_text(text, parse_mode="HTML")
 
