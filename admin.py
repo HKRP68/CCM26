@@ -624,6 +624,13 @@ def players_bulk_upload():
         db = get_session()
         try:
             added = 0; skipped = 0; errors = []
+            added_by_version = {}  # for the success flash
+            # Cache of {name: base_player_id} for Base rows added in this batch,
+            # so a Legend row appearing AFTER its Base in the same upload can
+            # still link parent_player_id correctly (the Base row isn't queryable
+            # via db.query until flushed, and we want to avoid flushing on every
+            # row for performance).
+            batch_base_ids = {}
             # Parse CSV
             reader = csv.reader(io.StringIO(csv_text))
             rows = list(reader)
@@ -641,18 +648,35 @@ def players_bulk_upload():
                 if not row or not row[0].strip():
                     continue
                 try:
-                    # Format: Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating
-                    # Minimum required: Name, Rating, Category
+                    # Format: Name, Rating, Category, Country, Bat Hand, Bowl Hand,
+                    #         Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
+                    # Min required: Name. Version + Is Active are optional (default Base, 1).
                     cols = [c.strip() for c in row]
-                    while len(cols) < 9:
+                    while len(cols) < 11:
                         cols.append("")
 
                     name = cols[0]
                     if not name:
                         continue
 
-                    # Check duplicate
-                    existing = db.query(Player).filter(Player.name == name).first()
+                    # Version — column 10 (index 9). Default "Base" if empty/missing.
+                    # Strip surrounding quotes some spreadsheet exports add.
+                    version_raw = cols[9].strip().strip('"').strip("'")
+                    version = version_raw if version_raw else "Base"
+
+                    # Is Active — column 11 (index 10). "0", "false", "no" → inactive.
+                    is_active_raw = cols[10].strip().lower()
+                    if is_active_raw in ("0", "false", "no", "n", "inactive"):
+                        is_active = False
+                    else:
+                        is_active = True  # default
+
+                    # Duplicate check by (name, version) pair — multiple versions
+                    # of the same player are allowed by design.
+                    existing = (db.query(Player)
+                                .filter(Player.name == name,
+                                        Player.version == version)
+                                .first())
                     if existing:
                         skipped += 1
                         continue
@@ -694,23 +718,78 @@ def players_bulk_upload():
                     bat_hand = hand_map.get(bat_hand.lower(), bat_hand)
                     bowl_hand = hand_map.get(bowl_hand.lower(), bowl_hand)
 
+                    # For variant versions (non-Base): try to link to base card via
+                    # parent_player_id. Look up the existing Base row with same name.
+                    # Check both the DB (committed) and this batch's pending Base rows.
+                    parent_player_id = None
+                    if version.lower() != "base":
+                        # First, check batch cache (rows added in this loop)
+                        if name in batch_base_ids:
+                            parent_player_id = batch_base_ids[name]
+                        else:
+                            # Then check the DB for already-committed Base rows
+                            base = (db.query(Player)
+                                    .filter(Player.name == name,
+                                            Player.version == "Base")
+                                    .first())
+                            if base:
+                                parent_player_id = base.id
+                        # If still none, parent_player_id stays None. The version
+                        # still saves with the right `version` value. Caller can
+                        # upload Base first if they want the link.
+
                     p = Player(
                         name=name, rating=rating, category=category, country=country,
                         bat_hand=bat_hand, bowl_hand=bowl_hand, bowl_style=bowl_style,
                         bat_rating=bat_rating, bowl_rating=bowl_rating,
-                        version="Base", is_active=True,
+                        version=version, parent_player_id=parent_player_id,
+                        is_active=is_active,
                     )
                     db.add(p)
+                    # If this is a Base row, flush so its id is set, then cache
+                    # it for any subsequent variant rows in this batch.
+                    if version.lower() == "base":
+                        db.flush()
+                        batch_base_ids[name] = p.id
                     added += 1
+                    added_by_version[version] = added_by_version.get(version, 0) + 1
                 except Exception as e:
                     errors.append(f"Row {i}: {str(e)[:80]}")
 
             db.commit()
 
-            log_admin(db, "bulk_upload", detail=f"Added {added}, skipped {skipped} duplicates, {len(errors)} errors")
+            # Second pass: link parent_player_id for any variants that
+            # imported BEFORE their Base row (export sorts by rating desc, so
+            # high-rated variants like Legend can appear before the Base row
+            # in a round-trip).
+            try:
+                orphans = (db.query(Player)
+                           .filter(Player.version != "Base",
+                                   Player.parent_player_id.is_(None))
+                           .all())
+                linked = 0
+                for variant in orphans:
+                    base = (db.query(Player)
+                            .filter(Player.name == variant.name,
+                                    Player.version == "Base")
+                            .first())
+                    if base and base.id != variant.id:
+                        variant.parent_player_id = base.id
+                        linked += 1
+                if linked:
+                    db.commit()
+            except Exception:
+                logger.exception("Second-pass parent link failed (non-fatal)")
+
+            log_admin(db, "bulk_upload",
+                      detail=f"Added {added} (by version: {added_by_version}), "
+                             f"skipped {skipped} duplicates, {len(errors)} errors")
             db.commit()
 
             msg = f"✅ Added {added} players"
+            if len(added_by_version) > 1 or (added_by_version and "Base" not in added_by_version):
+                breakdown = ", ".join(f"{v}: {n}" for v, n in sorted(added_by_version.items()))
+                msg += f" ({breakdown})"
             if skipped: msg += f" · Skipped {skipped} duplicates"
             if errors: msg += f" · {len(errors)} errors"
             flash(msg, "success")
