@@ -719,6 +719,17 @@ class GameConfig(Base):
     # scorecard. Defaults match the original PRIMARY (red) / SECONDARY (teal).
     scorecard_color_inn1 = Column(String(9), default="#c41e3a")
     scorecard_color_inn2 = Column(String(9), default="#00c9a7")
+    # ── Maintenance mode ──
+    # When is_maintenance is True, all bot commands except those from a
+    # bypass user return maintenance_message instead of running. Matches
+    # already in progress are protected — only NEW matches/commands blocked.
+    is_maintenance = Column(Boolean, default=False, nullable=False)
+    maintenance_message = Column(Text, nullable=True)
+    maintenance_until = Column(DateTime, nullable=True)  # optional ETA shown to users
+    maintenance_started_at = Column(DateTime, nullable=True)
+    # Comma-separated telegram IDs allowed to use commands during maintenance
+    # (admins testing the bot, for example).
+    maintenance_bypass_ids = Column(String(500), nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
@@ -1145,3 +1156,70 @@ class BowloutBall(Base):
     bowler_rating = Column(Integer, default=70)
     is_hit = Column(Boolean, default=False)
     bowled_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserReport(Base):
+    __tablename__ = "user_reports"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_read = Column(Boolean, default=False, nullable=False)
+    is_resolved = Column(Boolean, default=False, nullable=False)
+    admin_response = Column(Text, nullable=True)
+    replied_at = Column(DateTime, nullable=True)
+    replied_by = Column(String(80), nullable=True)
+
+
+class ShotProbability(Base):
+    __tablename__ = "shot_probabilities"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    shot_name = Column(String(40), nullable=False, unique=True, index=True)
+    mod_dot = Column(Float, default=0.0)
+    mod_1 = Column(Float, default=0.0)
+    mod_2 = Column(Float, default=0.0)
+    mod_3 = Column(Float, default=0.0)
+    mod_4 = Column(Float, default=0.0)
+    mod_6 = Column(Float, default=0.0)
+    mod_wicket = Column(Float, default=0.0)
+    mod_extras = Column(Float, default=0.0)
+    description = Column(String(200), nullable=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BotChat(Base):
+    __tablename__ = "bot_chats"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(BigInteger, nullable=False, unique=True, index=True)
+    chat_type = Column(String(20), default="group")
+    title = Column(String(255), nullable=True)
+    username = Column(String(80), nullable=True)
+    member_count = Column(Integer, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    joined_at = Column(DateTime, default=datetime.utcnow)
+    left_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message = Column(Text, nullable=False)
+    target_type = Column(String(20), default="all")
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    sent_by = Column(String(80), nullable=True)
+    sent_count = Column(Integer, default=0)
+    failed_count = Column(Integer, default=0)
+    status = Column(String(20), default="pending")
+
+
+class PendingUndo(Base):
+    """Single-row-per-user state for /cmuundo command (60s window)."""
+    __tablename__ = "pending_undos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, unique=True, index=True)
+    action_type = Column(String(20), nullable=False)  # 'buy' | 'release'
+    payload = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)

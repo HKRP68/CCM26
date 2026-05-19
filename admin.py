@@ -387,10 +387,22 @@ def dashboard():
                       .limit(10).all())
         countries = [{"country": c, "count": n} for c, n in countries]
 
+        # Maintenance state (for the dashboard banner)
+        try:
+            from services.maintenance_service import is_maintenance_active
+            from services.config_service import get_config as _gc
+            _cfg = _gc()
+            maint_active = is_maintenance_active(_cfg)
+            maint_until = _cfg.get("maintenance_until")
+        except Exception:
+            maint_active = False
+            maint_until = None
+
         return render_template("dashboard.html", stats=stats, tiers=tiers,
                                countries=countries, growth=growth,
                                match_activity=match_activity,
-                               recent_logs=recent_logs, top_users=top_users)
+                               recent_logs=recent_logs, top_users=top_users,
+                               maint_active=maint_active, maint_until=maint_until)
     finally:
         db.close()
 
@@ -1527,6 +1539,155 @@ def user_detail(user_id):
                                today_key=today_key, month_key=month_key)
     finally:
         db.close()
+
+
+# ─── Edit user QP ────────────────────────────────────────────────────
+@app.route("/users/<int:user_id>/edit_qp", methods=["POST"])
+@login_required
+def admin_edit_qp(user_id):
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash(f"User {user_id} not found", "error")
+            return redirect(url_for("users_list"))
+        try:
+            action = (request.form.get("action") or "set").strip()
+            amount = int(request.form.get("amount") or 0)
+            current = user.quest_points or 0
+            if action == "set":
+                user.quest_points = max(0, amount)
+                msg = f"Set QP to {user.quest_points}"
+            elif action == "add":
+                user.quest_points = max(0, current + amount)
+                msg = f"Added {amount} QP → {user.quest_points}"
+            elif action == "subtract":
+                user.quest_points = max(0, current - amount)
+                msg = f"Subtracted {amount} QP → {user.quest_points}"
+            else:
+                flash(f"Unknown action: {action}", "error")
+                return redirect(url_for("user_detail", user_id=user_id))
+            db.commit()
+            log_admin(db, "edit_qp", target_type="user",
+                      target_id=user.id, target_name=user.first_name or "",
+                      detail=f"{action} {amount} (was {current})")
+            db.commit()
+            flash(f"✅ {msg}", "success")
+        except (ValueError, TypeError) as e:
+            flash(f"Invalid amount: {e}", "error")
+        except Exception as e:
+            db.rollback()
+            logger.exception("Edit QP failed")
+            flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
+# ─── Reset user — wipe all data ──────────────────────────────────────
+@app.route("/users/<int:user_id>/reset", methods=["POST"])
+@login_required
+def admin_reset_user(user_id):
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash(f"User {user_id} not found", "error")
+            return redirect(url_for("users_list"))
+
+        confirmation = (request.form.get("confirmation") or "").strip()
+        expected = f"RESET {user_id}"
+        if confirmation != expected:
+            flash(f"❌ Confirmation phrase wrong. Type exactly: <code>{expected}</code>",
+                  "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        try:
+            orig_state = {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "qp": user.quest_points or 0,
+                "roster_count": user.roster_count or 0,
+                "matches_played": user.matches_played or 0,
+                "first_name": user.first_name or "",
+                "username": user.username or "",
+            }
+
+            from models import (
+                UserRoster, UserStats, ActivityLog, UserQuestProgress,
+                UserAchievement, Trade, PlayerTrait, TraitInventory,
+            )
+
+            deleted_counts = {}
+            for model, attr in [
+                (UserRoster, "user_id"),
+                (UserStats, "user_id"),
+                (ActivityLog, "user_id"),
+                (UserQuestProgress, "user_id"),
+                (UserAchievement, "user_id"),
+                (TraitInventory, "user_id"),
+            ]:
+                try:
+                    n = (db.query(model)
+                           .filter(getattr(model, attr) == user_id)
+                           .delete(synchronize_session=False))
+                    deleted_counts[model.__tablename__] = n
+                except Exception as e:
+                    deleted_counts[model.__tablename__] = f"ERR:{e}"
+
+            try:
+                n = (db.query(PlayerTrait)
+                       .filter(PlayerTrait.user_id == user_id)
+                       .delete(synchronize_session=False))
+                deleted_counts["player_traits"] = n
+            except Exception as e:
+                deleted_counts["player_traits"] = f"ERR:{e}"
+
+            try:
+                n = (db.query(Trade)
+                        .filter((Trade.from_user_id == user_id) |
+                                (Trade.to_user_id == user_id))
+                        .delete(synchronize_session=False))
+                deleted_counts["trades"] = n
+            except Exception as e:
+                deleted_counts["trades"] = f"ERR:{e}"
+
+            # Reset User counters
+            user.total_coins = 0
+            user.total_gems = 0
+            user.quest_points = 0
+            user.roster_count = 0
+            user.matches_played = 0
+            user.matches_won = 0
+            user.matches_lost = 0
+            if hasattr(user, "win_streak"):
+                user.win_streak = 0
+            if hasattr(user, "trade_count"):
+                user.trade_count = 0
+
+            new_stats = UserStats(user_id=user_id)
+            db.add(new_stats)
+            db.commit()
+
+            log_admin(db, "reset_user", target_type="user",
+                      target_id=user.id,
+                      target_name=user.first_name or user.username or "",
+                      detail=(f"RESET — was: coins={orig_state['coins']:,}, "
+                              f"gems={orig_state['gems']}, QP={orig_state['qp']}, "
+                              f"roster={orig_state['roster_count']}, "
+                              f"matches={orig_state['matches_played']}. "
+                              f"Deleted: {deleted_counts}"))
+            db.commit()
+            flash(f"✅ Reset complete for <b>{orig_state['first_name'] or orig_state['username'] or user_id}</b>. "
+                  f"User must /debut again to play.",
+                  "success")
+        except Exception as e:
+            db.rollback()
+            logger.exception("Reset user failed")
+            flash(f"Error during reset: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
 
 
 @app.route("/users/<int:user_id>/quest_progress/<int:progress_id>/edit",
@@ -4293,6 +4454,534 @@ def _format_cooldown(seconds):
     if seconds < 3600: return f"{seconds // 60}m"
     if seconds < 86400: return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MAINTENANCE MODE — turn the bot on/off
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/maintenance", methods=["GET", "POST"])
+@login_required
+def admin_maintenance():
+    """Toggle maintenance mode, edit the user-facing message, set an ETA,
+    and manage bypass user IDs.
+
+    Matches already in progress continue to work even when maintenance is ON
+    — only NEW commands are blocked. Callback queries (in-progress match
+    button taps) are allowed through.
+    """
+    db = get_session()
+    try:
+        from models import GameConfig
+        from services.config_service import _refresh as _refresh_cfg
+        row = db.query(GameConfig).first()
+        if not row:
+            row = GameConfig()
+            db.add(row); db.flush()
+
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "enable":
+                    msg = (request.form.get("message", "") or "").strip()[:2000]
+                    until_str = (request.form.get("until", "") or "").strip()
+                    bypass_str = (request.form.get("bypass_ids", "") or "").strip()[:500]
+
+                    row.is_maintenance = True
+                    row.maintenance_message = msg or None
+                    row.maintenance_started_at = datetime.utcnow()
+                    row.maintenance_bypass_ids = bypass_str or None
+
+                    # Parse the datetime-local input as IST → convert to UTC for storage
+                    if until_str:
+                        try:
+                            from datetime import timedelta as _td
+                            # datetime-local format: 2025-12-31T18:30
+                            d = datetime.strptime(until_str, "%Y-%m-%dT%H:%M")
+                            # Treat input as IST, convert to UTC
+                            row.maintenance_until = d - _td(hours=5, minutes=30)
+                        except ValueError:
+                            row.maintenance_until = None
+                    else:
+                        row.maintenance_until = None
+
+                    row.updated_at = datetime.utcnow()
+                    row.updated_by = session.get("admin", "admin")
+                    db.commit()
+                    _refresh_cfg(db)  # invalidate cache so middleware sees the change
+
+                    log_admin(db, "maintenance_enable", target_type="config",
+                              target_name="maintenance",
+                              detail=f"until={until_str or 'no ETA'}, msg={'custom' if msg else 'default'}")
+                    db.commit()
+                    flash("🛠️ Maintenance mode <b>ENABLED</b>. New commands now blocked.", "info")
+
+                elif action == "disable":
+                    row.is_maintenance = False
+                    # Keep the message + until for reference, but clear start time
+                    row.maintenance_started_at = None
+                    row.updated_at = datetime.utcnow()
+                    db.commit()
+                    _refresh_cfg(db)
+                    log_admin(db, "maintenance_disable", target_type="config",
+                              target_name="maintenance", detail="disabled")
+                    db.commit()
+                    flash("✅ Maintenance mode <b>DISABLED</b>. Bot fully operational.", "success")
+
+                elif action == "save_message":
+                    # Update message + bypass without toggling state
+                    msg = (request.form.get("message", "") or "").strip()[:2000]
+                    bypass_str = (request.form.get("bypass_ids", "") or "").strip()[:500]
+                    until_str = (request.form.get("until", "") or "").strip()
+                    row.maintenance_message = msg or None
+                    row.maintenance_bypass_ids = bypass_str or None
+                    if until_str:
+                        try:
+                            from datetime import timedelta as _td
+                            d = datetime.strptime(until_str, "%Y-%m-%dT%H:%M")
+                            row.maintenance_until = d - _td(hours=5, minutes=30)
+                        except ValueError: pass
+                    row.updated_at = datetime.utcnow()
+                    db.commit()
+                    _refresh_cfg(db)
+                    log_admin(db, "maintenance_edit", target_type="config",
+                              target_name="maintenance",
+                              detail=f"msg={'custom' if msg else 'default'}")
+                    db.commit()
+                    flash("✅ Maintenance settings saved", "success")
+            except Exception as e:
+                db.rollback()
+                logger.exception("maintenance toggle failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_maintenance"))
+
+        # GET — render the page
+        from services.maintenance_service import is_maintenance_active
+        from datetime import timedelta as _td
+
+        cfg = {
+            "is_maintenance": row.is_maintenance or False,
+            "maintenance_message": row.maintenance_message,
+            "maintenance_until": row.maintenance_until,
+            "maintenance_started_at": row.maintenance_started_at,
+            "maintenance_bypass_ids": row.maintenance_bypass_ids or "",
+        }
+        # Convert UTC → IST for the datetime-local input value
+        until_ist_str = ""
+        if row.maintenance_until:
+            ist = row.maintenance_until + _td(hours=5, minutes=30)
+            until_ist_str = ist.strftime("%Y-%m-%dT%H:%M")
+
+        # Render preview message
+        from services.maintenance_service import get_maintenance_message
+        preview = get_maintenance_message(cfg=cfg) if cfg["is_maintenance"] or cfg["maintenance_message"] else None
+
+        active = is_maintenance_active(cfg)
+
+        return render_template("admin_maintenance.html",
+                               cfg=cfg, active=active,
+                               until_ist_str=until_ist_str,
+                               preview=preview)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# USER REPORTS — inbox for /report submissions
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/reports", methods=["GET", "POST"])
+@login_required
+def admin_reports():
+    db = get_session()
+    try:
+        from models import UserReport
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "mark_read":
+                    rid = int(request.form.get("report_id"))
+                    r = db.query(UserReport).get(rid)
+                    if r:
+                        r.is_read = True; db.commit()
+                        flash("Marked as read", "info")
+                elif action == "resolve":
+                    rid = int(request.form.get("report_id"))
+                    r = db.query(UserReport).get(rid)
+                    if r:
+                        r.is_resolved = True; r.is_read = True
+                        db.commit()
+                        log_admin(db, "report_resolve", target_type="report",
+                                  target_id=r.id, target_name=f"#{r.id}",
+                                  detail="Marked resolved")
+                        db.commit()
+                        flash(f"✅ Report #{r.id} resolved", "success")
+                elif action == "reply":
+                    rid = int(request.form.get("report_id"))
+                    reply = (request.form.get("reply") or "").strip()[:2000]
+                    if not reply:
+                        flash("Reply cannot be empty", "error")
+                    else:
+                        r = db.query(UserReport).get(rid)
+                        if r:
+                            user = db.query(User).get(r.user_id)
+                            if user:
+                                try:
+                                    from bot import _send_admin_reply_blocking
+                                    sent = _send_admin_reply_blocking(
+                                        user.telegram_id, reply)
+                                    if not sent:
+                                        flash("Saved reply but bot send failed", "error")
+                                except Exception as e:
+                                    logger.exception("Reply send failed")
+                                    flash(f"Saved reply but send failed: {e}", "error")
+                                r.admin_response = reply
+                                r.replied_at = datetime.utcnow()
+                                r.replied_by = session.get("admin", "admin")
+                                r.is_read = True
+                                db.commit()
+                                log_admin(db, "report_reply",
+                                          target_type="report",
+                                          target_id=r.id, target_name=f"#{r.id}",
+                                          detail=f"Replied ({len(reply)} chars)")
+                                db.commit()
+                                flash(f"✅ Replied to report #{r.id}", "success")
+            except Exception as e:
+                db.rollback()
+                logger.exception("Report action failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_reports",
+                                     status=request.args.get("status", "")))
+
+        status_filter = (request.args.get("status") or "").strip()
+        query = db.query(UserReport)
+        if status_filter == "unread":
+            query = query.filter(UserReport.is_read == False)
+        elif status_filter == "open":
+            query = query.filter(UserReport.is_resolved == False)
+        elif status_filter == "resolved":
+            query = query.filter(UserReport.is_resolved == True)
+        reports = query.order_by(UserReport.created_at.desc()).limit(200).all()
+
+        user_ids = list({r.user_id for r in reports})
+        users_by_id = {u.id: u for u in db.query(User).filter(
+            User.id.in_(user_ids)).all()} if user_ids else {}
+
+        counts = {
+            "unread": db.query(UserReport).filter(UserReport.is_read == False).count(),
+            "open": db.query(UserReport).filter(UserReport.is_resolved == False).count(),
+            "resolved": db.query(UserReport).filter(UserReport.is_resolved == True).count(),
+            "total": db.query(UserReport).count(),
+        }
+        return render_template("admin_reports.html",
+                               reports=reports, users_by_id=users_by_id,
+                               counts=counts, status_filter=status_filter)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SHOT PROBABILITIES — per-shot outcome modifiers + simulator
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/shot-probabilities", methods=["GET", "POST"])
+@login_required
+def admin_shot_probs():
+    db = get_session()
+    try:
+        from models import ShotProbability
+        from services.probability_engine import invalidate_shot_mods_cache
+
+        if request.method == "POST":
+            action = request.form.get("action", "save")
+            try:
+                if action == "save":
+                    rows = db.query(ShotProbability).all()
+                    for r in rows:
+                        prefix = f"shot_{r.id}_"
+                        def _f(key, default=0.0):
+                            v = request.form.get(prefix + key)
+                            if v is None or v == "":
+                                return default
+                            try:
+                                return float(v)
+                            except ValueError:
+                                return default
+                        r.mod_dot = _f("dot")
+                        r.mod_1 = _f("1")
+                        r.mod_2 = _f("2")
+                        r.mod_3 = _f("3")
+                        r.mod_4 = _f("4")
+                        r.mod_6 = _f("6")
+                        r.mod_wicket = _f("wicket")
+                        r.mod_extras = _f("extras")
+                        r.enabled = (request.form.get(prefix + "enabled") == "on")
+                    db.commit()
+                    invalidate_shot_mods_cache()
+                    log_admin(db, "shot_probs_save", target_type="config",
+                              target_name="shot_probabilities",
+                              detail=f"Saved {len(rows)} shots")
+                    db.commit()
+                    flash(f"✅ Saved {len(rows)} shots. Changes apply to next match ball.",
+                          "success")
+                elif action == "reset":
+                    from services.probability_engine import SHOT_MODS as _SM
+                    for r in db.query(ShotProbability).all():
+                        mods = _SM.get(r.shot_name, {})
+                        r.mod_dot = float(mods.get("dot", 0))
+                        r.mod_1 = float(mods.get("1", 0))
+                        r.mod_2 = float(mods.get("2", 0))
+                        r.mod_3 = float(mods.get("3", 0))
+                        r.mod_4 = float(mods.get("4", 0))
+                        r.mod_6 = float(mods.get("6", 0))
+                        r.mod_wicket = float(mods.get("W", 0))
+                        r.mod_extras = float(mods.get("extras", 0))
+                        r.enabled = True
+                    db.commit()
+                    invalidate_shot_mods_cache()
+                    flash("✅ All shots reset to code defaults", "info")
+            except Exception as e:
+                db.rollback()
+                logger.exception("Shot probs save failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_shot_probs"))
+
+        shots = (db.query(ShotProbability)
+                   .order_by(ShotProbability.shot_name).all())
+        return render_template("admin_shot_probs.html", shots=shots)
+    finally:
+        db.close()
+
+
+@app.route("/shot-probabilities/simulate", methods=["POST"])
+@login_required
+def admin_shot_simulate():
+    try:
+        from collections import Counter
+        from services.probability_engine import calculate_outcome
+
+        shot = (request.form.get("shot") or "Drive").strip()
+        bowl_style = (request.form.get("bowl_style") or "Right-arm fast").strip()
+        bowl_hand = (request.form.get("bowl_hand") or "R").strip()
+        variation = (request.form.get("variation") or "Stock").strip()
+        length = (request.form.get("length") or "Good").strip()
+        pitch_type = (request.form.get("pitch_type") or "Flat").strip()
+        bat_rating = int(request.form.get("bat_rating") or 75)
+        bowl_rating = int(request.form.get("bowl_rating") or 75)
+        over = int(request.form.get("over") or 10)
+        total_overs = int(request.form.get("total_overs") or 20)
+        n_balls = min(20000, max(100, int(request.form.get("n_balls") or 5000)))
+
+        c = Counter()
+        runs_total = 0
+        for _ in range(n_balls):
+            out = calculate_outcome(
+                bowl_style=bowl_style, bowl_hand=bowl_hand,
+                variation=variation, length=length,
+                pitch_type=pitch_type, over=over, total_overs=total_overs,
+                shot=shot, bat_rating=bat_rating, bowl_rating=bowl_rating,
+            )
+            t = out.get("type")
+            r = out.get("runs", 0)
+            if t == "wicket":
+                c["W"] += 1
+            elif t == "runs":
+                runs_total += r
+                if r == 0: c["dot"] += 1
+                elif r == 1: c["1"] += 1
+                elif r == 2: c["2"] += 1
+                elif r == 3: c["3"] += 1
+                elif r == 4: c["4"] += 1
+                elif r == 6: c["6"] += 1
+                else: c[f"{r}r"] += 1
+            elif t in ("wide", "noball", "legbye"):
+                runs_total += r
+                c["extras"] += 1
+            else:
+                c[str(t)] += 1
+
+        return {
+            "ok": True,
+            "shot": shot,
+            "n": n_balls,
+            "distribution": {k: c.get(k, 0) for k in
+                ["dot", "1", "2", "3", "4", "6", "W", "extras"]},
+            "percentages": {k: round(c.get(k, 0) / n_balls * 100, 2) for k in
+                ["dot", "1", "2", "3", "4", "6", "W", "extras"]},
+            "avg_runs": round(runs_total / n_balls, 3),
+            "expected_RR": round(runs_total / n_balls * 6, 2),
+        }
+    except Exception as e:
+        logger.exception("Shot simulate failed")
+        return {"ok": False, "error": str(e)}, 500
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BROADCAST — send a message to all groups
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/broadcast", methods=["GET", "POST"])
+@login_required
+def admin_broadcast():
+    db = get_session()
+    try:
+        from models import BotChat, Broadcast
+        if request.method == "POST":
+            try:
+                message = (request.form.get("message") or "").strip()
+                target = (request.form.get("target") or "all").strip()
+                if not message:
+                    flash("Message cannot be empty", "error")
+                    return redirect(url_for("admin_broadcast"))
+                if len(message) > 4000:
+                    flash("Message too long (max 4000 chars)", "error")
+                    return redirect(url_for("admin_broadcast"))
+
+                query = db.query(BotChat).filter(BotChat.is_active == True)
+                if target == "groups":
+                    query = query.filter(BotChat.chat_type.in_(["group", "supergroup"]))
+                elif target == "private":
+                    query = query.filter(BotChat.chat_type == "private")
+                chats = query.all()
+                chat_ids = [c.chat_id for c in chats]
+
+                if not chat_ids:
+                    flash(f"No active chats matching '{target}'", "info")
+                    return redirect(url_for("admin_broadcast"))
+
+                bc = Broadcast(
+                    message=message, target_type=target,
+                    sent_by=session.get("admin", "admin"),
+                    status="pending",
+                )
+                db.add(bc); db.commit()
+                bc_id = bc.id
+
+                log_admin(db, "broadcast_create", target_type="broadcast",
+                          target_id=bc.id, target_name=target,
+                          detail=f"To {len(chat_ids)} chats")
+                db.commit()
+
+                import threading
+                t = threading.Thread(
+                    target=_run_broadcast_worker,
+                    args=(bc_id, list(chat_ids), message),
+                    daemon=True,
+                )
+                t.start()
+                flash(f"📢 Broadcast #{bc_id} queued for {len(chat_ids)} chats. "
+                      f"Refresh to see progress.", "success")
+            except Exception as e:
+                db.rollback()
+                logger.exception("Broadcast create failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_broadcast"))
+
+        broadcasts = (db.query(Broadcast)
+                       .order_by(Broadcast.sent_at.desc())
+                       .limit(20).all())
+        chat_counts = {
+            "total": db.query(BotChat).filter(BotChat.is_active == True).count(),
+            "groups": db.query(BotChat).filter(
+                BotChat.is_active == True,
+                BotChat.chat_type.in_(["group", "supergroup"])).count(),
+            "private": db.query(BotChat).filter(
+                BotChat.is_active == True,
+                BotChat.chat_type == "private").count(),
+            "inactive": db.query(BotChat).filter(BotChat.is_active == False).count(),
+        }
+        recent_chats = (db.query(BotChat)
+                         .filter(BotChat.is_active == True)
+                         .order_by(BotChat.last_seen_at.desc())
+                         .limit(20).all())
+        return render_template("admin_broadcast.html",
+                               broadcasts=broadcasts,
+                               chat_counts=chat_counts,
+                               recent_chats=recent_chats)
+    finally:
+        db.close()
+
+
+def _run_broadcast_worker(bc_id, chat_ids, message):
+    """Background worker — sends broadcast at ~20 msgs/sec."""
+    import time
+    import logging as _lg
+    log = _lg.getLogger("broadcast")
+    sent = 0
+    failed = 0
+
+    from telegram import Bot
+    from config import BOT_TOKEN
+    bot_instance = Bot(token=BOT_TOKEN)
+
+    import asyncio
+    loop = asyncio.new_event_loop()
+
+    try:
+        from database import get_session as _gs
+        from models import Broadcast as _BC
+        s = _gs()
+        bc = s.query(_BC).get(bc_id)
+        if bc:
+            bc.status = "running"
+            s.commit()
+        s.close()
+    except Exception:
+        pass
+
+    DELAY = 0.05
+
+    async def _send_one(cid):
+        try:
+            await bot_instance.send_message(
+                chat_id=cid, text=message, parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            return True
+        except Exception as e:
+            log.warning(f"Broadcast send to {cid} failed: {e}")
+            return False
+
+    for cid in chat_ids:
+        try:
+            ok = loop.run_until_complete(_send_one(cid))
+            if ok: sent += 1
+            else: failed += 1
+        except Exception as e:
+            log.warning(f"Broadcast {bc_id} send to {cid} crashed: {e}")
+            failed += 1
+        time.sleep(DELAY)
+
+        if (sent + failed) % 50 == 0:
+            try:
+                s = _gs()
+                bc = s.query(_BC).get(bc_id)
+                if bc:
+                    bc.sent_count = sent
+                    bc.failed_count = failed
+                    s.commit()
+                s.close()
+            except Exception:
+                pass
+
+    try:
+        s = _gs()
+        bc = s.query(_BC).get(bc_id)
+        if bc:
+            bc.sent_count = sent
+            bc.failed_count = failed
+            bc.status = "done"
+            s.commit()
+        s.close()
+    except Exception:
+        pass
+
+    try:
+        loop.close()
+    except Exception:
+        pass
+
+    log.info(f"Broadcast {bc_id} complete: {sent} sent, {failed} failed")
 
 
 # ═══════════════════════════════════════════════════════════════════════

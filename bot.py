@@ -8,6 +8,7 @@ from telegram.ext import (
     ApplicationHandlerStop,
     CommandHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     MessageHandler,
     TypeHandler,
     filters,
@@ -62,6 +63,7 @@ from handlers.bowlout import (
     pbo_handler, pbo_accept_callback, pbo_decline_callback,
     bowlout_pick_callback,
 )
+from handlers.report import report_handler
 
 # Match handlers
 from handlers.match import (
@@ -226,6 +228,32 @@ def start_admin_panel():
         logger.exception("Admin panel crashed")
 
 
+def _send_admin_reply_blocking(chat_id, text):
+    """Synchronous send-message helper for use from Flask admin panel."""
+    try:
+        import asyncio
+        from telegram import Bot
+        bot_instance = Bot(token=BOT_TOKEN)
+
+        async def _send():
+            await bot_instance.send_message(
+                chat_id=chat_id,
+                text=("📬 <b>Admin reply to your /report:</b>\n\n" + text),
+                parse_mode="HTML",
+            )
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_send())
+            loop.close()
+            return True
+        except Exception:
+            logger.exception("Async send failed")
+            return False
+    except Exception:
+        logger.exception("Reply send failed")
+        return False
+
+
 def main():
     setup_logging()
     print("=" * 50)
@@ -295,6 +323,41 @@ def main():
         logger.info("Starting bot...")
         app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+        # ── Chat-tracker middleware (group=-3, runs FIRST) ──
+        async def _track_chat(update, context):
+            try:
+                from services.chat_tracker import record_chat
+                record_chat(update)
+            except Exception:
+                pass
+        app.add_handler(TypeHandler(_TGUpdate, _track_chat), group=-3)
+
+        # ── Maintenance middleware (group=-2, runs FIRST) ──
+        async def _maintenance_check(update, context):
+            try:
+                from services.maintenance_service import (
+                    should_block_update, get_maintenance_message
+                )
+                if not should_block_update(update):
+                    return
+                # Blocked — send maintenance message
+                try:
+                    text = get_maintenance_message()
+                    if update.message:
+                        await update.message.reply_text(text, parse_mode="HTML")
+                    elif update.callback_query:
+                        # Shouldn't reach here since callbacks bypass, but defensive
+                        await update.callback_query.answer(
+                            "Bot under maintenance", show_alert=True)
+                except Exception:
+                    pass
+                raise ApplicationHandlerStop
+            except ApplicationHandlerStop:
+                raise
+            except Exception:
+                logger.exception("Maintenance check failed (non-fatal)")
+        app.add_handler(TypeHandler(_TGUpdate, _maintenance_check), group=-2)
+
         # ── Ban-guard middleware (group=-1, runs before all handlers) ──
         async def _ban_check(update, context):
             user = update.effective_user
@@ -361,6 +424,16 @@ def main():
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
         app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
+
+        # ── User feedback ────────────────────────────────────────────
+        app.add_handler(CommandHandler("report", report_handler))
+
+        # ── Chat membership tracking ────────────────────────────────
+        from services.chat_tracker import handle_chat_member_update
+        app.add_handler(ChatMemberHandler(
+            handle_chat_member_update,
+            ChatMemberHandler.MY_CHAT_MEMBER,
+        ))
 
         # ── Bowl-out command ─────────────────────────────────────────
         app.add_handler(CommandHandler(["pbo", "bowlout"], pbo_handler))
@@ -635,7 +708,13 @@ def main():
         except Exception:
             logger.exception("Failed to wire bot for admin notifications")
 
-        app.run_polling(drop_pending_updates=True)
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=[
+                "message", "callback_query", "chat_member", "my_chat_member",
+                "edited_message", "channel_post",
+            ],
+        )
 
     except Exception:
         logger.exception("Bot crashed — admin panel still running")

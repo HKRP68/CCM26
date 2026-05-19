@@ -26,6 +26,7 @@ def init_db():
         UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
         NotificationSchedule, NotificationLog, ClaimRarityTier, GameConfig,
         MessageTemplate, Bowlout, BowloutBall,
+        UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
     )
     Base.metadata.create_all(bind=engine)
@@ -130,6 +131,12 @@ def _migrate_add_columns():
         "trait_market_last_refresh_at": "TIMESTAMP",
         "scorecard_color_inn1": "VARCHAR(9) DEFAULT '#c41e3a'",
         "scorecard_color_inn2": "VARCHAR(9) DEFAULT '#00c9a7'",
+        # Maintenance mode
+        "is_maintenance": "BOOLEAN DEFAULT FALSE",
+        "maintenance_message": "TEXT",
+        "maintenance_until": "TIMESTAMP",
+        "maintenance_started_at": "TIMESTAMP",
+        "maintenance_bypass_ids": "VARCHAR(500)",
     }
     for col, coltype in new_gameconfig_cols.items():
         _try_add("game_config", col, coltype)
@@ -303,6 +310,60 @@ def _migrate_add_columns():
     except Exception:
         import logging
         logging.getLogger(__name__).warning("Command seed skipped (non-fatal)")
+
+    # Seed default ShotProbability rows from SHOT_MODS (idempotent)
+    try:
+        from models import ShotProbability
+        from services.probability_engine import SHOT_MODS as _SM
+        sess = SessionLocal()
+        try:
+            descriptions = {
+                "Drive": "Safe & productive — boundary potential, low risk",
+                "Cut": "Off-side scoring shot",
+                "Pull": "Cross-bat to short ball — high-risk reward",
+                "Leg Glance": "Safest shot — singles & touches",
+                "Flick": "Wristy leg-side scoring shot",
+                "Sweep": "Spinner-killer — risky against pace",
+                "Switch Hit": "All-or-nothing reverse shot",
+                "Slog": "Max boundaries, max risk",
+                "Loft": "Aerial big hit over the infield",
+                "Defend": "Block — burn balls, very safe",
+                "Leave": "Let it pass — no runs, very low risk",
+            }
+            n = 0
+            for shot, mods in _SM.items():
+                if sess.query(ShotProbability).filter(
+                        ShotProbability.shot_name == shot).first():
+                    continue
+                row = ShotProbability(
+                    shot_name=shot,
+                    mod_dot=float(mods.get("dot", 0)),
+                    mod_1=float(mods.get("1", 0)),
+                    mod_2=float(mods.get("2", 0)),
+                    mod_3=float(mods.get("3", 0)),
+                    mod_4=float(mods.get("4", 0)),
+                    mod_6=float(mods.get("6", 0)),
+                    mod_wicket=float(mods.get("W", 0)),
+                    mod_extras=float(mods.get("extras", 0)),
+                    description=descriptions.get(shot, ""),
+                    enabled=True,
+                )
+                sess.add(row)
+                n += 1
+            if n:
+                sess.commit()
+                import logging
+                logging.getLogger(__name__).info(f"Seeded {n} shot probabilities")
+        except Exception:
+            sess.rollback()
+            import logging
+            logging.getLogger(__name__).exception("ShotProbability seed failed")
+        finally:
+            sess.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "ShotProbability seed skipped (non-fatal)")
 
 
 def reset_db():
