@@ -47,6 +47,13 @@
           <option value="0" {{ 'selected' if player and not player.is_active }}>Inactive</option>
         </select>
       </div>
+      <div class="form-group">
+        <label title="When set, this player cannot be bought via /buypl direct-name purchase. Still available via market, packs, trades, etc.">Block /buypl</label>
+        <select name="restricted_from_buypl">
+          <option value="0" {{ 'selected' if not player or not player.restricted_from_buypl }}>Available via /buypl</option>
+          <option value="1" {{ 'selected' if player and player.restricted_from_buypl }}>🚫 Blocked from /buypl</option>
+        </select>
+      </div>
     </div>
 
     <h3 style="margin:1.25rem 0 .75rem;font-size:.9rem;color:var(--accent);text-transform:uppercase;">Batting</h3>

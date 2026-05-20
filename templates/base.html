@@ -63,44 +63,51 @@ h1, h2 {
 h1 { font-size: 2rem; line-height: 1; }
 h2 { font-size: 1.4rem; margin-bottom: .8rem; }
 
-/* Nav — top scoreboard bar */
-nav {
+/* ═══════════════════════════════════════════════════════════════════
+   TOP BAR — slim scoreboard header with brand + hamburger (mobile only)
+   ═══════════════════════════════════════════════════════════════════ */
+nav.topbar {
   background:
     linear-gradient(180deg, #16241c 0%, var(--card) 100%);
   border-bottom: 2px solid var(--accent);
   box-shadow: 0 4px 14px rgba(0,0,0,.35);
-  padding: 0 1.5rem;
+  padding: 0 1.25rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 60px;
   position: sticky; top: 0; z-index: 100;
+  /* On desktop, sidebar occupies left 260px — shift topbar right */
+  margin-left: 260px;
 }
-nav::after {
+nav.topbar::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: -3px;
   height: 1px;
   background: repeating-linear-gradient(
     90deg, var(--accent) 0, var(--accent) 8px, transparent 8px, transparent 16px);
   opacity: .3;
 }
-nav .brand {
+nav.topbar .brand {
   font-family: 'Bebas Neue', sans-serif;
   font-size: 1.4rem;
   letter-spacing: .08em;
   color: var(--accent);
   display: flex; align-items: center; gap: .5rem;
+  text-decoration: none;
 }
 
-/* Hamburger button — opens the drawer */
+/* Hamburger — hidden on desktop, shown on tablet/mobile */
 .nav-toggle {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--accent);
-  padding: .4rem .65rem;
   border-radius: 6px;
   cursor: pointer;
-  display: flex; flex-direction: column; gap: 4px;
+  display: none;  /* default; shown via media query below */
+  flex-direction: column; gap: 4px;
   transition: all .15s;
+  min-width: 44px; min-height: 44px;
+  align-items: center; justify-content: center;
 }
 .nav-toggle:hover {
   background: rgba(212, 168, 42, 0.08);
@@ -114,7 +121,7 @@ nav .brand {
   transition: transform .25s, opacity .25s;
 }
 
-/* Drawer overlay + drawer panel */
+/* Sidebar overlay — only used on tablet/mobile */
 .nav-overlay {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, .55);
@@ -125,25 +132,29 @@ nav .brand {
 }
 .nav-overlay.open { opacity: 1; pointer-events: auto; }
 
+/* ═══════════════════════════════════════════════════════════════════
+   SIDEBAR — left-aligned, always visible on desktop, drawer on mobile
+   ═══════════════════════════════════════════════════════════════════ */
 .nav-drawer {
   position: fixed;
-  top: 0; right: 0;
+  top: 0; left: 0;
   height: 100vh;
-  width: 340px; max-width: 90vw;
+  width: 260px; max-width: 90vw;
   background: var(--card);
-  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
   z-index: 200;
-  transform: translateX(100%);
-  transition: transform .28s cubic-bezier(.22, .61, .36, 1);
   display: flex; flex-direction: column;
-  box-shadow: -8px 0 32px rgba(0, 0, 0, .55);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, .35);
+  /* Default state (desktop): visible at left edge */
+  transform: translateX(0);
+  transition: transform .28s cubic-bezier(.22, .61, .36, 1);
 }
-.nav-drawer.open { transform: translateX(0); }
 .nav-drawer .drawer-header {
   display: flex; justify-content: space-between; align-items: center;
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  background: linear-gradient(180deg, #16241c 0%, var(--card) 100%);
 }
 .nav-drawer .drawer-header h3 {
   font-family: 'Bebas Neue', sans-serif;
@@ -151,27 +162,44 @@ nav .brand {
   letter-spacing: .08em;
   color: var(--accent);
   margin: 0;
+  display: flex; align-items: center; gap: .4rem;
 }
 .nav-drawer .close-btn {
   background: transparent;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  padding: .25rem .5rem;
-  font-size: 1.4rem;
+  padding: .4rem .6rem;
+  font-size: 1.5rem;
   line-height: 1;
-  border-radius: 4px;
+  border-radius: 6px;
   transition: color .15s, background .15s;
+  min-width: 44px; min-height: 44px;
+  display: none;  /* hidden on desktop; shown on tablet/mobile */
+  align-items: center; justify-content: center;
 }
 .nav-drawer .close-btn:hover { color: var(--accent); background: rgba(212, 168, 42, 0.08); }
 
+/* Scrollable body — vertical scroll always available */
 .nav-drawer .drawer-body {
   overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
-  padding: .5rem 0;
+  padding: .5rem 0 1rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.nav-drawer .drawer-body::-webkit-scrollbar { width: 6px; }
+.nav-drawer .drawer-body::-webkit-scrollbar-track { background: transparent; }
+.nav-drawer .drawer-body::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 3px;
+}
+.nav-drawer .drawer-body::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
 .nav-drawer .section-label {
-  padding: .75rem 1.25rem .25rem;
+  padding: .85rem 1.25rem .25rem;
   font-size: .68rem;
   text-transform: uppercase;
   letter-spacing: .12em;
@@ -181,13 +209,14 @@ nav .brand {
 .nav-drawer a {
   display: flex;
   align-items: center;
-  gap: .5rem;
-  padding: .65rem 1.25rem;
+  gap: .65rem;
+  padding: .7rem 1.25rem;
   color: var(--text);
   text-decoration: none;
   font-size: .9rem;
   transition: background .12s, color .12s, padding-left .15s;
   border-left: 3px solid transparent;
+  min-height: 44px;  /* touch-friendly */
 }
 .nav-drawer a:hover {
   background: rgba(212, 168, 42, 0.08);
@@ -195,14 +224,14 @@ nav .brand {
   padding-left: 1.4rem;
 }
 .nav-drawer a.active {
-  background: rgba(212, 168, 42, 0.12);
+  background: rgba(212, 168, 42, 0.14);
   color: var(--accent);
   border-left-color: var(--accent);
   font-weight: 600;
 }
 .nav-drawer .logout-link {
-  margin: .5rem 1.25rem 1rem;
-  padding: .55rem .75rem;
+  margin: .75rem 1.25rem 1rem;
+  padding: .65rem .75rem;
   border: 1px solid var(--red);
   border-radius: 6px;
   color: var(--red);
@@ -213,6 +242,8 @@ nav .brand {
   letter-spacing: .04em;
   font-size: .8rem;
   transition: background .15s, color .15s;
+  min-height: 44px;
+  display: flex; align-items: center; justify-content: center;
 }
 .nav-drawer .logout-link:hover {
   background: var(--red);
@@ -247,12 +278,76 @@ table tbody tr:hover {
   background: rgba(212, 168, 42, 0.04);
 }
 
-/* Main */
+/* ═══════════════════════════════════════════════════════════════════
+   MAIN CONTENT — shifted right to accommodate sidebar on desktop
+   ═══════════════════════════════════════════════════════════════════ */
 main {
   max-width: 1280px;
   margin: 0 auto;
   padding: 1.5rem;
   position: relative; z-index: 1;
+  /* On desktop, sidebar takes 260px on left, so push content right */
+  margin-left: 260px;
+}
+
+/* Table wrapper allows horizontal scroll on mobile */
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RESPONSIVE BREAKPOINTS
+   - Desktop (≥1024px): sidebar always visible, no hamburger
+   - Tablet (768-1023px): sidebar hidden by default, hamburger shows
+   - Phone (<768px): same drawer behavior, tighter spacing
+   - Small phone (<480px): single-column grids
+   ═══════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 1023px) {
+  /* Hide topbar's sidebar-already-visible look — show hamburger */
+  .nav-toggle { display: flex; }
+  .nav-drawer .close-btn { display: flex; }
+  /* Sidebar hidden off-screen by default; .open slides it in */
+  .nav-drawer { transform: translateX(-100%); }
+  .nav-drawer.open { transform: translateX(0); }
+  /* No left margin needed — sidebar is off-screen */
+  main { margin-left: 0; }
+  nav.topbar { margin-left: 0; }
+}
+
+/* Tablet — 768-1023px */
+@media (max-width: 1023px) and (min-width: 769px) {
+  main { padding: 1.5rem 2rem; }
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+}
+
+/* Mobile — ≤768px */
+@media (max-width: 768px) {
+  html { font-size: 14px; }
+  .form-row { grid-template-columns: 1fr !important; }
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: .65rem; }
+  table { font-size: .78rem; }
+  th, td { padding: .5rem .55rem; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar select, .toolbar input { width: 100%; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.2rem; }
+  main { padding: 1rem .85rem; }
+  /* Bigger touch targets for buttons */
+  .btn { min-height: 40px; padding: .55rem .8rem; }
+  .btn-sm { min-height: 36px; padding: .4rem .65rem; font-size: .82rem; }
+  /* Cards stack tighter */
+  .stat-card { padding: .85rem .9rem; }
+}
+
+/* Small phone — ≤480px */
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  main { padding: .85rem .65rem; }
+  nav.topbar { padding: 0 .85rem; }
+  nav.topbar .brand { font-size: 1.15rem; }
+  .nav-drawer { width: 280px; }
 }
 
 /* Stat cards */
@@ -464,26 +559,11 @@ hr.pitch-line {
   margin: 1.25rem 0;
 }
 
-/* Mobile */
-@media (max-width: 768px) {
-  .form-row { grid-template-columns: 1fr; }
-  .stats-grid { grid-template-columns: 1fr 1fr; }
-  table { font-size: .78rem; }
-  th, td { padding: .5rem .6rem; }
-  nav .links a { padding: .4rem .55rem; font-size: .76rem; }
-  .toolbar { flex-direction: column; }
-  .toolbar select { width: 100%; }
-  h1 { font-size: 1.5rem; }
-}
-@media (max-width: 480px) {
-  .stats-grid { grid-template-columns: 1fr; }
-  main { padding: 1rem .75rem; }
-}
 </style>
 </head>
 <body>
 {% if session.get('admin') %}
-<nav>
+<nav class="topbar">
   <div class="brand">🏏 CRICMASTER ULTRA</div>
   <button class="nav-toggle" onclick="toggleDrawer()" aria-label="Open menu">
     <span></span><span></span><span></span>

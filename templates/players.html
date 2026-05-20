@@ -47,6 +47,12 @@
     <option value="0" {{ 'selected' if is_active == '0' }}>Inactive</option>
   </select>
 
+  <select name="buypl" title="Filter by /buypl availability">
+    <option value="">Any /buypl</option>
+    <option value="available" {{ 'selected' if buypl_filter == 'available' }}>✅ Available</option>
+    <option value="blocked" {{ 'selected' if buypl_filter == 'blocked' }}>🚫 Blocked</option>
+  </select>
+
   <select name="sort">
     <option value="rating_desc" {{ 'selected' if sort == 'rating_desc' }}>Rating ↓</option>
     <option value="rating_asc" {{ 'selected' if sort == 'rating_asc' }}>Rating ↑</option>
@@ -108,6 +114,7 @@
   <table>
     <thead>
       <tr>
+        <th><input type="checkbox" id="select-all-players" onclick="toggleAllPlayers(this)"></th>
         <th>Name</th>
         <th>Rating</th>
         <th>Category</th>
@@ -116,12 +123,14 @@
         <th>BAT | BOWL</th>
         <th>Style</th>
         <th>Active</th>
+        <th title="Blocked from /buypl direct-name purchase">/buypl</th>
         <th>Actions</th>
       </tr>
     </thead>
     <tbody>
     {% for p in players %}
     <tr>
+      <td><input type="checkbox" class="player-row-cb" value="{{ p.id }}"></td>
       <td style="font-weight:600;">
         {{ p.name }}{% if custom_image_ids and p.id in custom_image_ids %} <span title="Has custom card image" style="cursor:help;">🎨</span>{% endif %}
       </td>
@@ -134,6 +143,16 @@
       <td>
         {% if p.is_active %}<span style="color:var(--green);">●</span>
         {% else %}<span style="color:var(--red);">●</span>{% endif %}
+      </td>
+      <td>
+        <form method="POST" action="{{ url_for('player_toggle_buypl', player_id=p.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {% if p.restricted_from_buypl %}
+            <button type="submit" class="btn btn-red btn-sm" title="Player is BLOCKED from /buypl. Click to unblock.">🚫 Blocked</button>
+          {% else %}
+            <button type="submit" class="btn btn-ghost btn-sm" title="Available via /buypl. Click to block.">✅</button>
+          {% endif %}
+        </form>
       </td>
       <td>
         <div class="actions">
@@ -158,11 +177,60 @@
     </tr>
     {% endfor %}
     {% if not players %}
-    <tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
+    <tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
     {% endif %}
     </tbody>
   </table>
 </div>
+
+<div id="bulk-actions-bar" style="display:none;position:sticky;bottom:0;background:var(--card);border:1px solid var(--accent);border-radius:10px;padding:.75rem 1rem;margin-top:1rem;align-items:center;gap:.65rem;flex-wrap:wrap;box-shadow:0 -4px 16px rgba(0,0,0,.3);z-index:50;">
+  <strong style="color:var(--accent);"><span id="bulk-count">0</span> selected</strong>
+  <form method="POST" action="{{ url_for('players_bulk_toggle_buypl') }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="player_ids" id="bulk-ids-block">
+    <input type="hidden" name="action" value="block">
+    <button type="submit" class="btn btn-red btn-sm"
+            onclick="document.getElementById('bulk-ids-block').value = getSelectedPlayerIds(); return confirm('Block ' + selectedPlayerCount() + ' players from /buypl?');">
+      🚫 Block from /buypl
+    </button>
+  </form>
+  <form method="POST" action="{{ url_for('players_bulk_toggle_buypl') }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="player_ids" id="bulk-ids-unblock">
+    <input type="hidden" name="action" value="unblock">
+    <button type="submit" class="btn btn-green btn-sm"
+            onclick="document.getElementById('bulk-ids-unblock').value = getSelectedPlayerIds(); return confirm('Unblock ' + selectedPlayerCount() + ' players?');">
+      ✅ Unblock from /buypl
+    </button>
+  </form>
+  <button type="button" class="btn btn-ghost btn-sm" onclick="clearAllPlayerSelections()">Clear</button>
+</div>
+
+<script>
+  function selectedPlayerIds() {
+    return Array.from(document.querySelectorAll('.player-row-cb:checked'))
+                .map(cb => cb.value);
+  }
+  function getSelectedPlayerIds() { return selectedPlayerIds().join(','); }
+  function selectedPlayerCount() { return selectedPlayerIds().length; }
+  function updateBulkBar() {
+    const n = selectedPlayerCount();
+    const bar = document.getElementById('bulk-actions-bar');
+    document.getElementById('bulk-count').textContent = n;
+    bar.style.display = n > 0 ? 'flex' : 'none';
+  }
+  function toggleAllPlayers(masterCb) {
+    document.querySelectorAll('.player-row-cb').forEach(cb => cb.checked = masterCb.checked);
+    updateBulkBar();
+  }
+  function clearAllPlayerSelections() {
+    document.querySelectorAll('.player-row-cb').forEach(cb => cb.checked = false);
+    const m = document.getElementById('select-all-players');
+    if (m) m.checked = false;
+    updateBulkBar();
+  }
+  document.querySelectorAll('.player-row-cb').forEach(cb => cb.addEventListener('change', updateBulkBar));
+</script>
 
 {% if total_pages > 1 %}
 <div class="pagination">
