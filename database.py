@@ -8,7 +8,30 @@ connect_args = {}
 if "sqlite" in DATABASE_URL:
     connect_args["check_same_thread"] = False
 
-engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=connect_args)
+# Neon (and most managed Postgres) closes idle TCP connections after ~5 min.
+# Settings tuned for low-traffic Telegram bot on Neon's free tier:
+#   - pool_pre_ping: tests connection with SELECT 1 before use. Cheap, reliable.
+#   - pool_recycle: proactively close connections older than 240s so we don't
+#     hit the server's idle-kill (saves one "broken pipe" round-trip per kill).
+#   - pool_size + max_overflow kept small to avoid lots of warm connections
+#     holding the Neon compute active.
+_is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_URL.lower())
+
+if _is_postgres:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=240,          # < Neon's idle disconnect (~5min)
+        pool_size=2,               # small pool — bot is low concurrency
+        max_overflow=3,
+        connect_args=connect_args,
+    )
+else:
+    # SQLite (local dev) — keep simple
+    engine = create_engine(DATABASE_URL, echo=False,
+                           pool_pre_ping=True, connect_args=connect_args)
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -143,6 +166,8 @@ def _migrate_add_columns():
 
     # Player versions support
     _try_add("players", "parent_player_id", "INTEGER")
+    # Per-player block on /buypl direct purchase
+    _try_add("players", "restricted_from_buypl", "BOOLEAN DEFAULT FALSE")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")

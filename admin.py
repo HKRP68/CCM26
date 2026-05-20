@@ -421,6 +421,7 @@ def players_list():
         bat_hand = request.args.get("bat_hand", "").strip()
         bowl_hand = request.args.get("bowl_hand", "").strip()
         is_active = request.args.get("is_active", "").strip()
+        buypl_filter = request.args.get("buypl", "").strip()
         # Numeric ranges
         rating_min = _parse_int(request.args.get("rating_min", ""))
         rating_max = _parse_int(request.args.get("rating_max", ""))
@@ -477,6 +478,13 @@ def players_list():
             query = query.filter(Player.is_active == True)
         elif is_active == "0":
             query = query.filter(Player.is_active == False)
+        if buypl_filter == "blocked":
+            query = query.filter(Player.restricted_from_buypl == True)
+        elif buypl_filter == "available":
+            query = query.filter(
+                (Player.restricted_from_buypl == False) |
+                (Player.restricted_from_buypl.is_(None))
+            )
         if version_mode == "base":
             query = query.filter(Player.parent_player_id.is_(None))
         elif version_mode == "version":
@@ -539,6 +547,7 @@ def players_list():
             rating_range=rating_range,
             rating_ranges=list(RANGE_MAP.keys()),
             bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active,
+            buypl_filter=buypl_filter,
             sort=sort,
             categories=categories, countries=countries,
             custom_image_ids=custom_image_ids,
@@ -872,6 +881,7 @@ def player_add():
                 economy=float(request.form.get("economy", 0)),
                 wickets=int(request.form.get("wickets", 0)),
                 is_active=request.form.get("is_active", "1") == "1",
+                restricted_from_buypl=request.form.get("restricted_from_buypl") == "1",
             )
             db.add(player)
             db.flush()
@@ -923,6 +933,10 @@ def player_edit(player_id):
             player.economy = float(request.form.get("economy", 0))
             player.wickets = int(request.form.get("wickets", 0))
             player.is_active = request.form.get("is_active", "1") == "1"
+            # Restricted-from-/buypl toggle
+            player.restricted_from_buypl = (
+                request.form.get("restricted_from_buypl") == "1"
+            )
 
             changes = []
             if old_name != player.name:
@@ -1334,6 +1348,77 @@ def player_toggle(player_id):
             flash(f"Player '{player.name}' {status}", "info")
     except Exception as e:
         db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(request.referrer or url_for("players_list"))
+
+
+@app.route("/players/<int:player_id>/toggle-buypl", methods=["POST"])
+@login_required
+def player_toggle_buypl(player_id):
+    """Toggle restricted_from_buypl — blocks /buypl direct-name purchase for
+    this player. Player remains available via market, packs, trades, etc."""
+    db = get_session()
+    try:
+        player = db.query(Player).get(player_id)
+        if player:
+            player.restricted_from_buypl = not (player.restricted_from_buypl or False)
+            status = ("🚫 BLOCKED from /buypl" if player.restricted_from_buypl
+                      else "✅ available via /buypl")
+            log_admin(db, "player_toggle_buypl", target_type="player",
+                      target_id=player.id, target_name=player.name,
+                      detail=f"restricted_from_buypl → {player.restricted_from_buypl}")
+            db.commit()
+            try:
+                from services.player_cache import invalidate as _inv_pc
+                _inv_pc()
+            except Exception:
+                pass
+            flash(f"<b>{player.name}</b> is now {status}", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(request.referrer or url_for("players_list"))
+
+
+@app.route("/players/bulk-toggle-buypl", methods=["POST"])
+@login_required
+def players_bulk_toggle_buypl():
+    """Bulk-set restricted_from_buypl on a list of player IDs."""
+    db = get_session()
+    try:
+        action = (request.form.get("action") or "block").strip()
+        ids_raw = request.form.get("player_ids", "") or ""
+        try:
+            ids = [int(x.strip()) for x in ids_raw.split(",") if x.strip()]
+        except ValueError:
+            flash("Bad player_ids", "error")
+            return redirect(request.referrer or url_for("players_list"))
+        if not ids:
+            flash("No players selected", "error")
+            return redirect(request.referrer or url_for("players_list"))
+
+        new_val = (action == "block")
+        n = (db.query(Player).filter(Player.id.in_(ids))
+             .update({Player.restricted_from_buypl: new_val},
+                     synchronize_session=False))
+        db.commit()
+        log_admin(db, "bulk_toggle_buypl", detail=(
+            f"Set restricted_from_buypl={new_val} on {n} players"))
+        db.commit()
+        try:
+            from services.player_cache import invalidate as _inv_pc
+            _inv_pc()
+        except Exception:
+            pass
+        label = "🚫 blocked from /buypl" if new_val else "✅ unblocked"
+        flash(f"{n} players {label}", "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("bulk_toggle_buypl failed")
         flash(f"Error: {e}", "error")
     finally:
         db.close()
@@ -2602,6 +2687,17 @@ def _seed_from_json(raw_data):
     # Stash breakdown on the function so the caller can show it.
     _seed_from_json.last_breakdown = added_by_version
     return added
+
+
+@app.route("/health")
+def health():
+    """Cheap health check — does NOT touch the database.
+
+    Use this for external pingers (UptimeRobot, Render health checks, etc.)
+    that just need to know the process is alive. Hitting /status or / will
+    wake Neon's compute every time you ping; hitting /health doesn't.
+    """
+    return "ok", 200, {"Content-Type": "text/plain"}
 
 
 @app.route("/status")

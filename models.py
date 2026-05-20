@@ -68,6 +68,9 @@ class Player(Base):
     economy = Column(Float, default=0.0)
     wickets = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
+    # When True, blocks /buypl direct-name purchase. Player remains
+    # available via player market, packs, trades, debut grants, etc.
+    restricted_from_buypl = Column(Boolean, default=False, nullable=False)
     image_url = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
