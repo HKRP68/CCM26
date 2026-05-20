@@ -2,29 +2,44 @@
 
 Two entry points:
   1. `record_chat(update)` — called from middleware on EVERY incoming update.
-     Upserts the chat row (cheap, debounced via last_seen_at).
+     Throttled in-memory: at most one DB write per chat per RECORD_THROTTLE_SECONDS.
+     This keeps Neon compute hours low — the bot can field thousands of
+     messages without touching `bot_chats` more than once per chat per cycle.
   2. `handle_chat_member_update(update, context)` — registered as a
-     ChatMemberHandler to detect when the bot is added/kicked.
+     ChatMemberHandler to detect when the bot is added/kicked. Always writes.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, Chat, ChatMember, ChatMemberUpdated
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
+# Throttle: skip DB write if we updated this chat's last_seen_at recently
+RECORD_THROTTLE_SECONDS = 600  # 10 minutes
+
+# In-memory cache of {chat_id: last_record_at_datetime}
+_LAST_SEEN_MEM = {}
+
 
 def record_chat(update: Update):
     """Backfill — every update upserts the chat into bot_chats.
 
-    Cheap, non-blocking. Failures are swallowed silently so we never
-    drop user messages over telemetry.
+    Throttled to at most one write per chat per RECORD_THROTTLE_SECONDS.
+    Failures swallowed silently — we never drop user messages over telemetry.
     """
     try:
         chat = update.effective_chat
         if not chat:
             return
+
+        # Throttle: if we recorded this chat recently, skip the DB hit
+        now = datetime.utcnow()
+        last = _LAST_SEEN_MEM.get(chat.id)
+        if last is not None and (now - last).total_seconds() < RECORD_THROTTLE_SECONDS:
+            return
+
         from database import get_session
         from models import BotChat
         s = get_session()
@@ -32,7 +47,6 @@ def record_chat(update: Update):
             row = (s.query(BotChat)
                     .filter(BotChat.chat_id == chat.id)
                     .first())
-            now = datetime.utcnow()
             if not row:
                 row = BotChat(
                     chat_id=chat.id,
@@ -56,6 +70,7 @@ def record_chat(update: Update):
                     row.left_at = None
                     row.joined_at = now
             s.commit()
+            _LAST_SEEN_MEM[chat.id] = now  # mark cache only on success
         except Exception:
             s.rollback()
         finally:

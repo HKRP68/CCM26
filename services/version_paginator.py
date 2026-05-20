@@ -106,6 +106,15 @@ def build_pagination_keyboard(
                     callback_data=f"plpgnoop_{owner_tg}",
                 ),
             ])
+        elif flow == "buy" and getattr(current, "restricted_from_buypl", False):
+            # Player is blocked from /buypl direct purchase.
+            # Other paths (market, packs, debut, trades) remain available.
+            rows.append([
+                InlineKeyboardButton(
+                    "🚫 Not available to Buy",
+                    callback_data=f"plpgnoop_{owner_tg}",
+                ),
+            ])
         else:
             # Not owned — show Buy button
             price = get_buy_value(current.rating)

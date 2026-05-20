@@ -28,13 +28,33 @@ HEARTBEAT_JOB_NAME = "match_heartbeat_global"
 
 
 async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
-    """Periodic scan: re-renders stuck matches + fires notifications."""
+    """Periodic scan: re-renders stuck matches + fires notifications.
+
+    Designed to be cheap when idle (no active matches, no due notifications)
+    so Neon's compute can auto-suspend. We bail out before any DB query if
+    the in-memory flags say there's nothing to do.
+    """
+    # ── FAST PATH — skip everything if nothing to do ──
+    # The MatchState table is empty when no matches are in progress. We
+    # can check this with a cheap in-memory flag the match handlers
+    # maintain. If both flags say idle, we don't touch the DB at all
+    # → lets Neon compute suspend.
+    from services.match_heartbeat_flags import (
+        has_active_matches, has_due_notifications,
+    )
+    if not has_active_matches(context) and not has_due_notifications():
+        return  # nothing to do — DB stays cold
+
     # Notification tick (deduped to once per minute internally)
     try:
         from services.notification_service import maybe_tick
         await maybe_tick(context.application)
     except Exception:
         logger.exception("notification tick error")
+
+    # Active matches: only query DB if the flag says we have any
+    if not has_active_matches(context):
+        return
 
     try:
         from services.match_state_store import (
@@ -52,6 +72,11 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             states = session.query(MatchState).all()
         finally:
             session.close()
+
+        # Sync the flag — if DB shows no states, clear the in-memory hint
+        # so the next tick can fast-skip.
+        from services.match_heartbeat_flags import set_active_match_count
+        set_active_match_count(context, len(states))
 
         for ms in states:
             mid = ms.match_id
