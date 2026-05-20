@@ -218,6 +218,18 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text("❌ Player no longer available")
             return
 
+        # Defense in depth: this callback only fires from /buypl flow, so
+        # honor the restricted_from_buypl flag even if a stale button slipped
+        # through (e.g. admin enabled the flag after the buttons were sent).
+        if getattr(player, "restricted_from_buypl", False):
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                f"🚫 <b>{player.name}</b> is <b>Not available to Buy</b> via /buypl.\n\n"
+                f"<i>Try the player market (/playermarket), packs, or trades.</i>",
+                parse_mode="HTML",
+            )
+            return
+
         buy_val = get_buy_value(player.rating)
         username = tg_user.username or tg_user.first_name
 
