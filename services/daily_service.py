@@ -35,23 +35,17 @@ def check_daily_ready(session, user):
     return False, int(effective_cd - elapsed)
 
 
-def claim_daily(session, user, source_label="bot"):
+def claim_daily(session, user, source_label="bot", skip_cooldown=False):
     """Apply the daily reward. Caller must commit() afterwards.
 
-    Returns a dict describing what happened:
-      {
-        "ok": bool,
-        "coins": int,            # coins awarded
-        "gems": int,              # gems awarded
-        "streak": int,            # new streak count
-        "milestone": bool,        # hit a streak milestone?
-        "players_added": [{name, rating}, ...],
-        "players_skipped": [{name, rating}, ...],  # roster was full
-        "lines": [str, ...],      # human-friendly summary lines
-      }
+    Args:
+      skip_cooldown: when True, ignore the 24h last_daily check. Used by
+        the Mini App's quota system which enforces its own 1-free-plus-5-ads
+        limit independent of the legacy cooldown.
 
-    If cooldown isn't ready, returns {"ok": False, "error": "cooldown",
-    "remaining": int_seconds}.
+    Returns a dict describing what happened (see module docstring).
+    If cooldown isn't ready (and skip_cooldown is False), returns
+    {"ok": False, "error": "cooldown", "remaining": int_seconds}.
     """
     from models import UserStats, UserRoster
     from config import DAILY_COOLDOWN, DAILY_COINS, STREAK_MILESTONE, MAX_ROSTER
@@ -69,13 +63,15 @@ def claim_daily(session, user, source_label="bot"):
         stats = UserStats(user_id=user.id)
         session.add(stats); session.flush()
 
-    # Cooldown gate (defense in depth — caller should have checked)
-    effective_cd = get_cooldown(session, "daily", DAILY_COOLDOWN)
-    if stats.last_daily:
-        elapsed = (datetime.utcnow() - stats.last_daily).total_seconds()
-        if elapsed < effective_cd:
-            return {"ok": False, "error": "cooldown",
-                    "remaining": int(effective_cd - elapsed)}
+    # Cooldown gate (defense in depth — caller should have checked).
+    # Skip when caller manages its own quota (Mini App).
+    if not skip_cooldown:
+        effective_cd = get_cooldown(session, "daily", DAILY_COOLDOWN)
+        if stats.last_daily:
+            elapsed = (datetime.utcnow() - stats.last_daily).total_seconds()
+            if elapsed < effective_cd:
+                return {"ok": False, "error": "cooldown",
+                        "remaining": int(effective_cd - elapsed)}
 
     # Streak update
     streak_count, milestone = update_streak(stats)
