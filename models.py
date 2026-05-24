@@ -1226,3 +1226,26 @@ class PendingUndo(Base):
     payload = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
+
+
+class AdsgramReward(Base):
+    """Records ad-watch postbacks received from Adsgram's server.
+
+    Adsgram fires GET https://your-app/api/adsgram/reward?userid=<telegram_id>
+    after a user finishes watching a rewarded ad. We log it here so the
+    /api/webapp/spin endpoint can validate "this user really watched an ad
+    in the last few minutes" before granting the spin.
+
+    consumed_at is set when the user actually claims a spin using this
+    postback, preventing replay.
+    """
+    __tablename__ = "adsgram_rewards"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(Integer, nullable=False, index=True)
+    received_at = Column(DateTime, default=datetime.utcnow,
+                         nullable=False, index=True)
+    consumed_at = Column(DateTime, nullable=True)
+    # Optional fields for debugging — IP and full query string Adsgram sent
+    source_ip = Column(String(64), nullable=True)
+    query_string = Column(String(500), nullable=True)
+

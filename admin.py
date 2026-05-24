@@ -5,7 +5,10 @@ Shares the same database as the bot. Any changes here reflect in the bot instant
 import os
 import io
 import csv
+import logging
 from datetime import datetime, timedelta
+
+logger = logging.getLogger("admin")
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
 from sqlalchemy import func, or_, desc, asc
@@ -2775,6 +2778,7 @@ def webapp_init():
     db, user, tg_id = auth
     try:
         from models import UserStats
+        from services import adsgram_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         from datetime import datetime as _dt
         from config import GSPIN_COOLDOWN
@@ -2808,6 +2812,10 @@ def webapp_init():
                 "ready": gspin_ready,
                 "cooldown_remaining": gspin_remaining,
                 "cooldown_total": GSPIN_COOLDOWN,
+            },
+            "adsgram": {
+                "configured": adsgram_service.is_configured(),
+                "block_id": adsgram_service.get_block_id(),
             },
         }
     except Exception as e:
@@ -3027,7 +3035,13 @@ def webapp_roster():
 @app.route("/api/webapp/spin", methods=["POST"])
 @csrf_exempt
 def webapp_spin():
-    """Spin endpoint — requires ad_token. Phase 1: mock mode if WEBAPP_DEV_MODE=1."""
+    """Spin endpoint — requires ad verification.
+
+    Verification priority (best to worst):
+      1. Server-side Adsgram postback (claim_postback) — most trusted
+      2. Single-use client token issued after Adsgram SDK promise resolved
+      3. MOCK- token (dev mode only)
+    """
     auth, tg_id, err = _webapp_auth()
     if err:
         return err
@@ -3037,20 +3051,36 @@ def webapp_spin():
         from datetime import datetime as _dt
         from models import UserStats
         from config import GSPIN_COOLDOWN
+        from services import adsgram_service
 
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
-
         dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
-        is_mock = ad_token.startswith("MOCK-")
-        if not ad_token:
-            return {"ok": False, "error": "ad_required",
-                    "message": "Watch the ad to spin."}, 400
-        if is_mock and not dev_mode:
-            return {"ok": False, "error": "ad_required",
-                    "message": "Ad verification failed."}, 400
-        # else: real ad token → Phase 2 verifies via ad network postback
+        ads_configured = adsgram_service.is_configured()
 
+        # ── Verify the ad was actually watched ──
+        verified_via = None
+
+        # Strategy 1: server-side postback (highest confidence)
+        if adsgram_service.claim_postback(db, tg_id):
+            verified_via = "server_postback"
+
+        # Strategy 2: client-side token issued after SDK promise resolved
+        elif ad_token.startswith("CT-"):
+            if adsgram_service.consume_client_token(ad_token, tg_id):
+                verified_via = "client_token"
+
+        # Strategy 3: dev/mock — only when ADSGRAM_BLOCK_ID is unset OR dev mode on
+        elif ad_token.startswith("MOCK-"):
+            if dev_mode or not ads_configured:
+                verified_via = "mock"
+
+        if not verified_via:
+            return {"ok": False, "error": "ad_required",
+                    "message": "Ad verification failed. Watch the ad first.",
+                    "ads_configured": ads_configured}, 400
+
+        # ── Cooldown ──
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         if not stats:
             stats = UserStats(user_id=user.id)
@@ -3064,6 +3094,7 @@ def webapp_spin():
                                    f"{(remaining % 3600) // 60}m.",
                         "cooldown_remaining": remaining}, 429
 
+        # ── Reward ──
         from services.gspin_reward_service import pick_reward, apply_reward
         reward = pick_reward(db)
         if not reward:
@@ -3076,7 +3107,7 @@ def webapp_spin():
         try:
             from services.activity_service import log_activity
             log_activity(db, user.id, "gspin",
-                         f"[MiniApp] Spin: {reward.label} → {result['type']}")
+                         f"[MiniApp/{verified_via}] Spin: {reward.label} → {result['type']}")
         except Exception:
             pass
         try:
@@ -3089,6 +3120,7 @@ def webapp_spin():
         return {
             "ok": True,
             "reward": result,
+            "verified_via": verified_via,
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -3102,6 +3134,77 @@ def webapp_spin():
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
+
+
+@app.route("/api/webapp/ad-completed", methods=["POST"])
+@csrf_exempt
+def webapp_ad_completed():
+    """Called by client after Adsgram SDK's show() promise resolves.
+
+    Returns a single-use token the client immediately passes to /api/webapp/spin.
+    This is the client-side verification fallback used when server-side
+    postback isn't available (small apps, dev mode, etc).
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import adsgram_service
+        token = adsgram_service.issue_client_token(tg_id)
+        return {"ok": True, "ad_token": token}
+    finally:
+        db.close()
+
+
+@app.route("/api/adsgram/reward", methods=["GET"])
+@csrf_exempt
+def adsgram_postback():
+    """Adsgram server-to-server postback endpoint.
+
+    Adsgram fires GET requests here with ?userid=<telegram_id> after a
+    user finishes watching a rewarded ad. We log it; the spin endpoint
+    claims it later.
+
+    Configure this URL in your Adsgram block as:
+      https://your-app.onrender.com/api/adsgram/reward?userid=[userId]
+
+    Adsgram substitutes [userId] with the actual telegram_id before
+    making the request. No auth needed — Adsgram's docs don't include
+    signed requests; the security model is "obscurity of the URL +
+    cooldown limits".
+    """
+    try:
+        userid_raw = request.args.get("userid", "")
+        if not userid_raw:
+            return {"ok": False, "error": "no_userid"}, 400
+        try:
+            telegram_id = int(userid_raw)
+        except ValueError:
+            return {"ok": False, "error": "bad_userid"}, 400
+
+        # Optional: only accept postbacks for users that actually exist
+        db = get_session()
+        try:
+            user = db.query(User).filter(User.telegram_id == telegram_id).first()
+            if not user:
+                # Still 200 OK so Adsgram doesn't retry, but don't insert a row
+                logger.warning(f"Adsgram postback for unknown user {telegram_id}")
+                return {"ok": True, "note": "user_not_found"}, 200
+
+            from services import adsgram_service
+            adsgram_service.record_postback(
+                db, telegram_id,
+                source_ip=request.remote_addr,
+                query_string=request.query_string.decode("utf-8", errors="ignore"),
+            )
+            logger.info(f"Adsgram postback recorded for {telegram_id}")
+            return {"ok": True}
+        finally:
+            db.close()
+    except Exception as e:
+        logger.exception("adsgram_postback failed")
+        return {"ok": False, "error": "internal"}, 500
 
 
 @app.route("/status")
@@ -6286,6 +6389,65 @@ def admin_market_trait_delete(slot_id):
     finally:
         db.close()
     return redirect(url_for("admin_markets_overview"))
+
+
+# ─── Adsgram (Mini App ad analytics) ────────────────────────────────────
+
+@app.route("/adsgram")
+@login_required
+def admin_adsgram():
+    """Recent Adsgram postbacks + Mini App spin history."""
+    db = get_session()
+    try:
+        from models import AdsgramReward, ActivityLog
+        from services import adsgram_service
+        from sqlalchemy import func as _sqlfn
+
+        # Last 100 postbacks
+        recent = (db.query(AdsgramReward)
+                  .order_by(AdsgramReward.received_at.desc())
+                  .limit(100).all())
+
+        # Summary
+        total = db.query(_sqlfn.count(AdsgramReward.id)).scalar() or 0
+        consumed = (db.query(_sqlfn.count(AdsgramReward.id))
+                    .filter(AdsgramReward.consumed_at.isnot(None))
+                    .scalar() or 0)
+
+        # Today (last 24h)
+        from datetime import timedelta
+        day_ago = datetime.utcnow() - timedelta(hours=24)
+        today = (db.query(_sqlfn.count(AdsgramReward.id))
+                 .filter(AdsgramReward.received_at >= day_ago)
+                 .scalar() or 0)
+
+        # Recent Mini App spins (from activity log)
+        spins = (db.query(ActivityLog)
+                 .filter(ActivityLog.action == "gspin")
+                 .filter(ActivityLog.detail.like("[MiniApp/%"))
+                 .order_by(ActivityLog.created_at.desc())
+                 .limit(50).all())
+
+        # Build username map
+        from models import User
+        if spins:
+            uids = list({s.user_id for s in spins})
+            users = {u.id: (u.username or u.first_name or f"#{u.id}")
+                     for u in db.query(User).filter(User.id.in_(uids)).all()}
+        else:
+            users = {}
+
+        return render_template(
+            "admin_adsgram.html",
+            recent=recent,
+            spins=spins,
+            users=users,
+            total=total, consumed=consumed, today=today,
+            configured=adsgram_service.is_configured(),
+            block_id=adsgram_service.get_block_id() or "",
+        )
+    finally:
+        db.close()
 
 
 # ── Run ──────────────────────────────────────────────────────────────
