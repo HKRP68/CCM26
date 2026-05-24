@@ -2781,7 +2781,7 @@ def webapp_init():
         from services import adsgram_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         from datetime import datetime as _dt
-        from config import GSPIN_COOLDOWN
+        from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
         gspin_ready = True
         gspin_remaining = 0
         if stats and stats.last_gspin:
@@ -2789,6 +2789,16 @@ def webapp_init():
             if elapsed < GSPIN_COOLDOWN:
                 gspin_ready = False
                 gspin_remaining = int(GSPIN_COOLDOWN - elapsed)
+        daily_ready = True
+        daily_remaining = 0
+        if stats and stats.last_daily:
+            elapsed = (_dt.utcnow() - stats.last_daily).total_seconds()
+            # Use the configured daily cooldown (admin can tune it)
+            from services.command_config_service import get_cooldown
+            effective_cd = get_cooldown(db, "daily", DAILY_COOLDOWN)
+            if elapsed < effective_cd:
+                daily_ready = False
+                daily_remaining = int(effective_cd - elapsed)
         played = user.matches_played or 0
         won = user.matches_won or 0
         win_rate = round(won / played * 100, 1) if played else 0
@@ -2807,11 +2817,17 @@ def webapp_init():
                 "matches_won": won,
                 "matches_lost": user.matches_lost or 0,
                 "win_rate": win_rate,
+                "streak": stats.streak_count if stats else 0,
             },
             "gspin": {
                 "ready": gspin_ready,
                 "cooldown_remaining": gspin_remaining,
                 "cooldown_total": GSPIN_COOLDOWN,
+            },
+            "daily": {
+                "ready": daily_ready,
+                "cooldown_remaining": daily_remaining,
+                "cooldown_total": DAILY_COOLDOWN,
             },
             "adsgram": {
                 "configured": adsgram_service.is_configured(),
@@ -3153,6 +3169,308 @@ def webapp_ad_completed():
         from services import adsgram_service
         token = adsgram_service.issue_client_token(tg_id)
         return {"ok": True, "ad_token": token}
+    finally:
+        db.close()
+
+
+def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured):
+    """Shared ad-verification helper for spin/daily. Returns verified_via str or None."""
+    from services import adsgram_service
+    if adsgram_service.claim_postback(db, tg_id):
+        return "server_postback"
+    if ad_token and ad_token.startswith("CT-"):
+        if adsgram_service.consume_client_token(ad_token, tg_id):
+            return "client_token"
+    if ad_token and ad_token.startswith("MOCK-"):
+        if dev_mode or not ads_configured:
+            return "mock"
+    return None
+
+
+@app.route("/api/webapp/daily", methods=["POST"])
+@csrf_exempt
+def webapp_daily():
+    """Daily-claim endpoint — ad-gated, shares cooldown with bot /daily.
+
+    Uses services.daily_service.claim_daily so the reward logic stays
+    consistent with the bot. UserStats.last_daily is shared, so claiming
+    via Mini App also blocks the bot's /daily until cooldown elapses
+    (and vice versa).
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        import os as _os
+        from services import adsgram_service
+        from services.daily_service import claim_daily
+
+        data = request.get_json(silent=True) or {}
+        ad_token = (data.get("ad_token") or "").strip()
+        dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
+        ads_configured = adsgram_service.is_configured()
+
+        verified_via = _verify_ad_for_action(
+            db, tg_id, ad_token, dev_mode, ads_configured)
+        if not verified_via:
+            return {"ok": False, "error": "ad_required",
+                    "message": "Ad verification failed. Watch the ad first.",
+                    "ads_configured": ads_configured}, 400
+
+        result = claim_daily(db, user, source_label=f"MiniApp/{verified_via}")
+        if not result["ok"]:
+            # Cooldown — refund the ad-verification by re-issuing nothing
+            # (server postback already consumed; client token already
+            # consumed; mock isn't refundable either). Acceptable: user
+            # shouldn't have hit Claim if cooldown wasn't ready.
+            return {"ok": False, "error": result.get("error"),
+                    "message": "Daily not ready yet.",
+                    "cooldown_remaining": result.get("remaining", 0)}, 429
+
+        db.commit()
+        return {
+            "ok": True,
+            "verified_via": verified_via,
+            "reward": {
+                "coins": result["coins"],
+                "gems": result["gems"],
+                "streak": result["streak"],
+                "streak_max": result["streak_max"],
+                "milestone": result["milestone"],
+                "milestone_player": result["milestone_player"],
+                "players_added": result["players_added"],
+                "players_skipped": result["players_skipped"],
+                "lines": result["lines"],
+            },
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "roster_count": user.roster_count or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_daily failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/players", methods=["POST"])
+@csrf_exempt
+def webapp_players():
+    """Browse all players with filters: rating range, category, country, version.
+
+    Different from /search in that it returns paginated results sorted
+    by rating desc, suitable for an infinite-scroll "Browse" tab.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        data = request.get_json(silent=True) or {}
+        q = (data.get("q") or "").strip()
+        min_r = int(data.get("min_rating") or 0)
+        max_r = int(data.get("max_rating") or 100)
+        category = (data.get("category") or "").strip()
+        country = (data.get("country") or "").strip()
+        page = max(1, int(data.get("page") or 1))
+        per_page = min(50, max(1, int(data.get("per_page") or 20)))
+        only_unowned = bool(data.get("only_unowned"))
+
+        query = db.query(Player).filter(Player.is_active == True)
+        # Only show Base versions by default (cleaner browse — versions
+        # appear when user taps into a player)
+        query = query.filter(
+            (Player.version == "Base") | (Player.version.is_(None))
+        )
+        if q:
+            query = query.filter(Player.name.ilike(f"%{q}%"))
+        if min_r > 0:
+            query = query.filter(Player.rating >= min_r)
+        if max_r < 100:
+            query = query.filter(Player.rating <= max_r)
+        if category:
+            query = query.filter(Player.category == category)
+        if country:
+            query = query.filter(Player.country == country)
+
+        total = query.count()
+        players = (query.order_by(Player.rating.desc(), Player.name.asc())
+                   .offset((page - 1) * per_page).limit(per_page).all())
+
+        from models import UserRoster
+        owned_ids = {p[0] for p in (
+            db.query(UserRoster.player_id)
+              .filter(UserRoster.user_id == user.id).all())}
+
+        results = []
+        from config import get_buy_value
+        for p in players:
+            owned = p.id in owned_ids
+            if only_unowned and owned:
+                continue
+            results.append({
+                "id": p.id, "name": p.name, "rating": p.rating,
+                "category": p.category, "country": p.country,
+                "version": p.version or "Base",
+                "bat_rating": p.bat_rating or 0,
+                "bowl_rating": p.bowl_rating or 0,
+                "price": get_buy_value(p.rating),
+                "owned": owned,
+                "blocked": bool(getattr(p, "restricted_from_buypl", False)),
+            })
+
+        return {
+            "ok": True,
+            "results": results,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "has_more": (page * per_page) < total,
+        }
+    except Exception as e:
+        logger.exception("webapp_players failed")
+        return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/countries", methods=["POST"])
+@csrf_exempt
+def webapp_countries():
+    """Distinct country list for filter dropdown."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        rows = (db.query(Player.country)
+                .filter(Player.is_active == True,
+                        Player.country.isnot(None),
+                        Player.country != "")
+                .distinct().order_by(Player.country.asc()).all())
+        countries = [r[0] for r in rows if r[0]]
+        return {"ok": True, "countries": countries}
+    except Exception as e:
+        logger.exception("webapp_countries failed")
+        return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/leaderboard", methods=["POST"])
+@csrf_exempt
+def webapp_leaderboard():
+    """Top users by various metrics.
+
+    Body: {metric: 'wins' | 'win_rate' | 'coins' | 'roster_rating', limit: int}
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        data = request.get_json(silent=True) or {}
+        metric = (data.get("metric") or "wins").strip()
+        limit = min(50, max(5, int(data.get("limit") or 20)))
+
+        # Build the leaderboard query
+        if metric == "wins":
+            q = (db.query(User)
+                 .filter(User.matches_played > 0)
+                 .order_by(User.matches_won.desc().nullslast(),
+                           User.matches_played.desc().nullslast()))
+        elif metric == "win_rate":
+            # Order by ratio — require at least 5 matches for stability
+            from sqlalchemy import cast, Float, case
+            ratio = case(
+                (User.matches_played > 0,
+                 cast(User.matches_won, Float) / cast(User.matches_played, Float)),
+                else_=0.0,
+            )
+            q = (db.query(User)
+                 .filter(User.matches_played >= 5)
+                 .order_by(ratio.desc(), User.matches_played.desc()))
+        elif metric == "coins":
+            q = db.query(User).order_by(User.total_coins.desc().nullslast())
+        elif metric == "roster_rating":
+            # Average rating of player roster — requires join + aggregate
+            from sqlalchemy import func as _sf
+            from models import UserRoster
+            sub = (db.query(UserRoster.user_id,
+                            _sf.avg(Player.rating).label("avg_rating"),
+                            _sf.count(UserRoster.id).label("roster_n"))
+                   .join(Player, UserRoster.player_id == Player.id)
+                   .group_by(UserRoster.user_id)
+                   .having(_sf.count(UserRoster.id) >= 5)
+                   .subquery())
+            rows = (db.query(User, sub.c.avg_rating, sub.c.roster_n)
+                    .join(sub, sub.c.user_id == User.id)
+                    .order_by(sub.c.avg_rating.desc())
+                    .limit(limit).all())
+            users_list = []
+            me_rank = None
+            for i, (u, avg_r, n) in enumerate(rows, start=1):
+                entry = {
+                    "rank": i,
+                    "telegram_id": u.telegram_id,
+                    "username": u.username or "",
+                    "first_name": u.first_name or "",
+                    "team_name": u.team_name or "",
+                    "value": round(float(avg_r or 0), 1),
+                    "label": f"{round(float(avg_r or 0), 1)} avg ({n})",
+                    "is_me": (u.telegram_id == tg_id),
+                }
+                if entry["is_me"]:
+                    me_rank = i
+                users_list.append(entry)
+            return {
+                "ok": True, "metric": metric,
+                "rows": users_list, "my_rank": me_rank,
+            }
+        else:
+            return {"ok": False, "error": "bad_metric"}, 400
+
+        users = q.limit(limit).all()
+        rows = []
+        me_rank = None
+        for i, u in enumerate(users, start=1):
+            if metric == "wins":
+                value = u.matches_won or 0
+                label = f"{value} W / {u.matches_played or 0} M"
+            elif metric == "win_rate":
+                p = u.matches_played or 0
+                w = u.matches_won or 0
+                pct = round(w / p * 100, 1) if p else 0
+                value = pct
+                label = f"{pct}% ({w}/{p})"
+            elif metric == "coins":
+                value = u.total_coins or 0
+                label = f"{value:,} 🪙"
+            entry = {
+                "rank": i,
+                "telegram_id": u.telegram_id,
+                "username": u.username or "",
+                "first_name": u.first_name or "",
+                "team_name": u.team_name or "",
+                "value": value,
+                "label": label,
+                "is_me": (u.telegram_id == tg_id),
+            }
+            if entry["is_me"]:
+                me_rank = i
+            rows.append(entry)
+
+        return {
+            "ok": True, "metric": metric,
+            "rows": rows, "my_rank": me_rank,
+        }
+    except Exception as e:
+        logger.exception("webapp_leaderboard failed")
+        return {"ok": False, "error": str(e)}, 500
     finally:
         db.close()
 
