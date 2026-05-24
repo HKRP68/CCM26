@@ -192,10 +192,142 @@
     border-color: rgba(212, 168, 42, 0.5);
     box-shadow: 0 0 16px rgba(212, 168, 42, 0.15) inset;
   }
-  .tile.search { border-color: rgba(74, 158, 255, 0.4); }
-  .tile .tile-icon { font-size: 2.2rem; line-height: 1; }
-  .tile .tile-label { font-size: 0.95rem; font-weight: 700; margin-top: 0.45rem; }
-  .tile .tile-sub { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; }
+  .tile.daily {
+    border-color: rgba(0, 212, 170, 0.4);
+    box-shadow: 0 0 16px rgba(0, 212, 170, 0.1) inset;
+  }
+  .tile.browse { border-color: rgba(74, 158, 255, 0.4); }
+  .tile.leaderboard { border-color: rgba(167, 139, 250, 0.4); }
+  .tile .tile-icon { font-size: 2rem; line-height: 1; }
+  .tile .tile-label { font-size: 0.88rem; font-weight: 700; margin-top: 0.4rem; }
+  .tile .tile-sub { font-size: 0.66rem; color: var(--muted); margin-top: 0.15rem; }
+
+  /* ════ Browse: filter bar with sliders + dropdown ════ */
+  .filter-bar {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.85rem;
+    margin-bottom: 0.75rem;
+    display: flex; flex-direction: column; gap: 0.65rem;
+  }
+  .range-label {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem;
+  }
+  .range-label strong { color: var(--accent); }
+  .range-sliders {
+    position: relative; height: 30px;
+  }
+  .range-sliders input[type="range"] {
+    position: absolute; top: 0; left: 0; right: 0; width: 100%;
+    pointer-events: none;
+    -webkit-appearance: none; appearance: none;
+    background: transparent;
+    height: 30px;
+  }
+  .range-sliders input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 22px; height: 22px;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+    border-radius: 50%;
+    cursor: pointer;
+    pointer-events: auto;
+    margin-top: -10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  }
+  .range-sliders input[type="range"]::-moz-range-thumb {
+    width: 22px; height: 22px;
+    background: var(--accent); border: 2px solid var(--bg);
+    border-radius: 50%; cursor: pointer; pointer-events: auto;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  }
+  .range-sliders input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px; background: var(--border); border-radius: 2px;
+  }
+  .range-sliders input[type="range"]::-moz-range-track {
+    height: 4px; background: var(--border); border-radius: 2px;
+  }
+  #country-select {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+    width: 100%;
+    cursor: pointer;
+  }
+  .checkbox-row {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 0.85rem; color: var(--text);
+    cursor: pointer;
+  }
+  .checkbox-row input[type="checkbox"] {
+    width: 18px; height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .link-btn {
+    background: transparent; border: none; color: var(--accent);
+    font-size: 0.8rem; cursor: pointer; padding: 0.2rem 0.4rem;
+    font-family: inherit;
+  }
+  .load-more-btn {
+    width: 100%; padding: 0.85rem;
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    border-radius: 10px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: 1rem;
+    font-family: inherit;
+  }
+  .load-more-btn:active { transform: scale(0.98); }
+
+  /* ════ Leaderboard ════ */
+  .lb-row {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.7rem 0.85rem;
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 0.45rem;
+    position: relative;
+  }
+  .lb-row.me {
+    border-color: var(--accent);
+    background: linear-gradient(90deg, rgba(212,168,42,.08), var(--card-2));
+  }
+  .lb-rank {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; font-size: 0.95rem;
+    background: var(--card);
+    flex-shrink: 0;
+  }
+  .lb-rank.gold { background: linear-gradient(135deg, #ffd966, #d4a82a); color: #0a0f1a; }
+  .lb-rank.silver { background: linear-gradient(135deg, #d8d8d8, #888); color: #0a0f1a; }
+  .lb-rank.bronze { background: linear-gradient(135deg, #cd7f32, #8b4513); color: #fff; }
+  .lb-info { flex: 1; min-width: 0; }
+  .lb-name {
+    font-weight: 700; font-size: 0.92rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lb-team {
+    font-size: 0.74rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lb-value {
+    font-weight: 800; color: var(--accent);
+    font-size: 0.95rem;
+    white-space: nowrap;
+  }
 
   /* ════ Player cards ════ */
   .player-row {
@@ -577,10 +709,20 @@
       <div class="tile-label">Spin & Win</div>
       <div class="tile-sub" id="spin-tile-sub">Tap to play</div>
     </button>
-    <button class="tile search" onclick="navigate('search')">
-      <div class="tile-icon">🔍</div>
-      <div class="tile-label">Find Players</div>
+    <button class="tile daily" onclick="navigate('daily')">
+      <div class="tile-icon">📅</div>
+      <div class="tile-label">Daily</div>
+      <div class="tile-sub" id="daily-tile-sub">Tap to claim</div>
+    </button>
+    <button class="tile browse" onclick="navigate('browse')">
+      <div class="tile-icon">📚</div>
+      <div class="tile-label">Browse Players</div>
       <div class="tile-sub">Search & buy</div>
+    </button>
+    <button class="tile leaderboard" onclick="navigate('leaderboard')">
+      <div class="tile-icon">🏆</div>
+      <div class="tile-label">Leaderboard</div>
+      <div class="tile-sub" id="lb-tile-sub">Top players</div>
     </button>
   </div>
 
@@ -619,11 +761,47 @@
   </div>
 </div>
 
-<!-- ════ Search screen ════ -->
-<div class="screen" id="screen-search">
+<!-- ════ Daily screen ════ -->
+<div class="screen" id="screen-daily">
+  <div class="ad-banner">📺 Watch a quick ad to claim your daily reward. Once per day.</div>
+  <div style="padding: 1rem 0; text-align: center;">
+    <div style="font-size: 4rem; margin-bottom: 0.5rem;">📅</div>
+    <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Daily Reward</h2>
+    <p style="color: var(--muted); margin: 0;" id="daily-streak-line">Streak: 0 days</p>
+  </div>
+
+  <div class="card" id="daily-preview" style="text-align: center; padding: 1.5rem;">
+    <div style="display: flex; justify-content: space-around; flex-wrap: wrap; gap: 0.5rem;">
+      <div>
+        <div style="font-size: 1.5rem;">💰</div>
+        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Coins</div>
+      </div>
+      <div>
+        <div style="font-size: 1.5rem;">💎</div>
+        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Gems</div>
+      </div>
+      <div>
+        <div style="font-size: 1.5rem;">🏏</div>
+        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Players</div>
+      </div>
+      <div>
+        <div style="font-size: 1.5rem;">🎁</div>
+        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Streak bonus</div>
+      </div>
+    </div>
+  </div>
+
+  <button class="spin-button" id="daily-btn" onclick="onDailyClick()" style="margin-top: 1rem; width: 100%;">
+    📺 Watch ad to claim
+  </button>
+  <div id="daily-result"></div>
+</div>
+
+<!-- ════ Browse screen (formerly Search) ════ -->
+<div class="screen" id="screen-browse">
   <div class="search-box">
     <span>🔍</span>
-    <input type="text" id="search-input" placeholder="Search players by name…" autocomplete="off">
+    <input type="text" id="search-input" placeholder="Search by name…" autocomplete="off">
   </div>
   <div class="filters" id="cat-filters">
     <button class="chip active" data-cat="">All</button>
@@ -632,12 +810,31 @@
     <button class="chip" data-cat="All-rounder">⚡ AR</button>
     <button class="chip" data-cat="Wicket Keeper">🧤 WK</button>
   </div>
-  <div id="search-results">
-    <div class="empty">
-      <div class="icon">🔍</div>
-      Type a name to find players
+
+  <!-- Rating range slider + country dropdown -->
+  <div class="filter-bar">
+    <div class="rating-range">
+      <div class="range-label">
+        <span>Rating: <strong id="rating-display">50 – 100</strong></span>
+        <button class="link-btn" onclick="resetFilters()">Reset</button>
+      </div>
+      <div class="range-sliders">
+        <input type="range" id="rating-min" min="50" max="100" value="50" oninput="onRatingChange()">
+        <input type="range" id="rating-max" min="50" max="100" value="100" oninput="onRatingChange()">
+      </div>
     </div>
+    <select id="country-select" onchange="onFilterChange()">
+      <option value="">All Countries</option>
+    </select>
+    <label class="checkbox-row">
+      <input type="checkbox" id="unowned-only" onchange="onFilterChange()">
+      <span>Unowned only</span>
+    </label>
   </div>
+
+  <div id="browse-summary" style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;"></div>
+  <div id="browse-results"></div>
+  <button id="load-more" class="load-more-btn" style="display:none;" onclick="loadMore()">Load more</button>
 </div>
 
 <!-- ════ Roster screen ════ -->
@@ -651,6 +848,23 @@
   </div>
 </div>
 
+<!-- ════ Leaderboard screen ════ -->
+<div class="screen" id="screen-leaderboard">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.85rem;">
+    <h2 style="margin:0;font-size:1.25rem;">🏆 Leaderboard</h2>
+    <span id="my-rank-pill" style="display:none;background:rgba(212,168,42,.15);border:1px solid var(--accent);color:var(--accent);padding:0.25rem 0.6rem;border-radius:12px;font-size:0.8rem;font-weight:700;"></span>
+  </div>
+  <div class="filters">
+    <button class="chip active" data-metric="wins" onclick="setLeaderboardMetric('wins')">🏆 Wins</button>
+    <button class="chip" data-metric="win_rate" onclick="setLeaderboardMetric('win_rate')">📈 Win %</button>
+    <button class="chip" data-metric="coins" onclick="setLeaderboardMetric('coins')">💰 Coins</button>
+    <button class="chip" data-metric="roster_rating" onclick="setLeaderboardMetric('roster_rating')">⭐ Squad</button>
+  </div>
+  <div id="leaderboard-list">
+    <div class="empty"><div class="icon">⏳</div>Loading…</div>
+  </div>
+</div>
+
 <!-- ════ Bottom tabs ════ -->
 <div class="tabs">
   <button class="tab active" data-screen="home" onclick="navigate('home')">
@@ -661,13 +875,17 @@
     <div class="icon">🎡</div>
     <div>Spin</div>
   </button>
-  <button class="tab" data-screen="search" onclick="navigate('search')">
-    <div class="icon">🔍</div>
-    <div>Search</div>
+  <button class="tab" data-screen="browse" onclick="navigate('browse')">
+    <div class="icon">📚</div>
+    <div>Browse</div>
   </button>
   <button class="tab" data-screen="roster" onclick="navigate('roster')">
     <div class="icon">👥</div>
-    <div>Roster</div>
+    <div>Squad</div>
+  </button>
+  <button class="tab" data-screen="leaderboard" onclick="navigate('leaderboard')">
+    <div class="icon">🏆</div>
+    <div>Ranks</div>
   </button>
 </div>
 
@@ -745,12 +963,23 @@ function hapticNotif(type = 'success') {
 function navigate(screen) {
   haptic('light');
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById('screen-' + screen).classList.add('active');
+  const target = document.getElementById('screen-' + screen);
+  if (!target) return;
+  target.classList.add('active');
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.screen === screen));
   currentScreen = screen;
   window.scrollTo(0, 0);
   if (screen === 'roster') loadRoster();
   if (screen === 'home') refreshDashboard();
+  if (screen === 'leaderboard') loadLeaderboard();
+  if (screen === 'browse') {
+    loadCountries().then(() => {
+      if (!document.getElementById('browse-results').children.length) {
+        doBrowse(false);
+      }
+    });
+  }
+  if (screen === 'daily') updateDailyButton();
 }
 
 // ════════════════ Dashboard ════════════════
@@ -766,6 +995,7 @@ async function refreshDashboard() {
     return;
   }
   userData = data.user;
+  lastInitData = data;
   document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
   document.getElementById('stat-coins').textContent = formatNum(userData.coins);
   document.getElementById('stat-gems').textContent = formatNum(userData.gems);
@@ -775,23 +1005,45 @@ async function refreshDashboard() {
   document.getElementById('rec-won').textContent = userData.matches_won;
   document.getElementById('rec-lost').textContent = userData.matches_lost;
   document.getElementById('rec-wr').textContent = userData.win_rate + '%';
-  // Balance pill
   const pill = document.getElementById('balance-pill');
   pill.style.display = 'flex';
   document.getElementById('bp-coins').textContent = formatNum(userData.coins);
-  // Spin status
+
+  // Spin tile
   const spinSub = document.getElementById('spin-tile-sub');
   if (data.gspin.ready) {
     spinSub.textContent = 'Ready! 📺 Watch ad';
   } else {
-    const h = Math.floor(data.gspin.cooldown_remaining / 3600);
-    const m = Math.floor((data.gspin.cooldown_remaining % 3600) / 60);
-    spinSub.textContent = `Ready in ${h}h ${m}m`;
+    spinSub.textContent = 'Ready in ' + fmtRemaining(data.gspin.cooldown_remaining);
   }
   updateSpinButton(data.gspin);
-  // Initialize Adsgram SDK once we know the block ID from the backend
+
+  // Daily tile
+  const dailySub = document.getElementById('daily-tile-sub');
+  if (data.daily.ready) {
+    dailySub.textContent = 'Ready! 📺 Watch ad';
+  } else {
+    dailySub.textContent = 'Ready in ' + fmtRemaining(data.daily.cooldown_remaining);
+  }
+  updateDailyButton();
+
+  // Streak line on Daily screen
+  document.getElementById('daily-streak-line').textContent =
+    `🔥 Streak: ${userData.streak || 0} days`;
+
   initAdsgram(data.adsgram);
 }
+
+function fmtRemaining(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h === 0 && m === 0) return 'a moment';
+  if (h === 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+
+let lastInitData = null;
+let isDailyClaiming = false;
 
 function formatNum(n) {
   if (n === null || n === undefined) return '—';
@@ -821,6 +1073,146 @@ function updateSpinButton(g) {
     btn.disabled = false;
     btn.textContent = '📺 Watch ad to spin';
   }
+}
+
+// ════════════════ Daily ════════════════
+function updateDailyButton() {
+  const btn = document.getElementById('daily-btn');
+  const data = lastInitData;
+  if (isDailyClaiming) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Claiming…';
+    return;
+  }
+  if (!data || !data.daily) {
+    btn.disabled = false;
+    btn.textContent = '📺 Watch ad to claim';
+    return;
+  }
+  if (!data.daily.ready) {
+    btn.disabled = true;
+    btn.textContent = `⏱️ Ready in ${fmtRemaining(data.daily.cooldown_remaining)}`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = '📺 Watch ad to claim';
+  }
+}
+
+async function onDailyClick() {
+  if (isDailyClaiming) return;
+  haptic('medium');
+  isDailyClaiming = true;
+  updateDailyButton();
+
+  const adToken = await showAd();
+  if (!adToken) {
+    toast('Ad was skipped or failed', 'error');
+    isDailyClaiming = false;
+    updateDailyButton();
+    return;
+  }
+
+  const { ok, data } = await api('/api/webapp/daily', { ad_token: adToken });
+  isDailyClaiming = false;
+  if (!ok) {
+    toast(data.message || 'Daily claim failed', 'error');
+    hapticNotif('error');
+    updateDailyButton();
+    return;
+  }
+  hapticNotif('success');
+  showDailyReward(data.reward);
+  // Refresh dashboard so cooldown + balances update
+  refreshDashboard();
+}
+
+function showDailyReward(r) {
+  const el = document.getElementById('daily-result');
+  let lines = '';
+  if (r.coins) lines += `<div>💰 <strong>+${formatNum(r.coins)}</strong> coins</div>`;
+  if (r.gems) lines += `<div>💎 <strong>+${r.gems}</strong> gems</div>`;
+  lines += `<div style="margin-top:0.5rem;">🔥 Streak: <strong>${r.streak}/${r.streak_max}</strong></div>`;
+  if (r.milestone && r.milestone_player) {
+    lines += `<div style="margin-top:0.5rem;color:var(--accent);">🎉 MILESTONE: <strong>${escapeHtml(r.milestone_player.name)} (${r.milestone_player.rating} OVR)</strong></div>`;
+  }
+  if (r.players_added && r.players_added.length) {
+    lines += `<div style="margin-top:0.5rem;">`;
+    r.players_added.forEach(p => {
+      lines += `<div>✅ ${escapeHtml(p.name)} (${p.rating}) added</div>`;
+    });
+    lines += `</div>`;
+  }
+  if (r.players_skipped && r.players_skipped.length) {
+    lines += `<div style="margin-top:0.5rem;color:var(--accent);font-size:0.85rem;">`;
+    lines += `⚠️ ${r.players_skipped.length} player${r.players_skipped.length === 1 ? '' : 's'} not added (squad full — release one first):<br>`;
+    r.players_skipped.forEach(p => {
+      lines += `<div style="font-size:0.8rem;">• ${escapeHtml(p.name)} (${p.rating})</div>`;
+    });
+    lines += `</div>`;
+  }
+  el.innerHTML = `
+    <div class="reward-banner">
+      <div class="emoji">📅</div>
+      <div class="label">Daily claimed!</div>
+      <div class="detail" style="text-align:left;">${lines}</div>
+    </div>
+  `;
+}
+
+// ════════════════ Leaderboard ════════════════
+let lbMetric = 'wins';
+
+function setLeaderboardMetric(m) {
+  haptic('light');
+  lbMetric = m;
+  document.querySelectorAll('#screen-leaderboard .chip').forEach(c =>
+    c.classList.toggle('active', c.dataset.metric === m));
+  loadLeaderboard();
+}
+
+async function loadLeaderboard() {
+  const el = document.getElementById('leaderboard-list');
+  const rankPill = document.getElementById('my-rank-pill');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  rankPill.style.display = 'none';
+  const { ok, data } = await api('/api/webapp/leaderboard', {
+    metric: lbMetric, limit: 30,
+  });
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  if (!data.rows || !data.rows.length) {
+    el.innerHTML = `<div class="empty"><div class="icon">📊</div>Not enough data yet</div>`;
+    return;
+  }
+  if (data.my_rank) {
+    rankPill.style.display = 'inline-block';
+    rankPill.textContent = `You: #${data.my_rank}`;
+  }
+  el.innerHTML = data.rows.map(r => lbRow(r)).join('');
+}
+
+function lbRow(r) {
+  const cls = ['lb-row'];
+  if (r.is_me) cls.push('me');
+  let rankCls = '';
+  if (r.rank === 1) rankCls = 'gold';
+  else if (r.rank === 2) rankCls = 'silver';
+  else if (r.rank === 3) rankCls = 'bronze';
+  const display = r.team_name || r.first_name || r.username || `#${r.telegram_id}`;
+  const sub = r.team_name && (r.first_name || r.username)
+    ? escapeHtml(r.first_name || '@' + r.username) : '';
+  return `
+    <div class="${cls.join(' ')}">
+      <div class="lb-rank ${rankCls}">${r.rank}</div>
+      <div class="lb-info">
+        <div class="lb-name">${escapeHtml(display)}${r.is_me ? ' <span style="color:var(--accent);font-size:0.7rem;">(YOU)</span>' : ''}</div>
+        ${sub ? `<div class="lb-team">${sub}</div>` : ''}
+      </div>
+      <div class="lb-value">${escapeHtml(r.label)}</div>
+    </div>
+  `;
 }
 
 // ════════════════ Spin ════════════════
@@ -930,10 +1322,17 @@ function showReward(r) {
   `;
 }
 
-// ════════════════ Search ════════════════
+// ════════════════ Browse (players with filters) ════════════════
+let browsePage = 1;
+let browseInFlight = false;
+let browseMinRating = 50;
+let browseMaxRating = 100;
+let browseTimer = null;
+let countriesLoaded = false;
+
 document.getElementById('search-input').addEventListener('input', e => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => doSearch(e.target.value), 280);
+  clearTimeout(browseTimer);
+  browseTimer = setTimeout(() => onFilterChange(), 280);
 });
 
 document.querySelectorAll('#cat-filters .chip').forEach(chip => {
@@ -941,29 +1340,112 @@ document.querySelectorAll('#cat-filters .chip').forEach(chip => {
     document.querySelectorAll('#cat-filters .chip').forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
     currentCat = chip.dataset.cat;
-    doSearch(document.getElementById('search-input').value);
+    onFilterChange();
   });
 });
 
-async function doSearch(q) {
-  const resultsEl = document.getElementById('search-results');
-  if (!q && !currentCat) {
-    resultsEl.innerHTML = `<div class="empty"><div class="icon">🔍</div>Type a name to find players</div>`;
-    return;
+function onRatingChange() {
+  const lo = parseInt(document.getElementById('rating-min').value, 10);
+  const hi = parseInt(document.getElementById('rating-max').value, 10);
+  // Prevent crossover
+  if (lo > hi) {
+    document.getElementById('rating-min').value = hi;
+    browseMinRating = hi;
+  } else {
+    browseMinRating = lo;
   }
-  resultsEl.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-  const { ok, data } = await api('/api/webapp/search', {
-    q, category: currentCat, limit: 30,
+  if (hi < lo) {
+    document.getElementById('rating-max').value = lo;
+    browseMaxRating = lo;
+  } else {
+    browseMaxRating = hi;
+  }
+  document.getElementById('rating-display').textContent = `${browseMinRating} – ${browseMaxRating}`;
+  clearTimeout(browseTimer);
+  browseTimer = setTimeout(() => onFilterChange(), 250);
+}
+
+function resetFilters() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('rating-min').value = 50;
+  document.getElementById('rating-max').value = 100;
+  document.getElementById('country-select').value = '';
+  document.getElementById('unowned-only').checked = false;
+  document.querySelectorAll('#cat-filters .chip').forEach(c => c.classList.remove('active'));
+  document.querySelector('#cat-filters .chip[data-cat=""]').classList.add('active');
+  currentCat = '';
+  browseMinRating = 50; browseMaxRating = 100;
+  document.getElementById('rating-display').textContent = '50 – 100';
+  onFilterChange();
+}
+
+function onFilterChange() {
+  browsePage = 1;
+  document.getElementById('browse-results').innerHTML = '';
+  doBrowse(false);
+}
+
+async function loadCountries() {
+  if (countriesLoaded) return;
+  const { ok, data } = await api('/api/webapp/countries', {});
+  if (!ok || !data.countries) return;
+  const sel = document.getElementById('country-select');
+  data.countries.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    sel.appendChild(opt);
   });
+  countriesLoaded = true;
+}
+
+async function doBrowse(append) {
+  if (browseInFlight) return;
+  browseInFlight = true;
+
+  const q = document.getElementById('search-input').value;
+  const country = document.getElementById('country-select').value;
+  const onlyUnowned = document.getElementById('unowned-only').checked;
+  const resultsEl = document.getElementById('browse-results');
+  const moreBtn = document.getElementById('load-more');
+  const summary = document.getElementById('browse-summary');
+
+  if (!append) {
+    resultsEl.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  }
+
+  const { ok, data } = await api('/api/webapp/players', {
+    q,
+    category: currentCat,
+    country,
+    min_rating: browseMinRating,
+    max_rating: browseMaxRating,
+    only_unowned: onlyUnowned,
+    page: browsePage,
+    per_page: 25,
+  });
+  browseInFlight = false;
   if (!ok) {
-    resultsEl.innerHTML = `<div class="empty">❌ ${data.message || 'Search failed'}</div>`;
+    resultsEl.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
     return;
   }
-  if (!data.results || !data.results.length) {
-    resultsEl.innerHTML = `<div class="empty"><div class="icon">😕</div>No players found</div>`;
-    return;
+  const html = (data.results || []).map(p => playerRow(p)).join('');
+  if (append) {
+    // remove the spinner if any, append new
+    resultsEl.insertAdjacentHTML('beforeend', html);
+  } else {
+    if (!data.results || !data.results.length) {
+      resultsEl.innerHTML = `<div class="empty"><div class="icon">😕</div>No players match</div>`;
+    } else {
+      resultsEl.innerHTML = html;
+    }
   }
-  resultsEl.innerHTML = data.results.map(p => playerRow(p)).join('');
+  summary.textContent = `${data.total || 0} player${data.total === 1 ? '' : 's'} match · showing ${browsePage * 25} max`;
+  moreBtn.style.display = data.has_more ? 'block' : 'none';
+}
+
+function loadMore() {
+  browsePage++;
+  doBrowse(true);
 }
 
 function ratingTier(r) {
@@ -1067,9 +1549,9 @@ async function buyPlayer(id, price) {
   closeModal();
   // Refresh
   refreshDashboard();
-  // If on search screen, re-run search to update ownership badges
-  if (currentScreen === 'search') {
-    doSearch(document.getElementById('search-input').value);
+  // If on browse screen, re-run to update ownership badges
+  if (currentScreen === 'browse') {
+    onFilterChange();
   }
 }
 
