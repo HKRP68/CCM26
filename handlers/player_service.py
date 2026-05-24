@@ -1,4 +1,8 @@
-"""Player selection and value services."""
+"""Player selection and value services.
+
+Uses player_cache for random picks (zero egress for selection logic), then
+fetches the single chosen ORM row by ID. Result: massive egress reduction.
+"""
 
 import random
 from sqlalchemy import and_
@@ -10,40 +14,58 @@ from config import CLAIM_RARITY, get_buy_value, get_sell_value
 
 def get_random_player_by_rating_range(session: Session, low: int, high: int) -> Player | None:
     """Return a random active player within [low, high] rating.
-    If the exact range is empty, gradually widen until players are found."""
-    players = (
-        session.query(Player)
-        .filter(and_(Player.rating >= low, Player.rating <= high, Player.is_active == True))
-        .all()
-    )
-    if players:
-        return random.choice(players)
 
-    # Widen range up to ±10 to find the nearest players
-    for expand in range(1, 11):
-        players = (
-            session.query(Player)
-            .filter(and_(
-                Player.rating >= max(50, low - expand),
-                Player.rating <= min(100, high + expand),
-                Player.is_active == True,
-            ))
-            .all()
-        )
-        if players:
-            return random.choice(players)
+    Implementation: uses in-memory cache to pick the ID, then fetches just that
+    one row. Was previously fetching every player in range — wasteful.
+    """
+    from services import player_cache
+    pick = player_cache.get_random_in_rating_range(low, high)
+    if not pick:
+        return None
+    # Fetch single ORM row (cheap — single row, indexed lookup)
+    return session.query(Player).get(pick["id"])
 
-    # Absolute fallback: any active player
-    all_players = session.query(Player).filter(Player.is_active == True).all()
-    return random.choice(all_players) if all_players else None
+
+def _get_rarity_distribution(session: Session):
+    """Return list of (cumulative_threshold, low, high) tuples.
+
+    Tries the admin-configurable ClaimRarityTier table first.
+    Falls back to CLAIM_RARITY from config.py if no rows exist.
+    """
+    try:
+        from models import ClaimRarityTier
+        rows = (session.query(ClaimRarityTier)
+                .filter(ClaimRarityTier.is_active == True)
+                .order_by(ClaimRarityTier.sort_order, ClaimRarityTier.id).all())
+        if rows:
+            # Build cumulative thresholds
+            total = sum(r.probability for r in rows)
+            if total <= 0:
+                return CLAIM_RARITY
+            # Normalize probabilities so they sum to 1.0 (allows admin to use percentages)
+            cumulative = 0.0
+            out = []
+            for r in rows:
+                cumulative += (r.probability / total)
+                out.append((cumulative, r.rating_min, r.rating_max))
+            return out
+    except Exception:
+        pass
+    return CLAIM_RARITY
 
 
 def get_random_player_by_rarity(session: Session) -> Player | None:
-    """Pick a random player using the claim rarity distribution."""
+    """Pick a random player using the claim rarity distribution.
+    Uses admin-configured tiers if any exist; otherwise falls back to config."""
+    dist = _get_rarity_distribution(session)
     roll = random.random()
-    for threshold, low, high in CLAIM_RARITY:
+    for threshold, low, high in dist:
         if roll <= threshold:
             return get_random_player_by_rating_range(session, low, high)
+    # If we somehow fall off the end, use the last tier's range
+    if dist:
+        _, low, high = dist[-1]
+        return get_random_player_by_rating_range(session, low, high)
     return get_random_player_by_rating_range(session, 50, 58)
 
 

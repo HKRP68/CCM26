@@ -122,6 +122,12 @@ def save_state(ctx, mid, state, next_action=None, last_prompt_msg_id=None):
                 last_prompt_msg_id=last_prompt_msg_id,
             )
             session.add(ms)
+            # Bump active-match flag so heartbeat knows to do work
+            try:
+                from services.match_heartbeat_flags import increment_active_matches
+                increment_active_matches(ctx)
+            except Exception:
+                pass
         else:
             ms.state_json = _serialize(state)
             if next_action is not None:
@@ -212,6 +218,12 @@ def cleanup_state(ctx, mid):
         if ms:
             session.delete(ms)
             session.commit()
+            # Decrement active-match flag for heartbeat fast-path
+            try:
+                from services.match_heartbeat_flags import decrement_active_matches
+                decrement_active_matches(ctx)
+            except Exception:
+                pass
     except Exception:
         session.rollback()
     finally:

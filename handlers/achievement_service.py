@@ -466,3 +466,45 @@ async def check_and_notify(context, chat_id, session, user_id):
     except Exception:
         logger.exception("Achievement notify failed")
     return newly
+
+
+def get_top_unlocked(session, user_id, limit=3):
+    """Return the user's most prestigious unlocked achievements for showcase.
+
+    Ranking: gem-rewards desc, then coin-rewards desc, then most recently
+    unlocked first. Gems are the rarer reward so they're a decent rarity proxy.
+
+    Returns list of dicts: {key, emoji, name, desc, gems, coins, unlocked_at}.
+    """
+    from models import UserAchievement
+    rows = (session.query(UserAchievement)
+            .filter(UserAchievement.user_id == user_id)
+            .all())
+    if not rows:
+        return []
+
+    key_to_unlock = {r.achievement_key: r.unlocked_at for r in rows}
+    catalog_by_key = {c["key"]: c for c in CATALOG}
+
+    unlocked = []
+    for key, unlocked_at in key_to_unlock.items():
+        c = catalog_by_key.get(key)
+        if not c:
+            continue
+        unlocked.append({
+            "key": key,
+            "emoji": c.get("emoji", "🏆"),
+            "name": c.get("name", key),
+            "desc": c.get("desc", ""),
+            "gems": c.get("gems", 0),
+            "coins": c.get("coins", 0),
+            "unlocked_at": unlocked_at,
+        })
+
+    # Sort by rarity proxy: gems desc, then coins desc, then most recent
+    unlocked.sort(
+        key=lambda a: (a["gems"], a["coins"],
+                       a["unlocked_at"].timestamp() if a["unlocked_at"] else 0),
+        reverse=True,
+    )
+    return unlocked[:limit]

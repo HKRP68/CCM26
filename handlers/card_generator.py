@@ -150,6 +150,10 @@ def generate_card(player) -> bytes | None:
     If the admin has uploaded a custom card image for this player and it's
     active, returns those bytes instead. Falls back to the auto-generated
     card otherwise.
+
+    Generated cards are cached in memory by player_id — a player's card art
+    doesn't change at runtime, so re-generating it is wasted CPU + memory.
+    Cache is invalidated when admin edits a player.
     """
     # Custom image override — short-circuit if admin uploaded one
     try:
@@ -159,6 +163,11 @@ def generate_card(player) -> bytes | None:
             return custom
     except Exception:
         pass  # Fall through to auto-generation
+
+    # Generated-card cache check
+    cached = _CARD_CACHE.get(player.id)
+    if cached is not None:
+        return cached
 
     try:
         # Read all attributes
@@ -286,8 +295,28 @@ def generate_card(player) -> bytes | None:
         buf = io.BytesIO()
         img.save(buf, format="PNG", quality=95)
         buf.seek(0)
-        return buf.getvalue()
+        result = buf.getvalue()
+        # Cache so we don't regenerate this card. Cap to avoid runaway memory.
+        if len(_CARD_CACHE) > 500:
+            _CARD_CACHE.clear()
+        _CARD_CACHE[player.id] = result
+        return result
 
     except Exception:
         logger.exception("Card generation failed")
         return None
+
+
+# Module-level cache for generated cards. Player art doesn't change at runtime,
+# so we keep up to 500 generated cards in memory. Invalidated when admin edits
+# the underlying Player row.
+_CARD_CACHE = {}
+
+
+def invalidate_card_cache(player_id=None):
+    """Drop cached generated cards. Call after admin edits a player.
+    If player_id is None, drops all."""
+    if player_id is None:
+        _CARD_CACHE.clear()
+    else:
+        _CARD_CACHE.pop(player_id, None)

@@ -21,14 +21,41 @@ from telegram.ext import ContextTypes
 logger = logging.getLogger(__name__)
 
 # Tunables
-HEARTBEAT_INTERVAL = 6         # seconds between scans
-RERENDER_THRESHOLD = 12        # seconds idle before we re-render the screen
-AUTODECIDE_THRESHOLD = 45      # seconds idle before AI auto-decides
+HEARTBEAT_INTERVAL = 30        # seconds between scans
+RERENDER_THRESHOLD = 90        # seconds idle before we re-render the screen
+AUTODECIDE_THRESHOLD = 300     # seconds idle (5 min) before AI auto-decides
 HEARTBEAT_JOB_NAME = "match_heartbeat_global"
 
 
 async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
-    """Periodic scan over all active match states."""
+    """Periodic scan: re-renders stuck matches + fires notifications.
+
+    Designed to be cheap when idle (no active matches, no due notifications)
+    so Neon's compute can auto-suspend. We bail out before any DB query if
+    the in-memory flags say there's nothing to do.
+    """
+    # ── FAST PATH — skip everything if nothing to do ──
+    # The MatchState table is empty when no matches are in progress. We
+    # can check this with a cheap in-memory flag the match handlers
+    # maintain. If both flags say idle, we don't touch the DB at all
+    # → lets Neon compute suspend.
+    from services.match_heartbeat_flags import (
+        has_active_matches, has_due_notifications,
+    )
+    if not has_active_matches(context) and not has_due_notifications():
+        return  # nothing to do — DB stays cold
+
+    # Notification tick (deduped to once per minute internally)
+    try:
+        from services.notification_service import maybe_tick
+        await maybe_tick(context.application)
+    except Exception:
+        logger.exception("notification tick error")
+
+    # Active matches: only query DB if the flag says we have any
+    if not has_active_matches(context):
+        return
+
     try:
         from services.match_state_store import (
             list_active_match_ids, get_state, get_next_action,
@@ -45,6 +72,11 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             states = session.query(MatchState).all()
         finally:
             session.close()
+
+        # Sync the flag — if DB shows no states, clear the in-memory hint
+        # so the next tick can fast-skip.
+        from services.match_heartbeat_flags import set_active_match_count
+        set_active_match_count(context, len(states))
 
         for ms in states:
             mid = ms.match_id
@@ -191,20 +223,46 @@ async def _auto_decide(context, mid, state, next_act):
 
 
 def start_heartbeat(application):
-    """Register the global heartbeat job. Idempotent — only adds once."""
+    """Register the global heartbeat job. Idempotent — only adds once.
+
+    Tries job_queue first. If unavailable (e.g. python-telegram-bot was installed
+    without the [job-queue] extra), falls back to a plain asyncio task that
+    schedules itself in the application's event loop on startup.
+    """
+    if application.job_queue:
+        try:
+            existing = application.job_queue.get_jobs_by_name(HEARTBEAT_JOB_NAME)
+            if existing:
+                return
+            application.job_queue.run_repeating(
+                _heartbeat_tick,
+                interval=HEARTBEAT_INTERVAL,
+                first=HEARTBEAT_INTERVAL,
+                name=HEARTBEAT_JOB_NAME,
+            )
+            logger.info(f"Heartbeat scheduled via JobQueue (every {HEARTBEAT_INTERVAL}s)")
+            return
+        except Exception:
+            logger.exception("Failed to schedule via JobQueue — falling back to asyncio task")
+
+    # Fallback: register a post_init handler that creates an asyncio loop task.
+    # This works even when python-telegram-bot[job-queue] is not installed.
+    async def _post_init(app):
+        import asyncio
+        async def _loop():
+            class _FakeContext:
+                def __init__(self, app): self.application = app
+            ctx = _FakeContext(app)
+            while True:
+                try:
+                    await _heartbeat_tick(ctx)
+                except Exception:
+                    logger.exception("heartbeat fallback tick failed")
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+        asyncio.create_task(_loop())
+        logger.info(f"Heartbeat scheduled via asyncio fallback (every {HEARTBEAT_INTERVAL}s)")
+
     try:
-        if not application.job_queue:
-            return
-        # Don't double-register
-        existing = application.job_queue.get_jobs_by_name(HEARTBEAT_JOB_NAME)
-        if existing:
-            return
-        application.job_queue.run_repeating(
-            _heartbeat_tick,
-            interval=HEARTBEAT_INTERVAL,
-            first=HEARTBEAT_INTERVAL,  # wait one interval before first run
-            name=HEARTBEAT_JOB_NAME,
-        )
-        logger.info(f"Heartbeat scheduled (every {HEARTBEAT_INTERVAL}s)")
+        application.post_init = _post_init
     except Exception:
-        logger.exception("Failed to start heartbeat")
+        logger.exception("Failed to register heartbeat fallback")
