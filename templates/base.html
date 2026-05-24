@@ -614,6 +614,7 @@ hr.pitch-line {
     <div class="section-label">System</div>
     <a href="{{ url_for('admin_maintenance') }}" class="{{ 'active' if request.endpoint == 'admin_maintenance' }}">🛠️ Maintenance</a>
     <a href="{{ url_for('admin_audit_log') }}" class="{{ 'active' if request.endpoint == 'admin_audit_log' }}">📋 Audit Log</a>
+    <a href="{{ url_for('admin_adsgram') }}" class="{{ 'active' if request.endpoint == 'admin_adsgram' }}">📺 Adsgram</a>
     <a href="{{ url_for('admin_diagnostics') }}" class="{{ 'active' if request.endpoint == 'admin_diagnostics' }}">🔧 Diagnostics</a>
     <a href="{{ url_for('status') }}" class="{{ 'active' if request.endpoint == 'status' }}">🟢 Status</a>
     <a href="{{ url_for('seed_database') }}" class="{{ 'active' if request.endpoint == 'seed_database' }}">🌱 Seed</a>

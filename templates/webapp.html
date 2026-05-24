@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>CricMaster Ultra</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   :root {
@@ -788,6 +789,8 @@ async function refreshDashboard() {
     spinSub.textContent = `Ready in ${h}h ${m}m`;
   }
   updateSpinButton(data.gspin);
+  // Initialize Adsgram SDK once we know the block ID from the backend
+  initAdsgram(data.adsgram);
 }
 
 function formatNum(n) {
@@ -859,11 +862,50 @@ async function onSpinClick() {
   }, 4600);
 }
 
+// Adsgram AdController, initialised lazily once we know the block ID
+let _adController = null;
+let _adsConfigured = false;
+let _adsBlockId = null;
+
+function initAdsgram(config) {
+  _adsConfigured = !!config?.configured;
+  _adsBlockId = config?.block_id || null;
+  if (_adsConfigured && _adsBlockId && window.Adsgram?.init) {
+    try {
+      _adController = window.Adsgram.init({ blockId: _adsBlockId });
+    } catch (e) {
+      console.error('Adsgram init failed:', e);
+      _adController = null;
+    }
+  }
+}
+
 async function showAd() {
-  // Phase 1: mock ad that always succeeds after 1s.
-  // Phase 2: replace with real ad SDK call:
-  //   const result = await window.Adsgram.show(slot_id);
-  //   return result.success ? result.token : null;
+  // Real Adsgram SDK if configured + initialised
+  if (_adController) {
+    try {
+      toast('📺 Loading ad…', 'info');
+      const result = await _adController.show();
+      // SDK promise resolves only if user watched ad till the end
+      if (result && result.done) {
+        // Tell our backend the ad was completed → returns a single-use token
+        const r = await api('/api/webapp/ad-completed', {});
+        if (r.ok && r.data.ad_token) return r.data.ad_token;
+        toast('Ad watched but token failed', 'error');
+        return null;
+      }
+      return null;
+    } catch (err) {
+      // SDK rejects on skip/error/no-banner — show friendly message
+      const desc = err?.description || err?.message || 'Ad unavailable';
+      if (err?.error) toast(`Ad error: ${desc}`, 'error');
+      else toast('Ad skipped — no spin granted', 'info');
+      return null;
+    }
+  }
+
+  // Fallback: dev/mock mode (only works if backend has WEBAPP_DEV_MODE=1
+  // or ADSGRAM_BLOCK_ID is unset)
   toast('📺 Playing ad… (mock)', 'info');
   await new Promise(r => setTimeout(r, 1200));
   return 'MOCK-' + Date.now();
