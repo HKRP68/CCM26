@@ -57,6 +57,18 @@ except ImportError:
         "Add 'flask-wtf' to requirements.txt to enable.")
     csrf = None
 
+
+def csrf_exempt(view):
+    """Mark a Flask view as exempt from CSRF protection.
+
+    Used for Mini App API endpoints which authenticate via Telegram's
+    initData HMAC signature instead of CSRF tokens.
+    """
+    if csrf is not None:
+        return csrf.exempt(view)
+    return view
+
+
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 # If ADMIN_PASSWORD_HASH is set (bcrypt hash format starting with $2b$), it
 # takes priority over the plaintext ADMIN_PASSWORD. Generate one with:
@@ -2698,6 +2710,398 @@ def health():
     wake Neon's compute every time you ping; hitting /health doesn't.
     """
     return "ok", 200, {"Content-Type": "text/plain"}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TELEGRAM MINI APP
+# ═══════════════════════════════════════════════════════════════════════
+# Serves a single-page web app at /webapp that runs inside Telegram's
+# WebView. All /api/webapp/* endpoints require valid Telegram initData
+# in the Authorization header. CSRF is exempt — Telegram's HMAC signature
+# is the authentication.
+
+def _webapp_auth():
+    """Verify Telegram initData from Authorization header.
+
+    Returns ((db, user, tg_id), None, None) on success.
+    Returns (None, None, (error_dict, http_status)) on failure.
+    """
+    import os as _os
+    bot_token = _os.getenv("BOT_TOKEN", "")
+    if not bot_token:
+        return None, None, ({"ok": False, "error": "bot_token_missing"}, 500)
+
+    init_data = request.headers.get("Authorization", "") or ""
+    if init_data.startswith("tma "):
+        init_data = init_data[4:]
+
+    # Dev/test bypass: only honored when WEBAPP_DEV_MODE=1
+    if init_data.startswith("DEV_") and _os.getenv("WEBAPP_DEV_MODE") == "1":
+        try:
+            tg_id = int(init_data[4:])
+        except ValueError:
+            return None, None, ({"ok": False, "error": "bad_dev_id"}, 401)
+    else:
+        from services.webapp_auth import verify_init_data, get_user_id
+        verified = verify_init_data(init_data, bot_token)
+        if not verified:
+            return None, None, ({"ok": False, "error": "bad_init_data"}, 401)
+        tg_id = get_user_id(verified)
+        if not tg_id:
+            return None, None, ({"ok": False, "error": "no_user_id"}, 401)
+
+    db = get_session()
+    user = db.query(User).filter(User.telegram_id == tg_id).first()
+    if not user:
+        db.close()
+        return None, tg_id, ({"ok": False, "error": "not_debuted",
+                              "message": "Open the bot and run /debut first."}, 403)
+    return (db, user, tg_id), None, None
+
+
+@app.route("/webapp")
+def webapp():
+    """Serve the Mini App HTML."""
+    return render_template("webapp.html")
+
+
+@app.route("/api/webapp/init", methods=["POST"])
+@csrf_exempt
+def webapp_init():
+    """Dashboard endpoint."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserStats
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        from datetime import datetime as _dt
+        from config import GSPIN_COOLDOWN
+        gspin_ready = True
+        gspin_remaining = 0
+        if stats and stats.last_gspin:
+            elapsed = (_dt.utcnow() - stats.last_gspin).total_seconds()
+            if elapsed < GSPIN_COOLDOWN:
+                gspin_ready = False
+                gspin_remaining = int(GSPIN_COOLDOWN - elapsed)
+        played = user.matches_played or 0
+        won = user.matches_won or 0
+        win_rate = round(won / played * 100, 1) if played else 0
+        return {
+            "ok": True,
+            "user": {
+                "telegram_id": user.telegram_id,
+                "first_name": user.first_name or "",
+                "username": user.username or "",
+                "team_name": user.team_name or "",
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "quest_points": user.quest_points or 0,
+                "roster_count": user.roster_count or 0,
+                "matches_played": played,
+                "matches_won": won,
+                "matches_lost": user.matches_lost or 0,
+                "win_rate": win_rate,
+            },
+            "gspin": {
+                "ready": gspin_ready,
+                "cooldown_remaining": gspin_remaining,
+                "cooldown_total": GSPIN_COOLDOWN,
+            },
+        }
+    except Exception as e:
+        logger.exception("webapp_init failed")
+        return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/search", methods=["POST"])
+@csrf_exempt
+def webapp_search():
+    """Search players. Body: {q, min_rating, max_rating, category, limit}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        data = request.get_json(silent=True) or {}
+        q = (data.get("q") or "").strip()
+        min_r = int(data.get("min_rating") or 0)
+        max_r = int(data.get("max_rating") or 100)
+        category = (data.get("category") or "").strip()
+        limit = min(50, int(data.get("limit") or 20))
+
+        query = db.query(Player).filter(Player.is_active == True)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(Player.name.ilike(like))
+        if min_r > 0:
+            query = query.filter(Player.rating >= min_r)
+        if max_r < 100:
+            query = query.filter(Player.rating <= max_r)
+        if category:
+            query = query.filter(Player.category == category)
+
+        players = query.order_by(Player.rating.desc()).limit(limit).all()
+
+        from models import UserRoster
+        owned_ids = {p[0] for p in (
+            db.query(UserRoster.player_id)
+              .filter(UserRoster.user_id == user.id).all())}
+
+        from config import get_buy_value
+        return {
+            "ok": True,
+            "results": [{
+                "id": p.id,
+                "name": p.name,
+                "rating": p.rating,
+                "category": p.category,
+                "country": p.country,
+                "version": p.version or "Base",
+                "bat_rating": p.bat_rating or 0,
+                "bowl_rating": p.bowl_rating or 0,
+                "price": get_buy_value(p.rating),
+                "owned": p.id in owned_ids,
+                "blocked": bool(getattr(p, "restricted_from_buypl", False)),
+            } for p in players],
+        }
+    except Exception as e:
+        logger.exception("webapp_search failed")
+        return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/player/<int:player_id>", methods=["POST"])
+@csrf_exempt
+def webapp_player_detail(player_id):
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        p = db.query(Player).get(player_id)
+        if not p or not p.is_active:
+            return {"ok": False, "error": "not_found"}, 404
+        from services.version_service import user_owns_any_version
+        from config import get_buy_value, get_sell_value
+        owns_any = user_owns_any_version(db, user.id, p.id)
+        return {
+            "ok": True,
+            "player": {
+                "id": p.id,
+                "name": p.name,
+                "rating": p.rating,
+                "category": p.category,
+                "country": p.country,
+                "version": p.version or "Base",
+                "bat_hand": p.bat_hand,
+                "bowl_hand": p.bowl_hand,
+                "bowl_style": p.bowl_style,
+                "bat_rating": p.bat_rating or 0,
+                "bowl_rating": p.bowl_rating or 0,
+                "price": get_buy_value(p.rating),
+                "sell_value": get_sell_value(p.rating),
+                "owned_any_version": owns_any,
+                "blocked": bool(getattr(p, "restricted_from_buypl", False)),
+            },
+        }
+    except Exception as e:
+        logger.exception("webapp_player_detail failed")
+        return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/buy/<int:player_id>", methods=["POST"])
+@csrf_exempt
+def webapp_buy(player_id):
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from datetime import datetime as _dt
+        from models import UserRoster
+        from services.version_service import user_owns_any_version
+        from config import get_buy_value, MAX_ROSTER
+
+        p = db.query(Player).get(player_id)
+        if not p or not p.is_active:
+            return {"ok": False, "error": "not_found"}, 404
+        if getattr(p, "restricted_from_buypl", False):
+            return {"ok": False, "error": "blocked",
+                    "message": f"{p.name} is Not available to Buy via the Mini App."}, 403
+        if user_owns_any_version(db, user.id, p.id):
+            return {"ok": False, "error": "already_owned",
+                    "message": f"You already own {p.name}."}, 400
+        if (user.roster_count or 0) >= MAX_ROSTER:
+            return {"ok": False, "error": "roster_full",
+                    "message": f"Roster full ({MAX_ROSTER}/{MAX_ROSTER}). Release someone first."}, 400
+        price = get_buy_value(p.rating)
+        if (user.total_coins or 0) < price:
+            return {"ok": False, "error": "insufficient_coins",
+                    "message": f"Need {price:,} 🪙, you have {user.total_coins:,}."}, 400
+
+        user.total_coins = (user.total_coins or 0) - price
+        entry = UserRoster(
+            user_id=user.id, player_id=p.id,
+            order_position=(user.roster_count or 0) + 1,
+            acquired_date=_dt.utcnow(),
+        )
+        db.add(entry)
+        db.flush()
+        user.roster_count = (user.roster_count or 0) + 1
+
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "buy",
+                         f"[MiniApp] Bought {p.name} ({p.rating} OVR) for {price:,}",
+                         coins_change=-price,
+                         player_name=p.name, player_rating=p.rating)
+        except Exception:
+            pass
+        try:
+            from services.undo_service import record_buy
+            record_buy(db, user.id,
+                       roster_id=entry.id, player_id=p.id,
+                       player_name=p.name, rating=p.rating, price=price)
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "ok": True,
+            "purchased": {"name": p.name, "rating": p.rating, "price": price},
+            "balance": user.total_coins,
+            "roster_count": user.roster_count,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_buy failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/roster", methods=["POST"])
+@csrf_exempt
+def webapp_roster():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserRoster
+        rows = (db.query(UserRoster, Player)
+                .join(Player, UserRoster.player_id == Player.id)
+                .filter(UserRoster.user_id == user.id)
+                .order_by(UserRoster.order_position.asc()).all())
+        return {
+            "ok": True,
+            "roster": [{
+                "roster_id": r.id,
+                "position": r.order_position,
+                "player_id": p.id,
+                "name": p.name,
+                "rating": p.rating,
+                "category": p.category,
+                "country": p.country,
+                "version": p.version or "Base",
+                "is_captain": bool(user.captain_roster_id == r.id),
+            } for r, p in rows],
+            "captain_roster_id": user.captain_roster_id,
+            "count": len(rows),
+            "max": 25,
+        }
+    except Exception as e:
+        logger.exception("webapp_roster failed")
+        return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/spin", methods=["POST"])
+@csrf_exempt
+def webapp_spin():
+    """Spin endpoint — requires ad_token. Phase 1: mock mode if WEBAPP_DEV_MODE=1."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        import os as _os
+        from datetime import datetime as _dt
+        from models import UserStats
+        from config import GSPIN_COOLDOWN
+
+        data = request.get_json(silent=True) or {}
+        ad_token = (data.get("ad_token") or "").strip()
+
+        dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
+        is_mock = ad_token.startswith("MOCK-")
+        if not ad_token:
+            return {"ok": False, "error": "ad_required",
+                    "message": "Watch the ad to spin."}, 400
+        if is_mock and not dev_mode:
+            return {"ok": False, "error": "ad_required",
+                    "message": "Ad verification failed."}, 400
+        # else: real ad token → Phase 2 verifies via ad network postback
+
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush()
+        if stats.last_gspin:
+            elapsed = (_dt.utcnow() - stats.last_gspin).total_seconds()
+            if elapsed < GSPIN_COOLDOWN:
+                remaining = int(GSPIN_COOLDOWN - elapsed)
+                return {"ok": False, "error": "cooldown",
+                        "message": f"Spin again in {remaining // 3600}h "
+                                   f"{(remaining % 3600) // 60}m.",
+                        "cooldown_remaining": remaining}, 429
+
+        from services.gspin_reward_service import pick_reward, apply_reward
+        reward = pick_reward(db)
+        if not reward:
+            return {"ok": False, "error": "no_rewards_configured",
+                    "message": "No spin rewards configured. Contact admin."}, 500
+
+        result = apply_reward(db, user, reward)
+        stats.last_gspin = _dt.utcnow()
+
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "gspin",
+                         f"[MiniApp] Spin: {reward.label} → {result['type']}")
+        except Exception:
+            pass
+        try:
+            from services.quest_service import safe_track
+            safe_track(db, user.id, "gspin", 1)
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "ok": True,
+            "reward": result,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "quest_points": user.quest_points or 0,
+                "roster_count": user.roster_count or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_spin failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
 
 
 @app.route("/status")

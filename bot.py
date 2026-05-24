@@ -65,6 +65,7 @@ from handlers.bowlout import (
 )
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
+from handlers.app import app_handler
 
 # Match handlers
 from handlers.match import (
@@ -432,6 +433,10 @@ def main():
         # ── Undo command — reverses last /buy or /release within 60s ─
         app.add_handler(CommandHandler("cmuundo", cmuundo_handler))
         logger.info("Registered /cmuundo handler (60s undo window)")
+
+        # ── Mini App launcher ────────────────────────────────────────
+        app.add_handler(CommandHandler("app", app_handler))
+        logger.info("Registered /app handler (Mini App)")
 
         # ── Chat membership tracking ────────────────────────────────
         from services.chat_tracker import handle_chat_member_update
