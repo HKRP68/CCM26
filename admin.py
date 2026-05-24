@@ -2778,7 +2778,7 @@ def webapp_init():
     db, user, tg_id = auth
     try:
         from models import UserStats
-        from services import adsgram_service
+        from services import adsgram_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         from datetime import datetime as _dt
         from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
@@ -2823,11 +2823,13 @@ def webapp_init():
                 "ready": gspin_ready,
                 "cooldown_remaining": gspin_remaining,
                 "cooldown_total": GSPIN_COOLDOWN,
+                "quota": _quota_service.get_quota_status(stats, "spin"),
             },
             "daily": {
                 "ready": daily_ready,
                 "cooldown_remaining": daily_remaining,
                 "cooldown_total": DAILY_COOLDOWN,
+                "quota": _quota_service.get_quota_status(stats, "daily"),
             },
             "adsgram": {
                 "configured": adsgram_service.is_configured(),
@@ -3051,12 +3053,17 @@ def webapp_roster():
 @app.route("/api/webapp/spin", methods=["POST"])
 @csrf_exempt
 def webapp_spin():
-    """Spin endpoint — requires ad verification.
+    """Spin endpoint with quota system.
 
-    Verification priority (best to worst):
-      1. Server-side Adsgram postback (claim_postback) — most trusted
-      2. Single-use client token issued after Adsgram SDK promise resolved
-      3. MOCK- token (dev mode only)
+    Each user gets:
+      - 1 FREE spin per 24h cycle (no ad needed)
+      - 5 additional ad-gated spins per cycle
+
+    Request body:
+      {ad_token: <optional, only needed when using ad-gated slot>}
+
+    If `ad_token` is missing/empty, we'll try to use the FREE slot. If
+    free isn't available, returns 400 with hint to watch ad.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -3066,49 +3073,50 @@ def webapp_spin():
         import os as _os
         from datetime import datetime as _dt
         from models import UserStats
-        from config import GSPIN_COOLDOWN
-        from services import adsgram_service
+        from services import adsgram_service, quota_service
 
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
         dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
         ads_configured = adsgram_service.is_configured()
 
-        # ── Verify the ad was actually watched ──
-        verified_via = None
-
-        # Strategy 1: server-side postback (highest confidence)
-        if adsgram_service.claim_postback(db, tg_id):
-            verified_via = "server_postback"
-
-        # Strategy 2: client-side token issued after SDK promise resolved
-        elif ad_token.startswith("CT-"):
-            if adsgram_service.consume_client_token(ad_token, tg_id):
-                verified_via = "client_token"
-
-        # Strategy 3: dev/mock — only when ADSGRAM_BLOCK_ID is unset OR dev mode on
-        elif ad_token.startswith("MOCK-"):
-            if dev_mode or not ads_configured:
-                verified_via = "mock"
-
-        if not verified_via:
-            return {"ok": False, "error": "ad_required",
-                    "message": "Ad verification failed. Watch the ad first.",
-                    "ads_configured": ads_configured}, 400
-
-        # ── Cooldown ──
+        # ── Load stats first to check quota ──
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         if not stats:
             stats = UserStats(user_id=user.id)
             db.add(stats); db.flush()
-        if stats.last_gspin:
-            elapsed = (_dt.utcnow() - stats.last_gspin).total_seconds()
-            if elapsed < GSPIN_COOLDOWN:
-                remaining = int(GSPIN_COOLDOWN - elapsed)
-                return {"ok": False, "error": "cooldown",
-                        "message": f"Spin again in {remaining // 3600}h "
-                                   f"{(remaining % 3600) // 60}m.",
-                        "cooldown_remaining": remaining}, 429
+
+        # ── Try to verify ad (so we know what slot is available) ──
+        verified_via = None
+        if adsgram_service.claim_postback(db, tg_id):
+            verified_via = "server_postback"
+        elif ad_token.startswith("CT-"):
+            if adsgram_service.consume_client_token(ad_token, tg_id):
+                verified_via = "client_token"
+        elif ad_token.startswith("MOCK-"):
+            if dev_mode or not ads_configured:
+                verified_via = "mock"
+
+        ad_provided = bool(verified_via)
+
+        # ── Check quota ──
+        allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided)
+        if not allowed:
+            status = quota_service.get_quota_status(stats, "spin")
+            if reason == "ad_required":
+                return {"ok": False, "error": "ad_required",
+                        "message": "Free spin already used — watch an ad for next spin.",
+                        "quota": status,
+                        "ads_configured": ads_configured}, 400
+            elif reason == "cycle_exhausted":
+                h = status["cycle_reset_in"] // 3600
+                m = (status["cycle_reset_in"] % 3600) // 60
+                return {"ok": False, "error": "cycle_exhausted",
+                        "message": f"All spins used. New spins in {h}h {m}m.",
+                        "quota": status,
+                        "cooldown_remaining": status["cycle_reset_in"]}, 429
+            else:
+                return {"ok": False, "error": reason or "blocked"}, 400
 
         # ── Reward ──
         from services.gspin_reward_service import pick_reward, apply_reward
@@ -3118,12 +3126,15 @@ def webapp_spin():
                     "message": "No spin rewards configured. Contact admin."}, 500
 
         result = apply_reward(db, user, reward)
+        # Update legacy last_gspin (bot still references it) + consume quota slot
         stats.last_gspin = _dt.utcnow()
+        quota_service.consume_slot(stats, "spin", slot_type)
 
         try:
             from services.activity_service import log_activity
             log_activity(db, user.id, "gspin",
-                         f"[MiniApp/{verified_via}] Spin: {reward.label} → {result['type']}")
+                         f"[MiniApp/{slot_type}/{verified_via or 'free'}] "
+                         f"Spin: {reward.label} → {result['type']}")
         except Exception:
             pass
         try:
@@ -3136,7 +3147,9 @@ def webapp_spin():
         return {
             "ok": True,
             "reward": result,
+            "slot_type": slot_type,
             "verified_via": verified_via,
+            "quota": quota_service.get_quota_status(stats, "spin"),
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -3203,7 +3216,8 @@ def webapp_daily():
     db, user, tg_id = auth
     try:
         import os as _os
-        from services import adsgram_service
+        from models import UserStats
+        from services import adsgram_service, quota_service
         from services.daily_service import claim_daily
 
         data = request.get_json(silent=True) or {}
@@ -3211,27 +3225,48 @@ def webapp_daily():
         dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
         ads_configured = adsgram_service.is_configured()
 
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush()
+
+        # ── Verify ad (so we know which slot is available) ──
         verified_via = _verify_ad_for_action(
             db, tg_id, ad_token, dev_mode, ads_configured)
-        if not verified_via:
-            return {"ok": False, "error": "ad_required",
-                    "message": "Ad verification failed. Watch the ad first.",
-                    "ads_configured": ads_configured}, 400
+        ad_provided = bool(verified_via)
 
-        result = claim_daily(db, user, source_label=f"MiniApp/{verified_via}")
+        # ── Check quota ──
+        allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided)
+        if not allowed:
+            status = quota_service.get_quota_status(stats, "daily")
+            if reason == "ad_required":
+                return {"ok": False, "error": "ad_required",
+                        "message": "Free daily already used — watch an ad for next claim.",
+                        "quota": status,
+                        "ads_configured": ads_configured}, 400
+            elif reason == "cycle_exhausted":
+                h = status["cycle_reset_in"] // 3600
+                m = (status["cycle_reset_in"] % 3600) // 60
+                return {"ok": False, "error": "cycle_exhausted",
+                        "message": f"All daily claims used. New claims in {h}h {m}m.",
+                        "quota": status,
+                        "cooldown_remaining": status["cycle_reset_in"]}, 429
+
+        # ── Claim ── (skip the legacy 24h cooldown, quota_service handles limits)
+        result = claim_daily(db, user, source_label=f"MiniApp/{slot_type}/{verified_via or 'free'}",
+                             skip_cooldown=True)
         if not result["ok"]:
-            # Cooldown — refund the ad-verification by re-issuing nothing
-            # (server postback already consumed; client token already
-            # consumed; mock isn't refundable either). Acceptable: user
-            # shouldn't have hit Claim if cooldown wasn't ready.
-            return {"ok": False, "error": result.get("error"),
-                    "message": "Daily not ready yet.",
-                    "cooldown_remaining": result.get("remaining", 0)}, 429
+            return {"ok": False, "error": result.get("error", "internal"),
+                    "message": "Daily claim failed unexpectedly."}, 500
 
+        quota_service.consume_slot(stats, "daily", slot_type)
         db.commit()
+
         return {
             "ok": True,
+            "slot_type": slot_type,
             "verified_via": verified_via,
+            "quota": quota_service.get_quota_status(stats, "daily"),
             "reward": {
                 "coins": result["coins"],
                 "gems": result["gems"],

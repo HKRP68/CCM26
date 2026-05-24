@@ -168,6 +168,13 @@ def _migrate_add_columns():
     _try_add("players", "parent_player_id", "INTEGER")
     # Per-player block on /buypl direct purchase
     _try_add("players", "restricted_from_buypl", "BOOLEAN DEFAULT FALSE")
+    # Spin/daily quota system (1 free + N ad uses per 24h cycle)
+    _try_add("user_stats", "spin_cycle_started_at", "TIMESTAMP")
+    _try_add("user_stats", "spin_free_used", "BOOLEAN DEFAULT FALSE")
+    _try_add("user_stats", "spin_ad_count", "INTEGER DEFAULT 0")
+    _try_add("user_stats", "daily_cycle_started_at", "TIMESTAMP")
+    _try_add("user_stats", "daily_free_used", "BOOLEAN DEFAULT FALSE")
+    _try_add("user_stats", "daily_ad_count", "INTEGER DEFAULT 0")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")

@@ -106,6 +106,15 @@ class UserStats(Base):
     streak_count = Column(Integer, default=0)
     total_streaks_completed = Column(Integer, default=0)
     last_streak_reset = Column(DateTime, nullable=True)
+    # ── Multi-use spin/daily quota (24h rolling cycle) ──
+    # When the user first spins/claims-daily, we record the cycle start.
+    # During each cycle: 1 free use + N ad-gated uses. Cycle resets after 24h.
+    spin_cycle_started_at = Column(DateTime, nullable=True)
+    spin_free_used = Column(Boolean, default=False, nullable=False)
+    spin_ad_count = Column(Integer, default=0, nullable=False)
+    daily_cycle_started_at = Column(DateTime, nullable=True)
+    daily_free_used = Column(Boolean, default=False, nullable=False)
+    daily_ad_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="stats")
