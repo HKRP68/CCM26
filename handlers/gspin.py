@@ -76,16 +76,36 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML")
             return
 
+        # If the Mini App is configured, redirect there (so the spin is
+        # ad-gated and the user gets the full visual wheel).
+        import os as _os
+        webapp_url = _os.getenv("WEBAPP_URL", "").strip()
+        if webapp_url and webapp_url.startswith("https://"):
+            from telegram import WebAppInfo
+            text = (
+                "🎡 <b>GSPIN Wheel</b>\n\n"
+                "📺 <b>Watch a quick ad to spin the wheel</b> and win coins, "
+                "gems, players, or packs!\n\n"
+                "<i>Tap below to open the Mini App and claim your spin.</i>"
+            )
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🎡 Open Mini App to Spin",
+                    web_app=WebAppInfo(url=webapp_url + "#spin"),
+                )
+            ]])
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            return
+
+        # Legacy fallback when no Mini App URL is configured
         text = (
             "🎡 <b>GSPIN Wheel</b>\n\n"
             + _format_segments_text(session)
             + "\n\nTap to spin!"
         )
-
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("🎰 Spin the Wheel", callback_data=f"gspin_{user.id}")
         ]])
-
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
     except Exception:

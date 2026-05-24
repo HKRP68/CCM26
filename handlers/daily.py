@@ -51,6 +51,27 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         coin_amt = get_coin_amount(session, "daily", DAILY_COINS)
         player_amt = get_player_count(session, "daily", 2)
 
+        # If Mini App is configured, redirect there so the claim is ad-gated.
+        import os as _os
+        webapp_url = _os.getenv("WEBAPP_URL", "").strip()
+        if webapp_url and webapp_url.startswith("https://"):
+            from telegram import WebAppInfo
+            text = (
+                "📅 <b>Daily Reward Ready!</b>\n\n"
+                f"💰 +{coin_amt:,} coins, players, and more await.\n"
+                "📺 <b>Watch a quick ad</b> to claim your daily.\n\n"
+                "<i>Tap below to open the Mini App.</i>"
+            )
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "📅 Open Mini App to Claim",
+                    web_app=WebAppInfo(url=webapp_url + "#daily"),
+                )
+            ]])
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            return
+
+        # Legacy fallback when no Mini App configured
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("🎁 Claim Daily Reward",
                                  callback_data=f"dailyclaim_{user.id}")
