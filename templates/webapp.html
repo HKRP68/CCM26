@@ -434,7 +434,7 @@
       0 0 0 8px var(--card),
       0 0 0 10px var(--accent),
       0 0 30px rgba(212, 168, 42, 0.3);
-    transition: transform 4.5s cubic-bezier(0.17, 0.67, 0.32, 1.34);
+    transition: transform 2.5s cubic-bezier(0.17, 0.67, 0.32, 1.34);
   }
   .wheel-outer::before {
     content: "🏏";
@@ -751,7 +751,7 @@
 
 <!-- ════ Spin screen ════ -->
 <div class="screen" id="screen-spin">
-  <div class="ad-banner">📺 Watch a short ad to spin the wheel. One spin every 8 hours.</div>
+  <div class="ad-banner">🎁 <strong>1 FREE spin</strong> + 📺 <strong>5 ad spins</strong> every 24 hours.</div>
   <div class="spin-container">
     <div class="wheel-outer" id="wheel">
       <div class="wheel-pointer" style="top:-15px;"></div>
@@ -763,7 +763,7 @@
 
 <!-- ════ Daily screen ════ -->
 <div class="screen" id="screen-daily">
-  <div class="ad-banner">📺 Watch a quick ad to claim your daily reward. Once per day.</div>
+  <div class="ad-banner">🎁 <strong>1 FREE claim</strong> + 📺 <strong>5 ad claims</strong> every 24 hours.</div>
   <div style="padding: 1rem 0; text-align: center;">
     <div style="font-size: 4rem; margin-bottom: 0.5rem;">📅</div>
     <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Daily Reward</h2>
@@ -1011,19 +1011,33 @@ async function refreshDashboard() {
 
   // Spin tile
   const spinSub = document.getElementById('spin-tile-sub');
-  if (data.gspin.ready) {
-    spinSub.textContent = 'Ready! 📺 Watch ad';
+  const sq = data.gspin?.quota;
+  if (sq) {
+    if (sq.free_available) {
+      spinSub.textContent = '🎁 1 free + 5 ads';
+    } else if (sq.ad_used < sq.ad_total) {
+      spinSub.textContent = `📺 ${sq.ad_total - sq.ad_used} ad spins left`;
+    } else {
+      spinSub.textContent = `⏱️ New in ${fmtRemaining(sq.cycle_reset_in)}`;
+    }
   } else {
-    spinSub.textContent = 'Ready in ' + fmtRemaining(data.gspin.cooldown_remaining);
+    spinSub.textContent = 'Tap to play';
   }
   updateSpinButton(data.gspin);
 
   // Daily tile
   const dailySub = document.getElementById('daily-tile-sub');
-  if (data.daily.ready) {
-    dailySub.textContent = 'Ready! 📺 Watch ad';
+  const dq = data.daily?.quota;
+  if (dq) {
+    if (dq.free_available) {
+      dailySub.textContent = '🎁 1 free + 5 ads';
+    } else if (dq.ad_used < dq.ad_total) {
+      dailySub.textContent = `📺 ${dq.ad_total - dq.ad_used} ad claims left`;
+    } else {
+      dailySub.textContent = `⏱️ New in ${fmtRemaining(dq.cycle_reset_in)}`;
+    }
   } else {
-    dailySub.textContent = 'Ready in ' + fmtRemaining(data.daily.cooldown_remaining);
+    dailySub.textContent = 'Tap to claim';
   }
   updateDailyButton();
 
@@ -1059,57 +1073,90 @@ function updateSpinButton(g) {
     btn.innerHTML = '<span class="spinner"></span> Spinning...';
     return;
   }
-  if (!g) {
-    btn.disabled = false;
-    btn.textContent = '📺 Watch ad to spin';
+  // Use quota from latest init data
+  const quota = lastInitData?.gspin?.quota;
+  if (quota) {
+    if (quota.free_available) {
+      btn.disabled = false;
+      btn.textContent = '🎁 FREE Spin';
+      return;
+    }
+    const adsLeft = quota.ad_total - quota.ad_used;
+    if (adsLeft > 0) {
+      btn.disabled = false;
+      btn.textContent = `📺 Watch ad to spin (${adsLeft} left)`;
+      return;
+    }
+    // All used — show countdown to reset
+    const secs = quota.cycle_reset_in;
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    btn.disabled = true;
+    btn.textContent = `⏱️ New spins in ${h}h ${m}m`;
     return;
   }
-  if (!g.ready) {
-    const h = Math.floor(g.cooldown_remaining / 3600);
-    const m = Math.floor((g.cooldown_remaining % 3600) / 60);
-    btn.disabled = true;
-    btn.textContent = `⏱️ Ready in ${h}h ${m}m`;
-  } else {
-    btn.disabled = false;
-    btn.textContent = '📺 Watch ad to spin';
-  }
+  // Fallback (no quota info yet)
+  btn.disabled = false;
+  btn.textContent = '📺 Watch ad to spin';
 }
 
 // ════════════════ Daily ════════════════
 function updateDailyButton() {
   const btn = document.getElementById('daily-btn');
-  const data = lastInitData;
   if (isDailyClaiming) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Claiming…';
     return;
   }
-  if (!data || !data.daily) {
-    btn.disabled = false;
-    btn.textContent = '📺 Watch ad to claim';
+  const quota = lastInitData?.daily?.quota;
+  if (quota) {
+    if (quota.free_available) {
+      btn.disabled = false;
+      btn.textContent = '🎁 FREE Daily';
+      return;
+    }
+    const adsLeft = quota.ad_total - quota.ad_used;
+    if (adsLeft > 0) {
+      btn.disabled = false;
+      btn.textContent = `📺 Watch ad to claim (${adsLeft} left)`;
+      return;
+    }
+    const secs = quota.cycle_reset_in;
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    btn.disabled = true;
+    btn.textContent = `⏱️ New claims in ${h}h ${m}m`;
     return;
   }
-  if (!data.daily.ready) {
-    btn.disabled = true;
-    btn.textContent = `⏱️ Ready in ${fmtRemaining(data.daily.cooldown_remaining)}`;
-  } else {
-    btn.disabled = false;
-    btn.textContent = '📺 Watch ad to claim';
-  }
+  btn.disabled = false;
+  btn.textContent = '📺 Watch ad to claim';
 }
 
 async function onDailyClick() {
   if (isDailyClaiming) return;
   haptic('medium');
+
+  const quota = lastInitData?.daily?.quota;
+  const useFree = quota?.free_available;
+  const adsAvailable = (quota?.ad_used || 0) < (quota?.ad_total || 5);
+
+  if (!useFree && !adsAvailable) {
+    toast('All claims used. Come back later.', 'info');
+    return;
+  }
+
   isDailyClaiming = true;
   updateDailyButton();
 
-  const adToken = await showAd();
-  if (!adToken) {
-    toast('Ad was skipped or failed', 'error');
-    isDailyClaiming = false;
-    updateDailyButton();
-    return;
+  let adToken = '';
+  if (!useFree) {
+    adToken = await showAd();
+    if (!adToken) {
+      toast('Ad was skipped or failed', 'error');
+      isDailyClaiming = false;
+      refreshDashboard();
+      return;
+    }
   }
 
   const { ok, data } = await api('/api/webapp/daily', { ad_token: adToken });
@@ -1117,12 +1164,11 @@ async function onDailyClick() {
   if (!ok) {
     toast(data.message || 'Daily claim failed', 'error');
     hapticNotif('error');
-    updateDailyButton();
+    refreshDashboard();
     return;
   }
   hapticNotif('success');
   showDailyReward(data.reward);
-  // Refresh dashboard so cooldown + balances update
   refreshDashboard();
 }
 
@@ -1219,39 +1265,65 @@ function lbRow(r) {
 async function onSpinClick() {
   if (isSpinning) return;
   haptic('medium');
-  isSpinning = true;
-  updateSpinButton();
 
-  // Phase 1: mock ad — Phase 2 replaces this with real ad SDK
-  const adToken = await showAd();
-  if (!adToken) {
-    toast('Ad was skipped or failed', 'error');
-    isSpinning = false;
-    updateSpinButton(userData ? null : null);
-    refreshDashboard();
+  // Check what slot is available
+  const quota = lastInitData?.gspin?.quota;
+  const useFree = quota?.free_available;
+  const adsAvailable = (quota?.ad_used || 0) < (quota?.ad_total || 5);
+
+  if (!useFree && !adsAvailable) {
+    toast('All spins used. Come back later.', 'info');
     return;
   }
 
-  // Spin animation: 5 full rotations + a random landing offset
-  const wheel = document.getElementById('wheel');
-  const landingDeg = 1800 + Math.floor(Math.random() * 360);
-  wheel.style.transform = `rotate(${landingDeg}deg)`;
+  isSpinning = true;
+  updateSpinButton();
 
-  // Wait for the CSS transition (~4.5s) then call the API
-  setTimeout(async () => {
-    const { ok, data } = await api('/api/webapp/spin', { ad_token: adToken });
-    isSpinning = false;
-    if (!ok) {
-      toast(data.message || 'Spin failed', 'error');
-      hapticNotif('error');
-      updateSpinButton(null);
+  let adToken = '';
+  if (!useFree) {
+    // Need to watch ad first
+    adToken = await showAd();
+    if (!adToken) {
+      toast('Ad was skipped or failed', 'error');
+      isSpinning = false;
+      refreshDashboard();
       return;
     }
-    hapticNotif('success');
-    showReward(data.reward);
-    // Refresh balances
+  }
+  // else: free spin → no ad_token needed, backend allows it via quota system
+
+  // Start the wheel animation AND the API call in parallel.
+  // The wheel runs ~2.5s; if the API responds faster, we still wait for the
+  // animation to finish before revealing the reward — feels natural.
+  const wheel = document.getElementById('wheel');
+  const landingDeg = 1800 + Math.floor(Math.random() * 360);
+  // Reset to 0 first (in case of consecutive spins — CSS transitions need a delta)
+  wheel.style.transition = 'none';
+  wheel.style.transform = 'rotate(0deg)';
+  // Force reflow so the next transition triggers
+  void wheel.offsetWidth;
+  wheel.style.transition = 'transform 2.5s cubic-bezier(0.17, 0.67, 0.32, 1.34)';
+  wheel.style.transform = `rotate(${landingDeg}deg)`;
+
+  const apiPromise = api('/api/webapp/spin', { ad_token: adToken });
+  const minAnimation = new Promise(r => setTimeout(r, 2500));
+
+  // Wait for BOTH the animation to finish AND the API to respond.
+  // Whichever is slower determines reveal time. API usually faster.
+  const [_, apiResult] = await Promise.all([minAnimation, apiPromise]);
+  const { ok, data } = apiResult;
+
+  isSpinning = false;
+  if (!ok) {
+    toast(data.message || 'Spin failed', 'error');
+    hapticNotif('error');
     refreshDashboard();
-  }, 4600);
+    return;
+  }
+  hapticNotif('success');
+  showReward(data.reward);
+  // Refresh quota + balances
+  refreshDashboard();
 }
 
 // Adsgram AdController, initialised lazily once we know the block ID
@@ -1591,7 +1663,19 @@ function ratingColor(r) {
 }
 
 // ════════════════ Initial load ════════════════
-refreshDashboard();
+// Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
+function handleHashDeepLink() {
+  const hash = (window.location.hash || '').replace('#', '').toLowerCase();
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard'];
+  if (validScreens.includes(hash) && hash !== 'home') {
+    // refreshDashboard fires first then navigate
+    navigate(hash);
+  }
+}
+
+refreshDashboard().then(() => {
+  handleHashDeepLink();
+});
 </script>
 </body>
 </html>
