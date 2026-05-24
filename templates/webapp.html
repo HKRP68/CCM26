@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>CricMaster Ultra</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #0a0f1a;
+    --card: #161e2f;
+    --card-2: #1c2540;
+    --border: #2a3650;
+    --text: #e5edf7;
+    --muted: #7d89a6;
+    --accent: #d4a82a;
+    --accent-2: #ffd966;
+    --green: #00d4aa;
+    --red: #ff4d6d;
+    --blue: #4a9eff;
+    --purple: #a78bfa;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background:
+      radial-gradient(ellipse at top, rgba(212, 168, 42, 0.08) 0%, transparent 50%),
+      radial-gradient(ellipse at bottom, rgba(0, 212, 170, 0.06) 0%, transparent 50%),
+      var(--bg);
+    min-height: 100vh;
+    padding-bottom: 70px; /* leave space for bottom nav */
+  }
+
+  /* ════ Top app bar ════ */
+  .appbar {
+    position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(180deg, #16241c 0%, var(--card) 100%);
+    border-bottom: 2px solid var(--accent);
+    padding: 0.85rem 1rem 0.7rem;
+    display: flex; align-items: center; gap: 0.6rem;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  }
+  .appbar .logo {
+    font-size: 1.4rem;
+  }
+  .appbar h1 {
+    margin: 0; font-size: 1.05rem; letter-spacing: 0.05em;
+    font-weight: 700; color: var(--accent);
+    flex: 1;
+  }
+  .balance-pill {
+    background: rgba(212, 168, 42, 0.12);
+    border: 1px solid var(--accent);
+    padding: 0.3rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    display: flex; align-items: center; gap: 0.25rem;
+  }
+
+  /* ════ Bottom tabs ════ */
+  .tabs {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    display: flex;
+    z-index: 100;
+    padding: 0.4rem 0.25rem 0.55rem;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+    padding-bottom: calc(0.55rem + env(safe-area-inset-bottom));
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: none; color: var(--muted);
+    padding: 0.45rem 0.2rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 0.15rem;
+    transition: color 0.15s, transform 0.1s;
+    font-family: inherit;
+  }
+  .tab:active { transform: scale(0.92); }
+  .tab .icon {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+  .tab.active { color: var(--accent); }
+  .tab.active .icon { transform: translateY(-2px); transition: transform 0.2s; }
+
+  /* ════ Screens ════ */
+  .screen { display: none; padding: 1rem; min-height: calc(100vh - 130px); }
+  .screen.active { display: block; animation: fadeIn 0.25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ════ Cards ════ */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.85rem;
+  }
+  .card-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin: 0 0 0.6rem;
+    font-weight: 700;
+  }
+
+  /* ════ Stats grid (dashboard) ════ */
+  .greeting {
+    margin-bottom: 1rem;
+  }
+  .greeting .hi {
+    font-size: 0.85rem; color: var(--muted); margin: 0 0 0.2rem;
+  }
+  .greeting .name {
+    font-size: 1.5rem; font-weight: 800;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem;
+  }
+  .stat {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat::before {
+    content: ""; position: absolute;
+    top: -10px; right: -10px;
+    width: 50px; height: 50px;
+    border-radius: 50%;
+    opacity: 0.1;
+    background: var(--accent);
+  }
+  .stat .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+  .stat .val {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text);
+    margin-top: 0.2rem;
+  }
+  .stat.coins .val { color: var(--accent); }
+  .stat.gems .val { color: var(--blue); }
+  .stat.qp .val { color: var(--purple); }
+  .stat.roster .val { color: var(--green); }
+
+  /* ════ Big action tiles ════ */
+  .tile-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin-top: 0.85rem;
+  }
+  .tile {
+    background: linear-gradient(135deg, var(--card-2), var(--card));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    font-family: inherit; color: var(--text);
+    position: relative; overflow: hidden;
+  }
+  .tile:active { transform: scale(0.96); }
+  .tile.spin {
+    border-color: rgba(212, 168, 42, 0.5);
+    box-shadow: 0 0 16px rgba(212, 168, 42, 0.15) inset;
+  }
+  .tile.search { border-color: rgba(74, 158, 255, 0.4); }
+  .tile .tile-icon { font-size: 2.2rem; line-height: 1; }
+  .tile .tile-label { font-size: 0.95rem; font-weight: 700; margin-top: 0.45rem; }
+  .tile .tile-sub { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; }
+
+  /* ════ Player cards ════ */
+  .player-row {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.7rem; border-radius: 10px;
+    background: var(--card-2); border: 1px solid var(--border);
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+  }
+  .player-row:active { transform: scale(0.98); }
+  .player-row.owned { opacity: 0.6; }
+  .player-row.blocked { border-color: rgba(255, 77, 109, 0.4); }
+  .player-rating {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; font-size: 1.1rem;
+    background: linear-gradient(135deg, var(--accent), #b8901f);
+    color: #0a0f1a;
+    flex-shrink: 0;
+  }
+  .player-rating.bronze { background: linear-gradient(135deg, #b87333, #8b4513); color: #fff; }
+  .player-rating.silver { background: linear-gradient(135deg, #c0c0c0, #888); color: #1a1a1a; }
+  .player-rating.gold { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0a0f1a; }
+  .player-rating.epic { background: linear-gradient(135deg, var(--purple), #6d28d9); color: #fff; }
+  .player-rating.legendary { background: linear-gradient(135deg, #ff8c00, var(--red)); color: #fff; }
+  .player-info { flex: 1; min-width: 0; }
+  .player-name { font-weight: 700; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
+  .player-price {
+    background: rgba(212, 168, 42, 0.12);
+    border: 1px solid rgba(212, 168, 42, 0.3);
+    padding: 0.25rem 0.5rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .badge-mini {
+    font-size: 0.62rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-weight: 700;
+    margin-left: 0.25rem;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+  .badge-mini.owned { background: rgba(0, 212, 170, 0.2); color: var(--green); }
+  .badge-mini.blocked { background: rgba(255, 77, 109, 0.18); color: var(--red); }
+  .badge-mini.version { background: rgba(167, 139, 250, 0.18); color: var(--purple); }
+
+  /* ════ Search bar ════ */
+  .search-box {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.6rem 0.85rem;
+    display: flex; align-items: center; gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .search-box input {
+    background: transparent; border: none; color: var(--text);
+    flex: 1; font-size: 1rem; outline: none;
+    font-family: inherit;
+  }
+  .filters {
+    display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.75rem;
+  }
+  .chip {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.4rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .chip.active { background: rgba(212, 168, 42, 0.15); border-color: var(--accent); color: var(--accent); }
+
+  /* ════ Spin wheel ════ */
+  .spin-container {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 1.5rem 1rem;
+  }
+  .wheel-outer {
+    width: 260px; height: 260px;
+    border-radius: 50%;
+    position: relative;
+    background:
+      conic-gradient(
+        from 0deg,
+        #ffd966 0deg 60deg,
+        #ff8c00 60deg 120deg,
+        #00d4aa 120deg 180deg,
+        #4a9eff 180deg 240deg,
+        #a78bfa 240deg 300deg,
+        #ff4d6d 300deg 360deg
+      );
+    box-shadow:
+      0 0 0 8px var(--card),
+      0 0 0 10px var(--accent),
+      0 0 30px rgba(212, 168, 42, 0.3);
+    transition: transform 4.5s cubic-bezier(0.17, 0.67, 0.32, 1.34);
+  }
+  .wheel-outer::before {
+    content: "🏏";
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 70px; height: 70px;
+    background: var(--bg);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.8rem;
+    border: 2px solid var(--accent);
+  }
+  .wheel-pointer {
+    position: absolute; top: -5px; left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 12px solid transparent;
+    border-right: 12px solid transparent;
+    border-top: 22px solid var(--accent);
+    z-index: 5;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+  }
+  .spin-button {
+    margin-top: 2rem;
+    padding: 1.05rem 2.5rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #0a0f1a;
+    border: none;
+    border-radius: 30px;
+    font-size: 1.1rem;
+    font-weight: 900;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    box-shadow: 0 6px 20px rgba(212, 168, 42, 0.4);
+    transition: transform 0.15s, box-shadow 0.15s;
+    font-family: inherit;
+    min-width: 240px;
+  }
+  .spin-button:active { transform: scale(0.95); }
+  .spin-button:disabled {
+    background: var(--card-2);
+    color: var(--muted);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+  .reward-banner {
+    margin-top: 1.5rem;
+    padding: 1.25rem;
+    background: linear-gradient(135deg, rgba(212, 168, 42, 0.15), rgba(0, 212, 170, 0.1));
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    text-align: center;
+    animation: pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes pop {
+    0% { transform: scale(0.5); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .reward-banner .emoji { font-size: 3rem; }
+  .reward-banner .label { font-size: 1.15rem; font-weight: 800; margin-top: 0.5rem; }
+  .reward-banner .detail { font-size: 0.95rem; color: var(--muted); margin-top: 0.4rem; }
+
+  /* ════ Player detail modal ════ */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+    z-index: 200;
+    display: none;
+    align-items: flex-end;
+  }
+  .modal-backdrop.open { display: flex; animation: fadeIn 0.2s ease; }
+  .modal {
+    background: var(--card);
+    border-top: 2px solid var(--accent);
+    border-radius: 18px 18px 0 0;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 1.2rem 1rem 1.5rem;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+    animation: slideUp 0.3s cubic-bezier(0.17, 0.67, 0.32, 1.34);
+  }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .modal-grab {
+    width: 40px; height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 0 auto 1rem;
+  }
+  .modal h2 { margin: 0 0 0.5rem; font-size: 1.3rem; }
+  .modal-card {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 0.85rem;
+  }
+  .modal-stats {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;
+  }
+  .modal-stats > div {
+    background: var(--card);
+    padding: 0.55rem 0.7rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+  }
+  .modal-stats > div span { color: var(--muted); font-size: 0.75rem; display: block; margin-bottom: 0.15rem; }
+  .modal-stats > div strong { font-size: 1.05rem; }
+  .big-buy-btn {
+    width: 100%;
+    padding: 1rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #0a0f1a;
+    border: none;
+    border-radius: 12px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    cursor: pointer;
+    margin-top: 0.5rem;
+    font-family: inherit;
+    box-shadow: 0 4px 14px rgba(212, 168, 42, 0.3);
+  }
+  .big-buy-btn:active { transform: scale(0.98); }
+  .big-buy-btn:disabled, .big-buy-btn.blocked, .big-buy-btn.owned {
+    background: var(--card-2);
+    color: var(--muted);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+  .big-buy-btn.blocked { color: var(--red); border: 1px solid var(--red); }
+  .big-buy-btn.owned { color: var(--green); border: 1px solid var(--green); }
+  .close-btn {
+    position: absolute;
+    top: 1rem; right: 1rem;
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1.2rem;
+    font-family: inherit;
+  }
+
+  /* ════ Toasts ════ */
+  .toast-container {
+    position: fixed; top: 70px; left: 0; right: 0;
+    z-index: 300;
+    display: flex; flex-direction: column;
+    align-items: center; pointer-events: none;
+  }
+  .toast {
+    background: var(--card);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    padding: 0.75rem 1.2rem;
+    border-radius: 10px;
+    margin-top: 0.5rem;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    font-size: 0.9rem;
+    max-width: 90%;
+    animation: slideDown 0.25s ease, fadeOutT 0.35s ease 2.65s forwards;
+    pointer-events: auto;
+  }
+  .toast.error { border-color: var(--red); }
+  .toast.success { border-color: var(--green); }
+  @keyframes slideDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  @keyframes fadeOutT { to { opacity: 0; transform: translateY(-10px); } }
+
+  /* ════ Misc ════ */
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--card-2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty {
+    text-align: center; color: var(--muted);
+    padding: 2.5rem 1rem; font-size: 0.95rem;
+  }
+  .empty .icon { font-size: 2.5rem; margin-bottom: 0.6rem; }
+  .ad-banner {
+    background: linear-gradient(135deg, rgba(255, 217, 102, 0.1), rgba(0, 212, 170, 0.08));
+    border: 1px dashed var(--accent);
+    border-radius: 10px;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-bottom: 0.8rem;
+    text-align: center;
+  }
+  .roster-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+  }
+  .roster-item {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.65rem;
+    position: relative;
+  }
+  .roster-item.captain { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .roster-item .pos {
+    font-size: 0.62rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .roster-item .name { font-weight: 700; font-size: 0.88rem; margin-top: 0.15rem;
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .roster-item .meta { color: var(--muted); font-size: 0.7rem; margin-top: 0.15rem; }
+  .roster-item .captain-tag {
+    position: absolute; top: 6px; right: 6px;
+    background: var(--accent); color: #0a0f1a;
+    font-size: 0.55rem;
+    padding: 0.1rem 0.32rem;
+    border-radius: 4px;
+    font-weight: 800;
+  }
+</style>
+</head>
+<body>
+
+<!-- Top app bar -->
+<div class="appbar">
+  <span class="logo">🏏</span>
+  <h1>CRICMASTER</h1>
+  <div class="balance-pill" id="balance-pill" style="display:none;">
+    <span>💰</span><span id="bp-coins">0</span>
+  </div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<!-- ════ Home / Dashboard screen ════ -->
+<div class="screen active" id="screen-home">
+  <div class="greeting">
+    <p class="hi">Welcome back,</p>
+    <p class="name" id="user-name">…</p>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat coins">
+      <div class="label">💰 Coins</div>
+      <div class="val" id="stat-coins">—</div>
+    </div>
+    <div class="stat gems">
+      <div class="label">💎 Gems</div>
+      <div class="val" id="stat-gems">—</div>
+    </div>
+    <div class="stat qp">
+      <div class="label">⭐ Quest Pts</div>
+      <div class="val" id="stat-qp">—</div>
+    </div>
+    <div class="stat roster">
+      <div class="label">👥 Roster</div>
+      <div class="val" id="stat-roster">—</div>
+    </div>
+  </div>
+
+  <div class="tile-grid">
+    <button class="tile spin" onclick="navigate('spin')">
+      <div class="tile-icon">🎡</div>
+      <div class="tile-label">Spin & Win</div>
+      <div class="tile-sub" id="spin-tile-sub">Tap to play</div>
+    </button>
+    <button class="tile search" onclick="navigate('search')">
+      <div class="tile-icon">🔍</div>
+      <div class="tile-label">Find Players</div>
+      <div class="tile-sub">Search & buy</div>
+    </button>
+  </div>
+
+  <div class="card" style="margin-top:1rem;">
+    <p class="card-title">Your record</p>
+    <div style="display:flex;justify-content:space-around;text-align:center;">
+      <div>
+        <div style="font-size:1.5rem;font-weight:800;" id="rec-played">0</div>
+        <div style="color:var(--muted);font-size:0.75rem;">Matches</div>
+      </div>
+      <div>
+        <div style="font-size:1.5rem;font-weight:800;color:var(--green);" id="rec-won">0</div>
+        <div style="color:var(--muted);font-size:0.75rem;">Won</div>
+      </div>
+      <div>
+        <div style="font-size:1.5rem;font-weight:800;color:var(--red);" id="rec-lost">0</div>
+        <div style="color:var(--muted);font-size:0.75rem;">Lost</div>
+      </div>
+      <div>
+        <div style="font-size:1.5rem;font-weight:800;color:var(--accent);" id="rec-wr">0%</div>
+        <div style="color:var(--muted);font-size:0.75rem;">Win rate</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ Spin screen ════ -->
+<div class="screen" id="screen-spin">
+  <div class="ad-banner">📺 Watch a short ad to spin the wheel. One spin every 8 hours.</div>
+  <div class="spin-container">
+    <div class="wheel-outer" id="wheel">
+      <div class="wheel-pointer" style="top:-15px;"></div>
+    </div>
+    <button class="spin-button" id="spin-btn" onclick="onSpinClick()">📺 Watch ad to spin</button>
+    <div id="spin-result"></div>
+  </div>
+</div>
+
+<!-- ════ Search screen ════ -->
+<div class="screen" id="screen-search">
+  <div class="search-box">
+    <span>🔍</span>
+    <input type="text" id="search-input" placeholder="Search players by name…" autocomplete="off">
+  </div>
+  <div class="filters" id="cat-filters">
+    <button class="chip active" data-cat="">All</button>
+    <button class="chip" data-cat="Batsman">🏏 Bat</button>
+    <button class="chip" data-cat="Bowler">⚾ Bowl</button>
+    <button class="chip" data-cat="All-rounder">⚡ AR</button>
+    <button class="chip" data-cat="Wicket Keeper">🧤 WK</button>
+  </div>
+  <div id="search-results">
+    <div class="empty">
+      <div class="icon">🔍</div>
+      Type a name to find players
+    </div>
+  </div>
+</div>
+
+<!-- ════ Roster screen ════ -->
+<div class="screen" id="screen-roster">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.85rem;">
+    <h2 style="margin:0;font-size:1.25rem;">Your Squad</h2>
+    <span style="color:var(--muted);font-size:0.85rem;" id="roster-count">—/25</span>
+  </div>
+  <div id="roster-list">
+    <div class="empty"><div class="icon">⏳</div>Loading roster…</div>
+  </div>
+</div>
+
+<!-- ════ Bottom tabs ════ -->
+<div class="tabs">
+  <button class="tab active" data-screen="home" onclick="navigate('home')">
+    <div class="icon">🏠</div>
+    <div>Home</div>
+  </button>
+  <button class="tab" data-screen="spin" onclick="navigate('spin')">
+    <div class="icon">🎡</div>
+    <div>Spin</div>
+  </button>
+  <button class="tab" data-screen="search" onclick="navigate('search')">
+    <div class="icon">🔍</div>
+    <div>Search</div>
+  </button>
+  <button class="tab" data-screen="roster" onclick="navigate('roster')">
+    <div class="icon">👥</div>
+    <div>Roster</div>
+  </button>
+</div>
+
+<!-- ════ Player detail modal ════ -->
+<div class="modal-backdrop" id="modal" onclick="if(event.target.id==='modal') closeModal()">
+  <div class="modal" id="modal-content">
+    <button class="close-btn" onclick="closeModal()">✕</button>
+    <div class="modal-grab"></div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  // Theme the Telegram WebView chrome to match our dark UI
+  try {
+    tg.setHeaderColor('#16241c');
+    tg.setBackgroundColor('#0a0f1a');
+  } catch (e) {}
+}
+
+// Auth — Telegram passes initData, we send it on every request as Authorization
+const INIT_DATA = tg?.initData || '';
+// Dev override: append ?dev=<telegram_id> to the URL during testing
+const urlParams = new URLSearchParams(window.location.search);
+const devId = urlParams.get('dev');
+const AUTH_VALUE = devId ? `DEV_${devId}` : INIT_DATA;
+
+let currentScreen = 'home';
+let userData = null;
+let searchTimer = null;
+let currentCat = '';
+let isSpinning = false;
+
+// ════════════════ API ════════════════
+async function api(path, body) {
+  try {
+    const resp = await fetch(path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': AUTH_VALUE,
+      },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await resp.json();
+    return { ok: resp.ok && data.ok, status: resp.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: 'network', message: e.message } };
+  }
+}
+
+// ════════════════ Toast ════════════════
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+// ════════════════ Haptic ════════════════
+function haptic(style = 'light') {
+  try { tg?.HapticFeedback?.impactOccurred(style); } catch (e) {}
+}
+function hapticNotif(type = 'success') {
+  try { tg?.HapticFeedback?.notificationOccurred(type); } catch (e) {}
+}
+
+// ════════════════ Navigation ════════════════
+function navigate(screen) {
+  haptic('light');
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + screen).classList.add('active');
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.screen === screen));
+  currentScreen = screen;
+  window.scrollTo(0, 0);
+  if (screen === 'roster') loadRoster();
+  if (screen === 'home') refreshDashboard();
+}
+
+// ════════════════ Dashboard ════════════════
+async function refreshDashboard() {
+  const { ok, status, data } = await api('/api/webapp/init');
+  if (!ok) {
+    if (status === 403 && data.error === 'not_debuted') {
+      toast(data.message || 'Run /debut in the bot first', 'error');
+      document.getElementById('user-name').textContent = '⚠️ Not debuted';
+      return;
+    }
+    toast(data.message || 'Couldn\'t load dashboard', 'error');
+    return;
+  }
+  userData = data.user;
+  document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
+  document.getElementById('stat-coins').textContent = formatNum(userData.coins);
+  document.getElementById('stat-gems').textContent = formatNum(userData.gems);
+  document.getElementById('stat-qp').textContent = formatNum(userData.quest_points);
+  document.getElementById('stat-roster').textContent = `${userData.roster_count}/25`;
+  document.getElementById('rec-played').textContent = userData.matches_played;
+  document.getElementById('rec-won').textContent = userData.matches_won;
+  document.getElementById('rec-lost').textContent = userData.matches_lost;
+  document.getElementById('rec-wr').textContent = userData.win_rate + '%';
+  // Balance pill
+  const pill = document.getElementById('balance-pill');
+  pill.style.display = 'flex';
+  document.getElementById('bp-coins').textContent = formatNum(userData.coins);
+  // Spin status
+  const spinSub = document.getElementById('spin-tile-sub');
+  if (data.gspin.ready) {
+    spinSub.textContent = 'Ready! 📺 Watch ad';
+  } else {
+    const h = Math.floor(data.gspin.cooldown_remaining / 3600);
+    const m = Math.floor((data.gspin.cooldown_remaining % 3600) / 60);
+    spinSub.textContent = `Ready in ${h}h ${m}m`;
+  }
+  updateSpinButton(data.gspin);
+}
+
+function formatNum(n) {
+  if (n === null || n === undefined) return '—';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 10000) return (n / 1000).toFixed(1) + 'k';
+  return n.toLocaleString();
+}
+
+function updateSpinButton(g) {
+  const btn = document.getElementById('spin-btn');
+  if (isSpinning) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Spinning...';
+    return;
+  }
+  if (!g) {
+    btn.disabled = false;
+    btn.textContent = '📺 Watch ad to spin';
+    return;
+  }
+  if (!g.ready) {
+    const h = Math.floor(g.cooldown_remaining / 3600);
+    const m = Math.floor((g.cooldown_remaining % 3600) / 60);
+    btn.disabled = true;
+    btn.textContent = `⏱️ Ready in ${h}h ${m}m`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = '📺 Watch ad to spin';
+  }
+}
+
+// ════════════════ Spin ════════════════
+async function onSpinClick() {
+  if (isSpinning) return;
+  haptic('medium');
+  isSpinning = true;
+  updateSpinButton();
+
+  // Phase 1: mock ad — Phase 2 replaces this with real ad SDK
+  const adToken = await showAd();
+  if (!adToken) {
+    toast('Ad was skipped or failed', 'error');
+    isSpinning = false;
+    updateSpinButton(userData ? null : null);
+    refreshDashboard();
+    return;
+  }
+
+  // Spin animation: 5 full rotations + a random landing offset
+  const wheel = document.getElementById('wheel');
+  const landingDeg = 1800 + Math.floor(Math.random() * 360);
+  wheel.style.transform = `rotate(${landingDeg}deg)`;
+
+  // Wait for the CSS transition (~4.5s) then call the API
+  setTimeout(async () => {
+    const { ok, data } = await api('/api/webapp/spin', { ad_token: adToken });
+    isSpinning = false;
+    if (!ok) {
+      toast(data.message || 'Spin failed', 'error');
+      hapticNotif('error');
+      updateSpinButton(null);
+      return;
+    }
+    hapticNotif('success');
+    showReward(data.reward);
+    // Refresh balances
+    refreshDashboard();
+  }, 4600);
+}
+
+async function showAd() {
+  // Phase 1: mock ad that always succeeds after 1s.
+  // Phase 2: replace with real ad SDK call:
+  //   const result = await window.Adsgram.show(slot_id);
+  //   return result.success ? result.token : null;
+  toast('📺 Playing ad… (mock)', 'info');
+  await new Promise(r => setTimeout(r, 1200));
+  return 'MOCK-' + Date.now();
+}
+
+function showReward(r) {
+  const el = document.getElementById('spin-result');
+  let detail = '';
+  if (r.type === 'coins') detail = `💰 +${formatNum(r.amount)} coins`;
+  else if (r.type === 'gems') detail = `💎 +${r.amount} gems`;
+  else if (r.type === 'quest_points') detail = `⭐ +${r.amount} QP`;
+  else if (r.type === 'player') {
+    if (r.squad_full) detail = `🎉 ${r.player_name} (${r.player_rating}) — but squad is full!`;
+    else detail = `🎉 ${r.player_name} (${r.player_rating}) added to squad!`;
+  } else if (r.type === 'pack') detail = `🎁 Pack added to inventory`;
+  el.innerHTML = `
+    <div class="reward-banner">
+      <div class="emoji">${r.emoji || '🎁'}</div>
+      <div class="label">${r.label}</div>
+      <div class="detail">${detail}</div>
+    </div>
+  `;
+}
+
+// ════════════════ Search ════════════════
+document.getElementById('search-input').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => doSearch(e.target.value), 280);
+});
+
+document.querySelectorAll('#cat-filters .chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#cat-filters .chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentCat = chip.dataset.cat;
+    doSearch(document.getElementById('search-input').value);
+  });
+});
+
+async function doSearch(q) {
+  const resultsEl = document.getElementById('search-results');
+  if (!q && !currentCat) {
+    resultsEl.innerHTML = `<div class="empty"><div class="icon">🔍</div>Type a name to find players</div>`;
+    return;
+  }
+  resultsEl.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/search', {
+    q, category: currentCat, limit: 30,
+  });
+  if (!ok) {
+    resultsEl.innerHTML = `<div class="empty">❌ ${data.message || 'Search failed'}</div>`;
+    return;
+  }
+  if (!data.results || !data.results.length) {
+    resultsEl.innerHTML = `<div class="empty"><div class="icon">😕</div>No players found</div>`;
+    return;
+  }
+  resultsEl.innerHTML = data.results.map(p => playerRow(p)).join('');
+}
+
+function ratingTier(r) {
+  if (r >= 95) return 'legendary';
+  if (r >= 90) return 'epic';
+  if (r >= 85) return 'gold';
+  if (r >= 75) return 'silver';
+  return 'bronze';
+}
+
+function playerRow(p) {
+  const cls = [];
+  if (p.owned) cls.push('owned');
+  if (p.blocked) cls.push('blocked');
+  let badges = '';
+  if (p.version && p.version !== 'Base') badges += `<span class="badge-mini version">${escapeHtml(p.version)}</span>`;
+  if (p.owned) badges += `<span class="badge-mini owned">✓ Owned</span>`;
+  else if (p.blocked) badges += `<span class="badge-mini blocked">Blocked</span>`;
+  return `
+    <div class="player-row ${cls.join(' ')}" onclick="openPlayer(${p.id})">
+      <div class="player-rating ${ratingTier(p.rating)}">${p.rating}</div>
+      <div class="player-info">
+        <div class="player-name">${escapeHtml(p.name)} ${badges}</div>
+        <div class="player-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</div>
+      </div>
+      <div class="player-price">${formatNum(p.price)} 🪙</div>
+    </div>
+  `;
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
+
+// ════════════════ Player detail modal ════════════════
+async function openPlayer(id) {
+  haptic('light');
+  const modal = document.getElementById('modal');
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  modal.classList.add('open');
+  const { ok, data } = await api('/api/webapp/player/' + id);
+  if (!ok) {
+    body.innerHTML = `<div class="empty">❌ ${data.message || 'Failed to load'}</div>`;
+    return;
+  }
+  const p = data.player;
+  let buyBtn;
+  if (p.owned_any_version) {
+    buyBtn = `<button class="big-buy-btn owned" disabled>✅ Already owned</button>`;
+  } else if (p.blocked) {
+    buyBtn = `<button class="big-buy-btn blocked" disabled>🚫 Not available to Buy</button>`;
+  } else {
+    buyBtn = `<button class="big-buy-btn" onclick="buyPlayer(${p.id}, ${p.price})">💰 Buy for ${formatNum(p.price)} 🪙</button>`;
+  }
+  body.innerHTML = `
+    <h2>${escapeHtml(p.name)}
+      ${p.version !== 'Base' ? `<span class="badge-mini version">${escapeHtml(p.version)}</span>` : ''}
+    </h2>
+    <div style="color:var(--muted);font-size:0.9rem;margin-bottom:1rem;">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</div>
+
+    <div class="modal-card" style="text-align:center;">
+      <div class="player-rating ${ratingTier(p.rating)}" style="width:80px;height:80px;font-size:2rem;margin:0 auto;border-radius:18px;">${p.rating}</div>
+      <div style="color:var(--muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-top:0.5rem;">Overall</div>
+    </div>
+
+    <div class="modal-stats">
+      <div><span>🏏 Batting</span><strong>${p.bat_rating}</strong></div>
+      <div><span>⚾ Bowling</span><strong>${p.bowl_rating}</strong></div>
+      <div><span>Bat Hand</span><strong>${escapeHtml(p.bat_hand || '—')}</strong></div>
+      <div><span>Bowl Style</span><strong>${escapeHtml(p.bowl_style || '—')}</strong></div>
+    </div>
+
+    <div style="margin-top:1rem;">${buyBtn}</div>
+    ${!p.owned_any_version && !p.blocked ? `<div style="text-align:center;color:var(--muted);font-size:0.78rem;margin-top:0.6rem;">↩️ You can /cmuundo within 60s in the bot</div>` : ''}
+  `;
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+async function buyPlayer(id, price) {
+  haptic('medium');
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Buying…';
+  const { ok, data } = await api('/api/webapp/buy/' + id, {});
+  if (!ok) {
+    btn.disabled = false;
+    btn.innerHTML = `💰 Buy for ${formatNum(price)} 🪙`;
+    toast(data.message || 'Buy failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  hapticNotif('success');
+  toast(`✅ Bought ${data.purchased.name}!`, 'success');
+  closeModal();
+  // Refresh
+  refreshDashboard();
+  // If on search screen, re-run search to update ownership badges
+  if (currentScreen === 'search') {
+    doSearch(document.getElementById('search-input').value);
+  }
+}
+
+// ════════════════ Roster ════════════════
+async function loadRoster() {
+  const el = document.getElementById('roster-list');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/roster');
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed to load'}</div>`;
+    return;
+  }
+  document.getElementById('roster-count').textContent = `${data.count}/${data.max}`;
+  if (!data.roster.length) {
+    el.innerHTML = `<div class="empty"><div class="icon">👥</div>No players yet — head to Search!</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="roster-grid">${data.roster.map(r => `
+    <div class="roster-item ${r.is_captain ? 'captain' : ''}">
+      ${r.is_captain ? '<div class="captain-tag">CAPT</div>' : ''}
+      <div class="pos">#${r.position} · ${ratingBadge(r.rating)}</div>
+      <div class="name">${escapeHtml(r.name)}</div>
+      <div class="meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function ratingBadge(r) {
+  return `<span style="color:${ratingColor(r)};font-weight:800;">${r}</span>`;
+}
+function ratingColor(r) {
+  if (r >= 95) return '#ff8c00';
+  if (r >= 90) return '#a78bfa';
+  if (r >= 85) return '#ffd966';
+  if (r >= 75) return '#c0c0c0';
+  return '#b87333';
+}
+
+// ════════════════ Initial load ════════════════
+refreshDashboard();
+</script>
+</body>
+</html>
