@@ -2823,13 +2823,13 @@ def webapp_init():
                 "ready": gspin_ready,
                 "cooldown_remaining": gspin_remaining,
                 "cooldown_total": GSPIN_COOLDOWN,
-                "quota": _quota_service.get_quota_status(stats, "spin"),
+                "quota": _quota_service.get_quota_status(stats, "spin", session=db),
             },
             "daily": {
                 "ready": daily_ready,
                 "cooldown_remaining": daily_remaining,
                 "cooldown_total": DAILY_COOLDOWN,
-                "quota": _quota_service.get_quota_status(stats, "daily"),
+                "quota": _quota_service.get_quota_status(stats, "daily", session=db),
             },
             "adsgram": {
                 "configured": adsgram_service.is_configured(),
@@ -3100,7 +3100,7 @@ def webapp_spin():
         ad_provided = bool(verified_via)
 
         # ── Check quota ──
-        allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided)
+        allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db)
         if not allowed:
             status = quota_service.get_quota_status(stats, "spin")
             if reason == "ad_required":
@@ -3149,7 +3149,7 @@ def webapp_spin():
             "reward": result,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "spin"),
+            "quota": quota_service.get_quota_status(stats, "spin", session=db),
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -3236,7 +3236,7 @@ def webapp_daily():
         ad_provided = bool(verified_via)
 
         # ── Check quota ──
-        allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided)
+        allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db)
         if not allowed:
             status = quota_service.get_quota_status(stats, "daily")
             if reason == "ad_required":
@@ -3266,7 +3266,7 @@ def webapp_daily():
             "ok": True,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "daily"),
+            "quota": quota_service.get_quota_status(stats, "daily", session=db),
             "reward": {
                 "coins": result["coins"],
                 "gems": result["gems"],
@@ -3316,13 +3316,15 @@ def webapp_players():
         only_unowned = bool(data.get("only_unowned"))
 
         query = db.query(Player).filter(Player.is_active == True)
-        # Only show Base versions by default (cleaner browse — versions
-        # appear when user taps into a player)
-        query = query.filter(
-            (Player.version == "Base") | (Player.version.is_(None))
-        )
+        # NB: include ALL versions (Base, Legend, Star, etc).
+        # Version is shown as a badge in the row.
+
         if q:
-            query = query.filter(Player.name.ilike(f"%{q}%"))
+            # Search matches name OR country (case-insensitive)
+            like = f"%{q}%"
+            query = query.filter(
+                (Player.name.ilike(like)) | (Player.country.ilike(like))
+            )
         if min_r > 0:
             query = query.filter(Player.rating >= min_r)
         if max_r < 100:
@@ -3506,6 +3508,114 @@ def webapp_leaderboard():
     except Exception as e:
         logger.exception("webapp_leaderboard failed")
         return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quickmatch", methods=["POST"])
+@csrf_exempt
+def webapp_quickmatch():
+    """Play a quick match (single endpoint — submit all choices at once).
+
+    Request body:
+      {
+        toss_choice: 'bat' | 'bowl',
+        innings_1: ['aggressive'|'balanced'|'defensive', ...x3],
+        innings_2: ['aggressive'|'balanced'|'defensive', ...x3],
+        difficulty: 'easy' | 'medium' | 'hard' (default 'medium')
+      }
+
+    Returns the full match simulation result.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quick_match_service import play_quick_match
+
+        data = request.get_json(silent=True) or {}
+        toss_choice = (data.get("toss_choice") or "bat").lower()
+        if toss_choice not in ("bat", "bowl"):
+            toss_choice = "bat"
+        innings_1 = data.get("innings_1") or ["balanced", "balanced", "balanced"]
+        innings_2 = data.get("innings_2") or ["balanced", "balanced", "balanced"]
+        difficulty = (data.get("difficulty") or "medium").lower()
+        if difficulty not in ("easy", "medium", "hard"):
+            difficulty = "medium"
+
+        # Validate choices
+        valid_choices = ("aggressive", "balanced", "defensive")
+        innings_1 = [c if c in valid_choices else "balanced" for c in innings_1[:3]]
+        innings_2 = [c if c in valid_choices else "balanced" for c in innings_2[:3]]
+        while len(innings_1) < 3: innings_1.append("balanced")
+        while len(innings_2) < 3: innings_2.append("balanced")
+
+        # Check roster size
+        if (user.roster_count or 0) < 5:
+            return {"ok": False, "error": "roster_too_small",
+                    "message": "You need at least 5 players in your roster to play."}, 400
+
+        # Run the simulation
+        result = play_quick_match(
+            db, user,
+            user_choices={
+                "toss_choice": toss_choice,
+                "innings_1": innings_1,
+                "innings_2": innings_2,
+            },
+            opponent_difficulty=difficulty,
+        )
+
+        # Award coins
+        coin_reward = result.get("coin_reward", 0)
+        if coin_reward > 0:
+            user.total_coins = (user.total_coins or 0) + coin_reward
+
+        # Bump match counters
+        user.matches_played = (user.matches_played or 0) + 1
+        if result["user_won"] is True:
+            user.matches_won = (user.matches_won or 0) + 1
+        elif result["user_won"] is False:
+            user.matches_lost = (user.matches_lost or 0) + 1
+        # Tie: no win/loss bump
+
+        # Activity log
+        try:
+            from services.activity_service import log_activity
+            outcome = "won" if result["user_won"] is True else ("lost" if result["user_won"] is False else "tied")
+            log_activity(db, user.id, "quickmatch",
+                         f"[MiniApp] Quick match: {outcome}, "
+                         f"{result['innings_1']['total_runs']}/{result['innings_1']['total_wickets']} vs "
+                         f"{result['innings_2']['total_runs']}/{result['innings_2']['total_wickets']}",
+                         coins_change=coin_reward)
+        except Exception:
+            pass
+
+        # Quest tracking
+        try:
+            from services.quest_service import safe_track
+            safe_track(db, user.id, "match_played", 1)
+            if result["user_won"] is True:
+                safe_track(db, user.id, "match_won", 1)
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "ok": True,
+            "result": result,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "matches_played": user.matches_played,
+                "matches_won": user.matches_won,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quickmatch failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
 
@@ -4982,6 +5092,8 @@ def admin_economy():
                     "daily_gems": int(request.form.get("daily_gems", 0)),
                     "daily_streak_bonus_coins": int(request.form.get("daily_streak_bonus_coins", 200)),
                     "daily_streak_bonus_gems": int(request.form.get("daily_streak_bonus_gems", 0)),
+                    "spin_ad_quota": max(0, min(99, int(request.form.get("spin_ad_quota", 5)))),
+                    "daily_ad_quota": max(0, min(99, int(request.form.get("daily_ad_quota", 5)))),
                     "debut_coins": int(request.form.get("debut_coins", 100000)),
                     "debut_gems": int(request.form.get("debut_gems", 20)),
                 }
@@ -6799,6 +6911,79 @@ def admin_adsgram():
             configured=adsgram_service.is_configured(),
             block_id=adsgram_service.get_block_id() or "",
         )
+    finally:
+        db.close()
+
+
+# ─── Storage management (Telegram channel archives) ────────────────────
+
+@app.route("/storage")
+@login_required
+def admin_storage():
+    """Admin page for Telegram-channel storage status and activity archive."""
+    db = get_session()
+    try:
+        from models import ActivityLog, ActivityLogArchive, PlayerImage
+        from services import tg_storage_service, activity_archive_service
+        from sqlalchemy import func as _sf
+
+        active_logs = db.query(_sf.count(ActivityLog.id)).scalar() or 0
+        archives = (db.query(ActivityLogArchive)
+                    .order_by(ActivityLogArchive.archived_at.desc())
+                    .limit(50).all())
+        total_archived = sum(a.row_count for a in archives) if archives else 0
+        images_with_fileid = (db.query(_sf.count(PlayerImage.id))
+                              .filter(PlayerImage.tg_file_id.isnot(None))
+                              .scalar() or 0)
+        images_total = db.query(_sf.count(PlayerImage.id)).scalar() or 0
+
+        est_30 = activity_archive_service.estimate_archivable(db, 30)
+        est_7 = activity_archive_service.estimate_archivable(db, 7)
+
+        return render_template(
+            "admin_storage.html",
+            configured=tg_storage_service.is_configured(),
+            chat_id=os.getenv("STORAGE_CHAT_ID", "") or "(not set)",
+            active_logs=active_logs,
+            archives=archives,
+            total_archived=total_archived,
+            images_with_fileid=images_with_fileid,
+            images_total=images_total,
+            est_30=est_30,
+            est_7=est_7,
+        )
+    finally:
+        db.close()
+
+
+@app.route("/storage/archive", methods=["POST"])
+@login_required
+def admin_storage_archive():
+    """Trigger an archive run. Posts older_than_days from form."""
+    db = get_session()
+    try:
+        from services import activity_archive_service
+        try:
+            days = int(request.form.get("older_than_days", 30))
+        except ValueError:
+            days = 30
+        days = max(1, min(365, days))
+        result = activity_archive_service.archive_old_logs(
+            db, older_than_days=days,
+            archived_by=session.get("admin_user", "admin"),
+        )
+        if result["ok"]:
+            flash(f"✅ {result['message']}", "info")
+            try:
+                log_admin(db, "archive_logs", "activity_log",
+                          result.get("archive_id") or 0, "system",
+                          f"Archived {result['archived']} rows older than {days}d")
+                db.commit()
+            except Exception:
+                pass
+        else:
+            flash(f"❌ {result['message']}", "error")
+        return redirect(url_for("admin_storage"))
     finally:
         db.close()
 

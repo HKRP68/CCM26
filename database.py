@@ -175,6 +175,11 @@ def _migrate_add_columns():
     _try_add("user_stats", "daily_cycle_started_at", "TIMESTAMP")
     _try_add("user_stats", "daily_free_used", "BOOLEAN DEFAULT FALSE")
     _try_add("user_stats", "daily_ad_count", "INTEGER DEFAULT 0")
+    # Admin-tunable Mini App quota sizes
+    _try_add("game_config", "spin_ad_quota", "INTEGER DEFAULT 5")
+    _try_add("game_config", "daily_ad_quota", "INTEGER DEFAULT 5")
+    # Telegram channel storage — cache file_ids for player images
+    _try_add("player_images", "tg_file_id", "VARCHAR(200)")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")

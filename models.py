@@ -607,6 +607,9 @@ class PlayerImage(Base):
     image_kind = Column(String(20), default="default")
     # Path on disk relative to project root (e.g. data/player_images/123.png)
     image_path = Column(String(300), nullable=False)
+    # Telegram file_id — set after first upload to the storage channel.
+    # When present, the bot can send the image via this id without disk read.
+    tg_file_id = Column(String(200), nullable=True, index=True)
     # Optional admin-set caption / variant name
     label = Column(String(100), nullable=True)
     is_active = Column(Boolean, default=True)
@@ -701,6 +704,11 @@ class GameConfig(Base):
     daily_gems = Column(Integer, default=0)
     daily_streak_bonus_coins = Column(Integer, default=200)    # extra per day of streak
     daily_streak_bonus_gems = Column(Integer, default=0)
+    # ── Mini App ad-gated quotas (per 24h cycle) ──
+    # Number of AD-watched spins/dailies allowed per cycle (in addition to
+    # 1 free use). Admin-tunable via /admin/economy.
+    spin_ad_quota = Column(Integer, default=5, nullable=False)
+    daily_ad_quota = Column(Integer, default=5, nullable=False)
     # Debut bonus
     debut_coins = Column(Integer, default=100000)
     debut_gems = Column(Integer, default=20)                    # was 100
@@ -1258,3 +1266,24 @@ class AdsgramReward(Base):
     source_ip = Column(String(64), nullable=True)
     query_string = Column(String(500), nullable=True)
 
+
+
+class ActivityLogArchive(Base):
+    """Pointer to an archived batch of activity_log rows that have been
+    exported to the Telegram storage channel and deleted from Neon.
+
+    Each row represents one archive file (JSON dump). The actual log data
+    lives in a Telegram message identified by `tg_file_id`. To read old
+    archived logs, admins can fetch the file from Telegram on demand.
+    """
+    __tablename__ = "activity_log_archive"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    range_start = Column(DateTime, nullable=False, index=True)
+    range_end = Column(DateTime, nullable=False, index=True)
+    row_count = Column(Integer, default=0, nullable=False)
+    tg_file_id = Column(String(200), nullable=False)
+    tg_message_id = Column(Integer, nullable=True)
+    filename = Column(String(200), nullable=True)
+    archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    archived_by = Column(String(100), nullable=True)
