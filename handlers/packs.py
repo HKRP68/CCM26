@@ -698,12 +698,6 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
                 f"{glow}  <b>{player.rating} OVR</b>  {glow}")
             await asyncio.sleep(1.5)
 
-            # 7. Final card reveal (player image card)
-            try:
-                card_bytes = generate_card(player)
-            except Exception:
-                card_bytes = None
-
             roster_status = ("✅ Added to your roster"
                              if player.id in added_ids
                              else "⚠️ Squad full — release some via /releasepl")
@@ -714,14 +708,11 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
                 f"{roster_status}"
             )
             try:
-                if card_bytes:
-                    await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=io.BytesIO(card_bytes),
-                        caption=cap, parse_mode="HTML",
-                    )
-                else:
-                    await context.bot.send_message(chat_id, cap, parse_mode="HTML")
+                from services.card_sender import send_player_card
+                await send_player_card(
+                    bot=context.bot, chat_id=chat_id, player=player,
+                    caption=cap, session=session,
+                )
             except Exception:
                 logger.exception("send card failed")
 

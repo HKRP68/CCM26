@@ -124,12 +124,14 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         return
 
     # New message
-    if card_bytes:
-        sent = await send_to.reply_photo(
-            photo=_io.BytesIO(card_bytes), caption=caption,
-            parse_mode="HTML", reply_markup=keyboard,
-        )
-    else:
+    from services.card_sender import send_player_card
+    chat_id = (send_to.chat_id if hasattr(send_to, 'chat_id')
+               else send_to.chat.id)
+    sent = await send_player_card(
+        bot=context.bot, chat_id=chat_id, player=player,
+        caption=caption, reply_markup=keyboard, session=None,
+    )
+    if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
 
     try:

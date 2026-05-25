@@ -71,12 +71,36 @@ async def _send_player_card(session, user, player, target, owner_tg):
                 text += f"\n  {t.emoji} {t.name} Lv.{pt.level}{badge}"
 
     kb = _build_version_keyboard(versions, player.id, owner_tg, base_id)
-    card_bytes = generate_card(player)
 
+    # Prefer cached file_id (zero disk/PIL); fall back to generated card.
+    from services.player_image_service import get_tg_file_id
+    file_id = get_tg_file_id(session, player.id)
+
+    if file_id:
+        try:
+            await target.reply_photo(
+                photo=file_id, caption=text, parse_mode="HTML", reply_markup=kb,
+            )
+            return
+        except Exception:
+            pass  # stale file_id, fall through
+
+    card_bytes = generate_card(player)
     if card_bytes:
-        await target.reply_photo(
+        sent = await target.reply_photo(
             photo=io.BytesIO(card_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
         )
+        # Opportunistically cache the returned file_id for next time
+        try:
+            if sent and sent.photo:
+                from models import PlayerImage
+                row = (session.query(PlayerImage)
+                       .filter(PlayerImage.player_id == player.id).first())
+                if row and not row.tg_file_id:
+                    row.tg_file_id = sent.photo[-1].file_id
+                    session.flush()
+        except Exception:
+            pass
     else:
         await target.reply_text(text, parse_mode="HTML", reply_markup=kb)
 

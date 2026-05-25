@@ -223,25 +223,17 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         keyboard = InlineKeyboardMarkup(buttons)
 
-        # Send card image + text with buttons
-        msg = None
-        try:
-            card_bytes = generate_card(player)
-        except Exception:
-            card_bytes = None
-
-        if card_bytes:
-            try:
-                msg = await update.message.reply_photo(
-                    photo=io.BytesIO(card_bytes),
-                    caption=text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard)
-            except Exception:
-                logger.warning("Photo send failed, falling back to text")
-                msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        # Send card image + text with buttons via card_sender
+        from services.card_sender import send_player_card
+        msg = await send_player_card(
+            bot=context.bot,
+            chat_id=update.effective_chat.id,
+            player=player,
+            caption=text,
+            reply_markup=keyboard,
+            reply_to_message_id=update.message.message_id,
+            session=session,
+        )
 
         # Schedule auto-release timer (optional)
         if msg:

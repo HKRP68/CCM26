@@ -209,20 +209,15 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
 
         # Reply with the card (new message), then expire the parent's buttons
         await q.answer()
-        if card_bytes:
-            sent = await context.bot.send_photo(
-                chat_id=q.message.chat_id,
-                photo=io.BytesIO(card_bytes),
-                caption=cap,
-                parse_mode="HTML",
-                reply_markup=kb,
-            )
-        else:
+        from services.card_sender import send_player_card
+        sent = await send_player_card(
+            bot=context.bot, chat_id=q.message.chat_id, player=player,
+            caption=cap, reply_markup=kb, session=session,
+        )
+        if sent is None:
             sent = await context.bot.send_message(
-                chat_id=q.message.chat_id,
-                text=cap,
-                parse_mode="HTML",
-                reply_markup=kb,
+                chat_id=q.message.chat_id, text=cap,
+                parse_mode="HTML", reply_markup=kb,
             )
         try:
             schedule_button_timeout(
