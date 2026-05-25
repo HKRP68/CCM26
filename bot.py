@@ -178,6 +178,28 @@ logger = logging.getLogger(__name__)
 
 
 async def start_handler(update, context):
+    # Handle deep-link payloads from group redirects: /start spin or /start daily
+    # When a user taps the "Open Mini App" button from a group chat, they're
+    # bounced into a DM with this command. We immediately offer the right tab.
+    args = (context.args or []) if hasattr(context, 'args') else []
+    payload = (args[0].lower() if args else "")
+    if payload in ("spin", "daily"):
+        webapp_url = os.getenv("WEBAPP_URL", "").strip()
+        if webapp_url and webapp_url.startswith("https://"):
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            label = "🎡 Open Spin" if payload == "spin" else "📅 Open Daily"
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    label,
+                    web_app=WebAppInfo(url=webapp_url + "#" + payload),
+                )
+            ]])
+            await update.message.reply_text(
+                f"<b>Welcome!</b> Tap below to open the {payload} screen.",
+                parse_mode="HTML", reply_markup=kb,
+            )
+            return
+
     await update.message.reply_text(
         "🏏 <b>Welcome to Cricket Simulator Bot!</b>\n\n"
         "Use /debut (or /d) to create your account and receive your starting squad.\n\n"
