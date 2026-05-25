@@ -1,22 +1,32 @@
 """Spin/daily quota system.
 
-Each user gets:
-  - 1 FREE spin per 24h cycle (no ad needed)
-  - SPIN_AD_QUOTA additional ad-gated spins per cycle
+Each user gets per 24h rolling cycle:
+  - 1 FREE use (no ad)
+  - N AD-gated uses (N = `spin_ad_quota` or `daily_ad_quota` from GameConfig)
 
-Same for daily. Cycle starts when the user uses their first slot, resets
-24h after that.
-
-The legacy `last_gspin` / `last_daily` columns are kept for compatibility
-(bot still writes them on use) but the gate logic now uses the quota fields.
+Quotas are admin-tunable from /admin/economy — defaults to 5 each.
 """
 
 from datetime import datetime, timedelta
 
-# Tunable — number of ad-gated uses per cycle (in addition to 1 free use)
-SPIN_AD_QUOTA = 5
-DAILY_AD_QUOTA = 5
-CYCLE_HOURS = 24  # rolling cycle length
+# Fallback when GameConfig isn't reachable (e.g. fresh DB before init).
+DEFAULT_SPIN_AD_QUOTA = 5
+DEFAULT_DAILY_AD_QUOTA = 5
+CYCLE_HOURS = 24
+
+
+def _get_ad_quota(session, kind):
+    """Read configured ad quota from GameConfig with fallback."""
+    if session is None:
+        return DEFAULT_SPIN_AD_QUOTA if kind == "spin" else DEFAULT_DAILY_AD_QUOTA
+    try:
+        from services.config_service import get_config
+        cfg = get_config(session)
+        if kind == "spin":
+            return int(cfg.get("spin_ad_quota") or DEFAULT_SPIN_AD_QUOTA)
+        return int(cfg.get("daily_ad_quota") or DEFAULT_DAILY_AD_QUOTA)
+    except Exception:
+        return DEFAULT_SPIN_AD_QUOTA if kind == "spin" else DEFAULT_DAILY_AD_QUOTA
 
 
 def _reset_if_expired(stats, prefix):
@@ -41,7 +51,7 @@ def _reset_if_expired(stats, prefix):
     return False
 
 
-def get_quota_status(stats, kind):
+def get_quota_status(stats, kind, session=None):
     """Return dict describing current quota state.
 
     {
@@ -51,14 +61,16 @@ def get_quota_status(stats, kind):
       "cycle_reset_in": int seconds until full reset (0 if no active cycle),
       "all_used": bool,
     }
+
+    `session` is optional — used to look up admin-configured ad_quota
+    from GameConfig.
     """
+    ad_total = _get_ad_quota(session, kind)
     if kind == "spin":
-        ad_total = SPIN_AD_QUOTA
         started_attr = "spin_cycle_started_at"
         free_attr = "spin_free_used"
         count_attr = "spin_ad_count"
     else:
-        ad_total = DAILY_AD_QUOTA
         started_attr = "daily_cycle_started_at"
         free_attr = "daily_free_used"
         count_attr = "daily_ad_count"
@@ -90,15 +102,14 @@ def get_quota_status(stats, kind):
     }
 
 
-def can_use(stats, kind, ad_provided):
+def can_use(stats, kind, ad_provided, session=None):
     """Check if user can use a spin/daily slot now.
 
     `ad_provided` = True means caller verified the user watched an ad.
+    `session` is optional — passed through to read configured quota.
     Returns (allowed: bool, slot_type: 'free'|'ad'|None, reason: str|None).
-
-    Caller should call consume_slot() after a successful action.
     """
-    status = get_quota_status(stats, kind)
+    status = get_quota_status(stats, kind, session=session)
     if status["free_available"]:
         return True, "free", None
     if not ad_provided:

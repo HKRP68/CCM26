@@ -160,6 +160,8 @@ def save_custom_image(session, player_id, file_bytes, original_filename,
         row.is_active = True
         row.uploaded_at = datetime.utcnow()
         row.uploaded_by = uploaded_by
+        # New bytes → old file_id is stale, must re-upload
+        row.tg_file_id = None
     else:
         row = PlayerImage(
             player_id=player_id, image_kind="default",
@@ -170,9 +172,50 @@ def save_custom_image(session, player_id, file_bytes, original_filename,
         )
         session.add(row)
     session.flush()
+
+    # Best-effort upload to Telegram storage channel. No-op when not configured.
+    try:
+        from services import tg_storage_service
+        if tg_storage_service.is_configured():
+            from models import Player as _P
+            player_name = ""
+            try:
+                p = session.query(_P).get(player_id)
+                if p: player_name = f"{p.name} ({p.rating})"
+            except Exception:
+                pass
+            file_id = tg_storage_service.upload_photo_sync(
+                path,
+                caption=f"player_image #{player_id} {player_name}",
+            )
+            if file_id:
+                row.tg_file_id = file_id
+                session.flush()
+                logger.info(f"Uploaded player {player_id} image to channel")
+    except Exception:
+        logger.exception("Channel upload failed (non-fatal)")
+
     # Invalidate the image cache so next read fetches the new file
     _invalidate_image_cache(player_id)
     return True, "Saved."
+
+
+def get_tg_file_id(session, player_id):
+    """Return cached Telegram file_id for this player's custom image if any.
+
+    Use in handlers to skip disk reads:
+        file_id = get_tg_file_id(db, player.id)
+        if file_id:
+            await ctx.bot.send_photo(chat_id, photo=file_id, caption=...)
+        else:
+            # fall back to local file
+    """
+    row = (session.query(PlayerImage)
+           .filter(PlayerImage.player_id == player_id,
+                   PlayerImage.is_active == True).first())
+    if row and row.tg_file_id:
+        return row.tg_file_id
+    return None
 
 
 def remove_custom_image(session, player_id):
