@@ -51,9 +51,16 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         coin_amt = get_coin_amount(session, "daily", DAILY_COINS)
         player_amt = get_player_count(session, "daily", 2)
 
-        # If Mini App is configured, redirect there so the claim is ad-gated.
+        # Redirect to Mini App when configured. WebApp buttons only work in
+        # PRIVATE chats — in groups, use a `url=` deep link to bounce the
+        # user into a DM with the bot (or directly launch the Mini App from
+        # the group when BOT_USERNAME + MINIAPP_NAME are set).
         import os as _os
         webapp_url = _os.getenv("WEBAPP_URL", "").strip()
+        chat_type = (update.effective_chat.type
+                     if update.effective_chat else "private")
+        is_private = (chat_type == "private")
+
         if webapp_url and webapp_url.startswith("https://"):
             from telegram import WebAppInfo
             text = (
@@ -62,16 +69,33 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📺 <b>Watch a quick ad</b> to claim your daily.\n\n"
                 "<i>Tap below to open the Mini App.</i>"
             )
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
+            if is_private:
+                btn = InlineKeyboardButton(
                     "📅 Open Mini App to Claim",
                     web_app=WebAppInfo(url=webapp_url + "#daily"),
                 )
-            ]])
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-            return
+            else:
+                bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+                miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
+                if bot_username and miniapp_name:
+                    deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp=daily"
+                elif bot_username:
+                    deep_link = f"https://t.me/{bot_username}?start=daily"
+                else:
+                    deep_link = None
 
-        # Legacy fallback when no Mini App configured
+                if deep_link:
+                    btn = InlineKeyboardButton("📅 Open Mini App to Claim", url=deep_link)
+                    text += "\n\n<i>Group chat detected — tap will open in a DM with the bot.</i>"
+                else:
+                    btn = None
+
+            if btn is not None:
+                keyboard = InlineKeyboardMarkup([[btn]])
+                await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+                return
+
+        # Legacy fallback when no Mini App URL configured (or group with no bot username)
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("🎁 Claim Daily Reward",
                                  callback_data=f"dailyclaim_{user.id}")

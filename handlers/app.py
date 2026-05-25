@@ -32,19 +32,40 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Telegram only renders WebApp buttons in PRIVATE chats reliably.
-    # In groups it shows a link instead.
-    button = InlineKeyboardButton(
-        "🏏 Open CricMaster",
-        web_app=WebAppInfo(url=webapp_url),
-    )
-    kb = InlineKeyboardMarkup([[button]])
+    # WebApp buttons only work in PRIVATE chats. In groups, fall back to a
+    # url= deep link.
+    chat_type = (update.effective_chat.type
+                 if update.effective_chat else "private")
+    is_private = (chat_type == "private")
 
-    await update.message.reply_text(
-        "🎮 <b>CricMaster Mini App</b>\n\n"
-        "Tap the button below to open the app. Spin the wheel, search players, "
-        "manage your roster — all in one place.\n\n"
-        "<i>📺 Watch a quick ad to unlock each spin.</i>",
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
+    text = ("🎮 <b>CricMaster Mini App</b>\n\n"
+            "Tap the button below to open the app. Spin the wheel, search "
+            "players, manage your roster — all in one place.\n\n"
+            "<i>📺 Watch a quick ad to unlock each spin.</i>")
+
+    if is_private:
+        button = InlineKeyboardButton(
+            "🏏 Open CricMaster",
+            web_app=WebAppInfo(url=webapp_url),
+        )
+    else:
+        # Group chat — must use url= button
+        bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+        miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
+        if bot_username and miniapp_name:
+            deep_link = f"https://t.me/{bot_username}/{miniapp_name}"
+        elif bot_username:
+            deep_link = f"https://t.me/{bot_username}"
+        else:
+            await update.message.reply_text(
+                "⚠️ Mini App buttons don't work in groups. Open this in a "
+                "private chat with the bot.\n\n"
+                "<i>Admin: set BOT_USERNAME env var for proper group support.</i>",
+                parse_mode="HTML",
+            )
+            return
+        button = InlineKeyboardButton("🏏 Open CricMaster", url=deep_link)
+        text += "\n\n<i>Tap will open in a DM with the bot.</i>"
+
+    kb = InlineKeyboardMarkup([[button]])
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
