@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Storage{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📦 Storage <span style="color:var(--muted);font-weight:400;font-size:1rem;">Telegram channel archive</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+{% if configured %}
+<div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <strong style="color:var(--green);">✅ Storage configured</strong>
+  <div style="color:var(--muted);font-size:.85rem;margin-top:.25rem;">Chat ID: <code>{{ chat_id }}</code></div>
+</div>
+{% else %}
+<div style="background:rgba(255,217,102,.08);border:1px solid var(--accent);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <strong style="color:var(--accent);">⚠️ Storage NOT configured</strong>
+  <p style="color:var(--muted);font-size:.85rem;margin:.4rem 0 0;line-height:1.5;">
+    Set <code>STORAGE_CHAT_ID</code> env var on Render to a private channel where your bot is an admin.<br>
+    Steps: create channel → add bot as admin (Post messages perm) → forward any channel message to <code>@username_to_id_bot</code> to get the ID (negative number like <code>-1001234567890</code>).
+  </p>
+</div>
+{% endif %}
+
+<div class="stats-grid" style="margin-bottom:1.5rem;">
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Active log rows</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;color:var(--accent);">{{ "{:,}".format(active_logs) }}</p>
+    <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">in Neon now</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Total archived</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;color:var(--green);">{{ "{:,}".format(total_archived) }}</p>
+    <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">{{ archives|length }} archive file{{ 's' if archives|length != 1 else '' }}</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Images cached</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;color:var(--blue);">{{ images_with_fileid }}/{{ images_total }}</p>
+    <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">with Telegram file_id</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">>30 days old</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;">{{ "{:,}".format(est_30.row_count) }}</p>
+    <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">archivable now</p>
+  </div>
+</div>
+
+{% if configured %}
+<div class="card-section" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .6rem;">Archive old logs</h3>
+  <p style="color:var(--muted);font-size:.88rem;margin:0 0 1rem;line-height:1.5;">
+    Activity logs older than N days will be dumped to JSON, uploaded to your Telegram channel,
+    and deleted from Neon. The Telegram message holds the file forever; admins can re-download
+    via the file_id below.<br>
+    <span style="color:var(--accent);">Logs are deleted ONLY if upload succeeds. No data loss.</span>
+  </p>
+  <form method="POST" action="{{ url_for('admin_storage_archive') }}" style="display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+      <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Older than (days)</label>
+      <input type="number" name="older_than_days" min="1" max="365" value="30"
+             style="padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);width:120px;">
+    </div>
+    <button type="submit" class="btn btn-primary"
+            onclick="return confirm('Archive activity logs and DELETE them from the DB? Make sure the storage channel is set up correctly.');">
+      📤 Archive now
+    </button>
+  </form>
+  <p style="font-size:.78rem;color:var(--muted);margin-top:1rem;">
+    Right now: <strong>{{ est_30.row_count }}</strong> rows older than 30 days,
+    <strong>{{ est_7.row_count }}</strong> rows older than 7 days.
+  </p>
+</div>
+{% endif %}
+
+<h3 style="margin-top:1.5rem;">Archive history</h3>
+{% if archives %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Archived</th>
+    <th>Range</th>
+    <th>Rows</th>
+    <th>Filename</th>
+    <th>file_id</th>
+    <th>By</th>
+  </tr></thead>
+  <tbody>
+  {% for a in archives %}
+  <tr>
+    <td style="font-family:monospace;font-size:.82rem;">{{ a.archived_at.strftime('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;color:var(--muted);">{{ a.range_start.strftime('%m-%d') }} → {{ a.range_end.strftime('%m-%d') }}</td>
+    <td><strong>{{ "{:,}".format(a.row_count) }}</strong></td>
+    <td style="font-family:monospace;font-size:.75rem;color:var(--muted);">{{ a.filename or '—' }}</td>
+    <td style="font-family:monospace;font-size:.72rem;color:var(--muted);" title="{{ a.tg_file_id }}">{{ a.tg_file_id[:24] }}…</td>
+    <td style="font-size:.82rem;color:var(--muted);">{{ a.archived_by or '—' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p style="color:var(--muted);font-size:.78rem;margin-top:.8rem;">
+  To re-download an archive, find the message in your storage channel by file_id (search by content)
+  or programmatically via the Bot API: <code>bot.getFile(file_id=...).downloadAsync()</code>.
+</p>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No archives yet. Archive activity logs above when ready.
+</p>
+{% endif %}
+
+{% endblock %}

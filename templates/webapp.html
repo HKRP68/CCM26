@@ -198,6 +198,10 @@
   }
   .tile.browse { border-color: rgba(74, 158, 255, 0.4); }
   .tile.leaderboard { border-color: rgba(167, 139, 250, 0.4); }
+  .tile.match {
+    border-color: rgba(255, 77, 109, 0.5);
+    box-shadow: 0 0 16px rgba(255, 77, 109, 0.1) inset;
+  }
   .tile .tile-icon { font-size: 2rem; line-height: 1; }
   .tile .tile-label { font-size: 0.88rem; font-weight: 700; margin-top: 0.4rem; }
   .tile .tile-sub { font-size: 0.66rem; color: var(--muted); margin-top: 0.15rem; }
@@ -249,16 +253,35 @@
   .range-sliders input[type="range"]::-moz-range-track {
     height: 4px; background: var(--border); border-radius: 2px;
   }
-  #country-select {
+  #country-select, #role-select, #ovr-select {
     background: var(--card);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.9rem;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.88rem;
     font-family: inherit;
     width: 100%;
     cursor: pointer;
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%237d89a6' d='M0 0l5 6 5-6z'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    padding-right: 1.8rem;
+  }
+  .filter-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.5rem;
+  }
+  .filter-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+    display: block;
   }
   .checkbox-row {
     display: flex; align-items: center; gap: 0.5rem;
@@ -704,9 +727,14 @@
   </div>
 
   <div class="tile-grid">
+    <button class="tile match" onclick="navigate('match')">
+      <div class="tile-icon">🏏</div>
+      <div class="tile-label">Quick Match</div>
+      <div class="tile-sub">Play in 60s</div>
+    </button>
     <button class="tile spin" onclick="navigate('spin')">
       <div class="tile-icon">🎡</div>
-      <div class="tile-label">Spin & Win</div>
+      <div class="tile-label">Spin &amp; Win</div>
       <div class="tile-sub" id="spin-tile-sub">Tap to play</div>
     </button>
     <button class="tile daily" onclick="navigate('daily')">
@@ -717,9 +745,9 @@
     <button class="tile browse" onclick="navigate('browse')">
       <div class="tile-icon">📚</div>
       <div class="tile-label">Browse Players</div>
-      <div class="tile-sub">Search & buy</div>
+      <div class="tile-sub">Search &amp; buy</div>
     </button>
-    <button class="tile leaderboard" onclick="navigate('leaderboard')">
+    <button class="tile leaderboard" onclick="navigate('leaderboard')" style="grid-column: span 2;">
       <div class="tile-icon">🏆</div>
       <div class="tile-label">Leaderboard</div>
       <div class="tile-sub" id="lb-tile-sub">Top players</div>
@@ -797,39 +825,50 @@
   <div id="daily-result"></div>
 </div>
 
-<!-- ════ Browse screen (formerly Search) ════ -->
+<!-- ════ Browse screen ════ -->
 <div class="screen" id="screen-browse">
   <div class="search-box">
     <span>🔍</span>
-    <input type="text" id="search-input" placeholder="Search by name…" autocomplete="off">
-  </div>
-  <div class="filters" id="cat-filters">
-    <button class="chip active" data-cat="">All</button>
-    <button class="chip" data-cat="Batsman">🏏 Bat</button>
-    <button class="chip" data-cat="Bowler">⚾ Bowl</button>
-    <button class="chip" data-cat="All-rounder">⚡ AR</button>
-    <button class="chip" data-cat="Wicket Keeper">🧤 WK</button>
+    <input type="text" id="search-input" placeholder="Search player or country…" autocomplete="off">
   </div>
 
-  <!-- Rating range slider + country dropdown -->
   <div class="filter-bar">
-    <div class="rating-range">
-      <div class="range-label">
-        <span>Rating: <strong id="rating-display">50 – 100</strong></span>
-        <button class="link-btn" onclick="resetFilters()">Reset</button>
+    <div class="filter-grid">
+      <div>
+        <label class="filter-label">Role</label>
+        <select id="role-select" onchange="onFilterChange()">
+          <option value="">All</option>
+          <option value="Batsman">BAT</option>
+          <option value="Wicket Keeper">WK</option>
+          <option value="All-rounder">ALR</option>
+          <option value="Bowler">BWL</option>
+        </select>
       </div>
-      <div class="range-sliders">
-        <input type="range" id="rating-min" min="50" max="100" value="50" oninput="onRatingChange()">
-        <input type="range" id="rating-max" min="50" max="100" value="100" oninput="onRatingChange()">
+      <div>
+        <label class="filter-label">Country</label>
+        <select id="country-select" onchange="onFilterChange()">
+          <option value="">All countries</option>
+        </select>
+      </div>
+      <div>
+        <label class="filter-label">OVR</label>
+        <select id="ovr-select" onchange="onFilterChange()">
+          <option value="0-100">All</option>
+          <option value="95-100">95+ Legendary</option>
+          <option value="90-94">90-94 Epic</option>
+          <option value="85-89">85-89 Gold</option>
+          <option value="75-84">75-84 Silver</option>
+          <option value="50-74">50-74 Bronze</option>
+        </select>
       </div>
     </div>
-    <select id="country-select" onchange="onFilterChange()">
-      <option value="">All Countries</option>
-    </select>
-    <label class="checkbox-row">
-      <input type="checkbox" id="unowned-only" onchange="onFilterChange()">
-      <span>Unowned only</span>
-    </label>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem;">
+      <label class="checkbox-row">
+        <input type="checkbox" id="unowned-only" onchange="onFilterChange()">
+        <span>Unowned only</span>
+      </label>
+      <button class="link-btn" onclick="resetFilters()">Reset filters</button>
+    </div>
   </div>
 
   <div id="browse-summary" style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;"></div>
@@ -845,6 +884,114 @@
   </div>
   <div id="roster-list">
     <div class="empty"><div class="icon">⏳</div>Loading roster…</div>
+  </div>
+</div>
+
+<!-- ════ Quick Match screen ════ -->
+<div class="screen" id="screen-match">
+  <div id="match-step-intro">
+    <div style="text-align: center; padding: 1rem 0;">
+      <div style="font-size: 4rem; margin-bottom: 0.5rem;">🏏</div>
+      <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Quick Match</h2>
+      <p style="color: var(--muted); margin: 0; font-size: 0.88rem;">
+        Pick aggressive, balanced, or defensive for each phase. 7 taps. ~60 seconds.
+      </p>
+    </div>
+
+    <div class="card" style="text-align: center; padding: 1.5rem;">
+      <p class="card-title">Difficulty</p>
+      <div class="filters" style="justify-content: center; margin-top: 0.5rem;">
+        <button class="chip" data-diff="easy" onclick="setMatchDifficulty('easy')">😌 Easy</button>
+        <button class="chip active" data-diff="medium" onclick="setMatchDifficulty('medium')">⚔️ Medium</button>
+        <button class="chip" data-diff="hard" onclick="setMatchDifficulty('hard')">🔥 Hard</button>
+      </div>
+      <p style="color: var(--muted); font-size: 0.78rem; margin: 0.8rem 0 0;" id="diff-hint">
+        Opponent rating = your top-11 average
+      </p>
+    </div>
+
+    <div class="card" style="margin-top: 0.8rem;">
+      <p class="card-title">How phases work</p>
+      <div style="font-size: 0.85rem; line-height: 1.6; color: var(--muted);">
+        🟢 <strong style="color: var(--accent);">Aggressive</strong>: more runs, more wickets<br>
+        ⚪ <strong style="color: var(--accent);">Balanced</strong>: steady risk and reward<br>
+        🛡️ <strong style="color: var(--accent);">Defensive</strong>: safer, fewer runs
+      </div>
+    </div>
+
+    <button class="spin-button" onclick="startMatch()" style="margin-top: 1.2rem; width: 100%;">
+      🎲 Toss &amp; Play
+    </button>
+  </div>
+
+  <div id="match-step-toss" style="display:none;">
+    <div style="text-align: center; padding: 2rem 1rem;">
+      <div style="font-size: 4rem; margin-bottom: 1rem;">🎲</div>
+      <h2 style="margin: 0 0 0.5rem;">Toss</h2>
+      <p style="color: var(--muted); margin: 0 0 1.5rem;">Call your choice. You'll win the toss 50% of the time.</p>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem;">
+        <button class="tile" onclick="submitToss('bat')" style="padding: 1.3rem 0.5rem;">
+          <div style="font-size: 2.2rem;">🏏</div>
+          <div style="font-weight: 700; margin-top: 0.4rem;">Bat First</div>
+        </button>
+        <button class="tile" onclick="submitToss('bowl')" style="padding: 1.3rem 0.5rem;">
+          <div style="font-size: 2.2rem;">⚾</div>
+          <div style="font-weight: 700; margin-top: 0.4rem;">Bowl First</div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="match-step-phases" style="display:none;">
+    <div style="text-align: center; padding: 0.5rem 0;">
+      <p style="color: var(--muted); margin: 0; font-size: 0.85rem;" id="phases-progress">Innings 1 · Phase 1/3</p>
+      <h2 style="margin: 0.3rem 0; font-size: 1.4rem;" id="phases-name">Powerplay</h2>
+      <p style="color: var(--muted); margin: 0; font-size: 0.78rem;" id="phases-overs">Overs 1-6</p>
+    </div>
+
+    <div class="card" style="margin-top: 0.5rem; text-align: center;" id="phases-context">
+      <!-- Filled by JS: chase target, current state -->
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr; gap: 0.65rem; margin-top: 1rem;">
+      <button class="tile match" onclick="pickPhase('aggressive')" style="padding: 1.1rem;">
+        <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
+          <div style="font-size: 2rem;">🟢</div>
+          <div style="flex:1;">
+            <div style="font-weight: 800; font-size: 1rem;">Aggressive</div>
+            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;">More runs · more wickets</div>
+          </div>
+        </div>
+      </button>
+      <button class="tile" onclick="pickPhase('balanced')" style="padding: 1.1rem; border-color: rgba(212,168,42,0.5);">
+        <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
+          <div style="font-size: 2rem;">⚪</div>
+          <div style="flex:1;">
+            <div style="font-weight: 800; font-size: 1rem;">Balanced</div>
+            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;">Steady · neutral</div>
+          </div>
+        </div>
+      </button>
+      <button class="tile browse" onclick="pickPhase('defensive')" style="padding: 1.1rem;">
+        <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
+          <div style="font-size: 2rem;">🛡️</div>
+          <div style="flex:1;">
+            <div style="font-weight: 800; font-size: 1rem;">Defensive</div>
+            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;">Safer · fewer runs</div>
+          </div>
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <div id="match-step-playing" style="display:none; text-align:center; padding: 3rem 1rem;">
+    <div style="font-size: 3.5rem;">🏏</div>
+    <div style="margin-top: 1rem; color: var(--muted);">Simulating match…</div>
+    <div class="spinner" style="margin-top: 1rem; width: 28px; height: 28px;"></div>
+  </div>
+
+  <div id="match-step-result" style="display:none;">
+    <!-- Filled by JS after match completes -->
   </div>
 </div>
 
@@ -972,6 +1119,7 @@ function navigate(screen) {
   if (screen === 'roster') loadRoster();
   if (screen === 'home') refreshDashboard();
   if (screen === 'leaderboard') loadLeaderboard();
+  if (screen === 'match') resetMatchScreen();
   if (screen === 'browse') {
     loadCountries().then(() => {
       if (!document.getElementById('browse-results').children.length) {
@@ -1205,6 +1353,221 @@ function showDailyReward(r) {
   `;
 }
 
+// ════════════════ Quick Match ════════════════
+let matchState = null;
+let matchDifficulty = 'medium';
+
+function setMatchDifficulty(d) {
+  haptic('light');
+  matchDifficulty = d;
+  document.querySelectorAll('#screen-match [data-diff]').forEach(c =>
+    c.classList.toggle('active', c.dataset.diff === d));
+  const hint = document.getElementById('diff-hint');
+  if (hint) {
+    hint.textContent = ({
+      easy: 'Opponent rated -10 OVR vs your top 11',
+      medium: 'Opponent rating = your top-11 average',
+      hard: 'Opponent rated +10 OVR vs your top 11',
+    })[d];
+  }
+}
+
+function showMatchStep(step) {
+  ['intro', 'toss', 'phases', 'playing', 'result'].forEach(s => {
+    const el = document.getElementById('match-step-' + s);
+    if (el) el.style.display = (s === step) ? 'block' : 'none';
+  });
+}
+
+function resetMatchScreen() {
+  matchState = null;
+  showMatchStep('intro');
+}
+
+function startMatch() {
+  haptic('medium');
+  if (!userData || (userData.roster_count || 0) < 5) {
+    toast('You need at least 5 players in roster to play', 'error');
+    return;
+  }
+  matchState = {
+    tossChoice: null,
+    innings1: [],
+    innings2: [],
+    currentInnings: 1,
+    currentPhase: 0,
+  };
+  showMatchStep('toss');
+}
+
+function submitToss(choice) {
+  haptic('medium');
+  matchState.tossChoice = choice;
+  matchState.currentInnings = 1;
+  matchState.currentPhase = 0;
+  renderPhase();
+  showMatchStep('phases');
+}
+
+const PHASE_INFO = [
+  { name: 'Powerplay', overs: 'Overs 1-6' },
+  { name: 'Middle Overs', overs: 'Overs 7-15' },
+  { name: 'Death Overs', overs: 'Overs 16-20' },
+];
+
+function renderPhase() {
+  const inn = matchState.currentInnings;
+  const ph = matchState.currentPhase;
+  document.getElementById('phases-progress').textContent =
+    `Innings ${inn} · Phase ${ph + 1}/3`;
+  document.getElementById('phases-name').textContent = PHASE_INFO[ph].name;
+  document.getElementById('phases-overs').textContent = PHASE_INFO[ph].overs;
+
+  // Show context: if 2nd innings, show target
+  const ctx = document.getElementById('phases-context');
+  if (inn === 2 && matchState.target) {
+    const currentScore = matchState.firstInningsScore || 0;
+    ctx.style.display = 'block';
+    ctx.innerHTML = `
+      <p class="card-title">Chasing ${matchState.target}</p>
+      <div style="font-size:0.85rem;color:var(--muted);">
+        Innings 1 result: <strong style="color:var(--text);">${matchState.firstInningsScore}/${matchState.firstInningsWickets}</strong>
+      </div>
+    `;
+  } else if (inn === 1) {
+    ctx.style.display = 'block';
+    ctx.innerHTML = `
+      <p class="card-title">${matchState.userBatsFirst ? 'You are batting' : 'You are bowling'}</p>
+    `;
+  } else {
+    ctx.style.display = 'none';
+  }
+}
+
+function pickPhase(choice) {
+  haptic('medium');
+  if (!matchState) return;
+  const inn = matchState.currentInnings;
+  if (inn === 1) {
+    matchState.innings1.push(choice);
+  } else {
+    matchState.innings2.push(choice);
+  }
+  matchState.currentPhase++;
+  if (matchState.currentPhase >= 3) {
+    // Innings done
+    if (inn === 1) {
+      // Need to know who bats first — call API for innings 1 only? No, we
+      // submit everything at once. For now, derive from tossChoice as
+      // approximation; backend will reveal actual order.
+      matchState.userBatsFirst = (matchState.tossChoice === 'bat');
+      matchState.currentInnings = 2;
+      matchState.currentPhase = 0;
+      renderPhase();
+    } else {
+      // All phases picked; submit
+      submitMatch();
+    }
+  } else {
+    renderPhase();
+  }
+}
+
+async function submitMatch() {
+  showMatchStep('playing');
+  const { ok, data } = await api('/api/webapp/quickmatch', {
+    toss_choice: matchState.tossChoice,
+    innings_1: matchState.innings1,
+    innings_2: matchState.innings2,
+    difficulty: matchDifficulty,
+  });
+  if (!ok) {
+    toast(data.message || 'Match failed', 'error');
+    resetMatchScreen();
+    return;
+  }
+  renderMatchResult(data.result);
+  hapticNotif(data.result.user_won === true ? 'success'
+            : data.result.user_won === false ? 'error' : 'warning');
+  showMatchStep('result');
+  // Refresh dashboard so balances update
+  refreshDashboard();
+}
+
+function renderMatchResult(r) {
+  const el = document.getElementById('match-step-result');
+  const inn1 = r.innings_1, inn2 = r.innings_2;
+  const userBatsFirst = r.user_bats_first;
+  const userInn = userBatsFirst ? inn1 : inn2;
+  const botInn = userBatsFirst ? inn2 : inn1;
+
+  let outcomeText, outcomeColor;
+  if (r.user_won === true) {
+    outcomeText = '🏆 YOU WIN!';
+    outcomeColor = 'var(--green)';
+  } else if (r.user_won === false) {
+    outcomeText = '💔 You lost';
+    outcomeColor = 'var(--red)';
+  } else {
+    outcomeText = '🤝 Match tied';
+    outcomeColor = 'var(--accent)';
+  }
+
+  el.innerHTML = `
+    <div style="text-align:center; padding: 0.5rem 0 1.2rem;">
+      <div style="font-size:1.8rem; font-weight:800; color:${outcomeColor}; margin-bottom: 0.4rem;">
+        ${outcomeText}
+      </div>
+      ${r.coin_reward > 0 ? `<div style="color:var(--accent); font-weight:700;">+${r.coin_reward} 🪙</div>` : ''}
+    </div>
+
+    <div class="card" style="padding: 0;">
+      <div style="display:grid; grid-template-columns: 1fr 1fr;">
+        <div style="padding: 1rem; text-align: center; border-right: 1px solid var(--border);">
+          <div style="color:var(--muted); font-size: 0.7rem; text-transform: uppercase;">You · ${r.user_team_rating}</div>
+          <div style="font-size: 1.8rem; font-weight: 800; margin-top: 0.3rem;">
+            ${userInn.total_runs}<span style="color:var(--muted); font-size: 1.1rem;">/${userInn.total_wickets}</span>
+          </div>
+        </div>
+        <div style="padding: 1rem; text-align: center;">
+          <div style="color:var(--muted); font-size: 0.7rem; text-transform: uppercase;">Bot · ${r.opponent_team_rating}</div>
+          <div style="font-size: 1.8rem; font-weight: 800; margin-top: 0.3rem;">
+            ${botInn.total_runs}<span style="color:var(--muted); font-size: 1.1rem;">/${botInn.total_wickets}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: 0.7rem;">
+      <p class="card-title">Phase-by-phase</p>
+      <div style="font-size: 0.82rem;">
+        ${renderInnings('Innings 1 ' + (userBatsFirst ? '(You)' : '(Bot)'), inn1)}
+        ${renderInnings('Innings 2 ' + (userBatsFirst ? '(Bot)' : '(You)'), inn2)}
+      </div>
+    </div>
+
+    <button class="spin-button" onclick="resetMatchScreen()" style="margin-top: 1rem; width: 100%;">
+      🎲 Play Again
+    </button>
+  `;
+}
+
+function renderInnings(title, inn) {
+  const phases = inn.phases.map(p => {
+    const choiceIcon = ({aggressive: '🟢', balanced: '⚪', defensive: '🛡️'})[p.choice] || '';
+    return `<div style="display:flex; justify-content:space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border);">
+      <span>${choiceIcon} ${escapeHtml(p.name)}</span>
+      <span><strong>${p.runs}</strong>/${p.wickets_lost}</span>
+    </div>`;
+  }).join('');
+  return `
+    <div style="margin-bottom: 0.6rem; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;">
+      ${escapeHtml(title)} — ${inn.total_runs}/${inn.total_wickets}
+    </div>
+    ${phases}
+  `;
+}
+
 // ════════════════ Leaderboard ════════════════
 let lbMetric = 'wins';
 
@@ -1397,8 +1760,6 @@ function showReward(r) {
 // ════════════════ Browse (players with filters) ════════════════
 let browsePage = 1;
 let browseInFlight = false;
-let browseMinRating = 50;
-let browseMaxRating = 100;
 let browseTimer = null;
 let countriesLoaded = false;
 
@@ -1407,47 +1768,12 @@ document.getElementById('search-input').addEventListener('input', e => {
   browseTimer = setTimeout(() => onFilterChange(), 280);
 });
 
-document.querySelectorAll('#cat-filters .chip').forEach(chip => {
-  chip.addEventListener('click', () => {
-    document.querySelectorAll('#cat-filters .chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    currentCat = chip.dataset.cat;
-    onFilterChange();
-  });
-});
-
-function onRatingChange() {
-  const lo = parseInt(document.getElementById('rating-min').value, 10);
-  const hi = parseInt(document.getElementById('rating-max').value, 10);
-  // Prevent crossover
-  if (lo > hi) {
-    document.getElementById('rating-min').value = hi;
-    browseMinRating = hi;
-  } else {
-    browseMinRating = lo;
-  }
-  if (hi < lo) {
-    document.getElementById('rating-max').value = lo;
-    browseMaxRating = lo;
-  } else {
-    browseMaxRating = hi;
-  }
-  document.getElementById('rating-display').textContent = `${browseMinRating} – ${browseMaxRating}`;
-  clearTimeout(browseTimer);
-  browseTimer = setTimeout(() => onFilterChange(), 250);
-}
-
 function resetFilters() {
   document.getElementById('search-input').value = '';
-  document.getElementById('rating-min').value = 50;
-  document.getElementById('rating-max').value = 100;
+  document.getElementById('role-select').value = '';
   document.getElementById('country-select').value = '';
+  document.getElementById('ovr-select').value = '0-100';
   document.getElementById('unowned-only').checked = false;
-  document.querySelectorAll('#cat-filters .chip').forEach(c => c.classList.remove('active'));
-  document.querySelector('#cat-filters .chip[data-cat=""]').classList.add('active');
-  currentCat = '';
-  browseMinRating = 50; browseMaxRating = 100;
-  document.getElementById('rating-display').textContent = '50 – 100';
   onFilterChange();
 }
 
@@ -1475,7 +1801,10 @@ async function doBrowse(append) {
   browseInFlight = true;
 
   const q = document.getElementById('search-input').value;
+  const role = document.getElementById('role-select').value;
   const country = document.getElementById('country-select').value;
+  const ovrRange = document.getElementById('ovr-select').value || '0-100';
+  const [minR, maxR] = ovrRange.split('-').map(n => parseInt(n, 10));
   const onlyUnowned = document.getElementById('unowned-only').checked;
   const resultsEl = document.getElementById('browse-results');
   const moreBtn = document.getElementById('load-more');
@@ -1487,10 +1816,10 @@ async function doBrowse(append) {
 
   const { ok, data } = await api('/api/webapp/players', {
     q,
-    category: currentCat,
+    category: role,
     country,
-    min_rating: browseMinRating,
-    max_rating: browseMaxRating,
+    min_rating: minR,
+    max_rating: maxR,
     only_unowned: onlyUnowned,
     page: browsePage,
     per_page: 25,
@@ -1502,7 +1831,6 @@ async function doBrowse(append) {
   }
   const html = (data.results || []).map(p => playerRow(p)).join('');
   if (append) {
-    // remove the spinner if any, append new
     resultsEl.insertAdjacentHTML('beforeend', html);
   } else {
     if (!data.results || !data.results.length) {
@@ -1511,7 +1839,7 @@ async function doBrowse(append) {
       resultsEl.innerHTML = html;
     }
   }
-  summary.textContent = `${data.total || 0} player${data.total === 1 ? '' : 's'} match · showing ${browsePage * 25} max`;
+  summary.textContent = `${data.total || 0} player${data.total === 1 ? '' : 's'} found · showing up to ${browsePage * 25}`;
   moreBtn.style.display = data.has_more ? 'block' : 'none';
 }
 
@@ -1666,7 +1994,7 @@ function ratingColor(r) {
 // Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
 function handleHashDeepLink() {
   const hash = (window.location.hash || '').replace('#', '').toLowerCase();
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard'];
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match'];
   if (validScreens.includes(hash) && hash !== 'home') {
     // refreshDashboard fires first then navigate
     navigate(hash);

@@ -127,6 +127,30 @@
     </div>
   </div>
 
+  <h2 style="margin-bottom:.7rem; font-size:1.1rem;">📺 Mini App Ad Quotas</h2>
+  <p style="color:var(--muted); font-size:.85rem; margin-bottom:1rem;">
+    Each user gets 1 FREE use per 24h cycle, plus this many AD-watched uses.
+    Set to 0 to disable ad-gated extras (only the 1 free use remains).
+  </p>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Spin ad quota <span style="color:var(--muted);">(default: 5)</span>
+      </label>
+      <input type="number" name="spin_ad_quota" min="0" max="99" required
+             value="{{ cfg.spin_ad_quota }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Daily ad quota <span style="color:var(--muted);">(default: 5)</span>
+      </label>
+      <input type="number" name="daily_ad_quota" min="0" max="99" required
+             value="{{ cfg.daily_ad_quota }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+    </div>
+  </div>
+
   <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🎉 Debut Bonus</h2>
   <p style="color:var(--muted); font-size:.85rem; margin-bottom:1rem;">
     Given to new users on /debut. Should be enough to start playing but not buy 95+ players.
