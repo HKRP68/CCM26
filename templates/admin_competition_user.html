@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ target_user.first_name or target_user.telegram_id }}'s invites{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>👤 Invites by {{ target_user.first_name or target_user.username or target_user.telegram_id }}</h2>
+  <a href="{{ url_for('admin_competition_detail', comp_id=comp.id) }}" class="btn btn-ghost btn-sm">← Leaderboard</a>
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;">
+  <strong>Competition:</strong> {{ comp.name }}<br>
+  <strong>Telegram ID:</strong> <code>{{ target_user.telegram_id }}</code>
+  {% if target_user.username %} · <strong>@{{ target_user.username }}</strong>{% endif %}<br>
+  <strong>Completed invites:</strong> <span style="color:var(--green);">{{ stats.completed }}</span> ·
+  <strong>Pending:</strong> {{ stats.pending }} ·
+  {% if stats.rank %}<strong>Rank:</strong> #{{ stats.rank }}{% endif %}
+</div>
+
+<h3>All invitees</h3>
+{% if invitees %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Invitee</th>
+    <th>Clicked at</th>
+    <th>Status</th>
+    <th>Reward paid</th>
+    <th>Valid</th>
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for iv in invitees %}
+  <tr style="{{ 'opacity:.5;' if not iv.is_valid else '' }}">
+    <td>
+      <strong>{{ iv.first_name or iv.username or iv.telegram_id }}</strong>
+      {% if iv.username %}<br><span style="color:var(--muted);font-size:.75rem;">@{{ iv.username }}</span>{% endif %}
+      <br><span style="color:var(--muted);font-size:.7rem;font-family:monospace;">tg: {{ iv.telegram_id }}</span>
+    </td>
+    <td style="font-size:.78rem;color:var(--muted);">
+      {{ iv.created_at.strftime('%Y-%m-%d %H:%M') if iv.created_at else '—' }}
+    </td>
+    <td>
+      {% if iv.completed_at %}
+        <span style="color:var(--green);font-weight:700;">✅ /debut done</span>
+        <div style="font-size:.7rem;color:var(--muted);">{{ iv.completed_at.strftime('%Y-%m-%d %H:%M') }}</div>
+      {% else %}
+        <span style="color:var(--accent);">⏳ Pending</span>
+      {% endif %}
+    </td>
+    <td style="font-size:.78rem;color:var(--muted);">
+      {{ iv.reward_paid_at.strftime('%Y-%m-%d') if iv.reward_paid_at else '—' }}
+    </td>
+    <td>
+      {% if iv.is_valid %}
+        <span style="color:var(--green);">✓</span>
+      {% else %}
+        <span style="color:var(--red);">INVALID</span>
+      {% endif %}
+    </td>
+    <td>
+      <form method="POST" action="{{ url_for('admin_referral_toggle', ref_id=iv.referral_id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost btn-sm"
+                onclick="return confirm('Toggle valid status?');">
+          {{ 'Mark invalid' if iv.is_valid else 'Re-validate' }}
+        </button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p style="color:var(--muted);font-size:.75rem;margin-top:.8rem;">
+  Marking a referral invalid removes it from the leaderboard count but preserves the audit trail.
+  Useful when you spot abuse — alt accounts, etc.
+</p>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No invitees yet.
+</p>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}{{ comp.name }}{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏆 {{ comp.name }}</h2>
+  <a href="{{ url_for('admin_competitions') }}" class="btn btn-ghost btn-sm">← All competitions</a>
+</div>
+
+<div class="stats-grid" style="margin-bottom:1.5rem;">
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Status</p>
+    <p style="font-size:1.2rem;font-weight:800;margin:.25rem 0 0;">
+      {% if comp.winners_announced_at %}
+        <span style="color:var(--blue);">✅ Concluded</span>
+      {% else %}
+        <span style="color:var(--green);">● Running</span>
+      {% endif %}
+    </p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Total invites</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;">{{ "{:,}".format(total_invites) }}</p>
+    <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">{{ completed_invites }} completed</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Period</p>
+    <p style="font-size:.85rem;font-weight:700;margin:.25rem 0 0;">{{ comp.start_date.strftime('%b %d') }} → {{ comp.end_date.strftime('%b %d') }}</p>
+    <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">{{ comp.start_date.year }}</p>
+  </div>
+</div>
+
+{% if not comp.winners_announced_at %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .8rem;">🏆 Declare winners</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin:0 0 1rem;">
+    This will award top prizes to the top-3 ranked users and mark the competition as concluded.
+    Each user's prize will be credited to their coin balance immediately. <strong>Can only be done once.</strong>
+  </p>
+  <form method="POST" action="{{ url_for('admin_competition_declare', comp_id=comp.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-primary"
+            onclick="return confirm('Declare winners and pay out prizes? This is permanent.');">
+      🏆 Declare winners now
+    </button>
+  </form>
+</div>
+{% else %}
+<div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.5rem;">
+  <strong style="color:var(--green);">✅ Winners declared</strong>
+  <div style="color:var(--muted);font-size:.85rem;margin-top:.25rem;">
+    On {{ comp.winners_announced_at.strftime('%Y-%m-%d %H:%M') }} UTC
+  </div>
+</div>
+{% endif %}
+
+<h3>Leaderboard</h3>
+{% if leaderboard %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Rank</th>
+    <th>User</th>
+    <th>Completed</th>
+    <th>Pending</th>
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for entry in leaderboard %}
+  <tr {% if entry.rank == 1 %}style="background:rgba(212,168,42,.06);"{% endif %}>
+    <td>
+      {% if entry.rank == 1 %}🥇{% elif entry.rank == 2 %}🥈{% elif entry.rank == 3 %}🥉{% else %}{{ entry.rank }}{% endif %}
+    </td>
+    <td>
+      <strong>{{ entry.first_name or entry.username or entry.telegram_id }}</strong>
+      {% if entry.username %}<span style="color:var(--muted);font-size:.78rem;">@{{ entry.username }}</span>{% endif %}
+      {% if entry.team_name %}<div style="font-size:.72rem;color:var(--muted);">Team: {{ entry.team_name }}</div>{% endif %}
+    </td>
+    <td><strong style="color:var(--green);">{{ entry.completed_invites }}</strong></td>
+    <td style="color:var(--muted);">{{ entry.pending_invites }}</td>
+    <td>
+      <a href="{{ url_for('admin_competition_user', comp_id=comp.id, user_id=entry.user_id) }}"
+         class="btn btn-ghost btn-sm">Detail</a>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No completed invites yet for this competition.
+</p>
+{% endif %}
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-top:1.5rem;">
+  <summary style="cursor:pointer;font-weight:700;">⚙️ Edit settings</summary>
+  <form method="POST" action="{{ url_for('admin_competition_update', comp_id=comp.id) }}" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div style="grid-column:span 2;">
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Name</label>
+        <input type="text" name="name" value="{{ comp.name }}"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Start</label>
+        <input type="datetime-local" name="start_date" value="{{ comp.start_date.strftime('%Y-%m-%dT%H:%M') }}"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">End</label>
+        <input type="datetime-local" name="end_date" value="{{ comp.end_date.strftime('%Y-%m-%dT%H:%M') }}"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥇 1st prize</label>
+        <input type="number" name="prize_top1" value="{{ comp.prize_top1 }}" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥈 2nd prize</label>
+        <input type="number" name="prize_top2" value="{{ comp.prize_top2 }}" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥉 3rd prize</label>
+        <input type="number" name="prize_top3" value="{{ comp.prize_top3 }}" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">Per invite (coins)</label>
+        <input type="number" name="prize_per_invite" value="{{ comp.prize_per_invite }}" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">Per invite (gems)</label>
+        <input type="number" name="prize_per_invite_gems" value="{{ comp.prize_per_invite_gems }}" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+    <label class="checkbox-row" style="margin-top:.8rem;display:flex;gap:.5rem;align-items:center;">
+      <input type="checkbox" name="is_active" {% if comp.is_active %}checked{% endif %}>
+      <span>Active</span>
+    </label>
+    <div style="margin-top:1rem;">
+      <label style="display:block;font-size:.75rem;color:var(--muted);">Notes</label>
+      <textarea name="notes" rows="2" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;">{{ comp.notes or '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Save changes</button>
+  </form>
+</details>
+
+{% endblock %}

@@ -6,6 +6,7 @@
 <title>CricMaster Ultra</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   :root {
@@ -198,6 +199,10 @@
   }
   .tile.browse { border-color: rgba(74, 158, 255, 0.4); }
   .tile.leaderboard { border-color: rgba(167, 139, 250, 0.4); }
+  .tile.invite {
+    border-color: rgba(0, 212, 170, 0.45);
+    box-shadow: 0 0 16px rgba(0, 212, 170, 0.08) inset;
+  }
   .tile.match {
     border-color: rgba(255, 77, 109, 0.5);
     box-shadow: 0 0 16px rgba(255, 77, 109, 0.1) inset;
@@ -685,6 +690,138 @@
     border-radius: 4px;
     font-weight: 800;
   }
+  .roster-item.selected {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue) inset;
+  }
+  .roster-item .select-mark {
+    position: absolute; top: 6px; left: 6px; font-size: 0.85rem;
+  }
+  .roster-item .sell-row {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 0.4rem; gap: 0.3rem;
+  }
+  .roster-item .sell-val {
+    color: var(--green); font-size: 0.7rem; font-weight: 700;
+  }
+  .release-btn {
+    background: rgba(255, 77, 109, 0.12);
+    color: var(--red);
+    border: 1px solid rgba(255, 77, 109, 0.35);
+    padding: 0.18rem 0.42rem;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .release-btn:active { background: rgba(255, 77, 109, 0.25); }
+  .link-btn {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.7rem;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .link-btn:active { background: var(--card-2); }
+
+  /* Market */
+  .market-row {
+    display: flex; gap: 0.6rem; align-items: center;
+    padding: 0.65rem 0.75rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 0.45rem;
+  }
+  .market-info { flex: 1; min-width: 0; }
+  .market-name { font-weight: 700; font-size: 0.88rem;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .market-meta { color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
+  .ver-badge {
+    background: rgba(255,217,102,0.18); color: var(--accent);
+    font-size: 0.55rem; font-weight: 800; padding: 0.1rem 0.32rem;
+    border-radius: 3px; text-transform: uppercase; vertical-align: middle;
+  }
+  .market-buy-btn {
+    background: var(--accent); color: #0a0f1a;
+    border: none; padding: 0.5rem 0.85rem;
+    border-radius: 7px;
+    font-weight: 800; font-size: 0.72rem;
+    font-family: inherit; cursor: pointer;
+    white-space: nowrap;
+  }
+  .market-buy-btn:active { opacity: 0.85; }
+  .market-buy-btn.disabled {
+    background: var(--card-2); color: var(--muted); cursor: not-allowed;
+  }
+
+  /* XI */
+  .xi-row {
+    display: flex; gap: 0.55rem; align-items: center;
+    padding: 0.6rem 0.7rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 0.4rem;
+    touch-action: none;  /* needed for Sortable on touch */
+  }
+  .xi-row.xi-ghost { opacity: 0.4; background: var(--card-2); }
+  .xi-handle {
+    cursor: grab; color: var(--muted); font-size: 1.2rem;
+    padding: 0 0.3rem; touch-action: none;
+    user-select: none; -webkit-user-select: none;
+  }
+  .xi-pos {
+    background: var(--card-2); color: var(--accent);
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 0.78rem;
+    border: 1px solid var(--border);
+  }
+  .xi-info { flex: 1; min-width: 0; }
+  .xi-name { font-weight: 700; font-size: 0.85rem;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .xi-meta { color: var(--muted); font-size: 0.7rem; margin-top: 0.12rem; }
+  .bench-row {
+    display: flex; gap: 0.55rem; align-items: center;
+    padding: 0.55rem 0.7rem;
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 0.4rem;
+    cursor: pointer;
+  }
+  .bench-row:active { background: var(--card); }
+  .bench-action {
+    font-size: 0.72rem; color: var(--accent); font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* Invite */
+  .invite-lb-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.4rem 0; border-bottom: 1px solid var(--border);
+  }
+  .invite-lb-row:last-child { border-bottom: none; }
+  .invite-lb-row.me { background: rgba(0, 212, 170, 0.06); margin: 0 -0.3rem; padding: 0.4rem 0.3rem; border-radius: 6px; }
+  .invite-lb-rank { width: 36px; font-weight: 800; color: var(--accent); }
+  .invite-lb-name {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 0.85rem;
+  }
+  .invite-lb-count {
+    font-weight: 800; font-size: 0.95rem; color: var(--green);
+  }
+  .invitee-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.45rem 0; border-bottom: 1px solid var(--border);
+  }
+  .invitee-row:last-child { border-bottom: none; }
 </style>
 </head>
 <body>
@@ -747,10 +884,15 @@
       <div class="tile-label">Browse Players</div>
       <div class="tile-sub">Search &amp; buy</div>
     </button>
-    <button class="tile leaderboard" onclick="navigate('leaderboard')" style="grid-column: span 2;">
+    <button class="tile leaderboard" onclick="navigate('leaderboard')">
       <div class="tile-icon">🏆</div>
       <div class="tile-label">Leaderboard</div>
       <div class="tile-sub" id="lb-tile-sub">Top players</div>
+    </button>
+    <button class="tile invite" onclick="navigate('invite')">
+      <div class="tile-icon">🎟️</div>
+      <div class="tile-label">Invite &amp; Win</div>
+      <div class="tile-sub" id="invite-tile-sub">Earn rewards</div>
     </button>
   </div>
 
@@ -867,7 +1009,36 @@
         <input type="checkbox" id="unowned-only" onchange="onFilterChange()">
         <span>Unowned only</span>
       </label>
-      <button class="link-btn" onclick="resetFilters()">Reset filters</button>
+      <button class="link-btn" onclick="toggleAdvanced()" id="adv-toggle">▾ Advanced</button>
+    </div>
+    <div id="adv-panel" style="display:none;margin-top:0.7rem;padding-top:0.7rem;border-top:1px solid var(--border);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
+        <div>
+          <label class="filter-label">Min OVR</label>
+          <input type="number" id="adv-min-ovr" min="50" max="100" placeholder="50"
+                 oninput="onFilterChange()"
+                 style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        </div>
+        <div>
+          <label class="filter-label">Max OVR</label>
+          <input type="number" id="adv-max-ovr" min="50" max="100" placeholder="100"
+                 oninput="onFilterChange()"
+                 style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        </div>
+        <div>
+          <label class="filter-label">Min Price 🪙</label>
+          <input type="number" id="adv-min-price" min="0" placeholder="0"
+                 oninput="onFilterChange()"
+                 style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        </div>
+        <div>
+          <label class="filter-label">Max Price 🪙</label>
+          <input type="number" id="adv-max-price" min="0" placeholder="no limit"
+                 oninput="onFilterChange()"
+                 style="width:100%;padding:0.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        </div>
+      </div>
+      <button class="link-btn" onclick="resetFilters()" style="margin-top:0.55rem;width:100%;">Reset all filters</button>
     </div>
   </div>
 
@@ -878,12 +1049,66 @@
 
 <!-- ════ Roster screen ════ -->
 <div class="screen" id="screen-roster">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.85rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
     <h2 style="margin:0;font-size:1.25rem;">Your Squad</h2>
     <span style="color:var(--muted);font-size:0.85rem;" id="roster-count">—/25</span>
   </div>
+  <div style="display:flex;gap:0.4rem;margin-bottom:0.65rem;flex-wrap:wrap;">
+    <button class="link-btn" onclick="toggleSquadSelectMode()" id="squad-select-toggle">
+      ☑️ Select
+    </button>
+    <button class="link-btn" onclick="navigate('xi')">👥 Manage XI</button>
+    <button class="link-btn" onclick="navigate('market')">🌟 Market</button>
+  </div>
+  <div id="squad-bulk-bar" style="display:none;background:rgba(212,168,42,0.12);border:1px solid var(--accent);border-radius:8px;padding:0.6rem 0.75rem;margin-bottom:0.65rem;align-items:center;gap:0.6rem;">
+    <span style="flex:1;font-size:0.85rem;"><b id="squad-bulk-count">0</b> selected · <b id="squad-bulk-coins">0</b> 🪙</span>
+    <button class="link-btn" onclick="releaseSquadSelection()" style="background:var(--red);color:#fff;padding:0.3rem 0.7rem;border-radius:6px;">Release</button>
+    <button class="link-btn" onclick="clearSquadSelection()">Cancel</button>
+  </div>
   <div id="roster-list">
     <div class="empty"><div class="icon">⏳</div>Loading roster…</div>
+  </div>
+</div>
+
+<!-- ════ Market screen ════ -->
+<div class="screen" id="screen-market">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+    <h2 style="margin:0;font-size:1.25rem;">🌟 Player Market</h2>
+    <span style="color:var(--muted);font-size:0.8rem;" id="market-balance">— 🪙</span>
+  </div>
+  <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
+    Today's market. Refreshes daily. Prices include discounts.
+  </p>
+  <div id="market-list">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<!-- ════ XI screen ════ -->
+<div class="screen" id="screen-xi">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+    <h2 style="margin:0;font-size:1.25rem;">👥 Playing XI</h2>
+    <button class="link-btn" onclick="navigate('roster')">← Squad</button>
+  </div>
+  <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
+    Drag to reorder positions 1-11. Tap a bench player to swap into the XI.
+  </p>
+  <div id="xi-list" style="margin-bottom: 1rem;">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+  <h3 style="margin:1rem 0 0.5rem;font-size:0.95rem;color:var(--muted);">Bench</h3>
+  <div id="xi-bench">
+    <div class="empty"><div style="font-size: 0.85rem;">—</div></div>
+  </div>
+</div>
+
+<!-- ════ Invite screen ════ -->
+<div class="screen" id="screen-invite">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+    <h2 style="margin:0;font-size:1.25rem;">🎟️ Invite &amp; Win</h2>
+  </div>
+  <div id="invite-content">
+    <div class="empty"><div class="spinner"></div></div>
   </div>
 </div>
 
@@ -1120,6 +1345,9 @@ function navigate(screen) {
   if (screen === 'home') refreshDashboard();
   if (screen === 'leaderboard') loadLeaderboard();
   if (screen === 'match') resetMatchScreen();
+  if (screen === 'market') loadMarket();
+  if (screen === 'xi') loadXi();
+  if (screen === 'invite') loadInvite();
   if (screen === 'browse') {
     loadCountries().then(() => {
       if (!document.getElementById('browse-results').children.length) {
@@ -1332,7 +1560,14 @@ function showDailyReward(r) {
   if (r.players_added && r.players_added.length) {
     lines += `<div style="margin-top:0.5rem;">`;
     r.players_added.forEach(p => {
-      lines += `<div>✅ ${escapeHtml(p.name)} (${p.rating}) added</div>`;
+      const sv = p.sell_value || 0;
+      const releaseBtn = p.roster_id
+        ? `<button class="release-btn" style="margin-left:0.5rem;" onclick="releaseDailyReward(${p.roster_id}, this, '${escapeHtmlAttr(p.name)}', ${sv})">✕ Release · ${sv.toLocaleString()}🪙</button>`
+        : '';
+      lines += `<div style="display:flex;align-items:center;justify-content:space-between;margin:0.2rem 0;flex-wrap:wrap;">
+        <span>✅ ${escapeHtml(p.name)} (${p.rating}) added</span>
+        ${releaseBtn}
+      </div>`;
     });
     lines += `</div>`;
   }
@@ -1774,7 +2009,19 @@ function resetFilters() {
   document.getElementById('country-select').value = '';
   document.getElementById('ovr-select').value = '0-100';
   document.getElementById('unowned-only').checked = false;
+  ['adv-min-ovr', 'adv-max-ovr', 'adv-min-price', 'adv-max-price'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
   onFilterChange();
+}
+
+function toggleAdvanced() {
+  const panel = document.getElementById('adv-panel');
+  const toggle = document.getElementById('adv-toggle');
+  const showing = panel.style.display === 'block';
+  panel.style.display = showing ? 'none' : 'block';
+  toggle.textContent = showing ? '▾ Advanced' : '▴ Hide advanced';
 }
 
 function onFilterChange() {
@@ -1804,7 +2051,17 @@ async function doBrowse(append) {
   const role = document.getElementById('role-select').value;
   const country = document.getElementById('country-select').value;
   const ovrRange = document.getElementById('ovr-select').value || '0-100';
-  const [minR, maxR] = ovrRange.split('-').map(n => parseInt(n, 10));
+  let [minR, maxR] = ovrRange.split('-').map(n => parseInt(n, 10));
+
+  // Advanced overrides: if min-ovr or max-ovr inputs are set, they win
+  const advMinOvr = parseInt(document.getElementById('adv-min-ovr').value, 10);
+  const advMaxOvr = parseInt(document.getElementById('adv-max-ovr').value, 10);
+  if (!isNaN(advMinOvr) && advMinOvr > 0) minR = advMinOvr;
+  if (!isNaN(advMaxOvr) && advMaxOvr > 0) maxR = advMaxOvr;
+
+  const advMinPrice = parseInt(document.getElementById('adv-min-price').value, 10);
+  const advMaxPrice = parseInt(document.getElementById('adv-max-price').value, 10);
+
   const onlyUnowned = document.getElementById('unowned-only').checked;
   const resultsEl = document.getElementById('browse-results');
   const moreBtn = document.getElementById('load-more');
@@ -1814,7 +2071,7 @@ async function doBrowse(append) {
     resultsEl.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   }
 
-  const { ok, data } = await api('/api/webapp/players', {
+  const body = {
     q,
     category: role,
     country,
@@ -1823,7 +2080,11 @@ async function doBrowse(append) {
     only_unowned: onlyUnowned,
     page: browsePage,
     per_page: 25,
-  });
+  };
+  if (!isNaN(advMinPrice) && advMinPrice > 0) body.min_price = advMinPrice;
+  if (!isNaN(advMaxPrice) && advMaxPrice > 0) body.max_price = advMaxPrice;
+
+  const { ok, data } = await api('/api/webapp/players', body);
   browseInFlight = false;
   if (!ok) {
     resultsEl.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
@@ -1956,6 +2217,51 @@ async function buyPlayer(id, price) {
 }
 
 // ════════════════ Roster ════════════════
+let cachedRoster = null;
+let squadSelectMode = false;
+let squadSelected = new Set();
+
+function toggleSquadSelectMode() {
+  squadSelectMode = !squadSelectMode;
+  squadSelected.clear();
+  document.getElementById('squad-select-toggle').textContent =
+    squadSelectMode ? '✕ Cancel select' : '☑️ Select';
+  renderSquadList();
+}
+
+function clearSquadSelection() {
+  squadSelectMode = false;
+  squadSelected.clear();
+  document.getElementById('squad-select-toggle').textContent = '☑️ Select';
+  renderSquadList();
+}
+
+function toggleSquadSelection(rosterId, sellValue) {
+  if (squadSelected.has(rosterId)) {
+    squadSelected.delete(rosterId);
+  } else {
+    squadSelected.add(rosterId);
+  }
+  updateSquadBulkBar();
+  renderSquadList();
+}
+
+function updateSquadBulkBar() {
+  const bar = document.getElementById('squad-bulk-bar');
+  const count = squadSelected.size;
+  if (!squadSelectMode || count === 0) {
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = 'flex';
+  document.getElementById('squad-bulk-count').textContent = count;
+  let total = 0;
+  if (cachedRoster) {
+    cachedRoster.forEach(r => { if (squadSelected.has(r.roster_id)) total += r.sell_value; });
+  }
+  document.getElementById('squad-bulk-coins').textContent = total.toLocaleString();
+}
+
 async function loadRoster() {
   const el = document.getElementById('roster-list');
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
@@ -1965,18 +2271,93 @@ async function loadRoster() {
     return;
   }
   document.getElementById('roster-count').textContent = `${data.count}/${data.max}`;
-  if (!data.roster.length) {
-    el.innerHTML = `<div class="empty"><div class="icon">👥</div>No players yet — head to Search!</div>`;
+  cachedRoster = data.roster;
+  renderSquadList();
+}
+
+function renderSquadList() {
+  const el = document.getElementById('roster-list');
+  if (!cachedRoster) return;
+  if (!cachedRoster.length) {
+    el.innerHTML = `<div class="empty"><div class="icon">👥</div>No players yet — head to Browse!</div>`;
     return;
   }
-  el.innerHTML = `<div class="roster-grid">${data.roster.map(r => `
-    <div class="roster-item ${r.is_captain ? 'captain' : ''}">
+  el.innerHTML = `<div class="roster-grid">${cachedRoster.map(r => `
+    <div class="roster-item ${r.is_captain ? 'captain' : ''} ${squadSelected.has(r.roster_id) ? 'selected' : ''}"
+         ${squadSelectMode ? `onclick="toggleSquadSelection(${r.roster_id})"` : ''}
+         style="${squadSelectMode ? 'cursor:pointer;' : ''}">
       ${r.is_captain ? '<div class="captain-tag">CAPT</div>' : ''}
+      ${squadSelectMode ? `<div class="select-mark">${squadSelected.has(r.roster_id) ? '✅' : '⬜'}</div>` : ''}
       <div class="pos">#${r.position} · ${ratingBadge(r.rating)}</div>
       <div class="name">${escapeHtml(r.name)}</div>
       <div class="meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}</div>
+      <div class="sell-row">
+        <span class="sell-val">+${r.sell_value.toLocaleString()} 🪙</span>
+        ${(!squadSelectMode && !r.is_captain) ? `<button class="release-btn" onclick="event.stopPropagation(); releaseOne(${r.roster_id}, '${escapeHtmlAttr(r.name)}', ${r.sell_value})">✕ Release</button>` : ''}
+      </div>
     </div>
   `).join('')}</div>`;
+  updateSquadBulkBar();
+}
+
+async function releaseOne(rosterId, name, sellValue) {
+  if (!confirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
+  haptic('medium');
+  const { ok, data } = await api(`/api/webapp/release/${rosterId}`, {});
+  if (!ok) {
+    toast(data.message || 'Release failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast(`Released ${data.player_name} (+${data.sell_value.toLocaleString()} 🪙)`, 'success');
+  hapticNotif('success');
+  loadRoster();
+  refreshDashboard();
+}
+
+async function releaseSquadSelection() {
+  if (squadSelected.size === 0) return;
+  const ids = Array.from(squadSelected);
+  let total = 0;
+  if (cachedRoster) cachedRoster.forEach(r => { if (squadSelected.has(r.roster_id)) total += r.sell_value; });
+  if (!confirm(`Release ${ids.length} players for ${total.toLocaleString()} 🪙?`)) return;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/release_multi', { roster_ids: ids });
+  if (!ok) {
+    toast(data.message || 'Release failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast(`Released ${data.released_count} players (+${data.total_coins.toLocaleString()} 🪙)`, 'success');
+  hapticNotif('success');
+  clearSquadSelection();
+  loadRoster();
+  refreshDashboard();
+}
+
+async function releaseDailyReward(rosterId, btn, name, sellValue) {
+  if (!confirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
+  haptic('medium');
+  const { ok, data } = await api(`/api/webapp/release/${rosterId}`, {});
+  if (!ok) {
+    toast(data.message || 'Release failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast(`Released ${data.player_name} (+${data.sell_value.toLocaleString()} 🪙)`, 'success');
+  hapticNotif('success');
+  // Update the row in place — strike out + remove button
+  if (btn) {
+    const row = btn.parentElement;
+    row.style.opacity = '0.5';
+    row.querySelector('span').innerHTML = `<s>✅ ${escapeHtml(name)}</s> · sold`;
+    btn.remove();
+  }
+  refreshDashboard();
+}
+
+function escapeHtmlAttr(s) {
+  return String(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
 }
 
 function ratingBadge(r) {
@@ -1990,11 +2371,338 @@ function ratingColor(r) {
   return '#b87333';
 }
 
+// ════════════════ Market ════════════════
+async function loadMarket() {
+  const list = document.getElementById('market-list');
+  list.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/market', {});
+  if (!ok) {
+    list.innerHTML = `<div class="empty">❌ ${data.message || 'Market unavailable'}</div>`;
+    return;
+  }
+  const bal = document.getElementById('market-balance');
+  if (data.balance) bal.textContent = `${data.balance.coins.toLocaleString()} 🪙 · ${data.balance.roster_count}/${data.balance.roster_max}`;
+  if (!data.slots.length) {
+    list.innerHTML = `<div class="empty"><div class="icon">🌟</div>Market is empty — try again soon</div>`;
+    return;
+  }
+  list.innerHTML = data.slots.map(s => marketRow(s)).join('');
+}
+
+function marketRow(s) {
+  const sold = s.sold_out;
+  const owned = s.is_owned;
+  const disabled = sold || owned;
+  const btnLabel = sold ? '❌ Sold out' : (owned ? '✓ Owned' : `Buy · ${s.final_price.toLocaleString()} 🪙`);
+  const priceLine = s.discount_pct > 0
+    ? `<span style="text-decoration:line-through;color:var(--muted);font-size:0.72rem;">${s.base_price.toLocaleString()}</span> <span style="color:var(--green);font-weight:700;">-${s.discount_pct}%</span>`
+    : '';
+  return `
+    <div class="market-row">
+      <div class="market-info">
+        <div class="market-name">${escapeHtml(s.name)} <span style="color:${ratingColor(s.rating)};font-weight:800;">${s.rating}</span>${s.version !== 'Base' ? ` <span class="ver-badge">${escapeHtml(s.version)}</span>` : ''}</div>
+        <div class="market-meta">${escapeHtml(s.category)} · ${escapeHtml(s.country)} ${priceLine ? '· ' + priceLine : ''}</div>
+      </div>
+      <button class="market-buy-btn ${disabled ? 'disabled' : ''}"
+              ${disabled ? 'disabled' : ''}
+              onclick="buyFromMarket(${s.slot_id}, '${escapeHtmlAttr(s.name)}', ${s.final_price})">
+        ${btnLabel}
+      </button>
+    </div>
+  `;
+}
+
+async function buyFromMarket(slotId, name, price) {
+  if (!confirm(`Buy ${name} for ${price.toLocaleString()} 🪙?`)) return;
+  haptic('medium');
+  const { ok, data } = await api(`/api/webapp/market/buy/${slotId}`, {});
+  if (!ok) {
+    toast(data.message || 'Buy failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast(`Bought ${data.player_name}!`, 'success');
+  hapticNotif('success');
+  loadMarket();
+  refreshDashboard();
+}
+
+// ════════════════ XI ════════════════
+let xiSortable = null;
+let cachedXi = null;
+let cachedBench = null;
+
+async function loadXi() {
+  const list = document.getElementById('xi-list');
+  const benchEl = document.getElementById('xi-bench');
+  list.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  benchEl.innerHTML = '';
+  const { ok, data } = await api('/api/webapp/xi', {});
+  if (!ok) {
+    list.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  cachedXi = data.xi;
+  cachedBench = data.bench;
+
+  if (!data.xi.length) {
+    list.innerHTML = `<div class="empty">No XI yet — get players into your roster!</div>`;
+  } else {
+    list.innerHTML = data.xi.map((r, i) => `
+      <div class="xi-row" data-roster-id="${r.roster_id}">
+        <div class="xi-handle">⠿</div>
+        <div class="xi-pos">${i + 1}</div>
+        <div class="xi-info">
+          <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">CAPT</span>' : ''}</div>
+          <div class="xi-meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}</div>
+        </div>
+      </div>
+    `).join('');
+
+    // Init Sortable on the list — drag to reorder
+    if (xiSortable) xiSortable.destroy();
+    xiSortable = Sortable.create(list, {
+      animation: 150,
+      handle: '.xi-handle',
+      ghostClass: 'xi-ghost',
+      onEnd: persistXiOrder,
+    });
+  }
+
+  if (!data.bench.length) {
+    benchEl.innerHTML = `<div class="empty" style="padding:1rem;"><div style="font-size:0.85rem;">No bench players</div></div>`;
+  } else {
+    benchEl.innerHTML = data.bench.map(r => `
+      <div class="bench-row" onclick="swapBenchPlayer(${r.roster_id}, '${escapeHtmlAttr(r.name)}')">
+        <div class="xi-info">
+          <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}</div>
+          <div class="xi-meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)} · pos ${r.position}</div>
+        </div>
+        <div class="bench-action">↑ Swap</div>
+      </div>
+    `).join('');
+  }
+}
+
+async function persistXiOrder() {
+  const orderedIds = Array.from(document.querySelectorAll('#xi-list .xi-row'))
+    .map(el => parseInt(el.dataset.rosterId, 10))
+    .filter(n => !isNaN(n));
+  if (orderedIds.length < 2) return;
+  // Optimistically update position labels
+  document.querySelectorAll('#xi-list .xi-row .xi-pos').forEach((el, i) => {
+    el.textContent = i + 1;
+  });
+  haptic('light');
+  const { ok, data } = await api('/api/webapp/xi/reorder', { ordered_roster_ids: orderedIds });
+  if (!ok) {
+    toast(data.message || 'Reorder failed', 'error');
+    loadXi();
+    return;
+  }
+}
+
+async function swapBenchPlayer(benchRosterId, benchName) {
+  if (!cachedXi || cachedXi.length === 0) {
+    toast('No XI player to swap with', 'error');
+    return;
+  }
+  // For simplicity: swap into position 11 (last XI spot)
+  const xiTarget = cachedXi[cachedXi.length - 1];
+  if (!confirm(`Swap ${benchName} into the XI (replacing ${xiTarget.name} at #${xiTarget.position})?`)) return;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/xi/swap_bench', {
+    bench_roster_id: benchRosterId,
+    xi_roster_id: xiTarget.roster_id,
+  });
+  if (!ok) {
+    toast(data.message || 'Swap failed', 'error');
+    return;
+  }
+  toast(`${benchName} is now in the XI`, 'success');
+  hapticNotif('success');
+  loadXi();
+}
+
+// ════════════════ Invite ════════════════
+async function loadInvite() {
+  const el = document.getElementById('invite-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/invite', {});
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Invite system unavailable'}</div>`;
+    return;
+  }
+  if (!data.bot_configured) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="icon">⚠️</div>
+        Invite system not configured yet — admin needs to set the BOT_USERNAME env var.
+      </div>
+    `;
+    return;
+  }
+
+  const comp = data.active_competition;
+  const stats = data.stats;
+  const link = data.invite_link;
+
+  let compBlock = '';
+  if (comp) {
+    const ends = new Date(comp.end_date);
+    const now = new Date();
+    const daysLeft = Math.max(0, Math.ceil((ends - now) / 86400000));
+    const ppi = comp.prize_per_invite || 0;
+    const ppiG = comp.prize_per_invite_gems || 0;
+    const ppiText = (ppi || ppiG)
+      ? `🎁 <b>${ppi ? ppi.toLocaleString() + '🪙' : ''}${ppi && ppiG ? ' + ' : ''}${ppiG ? ppiG + '💎' : ''}</b> per invite`
+      : '<span style="color:var(--muted);">(no per-invite reward)</span>';
+
+    let topPrizes = '';
+    if (comp.prize_top1 > 0) topPrizes += `<div>🥇 1st: <b>${comp.prize_top1.toLocaleString()}🪙</b></div>`;
+    if (comp.prize_top2 > 0) topPrizes += `<div>🥈 2nd: <b>${comp.prize_top2.toLocaleString()}🪙</b></div>`;
+    if (comp.prize_top3 > 0) topPrizes += `<div>🥉 3rd: <b>${comp.prize_top3.toLocaleString()}🪙</b></div>`;
+
+    compBlock = `
+      <div class="card" style="margin-bottom:0.7rem;">
+        <p class="card-title">📅 ${escapeHtml(comp.name)}</p>
+        <div style="font-size:0.85rem;line-height:1.5;">
+          ${daysLeft > 0 ? `<div>⏳ <b>${daysLeft} day${daysLeft === 1 ? '' : 's'}</b> left</div>` : '<div style="color:var(--red);">⏰ Ended</div>'}
+          <div style="margin-top:0.3rem;">${ppiText}</div>
+          ${topPrizes ? `<div style="margin-top:0.6rem;">${topPrizes}</div>` : ''}
+        </div>
+      </div>
+    `;
+  } else {
+    compBlock = `
+      <div class="card" style="margin-bottom:0.7rem;">
+        <p class="card-title">No active competition</p>
+        <div style="color:var(--muted);font-size:0.85rem;">Invites still count toward lifetime totals.</div>
+      </div>
+    `;
+  }
+
+  const myStats = `
+    <div class="card" style="margin-bottom:0.7rem;">
+      <p class="card-title">Your invites</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem;text-align:center;">
+        <div>
+          <div style="font-size:1.6rem;font-weight:800;color:var(--green);">${stats.completed}</div>
+          <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;">Joined</div>
+        </div>
+        <div>
+          <div style="font-size:1.6rem;font-weight:800;color:var(--accent);">${stats.pending}</div>
+          <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;">Pending</div>
+        </div>
+        <div>
+          <div style="font-size:1.6rem;font-weight:800;">${stats.rank ? '#' + stats.rank : '—'}</div>
+          <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;">Rank</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const linkBlock = `
+    <div class="card" style="margin-bottom:0.7rem;">
+      <p class="card-title">Your invite link</p>
+      <div style="display:flex;gap:0.4rem;align-items:center;">
+        <input type="text" value="${escapeHtmlAttr(link)}" readonly id="invite-link-input"
+               style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:0.5rem;border-radius:6px;font-family:monospace;font-size:0.78rem;">
+        <button class="spin-button" style="padding:0.5rem 0.9rem;font-size:0.78rem;width:auto;" onclick="copyInviteLink()">📋 Copy</button>
+      </div>
+      <button class="spin-button" style="margin-top:0.5rem;width:100%;" onclick="shareInviteLink('${escapeHtmlAttr(link)}')">
+        📤 Share via Telegram
+      </button>
+      <p style="color:var(--muted);font-size:0.75rem;margin-top:0.5rem;line-height:1.5;">
+        When someone clicks your link and completes /debut, you get credit.
+      </p>
+    </div>
+  `;
+
+  // Leaderboard top 10
+  let lbBlock = '';
+  if (data.leaderboard && data.leaderboard.length) {
+    const rows = data.leaderboard.map(e => `
+      <div class="invite-lb-row ${e.user_id === userData.user_id ? 'me' : ''}">
+        <div class="invite-lb-rank">${e.rank <= 3 ? ['🥇','🥈','🥉'][e.rank - 1] : '#' + e.rank}</div>
+        <div class="invite-lb-name">
+          ${escapeHtml(e.first_name || e.username || 'Player ' + e.telegram_id)}
+        </div>
+        <div class="invite-lb-count">${e.completed_invites}</div>
+      </div>
+    `).join('');
+    lbBlock = `
+      <div class="card" style="margin-bottom:0.7rem;">
+        <p class="card-title">🏆 Top inviters</p>
+        ${rows}
+      </div>
+    `;
+  }
+
+  // My recent invitees
+  let invitesBlock = '';
+  if (data.my_invitees && data.my_invitees.length) {
+    const rows = data.my_invitees.slice(0, 10).map(iv => `
+      <div class="invitee-row">
+        <div>
+          <div style="font-weight:700;font-size:0.85rem;">${escapeHtml(iv.first_name || iv.username || 'tg:' + iv.telegram_id)}</div>
+          <div style="font-size:0.7rem;color:var(--muted);">${iv.created_at ? new Date(iv.created_at).toLocaleDateString() : ''}</div>
+        </div>
+        <div style="text-align:right;">
+          ${iv.completed_at
+            ? '<span style="color:var(--green);font-weight:700;font-size:0.75rem;">✅ Joined</span>'
+            : '<span style="color:var(--accent);font-size:0.75rem;">⏳ Pending</span>'}
+        </div>
+      </div>
+    `).join('');
+    invitesBlock = `
+      <div class="card" style="margin-bottom:0.7rem;">
+        <p class="card-title">Your invitees (${data.my_invitees.length})</p>
+        ${rows}
+      </div>
+    `;
+  }
+
+  el.innerHTML = compBlock + myStats + linkBlock + lbBlock + invitesBlock;
+}
+
+function copyInviteLink() {
+  const input = document.getElementById('invite-link-input');
+  input.select();
+  try {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(input.value);
+    } else {
+      document.execCommand('copy');
+    }
+    toast('Link copied!', 'success');
+    hapticNotif('success');
+  } catch (e) {
+    toast('Copy failed — long-press the link to copy manually', 'error');
+  }
+}
+
+function shareInviteLink(link) {
+  haptic('medium');
+  const text = encodeURIComponent("Join me in Cricket Simulator Bot!");
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${text}`;
+  // Telegram Mini App API: use openTelegramLink if available
+  try {
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openTelegramLink) {
+      window.Telegram.WebApp.openTelegramLink(shareUrl);
+    } else {
+      window.open(shareUrl, '_blank');
+    }
+  } catch (e) {
+    window.open(shareUrl, '_blank');
+  }
+}
+
 // ════════════════ Initial load ════════════════
 // Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
 function handleHashDeepLink() {
   const hash = (window.location.hash || '').replace('#', '').toLowerCase();
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match'];
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite'];
   if (validScreens.includes(hash) && hash !== 'home') {
     // refreshDashboard fires first then navigate
     navigate(hash);

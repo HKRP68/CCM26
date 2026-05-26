@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Competitions{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏆 Referral Competitions</h2>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <a href="{{ url_for('admin_competition_templates') }}" class="btn btn-ghost btn-sm">📋 Manage templates</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+  </div>
+</div>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;" {% if not competitions %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:700;">➕ Create new competition</summary>
+
+  {% if templates %}
+  <div style="background:rgba(212,168,42,.06);border:1px solid var(--accent);border-radius:8px;padding:.75rem 1rem;margin-top:1rem;">
+    <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.3rem;text-transform:uppercase;letter-spacing:.06em;font-weight:700;">📋 Start from template (optional)</label>
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+      <select id="template-picker" style="flex:1;min-width:200px;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <option value="">— Choose a template —</option>
+        {% for t in templates %}
+        <option value="{{ t.id }}"
+                data-top1="{{ t.prize_top1 }}"
+                data-top2="{{ t.prize_top2 }}"
+                data-top3="{{ t.prize_top3 }}"
+                data-per-invite="{{ t.prize_per_invite }}"
+                data-per-invite-gems="{{ t.prize_per_invite_gems }}"
+                data-duration="{{ t.duration_days or '' }}"
+                data-desc="{{ t.description or '' }}">
+          {{ t.name }}{% if t.duration_days %} · {{ t.duration_days }}d{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <button type="button" onclick="applyTemplate()" class="btn btn-primary btn-sm">Apply</button>
+    </div>
+    <div id="template-preview" style="display:none;margin-top:.5rem;font-size:.78rem;color:var(--muted);"></div>
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('admin_competition_create') }}" style="margin-top:1rem;" id="create-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div style="grid-column:span 2;">
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Competition name</label>
+        <input type="text" name="name" id="f-name" required placeholder="e.g. November Invite Sprint"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Start (UTC)</label>
+        <input type="datetime-local" name="start_date" id="f-start" required
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">End (UTC)</label>
+        <input type="datetime-local" name="end_date" required
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <h3 style="margin:1.2rem 0 .5rem;font-size:.95rem;">🥇 Top prize structure (coins) <span style="color:var(--muted);font-weight:400;font-size:.8rem;">— 0 = disabled</span></h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.7rem;">
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">🥇 1st place</label>
+        <input type="number" name="prize_top1" id="f-top1" min="0" value="100000"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">🥈 2nd place</label>
+        <input type="number" name="prize_top2" id="f-top2" min="0" value="50000"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">🥉 3rd place</label>
+        <input type="number" name="prize_top3" id="f-top3" min="0" value="25000"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <h3 style="margin:1.2rem 0 .5rem;font-size:.95rem;">🎁 Per-invite reward <span style="color:var(--muted);font-weight:400;font-size:.8rem;">— given to inviter when invitee completes /debut</span></h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem;">
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Coins per invite</label>
+        <input type="number" name="prize_per_invite" id="f-per-invite" min="0" value="500"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Gems per invite</label>
+        <input type="number" name="prize_per_invite_gems" id="f-per-invite-gems" min="0" value="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;">
+      <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Notes (optional)</label>
+      <textarea name="notes" rows="2" placeholder="Internal notes about this competition"
+                style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;"></textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Create competition</button>
+  </form>
+</details>
+
+<h3>All competitions</h3>
+{% if competitions %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Name</th>
+    <th>Status</th>
+    <th>Start</th>
+    <th>End</th>
+    <th>Top prizes</th>
+    <th>Per invite</th>
+    <th>Winners</th>
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for c in competitions %}
+  <tr>
+    <td><strong>{{ c.name }}</strong></td>
+    <td>
+      {% if c.id == active_competition_id %}
+        <span style="color:var(--green);font-weight:700;">● ACTIVE</span>
+      {% elif c.is_active %}
+        <span style="color:var(--accent);">Scheduled</span>
+      {% else %}
+        <span style="color:var(--muted);">Inactive</span>
+      {% endif %}
+    </td>
+    <td style="font-size:.82rem;">{{ c.start_date.strftime('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;">{{ c.end_date.strftime('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;">
+      {{ "{:,}".format(c.prize_top1) }} / {{ "{:,}".format(c.prize_top2) }} / {{ "{:,}".format(c.prize_top3) }}
+    </td>
+    <td style="font-size:.82rem;">
+      {% if c.prize_per_invite or c.prize_per_invite_gems %}
+        {% if c.prize_per_invite %}{{ "{:,}".format(c.prize_per_invite) }}🪙{% endif %}
+        {% if c.prize_per_invite_gems %} {{ c.prize_per_invite_gems }}💎{% endif %}
+      {% else %}—{% endif %}
+    </td>
+    <td style="font-size:.82rem;color:var(--muted);">
+      {{ '✅ Declared' if c.winners_announced_at else 'Pending' }}
+    </td>
+    <td>
+      <a href="{{ url_for('admin_competition_detail', comp_id=c.id) }}" class="btn btn-ghost btn-sm">View</a>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No competitions yet. Create one above.
+</p>
+{% endif %}
+
+<script>
+function applyTemplate() {
+  const picker = document.getElementById('template-picker');
+  if (!picker) return;
+  const opt = picker.options[picker.selectedIndex];
+  if (!opt || !opt.value) {
+    alert('Select a template first.');
+    return;
+  }
+  // Pull data attributes
+  const top1 = opt.dataset.top1 || '0';
+  const top2 = opt.dataset.top2 || '0';
+  const top3 = opt.dataset.top3 || '0';
+  const perInvite = opt.dataset.perInvite || '0';
+  const perInviteGems = opt.dataset.perInviteGems || '0';
+  const duration = opt.dataset.duration;  // may be '' or a number string
+
+  // Fill prizes
+  document.getElementById('f-top1').value = top1;
+  document.getElementById('f-top2').value = top2;
+  document.getElementById('f-top3').value = top3;
+  document.getElementById('f-per-invite').value = perInvite;
+  document.getElementById('f-per-invite-gems').value = perInviteGems;
+
+  // If start_date is set AND template has duration, auto-compute end_date
+  const startInput = document.getElementById('f-start');
+  const endInput = document.getElementById('f-end');
+  if (duration && startInput.value) {
+    try {
+      const start = new Date(startInput.value);
+      if (!isNaN(start.getTime())) {
+        const end = new Date(start.getTime() + parseInt(duration, 10) * 86400000);
+        // Format as yyyy-MM-ddTHH:mm (no seconds, no TZ)
+        endInput.value = end.toISOString().slice(0, 16);
+      }
+    } catch (e) {}
+  } else if (duration && !startInput.value) {
+    // Suggest using "now" as start
+    const now = new Date();
+    startInput.value = now.toISOString().slice(0, 16);
+    const end = new Date(now.getTime() + parseInt(duration, 10) * 86400000);
+    endInput.value = end.toISOString().slice(0, 16);
+  }
+
+  // Suggest a name if empty (template name + month/year)
+  const nameInput = document.getElementById('f-name');
+  if (!nameInput.value) {
+    // Strip emoji prefix from template name for cleaner suggestion
+    let tname = opt.text.split(' · ')[0].trim();
+    // Remove leading emoji + space
+    tname = tname.replace(/^[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+\s*/u, '');
+    const now = new Date();
+    const m = now.toLocaleString('en-US', { month: 'long' });
+    const y = now.getFullYear();
+    nameInput.value = `${tname} — ${m} ${y}`;
+  }
+
+  // Show preview
+  const preview = document.getElementById('template-preview');
+  if (preview) {
+    const desc = opt.dataset.desc || '';
+    preview.style.display = 'block';
+    preview.innerHTML = `<strong>Applied:</strong> ${opt.text}` +
+      (desc ? ` — <em>${desc}</em>` : '') +
+      ` <span style="color:var(--green);">✓ form filled</span>`;
+  }
+}
+
+// If start_date changes after applying a template, recompute end_date
+document.addEventListener('DOMContentLoaded', function() {
+  const startInput = document.getElementById('f-start');
+  const endInput = document.getElementById('f-end');
+  if (startInput) {
+    startInput.addEventListener('change', function() {
+      const picker = document.getElementById('template-picker');
+      if (!picker) return;
+      const opt = picker.options[picker.selectedIndex];
+      const duration = opt && opt.dataset && opt.dataset.duration;
+      if (duration && startInput.value) {
+        try {
+          const start = new Date(startInput.value);
+          const end = new Date(start.getTime() + parseInt(duration, 10) * 86400000);
+          endInput.value = end.toISOString().slice(0, 16);
+        } catch (e) {}
+      }
+    });
+  }
+});
+</script>
+
+{% endblock %}

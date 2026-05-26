@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Competition Templates{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📋 Competition Templates</h2>
+  <a href="{{ url_for('admin_competitions') }}" class="btn btn-ghost btn-sm">← Competitions</a>
+</div>
+
+<p style="color:var(--muted);font-size:.88rem;margin-bottom:1.5rem;">
+  Reusable prize-structure presets. Apply them on the "Create competition" page to skip filling all 5 prize fields.
+  Editing a template does <strong>not</strong> change competitions that were already created from it.
+</p>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;" {% if not templates %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:700;">➕ Create new template</summary>
+  <form method="POST" action="{{ url_for('admin_competition_template_create') }}" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:.7rem;">
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Template name <span style="color:var(--red);">*</span></label>
+        <input type="text" name="name" required placeholder="e.g. 🏆 Monthly Standard"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Duration (days)</label>
+        <input type="number" name="duration_days" min="1" placeholder="optional"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <div style="margin-top:.7rem;">
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Description (optional)</label>
+      <input type="text" name="description" maxlength="300" placeholder="What this template is for"
+             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+
+    <h3 style="margin:1.2rem 0 .5rem;font-size:.95rem;">🥇 Top prizes (coins) <span style="color:var(--muted);font-weight:400;font-size:.8rem;">— 0 = disabled</span></h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.7rem;">
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥇 1st</label>
+        <input type="number" name="prize_top1" min="0" value="0" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥈 2nd</label>
+        <input type="number" name="prize_top2" min="0" value="0" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥉 3rd</label>
+        <input type="number" name="prize_top3" min="0" value="0" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+    </div>
+
+    <h3 style="margin:1.2rem 0 .5rem;font-size:.95rem;">🎁 Per-invite reward</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.7rem;">
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">Coins per invite</label>
+        <input type="number" name="prize_per_invite" min="0" value="0" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">Gems per invite</label>
+        <input type="number" name="prize_per_invite_gems" min="0" value="0" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+      <div><label style="display:block;font-size:.75rem;color:var(--muted);">Sort order</label>
+        <input type="number" name="sort_order" value="100" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+    </div>
+
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Save template</button>
+  </form>
+</details>
+
+<h3>All templates</h3>
+{% if templates %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Name</th>
+    <th>Duration</th>
+    <th>🥇</th>
+    <th>🥈</th>
+    <th>🥉</th>
+    <th>Per invite</th>
+    <th>Order</th>
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for t in templates %}
+  <tr>
+    <td>
+      <strong>{{ t.name }}</strong>
+      {% if t.description %}<div style="font-size:.75rem;color:var(--muted);margin-top:.15rem;">{{ t.description }}</div>{% endif %}
+    </td>
+    <td style="font-size:.85rem;color:var(--muted);">{{ (t.duration_days|string + 'd') if t.duration_days else '—' }}</td>
+    <td>{{ "{:,}".format(t.prize_top1) if t.prize_top1 else '—' }}</td>
+    <td>{{ "{:,}".format(t.prize_top2) if t.prize_top2 else '—' }}</td>
+    <td>{{ "{:,}".format(t.prize_top3) if t.prize_top3 else '—' }}</td>
+    <td style="font-size:.85rem;">
+      {% if t.prize_per_invite or t.prize_per_invite_gems %}
+        {% if t.prize_per_invite %}{{ "{:,}".format(t.prize_per_invite) }}🪙{% endif %}
+        {% if t.prize_per_invite_gems %} {{ t.prize_per_invite_gems }}💎{% endif %}
+      {% else %}—{% endif %}
+    </td>
+    <td style="color:var(--muted);font-size:.85rem;">{{ t.sort_order }}</td>
+    <td style="white-space:nowrap;">
+      <button type="button" onclick="toggleEdit({{ t.id }})" class="btn btn-ghost btn-sm">Edit</button>
+      <form method="POST" action="{{ url_for('admin_competition_template_delete', tpl_id=t.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost btn-sm"
+                onclick="return confirm('Delete template &quot;{{ t.name|e }}&quot;?');"
+                style="color:var(--red);">Delete</button>
+      </form>
+    </td>
+  </tr>
+  <tr id="edit-{{ t.id }}" style="display:none;background:rgba(212,168,42,.03);">
+    <td colspan="8" style="padding:1rem;">
+      <form method="POST" action="{{ url_for('admin_competition_template_update', tpl_id=t.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:.6rem;margin-bottom:.6rem;">
+          <input type="text" name="name" value="{{ t.name }}" required placeholder="Name"
+                 style="padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <input type="number" name="duration_days" value="{{ t.duration_days or '' }}" placeholder="Duration days"
+                 style="padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <input type="number" name="sort_order" value="{{ t.sort_order }}" placeholder="Sort order"
+                 style="padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        </div>
+        <input type="text" name="description" value="{{ t.description or '' }}" placeholder="Description"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:.6rem;">
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:.5rem;margin-bottom:.7rem;">
+          <div><label style="display:block;font-size:.7rem;color:var(--muted);">🥇 1st</label>
+            <input type="number" name="prize_top1" value="{{ t.prize_top1 }}" min="0" style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+          <div><label style="display:block;font-size:.7rem;color:var(--muted);">🥈 2nd</label>
+            <input type="number" name="prize_top2" value="{{ t.prize_top2 }}" min="0" style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+          <div><label style="display:block;font-size:.7rem;color:var(--muted);">🥉 3rd</label>
+            <input type="number" name="prize_top3" value="{{ t.prize_top3 }}" min="0" style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+          <div><label style="display:block;font-size:.7rem;color:var(--muted);">/invite 🪙</label>
+            <input type="number" name="prize_per_invite" value="{{ t.prize_per_invite }}" min="0" style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+          <div><label style="display:block;font-size:.7rem;color:var(--muted);">/invite 💎</label>
+            <input type="number" name="prize_per_invite_gems" value="{{ t.prize_per_invite_gems }}" min="0" style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Save changes</button>
+        <button type="button" onclick="toggleEdit({{ t.id }})" class="btn btn-ghost btn-sm">Cancel</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No templates yet. Create one above. (Default templates seed automatically on first server start.)
+</p>
+{% endif %}
+
+<script>
+function toggleEdit(id) {
+  const row = document.getElementById('edit-' + id);
+  if (!row) return;
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+</script>
+
+{% endblock %}
