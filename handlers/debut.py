@@ -73,6 +73,33 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user.roster_count = len(players)
         log_activity(session, user.id, 'debut', f'Debut: {len(players)} players, {debut_coins} coins, {debut_gems} gems', coins_change=debut_coins, gems_change=debut_gems)
+
+        # ── Referral completion ──
+        # Record any pending referral (stashed from /start ref<id>) and
+        # complete it now that the user has a real account.
+        referral_reward_text = ""
+        try:
+            from services.referral_service import record_referral, complete_referral
+            from models import User as _U
+            pending_inviter_tg = context.user_data.get("pending_inviter_tg_id") if hasattr(context, 'user_data') else None
+            if pending_inviter_tg:
+                inviter = session.query(_U).filter(_U.telegram_id == pending_inviter_tg).first()
+                if inviter:
+                    record_referral(session, inviter.id, user.id)
+                context.user_data.pop("pending_inviter_tg_id", None)
+            # Complete any referral pointing at this invitee (whether just
+            # created or pre-existing from the start handler)
+            cr = complete_referral(session, user.id)
+            if cr and (cr["paid_coins"] > 0 or cr["paid_gems"] > 0):
+                parts = []
+                if cr["paid_coins"]: parts.append(f"+{cr['paid_coins']:,} 🪙")
+                if cr["paid_gems"]: parts.append(f"+{cr['paid_gems']} 💎")
+                referral_reward_text = (
+                    "\n\n🎁 Your inviter received " + " ".join(parts) + " for inviting you!"
+                )
+        except Exception:
+            logger.exception("Referral completion failed (non-fatal)")
+
         session.commit()
 
         lines = []
@@ -93,6 +120,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/playerinfo [name] - Player details\n"
             "/daily - Daily reward (24h cooldown)\n"
             "/gspin - Spin wheel (8h cooldown)"
+            + referral_reward_text
         )
         await update.message.reply_text(text, parse_mode="HTML")
         logger.info(f"Debut complete for user {tg_user.id}, {len(players)} players assigned")

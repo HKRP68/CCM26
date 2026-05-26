@@ -54,6 +54,48 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        # Redirect to Mini App market when configured. Chat-type aware to
+        # avoid the WebApp-in-group bug.
+        import os as _os
+        webapp_url = _os.getenv("WEBAPP_URL", "").strip()
+        chat_type = (update.effective_chat.type
+                     if update.effective_chat else "private")
+        is_private = (chat_type == "private")
+
+        if webapp_url and webapp_url.startswith("https://"):
+            from telegram import WebAppInfo
+            text = (
+                "🌟 <b>Player Market</b>\n\n"
+                "Browse today's market and buy in the Mini App for the full "
+                "card view, full filters, and a faster experience.\n\n"
+                "<i>Tap below to open the market.</i>"
+            )
+            if is_private:
+                btn = InlineKeyboardButton(
+                    "🌟 Open Market in Mini App",
+                    web_app=WebAppInfo(url=webapp_url + "#market"),
+                )
+            else:
+                bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+                miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
+                if bot_username and miniapp_name:
+                    deep = f"https://t.me/{bot_username}/{miniapp_name}?startapp=market"
+                elif bot_username:
+                    deep = f"https://t.me/{bot_username}?start=market"
+                else:
+                    deep = None
+                if deep:
+                    btn = InlineKeyboardButton("🌟 Open Market in Mini App", url=deep)
+                    text += "\n\n<i>Group chat detected — tap will open in a DM with the bot.</i>"
+                else:
+                    btn = None
+
+            if btn is not None:
+                kb = InlineKeyboardMarkup([[btn]])
+                await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+                return
+
+        # Legacy fallback when Mini App isn't configured
         # Auto-refresh if 24h have passed (or first run)
         ensure_player_market_fresh(session)
 
