@@ -179,15 +179,53 @@ logger = logging.getLogger(__name__)
 
 async def start_handler(update, context):
     # Handle deep-link payloads from group redirects: /start spin or /start daily
-    # When a user taps the "Open Mini App" button from a group chat, they're
-    # bounced into a DM with this command. We immediately offer the right tab.
+    # Also handle referral: /start ref<inviter_telegram_id>
     args = (context.args or []) if hasattr(context, 'args') else []
     payload = (args[0].lower() if args else "")
-    if payload in ("spin", "daily"):
+
+    # ── Referral payload ──
+    if payload.startswith("ref"):
+        try:
+            inviter_tg_id = int(payload[3:])
+        except (ValueError, TypeError):
+            inviter_tg_id = None
+
+        invitee_tg_user = update.effective_user
+        if inviter_tg_id and invitee_tg_user and inviter_tg_id != invitee_tg_user.id:
+            # Try to create or find a User row for the invitee + record referral.
+            # We don't auto-create the invitee here — we want a Real User row
+            # from /debut. So if invitee has no User yet, we stash the inviter
+            # in user_data and the /debut handler will record on completion.
+            try:
+                session = get_session()
+                try:
+                    from models import User
+                    from services.referral_service import record_referral
+                    inviter = session.query(User).filter(
+                        User.telegram_id == inviter_tg_id).first()
+                    invitee = session.query(User).filter(
+                        User.telegram_id == invitee_tg_user.id).first()
+                    if inviter and invitee:
+                        # Both exist → record now
+                        record_referral(session, inviter.id, invitee.id)
+                        session.commit()
+                    elif inviter:
+                        # Invitee hasn't done /debut yet — stash inviter
+                        context.user_data["pending_inviter_tg_id"] = inviter_tg_id
+                finally:
+                    session.close()
+            except Exception:
+                import logging
+                logging.exception("referral start payload handling failed")
+            # Continue to show welcome — let them do /debut
+
+    if payload in ("spin", "daily", "market", "xi"):
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
         if webapp_url and webapp_url.startswith("https://"):
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-            label = "🎡 Open Spin" if payload == "spin" else "📅 Open Daily"
+            labels = {"spin": "🎡 Open Spin", "daily": "📅 Open Daily",
+                      "market": "🌟 Open Market", "xi": "👥 Open XI"}
+            label = labels.get(payload, "Open Mini App")
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     label,
@@ -552,6 +590,10 @@ def main():
         app.add_handler(CommandHandler(["howto", "help", "guide"], howto_handler))
         app.add_handler(CallbackQueryHandler(howto_tab_callback, pattern=r"^howto_tab_"))
         app.add_handler(CallbackQueryHandler(howto_close_callback, pattern=r"^howto_close_"))
+
+        # ── /invite Referral system ─────────────────────────────────
+        from handlers.invite import invite_handler
+        app.add_handler(CommandHandler(["invite", "ref", "refer", "share"], invite_handler))
 
         # ── Bot vs Bot spectator mode ─────────────────────────────────
         app.add_handler(CommandHandler(["botvsbot", "bvb"], botvsbot_handler))

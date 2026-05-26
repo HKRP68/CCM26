@@ -1287,3 +1287,96 @@ class ActivityLogArchive(Base):
     filename = Column(String(200), nullable=True)
     archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     archived_by = Column(String(100), nullable=True)
+
+
+# ── Referral / invite system ─────────────────────────────────────────
+
+class ReferralCompetition(Base):
+    """A time-bound invite contest. Admin creates these from /competitions.
+
+    Only one should be active at a time; the active one is the destination
+    for new referrals during its window. Past competitions stay in the DB
+    for leaderboard history.
+    """
+    __tablename__ = "referral_competitions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    start_date = Column(DateTime, nullable=False, index=True)
+    end_date = Column(DateTime, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    # Rewards (coins) — admin-tunable. 0 = disabled for that slot.
+    prize_top1 = Column(Integer, default=0, nullable=False)
+    prize_top2 = Column(Integer, default=0, nullable=False)
+    prize_top3 = Column(Integer, default=0, nullable=False)
+    # Per-invite reward (coins) given to inviter when invitee completes debut.
+    # 0 means no per-invite reward, only the top-N prizes at competition end.
+    prize_per_invite = Column(Integer, default=0, nullable=False)
+    # Per-invite GEM reward (alternative or additive to coins).
+    prize_per_invite_gems = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String(100), nullable=True)
+    # Set when admin clicks "Declare winners" — prevents double-paying.
+    winners_announced_at = Column(DateTime, nullable=True)
+    winner_top1_user_id = Column(Integer, nullable=True)
+    winner_top2_user_id = Column(Integer, nullable=True)
+    winner_top3_user_id = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
+
+
+class Referral(Base):
+    """A single invite event. Created when an invitee starts the bot via a
+    referral deep-link. `completed_at` is set when the invitee finishes
+    /debut — that's when the invite "counts" for the leaderboard and any
+    per-invite reward is paid out.
+    """
+    __tablename__ = "referrals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    inviter_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    invitee_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                             nullable=False, unique=True, index=True)
+    # Which competition the invite is attributed to (None if no active comp
+    # at the time of invite — still recorded for history).
+    competition_id = Column(Integer,
+                            ForeignKey("referral_competitions.id",
+                                       ondelete="SET NULL"),
+                            nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    # Set when invitee completes /debut
+    completed_at = Column(DateTime, nullable=True, index=True)
+    # Admin can mark as invalid (suspected abuse) — invalid rows don't count
+    # toward the leaderboard but stay for audit history.
+    is_valid = Column(Boolean, default=True, nullable=False)
+    # Set when per-invite reward was paid out (prevents double-pay)
+    reward_paid_at = Column(DateTime, nullable=True)
+
+
+class CompetitionTemplate(Base):
+    """Reusable prize-structure template for ReferralCompetition.
+
+    Admin saves a template once (e.g. "Monthly Standard") and applies it
+    to new competitions to skip filling all 5 prize fields. Values are
+    copied at apply-time — editing a template does NOT change competitions
+    that were created from it.
+
+    `duration_days` is optional: when set, applying the template can
+    auto-compute end_date from start_date. If None, admin sets end_date
+    manually.
+    """
+    __tablename__ = "competition_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False, unique=True)
+    description = Column(String(300), nullable=True)
+    duration_days = Column(Integer, nullable=True)
+    prize_top1 = Column(Integer, default=0, nullable=False)
+    prize_top2 = Column(Integer, default=0, nullable=False)
+    prize_top3 = Column(Integer, default=0, nullable=False)
+    prize_per_invite = Column(Integer, default=0, nullable=False)
+    prize_per_invite_gems = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String(100), nullable=True)
+    # Soft order in dropdowns
+    sort_order = Column(Integer, default=100, nullable=False)

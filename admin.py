@@ -2805,6 +2805,7 @@ def webapp_init():
         return {
             "ok": True,
             "user": {
+                "user_id": user.id,
                 "telegram_id": user.telegram_id,
                 "first_name": user.first_name or "",
                 "username": user.username or "",
@@ -3013,6 +3014,173 @@ def webapp_buy(player_id):
         db.close()
 
 
+@app.route("/api/webapp/release/<int:roster_id>", methods=["POST"])
+@csrf_exempt
+def webapp_release(roster_id):
+    """Release a single player from the user's roster.
+
+    Returns coins received from sell value.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserRoster
+        from config import get_sell_value
+
+        row = (db.query(UserRoster)
+               .filter(UserRoster.id == roster_id,
+                       UserRoster.user_id == user.id).first())
+        if not row:
+            return {"ok": False, "error": "not_found",
+                    "message": "That player isn't in your roster."}, 404
+
+        player = db.query(Player).get(row.player_id)
+        if not player:
+            return {"ok": False, "error": "player_missing"}, 404
+
+        # Prevent releasing the captain
+        if user.captain_roster_id == row.id:
+            return {"ok": False, "error": "is_captain",
+                    "message": "Can't release captain. Set a new captain first."}, 400
+
+        sell_value = get_sell_value(player.rating)
+        player_name = player.name
+        player_rating = player.rating
+
+        # Remove from roster
+        db.delete(row)
+        user.total_coins = (user.total_coins or 0) + sell_value
+        user.roster_count = max(0, (user.roster_count or 0) - 1)
+
+        # Activity log + undo
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "release",
+                         f"[MiniApp] Released {player_name} ({player_rating})",
+                         coins_change=sell_value,
+                         player_name=player_name, player_rating=player_rating)
+        except Exception:
+            pass
+        try:
+            from services.undo_service import record_release
+            record_release(db, user.id, player.id, sell_value)
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "ok": True,
+            "sell_value": sell_value,
+            "player_name": player_name,
+            "player_rating": player_rating,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "roster_count": user.roster_count or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_release failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/release_multi", methods=["POST"])
+@csrf_exempt
+def webapp_release_multi():
+    """Release multiple players at once. Returns total coins gained.
+
+    Request body: {roster_ids: [123, 456, ...]}
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserRoster
+        from config import get_sell_value
+
+        data = request.get_json(silent=True) or {}
+        ids = data.get("roster_ids") or []
+        if not isinstance(ids, list) or not ids:
+            return {"ok": False, "error": "no_ids",
+                    "message": "No players selected."}, 400
+        # Sanitize
+        try:
+            ids = [int(x) for x in ids][:25]  # cap at 25 to prevent abuse
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_ids"}, 400
+
+        rows = (db.query(UserRoster)
+                .filter(UserRoster.user_id == user.id,
+                        UserRoster.id.in_(ids)).all())
+        if not rows:
+            return {"ok": False, "error": "not_found",
+                    "message": "None of those players are in your roster."}, 404
+
+        # Bail if captain is in the selection
+        if user.captain_roster_id and any(r.id == user.captain_roster_id for r in rows):
+            return {"ok": False, "error": "captain_selected",
+                    "message": "Captain is in selection. Set a new captain first."}, 400
+
+        # Look up players for sell values
+        player_ids = [r.player_id for r in rows]
+        players = {p.id: p for p in
+                   db.query(Player).filter(Player.id.in_(player_ids)).all()}
+
+        total_coins = 0
+        released = []
+        for r in rows:
+            p = players.get(r.player_id)
+            if not p: continue
+            sv = get_sell_value(p.rating)
+            total_coins += sv
+            released.append({
+                "roster_id": r.id,
+                "name": p.name,
+                "rating": p.rating,
+                "sell_value": sv,
+            })
+            db.delete(r)
+            try:
+                from services.undo_service import record_release
+                record_release(db, user.id, p.id, sv)
+            except Exception:
+                pass
+
+        user.total_coins = (user.total_coins or 0) + total_coins
+        user.roster_count = max(0, (user.roster_count or 0) - len(released))
+
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "release_multi",
+                         f"[MiniApp] Released {len(released)} players",
+                         coins_change=total_coins)
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "ok": True,
+            "released_count": len(released),
+            "total_coins": total_coins,
+            "released": released,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "roster_count": user.roster_count or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_release_multi failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/roster", methods=["POST"])
 @csrf_exempt
 def webapp_roster():
@@ -3022,6 +3190,7 @@ def webapp_roster():
     db, user, tg_id = auth
     try:
         from models import UserRoster
+        from config import get_sell_value
         rows = (db.query(UserRoster, Player)
                 .join(Player, UserRoster.player_id == Player.id)
                 .filter(UserRoster.user_id == user.id)
@@ -3038,6 +3207,7 @@ def webapp_roster():
                 "country": p.country,
                 "version": p.version or "Base",
                 "is_captain": bool(user.captain_roster_id == r.id),
+                "sell_value": get_sell_value(p.rating),
             } for r, p in rows],
             "captain_roster_id": user.captain_roster_id,
             "count": len(rows),
@@ -3305,10 +3475,31 @@ def webapp_players():
         return err
     db, user, tg_id = auth
     try:
+        from config import get_buy_value
         data = request.get_json(silent=True) or {}
         q = (data.get("q") or "").strip()
         min_r = int(data.get("min_rating") or 0)
         max_r = int(data.get("max_rating") or 100)
+        # Exact rating filter: if set, overrides min/max
+        exact_r = data.get("exact_rating")
+        if exact_r not in (None, "", 0, "0"):
+            try:
+                er = int(exact_r)
+                min_r = er
+                max_r = er
+            except (ValueError, TypeError):
+                pass
+        # Price filters
+        min_price = data.get("min_price")
+        max_price = data.get("max_price")
+        try:
+            min_price = int(min_price) if min_price not in (None, "", 0, "0") else 0
+        except (ValueError, TypeError):
+            min_price = 0
+        try:
+            max_price = int(max_price) if max_price not in (None, "") else 0
+        except (ValueError, TypeError):
+            max_price = 0
         category = (data.get("category") or "").strip()
         country = (data.get("country") or "").strip()
         page = max(1, int(data.get("page") or 1))
@@ -3329,6 +3520,21 @@ def webapp_players():
             query = query.filter(Player.rating >= min_r)
         if max_r < 100:
             query = query.filter(Player.rating <= max_r)
+
+        # Price range filter: BUY_SELL is monotonic in rating, so convert
+        # price thresholds to allowed rating list.
+        if min_price > 0 or max_price > 0:
+            from config import BUY_SELL
+            allowed_ratings = []
+            for r_v, (buy_p, _) in BUY_SELL.items():
+                if min_price > 0 and buy_p < min_price: continue
+                if max_price > 0 and buy_p > max_price: continue
+                allowed_ratings.append(r_v)
+            if allowed_ratings:
+                query = query.filter(Player.rating.in_(allowed_ratings))
+            else:
+                query = query.filter(Player.rating < 0)  # empty result
+
         if category:
             query = query.filter(Player.category == category)
         if country:
@@ -3615,6 +3821,362 @@ def webapp_quickmatch():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_quickmatch failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/market", methods=["POST"])
+@csrf_exempt
+def webapp_market():
+    """Return active market slots (player market only)."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import GlobalPlayerMarket, UserRoster
+        from services.global_market import ensure_player_market_fresh
+        try:
+            ensure_player_market_fresh(db)
+        except Exception:
+            logger.exception("ensure_player_market_fresh failed (continuing)")
+
+        slots = (db.query(GlobalPlayerMarket)
+                 .filter(GlobalPlayerMarket.is_active == True)
+                 .order_by(GlobalPlayerMarket.slot_index.asc()).all())
+        # Pull all players in one query
+        pids = [s.player_id for s in slots]
+        players = {p.id: p for p in
+                   db.query(Player).filter(Player.id.in_(pids)).all()} if pids else {}
+
+        # Pull owned player ids
+        owned = {pid for (pid,) in
+                 db.query(UserRoster.player_id)
+                   .filter(UserRoster.user_id == user.id).all()}
+
+        results = []
+        for s in slots:
+            p = players.get(s.player_id)
+            if not p: continue
+            results.append({
+                "slot_id": s.id,
+                "slot_index": s.slot_index,
+                "player_id": p.id,
+                "name": p.name,
+                "rating": p.rating,
+                "category": p.category,
+                "country": p.country,
+                "version": p.version or "Base",
+                "base_price": s.base_price,
+                "final_price": s.final_price,
+                "discount_pct": (int((1 - s.final_price / s.base_price) * 100)
+                                 if s.base_price > 0 and s.final_price < s.base_price else 0),
+                "quantity": s.quantity,
+                "purchased_count": s.purchased_count,
+                "sold_out": s.purchased_count >= s.quantity,
+                "is_owned": p.id in owned,
+            })
+        return {"ok": True, "slots": results, "total": len(results),
+                "balance": {"coins": user.total_coins or 0,
+                            "roster_count": user.roster_count or 0,
+                            "roster_max": 25}}
+    except Exception as e:
+        logger.exception("webapp_market failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/market/buy/<int:slot_id>", methods=["POST"])
+@csrf_exempt
+def webapp_market_buy(slot_id):
+    """Buy from a market slot."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import GlobalPlayerMarket, UserRoster
+
+        slot = db.query(GlobalPlayerMarket).filter(
+            GlobalPlayerMarket.id == slot_id,
+            GlobalPlayerMarket.is_active == True).first()
+        if not slot:
+            return {"ok": False, "error": "not_found",
+                    "message": "Market slot not found."}, 404
+        if slot.purchased_count >= slot.quantity:
+            return {"ok": False, "error": "sold_out",
+                    "message": "This item is sold out."}, 400
+
+        player = db.query(Player).get(slot.player_id)
+        if not player:
+            return {"ok": False, "error": "player_missing"}, 404
+
+        # Restrictions
+        if getattr(player, "restricted_from_buypl", False):
+            return {"ok": False, "error": "restricted",
+                    "message": "This player isn't available for purchase."}, 400
+
+        # Ownership: prevent double-owning the same version
+        owned = (db.query(UserRoster)
+                 .filter(UserRoster.user_id == user.id,
+                         UserRoster.player_id == player.id).first())
+        if owned:
+            return {"ok": False, "error": "already_owned",
+                    "message": "You already own this version."}, 400
+
+        # Roster cap
+        if (user.roster_count or 0) >= 25:
+            return {"ok": False, "error": "roster_full",
+                    "message": "Your roster is full (25/25)."}, 400
+
+        # Balance
+        if (user.total_coins or 0) < slot.final_price:
+            return {"ok": False, "error": "insufficient_coins",
+                    "message": f"Need {slot.final_price:,} 🪙 — you have {user.total_coins:,}."}, 400
+
+        # Apply
+        user.total_coins -= slot.final_price
+        # Append at next free position (use roster_count+1 for predictability)
+        max_pos = (db.query(UserRoster.order_position)
+                   .filter(UserRoster.user_id == user.id)
+                   .order_by(UserRoster.order_position.desc()).first())
+        # If max position < 25, use max+1. Otherwise default to 99.
+        if max_pos and max_pos[0] is not None and max_pos[0] < 25:
+            next_pos = max_pos[0] + 1
+        elif not max_pos:
+            next_pos = 1
+        else:
+            next_pos = 99
+        new_row = UserRoster(user_id=user.id, player_id=player.id,
+                             order_position=next_pos,
+                             acquired_date=datetime.utcnow())
+        db.add(new_row)
+        user.roster_count = (user.roster_count or 0) + 1
+        slot.purchased_count += 1
+
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "market_buy",
+                         f"[MiniApp] Market: {player.name} ({player.rating})",
+                         coins_change=-slot.final_price,
+                         player_name=player.name, player_rating=player.rating)
+        except Exception:
+            pass
+        try:
+            from services.undo_service import record_buy
+            record_buy(db, user.id, player.id, slot.final_price)
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "ok": True,
+            "player_name": player.name,
+            "rating": player.rating,
+            "spent": slot.final_price,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "roster_count": user.roster_count or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_market_buy failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/xi", methods=["POST"])
+@csrf_exempt
+def webapp_xi():
+    """Return the playing XI (positions 1-11) and bench (positions 12-25)."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserRoster
+        rows = (db.query(UserRoster, Player)
+                .join(Player, UserRoster.player_id == Player.id)
+                .filter(UserRoster.user_id == user.id)
+                .order_by(UserRoster.order_position.asc()).all())
+        xi = []
+        bench = []
+        for r, p in rows:
+            entry = {
+                "roster_id": r.id,
+                "position": r.order_position,
+                "player_id": p.id,
+                "name": p.name,
+                "rating": p.rating,
+                "category": p.category,
+                "country": p.country,
+                "version": p.version or "Base",
+                "is_captain": bool(user.captain_roster_id == r.id),
+            }
+            if r.order_position <= 11:
+                xi.append(entry)
+            else:
+                bench.append(entry)
+        return {"ok": True, "xi": xi, "bench": bench,
+                "captain_roster_id": user.captain_roster_id,
+                "roster_count": len(rows)}
+    except Exception as e:
+        logger.exception("webapp_xi failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/xi/reorder", methods=["POST"])
+@csrf_exempt
+def webapp_xi_reorder():
+    """Reorder the playing XI based on a new ordered list of roster_ids.
+
+    Request body: {ordered_roster_ids: [r1, r2, ..., r11]}
+    Updates order_position 1..N for each. Bench positions are preserved.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserRoster
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ordered_roster_ids") or []
+        if not isinstance(ids, list) or not ids:
+            return {"ok": False, "error": "no_ids"}, 400
+        try:
+            ids = [int(x) for x in ids][:11]
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_ids"}, 400
+
+        # Verify all belong to this user
+        rows = (db.query(UserRoster)
+                .filter(UserRoster.user_id == user.id,
+                        UserRoster.id.in_(ids)).all())
+        if len(rows) != len(ids):
+            return {"ok": False, "error": "mismatch",
+                    "message": "Some roster_ids not in your roster."}, 400
+
+        by_id = {r.id: r for r in rows}
+        for new_pos, rid in enumerate(ids, start=1):
+            by_id[rid].order_position = new_pos
+
+        db.commit()
+        return {"ok": True, "reordered": len(ids)}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_xi_reorder failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/xi/swap_bench", methods=["POST"])
+@csrf_exempt
+def webapp_xi_swap_bench():
+    """Swap a bench player into the XI.
+
+    Request body: {bench_roster_id, xi_roster_id}
+    The bench player takes the XI player's position; XI player goes to bench.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserRoster
+        data = request.get_json(silent=True) or {}
+        bench_id = int(data.get("bench_roster_id") or 0)
+        xi_id = int(data.get("xi_roster_id") or 0)
+        if not bench_id or not xi_id:
+            return {"ok": False, "error": "missing_ids"}, 400
+
+        bench_row = (db.query(UserRoster)
+                     .filter(UserRoster.id == bench_id,
+                             UserRoster.user_id == user.id).first())
+        xi_row = (db.query(UserRoster)
+                  .filter(UserRoster.id == xi_id,
+                          UserRoster.user_id == user.id).first())
+        if not bench_row or not xi_row:
+            return {"ok": False, "error": "not_found"}, 404
+        if bench_row.order_position <= 11:
+            return {"ok": False, "error": "not_bench"}, 400
+        if xi_row.order_position > 11:
+            return {"ok": False, "error": "not_xi"}, 400
+
+        # Swap their positions
+        bench_pos = bench_row.order_position
+        xi_pos = xi_row.order_position
+        bench_row.order_position = xi_pos
+        xi_row.order_position = bench_pos
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_xi_swap_bench failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/invite", methods=["POST"])
+@csrf_exempt
+def webapp_invite():
+    """Return the user's invite link, active competition info, and stats."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.referral_service import (
+            get_active_competition, get_user_stats, get_invite_link,
+            get_leaderboard, get_user_invitee_list,
+        )
+
+        bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+        link = get_invite_link(bot_username, tg_id) if bot_username else None
+        comp = get_active_competition(db)
+        stats = get_user_stats(db, user.id, comp.id if comp else None)
+
+        result = {
+            "ok": True,
+            "bot_configured": bool(bot_username),
+            "invite_link": link,
+            "stats": stats,
+            "active_competition": None,
+            "leaderboard": [],
+            "my_invitees": [],
+        }
+        if comp:
+            result["active_competition"] = {
+                "id": comp.id,
+                "name": comp.name,
+                "start_date": comp.start_date.isoformat() if comp.start_date else None,
+                "end_date": comp.end_date.isoformat() if comp.end_date else None,
+                "prize_top1": comp.prize_top1,
+                "prize_top2": comp.prize_top2,
+                "prize_top3": comp.prize_top3,
+                "prize_per_invite": comp.prize_per_invite,
+                "prize_per_invite_gems": comp.prize_per_invite_gems,
+                "winners_announced": comp.winners_announced_at is not None,
+            }
+            result["leaderboard"] = get_leaderboard(db, comp.id, limit=10)
+            result["my_invitees"] = [
+                {**iv,
+                 "created_at": iv["created_at"].isoformat() if iv["created_at"] else None,
+                 "completed_at": iv["completed_at"].isoformat() if iv["completed_at"] else None,
+                 "reward_paid_at": iv["reward_paid_at"].isoformat() if iv["reward_paid_at"] else None}
+                for iv in get_user_invitee_list(db, user.id, comp.id, limit=50)
+            ]
+
+        return result
+    except Exception as e:
+        logger.exception("webapp_invite failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -6984,6 +7546,376 @@ def admin_storage_archive():
         else:
             flash(f"❌ {result['message']}", "error")
         return redirect(url_for("admin_storage"))
+    finally:
+        db.close()
+
+
+# ─── Referral competitions ─────────────────────────────────────────────
+
+@app.route("/competitions")
+@login_required
+def admin_competitions():
+    """List all referral competitions + create form."""
+    db = get_session()
+    try:
+        from models import ReferralCompetition, CompetitionTemplate
+        comps = (db.query(ReferralCompetition)
+                 .order_by(ReferralCompetition.start_date.desc()).all())
+        templates = (db.query(CompetitionTemplate)
+                     .order_by(CompetitionTemplate.sort_order.asc(),
+                               CompetitionTemplate.name.asc()).all())
+        from services.referral_service import get_active_competition
+        active = get_active_competition(db)
+        return render_template("admin_competitions.html",
+                               competitions=comps,
+                               templates=templates,
+                               active_competition_id=active.id if active else None)
+    finally:
+        db.close()
+
+
+@app.route("/competitions/create", methods=["POST"])
+@login_required
+def admin_competition_create():
+    db = get_session()
+    try:
+        from models import ReferralCompetition
+        from datetime import datetime as _dt
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("Name is required.", "error")
+            return redirect(url_for("admin_competitions"))
+        try:
+            start = _dt.fromisoformat(request.form.get("start_date") or "")
+            end = _dt.fromisoformat(request.form.get("end_date") or "")
+        except ValueError:
+            flash("Invalid date format. Use YYYY-MM-DDTHH:MM.", "error")
+            return redirect(url_for("admin_competitions"))
+        if end <= start:
+            flash("End date must be after start date.", "error")
+            return redirect(url_for("admin_competitions"))
+
+        comp = ReferralCompetition(
+            name=name[:120],
+            start_date=start, end_date=end,
+            is_active=True,
+            prize_top1=int(request.form.get("prize_top1") or 0),
+            prize_top2=int(request.form.get("prize_top2") or 0),
+            prize_top3=int(request.form.get("prize_top3") or 0),
+            prize_per_invite=int(request.form.get("prize_per_invite") or 0),
+            prize_per_invite_gems=int(request.form.get("prize_per_invite_gems") or 0),
+            notes=(request.form.get("notes") or "").strip()[:500] or None,
+            created_by=session.get("admin_user", "admin"),
+        )
+        db.add(comp); db.commit()
+        flash(f"✅ Created competition '{name}'", "info")
+        try:
+            log_admin(db, "create_competition", "referral_competition",
+                      comp.id, "system", f"name={name}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_competition_detail", comp_id=comp.id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_competitions"))
+    finally:
+        db.close()
+
+
+@app.route("/competitions/<int:comp_id>")
+@login_required
+def admin_competition_detail(comp_id):
+    """Per-competition leaderboard + edit form."""
+    db = get_session()
+    try:
+        from models import ReferralCompetition, Referral
+        from services.referral_service import get_leaderboard
+        comp = db.query(ReferralCompetition).get(comp_id)
+        if not comp:
+            flash("Competition not found.", "error")
+            return redirect(url_for("admin_competitions"))
+        lb = get_leaderboard(db, comp_id, limit=100)
+        total_invites = (db.query(Referral)
+                         .filter(Referral.competition_id == comp_id).count())
+        completed_invites = (db.query(Referral)
+                             .filter(Referral.competition_id == comp_id,
+                                     Referral.completed_at.isnot(None),
+                                     Referral.is_valid == True).count())
+        return render_template("admin_competition_detail.html",
+                               comp=comp,
+                               leaderboard=lb,
+                               total_invites=total_invites,
+                               completed_invites=completed_invites)
+    finally:
+        db.close()
+
+
+@app.route("/competitions/<int:comp_id>/update", methods=["POST"])
+@login_required
+def admin_competition_update(comp_id):
+    db = get_session()
+    try:
+        from models import ReferralCompetition
+        from datetime import datetime as _dt
+        comp = db.query(ReferralCompetition).get(comp_id)
+        if not comp:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_competitions"))
+        # Fields: name, start_date, end_date, prizes, notes, is_active
+        comp.name = (request.form.get("name") or comp.name).strip()[:120]
+        try:
+            sd = request.form.get("start_date")
+            ed = request.form.get("end_date")
+            if sd: comp.start_date = _dt.fromisoformat(sd)
+            if ed: comp.end_date = _dt.fromisoformat(ed)
+        except ValueError:
+            flash("Invalid date.", "error")
+            return redirect(url_for("admin_competition_detail", comp_id=comp_id))
+        comp.prize_top1 = int(request.form.get("prize_top1") or 0)
+        comp.prize_top2 = int(request.form.get("prize_top2") or 0)
+        comp.prize_top3 = int(request.form.get("prize_top3") or 0)
+        comp.prize_per_invite = int(request.form.get("prize_per_invite") or 0)
+        comp.prize_per_invite_gems = int(request.form.get("prize_per_invite_gems") or 0)
+        comp.is_active = bool(request.form.get("is_active"))
+        comp.notes = (request.form.get("notes") or "").strip()[:500] or None
+        db.commit()
+        flash("✅ Updated.", "info")
+        return redirect(url_for("admin_competition_detail", comp_id=comp_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_competition_detail", comp_id=comp_id))
+    finally:
+        db.close()
+
+
+@app.route("/competitions/<int:comp_id>/declare", methods=["POST"])
+@login_required
+def admin_competition_declare(comp_id):
+    """Declare winners and pay top-N prizes."""
+    db = get_session()
+    try:
+        from services.referral_service import declare_winners
+        result = declare_winners(db, comp_id,
+                                 declared_by=session.get("admin_user", "admin"))
+        if result["ok"]:
+            db.commit()
+            winners_str = ", ".join(
+                f"#{w['rank']} @{w['username'] or w['telegram_id']} ({w['prize_coins']:,}🪙)"
+                for w in result["winners"])
+            flash(f"✅ {result['message']} {winners_str}", "info")
+            try:
+                log_admin(db, "declare_winners", "referral_competition",
+                          comp_id, "system", winners_str)
+                db.commit()
+            except Exception:
+                pass
+        else:
+            flash(f"❌ {result['message']}", "error")
+        return redirect(url_for("admin_competition_detail", comp_id=comp_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_competition_detail", comp_id=comp_id))
+    finally:
+        db.close()
+
+
+@app.route("/competitions/<int:comp_id>/user/<int:user_id>")
+@login_required
+def admin_competition_user(comp_id, user_id):
+    """View a specific user's invite list for a competition."""
+    db = get_session()
+    try:
+        from models import ReferralCompetition
+        from services.referral_service import (
+            get_user_invitee_list, get_user_stats,
+        )
+        comp = db.query(ReferralCompetition).get(comp_id)
+        target_user = db.query(User).get(user_id)
+        if not comp or not target_user:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_competitions"))
+        invitees = get_user_invitee_list(db, user_id, comp_id, limit=200)
+        stats = get_user_stats(db, user_id, comp_id)
+        return render_template("admin_competition_user.html",
+                               comp=comp, target_user=target_user,
+                               invitees=invitees, stats=stats)
+    finally:
+        db.close()
+
+
+@app.route("/competitions/referral/<int:ref_id>/toggle_valid", methods=["POST"])
+@login_required
+def admin_referral_toggle(ref_id):
+    """Mark a referral as invalid (suspected abuse) or valid again."""
+    db = get_session()
+    try:
+        from models import Referral
+        ref = db.query(Referral).get(ref_id)
+        if not ref:
+            flash("Referral not found.", "error")
+            return redirect(request.referrer or url_for("admin_competitions"))
+        ref.is_valid = not ref.is_valid
+        db.commit()
+        flash(f"Referral marked {'valid' if ref.is_valid else 'INVALID'}.", "info")
+        try:
+            log_admin(db, "toggle_referral", "referral", ref_id, "system",
+                      f"is_valid={ref.is_valid}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(request.referrer or url_for("admin_competitions"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(request.referrer or url_for("admin_competitions"))
+    finally:
+        db.close()
+
+
+@app.route("/competitions/templates")
+@login_required
+def admin_competition_templates():
+    """Manage competition templates (preset prize structures)."""
+    db = get_session()
+    try:
+        from models import CompetitionTemplate
+        templates = (db.query(CompetitionTemplate)
+                     .order_by(CompetitionTemplate.sort_order.asc(),
+                               CompetitionTemplate.name.asc()).all())
+        return render_template("admin_competition_templates.html",
+                               templates=templates)
+    finally:
+        db.close()
+
+
+@app.route("/competitions/templates/create", methods=["POST"])
+@login_required
+def admin_competition_template_create():
+    db = get_session()
+    try:
+        from models import CompetitionTemplate
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("Name is required.", "error")
+            return redirect(url_for("admin_competition_templates"))
+        # Uniqueness check
+        existing = (db.query(CompetitionTemplate)
+                    .filter(CompetitionTemplate.name == name).first())
+        if existing:
+            flash(f"Template '{name}' already exists.", "error")
+            return redirect(url_for("admin_competition_templates"))
+
+        # Optional duration
+        duration_raw = (request.form.get("duration_days") or "").strip()
+        try:
+            duration = int(duration_raw) if duration_raw else None
+            if duration is not None and duration < 1:
+                duration = None
+        except ValueError:
+            duration = None
+
+        tpl = CompetitionTemplate(
+            name=name[:120],
+            description=(request.form.get("description") or "").strip()[:300] or None,
+            duration_days=duration,
+            prize_top1=max(0, int(request.form.get("prize_top1") or 0)),
+            prize_top2=max(0, int(request.form.get("prize_top2") or 0)),
+            prize_top3=max(0, int(request.form.get("prize_top3") or 0)),
+            prize_per_invite=max(0, int(request.form.get("prize_per_invite") or 0)),
+            prize_per_invite_gems=max(0, int(request.form.get("prize_per_invite_gems") or 0)),
+            sort_order=int(request.form.get("sort_order") or 100),
+            created_by=session.get("admin_user", "admin"),
+        )
+        db.add(tpl); db.commit()
+        flash(f"✅ Template '{name}' created", "info")
+        try:
+            log_admin(db, "create_template", "competition_template",
+                      tpl.id, "system", f"name={name}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_competition_templates"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_competition_templates"))
+    finally:
+        db.close()
+
+
+@app.route("/competitions/templates/<int:tpl_id>/update", methods=["POST"])
+@login_required
+def admin_competition_template_update(tpl_id):
+    db = get_session()
+    try:
+        from models import CompetitionTemplate
+        tpl = db.query(CompetitionTemplate).get(tpl_id)
+        if not tpl:
+            flash("Template not found.", "error")
+            return redirect(url_for("admin_competition_templates"))
+        new_name = (request.form.get("name") or tpl.name).strip()[:120]
+        # If renaming, ensure no collision
+        if new_name != tpl.name:
+            collision = (db.query(CompetitionTemplate)
+                         .filter(CompetitionTemplate.name == new_name,
+                                 CompetitionTemplate.id != tpl_id).first())
+            if collision:
+                flash(f"Name '{new_name}' is already used.", "error")
+                return redirect(url_for("admin_competition_templates"))
+        tpl.name = new_name
+        tpl.description = (request.form.get("description") or "").strip()[:300] or None
+        duration_raw = (request.form.get("duration_days") or "").strip()
+        try:
+            d = int(duration_raw) if duration_raw else None
+            tpl.duration_days = d if (d and d >= 1) else None
+        except ValueError:
+            tpl.duration_days = None
+        tpl.prize_top1 = max(0, int(request.form.get("prize_top1") or 0))
+        tpl.prize_top2 = max(0, int(request.form.get("prize_top2") or 0))
+        tpl.prize_top3 = max(0, int(request.form.get("prize_top3") or 0))
+        tpl.prize_per_invite = max(0, int(request.form.get("prize_per_invite") or 0))
+        tpl.prize_per_invite_gems = max(0, int(request.form.get("prize_per_invite_gems") or 0))
+        tpl.sort_order = int(request.form.get("sort_order") or 100)
+        db.commit()
+        flash("✅ Template updated", "info")
+        return redirect(url_for("admin_competition_templates"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_competition_templates"))
+    finally:
+        db.close()
+
+
+@app.route("/competitions/templates/<int:tpl_id>/delete", methods=["POST"])
+@login_required
+def admin_competition_template_delete(tpl_id):
+    db = get_session()
+    try:
+        from models import CompetitionTemplate
+        tpl = db.query(CompetitionTemplate).get(tpl_id)
+        if not tpl:
+            flash("Template not found.", "error")
+            return redirect(url_for("admin_competition_templates"))
+        name = tpl.name
+        db.delete(tpl)
+        db.commit()
+        flash(f"🗑️ Deleted template '{name}'", "info")
+        try:
+            log_admin(db, "delete_template", "competition_template",
+                      tpl_id, "system", f"name={name}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_competition_templates"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_competition_templates"))
     finally:
         db.close()
 

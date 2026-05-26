@@ -55,6 +55,65 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
     _seed_traits()
+    _seed_competition_templates()
+
+
+def _seed_competition_templates():
+    """Idempotent seed for default competition templates. Only inserts ones
+    that don't already exist (by name). Admin can edit or delete these."""
+    from models import CompetitionTemplate
+    DEFAULTS = [
+        {
+            "name": "🎁 Weekly Small",
+            "description": "7-day invite sprint with modest top prizes",
+            "duration_days": 7,
+            "prize_top1": 50000, "prize_top2": 25000, "prize_top3": 10000,
+            "prize_per_invite": 200, "prize_per_invite_gems": 0,
+            "sort_order": 10,
+        },
+        {
+            "name": "🏆 Monthly Standard",
+            "description": "30-day standard competition with strong prize pool",
+            "duration_days": 30,
+            "prize_top1": 200000, "prize_top2": 100000, "prize_top3": 50000,
+            "prize_per_invite": 500, "prize_per_invite_gems": 0,
+            "sort_order": 20,
+        },
+        {
+            "name": "💎 Premium Sprint",
+            "description": "14-day high-stakes contest with gem bonuses",
+            "duration_days": 14,
+            "prize_top1": 500000, "prize_top2": 250000, "prize_top3": 100000,
+            "prize_per_invite": 1000, "prize_per_invite_gems": 5,
+            "sort_order": 30,
+        },
+        {
+            "name": "🔥 Per-Invite Only",
+            "description": "Pure participation reward — no top prizes",
+            "duration_days": 30,
+            "prize_top1": 0, "prize_top2": 0, "prize_top3": 0,
+            "prize_per_invite": 1000, "prize_per_invite_gems": 0,
+            "sort_order": 40,
+        },
+    ]
+    session = SessionLocal()
+    try:
+        existing = {t.name for t in session.query(CompetitionTemplate).all()}
+        added = 0
+        for d in DEFAULTS:
+            if d["name"] not in existing:
+                session.add(CompetitionTemplate(**d))
+                added += 1
+        if added:
+            session.commit()
+            import logging
+            logging.getLogger("database").info(f"Seeded {added} default competition templates")
+    except Exception:
+        session.rollback()
+        import logging
+        logging.getLogger("database").exception("Failed to seed competition templates")
+    finally:
+        session.close()
 
 
 def _seed_traits():
