@@ -110,6 +110,10 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False):
     added = []
     skipped = []
     all_players = players + ([milestone_player] if milestone_player else [])
+    try:
+        from config import get_sell_value
+    except Exception:
+        get_sell_value = lambda r: 0
     for p in all_players:
         if not p:
             continue
@@ -120,8 +124,13 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False):
                 acquired_date=datetime.utcnow(),
             )
             session.add(entry)
+            session.flush()  # so entry.id is populated
             user.roster_count = (user.roster_count or 0) + 1
-            added.append({"name": p.name, "rating": p.rating, "id": p.id})
+            added.append({
+                "name": p.name, "rating": p.rating, "id": p.id,
+                "roster_id": entry.id,
+                "sell_value": get_sell_value(p.rating),
+            })
         else:
             skipped.append({"name": p.name, "rating": p.rating, "id": p.id})
 
