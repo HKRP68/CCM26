@@ -68,9 +68,20 @@ async def invite_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append("<i>No active competition right now — invites still recorded.</i>\n")
             lines.append(f"<b>Lifetime invites:</b> {stats['lifetime_completed']}")
 
+        # Generate referral code if missing
+        from services.referral_service import ensure_referral_code, format_branding_html
+        code = ensure_referral_code(session, user)
+        session.commit()  # persist new code
+
         lines.append("\n📋 <b>Your invite link:</b>")
         lines.append(f"<code>{link}</code>")
-        lines.append("\nShare with friends. When they do /debut, you get credit.")
+        if code:
+            lines.append(f"\n🎟️ <b>Your code:</b> <code>{code}</code>")
+            lines.append("<i>Friends can also redeem this with /redeem after their /debut.</i>")
+        lines.append("\nWhen someone uses your link or code and finishes /debut, you get credit.")
+
+        # Branding footer
+        lines.append(format_branding_html(session, prefix="\n"))
 
         # Telegram has a "share" deep-link that opens a chat picker
         share_url = (

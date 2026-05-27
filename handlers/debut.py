@@ -78,6 +78,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Record any pending referral (stashed from /start ref<id>) and
         # complete it now that the user has a real account.
         referral_reward_text = ""
+        referral_completed_now = False
         try:
             from services.referral_service import record_referral, complete_referral
             from models import User as _U
@@ -90,15 +91,24 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Complete any referral pointing at this invitee (whether just
             # created or pre-existing from the start handler)
             cr = complete_referral(session, user.id)
-            if cr and (cr["paid_coins"] > 0 or cr["paid_gems"] > 0):
-                parts = []
-                if cr["paid_coins"]: parts.append(f"+{cr['paid_coins']:,} 🪙")
-                if cr["paid_gems"]: parts.append(f"+{cr['paid_gems']} 💎")
-                referral_reward_text = (
-                    "\n\n🎁 Your inviter received " + " ".join(parts) + " for inviting you!"
-                )
+            if cr:
+                referral_completed_now = True
+                if cr["paid_coins"] > 0 or cr["paid_gems"] > 0:
+                    parts = []
+                    if cr["paid_coins"]: parts.append(f"+{cr['paid_coins']:,} 🪙")
+                    if cr["paid_gems"]: parts.append(f"+{cr['paid_gems']} 💎")
+                    referral_reward_text = (
+                        "\n\n🎁 Your inviter received " + " ".join(parts) + " for inviting you!"
+                    )
         except Exception:
             logger.exception("Referral completion failed (non-fatal)")
+
+        # Branding (admin-configurable)
+        try:
+            from services.referral_service import format_branding_html
+            branding = format_branding_html(session)
+        except Exception:
+            branding = ""
 
         session.commit()
 
@@ -121,8 +131,33 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/daily - Daily reward (24h cooldown)\n"
             "/gspin - Spin wheel (8h cooldown)"
             + referral_reward_text
+            + branding
         )
-        await update.message.reply_text(text, parse_mode="HTML")
+        await update.message.reply_text(
+            text, parse_mode="HTML", disable_web_page_preview=True)
+
+        # If no referral was completed by the link path, ask for a code.
+        # Sets a flag so the text-message catcher knows they're a fresh
+        # debutant whose next typed line might be a referral code.
+        if not referral_completed_now:
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                context.user_data["awaiting_referral_code"] = True
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⏭️ Skip", callback_data=f"refcode_skip_{user.id}"),
+                ]])
+                await update.message.reply_text(
+                    "🎟️ <b>Got a referral code?</b>\n\n"
+                    "If a friend gave you their 6-character code, send it now "
+                    "and they'll earn a reward.\n\n"
+                    "Reply with: <code>/redeem CODE</code>\n"
+                    "or just type the code itself.\n\n"
+                    "<i>Skip if you don't have one — you can always /redeem later.</i>",
+                    parse_mode="HTML", reply_markup=kb,
+                )
+            except Exception:
+                logger.exception("Referral code prompt failed (non-fatal)")
+
         logger.info(f"Debut complete for user {tg_user.id}, {len(players)} players assigned")
 
     except Exception:
