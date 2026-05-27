@@ -4066,6 +4066,8 @@ def webapp_xi():
                 "player_id": p.id,
                 "name": p.name,
                 "rating": p.rating,
+                "bat_rating": p.bat_rating or 0,
+                "bowl_rating": p.bowl_rating or 0,
                 "category": p.category,
                 "country": p.country,
                 "version": p.version or "Base",
@@ -4312,7 +4314,7 @@ def webapp_quests():
                 if ac:
                     result["auto_claimed_summary"].extend([{
                         "quest_type": qtype,
-                        "title": entry.get("title", ""),
+                        "title": entry.get("name", ""),
                         "coins": entry.get("coins", 0),
                         "gems": entry.get("gems", 0),
                         "points": entry.get("points", 0),
@@ -4327,10 +4329,10 @@ def webapp_quests():
                 quests_out.append({
                     "quest_id": q.id,
                     "uqp_id": it["uqp_id"],
-                    "title": q.title,
+                    "title": q.name,  # Quest model uses 'name', not 'title'
                     "description": q.description,
                     "emoji": getattr(q, "emoji", "🎯") or "🎯",
-                    "category": getattr(q, "category", "") or "",
+                    "event_key": getattr(q, "event_key", "") or "",
                     "progress": it["progress"],
                     "target": it["target"],
                     "percent": it["percent"],
