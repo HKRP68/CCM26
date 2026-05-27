@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Branding{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📣 Branding</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;">
+  These links appear in bot welcome messages, /howto, /debut, /invite, and the Mini App footer.
+  Leave a field blank to hide that link. Updates appear immediately — no restart needed.
+</p>
+
+<form method="POST" action="{{ url_for('admin_branding_save') }}" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <h3 style="margin:0 0 .8rem;font-size:1rem;">📢 Channel</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Channel username</label>
+      <div style="display:flex;align-items:center;gap:.3rem;">
+        <span style="color:var(--muted);font-weight:700;font-size:.95rem;">@</span>
+        <input type="text" name="channel_username" value="{{ cfg.branding_channel_username or '' }}"
+               placeholder="CricMasterUltra" maxlength="64"
+               style="flex:1;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;">
+      </div>
+      <p style="color:var(--muted);font-size:.72rem;margin:.25rem 0 0;">Without the @ — just the username</p>
+    </div>
+    <div>
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Channel label</label>
+      <input type="text" name="channel_label" value="{{ cfg.branding_channel_label or '' }}"
+             placeholder="official channel" maxlength="80"
+             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <p style="color:var(--muted);font-size:.72rem;margin:.25rem 0 0;">Short description shown after the link</p>
+    </div>
+  </div>
+
+  <h3 style="margin:0 0 .8rem;font-size:1rem;">💬 Group</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem;">
+    <div>
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Group username</label>
+      <div style="display:flex;align-items:center;gap:.3rem;">
+        <span style="color:var(--muted);font-weight:700;font-size:.95rem;">@</span>
+        <input type="text" name="group_username" value="{{ cfg.branding_group_username or '' }}"
+               placeholder="cmugames" maxlength="64"
+               style="flex:1;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;">
+      </div>
+      <p style="color:var(--muted);font-size:.72rem;margin:.25rem 0 0;">Public group's username</p>
+    </div>
+    <div>
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Group label</label>
+      <input type="text" name="group_label" value="{{ cfg.branding_group_label or '' }}"
+             placeholder="official group chat" maxlength="80"
+             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+  </div>
+
+  <h3 style="margin:0 0 .8rem;font-size:1rem;">💡 Tagline (optional)</h3>
+  <div style="margin-bottom:1.5rem;">
+    <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Tagline shown above the links</label>
+    <input type="text" name="tagline" value="{{ cfg.branding_tagline or '' }}"
+           placeholder="e.g. Join our community for updates and giveaways!" maxlength="200"
+           style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    <p style="color:var(--muted);font-size:.72rem;margin:.25rem 0 0;">Italicized, sits above the channel/group lines</p>
+  </div>
+
+  <h3 style="margin:0 0 .5rem;font-size:1rem;">🔍 Preview</h3>
+  <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1.5rem;line-height:1.7;">
+    {% if cfg.branding_tagline %}<div><em>{{ cfg.branding_tagline }}</em></div>{% endif %}
+    {% if cfg.branding_channel_username %}<div>📢 <a href="https://t.me/{{ cfg.branding_channel_username }}" target="_blank">@{{ cfg.branding_channel_username }}</a> — {{ cfg.branding_channel_label or 'official channel' }}</div>{% endif %}
+    {% if cfg.branding_group_username %}<div>💬 <a href="https://t.me/{{ cfg.branding_group_username }}" target="_blank">@{{ cfg.branding_group_username }}</a> — {{ cfg.branding_group_label or 'official group' }}</div>{% endif %}
+    {% if not (cfg.branding_channel_username or cfg.branding_group_username) %}
+      <span style="color:var(--muted);">— Nothing configured. Fill in the fields above and save to see preview. —</span>
+    {% endif %}
+  </div>
+
+  <button type="submit" class="btn btn-primary">💾 Save branding</button>
+</form>
+
+{% endblock %}

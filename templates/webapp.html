@@ -203,6 +203,99 @@
     border-color: rgba(0, 212, 170, 0.45);
     box-shadow: 0 0 16px rgba(0, 212, 170, 0.08) inset;
   }
+  .tile.quests {
+    border-color: rgba(212, 168, 42, 0.45);
+    box-shadow: 0 0 16px rgba(212, 168, 42, 0.08) inset;
+  }
+
+  /* Quest screen */
+  .quest-tabs {
+    display: flex; gap: 0.3rem; margin-bottom: 0.75rem;
+    background: var(--card); padding: 0.25rem; border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .quest-tab {
+    flex: 1; padding: 0.5rem 0.7rem;
+    background: transparent; color: var(--muted);
+    border: none; border-radius: 6px;
+    font-family: inherit; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer;
+  }
+  .quest-tab.active {
+    background: var(--accent); color: #0a0f1a; font-weight: 800;
+  }
+  .quest-row {
+    padding: 0.75rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 0.5rem;
+  }
+  .quest-row.completed { border-color: var(--green); }
+  .quest-row.claimed { opacity: 0.55; }
+  .quest-row-header {
+    display: flex; gap: 0.5rem; align-items: flex-start;
+    margin-bottom: 0.5rem;
+  }
+  .quest-row-emoji { font-size: 1.2rem; line-height: 1.2; }
+  .quest-row-title {
+    flex: 1; font-weight: 700; font-size: 0.92rem; line-height: 1.25;
+  }
+  .quest-row-desc {
+    color: var(--muted); font-size: 0.75rem; margin-top: 0.2rem;
+    line-height: 1.35;
+  }
+  .quest-progress-wrap {
+    background: var(--input-bg); border-radius: 4px; height: 7px;
+    overflow: hidden; margin: 0.4rem 0;
+  }
+  .quest-progress-bar {
+    height: 100%; background: var(--accent);
+    transition: width 0.3s ease;
+  }
+  .quest-progress-bar.completed { background: var(--green); }
+  .quest-meta-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.78rem;
+  }
+  .quest-rewards { color: var(--muted); }
+  .quest-claim-btn {
+    background: var(--green); color: #0a0f1a;
+    border: none; padding: 0.4rem 0.9rem;
+    border-radius: 6px; font-weight: 800; font-size: 0.78rem;
+    font-family: inherit; cursor: pointer;
+  }
+  .quest-claim-btn:active { opacity: 0.85; }
+  .quest-claim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Quick Match scorecard */
+  .scorecard-tabs {
+    display: flex; gap: 0.3rem;
+    background: var(--input-bg); padding: 0.25rem;
+    border-radius: 8px; margin-bottom: 0.5rem;
+  }
+  .sc-tab {
+    flex: 1; padding: 0.45rem 0.6rem;
+    background: transparent; color: var(--muted);
+    border: none; border-radius: 6px;
+    font-family: inherit; font-size: 0.78rem; font-weight: 600;
+    cursor: pointer;
+  }
+  .sc-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .scorecard-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 0.78rem; margin-top: 0.4rem;
+  }
+  .scorecard-table th {
+    color: var(--muted); font-weight: 600;
+    text-align: right; padding: 0.35rem 0.25rem;
+    font-size: 0.7rem; text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+  .scorecard-table td {
+    padding: 0.35rem 0.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .scorecard-table tr:last-child td { border-bottom: none; }
+  .scorecard-table tr.dnb td { opacity: 0.45; }
   .tile.match {
     border-color: rgba(255, 77, 109, 0.5);
     box-shadow: 0 0 16px rgba(255, 77, 109, 0.1) inset;
@@ -822,6 +915,22 @@
     padding: 0.45rem 0; border-bottom: 1px solid var(--border);
   }
   .invitee-row:last-child { border-bottom: none; }
+
+  /* Branding links */
+  .brand-link {
+    display: block;
+    padding: 0.6rem 0.75rem;
+    margin-bottom: 0.4rem;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+  .brand-link:last-child { margin-bottom: 0; }
+  .brand-link:active { background: var(--card-2); }
 </style>
 </head>
 <body>
@@ -893,6 +1002,11 @@
       <div class="tile-icon">🎟️</div>
       <div class="tile-label">Invite &amp; Win</div>
       <div class="tile-sub" id="invite-tile-sub">Earn rewards</div>
+    </button>
+    <button class="tile quests" onclick="navigate('quests')">
+      <div class="tile-icon">🎯</div>
+      <div class="tile-label">Quests</div>
+      <div class="tile-sub" id="quests-tile-sub">Daily challenges</div>
     </button>
   </div>
 
@@ -1102,6 +1216,22 @@
   </div>
 </div>
 
+<!-- ════ Quests screen ════ -->
+<div class="screen" id="screen-quests">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+    <h2 style="margin:0;font-size:1.25rem;">🎯 Quests</h2>
+    <button class="link-btn" onclick="loadQuests()">↻ Refresh</button>
+  </div>
+  <div class="quest-tabs">
+    <button class="quest-tab active" data-qtab="daily" onclick="switchQuestTab('daily')">Daily</button>
+    <button class="quest-tab" data-qtab="weekly" onclick="switchQuestTab('weekly')">Weekly</button>
+    <button class="quest-tab" data-qtab="monthly" onclick="switchQuestTab('monthly')">Monthly</button>
+  </div>
+  <div id="quest-content">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+</div>
+
 <!-- ════ Invite screen ════ -->
 <div class="screen" id="screen-invite">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
@@ -1119,6 +1249,7 @@
       <div style="font-size: 4rem; margin-bottom: 0.5rem;">🏏</div>
       <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Quick Match</h2>
       <p style="color: var(--muted); margin: 0; font-size: 0.88rem;">
+        Your playing XI vs a bot opponent. Full scorecard at the end.<br>
         Pick aggressive, balanced, or defensive for each phase. 7 taps. ~60 seconds.
       </p>
     </div>
@@ -1131,7 +1262,10 @@
         <button class="chip" data-diff="hard" onclick="setMatchDifficulty('hard')">🔥 Hard</button>
       </div>
       <p style="color: var(--muted); font-size: 0.78rem; margin: 0.8rem 0 0;" id="diff-hint">
-        Opponent rating = your top-11 average
+        Opponent strength scales to your XI's average rating
+      </p>
+      <p style="color: var(--muted); font-size: 0.72rem; margin: 0.5rem 0 0;">
+        Need a full XI? <a href="#" onclick="navigate('xi'); return false;" style="color: var(--accent);">Manage your XI</a>
       </p>
     </div>
 
@@ -1348,6 +1482,7 @@ function navigate(screen) {
   if (screen === 'market') loadMarket();
   if (screen === 'xi') loadXi();
   if (screen === 'invite') loadInvite();
+  if (screen === 'quests') loadQuests();
   if (screen === 'browse') {
     loadCountries().then(() => {
       if (!document.getElementById('browse-results').children.length) {
@@ -1748,6 +1883,45 @@ function renderMatchResult(r) {
     outcomeColor = 'var(--accent)';
   }
 
+  // Man of the Match block
+  const momBlock = r.mom ? `
+    <div class="card" style="margin-top: 0.7rem; border-color: var(--accent); background: rgba(212,168,42,0.05);">
+      <p class="card-title">🏅 Man of the Match</p>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-weight:800; font-size: 0.95rem;">${escapeHtml(r.mom.name)} ${ratingBadge(r.mom.rating)}</div>
+          <div style="color:var(--muted); font-size: 0.78rem; margin-top: 0.15rem;">
+            ${escapeHtml(r.mom.category)} · ${r.mom.from_user_team ? 'Your team' : 'Opponent'}
+          </div>
+        </div>
+        <div style="font-weight: 800; font-size: 1.15rem; color: var(--accent);">
+          ${escapeHtml(r.mom.highlight)}
+        </div>
+      </div>
+    </div>
+  ` : '';
+
+  // Full scorecard rendering (when XI data is present)
+  const hasFullScorecard = inn1.batting_card && inn1.bowling_card;
+  const scorecardBlock = hasFullScorecard ? `
+    <div class="card" style="margin-top: 0.7rem; padding: 0.5rem;">
+      <div class="scorecard-tabs">
+        <button class="sc-tab active" data-inn="1" onclick="switchScorecardInnings(1)">Innings 1</button>
+        <button class="sc-tab" data-inn="2" onclick="switchScorecardInnings(2)">Innings 2</button>
+      </div>
+      <div id="scorecard-inn-1">${renderInningsScorecard(inn1, userBatsFirst, 1)}</div>
+      <div id="scorecard-inn-2" style="display:none;">${renderInningsScorecard(inn2, userBatsFirst, 2)}</div>
+    </div>
+  ` : `
+    <div class="card" style="margin-top: 0.7rem;">
+      <p class="card-title">Phase-by-phase</p>
+      <div style="font-size: 0.82rem;">
+        ${renderInnings('Innings 1 ' + (userBatsFirst ? '(You)' : '(Bot)'), inn1)}
+        ${renderInnings('Innings 2 ' + (userBatsFirst ? '(Bot)' : '(You)'), inn2)}
+      </div>
+    </div>
+  `;
+
   el.innerHTML = `
     <div style="text-align:center; padding: 0.5rem 0 1.2rem;">
       <div style="font-size:1.8rem; font-weight:800; color:${outcomeColor}; margin-bottom: 0.4rem;">
@@ -1773,17 +1947,87 @@ function renderMatchResult(r) {
       </div>
     </div>
 
-    <div class="card" style="margin-top: 0.7rem;">
-      <p class="card-title">Phase-by-phase</p>
-      <div style="font-size: 0.82rem;">
-        ${renderInnings('Innings 1 ' + (userBatsFirst ? '(You)' : '(Bot)'), inn1)}
-        ${renderInnings('Innings 2 ' + (userBatsFirst ? '(Bot)' : '(You)'), inn2)}
-      </div>
-    </div>
+    ${momBlock}
+    ${scorecardBlock}
 
     <button class="spin-button" onclick="resetMatchScreen()" style="margin-top: 1rem; width: 100%;">
       🎲 Play Again
     </button>
+  `;
+}
+
+function switchScorecardInnings(n) {
+  document.querySelectorAll('.sc-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.inn === String(n));
+  });
+  document.getElementById('scorecard-inn-1').style.display = (n === 1) ? '' : 'none';
+  document.getElementById('scorecard-inn-2').style.display = (n === 2) ? '' : 'none';
+}
+
+function renderInningsScorecard(inn, userBatsFirst, innNum) {
+  const title = innNum === 1
+    ? (userBatsFirst ? '🏏 Your team batting' : '🤖 Opponent batting')
+    : (userBatsFirst ? '🤖 Opponent batting' : '🏏 Your team batting');
+  // Compute overs from balls_faced
+  const balls = inn.balls_faced || 0;
+  const overs = Math.floor(balls / 6) + (balls % 6) / 10;
+  const oversStr = overs.toFixed(1);
+
+  const battingRows = (inn.batting_card || []).map(b => {
+    const isDnb = b.dismissal === 'did not bat';
+    return `
+      <tr class="${isDnb ? 'dnb' : ''}">
+        <td style="text-align:left;">
+          <b>${escapeHtml(b.name)}</b>${b.is_captain ? ' <span style="font-size:0.6rem;color:var(--accent);">(C)</span>' : ''}
+          <div style="font-size:0.7rem;color:var(--muted);">${b.out ? escapeHtml(b.dismissal) : (isDnb ? 'did not bat' : 'not out')}</div>
+        </td>
+        <td style="text-align:right; font-weight: ${isDnb ? '400' : '700'};">${b.runs}</td>
+        <td style="text-align:right; color:var(--muted);">${b.balls}</td>
+        <td style="text-align:right; color:var(--muted);">${b.fours}</td>
+        <td style="text-align:right; color:var(--muted);">${b.sixes}</td>
+        <td style="text-align:right; color:var(--muted);">${b.strike_rate || '0.0'}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const bowlingRows = (inn.bowling_card || []).map(b => `
+    <tr>
+      <td style="text-align:left;">
+        <b>${escapeHtml(b.name)}</b>${b.is_captain ? ' <span style="font-size:0.6rem;color:var(--accent);">(C)</span>' : ''}
+      </td>
+      <td style="text-align:right;">${b.overs}</td>
+      <td style="text-align:right; color:var(--muted);">${b.runs}</td>
+      <td style="text-align:right; font-weight: 700; color: ${b.wickets >= 3 ? 'var(--green)' : 'var(--text)'};">${b.wickets}</td>
+      <td style="text-align:right; color:var(--muted);">${b.economy}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div style="padding: 0.4rem 0.5rem;">
+      <div style="display:flex; justify-content:space-between; padding: 0.4rem 0;">
+        <div style="font-weight: 700;">${title}</div>
+        <div style="font-weight: 800;">${inn.total_runs}/${inn.total_wickets} <span style="color:var(--muted); font-size:0.82rem;">(${oversStr})</span></div>
+      </div>
+      <table class="scorecard-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Batter</th>
+            <th>R</th><th>B</th><th>4s</th><th>6s</th><th>SR</th>
+          </tr>
+        </thead>
+        <tbody>${battingRows || `<tr><td colspan="6" style="color:var(--muted);">—</td></tr>`}</tbody>
+      </table>
+      <div style="margin-top: 0.8rem; font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em;">Bowling</div>
+      <table class="scorecard-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Bowler</th>
+            <th>O</th><th>R</th><th>W</th><th>Econ</th>
+          </tr>
+        </thead>
+        <tbody>${bowlingRows || `<tr><td colspan="5" style="color:var(--muted);">—</td></tr>`}</tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -2602,6 +2846,21 @@ async function loadInvite() {
     </div>
   `;
 
+  const code = data.user_referral_code;
+  const codeBlock = code ? `
+    <div class="card" style="margin-bottom:0.7rem;">
+      <p class="card-title">🎟️ Your referral code</p>
+      <div style="display:flex;gap:0.4rem;align-items:center;">
+        <input type="text" value="${escapeHtmlAttr(code)}" readonly id="invite-code-input"
+               style="flex:1;background:var(--input-bg);color:var(--accent);border:1px solid var(--border);padding:0.7rem;border-radius:6px;font-family:monospace;font-size:1.1rem;font-weight:800;text-align:center;letter-spacing:0.15em;">
+        <button class="spin-button" style="padding:0.7rem 0.9rem;font-size:0.78rem;width:auto;" onclick="copyInviteCode()">📋</button>
+      </div>
+      <p style="color:var(--muted);font-size:0.72rem;margin-top:0.4rem;line-height:1.5;">
+        Friends can type <code>/redeem ${escapeHtml(code)}</code> after their /debut.
+      </p>
+    </div>
+  ` : '';
+
   const linkBlock = `
     <div class="card" style="margin-bottom:0.7rem;">
       <p class="card-title">Your invite link</p>
@@ -2615,6 +2874,22 @@ async function loadInvite() {
       </button>
       <p style="color:var(--muted);font-size:0.75rem;margin-top:0.5rem;line-height:1.5;">
         When someone clicks your link and completes /debut, you get credit.
+      </p>
+    </div>
+  `;
+
+  // "Got a code from a friend?" — only shown for eligible new users
+  const redeemBlock = (!data.can_redeem) ? '' : `
+    <div class="card" style="margin-bottom:0.7rem;border-color:var(--accent);">
+      <p class="card-title">🎁 Got a code from a friend?</p>
+      <div style="display:flex;gap:0.4rem;align-items:center;">
+        <input type="text" id="redeem-code-input" placeholder="ABCD23" maxlength="6"
+               oninput="this.value = this.value.toUpperCase()"
+               style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:0.6rem;border-radius:6px;font-family:monospace;font-size:1rem;text-align:center;letter-spacing:0.15em;">
+        <button class="spin-button" style="padding:0.6rem 1rem;font-size:0.85rem;width:auto;" onclick="submitRedeemCode()">Redeem</button>
+      </div>
+      <p style="color:var(--muted);font-size:0.72rem;margin-top:0.4rem;line-height:1.5;">
+        Enter a 6-character referral code from a friend. <b>New users only</b> — within 24h of /debut, before your first match.
       </p>
     </div>
   `;
@@ -2663,7 +2938,82 @@ async function loadInvite() {
     `;
   }
 
-  el.innerHTML = compBlock + myStats + linkBlock + lbBlock + invitesBlock;
+  // Branding footer (channel + group)
+  const branding = data.branding || {};
+  let brandingBlock = '';
+  if (branding.has_any) {
+    const parts = [];
+    if (branding.tagline) {
+      parts.push(`<div style="font-style:italic;color:var(--muted);margin-bottom:0.5rem;font-size:0.85rem;">${escapeHtml(branding.tagline)}</div>`);
+    }
+    if (branding.channel_username) {
+      parts.push(`<a href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" class="brand-link" onclick="openBrandingLink(event, '${escapeHtmlAttr(branding.channel_link)}')">
+        📢 <b>@${escapeHtml(branding.channel_username)}</b>
+        <span style="color:var(--muted);">— ${escapeHtml(branding.channel_label || 'official channel')}</span>
+      </a>`);
+    }
+    if (branding.group_username) {
+      parts.push(`<a href="${escapeHtmlAttr(branding.group_link)}" target="_blank" class="brand-link" onclick="openBrandingLink(event, '${escapeHtmlAttr(branding.group_link)}')">
+        💬 <b>@${escapeHtml(branding.group_username)}</b>
+        <span style="color:var(--muted);">— ${escapeHtml(branding.group_label || 'official group')}</span>
+      </a>`);
+    }
+    brandingBlock = `
+      <div class="card" style="margin-bottom:0.7rem;background:rgba(0,212,170,0.04);border-color:rgba(0,212,170,0.3);">
+        <p class="card-title">🌟 Join our community</p>
+        ${parts.join('')}
+      </div>
+    `;
+  }
+
+  el.innerHTML = compBlock + myStats + codeBlock + linkBlock + redeemBlock + lbBlock + invitesBlock + brandingBlock;
+}
+
+function copyInviteCode() {
+  const input = document.getElementById('invite-code-input');
+  if (!input) return;
+  input.select();
+  try {
+    if (navigator.clipboard) navigator.clipboard.writeText(input.value);
+    else document.execCommand('copy');
+    toast('Code copied!', 'success');
+    hapticNotif('success');
+  } catch (e) { toast('Copy failed', 'error'); }
+}
+
+async function submitRedeemCode() {
+  const input = document.getElementById('redeem-code-input');
+  if (!input) return;
+  const code = (input.value || '').trim().toUpperCase();
+  if (code.length !== 6) {
+    toast('Code must be 6 characters', 'error');
+    return;
+  }
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/redeem', { code });
+  if (!ok) {
+    toast(data.message || 'Redeem failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast('✅ ' + (data.message || 'Code redeemed!'), 'success');
+  hapticNotif('success');
+  input.value = '';
+  // Refresh the invite screen to hide the redeem block
+  loadInvite();
+}
+
+function openBrandingLink(e, url) {
+  e.preventDefault();
+  try {
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openTelegramLink) {
+      window.Telegram.WebApp.openTelegramLink(url);
+    } else {
+      window.open(url, '_blank');
+    }
+  } catch (err) {
+    window.open(url, '_blank');
+  }
 }
 
 function copyInviteLink() {
@@ -2698,11 +3048,126 @@ function shareInviteLink(link) {
   }
 }
 
+// ════════════════ Quests ════════════════
+let currentQuestTab = 'daily';
+let cachedQuests = null;  // {daily: [], weekly: [], monthly: []}
+
+function switchQuestTab(qtype) {
+  currentQuestTab = qtype;
+  document.querySelectorAll('.quest-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.qtab === qtype);
+  });
+  renderQuestList();
+}
+
+async function loadQuests() {
+  const el = document.getElementById('quest-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/quests', { type: 'all' });
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Quests unavailable'}</div>`;
+    return;
+  }
+  cachedQuests = data.groups || {};
+  // Show auto-claim toast if any
+  if (data.auto_claimed_summary && data.auto_claimed_summary.length) {
+    const coins = data.auto_claimed_summary.reduce((s,e) => s + (e.coins||0), 0);
+    if (coins > 0) {
+      toast(`🎁 Auto-claimed ${coins.toLocaleString()} 🪙 from yesterday's quests`, 'success');
+    }
+  }
+  renderQuestList();
+}
+
+function renderQuestList() {
+  const el = document.getElementById('quest-content');
+  if (!cachedQuests) return;
+  const list = cachedQuests[currentQuestTab] || [];
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><div class="icon">🎯</div>No ${currentQuestTab} quests right now</div>`;
+    return;
+  }
+  // Check if any are completed-unclaimed for the bulk claim button
+  const completedUnclaimed = list.filter(q => q.completed && !q.claimed).length;
+  let topBar = '';
+  if (completedUnclaimed > 0) {
+    topBar = `
+      <div style="background:rgba(0,212,170,0.08);border:1px solid var(--green);border-radius:8px;padding:0.5rem 0.7rem;margin-bottom:0.6rem;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:0.85rem;"><b>${completedUnclaimed}</b> quest${completedUnclaimed === 1 ? '' : 's'} ready</span>
+        <button class="quest-claim-btn" onclick="claimAllQuests('${currentQuestTab}')">🎁 Claim all</button>
+      </div>
+    `;
+  }
+  el.innerHTML = topBar + list.map(q => `
+    <div class="quest-row ${q.completed ? 'completed' : ''} ${q.claimed ? 'claimed' : ''}">
+      <div class="quest-row-header">
+        <div class="quest-row-emoji">${escapeHtml(q.emoji)}</div>
+        <div style="flex:1;">
+          <div class="quest-row-title">${escapeHtml(q.title)}</div>
+          ${q.description ? `<div class="quest-row-desc">${escapeHtml(q.description)}</div>` : ''}
+        </div>
+      </div>
+      <div class="quest-progress-wrap">
+        <div class="quest-progress-bar ${q.completed ? 'completed' : ''}" style="width:${q.percent}%;"></div>
+      </div>
+      <div class="quest-meta-row">
+        <span style="color:var(--muted);font-size:0.75rem;">${q.progress} / ${q.target}</span>
+        <span class="quest-rewards">
+          ${q.reward_coins ? `+${q.reward_coins.toLocaleString()}🪙 ` : ''}
+          ${q.reward_gems ? `+${q.reward_gems}💎 ` : ''}
+          ${q.reward_points ? `+${q.reward_points} QP` : ''}
+        </span>
+      </div>
+      ${q.completed && !q.claimed
+        ? `<button class="quest-claim-btn" style="margin-top:0.5rem;width:100%;" onclick="claimQuest(${q.quest_id})">🎁 Claim reward</button>`
+        : (q.claimed ? `<div style="margin-top:0.4rem;color:var(--muted);font-size:0.75rem;text-align:center;">✓ Claimed</div>` : '')}
+    </div>
+  `).join('');
+}
+
+async function claimQuest(questId) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/quests/claim', { quest_id: questId });
+  if (!ok) {
+    toast(data.message || 'Claim failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  const r = data.reward || {};
+  const parts = [];
+  if (r.coins) parts.push(`+${r.coins.toLocaleString()}🪙`);
+  if (r.gems) parts.push(`+${r.gems}💎`);
+  if (r.points) parts.push(`+${r.points} QP`);
+  toast('🎉 ' + (parts.join(' ') || 'Claimed!'), 'success');
+  hapticNotif('success');
+  loadQuests();
+  refreshDashboard();
+}
+
+async function claimAllQuests(qtype) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/quests/claim_all', { type: qtype });
+  if (!ok) {
+    toast(data.message || 'Claim failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  const t = data.total_reward || {};
+  const parts = [];
+  if (t.coins) parts.push(`+${t.coins.toLocaleString()}🪙`);
+  if (t.gems) parts.push(`+${t.gems}💎`);
+  if (t.points) parts.push(`+${t.points} QP`);
+  toast(`🎉 Claimed ${data.count_claimed} quest${data.count_claimed === 1 ? '' : 's'} · ${parts.join(' ')}`, 'success');
+  hapticNotif('success');
+  loadQuests();
+  refreshDashboard();
+}
+
 // ════════════════ Initial load ════════════════
 // Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
 function handleHashDeepLink() {
   const hash = (window.location.hash || '').replace('#', '').toLowerCase();
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite'];
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests'];
   if (validScreens.includes(hash) && hash !== 'home') {
     // refreshDashboard fires first then navigate
     navigate(hash);
