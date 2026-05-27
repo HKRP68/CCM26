@@ -262,7 +262,10 @@ def get_user_xi(session, user_id):
             .order_by(UserRoster.order_position.asc()).all())
     return [{
         "roster_id": r.id, "player_id": p.id, "name": p.name,
-        "rating": p.rating, "category": p.category, "country": p.country,
+        "rating": p.rating,
+        "bat_rating": p.bat_rating or 0,
+        "bowl_rating": p.bowl_rating or 0,
+        "category": p.category, "country": p.country,
         "version": p.version or "Base",
         "position": r.order_position,
         "is_captain": (captain_rid == r.id),
@@ -302,7 +305,7 @@ def _generate_bot_xi(session, target_rating, opponent_country=None):
                 picked = cands[:want]
                 for p in picked:
                     bot_xi.append({
-                        "player_id": p.id, "name": p.name, "rating": p.rating,
+                        "player_id": p.id, "name": p.name, "rating": p.rating, "bat_rating": p.bat_rating or 0, "bowl_rating": p.bowl_rating or 0,
                         "category": p.category, "country": p.country,
                         "version": p.version or "Base",
                         "position": len(bot_xi) + 1,
@@ -319,7 +322,7 @@ def _generate_bot_xi(session, target_rating, opponent_country=None):
             random.shuffle(cands)
             for p in cands[:want]:
                 bot_xi.append({
-                    "player_id": p.id, "name": p.name, "rating": p.rating,
+                    "player_id": p.id, "name": p.name, "rating": p.rating, "bat_rating": p.bat_rating or 0, "bowl_rating": p.bowl_rating or 0,
                     "category": p.category, "country": p.country,
                     "version": p.version or "Base",
                     "position": len(bot_xi) + 1,
@@ -347,6 +350,13 @@ def _generate_batting_card(xi, runs_total, balls_faced, wickets_lost):
     Middle order (4-6): moderate share
     Lower order (7-11): small share, mostly come in if 6+ wickets fell
 
+    KEY LOGIC: weighting uses each player's BATTING RATING and their CATEGORY.
+    A bowler at position 8 won't be hitting a century because:
+      - Bowlers have low bat_rating (typically 30-50)
+      - Lower position has low pos_w
+      - Category multiplier strongly penalizes bowlers (0.35) and rewards
+        batsmen (1.0) and all-rounders (0.8)
+
     Returns: list of {position, name, rating, runs, balls, sr, out, dismissal}
     """
     if not xi:
@@ -363,41 +373,143 @@ def _generate_batting_card(xi, runs_total, balls_faced, wickets_lost):
     if not batting_who_played:
         return []
 
-    # Distribute runs: weighted toward top order, scaled by rating
+    # Category multiplier — how good is this player at batting RELATIVE to
+    # other players in their position. Bowlers are heavily downweighted so
+    # they don't end up scoring centuries.
+    CAT_BAT_MULT = {
+        "Batsman":       1.00,
+        "Wicket Keeper": 0.85,
+        "All-rounder":   0.80,
+        "Bowler":        0.30,   # strong penalty — bowlers don't score big
+    }
+
+    # Distribute runs: weighted by batting rating, category, AND position
     weights = []
     for i, p in enumerate(batting_who_played):
-        # Position weight: top order gets more
-        if i < 3: pos_w = 1.4
-        elif i < 6: pos_w = 1.0
-        else: pos_w = 0.55
-        # Rating weight
-        rating_w = max(0.4, p["rating"] / 80.0)
-        # Random noise so identical XI gives slightly different cards
-        noise = random.uniform(0.6, 1.4)
-        weights.append(pos_w * rating_w * noise)
+        # Position weight: top order gets significantly more
+        if i < 3: pos_w = 1.5
+        elif i < 5: pos_w = 1.2
+        elif i < 7: pos_w = 0.9
+        elif i < 9: pos_w = 0.45
+        else:      pos_w = 0.25
+
+        # Use bat_rating (not OVR) — bowlers have low bat_rating
+        # Fall back to OVR if bat_rating is 0 (legacy data)
+        bat = p.get("bat_rating") or 0
+        if bat <= 0:
+            bat = p.get("rating", 60)
+        # Scale so 80 bat_rating ≈ 1.0, 40 ≈ 0.4
+        # Use a steeper curve: (bat/75)^2 so bad batters are very weak
+        rating_w = max(0.1, (bat / 75.0) ** 1.5)
+
+        # Category multiplier
+        cat_w = CAT_BAT_MULT.get(p["category"], 0.6)
+
+        # Random noise — narrower (less wild outcomes)
+        noise = random.uniform(0.75, 1.25)
+
+        weights.append(pos_w * rating_w * cat_w * noise)
 
     total_w = sum(weights) or 1.0
     # Initial run distribution
     distribution = [int(runs_total * w / total_w) for w in weights]
-    # Fix rounding so it sums to total
-    diff = runs_total - sum(distribution)
-    if distribution:
-        distribution[0] += diff  # add remainder to top batter
 
-    # Distribute balls similarly (top order faces more)
+    # ── Cap individual scores by quality ──
+    # A T20 century by a #9 bowler with 40 bat_rating is unrealistic.
+    # Cap each batter's max score by their quality, position, AND a hard
+    # category cap. The cap is generous enough that genuinely good batters
+    # can still score big.
+    def _max_score(p, pos_idx):
+        bat = p.get("bat_rating") or p.get("rating", 60)
+        cat = p["category"]
+        # Hard category cap (a bowler simply doesn't bat like a top-order)
+        if cat == "Bowler":          base_cap = 35
+        elif cat == "All-rounder":   base_cap = 80
+        elif cat == "Wicket Keeper": base_cap = 100
+        else:                        base_cap = 150  # Batsman
+        # Position cap: lower order can't accumulate as many balls
+        if pos_idx < 3:   pos_cap = 150  # opener/#3 can do anything
+        elif pos_idx < 5: pos_cap = 110
+        elif pos_idx < 7: pos_cap = 85
+        elif pos_idx < 9: pos_cap = 50
+        else:             pos_cap = 30
+        # Quality cap: rating directly limits ceiling
+        quality_cap = int((bat / 100.0) * 130)  # 100 OVR → 130 max
+        return max(8, min(base_cap, pos_cap, quality_cap))
+
+    # Apply caps + redistribute overflow to higher-quality batters
+    for attempt in range(3):  # iterate to redistribute overflow
+        overflow = 0
+        capacity = []  # (idx, remaining_capacity, eligible_to_take_more)
+        for i, p in enumerate(batting_who_played):
+            cap = _max_score(p, i)
+            if distribution[i] > cap:
+                overflow += distribution[i] - cap
+                distribution[i] = cap
+            else:
+                # How much more this batter can absorb
+                capacity.append((i, cap - distribution[i], p))
+
+        if overflow == 0 or not capacity:
+            break
+
+        # Distribute overflow to remaining capacity weighted by quality
+        cap_weights = [(idx, cap_left, weights[idx])
+                       for idx, cap_left, _ in capacity if cap_left > 0]
+        if not cap_weights:
+            break
+        total_cw = sum(w for _, _, w in cap_weights) or 1.0
+        for idx, cap_left, w in cap_weights:
+            add = min(cap_left, int(overflow * w / total_cw))
+            distribution[idx] += add
+            overflow -= add
+            if overflow <= 0: break
+
+    # Fix rounding so it sums to total (cap may have lost a few runs — that's OK,
+    # we'll absorb the diff to whoever has the most capacity)
+    diff = runs_total - sum(distribution)
+    if diff != 0:
+        # Add to the highest-weighted batter who has room
+        for idx in sorted(range(len(distribution)), key=lambda i: -weights[i]):
+            cap = _max_score(batting_who_played[idx], idx)
+            room = cap - distribution[idx]
+            take = max(-distribution[idx], min(diff, room))
+            distribution[idx] += take
+            diff -= take
+            if diff == 0: break
+
+    # ── Ball distribution: also category/quality-weighted ──
+    # Top order faces more, and quality batters use their balls efficiently.
     ball_weights = []
     for i, p in enumerate(batting_who_played):
-        if i < 3: pos_w = 1.3
-        elif i < 6: pos_w = 1.0
-        else: pos_w = 0.65
-        ball_weights.append(pos_w * random.uniform(0.7, 1.3))
+        if i < 3:   pos_w = 1.4
+        elif i < 5: pos_w = 1.15
+        elif i < 7: pos_w = 0.9
+        elif i < 9: pos_w = 0.55
+        else:       pos_w = 0.35
+        cat_w = CAT_BAT_MULT.get(p["category"], 0.6)
+        ball_weights.append(pos_w * cat_w * random.uniform(0.85, 1.15))
     total_bw = sum(ball_weights) or 1.0
     ball_dist = [max(1, int(balls_faced * w / total_bw))
                  for w in ball_weights]
-    # Re-fix sum
     diff_b = balls_faced - sum(ball_dist)
     if ball_dist:
         ball_dist[0] += diff_b
+
+    # ── Sanity: balls must support runs at a reasonable strike rate ──
+    # If we gave 50 runs to a tailender who only faced 8 balls, the SR
+    # would be 625 — absurd. Cap balls-driven SR per category.
+    MAX_SR_BY_CAT = {
+        "Batsman": 250, "Wicket Keeper": 220,
+        "All-rounder": 220, "Bowler": 180,
+    }
+    for i, p in enumerate(batting_who_played):
+        max_sr = MAX_SR_BY_CAT.get(p["category"], 200)
+        # Required balls for current runs at max_sr
+        if distribution[i] > 0:
+            min_balls = max(1, int(distribution[i] * 100 / max_sr))
+            if ball_dist[i] < min_balls:
+                ball_dist[i] = min_balls
 
     # Mark dismissals: first N batters got out (where N = wickets_lost)
     dismissal_types = ["c", "b", "lbw", "run out", "st", "c & b"]
@@ -452,11 +564,24 @@ def _generate_bowling_card(xi, runs_conceded, balls_bowled, wickets_taken):
         bowlers = xi[:5]
     # Limit to 5 bowlers max in a T20 (one bowls 4 overs at most)
     if len(bowlers) > 5:
-        bowlers.sort(key=lambda p: -p["rating"])
+        # Prioritize by bowl_rating (not OVR), then by being a Bowler
+        bowlers.sort(key=lambda p: (
+            -(p.get("bowl_rating") or 0),
+            0 if p["category"] == "Bowler" else 1,
+        ))
         bowlers = bowlers[:5]
 
-    # Distribute balls/overs: skew toward higher-rated bowlers
-    weights = [max(0.5, p["rating"] / 80.0) * random.uniform(0.7, 1.3)
+    # Helper: effective bowling skill = bowl_rating with category boost
+    def _bowl_skill(p):
+        br = p.get("bowl_rating") or 0
+        if br <= 0:
+            br = p.get("rating", 60)
+        # Bowlers get full credit; ARs are slightly weaker bowlers
+        cat_mult = 1.0 if p["category"] == "Bowler" else 0.85
+        return max(20, br * cat_mult)
+
+    # Distribute balls/overs: skew toward higher-skill bowlers
+    weights = [(_bowl_skill(p) / 80.0) * random.uniform(0.85, 1.15)
                for p in bowlers]
     total_w = sum(weights) or 1.0
     ball_alloc = [max(6, int(balls_bowled * w / total_w))
@@ -466,31 +591,46 @@ def _generate_bowling_card(xi, runs_conceded, balls_bowled, wickets_taken):
     # Distribute the leftovers if any
     diff = balls_bowled - sum(ball_alloc)
     if diff > 0 and bowlers:
-        # Spread extra balls round-robin
-        for i in range(diff):
-            idx = i % len(bowlers)
+        # Spread extra balls round-robin, preferring higher-skill bowlers
+        order = sorted(range(len(bowlers)), key=lambda i: -_bowl_skill(bowlers[i]))
+        for j in range(diff):
+            idx = order[j % len(order)]
             if ball_alloc[idx] < 24:
                 ball_alloc[idx] += 1
 
-    # Distribute runs (better bowler = fewer runs)
-    inv_weights = [1.0 / max(0.5, p["rating"] / 80.0) * random.uniform(0.7, 1.3)
-                   for p in bowlers]
+    # Distribute runs: BETTER bowler concedes FEWER runs (inverse skill)
+    # Also weight by balls they bowled (a bowler with 24 balls concedes more
+    # total than one with 6 balls, even at the same economy).
+    inv_weights = []
+    for i, p in enumerate(bowlers):
+        skill = _bowl_skill(p)
+        # Inverse skill (better → lower weight for runs given up)
+        # Use a steeper inverse curve: skill 90 → 0.6, skill 50 → 1.7
+        inv = (80.0 / skill) ** 1.4
+        # Multiply by share of balls bowled
+        balls_share = max(1, ball_alloc[i]) / max(1, balls_bowled)
+        inv_weights.append(inv * balls_share * random.uniform(0.85, 1.15))
     total_iw = sum(inv_weights) or 1.0
     run_alloc = [int(runs_conceded * w / total_iw) for w in inv_weights]
     diff_r = runs_conceded - sum(run_alloc)
-    if run_alloc: run_alloc[0] += diff_r
+    if run_alloc:
+        run_alloc[0] += diff_r
 
-    # Distribute wickets — weighted by rating
+    # Distribute wickets — weighted by bowl_skill
     wkt_alloc = [0] * len(bowlers)
     remaining_wkts = wickets_taken
     while remaining_wkts > 0:
-        # Pick a bowler weighted by rating
         if not bowlers: break
-        weights = [max(0.5, p["rating"] / 80.0) for p in bowlers]
-        total = sum(weights)
+        wkt_weights = [_bowl_skill(p) / 80.0 for p in bowlers]
+        # Reduce weight if bowler is at max wickets (cap 5 in a T20)
+        for i in range(len(wkt_weights)):
+            if wkt_alloc[i] >= 5:
+                wkt_weights[i] = 0.01
+        total = sum(wkt_weights)
+        if total <= 0: break
         roll = random.uniform(0, total)
         acc = 0
-        for i, w in enumerate(weights):
+        for i, w in enumerate(wkt_weights):
             acc += w
             if roll <= acc:
                 wkt_alloc[i] += 1
