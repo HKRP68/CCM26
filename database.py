@@ -239,6 +239,13 @@ def _migrate_add_columns():
     _try_add("game_config", "daily_ad_quota", "INTEGER DEFAULT 5")
     # Telegram channel storage — cache file_ids for player images
     _try_add("player_images", "tg_file_id", "VARCHAR(200)")
+    # Referral code + branding (per the invite + branding feature)
+    _try_add("users", "referral_code", "VARCHAR(12)")
+    _try_add("game_config", "branding_channel_username", "VARCHAR(64)")
+    _try_add("game_config", "branding_channel_label", "VARCHAR(80)")
+    _try_add("game_config", "branding_group_username", "VARCHAR(64)")
+    _try_add("game_config", "branding_group_label", "VARCHAR(80)")
+    _try_add("game_config", "branding_tagline", "VARCHAR(200)")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
@@ -282,6 +289,10 @@ def _migrate_add_columns():
         # one with version='Base card' and one with version='IPL 2026'.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_players_name_version "
         "ON players (name, version)",
+        # Unique referral code per user (added via migration so we need the
+        # index here; existing rows with NULL are OK — NULLs don't conflict)
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code "
+        "ON users (referral_code)",
     ]
     for sql in migration_sql:
         try:

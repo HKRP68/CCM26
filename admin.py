@@ -30,7 +30,41 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("ADMIN_SECRET", os.urandom(24).hex())
+
+# ── Secret key — MUST be stable across restarts ───────────────────────
+# Why: Flask signs session cookies with this. CSRF tokens are stored in
+# the session. If the secret changes between requests, ALL sessions become
+# invalid → "CSRF session token is missing" errors on every form submit.
+#
+# Render free tier spins down idle services; every wake-up would have
+# generated a fresh os.urandom value, breaking all logged-in sessions.
+#
+# Resolution order:
+#   1. ADMIN_SECRET env var (best — set this in production)
+#   2. Derive from BOT_TOKEN hash (stable as long as BOT_TOKEN is stable)
+#   3. Fresh random (last resort — logs a loud warning)
+import hashlib as _hashlib
+_admin_secret = os.getenv("ADMIN_SECRET", "").strip()
+if _admin_secret:
+    app.secret_key = _admin_secret
+elif os.getenv("BOT_TOKEN", "").strip():
+    # Derive a stable 32-byte hex secret from the bot token. Anyone with the
+    # bot token could compute this, but they could also do far worse with it
+    # directly — acceptable fallback. Far better than fresh random per restart.
+    _seed = "cricmaster-admin-secret-v1::" + os.getenv("BOT_TOKEN", "")
+    app.secret_key = _hashlib.sha256(_seed.encode()).hexdigest()
+    import logging as _l
+    _l.getLogger("admin").warning(
+        "ADMIN_SECRET env var not set — derived from BOT_TOKEN hash. "
+        "For production, set ADMIN_SECRET to a random 32+ char string."
+    )
+else:
+    app.secret_key = os.urandom(24).hex()
+    import logging as _l
+    _l.getLogger("admin").error(
+        "CRITICAL: Neither ADMIN_SECRET nor BOT_TOKEN is set! "
+        "Sessions and CSRF will break on restart. Set ADMIN_SECRET now."
+    )
 
 # ── Security configuration ────────────────────────────────────────────
 # Cookie hardening: HttpOnly stops JS reading the cookie, SameSite mitigates
@@ -45,13 +79,32 @@ app.config.update(
 
 # CSRF protection for all POST/PUT/DELETE forms
 try:
-    from flask_wtf.csrf import CSRFProtect, generate_csrf
+    from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
     csrf = CSRFProtect(app)
 
     @app.context_processor
     def _inject_csrf():
         # Makes csrf_token() available in every template
         return {"csrf_token": generate_csrf}
+
+    @app.errorhandler(CSRFError)
+    def _handle_csrf_error(e):
+        """Show a friendly message and bounce back to a fresh page.
+
+        Common cause: session expired (idle timeout, server restart, or
+        user had a stale tab open across a deploy). Bouncing to /login
+        with a clear message lets them re-authenticate cleanly instead of
+        seeing a raw 400.
+        """
+        import logging
+        logging.getLogger("admin").warning(
+            f"CSRF error on {request.path}: {e.description}"
+        )
+        from flask import flash, redirect, url_for, session as _sess
+        # Clear stale session — they need a fresh one
+        _sess.clear()
+        flash("Your session expired. Please log in again.", "error")
+        return redirect(url_for("login"))
 except ImportError:
     # flask-wtf not available — log a warning, fall back to no-op
     import logging
@@ -2836,12 +2889,24 @@ def webapp_init():
                 "configured": adsgram_service.is_configured(),
                 "block_id": adsgram_service.get_block_id(),
             },
+            "branding": _get_branding_safe(db),
         }
     except Exception as e:
         logger.exception("webapp_init failed")
         return {"ok": False, "error": str(e)}, 500
     finally:
         db.close()
+
+
+def _get_branding_safe(db):
+    """Wrapper that returns empty branding if service errors (defensive)."""
+    try:
+        from services.referral_service import get_branding
+        return get_branding(db)
+    except Exception:
+        return {"channel_username": "", "channel_label": "", "channel_link": "",
+                "group_username": "", "group_label": "", "group_link": "",
+                "tagline": "", "has_any": False}
 
 
 @app.route("/api/webapp/search", methods=["POST"])
@@ -3757,13 +3822,14 @@ def webapp_quickmatch():
         while len(innings_1) < 3: innings_1.append("balanced")
         while len(innings_2) < 3: innings_2.append("balanced")
 
-        # Check roster size
+        # Check roster size — and check for full XI
         if (user.roster_count or 0) < 5:
             return {"ok": False, "error": "roster_too_small",
                     "message": "You need at least 5 players in your roster to play."}, 400
 
-        # Run the simulation
-        result = play_quick_match(
+        # Try XI-based simulation first (better experience)
+        from services.quick_match_service import play_quick_match_xi, play_quick_match
+        result = play_quick_match_xi(
             db, user,
             user_choices={
                 "toss_choice": toss_choice,
@@ -3772,11 +3838,18 @@ def webapp_quickmatch():
             },
             opponent_difficulty=difficulty,
         )
+        # If XI was incomplete, return the error explaining
+        if not result.get("ok", True):
+            err_code = result.get("error", "xi_incomplete")
+            return {
+                "ok": False, "error": err_code,
+                "message": result.get("message",
+                    "Your playing XI must have 11 players. Set up your XI first."),
+            }, 400
 
-        # Award coins
+        # XI sim handled coin reward + activity log internally — skip duplicating
         coin_reward = result.get("coin_reward", 0)
-        if coin_reward > 0:
-            user.total_coins = (user.total_coins or 0) + coin_reward
+        # NOTE: total_coins was already updated in play_quick_match_xi
 
         # Bump match counters
         user.matches_played = (user.matches_played or 0) + 1
@@ -3786,26 +3859,7 @@ def webapp_quickmatch():
             user.matches_lost = (user.matches_lost or 0) + 1
         # Tie: no win/loss bump
 
-        # Activity log
-        try:
-            from services.activity_service import log_activity
-            outcome = "won" if result["user_won"] is True else ("lost" if result["user_won"] is False else "tied")
-            log_activity(db, user.id, "quickmatch",
-                         f"[MiniApp] Quick match: {outcome}, "
-                         f"{result['innings_1']['total_runs']}/{result['innings_1']['total_wickets']} vs "
-                         f"{result['innings_2']['total_runs']}/{result['innings_2']['total_wickets']}",
-                         coins_change=coin_reward)
-        except Exception:
-            pass
-
-        # Quest tracking
-        try:
-            from services.quest_service import safe_track
-            safe_track(db, user.id, "match_played", 1)
-            if result["user_won"] is True:
-                safe_track(db, user.id, "match_won", 1)
-        except Exception:
-            pass
+        # (Activity log + quest tracking already handled in play_quick_match_xi)
 
         db.commit()
         return {
@@ -4136,6 +4190,7 @@ def webapp_invite():
         from services.referral_service import (
             get_active_competition, get_user_stats, get_invite_link,
             get_leaderboard, get_user_invitee_list,
+            ensure_referral_code, get_branding, is_eligible_to_redeem,
         )
 
         bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
@@ -4143,14 +4198,26 @@ def webapp_invite():
         comp = get_active_competition(db)
         stats = get_user_stats(db, user.id, comp.id if comp else None)
 
+        # Ensure user has a referral code
+        code = ensure_referral_code(db, user)
+        # Eligibility to redeem (only new users)
+        can_redeem, redeem_blocked_reason = is_eligible_to_redeem(db, user)
+        db.commit()
+
         result = {
             "ok": True,
             "bot_configured": bool(bot_username),
             "invite_link": link,
+            "user_referral_code": code,
+            "can_redeem": can_redeem,
+            "redeem_blocked_reason": redeem_blocked_reason,
+            # Legacy field kept for backward compat
+            "has_redeemed_code": (not can_redeem and redeem_blocked_reason == "already_redeemed"),
             "stats": stats,
             "active_competition": None,
             "leaderboard": [],
             "my_invitees": [],
+            "branding": get_branding(db),
         }
         if comp:
             result["active_competition"] = {
@@ -4176,7 +4243,187 @@ def webapp_invite():
 
         return result
     except Exception as e:
+        db.rollback()
         logger.exception("webapp_invite failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/redeem", methods=["POST"])
+@csrf_exempt
+def webapp_redeem():
+    """Mini App referral code redemption."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.referral_service import redeem_code
+        data = request.get_json(silent=True) or {}
+        code = (data.get("code") or "").strip().upper()
+        if not code:
+            return {"ok": False, "error": "missing_code",
+                    "message": "Enter a code."}, 400
+        # Validate format quickly
+        import re
+        if not re.match(r"^[A-HJ-NP-Z2-9]{6}$", code):
+            return {"ok": False, "error": "invalid_format",
+                    "message": "Codes are 6 characters (no spaces or special chars)."}, 400
+
+        result = redeem_code(db, code, user.id)
+        if result["ok"]:
+            db.commit()
+        else:
+            db.rollback()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_redeem failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quests", methods=["POST"])
+@csrf_exempt
+def webapp_quests():
+    """Return the user's active quests grouped by type (daily/weekly/monthly).
+
+    For each quest: progress, target, percent, completed, claimed flags.
+    Body: {type: 'daily'|'weekly'|'monthly'|'all'} default 'all'
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quest_service import get_user_quests, consume_pending_auto_claims
+        data = request.get_json(silent=True) or {}
+        which = (data.get("type") or "all").lower()
+        types = [which] if which in ("daily", "weekly", "monthly") else ["daily", "weekly", "monthly"]
+
+        result = {"ok": True, "groups": {}, "auto_claimed_summary": []}
+
+        for qtype in types:
+            # Pick up any auto-claims from previous period (best-effort)
+            try:
+                ac = consume_pending_auto_claims(db, user.id, qtype)
+                if ac:
+                    result["auto_claimed_summary"].extend([{
+                        "quest_type": qtype,
+                        "title": entry.get("title", ""),
+                        "coins": entry.get("coins", 0),
+                        "gems": entry.get("gems", 0),
+                        "points": entry.get("points", 0),
+                    } for entry in ac])
+            except Exception:
+                logger.exception("auto-claim consume failed")
+
+            items = get_user_quests(db, user.id, qtype)
+            quests_out = []
+            for it in items:
+                q = it["quest"]
+                quests_out.append({
+                    "quest_id": q.id,
+                    "uqp_id": it["uqp_id"],
+                    "title": q.title,
+                    "description": q.description,
+                    "emoji": getattr(q, "emoji", "🎯") or "🎯",
+                    "category": getattr(q, "category", "") or "",
+                    "progress": it["progress"],
+                    "target": it["target"],
+                    "percent": it["percent"],
+                    "completed": it["completed"],
+                    "claimed": it["claimed"],
+                    "reward_coins": q.reward_coins or 0,
+                    "reward_gems": q.reward_gems or 0,
+                    "reward_points": q.reward_points or 0,
+                })
+            result["groups"][qtype] = quests_out
+
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quests failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quests/claim", methods=["POST"])
+@csrf_exempt
+def webapp_quest_claim():
+    """Claim a single quest reward. Body: {quest_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quest_service import claim_quest_reward
+        data = request.get_json(silent=True) or {}
+        try:
+            qid = int(data.get("quest_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        if not qid:
+            return {"ok": False, "error": "missing_id"}, 400
+
+        ok, message, reward = claim_quest_reward(db, user.id, qid)
+        if not ok:
+            return {"ok": False, "error": "claim_failed", "message": message}, 400
+
+        db.commit()
+        return {
+            "ok": True,
+            "message": message,
+            "reward": reward,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "quest_points": user.quest_points or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quest_claim failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quests/claim_all", methods=["POST"])
+@csrf_exempt
+def webapp_quest_claim_all():
+    """Claim ALL completed-but-unclaimed quests of a given type.
+    Body: {type: 'daily'|'weekly'|'monthly'}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quest_service import claim_all_completed
+        data = request.get_json(silent=True) or {}
+        qtype = (data.get("type") or "").lower()
+        if qtype not in ("daily", "weekly", "monthly"):
+            return {"ok": False, "error": "bad_type"}, 400
+
+        count, total = claim_all_completed(db, user.id, qtype)
+        db.commit()
+        return {
+            "ok": True,
+            "count_claimed": count,
+            "total_reward": total,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "quest_points": user.quest_points or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quest_claim_all failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -7916,6 +8163,69 @@ def admin_competition_template_delete(tpl_id):
         db.rollback()
         flash(f"❌ {e}", "error")
         return redirect(url_for("admin_competition_templates"))
+    finally:
+        db.close()
+
+
+# ─── Branding (channel + group links) ────────────────────────────────
+
+@app.route("/branding")
+@login_required
+def admin_branding():
+    """Edit the global channel/group branding shown in bot messages and Mini App."""
+    db = get_session()
+    try:
+        from models import GameConfig
+        cfg = db.query(GameConfig).first()
+        if not cfg:
+            cfg = GameConfig()
+            db.add(cfg); db.commit()
+        return render_template("admin_branding.html", cfg=cfg)
+    finally:
+        db.close()
+
+
+@app.route("/branding/save", methods=["POST"])
+@login_required
+def admin_branding_save():
+    db = get_session()
+    try:
+        from models import GameConfig
+        cfg = db.query(GameConfig).first()
+        if not cfg:
+            cfg = GameConfig()
+            db.add(cfg); db.flush()
+
+        def _clean(s, max_len):
+            return (s or "").strip().lstrip("@")[:max_len] or None
+
+        cfg.branding_channel_username = _clean(request.form.get("channel_username"), 64)
+        cfg.branding_channel_label = (request.form.get("channel_label") or "").strip()[:80] or None
+        cfg.branding_group_username = _clean(request.form.get("group_username"), 64)
+        cfg.branding_group_label = (request.form.get("group_label") or "").strip()[:80] or None
+        cfg.branding_tagline = (request.form.get("tagline") or "").strip()[:200] or None
+
+        # Refresh in-memory config cache (used by config_service)
+        try:
+            from services import config_service as _cs
+            if hasattr(_cs, "_refresh_cfg"):
+                _cs._refresh_cfg(db)
+        except Exception:
+            pass
+
+        db.commit()
+        flash("✅ Branding updated. Will appear immediately everywhere.", "info")
+        try:
+            log_admin(db, "update_branding", "game_config", cfg.id, "system",
+                      f"channel=@{cfg.branding_channel_username or '-'} group=@{cfg.branding_group_username or '-'}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_branding"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_branding"))
     finally:
         db.close()
 

@@ -269,9 +269,24 @@ async def start_handler(update, context):
         "/traitapply /tapply - Apply trait to player\n"
         "/traitupgrade /tup - Level up a trait\n"
         "/traitreplace /trep - Replace a trait\n"
-        "/leaderboard /lb /top - Leaderboard",
+        "/leaderboard /lb /top - Leaderboard"
+        + _get_start_branding(),
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
+
+
+def _get_start_branding():
+    """Fetch branding HTML snippet for the /start welcome message."""
+    try:
+        from services.referral_service import format_branding_html
+        s = get_session()
+        try:
+            return format_branding_html(s)
+        finally:
+            s.close()
+    except Exception:
+        return ""
 
 
 def start_admin_panel():
@@ -594,6 +609,22 @@ def main():
         # ── /invite Referral system ─────────────────────────────────
         from handlers.invite import invite_handler
         app.add_handler(CommandHandler(["invite", "ref", "refer", "share"], invite_handler))
+
+        # ── /redeem Referral code redemption ──────────────────────
+        from handlers.redeem import (
+            redeem_handler, text_code_handler, refcode_skip_callback,
+        )
+        app.add_handler(CommandHandler(["redeem", "code"], redeem_handler))
+        app.add_handler(CallbackQueryHandler(refcode_skip_callback,
+                                              pattern=r"^refcode_skip_"))
+        # Text fallback: in DM only, catches bare codes typed after /debut.
+        # text_code_handler checks the `awaiting_referral_code` flag and
+        # returns early if not set, so other text messages pass through.
+        from telegram.ext import MessageHandler, filters
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            text_code_handler,
+        ), group=0)
 
         # ── Bot vs Bot spectator mode ─────────────────────────────────
         app.add_handler(CommandHandler(["botvsbot", "bvb"], botvsbot_handler))

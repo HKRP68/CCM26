@@ -20,6 +20,10 @@ class User(Base):
     total_gems = Column(Integer, default=0)
     roster_count = Column(Integer, default=0)
     captain_roster_id = Column(Integer, nullable=True)
+    # Short unique code used by friends to redeem a referral via /debut prompt
+    # or /redeem <code>. Auto-generated on first /invite or first request that
+    # needs it. 6 chars uppercase alphanumeric, ~1 billion possibilities.
+    referral_code = Column(String(12), nullable=True, unique=True, index=True)
     matches_played = Column(Integer, default=0)
     matches_won = Column(Integer, default=0)
     matches_lost = Column(Integer, default=0)
@@ -709,6 +713,14 @@ class GameConfig(Base):
     # 1 free use). Admin-tunable via /admin/economy.
     spin_ad_quota = Column(Integer, default=5, nullable=False)
     daily_ad_quota = Column(Integer, default=5, nullable=False)
+    # ── Branding (admin-editable from /branding page) ──
+    # Public Telegram channel + group usernames (without @). Used in welcome
+    # messages, /howto, /invite, and Mini App footer. Blank = hide link.
+    branding_channel_username = Column(String(64), nullable=True)
+    branding_channel_label = Column(String(80), nullable=True)
+    branding_group_username = Column(String(64), nullable=True)
+    branding_group_label = Column(String(80), nullable=True)
+    branding_tagline = Column(String(200), nullable=True)
     # Debut bonus
     debut_coins = Column(Integer, default=100000)
     debut_gems = Column(Integer, default=20)                    # was 100
