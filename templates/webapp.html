@@ -893,6 +893,73 @@
     font-size: 0.72rem; color: var(--accent); font-weight: 700;
     white-space: nowrap;
   }
+  .bench-group-label {
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0.8rem 0 0.4rem;
+    font-weight: 700;
+  }
+  .bench-group-label:first-child { margin-top: 0; }
+  .xi-move {
+    display: flex; flex-direction: column; gap: 0.15rem;
+  }
+  .xi-move-btn {
+    background: var(--card-2); color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.18rem 0.45rem;
+    border-radius: 4px;
+    font-family: inherit; font-size: 0.7rem;
+    cursor: pointer; line-height: 1;
+  }
+  .xi-move-btn:active:not(:disabled) { background: var(--accent); color: #0a0f1a; }
+  .xi-move-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .cat-tag {
+    display: inline-block;
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .cat-batsman { background: rgba(255, 77, 109, 0.15); color: var(--red); }
+  .cat-bowler { background: rgba(0, 212, 170, 0.15); color: var(--green); }
+  .cat-wicket-keeper { background: rgba(212, 168, 42, 0.2); color: var(--accent); }
+  .cat-all-rounder { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
+
+  /* Swap picker overlay */
+  .swap-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex; align-items: flex-end; justify-content: center;
+    z-index: 9999;
+    animation: fadein 0.18s;
+  }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+  .swap-panel {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px 14px 0 0;
+    width: 100%; max-width: 480px;
+    padding: 1rem 1rem 1.2rem;
+    max-height: 80vh; overflow-y: auto;
+    animation: slideup 0.22s;
+  }
+  @keyframes slideup { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .swap-candidate {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.7rem 0.8rem;
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.4rem;
+    cursor: pointer;
+  }
+  .swap-candidate:active { background: var(--card); }
+  .swap-arrow {
+    color: var(--red); font-weight: 700; font-size: 0.78rem;
+    white-space: nowrap;
+  }
 
   /* Invite */
   .invite-lb-row {
@@ -1205,7 +1272,7 @@
     <button class="link-btn" onclick="navigate('roster')">← Squad</button>
   </div>
   <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
-    Drag to reorder positions 1-11. Tap a bench player to swap into the XI.
+    Drag the ⠿ handle OR use ▲▼ buttons to reorder. Tap a bench player to swap them in (same category only).
   </p>
   <div id="xi-list" style="margin-bottom: 1rem;">
     <div class="empty"><div class="spinner"></div></div>
@@ -2676,6 +2743,21 @@ let xiSortable = null;
 let cachedXi = null;
 let cachedBench = null;
 
+// Category order — used for grouping bench and inferring batting/bowling
+const XI_CATEGORY_ORDER = ['Batsman', 'Wicket Keeper', 'All-rounder', 'Bowler'];
+const XI_CATEGORY_LABEL = {
+  'Batsman': '🏏 Batsmen',
+  'Wicket Keeper': '🧤 Wicket Keepers',
+  'All-rounder': '⚔️ All-rounders',
+  'Bowler': '🎯 Bowlers',
+};
+const XI_CATEGORY_SHORT = {
+  'Batsman': 'BAT',
+  'Wicket Keeper': 'WK',
+  'All-rounder': 'AR',
+  'Bowler': 'BOWL',
+};
+
 async function loadXi() {
   const list = document.getElementById('xi-list');
   const benchEl = document.getElementById('xi-bench');
@@ -2689,42 +2771,101 @@ async function loadXi() {
   cachedXi = data.xi;
   cachedBench = data.bench;
 
-  if (!data.xi.length) {
+  renderXiList();
+  renderBenchGrouped();
+}
+
+function renderXiList() {
+  const list = document.getElementById('xi-list');
+  if (!cachedXi || !cachedXi.length) {
     list.innerHTML = `<div class="empty">No XI yet — get players into your roster!</div>`;
-  } else {
-    list.innerHTML = data.xi.map((r, i) => `
+    return;
+  }
+  list.innerHTML = cachedXi.map((r, i) => {
+    const isFirst = i === 0;
+    const isLast = i === cachedXi.length - 1;
+    return `
       <div class="xi-row" data-roster-id="${r.roster_id}">
         <div class="xi-handle">⠿</div>
         <div class="xi-pos">${i + 1}</div>
         <div class="xi-info">
           <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">CAPT</span>' : ''}</div>
-          <div class="xi-meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}</div>
+          <div class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</div>
+        </div>
+        <div class="xi-move">
+          <button class="xi-move-btn" onclick="moveXiRow(${r.roster_id}, -1)" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
+          <button class="xi-move-btn" onclick="moveXiRow(${r.roster_id}, +1)" ${isLast ? 'disabled' : ''} title="Move down">▼</button>
         </div>
       </div>
-    `).join('');
+    `;
+  }).join('');
 
-    // Init Sortable on the list — drag to reorder
-    if (xiSortable) xiSortable.destroy();
-    xiSortable = Sortable.create(list, {
-      animation: 150,
-      handle: '.xi-handle',
-      ghostClass: 'xi-ghost',
-      onEnd: persistXiOrder,
-    });
-  }
+  // Init Sortable on the list — drag to reorder
+  if (xiSortable) { try { xiSortable.destroy(); } catch (e) {} }
+  xiSortable = Sortable.create(list, {
+    animation: 150,
+    handle: '.xi-handle',
+    ghostClass: 'xi-ghost',
+    onEnd: persistXiOrder,
+  });
+}
 
-  if (!data.bench.length) {
+function renderBenchGrouped() {
+  const benchEl = document.getElementById('xi-bench');
+  if (!cachedBench || !cachedBench.length) {
     benchEl.innerHTML = `<div class="empty" style="padding:1rem;"><div style="font-size:0.85rem;">No bench players</div></div>`;
-  } else {
-    benchEl.innerHTML = data.bench.map(r => `
-      <div class="bench-row" onclick="swapBenchPlayer(${r.roster_id}, '${escapeHtmlAttr(r.name)}')">
-        <div class="xi-info">
-          <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}</div>
-          <div class="xi-meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)} · pos ${r.position}</div>
+    return;
+  }
+  // Group by category in fixed order
+  const grouped = {};
+  cachedBench.forEach(r => {
+    const cat = r.category || 'Other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(r);
+  });
+
+  const out = [];
+  XI_CATEGORY_ORDER.forEach(cat => {
+    if (!grouped[cat] || !grouped[cat].length) return;
+    out.push(`<div class="bench-group-label">${XI_CATEGORY_LABEL[cat] || cat} <span style="color:var(--muted);font-weight:400;">(${grouped[cat].length})</span></div>`);
+    grouped[cat].forEach(r => {
+      out.push(`
+        <div class="bench-row" onclick="swapBenchPlayer(${r.roster_id}, '${escapeHtmlAttr(r.name)}', '${escapeHtmlAttr(r.category)}')">
+          <div class="xi-info">
+            <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}</div>
+            <div class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</div>
+          </div>
+          <div class="bench-action">↑ Swap</div>
         </div>
-        <div class="bench-action">↑ Swap</div>
-      </div>
-    `).join('');
+      `);
+    });
+  });
+  benchEl.innerHTML = out.join('');
+}
+
+function categoryKey(cat) {
+  return (cat || '').toLowerCase().replace(/\s+/g, '-');
+}
+
+async function moveXiRow(rosterId, delta) {
+  if (!cachedXi) return;
+  const idx = cachedXi.findIndex(r => r.roster_id === rosterId);
+  if (idx === -1) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= cachedXi.length) return;
+  // Swap positions in cachedXi
+  const tmp = cachedXi[idx];
+  cachedXi[idx] = cachedXi[newIdx];
+  cachedXi[newIdx] = tmp;
+  // Re-render immediately for snappy feel
+  renderXiList();
+  haptic('light');
+  // Persist
+  const orderedIds = cachedXi.map(r => r.roster_id);
+  const { ok, data } = await api('/api/webapp/xi/reorder', { ordered_roster_ids: orderedIds });
+  if (!ok) {
+    toast(data.message || 'Reorder failed', 'error');
+    loadXi();
   }
 }
 
@@ -2733,6 +2874,12 @@ async function persistXiOrder() {
     .map(el => parseInt(el.dataset.rosterId, 10))
     .filter(n => !isNaN(n));
   if (orderedIds.length < 2) return;
+  // Sync cachedXi with new DOM order
+  if (cachedXi) {
+    const byId = {};
+    cachedXi.forEach(r => byId[r.roster_id] = r);
+    cachedXi = orderedIds.map(id => byId[id]).filter(Boolean);
+  }
   // Optimistically update position labels
   document.querySelectorAll('#xi-list .xi-row .xi-pos').forEach((el, i) => {
     el.textContent = i + 1;
@@ -2742,28 +2889,72 @@ async function persistXiOrder() {
   if (!ok) {
     toast(data.message || 'Reorder failed', 'error');
     loadXi();
-    return;
   }
 }
 
-async function swapBenchPlayer(benchRosterId, benchName) {
+async function swapBenchPlayer(benchRosterId, benchName, benchCategory) {
   if (!cachedXi || cachedXi.length === 0) {
-    toast('No XI player to swap with', 'error');
+    toast('No XI to swap with', 'error');
     return;
   }
-  // For simplicity: swap into position 11 (last XI spot)
-  const xiTarget = cachedXi[cachedXi.length - 1];
-  if (!confirm(`Swap ${benchName} into the XI (replacing ${xiTarget.name} at #${xiTarget.position})?`)) return;
+  // Find XI players of the SAME category (e.g. Batsman swap → Batsman targets only)
+  const sameCategoryXi = cachedXi.filter(r => r.category === benchCategory);
+  if (!sameCategoryXi.length) {
+    toast(`No ${benchCategory} in your XI — drop one in first or change positions`, 'error');
+    return;
+  }
+  // Show a picker — let user choose WHICH same-category XI player to swap out
+  showSwapPicker(benchRosterId, benchName, benchCategory, sameCategoryXi);
+}
+
+function showSwapPicker(benchRosterId, benchName, benchCategory, candidates) {
+  // Build a modal-like overlay
+  const existing = document.getElementById('swap-picker-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'swap-picker-overlay';
+  overlay.className = 'swap-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="swap-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+        <h3 style="margin:0;font-size:1rem;">Swap ${escapeHtml(benchName)} in</h3>
+        <button onclick="document.getElementById('swap-picker-overlay').remove();" class="link-btn">✕</button>
+      </div>
+      <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
+        Choose a <b>${escapeHtml(benchCategory)}</b> to swap out of the XI:
+      </p>
+      <div>
+        ${candidates.map(c => `
+          <div class="swap-candidate" onclick="confirmSwap(${benchRosterId}, ${c.roster_id}, '${escapeHtmlAttr(benchName)}', '${escapeHtmlAttr(c.name)}')">
+            <div>
+              <div style="font-weight:700;font-size:0.88rem;">${escapeHtml(c.name)} ${ratingBadge(c.rating)}</div>
+              <div style="font-size:0.72rem;color:var(--muted);">XI position ${c.position}</div>
+            </div>
+            <div class="swap-arrow">→ Out</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+async function confirmSwap(benchRosterId, xiRosterId, benchName, xiName) {
+  const overlay = document.getElementById('swap-picker-overlay');
+  if (overlay) overlay.remove();
   haptic('medium');
   const { ok, data } = await api('/api/webapp/xi/swap_bench', {
     bench_roster_id: benchRosterId,
-    xi_roster_id: xiTarget.roster_id,
+    xi_roster_id: xiRosterId,
   });
   if (!ok) {
     toast(data.message || 'Swap failed', 'error');
+    hapticNotif('error');
     return;
   }
-  toast(`${benchName} is now in the XI`, 'success');
+  toast(`${benchName} replaces ${xiName} in the XI`, 'success');
   hapticNotif('success');
   loadXi();
 }
