@@ -961,6 +961,34 @@
     white-space: nowrap;
   }
 
+  /* Phase result flash overlay */
+  .phase-result-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9999;
+    animation: fadein 0.18s;
+    transition: opacity 0.2s;
+  }
+  .phase-result-card {
+    background: var(--card); border: 2px solid var(--accent);
+    border-radius: 14px;
+    padding: 1.4rem 1.8rem;
+    text-align: center;
+    max-width: 320px;
+    animation: scaleup 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .phase-result-card.phase-big {
+    border-color: var(--green);
+    box-shadow: 0 0 28px rgba(0, 212, 170, 0.3);
+  }
+  .phase-result-card.phase-good { border-color: var(--accent); }
+  .phase-result-card.phase-meh { border-color: var(--border); }
+  @keyframes scaleup {
+    from { transform: scale(0.85); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
   /* Invite */
   .invite-lb-row {
     display: flex; align-items: center; gap: 0.6rem;
@@ -1316,9 +1344,21 @@
       <div style="font-size: 4rem; margin-bottom: 0.5rem;">🏏</div>
       <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Quick Match</h2>
       <p style="color: var(--muted); margin: 0; font-size: 0.88rem;">
-        Your playing XI vs a bot opponent. Full scorecard at the end.<br>
-        Pick aggressive, balanced, or defensive for each phase. 7 taps. ~60 seconds.
+        Your XI vs a bot team. Choose tactics phase by phase as the match unfolds — react to the situation.
       </p>
+    </div>
+
+    <!-- Daily quota card -->
+    <div class="card" id="qm-quota-card" style="text-align:center; padding: 0.9rem 1rem; margin-bottom: 0.7rem; background: rgba(212,168,42,0.06);">
+      <div style="font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;">
+        Today's Quick Matches
+      </div>
+      <div id="qm-quota-display" style="font-size: 1.4rem; font-weight: 800; margin-top: 0.25rem;">
+        — / —
+      </div>
+      <div style="font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem;">
+        Resets at UTC midnight
+      </div>
     </div>
 
     <div class="card" style="text-align: center; padding: 1.5rem;">
@@ -1329,7 +1369,7 @@
         <button class="chip" data-diff="hard" onclick="setMatchDifficulty('hard')">🔥 Hard</button>
       </div>
       <p style="color: var(--muted); font-size: 0.78rem; margin: 0.8rem 0 0;" id="diff-hint">
-        Opponent strength scales to your XI's average rating
+        Opponent rating = your XI average
       </p>
       <p style="color: var(--muted); font-size: 0.72rem; margin: 0.5rem 0 0;">
         Need a full XI? <a href="#" onclick="navigate('xi'); return false;" style="color: var(--accent);">Manage your XI</a>
@@ -1345,7 +1385,14 @@
       </div>
     </div>
 
-    <button class="spin-button" onclick="startMatch()" style="margin-top: 1.2rem; width: 100%;">
+    <div class="card" style="margin-top: 0.8rem; background: rgba(0,212,170,0.05);">
+      <p style="margin: 0; font-size: 0.78rem; color: var(--muted); line-height: 1.6;">
+        🪙 <b style="color:var(--text);">+250 coins</b> for a win (+100 dominant bonus). 100 for a tie.<br>
+        ℹ️ Quick Match stats are <b>separate</b> from your career — they don't affect the leaderboard.
+      </p>
+    </div>
+
+    <button class="spin-button" id="qm-play-button" onclick="startMatch()" style="margin-top: 1.2rem; width: 100%;">
       🎲 Toss &amp; Play
     </button>
   </div>
@@ -1376,10 +1423,14 @@
     </div>
 
     <div class="card" style="margin-top: 0.5rem; text-align: center;" id="phases-context">
-      <!-- Filled by JS: chase target, current state -->
+      <!-- Filled by JS: current state, history, situation -->
     </div>
 
-    <div style="display: grid; grid-template-columns: 1fr; gap: 0.65rem; margin-top: 1rem;">
+    <div style="margin-top: 1rem; font-size: 0.82rem; color: var(--muted); text-align: center;" id="phases-choices-hint">
+      How will your batters play?
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr; gap: 0.65rem; margin-top: 0.5rem;">
       <button class="tile match" onclick="pickPhase('aggressive')" style="padding: 1.1rem;">
         <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
           <div style="font-size: 2rem;">🟢</div>
@@ -1410,9 +1461,13 @@
     </div>
   </div>
 
+  <div id="match-step-innings-break" style="display:none;">
+    <div id="innings-break-content"></div>
+  </div>
+
   <div id="match-step-playing" style="display:none; text-align:center; padding: 3rem 1rem;">
     <div style="font-size: 3.5rem;">🏏</div>
-    <div style="margin-top: 1rem; color: var(--muted);">Simulating match…</div>
+    <div style="margin-top: 1rem; color: var(--muted);">Loading…</div>
     <div class="spinner" style="margin-top: 1rem; width: 28px; height: 28px;"></div>
   </div>
 
@@ -1790,9 +1845,10 @@ function showDailyReward(r) {
   `;
 }
 
-// ════════════════ Quick Match ════════════════
+// ════════════════ Quick Match v3 — phase-by-phase ════════════════
 let matchState = null;
 let matchDifficulty = 'medium';
+let matchQuota = null;
 
 function setMatchDifficulty(d) {
   haptic('light');
@@ -1802,133 +1858,305 @@ function setMatchDifficulty(d) {
   const hint = document.getElementById('diff-hint');
   if (hint) {
     hint.textContent = ({
-      easy: 'Opponent rated -10 OVR vs your top 11',
-      medium: 'Opponent rating = your top-11 average',
-      hard: 'Opponent rated +10 OVR vs your top 11',
+      easy: 'Opponent rated -8 OVR vs your XI average',
+      medium: 'Opponent rating = your XI average',
+      hard: 'Opponent rated +8 OVR vs your XI average',
     })[d];
   }
 }
 
 function showMatchStep(step) {
-  ['intro', 'toss', 'phases', 'playing', 'result'].forEach(s => {
+  ['intro', 'toss', 'phases', 'innings-break', 'playing', 'result'].forEach(s => {
     const el = document.getElementById('match-step-' + s);
     if (el) el.style.display = (s === step) ? 'block' : 'none';
   });
+  // Refresh quota when returning to intro
+  if (step === 'intro') loadMatchQuota();
 }
 
 function resetMatchScreen() {
+  // Best-effort abandon if a match is in flight
+  if (matchState && matchState.match_id && !matchState.complete) {
+    api('/api/webapp/quickmatch/abandon', {}).catch(() => {});
+  }
   matchState = null;
   showMatchStep('intro');
 }
 
+async function loadMatchQuota() {
+  const display = document.getElementById('qm-quota-display');
+  const btn = document.getElementById('qm-play-button');
+  if (!display) return;
+  const { ok, data } = await api('/api/webapp/quickmatch/quota', {});
+  if (!ok) { display.textContent = '—'; return; }
+  matchQuota = data;
+  const used = data.used || 0, limit = data.limit || 5, rem = data.remaining || 0;
+  display.innerHTML = `<span style="color:${rem === 0 ? 'var(--red)' : 'var(--accent)'};">${used}</span><span style="color:var(--muted);"> / ${limit}</span>`;
+  if (btn) {
+    if (rem <= 0) {
+      btn.disabled = true;
+      btn.textContent = '🚫 Daily limit reached';
+      btn.style.opacity = '0.55';
+    } else {
+      btn.disabled = false;
+      btn.textContent = `🎲 Toss & Play (${rem} left)`;
+      btn.style.opacity = '1';
+    }
+  }
+}
+
 function startMatch() {
   haptic('medium');
-  if (!userData || (userData.roster_count || 0) < 5) {
-    toast('You need at least 5 players in roster to play', 'error');
+  if (matchQuota && matchQuota.remaining <= 0) {
+    toast(`Daily limit ${matchQuota.limit} reached. Resets at UTC midnight.`, 'error');
     return;
   }
-  matchState = {
-    tossChoice: null,
-    innings1: [],
-    innings2: [],
-    currentInnings: 1,
-    currentPhase: 0,
-  };
   showMatchStep('toss');
 }
 
-function submitToss(choice) {
+const PHASE_INFO = [
+  { name: 'Powerplay', overs: 'Overs 1-6', icon: '⚡' },
+  { name: 'Middle Overs', overs: 'Overs 7-15', icon: '🎯' },
+  { name: 'Death Overs', overs: 'Overs 16-20', icon: '🔥' },
+];
+
+async function submitToss(choice) {
   haptic('medium');
-  matchState.tossChoice = choice;
-  matchState.currentInnings = 1;
-  matchState.currentPhase = 0;
+  showMatchStep('playing');
+  const { ok, data } = await api('/api/webapp/quickmatch/start', {
+    toss_choice: choice,
+    difficulty: matchDifficulty,
+  });
+  if (!ok) {
+    if (data.error === 'invalid_xi') {
+      showMatchStep('intro');
+      showXiErrorModal(data.errors || [data.message || 'XI invalid']);
+    } else if (data.error === 'daily_limit_reached') {
+      showMatchStep('intro');
+      loadMatchQuota();
+      toast(data.message, 'error');
+    } else {
+      toast(data.message || 'Could not start match', 'error');
+      showMatchStep('intro');
+    }
+    return;
+  }
+  matchState = data.state;
+  if (data.quota) matchQuota = data.quota;
   renderPhase();
   showMatchStep('phases');
 }
 
-const PHASE_INFO = [
-  { name: 'Powerplay', overs: 'Overs 1-6' },
-  { name: 'Middle Overs', overs: 'Overs 7-15' },
-  { name: 'Death Overs', overs: 'Overs 16-20' },
-];
+function showXiErrorModal(errors) {
+  const existing = document.getElementById('xi-error-modal');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'xi-error-modal';
+  overlay.className = 'swap-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="swap-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+        <h3 style="margin:0;font-size:1rem;">⚠️ Invalid playing XI</h3>
+        <button onclick="document.getElementById('xi-error-modal').remove();" class="link-btn">✕</button>
+      </div>
+      <p style="color:var(--muted);font-size:0.85rem;margin:0 0 0.7rem;line-height:1.5;">
+        Your XI doesn't follow cricket team rules. Fix it before playing.
+      </p>
+      <div style="background:rgba(255,77,109,0.08);border:1px solid var(--red);border-radius:8px;padding:0.7rem 0.9rem;font-size:0.85rem;line-height:1.6;">
+        ${errors.map(e => `<div>❌ ${escapeHtml(e)}</div>`).join('')}
+      </div>
+      <div style="background:var(--card-2);border-radius:8px;padding:0.7rem 0.9rem;margin-top:0.7rem;font-size:0.8rem;line-height:1.6;">
+        <b>Valid XI rules:</b><br>
+        🏏 3-5 Batsmen<br>
+        🧤 1-2 Wicket Keepers<br>
+        ⚔️ 1-3 All-rounders<br>
+        🎯 3-5 Bowlers<br>
+        <span style="color:var(--muted);">(Total: exactly 11 players)</span>
+      </div>
+      <button class="spin-button" onclick="document.getElementById('xi-error-modal').remove(); navigate('xi');" style="margin-top:0.9rem;width:100%;">
+        👥 Go to Manage XI
+      </button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
 
 function renderPhase() {
-  const inn = matchState.currentInnings;
-  const ph = matchState.currentPhase;
+  if (!matchState) return;
+  const inn = matchState.innings;
+  const ph = matchState.phase_index;
+  const phaseInfo = PHASE_INFO[ph] || PHASE_INFO[0];
+
   document.getElementById('phases-progress').textContent =
     `Innings ${inn} · Phase ${ph + 1}/3`;
-  document.getElementById('phases-name').textContent = PHASE_INFO[ph].name;
-  document.getElementById('phases-overs').textContent = PHASE_INFO[ph].overs;
+  document.getElementById('phases-name').textContent = `${phaseInfo.icon} ${phaseInfo.name}`;
+  document.getElementById('phases-overs').textContent = phaseInfo.overs;
 
-  // Show context: if 2nd innings, show target
   const ctx = document.getElementById('phases-context');
+  const userBatting = (inn === 1 && matchState.user_bats_first) ||
+                      (inn === 2 && !matchState.user_bats_first);
+  const currentInn = inn === 1 ? matchState.innings_1 : matchState.innings_2;
+  const score = currentInn.runs;
+  const wickets = currentInn.wickets;
+  const balls = currentInn.balls;
+  const overs = formatOvers(balls);
+
+  let situationLine = '';
   if (inn === 2 && matchState.target) {
-    const currentScore = matchState.firstInningsScore || 0;
-    ctx.style.display = 'block';
-    ctx.innerHTML = `
-      <p class="card-title">Chasing ${matchState.target}</p>
-      <div style="font-size:0.85rem;color:var(--muted);">
-        Innings 1 result: <strong style="color:var(--text);">${matchState.firstInningsScore}/${matchState.firstInningsWickets}</strong>
+    const need = matchState.target - score;
+    situationLine = `<div style="font-size:0.85rem;color:var(--accent);margin-top:0.4rem;font-weight:600;">
+      Need <b>${need}</b> to win
+    </div>`;
+  }
+
+  let historyLine = '';
+  if (currentInn.phase_history && currentInn.phase_history.length) {
+    const last = currentInn.phase_history[currentInn.phase_history.length - 1];
+    const yourTactic = last.user_choice || last.user_bowling_choice || '—';
+    historyLine = `
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:0.6rem;line-height:1.5;border-top:1px solid var(--border);padding-top:0.6rem;">
+        Previous phase: you <b>${escapeHtml(yourTactic)}</b>, bot <b>${escapeHtml(last.bot_choice)}</b><br>
+        +${last.runs} runs · ${last.wickets_lost} wkt
       </div>
     `;
-  } else if (inn === 1) {
-    ctx.style.display = 'block';
-    ctx.innerHTML = `
-      <p class="card-title">${matchState.userBatsFirst ? 'You are batting' : 'You are bowling'}</p>
-    `;
-  } else {
-    ctx.style.display = 'none';
+  }
+
+  ctx.style.display = 'block';
+  ctx.innerHTML = `
+    <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">
+      ${userBatting ? '🏏 You are batting' : '⚾ You are bowling'}
+    </div>
+    <div style="font-size:1.6rem;font-weight:800;margin-top:0.3rem;">
+      ${score}<span style="color:var(--muted);font-size:1.1rem;">/${wickets}</span>
+      <span style="color:var(--muted);font-size:0.9rem;font-weight:400;"> (${overs})</span>
+    </div>
+    ${situationLine}
+    ${historyLine}
+  `;
+
+  const choicesEl = document.getElementById('phases-choices-hint');
+  if (choicesEl) {
+    choicesEl.textContent = userBatting
+      ? 'How will your batters play?'
+      : 'How will your bowlers attack?';
   }
 }
 
-function pickPhase(choice) {
+function formatOvers(balls) {
+  const o = Math.floor(balls / 6);
+  const b = balls % 6;
+  return b > 0 ? `${o}.${b}` : `${o}.0`;
+}
+
+async function pickPhase(choice) {
   haptic('medium');
   if (!matchState) return;
-  const inn = matchState.currentInnings;
-  if (inn === 1) {
-    matchState.innings1.push(choice);
-  } else {
-    matchState.innings2.push(choice);
-  }
-  matchState.currentPhase++;
-  if (matchState.currentPhase >= 3) {
-    // Innings done
-    if (inn === 1) {
-      // Need to know who bats first — call API for innings 1 only? No, we
-      // submit everything at once. For now, derive from tossChoice as
-      // approximation; backend will reveal actual order.
-      matchState.userBatsFirst = (matchState.tossChoice === 'bat');
-      matchState.currentInnings = 2;
-      matchState.currentPhase = 0;
-      renderPhase();
-    } else {
-      // All phases picked; submit
-      submitMatch();
-    }
-  } else {
-    renderPhase();
-  }
-}
+  document.querySelectorAll('#match-step-phases button').forEach(b => b.disabled = true);
 
-async function submitMatch() {
-  showMatchStep('playing');
-  const { ok, data } = await api('/api/webapp/quickmatch', {
-    toss_choice: matchState.tossChoice,
-    innings_1: matchState.innings1,
-    innings_2: matchState.innings2,
-    difficulty: matchDifficulty,
-  });
+  const { ok, data } = await api('/api/webapp/quickmatch/phase', { choice });
+  document.querySelectorAll('#match-step-phases button').forEach(b => b.disabled = false);
+
   if (!ok) {
-    toast(data.message || 'Match failed', 'error');
-    resetMatchScreen();
+    toast(data.message || 'Phase failed', 'error');
+    if (data.error === 'no_match') resetMatchScreen();
     return;
   }
-  renderMatchResult(data.result);
-  hapticNotif(data.result.user_won === true ? 'success'
-            : data.result.user_won === false ? 'error' : 'warning');
-  showMatchStep('result');
-  // Refresh dashboard so balances update
-  refreshDashboard();
+
+  matchState = data.state;
+  const pr = data.phase_result;
+
+  await showPhaseResult(pr);
+
+  if (data.match_complete) {
+    if (data.quota) matchQuota = data.quota;
+    renderMatchResult(data.scorecard);
+    hapticNotif(data.scorecard.user_won === true ? 'success'
+              : data.scorecard.user_won === false ? 'error' : 'warning');
+    showMatchStep('result');
+    refreshDashboard();
+    return;
+  }
+
+  if (data.innings_complete) {
+    showInningsBreak();
+    return;
+  }
+
+  renderPhase();
+}
+
+async function showPhaseResult(pr) {
+  const overlay = document.createElement('div');
+  overlay.className = 'phase-result-overlay';
+  const dir = pr.runs >= 50 ? 'big' : (pr.runs >= 30 ? 'good' : 'meh');
+  overlay.innerHTML = `
+    <div class="phase-result-card phase-${dir}">
+      <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">
+        ${escapeHtml(pr.name)} done
+      </div>
+      <div style="font-size:2.2rem;font-weight:800;margin:0.4rem 0;">
+        ${pr.runs}<span style="font-size:1.1rem;color:var(--muted);"> runs</span>
+      </div>
+      <div style="font-size:0.85rem;color:var(--muted);">
+        ${pr.wickets_lost} wkt${pr.wickets_lost === 1 ? '' : 's'} ·
+        Score: <b style="color:var(--text);">${pr.score_after}/${pr.wickets_after}</b>
+      </div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:0.6rem;">
+        You: ${escapeHtml(pr.user_choice || pr.user_bowling_choice || '—')} ·
+        Bot: ${escapeHtml(pr.bot_choice)}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  await new Promise(r => setTimeout(r, 1400));
+  overlay.style.opacity = '0';
+  await new Promise(r => setTimeout(r, 200));
+  overlay.remove();
+}
+
+function showInningsBreak() {
+  showMatchStep('innings-break');
+  const inn1 = matchState.innings_1;
+  const target = matchState.target;
+  const userBatsFirst = matchState.user_bats_first;
+  const el = document.getElementById('innings-break-content');
+  el.innerHTML = `
+    <div style="text-align:center;padding:1rem 0;">
+      <div style="font-size:3rem;">🏏</div>
+      <h2 style="margin:0.5rem 0;">Innings Break</h2>
+    </div>
+    <div class="card" style="padding: 1rem 1.2rem;">
+      <div style="text-align:center;">
+        <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">
+          ${userBatsFirst ? 'You scored' : 'Opponent scored'}
+        </div>
+        <div style="font-size:2rem;font-weight:800;margin-top:0.3rem;">
+          ${inn1.runs}<span style="color:var(--muted);font-size:1.2rem;">/${inn1.wickets}</span>
+        </div>
+        <div style="font-size:0.85rem;color:var(--accent);margin-top:0.4rem;font-weight:700;">
+          Target: ${target}
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:0.8rem;">
+      <p class="card-title">${userBatsFirst ? "Now defending" : 'Now chasing'}</p>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0;">
+        ${userBatsFirst
+          ? 'Your bowlers need to defend this total. Bigger total = more flexibility.'
+          : `You need ${target} runs to win in 20 overs. Build phase by phase.`}
+      </p>
+    </div>
+    <button class="spin-button" onclick="continueToInnings2()" style="margin-top:1rem;width:100%;">
+      ▶ Start Innings 2
+    </button>
+  `;
+}
+
+function continueToInnings2() {
+  haptic('medium');
+  renderPhase();
+  showMatchStep('phases');
 }
 
 function renderMatchResult(r) {
