@@ -116,6 +116,15 @@ class UserStats(Base):
     last_claim = Column(DateTime, nullable=True)
     last_daily = Column(DateTime, nullable=True)
     last_gspin = Column(DateTime, nullable=True)
+    # Free Pack (Mini App, ad-gated, 1h cooldown)
+    last_free_pack = Column(DateTime, nullable=True)
+    # Cooldown-ready notification flags. Set True once we've notified the user
+    # their cooldown is up, so the background job doesn't spam them every tick.
+    # Reset to False when the user performs the action (consuming the cooldown).
+    notified_daily_ready = Column(Boolean, default=False, nullable=False)
+    notified_gspin_ready = Column(Boolean, default=False, nullable=False)
+    notified_claim_ready = Column(Boolean, default=False, nullable=False)
+    notified_free_pack_ready = Column(Boolean, default=False, nullable=False)
     streak_count = Column(Integer, default=0)
     total_streaks_completed = Column(Integer, default=0)
     last_streak_reset = Column(DateTime, nullable=True)
@@ -724,6 +733,12 @@ class GameConfig(Base):
     daily_ad_quota = Column(Integer, default=5, nullable=False)
     # Daily Quick Match limit per user. Resets at UTC midnight.
     daily_quick_match_limit = Column(Integer, default=5, nullable=False)
+    # ── Free Pack (Mini App, ad-gated) ──
+    free_pack_cooldown_minutes = Column(Integer, default=60, nullable=False)
+    # JSON list of probability bands, e.g.
+    # [{"min":75,"max":80,"weight":79},{"min":81,"max":83,"weight":7},...]
+    # If null, a sensible default table is used.
+    free_pack_bands_json = Column(Text, nullable=True)
     # ── Branding (admin-editable from /branding page) ──
     # Public Telegram channel + group usernames (without @). Used in welcome
     # messages, /howto, /invite, and Mini App footer. Blank = hide link.

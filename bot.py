@@ -801,6 +801,23 @@ def main():
         except Exception:
             logger.exception("Failed to schedule stuck-match cleanup")
 
+        # ── Cooldown-ready notifications ──
+        # Nudges users when their daily/gspin/claim/free-pack cooldowns are up.
+        try:
+            async def _cooldown_notify_job(context):
+                try:
+                    from services.cooldown_notifier import run_cooldown_notifications
+                    await run_cooldown_notifications(context.application)
+                except Exception:
+                    logger.exception("Cooldown notification job failed")
+            if app.job_queue:
+                # Every 5 minutes. First run after 90s (let startup settle).
+                app.job_queue.run_repeating(_cooldown_notify_job, interval=300,
+                                             first=90, name="cooldown_notifications")
+                logger.info("Cooldown notification job scheduled (every 5 min)")
+        except Exception:
+            logger.exception("Failed to schedule cooldown notifications")
+
         # Wire up cross-thread bot ref for admin Send-Now button
         try:
             import asyncio as _asyncio

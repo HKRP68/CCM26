@@ -4017,6 +4017,109 @@ def webapp_quickmatch_quota():
         db.close()
 
 
+@app.route("/api/webapp/freepack/status", methods=["POST"])
+@csrf_exempt
+def webapp_freepack_status():
+    """Return free pack cooldown + probability table for display."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import adsgram_service
+        from services.free_pack_service import (
+            check_free_pack_cooldown, get_band_percentages, get_cooldown_minutes,
+        )
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush(); db.commit()
+        ready, remaining = check_free_pack_cooldown(db, stats)
+        return {
+            "ok": True,
+            "ready": ready,
+            "remaining_seconds": remaining,
+            "cooldown_minutes": get_cooldown_minutes(db),
+            "bands": get_band_percentages(db),
+            "ads_configured": adsgram_service.is_configured(),
+            "adsgram_block_id": adsgram_service.get_block_id(),
+            "roster_count": user.roster_count or 0,
+            "roster_full": (user.roster_count or 0) >= 25,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_freepack_status failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/freepack/open", methods=["POST"])
+@csrf_exempt
+def webapp_freepack_open():
+    """Open a free pack. Requires a verified ad (postback / client token /
+    mock in dev). Enforces the 1h cooldown server-side."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import adsgram_service
+        from services.free_pack_service import open_free_pack, check_free_pack_cooldown
+        data = request.get_json(silent=True) or {}
+        ad_token = (data.get("ad_token") or "").strip()
+
+        dev_mode = os.getenv("WEBAPP_DEV_MODE") == "1"
+        ads_configured = adsgram_service.is_configured()
+
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush()
+
+        # Cooldown check first (don't waste their ad)
+        ready, remaining = check_free_pack_cooldown(db, stats)
+        if not ready:
+            return {"ok": False, "error": "cooldown",
+                    "message": "Free Pack is still on cooldown.",
+                    "remaining_seconds": remaining}, 400
+
+        # Verify ad
+        verified_via = None
+        if adsgram_service.claim_postback(db, tg_id):
+            verified_via = "server_postback"
+        elif ad_token.startswith("CT-"):
+            if adsgram_service.consume_client_token(ad_token, tg_id):
+                verified_via = "client_token"
+        elif ad_token.startswith("MOCK-"):
+            if dev_mode or not ads_configured:
+                verified_via = "mock"
+
+        if not verified_via:
+            return {"ok": False, "error": "ad_required",
+                    "message": "Watch an ad to claim your free pack.",
+                    "ads_configured": ads_configured}, 400
+
+        result = open_free_pack(db, user)
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+
+        db.commit()
+        result["balance"] = {
+            "coins": user.total_coins or 0,
+            "gems": user.total_gems or 0,
+            "roster_count": user.roster_count or 0,
+        }
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_freepack_open failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/market", methods=["POST"])
 @csrf_exempt
 def webapp_market():
