@@ -207,6 +207,46 @@
     border-color: rgba(212, 168, 42, 0.45);
     box-shadow: 0 0 16px rgba(212, 168, 42, 0.08) inset;
   }
+  .tile.freepack {
+    border-color: rgba(167, 139, 250, 0.45);
+    box-shadow: 0 0 16px rgba(167, 139, 250, 0.08) inset;
+  }
+
+  /* Free pack odds table */
+  .odds-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
+    font-size: 0.88rem;
+  }
+  .odds-row:last-child { border-bottom: none; }
+  .odds-range { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+  .odds-pct { font-weight: 800; color: var(--accent); }
+  .odds-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .odds-common { background: #8b9bb4; }
+  .odds-std { background: var(--green); }
+  .odds-rare { background: var(--accent); }
+  .odds-elite {
+    background: #a78bfa;
+    box-shadow: 0 0 8px rgba(167,139,250,0.7);
+  }
+
+  /* Free pack reveal card */
+  .freepack-reveal-card {
+    background: var(--card-2);
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    padding: 1.4rem 1rem;
+    animation: scaleup 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .freepack-reveal-card.tier-std { border-color: var(--green); }
+  .freepack-reveal-card.tier-rare {
+    border-color: var(--accent);
+    box-shadow: 0 0 24px rgba(212,168,42,0.25);
+  }
+  .freepack-reveal-card.tier-elite {
+    border-color: #a78bfa;
+    box-shadow: 0 0 30px rgba(167,139,250,0.4);
+  }
 
   /* Quest screen */
   .quest-tabs {
@@ -1103,6 +1143,11 @@
       <div class="tile-label">Quests</div>
       <div class="tile-sub" id="quests-tile-sub">Daily challenges</div>
     </button>
+    <button class="tile freepack" onclick="navigate('freepack')">
+      <div class="tile-icon">📦</div>
+      <div class="tile-label">Free Pack</div>
+      <div class="tile-sub" id="freepack-tile-sub">Watch &amp; win</div>
+    </button>
   </div>
 
   <div class="card" style="margin-top:1rem;">
@@ -1308,6 +1353,36 @@
   <h3 style="margin:1rem 0 0.5rem;font-size:0.95rem;color:var(--muted);">Bench</h3>
   <div id="xi-bench">
     <div class="empty"><div style="font-size: 0.85rem;">—</div></div>
+  </div>
+</div>
+
+<!-- ════ Free Pack screen ════ -->
+<div class="screen" id="screen-freepack">
+  <div style="text-align:center;padding:1rem 0;">
+    <div style="font-size:4rem;margin-bottom:0.4rem;">📦</div>
+    <h2 style="margin:0 0 0.25rem;font-size:1.4rem;">Free Pack</h2>
+    <p style="color:var(--muted);margin:0;font-size:0.88rem;">
+      Watch a short ad and get a free player. One pack every hour.
+    </p>
+  </div>
+
+  <!-- Cooldown / action card -->
+  <div class="card" id="freepack-action-card" style="text-align:center;padding:1.5rem;">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+
+  <!-- Probability table -->
+  <div class="card" style="margin-top:0.8rem;">
+    <p class="card-title">📊 Drop rates</p>
+    <div id="freepack-odds">
+      <div class="empty" style="padding:0.5rem;"><div style="font-size:0.8rem;">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:0.8rem;background:rgba(0,212,170,0.05);">
+    <p style="margin:0;font-size:0.78rem;color:var(--muted);line-height:1.6;">
+      ℹ️ Players go straight to your roster. If your roster is full (25), release some first.
+    </p>
   </div>
 </div>
 
@@ -1605,6 +1680,7 @@ function navigate(screen) {
   if (screen === 'xi') loadXi();
   if (screen === 'invite') loadInvite();
   if (screen === 'quests') loadQuests();
+  if (screen === 'freepack') loadFreePack();
   if (screen === 'browse') {
     loadCountries().then(() => {
       if (!document.getElementById('browse-results').children.length) {
@@ -3582,11 +3658,177 @@ async function claimAllQuests(qtype) {
   refreshDashboard();
 }
 
+// ════════════════ Free Pack ════════════════
+let freePackState = null;
+let freePackCooldownTimer = null;
+
+async function loadFreePack() {
+  if (freePackCooldownTimer) { clearInterval(freePackCooldownTimer); freePackCooldownTimer = null; }
+  const card = document.getElementById('freepack-action-card');
+  card.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/freepack/status', {});
+  if (!ok) {
+    card.innerHTML = `<div class="empty">❌ ${data.message || 'Unavailable'}</div>`;
+    return;
+  }
+  freePackState = data;
+  renderFreePackOdds(data.bands);
+  renderFreePackAction();
+}
+
+function renderFreePackOdds(bands) {
+  const el = document.getElementById('freepack-odds');
+  if (!bands || !bands.length) { el.innerHTML = '<div class="empty">—</div>'; return; }
+  // Sort by min rating descending so best is on top
+  const sorted = [...bands].sort((a, b) => b.min - a.min);
+  el.innerHTML = sorted.map(b => {
+    const range = b.min === b.max ? `OVR ${b.min}` : `OVR ${b.min}-${b.max}`;
+    const pctLabel = b.percent < 1 ? '<1%' : `${b.percent}%`;
+    const tier = b.min >= 84 ? 'elite' : (b.min >= 81 ? 'rare' : (b.min >= 75 ? 'std' : 'common'));
+    return `
+      <div class="odds-row">
+        <div class="odds-range">
+          <span class="odds-dot odds-${tier}"></span>
+          ${range}${b.label ? ` <span style="color:var(--muted);font-size:0.72rem;">${escapeHtml(b.label)}</span>` : ''}
+        </div>
+        <div class="odds-pct">${pctLabel}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderFreePackAction() {
+  const card = document.getElementById('freepack-action-card');
+  const d = freePackState;
+  if (!d) return;
+
+  if (d.roster_full) {
+    card.innerHTML = `
+      <div style="font-size:2.5rem;">🈵</div>
+      <p style="margin:0.6rem 0;font-weight:700;">Roster full</p>
+      <p style="color:var(--muted);font-size:0.82rem;margin:0 0 1rem;">
+        You have ${d.roster_count}/25 players. Release some to make room.
+      </p>
+      <button class="spin-button" onclick="navigate('roster')" style="width:100%;">
+        👥 Manage roster
+      </button>
+    `;
+    return;
+  }
+
+  if (d.ready) {
+    card.innerHTML = `
+      <div style="font-size:2.5rem;">📦</div>
+      <p style="margin:0.6rem 0 1rem;font-weight:700;">Your free pack is ready!</p>
+      <button class="spin-button" id="freepack-open-btn" onclick="openFreePack()" style="width:100%;">
+        📺 Watch ad &amp; open pack
+      </button>
+    `;
+  } else {
+    // Cooldown countdown
+    card.innerHTML = `
+      <div style="font-size:2.5rem;">⏳</div>
+      <p style="margin:0.6rem 0 0.3rem;font-weight:700;">Next pack in</p>
+      <div id="freepack-countdown" style="font-size:1.8rem;font-weight:800;color:var(--accent);font-variant-numeric:tabular-nums;">
+        ${formatCountdown(d.remaining_seconds)}
+      </div>
+      <p style="color:var(--muted);font-size:0.75rem;margin:0.6rem 0 0;">
+        Come back in an hour for another free player.
+      </p>
+    `;
+    // Live countdown
+    let remaining = d.remaining_seconds;
+    freePackCooldownTimer = setInterval(() => {
+      remaining -= 1;
+      const cd = document.getElementById('freepack-countdown');
+      if (!cd) { clearInterval(freePackCooldownTimer); return; }
+      if (remaining <= 0) {
+        clearInterval(freePackCooldownTimer);
+        loadFreePack();  // refresh → now ready
+        return;
+      }
+      cd.textContent = formatCountdown(remaining);
+    }, 1000);
+  }
+}
+
+function formatCountdown(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+async function openFreePack() {
+  const btn = document.getElementById('freepack-open-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '📺 Loading ad…'; }
+  haptic('medium');
+
+  // Watch ad → get token
+  const adToken = await showAd();
+  if (!adToken) {
+    if (btn) { btn.disabled = false; btn.textContent = '📺 Watch ad & open pack'; }
+    return;  // showAd already toasted
+  }
+
+  if (btn) btn.textContent = '📦 Opening…';
+  const { ok, data } = await api('/api/webapp/freepack/open', { ad_token: adToken });
+  if (!ok) {
+    toast(data.message || 'Pack failed', 'error');
+    hapticNotif('error');
+    loadFreePack();
+    return;
+  }
+
+  hapticNotif('success');
+  showFreePackReveal(data.player, data.band);
+  refreshDashboard();
+}
+
+function showFreePackReveal(player, band) {
+  const tier = player.rating >= 84 ? 'elite' : (player.rating >= 81 ? 'rare' : (player.rating >= 75 ? 'std' : 'common'));
+  const overlay = document.createElement('div');
+  overlay.className = 'swap-overlay';
+  overlay.id = 'freepack-reveal';
+  overlay.onclick = (e) => { if (e.target === overlay) closeFreePackReveal(); };
+  overlay.innerHTML = `
+    <div class="swap-panel" style="text-align:center;">
+      <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">
+        You pulled
+      </div>
+      <div class="freepack-reveal-card tier-${tier}">
+        <div style="font-size:2.6rem;font-weight:800;line-height:1;">${player.rating}</div>
+        <div style="font-size:0.7rem;color:var(--muted);margin-top:0.1rem;">OVR</div>
+        <div style="font-size:1.15rem;font-weight:800;margin-top:0.7rem;">${escapeHtml(player.name)}</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem;">
+          ${escapeHtml(player.category)} · ${escapeHtml(player.country)}
+        </div>
+        ${player.version && player.version !== 'Base' ? `<div style="font-size:0.72rem;color:var(--accent);margin-top:0.3rem;">${escapeHtml(player.version)}</div>` : ''}
+      </div>
+      <p style="color:var(--muted);font-size:0.78rem;margin:0.8rem 0 0;">
+        Added to your roster · sell value ${formatNum(player.sell_value)} 🪙
+      </p>
+      <button class="spin-button" onclick="closeFreePackReveal()" style="margin-top:1rem;width:100%;">
+        ✓ Nice!
+      </button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function closeFreePackReveal() {
+  const o = document.getElementById('freepack-reveal');
+  if (o) o.remove();
+  loadFreePack();  // refresh → now on cooldown
+}
+
 // ════════════════ Initial load ════════════════
 // Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
 function handleHashDeepLink() {
   const hash = (window.location.hash || '').replace('#', '').toLowerCase();
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests'];
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack'];
   if (validScreens.includes(hash) && hash !== 'home') {
     // refreshDashboard fires first then navigate
     navigate(hash);
