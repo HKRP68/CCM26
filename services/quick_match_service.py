@@ -343,6 +343,47 @@ def _xi_average(xi):
     return sum(p["rating"] for p in xi) / len(xi)
 
 
+def validate_user_xi(xi):
+    """Check XI list (from get_user_xi) follows cricket rules.
+
+    Mirrors bot_team_service.validate_team_xi:
+      - exactly 11 players
+      - 3-5 Batsmen, 3-5 Bowlers, 1-2 Wicket Keepers, 1-3 All-rounders
+
+    Returns (ok: bool, errors: list[str], counts: dict)
+    """
+    counts = {"Batsman": 0, "Bowler": 0,
+              "Wicket Keeper": 0, "All-rounder": 0}
+    for p in xi:
+        cat = p.get("category", "")
+        if cat in counts:
+            counts[cat] += 1
+
+    errs = []
+    if len(xi) != 11:
+        errs.append(f"Need exactly 11 players in your playing XI (have {len(xi)})")
+        return False, errs, counts
+
+    if counts["Batsman"] < 3:
+        errs.append(f"Need at least 3 Batsmen (have {counts['Batsman']})")
+    elif counts["Batsman"] > 5:
+        errs.append(f"Maximum 5 Batsmen (have {counts['Batsman']})")
+    if counts["Bowler"] < 3:
+        errs.append(f"Need at least 3 Bowlers (have {counts['Bowler']})")
+    elif counts["Bowler"] > 5:
+        errs.append(f"Maximum 5 Bowlers (have {counts['Bowler']})")
+    if counts["Wicket Keeper"] < 1:
+        errs.append(f"Need at least 1 Wicket Keeper (have {counts['Wicket Keeper']})")
+    elif counts["Wicket Keeper"] > 2:
+        errs.append(f"Maximum 2 Wicket Keepers (have {counts['Wicket Keeper']})")
+    if counts["All-rounder"] < 1:
+        errs.append(f"Need at least 1 All-rounder (have {counts['All-rounder']})")
+    elif counts["All-rounder"] > 3:
+        errs.append(f"Maximum 3 All-rounders (have {counts['All-rounder']})")
+
+    return len(errs) == 0, errs, counts
+
+
 def _generate_batting_card(xi, runs_total, balls_faced, wickets_lost):
     """Distribute team total across batters realistically.
 
@@ -833,5 +874,474 @@ def play_quick_match_xi(session, user, user_choices, opponent_difficulty="medium
         "user_won": user_won,
         "coin_reward": coin_reward,
         "mom": mom,
+        "played_at": datetime.utcnow().isoformat(),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase-by-phase quick match (v3) — reactive gameplay
+# ════════════════════════════════════════════════════════════════════
+#
+# State lives in-memory per user. User picks a phase tactic, server simulates
+# that one phase, returns result, waits for next pick. Allows reactive
+# decisions ("we lost wickets in PP, defend in middle") instead of one
+# up-front pick. State expires after 30 min of inactivity. Process restart
+# loses in-flight matches — acceptable for a "quick" match.
+#
+# Quick Match stats are tracked SEPARATELY from global match stats. They do
+# NOT count toward leaderboard, matches_played/won/lost, or career records.
+# Quick Match has its own counters and a daily limit (default 5/day).
+
+import threading
+import uuid as _uuid
+import time
+
+_PHASE_MATCH_STORE = {}  # tg_id -> state dict
+_PHASE_MATCH_LOCK = threading.Lock()
+_PHASE_MATCH_TTL_SEC = 30 * 60  # 30 min
+
+# Reward constants — easy to find when admins want to tune
+QUICK_MATCH_WIN_COIN_REWARD = 250
+QUICK_MATCH_WIN_DOMINANT_BONUS = 100  # extra for winning by >50 runs
+QUICK_MATCH_TIE_COIN_REWARD = 100
+
+# Daily limit fallback if GameConfig is missing
+DEFAULT_DAILY_QUICK_MATCH_LIMIT = 5
+
+
+def _now_ts():
+    return int(time.time())
+
+
+def _today_str():
+    """Today's date in UTC as YYYY-MM-DD (for daily-counter comparisons)."""
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _expire_stale_matches():
+    """Drop matches older than TTL. Cheap O(N) sweep."""
+    cutoff = _now_ts() - _PHASE_MATCH_TTL_SEC
+    with _PHASE_MATCH_LOCK:
+        stale = [k for k, v in _PHASE_MATCH_STORE.items()
+                 if v.get("last_activity", 0) < cutoff]
+        for k in stale:
+            _PHASE_MATCH_STORE.pop(k, None)
+
+
+def get_phase_match(tg_id):
+    """Return active phase match for user, or None."""
+    _expire_stale_matches()
+    with _PHASE_MATCH_LOCK:
+        return _PHASE_MATCH_STORE.get(tg_id)
+
+
+def drop_phase_match(tg_id):
+    """Clear any active match (used on completion or abandon)."""
+    with _PHASE_MATCH_LOCK:
+        _PHASE_MATCH_STORE.pop(tg_id, None)
+
+
+def get_daily_limit(session):
+    """Read daily Quick Match limit from GameConfig (with fallback)."""
+    try:
+        from models import GameConfig
+        cfg = session.query(GameConfig).first()
+        if cfg and cfg.daily_quick_match_limit is not None:
+            return max(0, int(cfg.daily_quick_match_limit))
+    except Exception:
+        pass
+    return DEFAULT_DAILY_QUICK_MATCH_LIMIT
+
+
+def _reset_daily_counter_if_new_day(user):
+    """If the user's daily counter is from a prior day, reset to 0.
+    Caller is responsible for committing."""
+    today = _today_str()
+    if user.quick_matches_today_date != today:
+        user.quick_matches_today = 0
+        user.quick_matches_today_date = today
+
+
+def get_quick_match_quota(session, user):
+    """Return (used_today, limit, remaining) for the user's Quick Match quota."""
+    _reset_daily_counter_if_new_day(user)
+    limit = get_daily_limit(session)
+    used = user.quick_matches_today or 0
+    remaining = max(0, limit - used)
+    return used, limit, remaining
+
+
+def start_phase_match(session, user, tg_id, toss_choice, opponent_difficulty="medium"):
+    """Initialise a new phase-by-phase match. Returns initial state dict.
+
+    Checks:
+      - User has a valid playing XI (3-5 bat / 3-5 bowl / 1-2 wk / 1-3 ar)
+      - User has Quick Match attempts remaining today (daily limit)
+
+    `toss_choice`: 'bat' or 'bowl' (user's pick if they win toss).
+    """
+    # Daily limit check (BEFORE XI generation — cheaper)
+    _reset_daily_counter_if_new_day(user)
+    used, limit, remaining = get_quick_match_quota(session, user)
+    if remaining <= 0:
+        return {
+            "ok": False,
+            "error": "daily_limit_reached",
+            "message": (
+                f"You've played {used}/{limit} Quick Matches today. "
+                f"Limit resets at UTC midnight."
+            ),
+            "used": used, "limit": limit, "remaining": 0,
+        }
+
+    user_xi = get_user_xi(session, user.id)
+    ok, errs, counts = validate_user_xi(user_xi)
+    if not ok:
+        return {
+            "ok": False, "error": "invalid_xi",
+            "message": " · ".join(errs),
+            "errors": errs, "counts": counts,
+        }
+
+    user_rating = _xi_average(user_xi)
+    diff_mod = {"easy": -8, "medium": 0, "hard": +8}.get(opponent_difficulty, 0)
+    target_bot_rating = max(55, min(95, user_rating + diff_mod))
+    bot_xi = _generate_bot_xi(session, int(target_bot_rating))
+    bot_rating = _xi_average(bot_xi) if bot_xi else target_bot_rating
+
+    # Toss
+    toss_won = random.random() < 0.5
+    if toss_won:
+        user_bats_first = (toss_choice == "bat")
+    else:
+        user_bats_first = (random.random() < 0.5)
+
+    state = {
+        "match_id": str(_uuid.uuid4())[:12],
+        "tg_id": tg_id,
+        "user_id": user.id,
+        "user_xi": user_xi,
+        "bot_xi": bot_xi,
+        "user_rating": round(user_rating, 1),
+        "bot_rating": round(bot_rating, 1),
+        "user_bats_first": user_bats_first,
+        "toss_won": toss_won,
+        "toss_choice": toss_choice,
+        "difficulty": opponent_difficulty,
+        "innings": 1,
+        "phase_index": 0,
+        "innings_1": {"runs": 0, "wickets": 0, "balls": 0, "phase_history": []},
+        "innings_2": {"runs": 0, "wickets": 0, "balls": 0, "phase_history": []},
+        "target": None,
+        "complete": False,
+        "user_won": None,
+        "coin_reward": 0,
+        "mom": None,
+        "started_at": _now_ts(),
+        "last_activity": _now_ts(),
+    }
+
+    with _PHASE_MATCH_LOCK:
+        _PHASE_MATCH_STORE[tg_id] = state
+
+    return {
+        "ok": True,
+        "state": _public_state(state),
+        "quota": {"used": used, "limit": limit, "remaining": remaining},
+    }
+
+
+def _public_state(state):
+    """Client-safe snapshot of state."""
+    return {
+        "match_id": state["match_id"],
+        "toss_won": state["toss_won"],
+        "toss_choice": state["toss_choice"],
+        "user_bats_first": state["user_bats_first"],
+        "user_team_rating": state["user_rating"],
+        "opponent_team_rating": state["bot_rating"],
+        "user_xi": state["user_xi"],
+        "bot_xi": state["bot_xi"],
+        "innings": state["innings"],
+        "phase_index": state["phase_index"],
+        "innings_1": state["innings_1"],
+        "innings_2": state["innings_2"],
+        "target": state["target"],
+        "complete": state["complete"],
+        "user_won": state["user_won"],
+        "coin_reward": state["coin_reward"],
+        "mom": state["mom"],
+    }
+
+
+def play_phase(session, user, tg_id, choice):
+    """Advance the active match by one phase.
+
+    Returns: {ok, phase_result, state, innings_complete, match_complete, scorecard?, quota?}
+    """
+    state = get_phase_match(tg_id)
+    if not state:
+        return {"ok": False, "error": "no_match",
+                "message": "No active match. Start a new one."}
+    if state["complete"]:
+        return {"ok": False, "error": "already_complete",
+                "message": "Match already finished."}
+
+    state["last_activity"] = _now_ts()
+
+    innings_key = f"innings_{state['innings']}"
+    inn = state[innings_key]
+    phase_idx = state["phase_index"]
+    if phase_idx >= len(PHASE_DEFS):
+        return {"ok": False, "error": "no_more_phases",
+                "message": "Innings already complete."}
+
+    phase = PHASE_DEFS[phase_idx]
+
+    user_batting_this_innings = (
+        (state["innings"] == 1 and state["user_bats_first"]) or
+        (state["innings"] == 2 and not state["user_bats_first"])
+    )
+
+    valid_choices = ("aggressive", "balanced", "defensive")
+    if choice not in valid_choices:
+        choice = "balanced"
+
+    user_choice = choice
+    bot_choice = random.choice(valid_choices)
+
+    if user_batting_this_innings:
+        batting_choice = user_choice
+        batting_rating = state["user_rating"]
+        bowling_rating = state["bot_rating"]
+    else:
+        batting_choice = bot_choice
+        batting_rating = state["bot_rating"]
+        bowling_rating = state["user_rating"]
+
+    wickets_left = 10 - inn["wickets"]
+    if wickets_left <= 0:
+        runs, wickets_lost, balls_this_phase = 0, 0, 0
+    else:
+        target = state["target"]
+        runs, wickets_lost = simulate_phase(
+            phase, batting_choice, batting_rating, bowling_rating, wickets_left)
+        balls_this_phase = phase["balls"]
+        # Target chase early-finish
+        if target is not None and (inn["runs"] + runs) >= target:
+            runs = target - inn["runs"]
+            balls_this_phase = int(phase["balls"] * random.uniform(0.6, 1.0))
+            wickets_lost = 0
+
+    wickets_lost = min(wickets_lost, wickets_left)
+
+    inn["runs"] += runs
+    inn["wickets"] += wickets_lost
+    inn["balls"] += balls_this_phase
+    inn["phase_history"].append({
+        "name": phase["name"],
+        "user_choice": user_choice if user_batting_this_innings else None,
+        "user_bowling_choice": user_choice if not user_batting_this_innings else None,
+        "bot_choice": bot_choice,
+        "user_batting_this_innings": user_batting_this_innings,
+        "runs": runs,
+        "wickets_lost": wickets_lost,
+        "balls_used": balls_this_phase,
+        "score_after": inn["runs"],
+        "wickets_after": inn["wickets"],
+    })
+
+    phase_result = inn["phase_history"][-1].copy()
+    state["phase_index"] += 1
+
+    innings_complete = False
+    target_chased = False
+    if state["target"] is not None and inn["runs"] >= state["target"]:
+        target_chased = True
+        innings_complete = True
+    if state["phase_index"] >= len(PHASE_DEFS) or inn["wickets"] >= 10:
+        innings_complete = True
+
+    match_complete = False
+    scorecard = None
+    quota_after = None
+    if innings_complete:
+        if state["innings"] == 1:
+            state["target"] = inn["runs"] + 1
+            state["innings"] = 2
+            state["phase_index"] = 0
+        else:
+            match_complete = True
+            state["complete"] = True
+            scorecard = _finalize_match(session, user, state, target_chased)
+            # After completing, return the post-match quota
+            used, limit, remaining = get_quick_match_quota(session, user)
+            quota_after = {"used": used, "limit": limit, "remaining": remaining}
+
+    result = {
+        "ok": True,
+        "phase_result": phase_result,
+        "state": _public_state(state),
+        "innings_complete": innings_complete,
+        "match_complete": match_complete,
+        "scorecard": scorecard,
+    }
+    if quota_after is not None:
+        result["quota"] = quota_after
+    return result
+
+
+def _finalize_match(session, user, state, target_chased):
+    """Build final scorecard, determine winner, award coins, bump QM-only
+    counters, log activity. Does NOT touch global match stats (matches_played
+    etc) — Quick Match is intentionally separate from the leaderboard."""
+    inn1 = state["innings_1"]
+    inn2 = state["innings_2"]
+    target = state["target"]
+    user_bats_first = state["user_bats_first"]
+
+    # Winner
+    if inn2["runs"] >= target:
+        user_won = not user_bats_first
+    elif inn2["runs"] == target - 1:
+        user_won = None  # tied
+    else:
+        user_won = user_bats_first
+
+    # Build per-player batting + bowling cards
+    if user_bats_first:
+        inn1_batting_xi = state["user_xi"]
+        inn1_bowling_xi = state["bot_xi"]
+        inn2_batting_xi = state["bot_xi"]
+        inn2_bowling_xi = state["user_xi"]
+        inn1_team = "Your team"
+        inn2_team = "Opponent"
+    else:
+        inn1_batting_xi = state["bot_xi"]
+        inn1_bowling_xi = state["user_xi"]
+        inn2_batting_xi = state["user_xi"]
+        inn2_bowling_xi = state["bot_xi"]
+        inn1_team = "Opponent"
+        inn2_team = "Your team"
+
+    inn1_full = {
+        "team_name": inn1_team,
+        "is_user": user_bats_first,
+        "total_runs": inn1["runs"],
+        "total_wickets": inn1["wickets"],
+        "balls_faced": inn1["balls"],
+        "phases": inn1["phase_history"],
+        "batting_card": _generate_batting_card(
+            inn1_batting_xi, inn1["runs"], inn1["balls"], inn1["wickets"]),
+        "bowling_card": _generate_bowling_card(
+            inn1_bowling_xi, inn1["runs"], inn1["balls"], inn1["wickets"]),
+    }
+    inn2_full = {
+        "team_name": inn2_team,
+        "is_user": not user_bats_first,
+        "total_runs": inn2["runs"],
+        "total_wickets": inn2["wickets"],
+        "balls_faced": inn2["balls"],
+        "phases": inn2["phase_history"],
+        "batting_card": _generate_batting_card(
+            inn2_batting_xi, inn2["runs"], inn2["balls"], inn2["wickets"]),
+        "bowling_card": _generate_bowling_card(
+            inn2_bowling_xi, inn2["runs"], inn2["balls"], inn2["wickets"]),
+    }
+
+    def _find_mom(inn, is_user_inn):
+        bc = inn.get("batting_card", [])
+        if bc:
+            top = max(bc, key=lambda b: b["runs"])
+            if top["runs"] >= 30:
+                return {"name": top["name"], "category": top["category"],
+                        "rating": top["rating"], "from_user_team": is_user_inn,
+                        "highlight": f"{top['runs']}({top['balls']})",
+                        "kind": "batter"}
+        bw = inn.get("bowling_card", [])
+        if bw:
+            top_b = max(bw, key=lambda b: (b["wickets"], -b["runs"]))
+            if top_b["wickets"] >= 3:
+                return {"name": top_b["name"], "category": top_b["category"],
+                        "rating": top_b["rating"], "from_user_team": not is_user_inn,
+                        "highlight": f"{top_b['wickets']}/{top_b['runs']}",
+                        "kind": "bowler"}
+        return None
+
+    mom = None
+    if user_won is True:
+        mom = (_find_mom(inn1_full, user_bats_first)
+               or _find_mom(inn2_full, not user_bats_first))
+    elif user_won is False:
+        mom = (_find_mom(inn2_full, not user_bats_first)
+               or _find_mom(inn1_full, user_bats_first))
+
+    # ── Coin rewards (reduced from 500 → 250 per user request) ──
+    coin_reward = 0
+    if user_won is True:
+        coin_reward = QUICK_MATCH_WIN_COIN_REWARD  # 250
+        # Dominant win bonus
+        if abs(inn1["runs"] - inn2["runs"]) > 50:
+            coin_reward += QUICK_MATCH_WIN_DOMINANT_BONUS  # 100
+    elif user_won is None:
+        coin_reward = QUICK_MATCH_TIE_COIN_REWARD  # 100
+
+    state["user_won"] = user_won
+    state["coin_reward"] = coin_reward
+    state["mom"] = mom
+
+    # ── Apply rewards + bump QUICK-MATCH-ONLY counters ──
+    # IMPORTANT: matches_played/won/lost are NOT touched. Quick Match has
+    # its own counters so it doesn't pollute the leaderboard.
+    if coin_reward > 0:
+        user.total_coins = (user.total_coins or 0) + coin_reward
+
+    user.quick_matches_played = (user.quick_matches_played or 0) + 1
+    if user_won is True:
+        user.quick_matches_won = (user.quick_matches_won or 0) + 1
+    elif user_won is False:
+        user.quick_matches_lost = (user.quick_matches_lost or 0) + 1
+
+    # Daily counter
+    _reset_daily_counter_if_new_day(user)
+    user.quick_matches_today = (user.quick_matches_today or 0) + 1
+
+    # Activity log (mark as quick match so admins can distinguish)
+    try:
+        from services.activity_service import log_activity
+        outcome = ("won" if user_won is True
+                   else ("tied" if user_won is None else "lost"))
+        log_activity(session, user.id, "quickmatch",
+                     f"[Quick Match] {outcome}: "
+                     f"{inn1['runs']}/{inn1['wickets']} vs "
+                     f"{inn2['runs']}/{inn2['wickets']}",
+                     coins_change=coin_reward)
+    except Exception:
+        pass
+
+    # Quest tracking — use QUICK-MATCH-SPECIFIC event keys so they don't
+    # count for "Win 3 matches" quests (which are for real matches). Quests
+    # defined with event_key='quick_match_played' or 'quick_match_won' will
+    # still progress.
+    try:
+        from services.quest_service import safe_track
+        safe_track(session, user.id, "quick_match_played", 1)
+        if user_won is True:
+            safe_track(session, user.id, "quick_match_won", 1)
+    except Exception:
+        pass
+
+    return {
+        "user_won": user_won,
+        "coin_reward": coin_reward,
+        "mom": mom,
+        "innings_1": inn1_full,
+        "innings_2": inn2_full,
+        "target": target,
+        "user_bats_first": user_bats_first,
+        "user_team_rating": state["user_rating"],
+        "opponent_team_rating": state["bot_rating"],
+        "user_xi": state["user_xi"],
+        "bot_xi": state["bot_xi"],
         "played_at": datetime.utcnow().isoformat(),
     }
