@@ -3786,6 +3786,22 @@ def webapp_leaderboard():
 @app.route("/api/webapp/quickmatch", methods=["POST"])
 @csrf_exempt
 def webapp_quickmatch():
+    """DEPRECATED single-shot Quick Match endpoint.
+
+    The Mini App now uses the phase-by-phase flow:
+      /api/webapp/quickmatch/start
+      /api/webapp/quickmatch/phase
+      /api/webapp/quickmatch/abandon
+
+    Returns a clear error so any older client knows to refresh.
+    """
+    return {
+        "ok": False, "error": "endpoint_deprecated",
+        "message": "Quick Match is now phase-by-phase. Please refresh the app to get the latest version.",
+    }, 410
+
+
+def _webapp_quickmatch_legacy_DISABLED():
     """Play a quick match (single endpoint — submit all choices at once).
 
     Request body:
@@ -3875,6 +3891,127 @@ def webapp_quickmatch():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_quickmatch failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quickmatch/start", methods=["POST"])
+@csrf_exempt
+def webapp_quickmatch_start():
+    """Start a phase-by-phase Quick Match (v3).
+
+    Body: {toss_choice: 'bat'|'bowl', difficulty: 'easy'|'medium'|'hard'}
+
+    Validates user's playing XI (3-5 bat / 3-5 bowl / 1-2 wk / 1-3 ar) AND
+    daily Quick Match limit before starting. Quick Match stats are tracked
+    SEPARATELY from global match stats and do not affect the leaderboard.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quick_match_service import (
+            start_phase_match, drop_phase_match, get_phase_match,
+        )
+        data = request.get_json(silent=True) or {}
+        toss_choice = (data.get("toss_choice") or "bat").lower()
+        if toss_choice not in ("bat", "bowl"):
+            toss_choice = "bat"
+        difficulty = (data.get("difficulty") or "medium").lower()
+        if difficulty not in ("easy", "medium", "hard"):
+            difficulty = "medium"
+
+        # Abandon any stale in-flight match (defensive cleanup)
+        existing = get_phase_match(tg_id)
+        if existing and not existing.get("complete"):
+            drop_phase_match(tg_id)
+
+        result = start_phase_match(db, user, tg_id, toss_choice, difficulty)
+        # If start was blocked (limit/xi), we may have modified user fields
+        # (date-reset in _reset_daily_counter_if_new_day) — persist either way
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quickmatch_start failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quickmatch/phase", methods=["POST"])
+@csrf_exempt
+def webapp_quickmatch_phase():
+    """Advance the active Quick Match by one phase.
+    Body: {choice: 'aggressive'|'balanced'|'defensive'}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quick_match_service import play_phase
+        data = request.get_json(silent=True) or {}
+        choice = (data.get("choice") or "balanced").lower()
+        if choice not in ("aggressive", "balanced", "defensive"):
+            choice = "balanced"
+
+        result = play_phase(db, user, tg_id, choice)
+        if result.get("match_complete"):
+            db.commit()  # Persist QM counters + coins
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quickmatch_phase failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quickmatch/abandon", methods=["POST"])
+@csrf_exempt
+def webapp_quickmatch_abandon():
+    """Cancel the active Quick Match (no rewards, no counter increment)."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quick_match_service import drop_phase_match
+        drop_phase_match(tg_id)
+        return {"ok": True}
+    except Exception as e:
+        logger.exception("webapp_quickmatch_abandon failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/quickmatch/quota", methods=["POST"])
+@csrf_exempt
+def webapp_quickmatch_quota():
+    """Return the user's current Quick Match daily quota."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.quick_match_service import get_quick_match_quota
+        used, limit, remaining = get_quick_match_quota(db, user)
+        db.commit()  # Persist any date-reset
+        return {
+            "ok": True,
+            "used": used, "limit": limit, "remaining": remaining,
+            "stats": {
+                "quick_matches_played": user.quick_matches_played or 0,
+                "quick_matches_won": user.quick_matches_won or 0,
+                "quick_matches_lost": user.quick_matches_lost or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_quickmatch_quota failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()

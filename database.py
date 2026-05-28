@@ -246,6 +246,14 @@ def _migrate_add_columns():
     _try_add("game_config", "branding_group_username", "VARCHAR(64)")
     _try_add("game_config", "branding_group_label", "VARCHAR(80)")
     _try_add("game_config", "branding_tagline", "VARCHAR(200)")
+    # Quick Match — separate stat tracking + daily limit (per the
+    # "stats not counted, daily limit 5" feature)
+    _try_add("users", "quick_matches_played", "INTEGER DEFAULT 0")
+    _try_add("users", "quick_matches_won", "INTEGER DEFAULT 0")
+    _try_add("users", "quick_matches_lost", "INTEGER DEFAULT 0")
+    _try_add("users", "quick_matches_today", "INTEGER DEFAULT 0")
+    _try_add("users", "quick_matches_today_date", "VARCHAR(10)")
+    _try_add("game_config", "daily_quick_match_limit", "INTEGER DEFAULT 5")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")

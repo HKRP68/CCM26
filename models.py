@@ -31,6 +31,15 @@ class User(Base):
     best_streak = Column(Integer, default=0)
     active_days = Column(Integer, default=0)  # days with at least 1 match
     last_match_date = Column(DateTime, nullable=True)
+    # Quick Match counters — kept SEPARATE from matches_played/won/lost so
+    # Quick Match (casual practice mode) doesn't pollute the global
+    # leaderboard, player stats, or career win/loss records.
+    quick_matches_played = Column(Integer, default=0)
+    quick_matches_won = Column(Integer, default=0)
+    quick_matches_lost = Column(Integer, default=0)
+    # Daily limit tracking. Reset to 0 when quick_matches_today_date != today.
+    quick_matches_today = Column(Integer, default=0)
+    quick_matches_today_date = Column(String(10), nullable=True)  # 'YYYY-MM-DD'
     quest_points = Column(Integer, default=0)  # earned from completing quests
     # Pack pity timer — increments on low rolls, resets on a max-rating roll.
     # When ≥ PITY_THRESHOLD, the next pack guarantees max-rating from the band.
@@ -713,6 +722,8 @@ class GameConfig(Base):
     # 1 free use). Admin-tunable via /admin/economy.
     spin_ad_quota = Column(Integer, default=5, nullable=False)
     daily_ad_quota = Column(Integer, default=5, nullable=False)
+    # Daily Quick Match limit per user. Resets at UTC midnight.
+    daily_quick_match_limit = Column(Integer, default=5, nullable=False)
     # ── Branding (admin-editable from /branding page) ──
     # Public Telegram channel + group usernames (without @). Used in welcome
     # messages, /howto, /invite, and Mini App footer. Blank = hide link.
