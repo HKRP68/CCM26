@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Seasons{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏆 Seasons</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;margin-bottom:1.5rem;">
+  <div style="font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Live season</div>
+  <div style="font-size:1.4rem;font-weight:800;margin:.3rem 0;">{{ live.name }}</div>
+  <div style="font-size:.85rem;color:var(--muted);">
+    Prizes — 🥇 {{ '{:,}'.format(live.prize_top1) }} coins + {{ live.prize_gems_top1 }}💎 ·
+    🥈 {{ '{:,}'.format(live.prize_top2) }} + {{ live.prize_gems_top2 }}💎 ·
+    🥉 {{ '{:,}'.format(live.prize_top3) }} + {{ live.prize_gems_top3 }}💎 ·
+    ranks 4-10: {{ '{:,}'.format(live.prize_top10) }} coins
+  </div>
+  <p style="font-size:.75rem;color:var(--muted);margin-top:.6rem;">
+    Season rolls over automatically at the start of each month (UTC). Top finishers are paid and standings archived.
+  </p>
+</div>
+
+<h3 style="font-size:1rem;margin:0 0 .6rem;">Current standings (top 25)</h3>
+<table style="width:100%;border-collapse:collapse;margin-bottom:2rem;">
+  <thead>
+    <tr style="text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:.78rem;">
+      <th style="padding:.5rem;">#</th><th style="padding:.5rem;">Player</th>
+      <th style="padding:.5rem;text-align:right;">Points</th><th style="padding:.5rem;text-align:right;">Wins</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in board %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.5rem;font-weight:700;">{{ row.rank }}</td>
+      <td style="padding:.5rem;">{{ row.name }}</td>
+      <td style="padding:.5rem;text-align:right;font-weight:700;">{{ '{:,}'.format(row.points) }}</td>
+      <td style="padding:.5rem;text-align:right;color:var(--muted);">{{ row.wins }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" style="padding:1rem;color:var(--muted);text-align:center;">No ranked players yet this season.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="font-size:1rem;margin:0 0 .6rem;">Season history</h3>
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:.78rem;">
+      <th style="padding:.5rem;">Season</th><th style="padding:.5rem;">Status</th><th style="padding:.5rem;">Ended</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in seasons %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.5rem;font-weight:700;">{{ s.name or s.season_key }}</td>
+      <td style="padding:.5rem;">{% if s.finalized %}<span style="color:var(--muted);">finalized</span>{% else %}<span style="color:var(--green,#3fb950);font-weight:700;">● live</span>{% endif %}</td>
+      <td style="padding:.5rem;color:var(--muted);font-size:.8rem;">{{ s.ended_at | ist('%Y-%m-%d') if s.ended_at else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

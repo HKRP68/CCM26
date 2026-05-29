@@ -25,7 +25,7 @@
   </div>
   <div class="stat-card">
     <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Period</p>
-    <p style="font-size:.85rem;font-weight:700;margin:.25rem 0 0;">{{ comp.start_date.strftime('%b %d') }} → {{ comp.end_date.strftime('%b %d') }}</p>
+    <p style="font-size:.85rem;font-weight:700;margin:.25rem 0 0;">{{ comp.start_date | ist('%b %d') }} → {{ comp.end_date | ist('%b %d') }}</p>
     <p style="color:var(--muted);font-size:.7rem;margin:.15rem 0 0;">{{ comp.start_date.year }}</p>
   </div>
 </div>
@@ -49,7 +49,7 @@
 <div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.5rem;">
   <strong style="color:var(--green);">✅ Winners declared</strong>
   <div style="color:var(--muted);font-size:.85rem;margin-top:.25rem;">
-    On {{ comp.winners_announced_at.strftime('%Y-%m-%d %H:%M') }} UTC
+    On {{ comp.winners_announced_at | ist('%Y-%m-%d %H:%M') }} UTC
   </div>
 </div>
 {% endif %}
@@ -105,12 +105,12 @@
       </div>
       <div>
         <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Start</label>
-        <input type="datetime-local" name="start_date" value="{{ comp.start_date.strftime('%Y-%m-%dT%H:%M') }}"
+        <input type="datetime-local" name="start_date" value="{{ comp.start_date | ist('%Y-%m-%dT%H:%M') }}"
                style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
       </div>
       <div>
         <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">End</label>
-        <input type="datetime-local" name="end_date" value="{{ comp.end_date.strftime('%Y-%m-%dT%H:%M') }}"
+        <input type="datetime-local" name="end_date" value="{{ comp.end_date | ist('%Y-%m-%dT%H:%M') }}"
                style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
       </div>
       <div><label style="display:block;font-size:.75rem;color:var(--muted);">🥇 1st prize</label>

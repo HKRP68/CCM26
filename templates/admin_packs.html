@@ -127,7 +127,7 @@
     {% for pp in recent_purchases %}
       <tr style="border-top:1px solid var(--border);">
         <td style="padding:.5rem .6rem; font-size:.75rem; color:var(--muted);">
-          {{ pp.purchased_at.strftime('%d %b %H:%M') }}
+          {{ pp.purchased_at | ist('%d %b %H:%M') }}
         </td>
         <td style="padding:.5rem .6rem;">
           <a href="{{ url_for('user_detail', user_id=pp.user_id) }}"

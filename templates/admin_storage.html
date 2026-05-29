@@ -88,8 +88,8 @@
   <tbody>
   {% for a in archives %}
   <tr>
-    <td style="font-family:monospace;font-size:.82rem;">{{ a.archived_at.strftime('%Y-%m-%d %H:%M') }}</td>
-    <td style="font-size:.82rem;color:var(--muted);">{{ a.range_start.strftime('%m-%d') }} → {{ a.range_end.strftime('%m-%d') }}</td>
+    <td style="font-family:monospace;font-size:.82rem;">{{ a.archived_at | ist('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;color:var(--muted);">{{ a.range_start | ist('%m-%d') }} → {{ a.range_end | ist('%m-%d') }}</td>
     <td><strong>{{ "{:,}".format(a.row_count) }}</strong></td>
     <td style="font-family:monospace;font-size:.75rem;color:var(--muted);">{{ a.filename or '—' }}</td>
     <td style="font-family:monospace;font-size:.72rem;color:var(--muted);" title="{{ a.tg_file_id }}">{{ a.tg_file_id[:24] }}…</td>

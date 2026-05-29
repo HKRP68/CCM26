@@ -116,7 +116,7 @@
       {% if not r.is_read %}<span class="badge badge-unread">🆕 UNREAD</span>{% endif %}
       {% if r.is_resolved %}<span class="badge badge-resolved">✅ RESOLVED</span>{% endif %}
       <div class="rpt-meta">
-        Report #{{ r.id }} · {{ r.created_at.strftime('%d %b %Y %H:%M') if r.created_at else '—' }}
+        Report #{{ r.id }} · {{ r.created_at | ist('%d %b %Y %H:%M') if r.created_at else '—' }}
       </div>
     </div>
   </div>
@@ -125,7 +125,7 @@
 
   {% if r.admin_response %}
   <div class="rpt-reply">
-    <div class="reply-head">Reply sent {{ r.replied_at.strftime('%d %b %H:%M') if r.replied_at else '' }}
+    <div class="reply-head">Reply sent {{ r.replied_at | ist('%d %b %H:%M') if r.replied_at else '' }}
       {% if r.replied_by %}by {{ r.replied_by }}{% endif %}
     </div>
     {{ r.admin_response }}

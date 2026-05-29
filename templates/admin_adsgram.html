@@ -81,7 +81,7 @@
   <tbody>
   {% for r in recent %}
   <tr>
-    <td style="font-family:monospace;font-size:.82rem;">{{ r.received_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+    <td style="font-family:monospace;font-size:.82rem;">{{ r.received_at | ist('%Y-%m-%d %H:%M:%S') }}</td>
     <td style="font-family:monospace;">{{ r.telegram_id }}</td>
     <td>
       {% if r.consumed_at %}
@@ -90,7 +90,7 @@
         <span style="color:var(--accent);">⏳ Pending</span>
       {% endif %}
     </td>
-    <td style="font-family:monospace;font-size:.82rem;color:var(--muted);">{{ r.consumed_at.strftime('%H:%M:%S') if r.consumed_at else '—' }}</td>
+    <td style="font-family:monospace;font-size:.82rem;color:var(--muted);">{{ r.consumed_at | ist('%H:%M:%S') if r.consumed_at else '—' }}</td>
     <td style="font-family:monospace;font-size:.78rem;color:var(--muted);">{{ r.source_ip or '—' }}</td>
   </tr>
   {% endfor %}
@@ -111,7 +111,7 @@
   <tbody>
   {% for s in spins %}
   <tr>
-    <td style="font-family:monospace;font-size:.82rem;">{{ s.created_at.strftime('%m-%d %H:%M') }}</td>
+    <td style="font-family:monospace;font-size:.82rem;">{{ s.created_at | ist('%m-%d %H:%M') }}</td>
     <td><a href="{{ url_for('user_detail', user_id=s.user_id) }}" style="color:var(--accent);">{{ users.get(s.user_id, '#' ~ s.user_id) }}</a></td>
     <td style="font-size:.85rem;color:var(--muted);">{{ s.detail }}</td>
   </tr>

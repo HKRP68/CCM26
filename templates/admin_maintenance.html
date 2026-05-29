@@ -136,7 +136,7 @@
     <h2><span class="pulse"></span>BOT IS DOWN</h2>
     <div>Maintenance mode is currently <strong>ACTIVE</strong></div>
     {% if cfg.maintenance_started_at %}
-      <small>Started: {{ cfg.maintenance_started_at.strftime('%H:%M UTC, %d %b %Y') }}</small>
+      <small>Started: {{ cfg.maintenance_started_at | ist('%H:%M, %d %b %Y') }}</small>
     {% endif %}
   {% else %}
     <h2>✅ BOT IS LIVE</h2>

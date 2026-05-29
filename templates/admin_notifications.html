@@ -87,7 +87,7 @@
     {% if s.last_fired_at %}
     <tr style="border-bottom:1px solid var(--border);">
       <td colspan="6" style="padding:.3rem .7rem; font-size:.75rem; color:var(--muted);">
-        Last fired: {{ s.last_fired_at.strftime('%Y-%m-%d %H:%M UTC') }}
+        Last fired: {{ s.last_fired_at | ist('%Y-%m-%d %H:%M') }}
       </td>
     </tr>
     {% endif %}
@@ -118,7 +118,7 @@
     <tbody>
     {% for log in recent_logs %}
       <tr>
-        <td style="padding:.3rem .4rem;">{{ log.sent_at.strftime('%Y-%m-%d %H:%M UTC') }}</td>
+        <td style="padding:.3rem .4rem;">{{ log.sent_at | ist('%Y-%m-%d %H:%M') }}</td>
         <td style="padding:.3rem .4rem;">{{ sched_names.get(log.schedule_id, '—') }}</td>
         <td style="padding:.3rem .4rem;">user #{{ log.user_id }}</td>
         <td style="padding:.3rem .4rem;">

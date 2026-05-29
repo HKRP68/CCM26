@@ -33,7 +33,7 @@
         {{ cache.get('active_count', 0) }} active
       </td>
       <td style="padding:.6rem; color:var(--muted); font-size:.85rem;">
-        Loaded: {{ cache.loaded_at.strftime('%H:%M:%S') if cache.get('loaded_at') else 'never' }}
+        Loaded: {{ cache.loaded_at | ist('%H:%M:%S') if cache.get('loaded_at') else 'never' }}
         · Auto-refresh every 5 min
       </td>
     </tr>

@@ -97,7 +97,7 @@
   <h2 style="margin:0;">🌟 Player Market
     {% if next_refresh %}
     <span style="font-size:.7rem; color:var(--muted); font-weight:normal; vertical-align:middle; margin-left:.5rem;">
-      next refresh: {{ next_refresh.strftime('%d %b %H:%M UTC') }}
+      next refresh: {{ next_refresh | ist('%d %b %H:%M') }}
     </span>
     {% endif %}
   </h2>
@@ -215,7 +215,7 @@
   <h2 style="margin:0;">💎 Trait Market
     {% if next_trait_refresh %}
     <span style="font-size:.7rem; color:var(--muted); font-weight:normal; vertical-align:middle; margin-left:.5rem;">
-      next refresh: {{ next_trait_refresh.strftime('%d %b %H:%M UTC') }}
+      next refresh: {{ next_trait_refresh | ist('%d %b %H:%M') }}
     </span>
     {% endif %}
   </h2>
@@ -313,7 +313,7 @@
   <tbody>
   {% for r in recent %}
     <tr style="border-bottom:1px solid var(--border); font-size:.85rem;">
-      <td style="padding:.4rem;">{{ r.purchased_at.strftime('%d %b %H:%M') }}</td>
+      <td style="padding:.4rem;">{{ r.purchased_at | ist('%d %b %H:%M') }}</td>
       <td style="padding:.4rem;">{{ r.market_type }}</td>
       <td style="padding:.4rem;">user #{{ r.user_id }}</td>
       <td style="padding:.4rem;">{{ r.item_name or '-' }}</td>

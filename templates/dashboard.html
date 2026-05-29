@@ -230,7 +230,7 @@
             {% if log.target_name %} → <span style="color:#00C9A7;">{{ log.target_name }}</span>{% endif %}
             {% if log.detail %} <span style="color:var(--muted);font-size:.78rem;">— {{ log.detail[:80] }}</span>{% endif %}
           </div>
-          <span class="when">{{ log.timestamp.strftime('%d %b %H:%M') if log.timestamp else '—' }}</span>
+          <span class="when">{{ log.timestamp | ist('%d %b %H:%M') if log.timestamp else '—' }}</span>
         </div>
       {% endfor %}
     </div>

@@ -280,9 +280,9 @@
       <td style="font-size:.85rem;">{{ u._winpct }}%</td>
       <td>{{ u._streak }}</td>
       <td style="font-size:.8rem;color:{{ 'var(--accent)' if u.last_match_date else 'var(--muted)' }}">
-        {{ u.last_match_date.strftime('%d %b') if u.last_match_date else 'never' }}
+        {{ u.last_match_date | ist('%d %b') if u.last_match_date else 'never' }}
       </td>
-      <td style="font-size:.8rem;">{{ u.created_at.strftime('%d %b %Y') if u.created_at else '—' }}</td>
+      <td style="font-size:.8rem;">{{ u.created_at | ist('%d %b %Y') if u.created_at else '—' }}</td>
       <td>
         <a href="{{ url_for('user_detail', user_id=u.id) }}" class="btn btn-blue btn-sm">View</a>
       </td>

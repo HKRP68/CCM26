@@ -57,7 +57,7 @@
     {% for log in logs %}
     <tr>
       <td style="white-space:nowrap;font-size:.85rem;">
-        {{ log.timestamp.strftime('%d %b %Y %H:%M:%S') if log.timestamp else '—' }}
+        {{ log.timestamp | ist('%d %b %Y %H:%M:%S') if log.timestamp else '—' }}
       </td>
       <td><strong style="color:#00C9A7;">{{ log.action }}</strong></td>
       <td>

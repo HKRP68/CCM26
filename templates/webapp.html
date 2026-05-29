@@ -211,6 +211,340 @@
     border-color: rgba(167, 139, 250, 0.45);
     box-shadow: 0 0 16px rgba(167, 139, 250, 0.08) inset;
   }
+  .tile.packs {
+    border-color: rgba(255, 107, 157, 0.45);
+    box-shadow: 0 0 16px rgba(255, 107, 157, 0.08) inset;
+  }
+  .tile.achievements {
+    border-color: rgba(255, 196, 0, 0.45);
+    box-shadow: 0 0 16px rgba(255, 196, 0, 0.08) inset;
+  }
+  .tile.season {
+    border-color: rgba(124, 196, 255, 0.45);
+    box-shadow: 0 0 16px rgba(124, 196, 255, 0.08) inset;
+  }
+  .tile.clubs {
+    border-color: rgba(96, 220, 160, 0.45);
+    box-shadow: 0 0 16px rgba(96, 220, 160, 0.08) inset;
+  }
+
+  /* Clubs */
+  .club-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem; margin-bottom: 0.8rem;
+  }
+  .club-hero {
+    text-align: center; padding: 1.2rem 1rem;
+    background: linear-gradient(135deg, rgba(96,220,160,0.12), rgba(124,196,255,0.08));
+    border: 1px solid rgba(96,220,160,0.4); border-radius: 14px; margin-bottom: 0.9rem;
+  }
+  .club-hero-emoji { font-size: 2.6rem; }
+  .club-hero-name { font-size: 1.3rem; font-weight: 800; margin-top: 0.3rem; }
+  .club-hero-code {
+    display: inline-block; margin-top: 0.4rem; font-family: monospace;
+    background: var(--input-bg); padding: 0.25rem 0.6rem; border-radius: 6px;
+    font-size: 0.85rem; letter-spacing: 0.1em; cursor: pointer;
+  }
+  .club-hero-pts { font-size: 1.6rem; font-weight: 900; color: var(--accent); margin-top: 0.5rem; }
+  .club-member {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
+  }
+  .club-member:last-child { border-bottom: none; }
+  .club-member.me { background: rgba(96,220,160,0.08); margin: 0 -0.5rem; padding: 0.5rem; border-radius: 6px; }
+  .club-member-name { flex: 1; font-weight: 600; font-size: 0.9rem; }
+  .club-member-pts { font-weight: 800; font-size: 0.85rem; }
+  .founder-badge {
+    font-size: 0.6rem; background: var(--accent); color: #0a0f1a;
+    padding: 0.1rem 0.4rem; border-radius: 4px; font-weight: 800; margin-left: 0.3rem;
+  }
+  .club-kick-btn {
+    background: transparent; border: 1px solid var(--red); color: var(--red);
+    padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.68rem; cursor: pointer;
+    font-family: inherit;
+  }
+  .club-lb-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
+  }
+  .club-lb-row:last-child { border-bottom: none; }
+  .club-lb-row.mine { background: rgba(96,220,160,0.08); margin: 0 -0.5rem; padding: 0.5rem; border-radius: 6px; }
+  .club-open-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.7rem; margin-bottom: 0.5rem;
+  }
+  .club-join-btn {
+    margin-left: auto; background: var(--green); color: #0a0f1a; border: none;
+    padding: 0.45rem 0.9rem; border-radius: 8px; font-weight: 800;
+    font-family: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+  }
+  .club-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.8rem; }
+  .club-tab {
+    flex: 1; padding: 0.5rem; background: var(--card); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
+    font-size: 0.82rem; font-weight: 600; cursor: pointer;
+  }
+  .club-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+
+  /* Event banner */
+  .event-banner {
+    background: linear-gradient(135deg, rgba(167,139,250,0.18), rgba(255,107,157,0.12));
+    border: 1px solid rgba(167,139,250,0.45);
+    border-radius: 12px; padding: 0.7rem 0.9rem; margin: 0.8rem 0;
+  }
+  .event-banner-row { display: flex; align-items: center; gap: 0.6rem; }
+  .event-banner-row + .event-banner-row { margin-top: 0.4rem; }
+  .event-emoji { font-size: 1.5rem; }
+  .event-name { font-weight: 800; font-size: 0.88rem; }
+  .event-desc { font-size: 0.72rem; color: var(--muted); margin-top: 0.05rem; }
+  .event-timer { margin-left: auto; font-size: 0.72rem; color: var(--accent); font-weight: 700; white-space: nowrap; }
+
+  /* Season board */
+  .season-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
+  }
+  .season-row:last-child { border-bottom: none; }
+  .season-row.me { background: rgba(124,196,255,0.08); margin: 0 -0.4rem; padding: 0.5rem 0.4rem; border-radius: 6px; }
+  .season-rank {
+    width: 1.8rem; text-align: center; font-weight: 800; font-size: 0.9rem;
+  }
+  .season-rank.r1 { color: #ffd700; }
+  .season-rank.r2 { color: #c0c0c0; }
+  .season-rank.r3 { color: #cd7f32; }
+  .season-name-cell { flex: 1; font-size: 0.88rem; font-weight: 600; }
+  .season-pts { font-weight: 800; font-size: 0.88rem; }
+
+  /* Upgrade */
+  .upgrade-btn {
+    background: rgba(167,139,250,0.15); color: #a78bfa;
+    border: 1px solid rgba(167,139,250,0.4);
+    padding: 0.25rem 0.5rem; border-radius: 6px;
+    font-family: inherit; font-size: 0.7rem; font-weight: 700; cursor: pointer;
+  }
+  .upgrade-btn:active { background: rgba(167,139,250,0.3); }
+  .upgrade-current {
+    text-align: center; padding: 0.8rem; margin-bottom: 0.8rem;
+    background: var(--card-2); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .upgrade-option {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.7rem; margin-bottom: 0.5rem;
+    background: var(--card-2); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .upgrade-option.affordable { border-color: rgba(167,139,250,0.5); }
+  .upgrade-arrow { font-size: 1.3rem; color: #a78bfa; }
+  .upgrade-opt-info { flex: 1; }
+  .upgrade-opt-version { font-weight: 800; font-size: 0.9rem; }
+  .upgrade-opt-cost { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+  .upgrade-do-btn {
+    background: #a78bfa; color: #0a0f1a; border: none;
+    padding: 0.5rem 0.9rem; border-radius: 8px; font-weight: 800;
+    font-family: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+  }
+  .upgrade-do-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Login streak banner */
+  .login-streak-banner {
+    display: flex; align-items: center; gap: 0.8rem;
+    background: linear-gradient(135deg, rgba(255,107,53,0.15), rgba(255,196,0,0.1));
+    border: 1px solid rgba(255,140,0,0.4);
+    border-radius: 12px; padding: 0.8rem 1rem; margin: 0.8rem 0;
+    cursor: pointer;
+  }
+  .login-streak-banner:active { opacity: 0.85; }
+  .lsb-flame { font-size: 2rem; animation: flameFlicker 1.5s ease-in-out infinite; }
+  @keyframes flameFlicker { 0%,100% { transform: scale(1) rotate(-2deg); } 50% { transform: scale(1.1) rotate(2deg); } }
+  .lsb-text { flex: 1; }
+  .lsb-title { font-weight: 800; font-size: 0.95rem; }
+  .lsb-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+  .lsb-cta {
+    background: var(--accent); color: #0a0f1a; font-weight: 800;
+    padding: 0.45rem 0.9rem; border-radius: 8px; font-size: 0.82rem;
+  }
+  .lsb-cta.claimed { background: var(--card-2); color: var(--muted); }
+
+  /* Login ladder */
+  .login-ladder {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem;
+  }
+  .ladder-day {
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.6rem 0.3rem; text-align: center;
+    position: relative;
+  }
+  .ladder-day.today {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(212,168,42,0.3);
+  }
+  .ladder-day.claimed {
+    opacity: 0.5;
+  }
+  .ladder-day.claimed::after {
+    content: '✓'; position: absolute; top: 4px; right: 6px;
+    color: var(--green); font-weight: 800; font-size: 0.75rem;
+  }
+  .ladder-day.day7 {
+    grid-column: span 4;
+    background: linear-gradient(135deg, rgba(167,139,250,0.15), rgba(212,168,42,0.12));
+    border-color: #a78bfa;
+  }
+  .ladder-day-num { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; }
+  .ladder-day-reward { font-size: 0.78rem; font-weight: 700; margin-top: 0.2rem; }
+
+  /* Achievements */
+  .ach-progress-wrap {
+    background: var(--input-bg); border-radius: 5px; height: 8px; overflow: hidden;
+  }
+  .ach-progress-bar {
+    height: 100%; background: linear-gradient(90deg, var(--accent), #ffc400);
+    transition: width 0.4s ease;
+  }
+  .ach-category-label {
+    font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.06em; font-weight: 700; margin: 0.9rem 0 0.5rem;
+  }
+  .ach-row {
+    display: flex; align-items: center; gap: 0.7rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.7rem; margin-bottom: 0.45rem;
+  }
+  .ach-row.locked { opacity: 0.5; }
+  .ach-row.unlocked { border-color: rgba(255,196,0,0.4); }
+  .ach-emoji {
+    font-size: 1.6rem; width: 2.2rem; text-align: center;
+    filter: grayscale(1);
+  }
+  .ach-row.unlocked .ach-emoji { filter: none; }
+  .ach-info { flex: 1; }
+  .ach-name { font-weight: 700; font-size: 0.9rem; }
+  .ach-desc { font-size: 0.72rem; color: var(--muted); margin-top: 0.1rem; line-height: 1.4; }
+  .ach-reward { font-size: 0.7rem; color: var(--accent); white-space: nowrap; }
+  .ach-lock { font-size: 1rem; }
+
+  /* Packs screen */
+  .packs-tabs {
+    display: flex; gap: 0.3rem; margin-bottom: 0.8rem;
+    background: var(--card); padding: 0.25rem; border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .packs-tab {
+    flex: 1; padding: 0.5rem 0.7rem; background: transparent;
+    color: var(--muted); border: none; border-radius: 6px;
+    font-family: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 0.3rem;
+  }
+  .packs-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .inv-badge {
+    background: var(--red); color: #fff; font-size: 0.65rem; font-weight: 800;
+    min-width: 16px; height: 16px; border-radius: 8px; padding: 0 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .pack-shop-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem; margin-bottom: 0.7rem;
+  }
+  .pack-shop-head { display: flex; align-items: center; gap: 0.7rem; }
+  .pack-shop-emoji { font-size: 2.2rem; }
+  .pack-shop-name { font-weight: 800; font-size: 1rem; }
+  .pack-shop-desc { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; line-height: 1.4; }
+  .pack-shop-contents {
+    display: flex; gap: 0.5rem; margin: 0.6rem 0;
+    font-size: 0.72rem; color: var(--muted); flex-wrap: wrap;
+  }
+  .pack-content-chip {
+    background: var(--input-bg); padding: 0.2rem 0.5rem; border-radius: 5px;
+  }
+  .pack-buy-btn {
+    width: 100%; padding: 0.7rem; border: none; border-radius: 8px;
+    background: var(--accent); color: #0a0f1a; font-weight: 800;
+    font-family: inherit; font-size: 0.9rem; cursor: pointer;
+  }
+  .pack-buy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .pack-inv-card {
+    display: flex; align-items: center; gap: 0.8rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.9rem; margin-bottom: 0.6rem;
+  }
+  .pack-open-btn {
+    margin-left: auto; padding: 0.55rem 1.1rem; border: none; border-radius: 8px;
+    background: var(--green); color: #0a0f1a; font-weight: 800;
+    font-family: inherit; font-size: 0.85rem; cursor: pointer;
+  }
+
+  /* Pack opening animation */
+  #pack-open-overlay {
+    position: fixed; inset: 0; z-index: 10000;
+    background: radial-gradient(circle at center, rgba(20,28,46,0.97), rgba(8,12,22,0.99));
+    display: flex; align-items: center; justify-content: center;
+    animation: fadein 0.25s;
+  }
+  .pack-open-stage {
+    display: flex; flex-direction: column; align-items: center;
+    width: 100%; max-width: 420px; padding: 1rem;
+  }
+  .pack-anim-pack {
+    position: relative; cursor: pointer;
+    width: 180px; height: 240px; border-radius: 18px;
+    background: linear-gradient(145deg, #ff6b9d, #c41e6a 60%, #7a1142);
+    box-shadow: 0 12px 40px rgba(255,107,157,0.4);
+    display: flex; align-items: center; justify-content: center;
+    animation: packShake 0.8s ease-in-out infinite;
+  }
+  .pack-anim-pack.bursting { animation: packBurst 0.5s ease-out forwards; }
+  @keyframes packShake {
+    0%,100% { transform: rotate(-2deg) scale(1); }
+    25% { transform: rotate(2deg) scale(1.02); }
+    50% { transform: rotate(-1deg) scale(1.01); }
+    75% { transform: rotate(1.5deg) scale(1.02); }
+  }
+  @keyframes packBurst {
+    0% { transform: scale(1); opacity: 1; }
+    40% { transform: scale(1.3); opacity: 1; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+  .pack-anim-emoji { font-size: 5rem; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3)); }
+  .pack-anim-glow {
+    position: absolute; inset: -20px; border-radius: 24px;
+    background: radial-gradient(circle, rgba(255,217,61,0.4), transparent 70%);
+    animation: glowPulse 1.2s ease-in-out infinite; pointer-events: none;
+  }
+  @keyframes glowPulse { 0%,100% { opacity: 0.4; } 50% { opacity: 0.9; } }
+  .pack-anim-tap {
+    position: absolute; bottom: -2.5rem; left: 50%; transform: translateX(-50%);
+    color: var(--accent); font-weight: 700; font-size: 0.9rem; white-space: nowrap;
+    animation: tapBlink 1s ease-in-out infinite;
+  }
+  @keyframes tapBlink { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .pack-anim-cards {
+    display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;
+    perspective: 1000px;
+  }
+  .reveal-card {
+    width: 130px; border-radius: 12px; padding: 1rem 0.8rem;
+    background: var(--card-2); border: 2px solid var(--border);
+    text-align: center; opacity: 0;
+    animation: cardFlyIn 0.6s cubic-bezier(0.34,1.56,0.64,1) forwards;
+  }
+  .reveal-card.tier-std { border-color: var(--green); }
+  .reveal-card.tier-rare { border-color: var(--accent); box-shadow: 0 0 20px rgba(212,168,42,0.3); }
+  .reveal-card.tier-elite {
+    border-color: #a78bfa;
+    box-shadow: 0 0 28px rgba(167,139,250,0.45);
+    background: linear-gradient(160deg, var(--card-2), rgba(167,139,250,0.12));
+  }
+  .reveal-card .rc-rating { font-size: 2.2rem; font-weight: 900; line-height: 1; }
+  .reveal-card .rc-name { font-size: 0.9rem; font-weight: 700; margin-top: 0.5rem; }
+  .reveal-card .rc-meta { font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
+  .reveal-card .rc-slot {
+    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent); margin-top: 0.4rem; font-weight: 800;
+  }
+  @keyframes cardFlyIn {
+    0% { opacity: 0; transform: translateY(40px) rotateY(180deg) scale(0.8); }
+    100% { opacity: 1; transform: translateY(0) rotateY(0) scale(1); }
+  }
 
   /* Free pack odds table */
   .odds-row {
@@ -1107,6 +1441,19 @@
     </div>
   </div>
 
+  <!-- Login streak banner -->
+  <div class="login-streak-banner" id="login-streak-banner" style="display:none;" onclick="showLoginStreakModal()">
+    <div class="lsb-flame">🔥</div>
+    <div class="lsb-text">
+      <div class="lsb-title"><span id="lsb-streak">0</span>-day login streak</div>
+      <div class="lsb-sub" id="lsb-sub">Tap to claim your daily reward</div>
+    </div>
+    <div class="lsb-cta" id="lsb-cta">Claim</div>
+  </div>
+
+  <!-- Active event banner -->
+  <div class="event-banner" id="event-banner" style="display:none;"></div>
+
   <div class="tile-grid">
     <button class="tile match" onclick="navigate('match')">
       <div class="tile-icon">🏏</div>
@@ -1147,6 +1494,26 @@
       <div class="tile-icon">📦</div>
       <div class="tile-label">Free Pack</div>
       <div class="tile-sub" id="freepack-tile-sub">Watch &amp; win</div>
+    </button>
+    <button class="tile packs" onclick="navigate('packs')">
+      <div class="tile-icon">🎴</div>
+      <div class="tile-label">Packs</div>
+      <div class="tile-sub" id="packs-tile-sub">Buy &amp; open</div>
+    </button>
+    <button class="tile achievements" onclick="navigate('achievements')">
+      <div class="tile-icon">🏆</div>
+      <div class="tile-label">Achievements</div>
+      <div class="tile-sub" id="achievements-tile-sub">Milestones</div>
+    </button>
+    <button class="tile season" onclick="navigate('season')">
+      <div class="tile-icon">👑</div>
+      <div class="tile-label">Season</div>
+      <div class="tile-sub" id="season-tile-sub">Monthly ranks</div>
+    </button>
+    <button class="tile clubs" onclick="navigate('clubs')">
+      <div class="tile-icon">🛡️</div>
+      <div class="tile-label">Clubs</div>
+      <div class="tile-sub" id="clubs-tile-sub">Team up</div>
     </button>
   </div>
 
@@ -1353,6 +1720,98 @@
   <h3 style="margin:1rem 0 0.5rem;font-size:0.95rem;color:var(--muted);">Bench</h3>
   <div id="xi-bench">
     <div class="empty"><div style="font-size: 0.85rem;">—</div></div>
+  </div>
+</div>
+
+<!-- ════ Clubs screen ════ -->
+<div class="screen" id="screen-clubs">
+  <div style="text-align:center;padding:0.8rem 0;">
+    <div style="font-size:3rem;">🛡️</div>
+    <h2 style="margin:0.3rem 0 0.2rem;font-size:1.35rem;">Clubs</h2>
+    <p style="color:var(--muted);margin:0;font-size:0.85rem;">Team up. Your club's score is everyone's season points combined.</p>
+  </div>
+  <div id="clubs-content"><div class="empty"><div class="spinner"></div></div></div>
+</div>
+
+<!-- ════ Season screen ════ -->
+<div class="screen" id="screen-season">
+  <div style="text-align:center;padding:0.8rem 0;">
+    <div style="font-size:3rem;">👑</div>
+    <h2 style="margin:0.3rem 0 0.2rem;font-size:1.35rem;" id="season-name">Season</h2>
+    <p style="color:var(--muted);margin:0;font-size:0.85rem;">Monthly leaderboard · resets at month end</p>
+  </div>
+
+  <div class="card" id="season-me-card" style="display:none;">
+    <div style="display:flex;justify-content:space-around;text-align:center;">
+      <div><div style="font-size:1.5rem;font-weight:800;" id="season-my-rank">—</div><div style="font-size:0.7rem;color:var(--muted);">Your rank</div></div>
+      <div><div style="font-size:1.5rem;font-weight:800;" id="season-my-points">—</div><div style="font-size:0.7rem;color:var(--muted);">Points</div></div>
+      <div><div style="font-size:1.5rem;font-weight:800;" id="season-my-wins">—</div><div style="font-size:0.7rem;color:var(--muted);">Wins</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:0.7rem;background:rgba(212,168,42,0.05);">
+    <p class="card-title">🎁 Season prizes</p>
+    <div id="season-prizes" style="font-size:0.82rem;line-height:1.7;color:var(--muted);"></div>
+    <p style="font-size:0.72rem;color:var(--muted);margin:0.5rem 0 0;">
+      Earn points from quests, login rewards, and match wins.
+    </p>
+  </div>
+
+  <div class="card" style="margin-top:0.7rem;">
+    <p class="card-title">🏆 Standings</p>
+    <div id="season-board"><div class="empty" style="padding:0.5rem;"><div class="spinner"></div></div></div>
+  </div>
+</div>
+
+<!-- ════ Achievements screen ════ -->
+<div class="screen" id="screen-achievements">
+  <div style="text-align:center;padding:0.8rem 0;">
+    <div style="font-size:3rem;">🏆</div>
+    <h2 style="margin:0.3rem 0 0.2rem;font-size:1.35rem;">Achievements</h2>
+    <p style="color:var(--muted);margin:0;font-size:0.85rem;" id="ach-progress-text">—</p>
+  </div>
+  <div class="ach-progress-wrap">
+    <div class="ach-progress-bar" id="ach-progress-bar" style="width:0%;"></div>
+  </div>
+  <div id="achievements-content" style="margin-top:0.8rem;">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<!-- ════ Login streak modal ════ -->
+<div id="login-streak-modal" class="swap-overlay" style="display:none;" onclick="if(event.target.id==='login-streak-modal') closeLoginStreakModal()">
+  <div class="swap-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+      <h3 style="margin:0;font-size:1.05rem;">🔥 Daily Login Rewards</h3>
+      <button onclick="closeLoginStreakModal()" class="link-btn">✕</button>
+    </div>
+    <p style="color:var(--muted);font-size:0.8rem;margin:0 0 0.8rem;line-height:1.5;">
+      Log in every day to climb the ladder. Miss a day and it resets to Day 1.
+    </p>
+    <div id="login-ladder" class="login-ladder"></div>
+    <button class="spin-button" id="login-claim-btn" onclick="claimLoginReward()" style="margin-top:1rem;width:100%;">
+      🎁 Claim today's reward
+    </button>
+  </div>
+</div>
+
+<!-- ════ Packs screen ════ -->
+<div class="screen" id="screen-packs">
+  <div style="text-align:center;padding:0.8rem 0;">
+    <div style="font-size:3rem;">🎴</div>
+    <h2 style="margin:0.3rem 0 0.2rem;font-size:1.35rem;">Packs</h2>
+    <p style="color:var(--muted);margin:0;font-size:0.85rem;">Buy packs, open them, build your squad.</p>
+  </div>
+
+  <div class="packs-tabs">
+    <button class="packs-tab active" data-ptab="shop" onclick="switchPacksTab('shop')">🛒 Shop</button>
+    <button class="packs-tab" data-ptab="inventory" onclick="switchPacksTab('inventory')">
+      🎒 My Packs <span id="packs-inv-badge" class="inv-badge" style="display:none;">0</span>
+    </button>
+  </div>
+
+  <div id="packs-content">
+    <div class="empty"><div class="spinner"></div></div>
   </div>
 </div>
 
@@ -1601,6 +2060,32 @@
   </div>
 </div>
 
+<!-- ════ Player upgrade modal ════ -->
+<div id="upgrade-modal" class="swap-overlay" style="display:none;" onclick="if(event.target.id==='upgrade-modal') closeUpgrade()">
+  <div class="swap-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+      <h3 style="margin:0;font-size:1.05rem;">⬆️ Upgrade Player</h3>
+      <button onclick="closeUpgrade()" class="link-btn">✕</button>
+    </div>
+    <div id="upgrade-body">
+      <div class="empty"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ Pack opening animation overlay ════ -->
+<div id="pack-open-overlay" style="display:none;">
+  <div class="pack-open-stage">
+    <div id="pack-open-pack" class="pack-anim-pack" onclick="revealPackCards()">
+      <div class="pack-anim-emoji">🎴</div>
+      <div class="pack-anim-glow"></div>
+      <div class="pack-anim-tap">Tap to open!</div>
+    </div>
+    <div id="pack-open-cards" class="pack-anim-cards" style="display:none;"></div>
+    <button id="pack-open-done" class="spin-button" style="display:none;margin-top:1.5rem;max-width:280px;" onclick="closePackOpen()">✓ Add to squad</button>
+  </div>
+</div>
+
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) {
@@ -1681,6 +2166,10 @@ function navigate(screen) {
   if (screen === 'invite') loadInvite();
   if (screen === 'quests') loadQuests();
   if (screen === 'freepack') loadFreePack();
+  if (screen === 'packs') loadPacks();
+  if (screen === 'achievements') loadAchievements();
+  if (screen === 'season') loadSeason();
+  if (screen === 'clubs') loadClubs();
   if (screen === 'browse') {
     loadCountries().then(() => {
       if (!document.getElementById('browse-results').children.length) {
@@ -1755,6 +2244,70 @@ async function refreshDashboard() {
     `🔥 Streak: ${userData.streak || 0} days`;
 
   initAdsgram(data.adsgram);
+
+  // Login streak banner
+  if (data.login_streak) {
+    loginStreakStatus = data.login_streak;
+    updateLoginStreakBanner();
+  }
+
+  // Active events banner
+  updateEventBanner(data.events || []);
+
+  // Season tile sub
+  if (data.season && data.season.me) {
+    const sub = document.getElementById('season-tile-sub');
+    if (sub && data.season.me.rank) sub.textContent = `Rank #${data.season.me.rank}`;
+  }
+  window._seasonInfo = data.season || null;
+}
+
+function updateEventBanner(events) {
+  const banner = document.getElementById('event-banner');
+  if (!banner) return;
+  if (!events.length) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  banner.innerHTML = events.map(e => {
+    let timer = '';
+    if (e.remaining_seconds > 0) {
+      const h = Math.floor(e.remaining_seconds / 3600);
+      timer = h >= 1 ? `${h}h left` : `${Math.floor(e.remaining_seconds/60)}m left`;
+    }
+    const multTag = (e.event_type === 'coin_multiplier' && e.multiplier > 1)
+      ? ` ×${e.multiplier}` : '';
+    return `
+      <div class="event-banner-row">
+        <div class="event-emoji">${escapeHtml(e.emoji)}</div>
+        <div style="flex:1;">
+          <div class="event-name">${escapeHtml(e.name)}${multTag}</div>
+          ${e.description ? `<div class="event-desc">${escapeHtml(e.description)}</div>` : ''}
+        </div>
+        ${timer ? `<div class="event-timer">${timer}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+let loginStreakStatus = null;
+
+function updateLoginStreakBanner() {
+  const banner = document.getElementById('login-streak-banner');
+  if (!banner || !loginStreakStatus) return;
+  const ls = loginStreakStatus;
+  if ((ls.streak || 0) <= 0) { banner.style.display = 'none'; return; }
+  banner.style.display = 'flex';
+  document.getElementById('lsb-streak').textContent = ls.streak;
+  const cta = document.getElementById('lsb-cta');
+  const sub = document.getElementById('lsb-sub');
+  if (ls.claimable_today) {
+    cta.textContent = 'Claim';
+    cta.classList.remove('claimed');
+    sub.textContent = `Day ${ls.ladder_day} reward ready — tap to claim`;
+  } else {
+    cta.textContent = '✓ Done';
+    cta.classList.add('claimed');
+    sub.textContent = 'Come back tomorrow to keep your streak';
+  }
 }
 
 function fmtRemaining(secs) {
@@ -2908,6 +3461,7 @@ function renderSquadList() {
       <div class="meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}</div>
       <div class="sell-row">
         <span class="sell-val">+${r.sell_value.toLocaleString()} 🪙</span>
+        ${!squadSelectMode ? `<button class="upgrade-btn" onclick="event.stopPropagation(); openUpgrade(${r.roster_id}, '${escapeHtmlAttr(r.name)}')">⬆️ Upgrade</button>` : ''}
         ${(!squadSelectMode && !r.is_captain) ? `<button class="release-btn" onclick="event.stopPropagation(); releaseOne(${r.roster_id}, '${escapeHtmlAttr(r.name)}', ${r.sell_value})">✕ Release</button>` : ''}
       </div>
     </div>
@@ -3824,11 +4378,648 @@ function closeFreePackReveal() {
   loadFreePack();  // refresh → now on cooldown
 }
 
+// ════════════════ Packs (buy + open) ════════════════
+let packsData = null;
+let currentPacksTab = 'shop';
+let pendingRevealPlayers = null;
+
+function switchPacksTab(tab) {
+  currentPacksTab = tab;
+  document.querySelectorAll('.packs-tab').forEach(el =>
+    el.classList.toggle('active', el.dataset.ptab === tab));
+  renderPacks();
+}
+
+async function loadPacks() {
+  const el = document.getElementById('packs-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/packs', {});
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed to load packs'}</div>`;
+    return;
+  }
+  packsData = data;
+  // Update inventory badge
+  const badge = document.getElementById('packs-inv-badge');
+  if (badge) {
+    const n = data.inventory.length;
+    badge.textContent = n;
+    badge.style.display = n > 0 ? 'inline-flex' : 'none';
+  }
+  renderPacks();
+}
+
+function renderPacks() {
+  const el = document.getElementById('packs-content');
+  if (!packsData) return;
+
+  if (currentPacksTab === 'shop') {
+    if (!packsData.packs.length) {
+      el.innerHTML = `<div class="empty">No packs available right now</div>`;
+      return;
+    }
+    el.innerHTML = packsData.packs.map(p => {
+      const costParts = [];
+      if (p.cost_coins) costParts.push(`${formatNum(p.cost_coins)} 🪙`);
+      if (p.cost_gems) costParts.push(`${p.cost_gems} 💎`);
+      if (p.cost_quest_points) costParts.push(`${p.cost_quest_points} ⭐`);
+      const cost = costParts.join(' + ') || 'Free';
+
+      const contents = [];
+      if (p.main_count) contents.push(`<span class="pack-content-chip">${p.main_count}× main (${p.main_min_rating}-${p.main_max_rating})</span>`);
+      if (p.bonus_count) contents.push(`<span class="pack-content-chip">${p.bonus_count}× bonus (${p.bonus_min_rating}-${p.bonus_max_rating})</span>`);
+
+      let btnLabel, btnDisabled = '';
+      if (p.sold_out_today) {
+        btnLabel = `Sold out today (${p.bought_today}/${p.daily_limit})`;
+        btnDisabled = 'disabled';
+      } else {
+        btnLabel = `Buy · ${cost}`;
+        if (p.daily_limit > 0) btnLabel += ` (${p.bought_today}/${p.daily_limit})`;
+      }
+
+      return `
+        <div class="pack-shop-card">
+          <div class="pack-shop-head">
+            <div class="pack-shop-emoji">${escapeHtml(p.emoji)}</div>
+            <div style="flex:1;">
+              <div class="pack-shop-name">${escapeHtml(p.name)}</div>
+              ${p.description ? `<div class="pack-shop-desc">${escapeHtml(p.description)}</div>` : ''}
+            </div>
+          </div>
+          <div class="pack-shop-contents">${contents.join('')}</div>
+          <button class="pack-buy-btn" ${btnDisabled} onclick="buyPack(${p.id})">${btnLabel}</button>
+        </div>
+      `;
+    }).join('');
+  } else {
+    // Inventory
+    if (!packsData.inventory.length) {
+      el.innerHTML = `
+        <div class="empty">
+          <div class="icon">🎒</div>
+          No unopened packs.<br>
+          <span style="font-size:0.8rem;">Buy one from the Shop tab!</span>
+        </div>`;
+      return;
+    }
+    el.innerHTML = packsData.inventory.map(inv => `
+      <div class="pack-inv-card">
+        <div style="font-size:2rem;">${escapeHtml(inv.emoji)}</div>
+        <div style="flex:1;">
+          <div style="font-weight:800;font-size:0.95rem;">${escapeHtml(inv.name)}</div>
+          <div style="font-size:0.72rem;color:var(--muted);">
+            ${inv.main_count}× main${inv.bonus_count ? ` + ${inv.bonus_count}× bonus` : ''}
+          </div>
+        </div>
+        <button class="pack-open-btn" onclick="openPack(${inv.inventory_id})">Open</button>
+      </div>
+    `).join('');
+  }
+}
+
+async function buyPack(packId) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/packs/buy', { pack_id: packId });
+  if (!ok) {
+    toast(data.message || 'Purchase failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast('✅ Pack added to your inventory!', 'success');
+  hapticNotif('success');
+  refreshDashboard();
+  await loadPacks();
+  // Nudge them to the inventory tab
+  switchPacksTab('inventory');
+}
+
+async function openPack(inventoryId) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/packs/open', { inventory_id: inventoryId });
+  if (!ok) {
+    toast(data.message || 'Could not open pack', 'error');
+    hapticNotif('error');
+    return;
+  }
+  // Store revealed players and start the animation
+  pendingRevealPlayers = data;
+  startPackOpenAnimation();
+  refreshDashboard();
+}
+
+function startPackOpenAnimation() {
+  const overlay = document.getElementById('pack-open-overlay');
+  const pack = document.getElementById('pack-open-pack');
+  const cards = document.getElementById('pack-open-cards');
+  const doneBtn = document.getElementById('pack-open-done');
+  // Reset
+  pack.style.display = 'flex';
+  pack.classList.remove('bursting');
+  cards.style.display = 'none';
+  cards.innerHTML = '';
+  doneBtn.style.display = 'none';
+  overlay.style.display = 'flex';
+  hapticNotif('success');
+}
+
+function revealPackCards() {
+  if (!pendingRevealPlayers) return;
+  haptic('heavy');
+  const pack = document.getElementById('pack-open-pack');
+  const cards = document.getElementById('pack-open-cards');
+  const doneBtn = document.getElementById('pack-open-done');
+
+  // Burst the pack
+  pack.classList.add('bursting');
+
+  setTimeout(() => {
+    pack.style.display = 'none';
+    cards.style.display = 'flex';
+
+    const players = pendingRevealPlayers.players || [];
+    // Sort: main first, then by rating desc
+    const sorted = [...players].sort((a, b) => {
+      if (a.slot !== b.slot) return a.slot === 'main' ? -1 : 1;
+      return b.rating - a.rating;
+    });
+
+    cards.innerHTML = sorted.map((p, i) => {
+      const tier = p.rating >= 84 ? 'elite' : (p.rating >= 81 ? 'rare' : (p.rating >= 75 ? 'std' : 'common'));
+      return `
+        <div class="reveal-card tier-${tier}" style="animation-delay:${i * 0.18}s;">
+          <div class="rc-rating">${p.rating}</div>
+          <div style="font-size:0.6rem;color:var(--muted);">OVR</div>
+          <div class="rc-name">${escapeHtml(p.name)}</div>
+          <div class="rc-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</div>
+          <div class="rc-slot">${p.slot === 'main' ? '⭐ Main' : 'Bonus'}</div>
+        </div>
+      `;
+    }).join('');
+
+    // Haptic burst as cards land
+    sorted.forEach((p, i) => setTimeout(() => haptic('light'), i * 180));
+
+    // Overflow warning
+    const overflow = pendingRevealPlayers.overflow || [];
+    if (overflow.length) {
+      const warn = document.createElement('div');
+      warn.style.cssText = 'width:100%;text-align:center;color:var(--red);font-size:0.78rem;margin-top:0.6rem;';
+      warn.textContent = `⚠️ ${overflow.length} player(s) couldn't fit — roster full!`;
+      cards.appendChild(warn);
+    }
+
+    // Show done button after cards animate in
+    setTimeout(() => { doneBtn.style.display = 'block'; }, sorted.length * 180 + 400);
+  }, 450);
+}
+
+function closePackOpen() {
+  haptic('light');
+  document.getElementById('pack-open-overlay').style.display = 'none';
+  pendingRevealPlayers = null;
+  loadPacks();  // refresh inventory
+}
+
+// ════════════════ Login streak ════════════════
+function showLoginStreakModal() {
+  haptic('light');
+  if (!loginStreakStatus) return;
+  renderLoginLadder();
+  document.getElementById('login-streak-modal').style.display = 'flex';
+}
+
+function closeLoginStreakModal() {
+  document.getElementById('login-streak-modal').style.display = 'none';
+}
+
+function renderLoginLadder() {
+  const ls = loginStreakStatus;
+  if (!ls) return;
+  const ladder = ls.ladder || [];
+  const el = document.getElementById('login-ladder');
+  el.innerHTML = ladder.map(d => {
+    const isToday = d.day === ls.ladder_day && ls.last_login_today !== false;
+    const isClaimedToday = d.day === ls.ladder_day && ls.already_claimed_today;
+    const isPast = d.day < ls.ladder_day;
+    const cls = [
+      'ladder-day',
+      d.day === 7 ? 'day7' : '',
+      d.day === ls.ladder_day ? 'today' : '',
+      (isPast || isClaimedToday) ? 'claimed' : '',
+    ].filter(Boolean).join(' ');
+    return `
+      <div class="${cls}">
+        <div class="ladder-day-num">Day ${d.day}</div>
+        <div class="ladder-day-reward">${escapeHtml(d.label)}</div>
+      </div>
+    `;
+  }).join('');
+
+  const btn = document.getElementById('login-claim-btn');
+  if (ls.claimable_today) {
+    btn.disabled = false;
+    btn.textContent = `🎁 Claim Day ${ls.ladder_day} reward`;
+    btn.style.opacity = '1';
+  } else {
+    btn.disabled = true;
+    btn.textContent = '✓ Claimed today — come back tomorrow';
+    btn.style.opacity = '0.6';
+  }
+}
+
+async function claimLoginReward() {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/login-streak/claim', {});
+  if (!ok) {
+    toast(data.message || 'Already claimed', 'error');
+    return;
+  }
+  const r = data.reward;
+  const parts = [];
+  if (r.coins) parts.push(`+${formatNum(r.coins)}🪙`);
+  if (r.gems) parts.push(`+${r.gems}💎`);
+  if (r.granted_pack) parts.push('+1 free pack 🎴');
+  toast(`🎉 Day ${r.day}: ${parts.join(' ')}`, 'success');
+  hapticNotif('success');
+  loginStreakStatus = data.status;
+  updateLoginStreakBanner();
+  renderLoginLadder();
+  refreshDashboard();
+  setTimeout(closeLoginStreakModal, 1200);
+}
+
+// ════════════════ Achievements ════════════════
+const ACH_CATEGORY_ORDER = ['Collection', 'Matches', 'Economy', 'Social', 'Traits', 'Packs', 'Other'];
+
+async function loadAchievements() {
+  const el = document.getElementById('achievements-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/achievements', {});
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  // Progress bar
+  const pct = data.total ? Math.round(data.unlocked * 100 / data.total) : 0;
+  document.getElementById('ach-progress-text').textContent =
+    `${data.unlocked} / ${data.total} unlocked (${pct}%)`;
+  document.getElementById('ach-progress-bar').style.width = pct + '%';
+
+  // Order categories
+  const cats = Object.keys(data.groups);
+  cats.sort((a, b) => {
+    const ia = ACH_CATEGORY_ORDER.indexOf(a); const ib = ACH_CATEGORY_ORDER.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+
+  el.innerHTML = cats.map(cat => {
+    const items = data.groups[cat];
+    // Unlocked first within category
+    items.sort((a, b) => (b.unlocked ? 1 : 0) - (a.unlocked ? 1 : 0));
+    const rows = items.map(a => {
+      const rewardBits = [];
+      if (a.coins) rewardBits.push(`${formatNum(a.coins)}🪙`);
+      if (a.gems) rewardBits.push(`${a.gems}💎`);
+      return `
+        <div class="ach-row ${a.unlocked ? 'unlocked' : 'locked'}">
+          <div class="ach-emoji">${escapeHtml(a.emoji)}</div>
+          <div class="ach-info">
+            <div class="ach-name">${escapeHtml(a.name)}</div>
+            <div class="ach-desc">${escapeHtml(a.desc)}</div>
+          </div>
+          ${a.unlocked
+            ? `<div class="ach-reward">✓</div>`
+            : (rewardBits.length ? `<div class="ach-reward">${rewardBits.join(' ')}</div>` : `<div class="ach-lock">🔒</div>`)}
+        </div>
+      `;
+    }).join('');
+    return `<div class="ach-category-label">${escapeHtml(cat)}</div>${rows}`;
+  }).join('');
+}
+
+// ════════════════ Season ════════════════
+async function loadSeason() {
+  const board = document.getElementById('season-board');
+  board.innerHTML = `<div class="empty" style="padding:0.5rem;"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/season', {});
+  if (!ok) {
+    board.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  const season = data.season;
+  document.getElementById('season-name').textContent = season.name || 'Season';
+
+  // My standing
+  if (season.me) {
+    document.getElementById('season-me-card').style.display = 'block';
+    document.getElementById('season-my-rank').textContent = season.me.rank ? `#${season.me.rank}` : '—';
+    document.getElementById('season-my-points').textContent = formatNum(season.me.points || 0);
+    document.getElementById('season-my-wins').textContent = season.me.wins || 0;
+  }
+
+  // Prizes
+  const p = season.prizes || {};
+  document.getElementById('season-prizes').innerHTML = `
+    🥇 #1: ${formatNum(p.top1?.coins || 0)} 🪙 + ${p.top1?.gems || 0} 💎<br>
+    🥈 #2: ${formatNum(p.top2?.coins || 0)} 🪙 + ${p.top2?.gems || 0} 💎<br>
+    🥉 #3: ${formatNum(p.top3?.coins || 0)} 🪙 + ${p.top3?.gems || 0} 💎<br>
+    🏅 #4-10: ${formatNum(p.top10?.coins || 0)} 🪙 each
+  `;
+
+  // Board
+  const rows = data.leaderboard || [];
+  if (!rows.length) {
+    board.innerHTML = `<div class="empty" style="padding:0.8rem;"><div style="font-size:0.85rem;">No ranked players yet. Be the first!</div></div>`;
+    return;
+  }
+  board.innerHTML = rows.map(r => {
+    const rankCls = r.rank <= 3 ? `r${r.rank}` : '';
+    const medal = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : r.rank;
+    return `
+      <div class="season-row ${r.is_me ? 'me' : ''}">
+        <div class="season-rank ${rankCls}">${medal}</div>
+        <div class="season-name-cell">${escapeHtml(r.name)}${r.is_me ? ' <span style="color:var(--accent);font-size:0.72rem;">(you)</span>' : ''}</div>
+        <div class="season-pts">${formatNum(r.points)} <span style="color:var(--muted);font-size:0.72rem;font-weight:400;">pts</span></div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ════════════════ Player upgrade ════════════════
+let upgradeRosterId = null;
+
+async function openUpgrade(rosterId, name) {
+  haptic('light');
+  upgradeRosterId = rosterId;
+  document.getElementById('upgrade-modal').style.display = 'flex';
+  const body = document.getElementById('upgrade-body');
+  body.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/upgrade/options', { roster_id: rosterId });
+  if (!ok) {
+    body.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  renderUpgradeOptions(data);
+}
+
+function renderUpgradeOptions(data) {
+  const body = document.getElementById('upgrade-body');
+  const c = data.current;
+  let html = `
+    <div class="upgrade-current">
+      <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;">Current</div>
+      <div style="font-size:1.6rem;font-weight:900;margin-top:0.2rem;">${c.rating}</div>
+      <div style="font-weight:700;">${escapeHtml(c.name)}</div>
+      <div style="font-size:0.75rem;color:var(--muted);">${escapeHtml(c.version)} · ${escapeHtml(c.category)}</div>
+    </div>
+  `;
+  if (!data.options.length) {
+    html += `<div class="empty" style="padding:1rem;"><div style="font-size:0.85rem;">No higher versions of this player exist yet.</div></div>`;
+    body.innerHTML = html;
+    return;
+  }
+  html += `<p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.6rem;">Upgrade to a higher version (you keep your squad slot):</p>`;
+  html += data.options.map(o => `
+    <div class="upgrade-option ${o.affordable ? 'affordable' : ''}">
+      <div class="upgrade-arrow">⬆️</div>
+      <div class="upgrade-opt-info">
+        <div class="upgrade-opt-version">${o.rating} · ${escapeHtml(o.version)}</div>
+        <div class="upgrade-opt-cost">${formatNum(o.cost)} 🪙 ${o.affordable ? '' : '<span style="color:var(--red);">(not enough)</span>'}</div>
+      </div>
+      <button class="upgrade-do-btn" ${o.affordable ? '' : 'disabled'} onclick="doUpgrade(${o.player_id}, ${o.cost})">Upgrade</button>
+    </div>
+  `).join('');
+  html += `<p style="text-align:center;color:var(--muted);font-size:0.72rem;margin-top:0.6rem;">You have ${formatNum(data.coins)} 🪙</p>`;
+  body.innerHTML = html;
+}
+
+async function doUpgrade(targetPlayerId, cost) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/upgrade/apply', {
+    roster_id: upgradeRosterId,
+    target_player_id: targetPlayerId,
+  });
+  if (!ok) {
+    toast(data.message || 'Upgrade failed', 'error');
+    hapticNotif('error');
+    return;
+  }
+  toast(`⬆️ Upgraded to ${data.to.version} (${data.to.rating})!`, 'success');
+  hapticNotif('success');
+  closeUpgrade();
+  refreshDashboard();
+  if (typeof loadSquad === 'function') loadSquad();
+  else if (typeof loadRoster === 'function') loadRoster();
+}
+
+function closeUpgrade() {
+  document.getElementById('upgrade-modal').style.display = 'none';
+  upgradeRosterId = null;
+}
+
+// ════════════════ Clubs ════════════════
+let clubsData = null;
+let clubTab = 'overview';
+
+async function loadClubs() {
+  const el = document.getElementById('clubs-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/clubs', {});
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  clubsData = data;
+  renderClubs();
+}
+
+function renderClubs() {
+  const el = document.getElementById('clubs-content');
+  const d = clubsData;
+  if (d.my_club) {
+    renderMyClub(el, d);
+  } else {
+    renderNoClub(el, d);
+  }
+}
+
+function renderMyClub(el, d) {
+  const c = d.my_club;
+  const members = c.members || [];
+  const memberRows = members.map(m => `
+    <div class="club-member ${m.is_me ? 'me' : ''}">
+      <div class="club-member-name">${escapeHtml(m.name)}${m.is_founder ? '<span class="founder-badge">FOUNDER</span>' : ''}${m.is_me ? ' <span style="color:var(--accent);font-size:0.7rem;">(you)</span>' : ''}</div>
+      <div class="club-member-pts">${formatNum(m.season_points)} pts</div>
+      ${(c.is_founder && !m.is_me) ? `<button class="club-kick-btn" onclick="kickMember(${m.user_id}, '${escapeHtmlAttr(m.name)}')">Kick</button>` : ''}
+    </div>
+  `).join('');
+
+  // Club's rank in the leaderboard
+  const myRank = (d.leaderboard.find(x => x.club_id === c.id) || {}).rank;
+
+  el.innerHTML = `
+    <div class="club-hero">
+      <div class="club-hero-emoji">${escapeHtml(c.emoji)}</div>
+      <div class="club-hero-name">${escapeHtml(c.name)}</div>
+      ${c.description ? `<div style="color:var(--muted);font-size:0.8rem;margin-top:0.3rem;">${escapeHtml(c.description)}</div>` : ''}
+      <div class="club-hero-pts">${formatNum(c.points)} pts</div>
+      <div style="font-size:0.75rem;color:var(--muted);">
+        ${myRank ? `Rank #${myRank} · ` : ''}${c.member_count}/${c.max_members} members
+      </div>
+      <div class="club-hero-code" onclick="copyClubCode('${c.code}')">📋 ${c.code}</div>
+    </div>
+
+    <div class="club-card">
+      <p class="card-title">👥 Members (by season points)</p>
+      ${memberRows}
+    </div>
+
+    <div class="club-card">
+      <p class="card-title">🏆 Club leaderboard</p>
+      ${renderClubLeaderboard(d.leaderboard, c.id)}
+    </div>
+
+    <button class="release-btn" style="width:100%;padding:0.7rem;margin-top:0.3rem;"
+            onclick="leaveClub()">🚪 Leave club</button>
+    <p style="text-align:center;color:var(--muted);font-size:0.72rem;margin-top:0.5rem;">
+      ${c.is_founder ? 'As founder, leaving transfers ownership to the next member.' : ''}
+    </p>
+  `;
+}
+
+function renderClubLeaderboard(lb, myClubId) {
+  if (!lb || !lb.length) return `<div class="empty" style="padding:0.5rem;">No clubs yet</div>`;
+  return lb.map(c => {
+    const medal = c.rank === 1 ? '🥇' : c.rank === 2 ? '🥈' : c.rank === 3 ? '🥉' : `#${c.rank}`;
+    return `
+      <div class="club-lb-row ${c.club_id === myClubId ? 'mine' : ''}">
+        <div style="width:2rem;text-align:center;font-weight:800;">${medal}</div>
+        <div style="font-size:1.2rem;">${escapeHtml(c.emoji)}</div>
+        <div style="flex:1;font-weight:600;font-size:0.88rem;">${escapeHtml(c.name)}<br><span style="color:var(--muted);font-size:0.7rem;">${c.member_count} members</span></div>
+        <div style="font-weight:800;font-size:0.85rem;">${formatNum(c.points)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderNoClub(el, d) {
+  const openRows = (d.open_clubs || []).map(c => `
+    <div class="club-open-row">
+      <div style="font-size:1.4rem;">${escapeHtml(c.emoji)}</div>
+      <div style="flex:1;">
+        <div style="font-weight:700;font-size:0.9rem;">${escapeHtml(c.name)}</div>
+        <div style="font-size:0.72rem;color:var(--muted);">${c.member_count}/${c.max_members} · ${formatNum(c.points)} pts</div>
+      </div>
+      <button class="club-join-btn" onclick="joinClub(null, ${c.id})">Join</button>
+    </div>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="club-tabs">
+      <button class="club-tab ${clubTab==='overview'?'active':''}" onclick="setClubTab('overview')">🔍 Browse</button>
+      <button class="club-tab ${clubTab==='create'?'active':''}" onclick="setClubTab('create')">➕ Create</button>
+    </div>
+
+    <div id="club-tab-content">
+      ${clubTab === 'create' ? `
+        <div class="club-card">
+          <p class="card-title">Create a club</p>
+          <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">Costs ${formatNum(d.create_cost)} 🪙. You'll be the founder.</p>
+          <input id="club-name-input" type="text" maxlength="40" placeholder="Club name"
+                 style="width:100%;padding:0.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;color:var(--text);margin-bottom:0.5rem;">
+          <input id="club-desc-input" type="text" maxlength="160" placeholder="Description (optional)"
+                 style="width:100%;padding:0.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;color:var(--text);margin-bottom:0.5rem;">
+          <input id="club-emoji-input" type="text" maxlength="4" placeholder="🛡️" value="🛡️"
+                 style="width:80px;padding:0.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;color:var(--text);text-align:center;margin-bottom:0.7rem;font-size:1.2rem;">
+          <button class="spin-button" style="width:100%;" onclick="createClub()"
+                  ${d.coins < d.create_cost ? 'disabled' : ''}>
+            ${d.coins < d.create_cost ? `Need ${formatNum(d.create_cost)} 🪙` : `Create for ${formatNum(d.create_cost)} 🪙`}
+          </button>
+        </div>
+      ` : `
+        <div class="club-card">
+          <p class="card-title">Join by code</p>
+          <div style="display:flex;gap:0.5rem;">
+            <input id="club-code-input" type="text" maxlength="8" placeholder="ABC123"
+                   style="flex:1;padding:0.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;color:var(--text);text-transform:uppercase;letter-spacing:0.1em;">
+            <button class="club-join-btn" onclick="joinByCode()">Join</button>
+          </div>
+        </div>
+        <div class="club-card">
+          <p class="card-title">🛡️ Open clubs</p>
+          ${openRows || '<div class="empty" style="padding:0.5rem;">No open clubs — create the first one!</div>'}
+        </div>
+        <div class="club-card">
+          <p class="card-title">🏆 Top clubs</p>
+          ${renderClubLeaderboard(d.leaderboard, null)}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function setClubTab(t) { clubTab = t; renderClubs(); }
+
+function copyClubCode(code) {
+  haptic('light');
+  if (navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{});
+  toast(`Code ${code} copied — share it!`, 'success');
+}
+
+async function createClub() {
+  const name = (document.getElementById('club-name-input')?.value || '').trim();
+  const desc = (document.getElementById('club-desc-input')?.value || '').trim();
+  const emoji = (document.getElementById('club-emoji-input')?.value || '🛡️').trim();
+  if (name.length < 3) { toast('Name must be at least 3 characters', 'error'); return; }
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/clubs/create', { name, description: desc, emoji });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  toast(`🛡️ Club "${data.club.name}" created!`, 'success');
+  hapticNotif('success');
+  refreshDashboard();
+  loadClubs();
+}
+
+async function joinByCode() {
+  const code = (document.getElementById('club-code-input')?.value || '').trim();
+  if (!code) { toast('Enter a club code', 'error'); return; }
+  joinClub(code, null);
+}
+
+async function joinClub(code, clubId) {
+  haptic('medium');
+  const body = code ? { code } : { club_id: clubId };
+  const { ok, data } = await api('/api/webapp/clubs/join', body);
+  if (!ok) { toast(data.message || 'Failed', 'error'); hapticNotif('error'); return; }
+  toast(`🛡️ Joined ${data.club.name}!`, 'success');
+  hapticNotif('success');
+  loadClubs();
+}
+
+async function leaveClub() {
+  if (!confirm('Leave this club? You\'ll have a short cooldown before joining another.')) return;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/clubs/leave', {});
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  toast(data.disbanded ? 'Club disbanded' : 'Left club', 'success');
+  loadClubs();
+}
+
+async function kickMember(userId, name) {
+  if (!confirm(`Remove ${name} from the club?`)) return;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/clubs/kick', { user_id: userId });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  toast(`Removed ${name}`, 'success');
+  loadClubs();
+}
+
 // ════════════════ Initial load ════════════════
 // Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
 function handleHashDeepLink() {
   const hash = (window.location.hash || '').replace('#', '').toLowerCase();
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack'];
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs'];
   if (validScreens.includes(hash) && hash !== 'home') {
     // refreshDashboard fires first then navigate
     navigate(hash);

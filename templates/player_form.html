@@ -171,7 +171,7 @@
         {% endif %}
         <div style="margin-bottom:.5rem; color:var(--muted);">
           📏 {{ "%.1f"|format(image_meta.file_size / 1024) }} KB ·
-          📅 {{ image_meta.uploaded_at.strftime('%Y-%m-%d %H:%M UTC') }}
+          📅 {{ image_meta.uploaded_at | ist('%Y-%m-%d %H:%M') }}
           {% if image_meta.uploaded_by %} · 👤 {{ image_meta.uploaded_by }}{% endif %}
         </div>
         {% if not image_meta.exists_on_disk %}

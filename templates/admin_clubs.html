@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Clubs{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🛡️ Clubs</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;">
+  Player-formed clubs. Score = sum of members' season points (live). Create cost: {{ '{:,}'.format(create_cost) }} coins · default cap: {{ default_max }} members.
+</p>
+
+{% if detail %}
+{# ── Club detail view ── #}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-bottom:1.5rem;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;">
+    <div>
+      <div style="font-size:1.6rem;font-weight:800;">{{ detail.club.emoji }} {{ detail.club.name }}</div>
+      <div style="color:var(--muted);font-size:.85rem;margin-top:.3rem;">
+        Code <b style="font-family:monospace;">{{ detail.club.code }}</b> ·
+        {{ detail.members|length }}/{{ detail.club.max_members }} members ·
+        <b>{{ '{:,}'.format(detail.points) }}</b> live points ·
+        {{ detail.club.total_seasons_won }} seasons won
+      </div>
+      {% if detail.club.description %}<div style="color:var(--muted);font-size:.82rem;margin-top:.3rem;">{{ detail.club.description }}</div>{% endif %}
+    </div>
+    <a href="{{ url_for('admin_clubs') }}" class="btn btn-ghost btn-sm">← All clubs</a>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
+  {# Members #}
+  <div>
+    <h3 style="font-size:1rem;margin:0 0 .6rem;">Members</h3>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:.75rem;">
+        <th style="padding:.4rem;">Player</th><th style="padding:.4rem;text-align:right;">Points</th><th style="padding:.4rem;"></th>
+      </tr></thead>
+      <tbody>
+        {% for m in detail.members %}
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:.5rem .4rem;">
+            {{ m.name }}
+            {% if m.is_founder %}<span style="background:var(--accent);color:#0a0f1a;font-size:.6rem;font-weight:800;padding:.1rem .3rem;border-radius:4px;">FOUNDER</span>{% endif %}
+            <br><span style="color:var(--muted);font-size:.68rem;">TG {{ m.telegram_id }}</span>
+          </td>
+          <td style="padding:.5rem .4rem;text-align:right;font-weight:700;">{{ '{:,}'.format(m.season_points) }}</td>
+          <td style="padding:.5rem .4rem;text-align:right;white-space:nowrap;">
+            {% if not m.is_founder %}
+            <form method="POST" action="{{ url_for('admin_clubs_transfer', club_id=detail.club.id) }}" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="user_id" value="{{ m.user_id }}">
+              <button class="btn btn-ghost btn-sm" title="Make founder">👑</button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_clubs_kick', club_id=detail.club.id) }}" style="display:inline;" onsubmit="return confirm('Remove {{ m.name }}?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="user_id" value="{{ m.user_id }}">
+              <button class="btn btn-ghost btn-sm" style="color:var(--red,#f85149);">Kick</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# Edit + danger #}
+  <div>
+    <h3 style="font-size:1rem;margin:0 0 .6rem;">Edit club</h3>
+    <form method="POST" action="{{ url_for('admin_clubs_edit', club_id=detail.club.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label style="font-size:.78rem;color:var(--muted);">Name</label>
+      <input type="text" name="name" value="{{ detail.club.name }}" maxlength="40"
+             style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:.5rem;">
+      <label style="font-size:.78rem;color:var(--muted);">Emoji</label>
+      <input type="text" name="emoji" value="{{ detail.club.emoji }}" maxlength="10"
+             style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:.5rem;">
+      <label style="font-size:.78rem;color:var(--muted);">Description</label>
+      <input type="text" name="description" value="{{ detail.club.description or '' }}" maxlength="160"
+             style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:.5rem;">
+      <label style="font-size:.78rem;color:var(--muted);">Max members (2-100)</label>
+      <input type="number" name="max_members" value="{{ detail.club.max_members }}" min="2" max="100"
+             style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:.8rem;">
+      <button type="submit" class="btn btn-primary">💾 Save</button>
+    </form>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 .6rem;color:var(--red,#f85149);">Danger zone</h3>
+    <form method="POST" action="{{ url_for('admin_clubs_disband', club_id=detail.club.id) }}" onsubmit="return confirm('Disband {{ detail.club.name }}? All members will be freed. This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-ghost" style="color:var(--red,#f85149);border-color:var(--red,#f85149);">🗑️ Disband club</button>
+    </form>
+  </div>
+</div>
+
+{% else %}
+{# ── Club list view ── #}
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:.78rem;">
+      <th style="padding:.5rem;">#</th><th style="padding:.5rem;">Club</th><th style="padding:.5rem;">Code</th>
+      <th style="padding:.5rem;">Founder</th><th style="padding:.5rem;text-align:center;">Members</th>
+      <th style="padding:.5rem;text-align:right;">Points</th><th style="padding:.5rem;"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in clubs %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem .5rem;font-weight:700;">{{ loop.index }}</td>
+      <td style="padding:.6rem .5rem;">{{ row.club.emoji }} <b>{{ row.club.name }}</b></td>
+      <td style="padding:.6rem .5rem;font-family:monospace;font-size:.82rem;">{{ row.club.code }}</td>
+      <td style="padding:.6rem .5rem;font-size:.85rem;">{{ row.founder_name }}</td>
+      <td style="padding:.6rem .5rem;text-align:center;">{{ row.club.member_count }}/{{ row.club.max_members }}</td>
+      <td style="padding:.6rem .5rem;text-align:right;font-weight:700;">{{ '{:,}'.format(row.points) }}</td>
+      <td style="padding:.6rem .5rem;text-align:right;">
+        <a href="{{ url_for('admin_clubs', view=row.club.id) }}" class="btn btn-ghost btn-sm">Manage</a>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="padding:1rem;color:var(--muted);text-align:center;">No clubs yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

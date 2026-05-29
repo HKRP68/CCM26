@@ -162,7 +162,7 @@
           <button type="submit" class="btn btn-ghost">↺ Reset to default</button>
         </form>
         <span style="color:var(--muted);font-size:.78rem;margin-left:auto;">
-          Last edit: {{ t.updated_at.strftime('%d %b %H:%M') if t.updated_at else '—' }}
+          Last edit: {{ t.updated_at | ist('%d %b %H:%M') if t.updated_at else '—' }}
         </span>
       </div>
     </form>

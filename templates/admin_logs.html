@@ -31,7 +31,7 @@
     {% for l in logs %}
     <tr>
       <td style="font-size:.85rem;white-space:nowrap;color:var(--muted);">
-        {{ l.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+        {{ l.timestamp | ist('%Y-%m-%d %H:%M:%S') }}
       </td>
       <td>
         {% set act_emoji = {

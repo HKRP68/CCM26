@@ -22,7 +22,7 @@
     <div>
       <strong style="color:#ff4757;">🚫 This user is banned.</strong>
       {% if user.ban_reason %}<br><span style="font-size:.85rem;color:var(--muted);">Reason: {{ user.ban_reason }}</span>{% endif %}
-      {% if user.banned_at %}<br><span style="font-size:.75rem;color:var(--muted);">Banned {{ user.banned_at.strftime('%d %b %Y %H:%M') }}</span>{% endif %}
+      {% if user.banned_at %}<br><span style="font-size:.75rem;color:var(--muted);">Banned {{ user.banned_at | ist('%d %b %Y %H:%M') }}</span>{% endif %}
     </div>
     <form method="POST" action="{{ url_for('user_ban', user_id=user.id) }}" style="display:inline;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -57,6 +57,20 @@
     <input type="number" name="amount" placeholder="amount" required min="0"
            style="width:120px;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;">
     <button type="submit" class="btn btn-blue">💾 Apply</button>
+  </form>
+</details>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
+  <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">✉️ Send message to this user</summary>
+  <form method="POST" action="{{ url_for('admin_message_user', user_id=user.id) }}" style="margin-top:.6rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p style="color:var(--muted);font-size:.78rem;margin:0 0 .5rem;line-height:1.5;">
+      Sends a direct Telegram DM from the bot. HTML formatting allowed (&lt;b&gt;, &lt;i&gt;, &lt;a&gt;).
+      The user must have started the bot — otherwise Telegram refuses delivery.
+    </p>
+    <textarea name="message" rows="4" maxlength="4000" required placeholder="Type your message…"
+              style="width:100%;background:var(--bg);border:1px solid var(--border);color:#fff;padding:.6rem;border-radius:6px;font-family:inherit;resize:vertical;"></textarea>
+    <button type="submit" class="btn btn-blue" style="margin-top:.5rem;">✉️ Send DM</button>
   </form>
 </details>
 
@@ -128,12 +142,12 @@
 <div class="form-card" style="max-width:500px;margin-bottom:1.5rem;">
   <h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--accent2);text-transform:uppercase;">Cooldowns & Streak</h3>
   <div style="font-size:.85rem;color:var(--muted);line-height:1.8;">
-    <b>Last Claim:</b> {{ stats.last_claim.strftime('%d %b %Y %H:%M') if stats.last_claim else 'Never' }}<br>
-    <b>Last Daily:</b> {{ stats.last_daily.strftime('%d %b %Y %H:%M') if stats.last_daily else 'Never' }}<br>
-    <b>Last GSpin:</b> {{ stats.last_gspin.strftime('%d %b %Y %H:%M') if stats.last_gspin else 'Never' }}<br>
+    <b>Last Claim:</b> {{ stats.last_claim | ist('%d %b %Y %H:%M') if stats.last_claim else 'Never' }}<br>
+    <b>Last Daily:</b> {{ stats.last_daily | ist('%d %b %Y %H:%M') if stats.last_daily else 'Never' }}<br>
+    <b>Last GSpin:</b> {{ stats.last_gspin | ist('%d %b %Y %H:%M') if stats.last_gspin else 'Never' }}<br>
     <b>Streak:</b> {{ stats.streak_count }}/14 ({{ stats.total_streaks_completed }} completed)<br>
     <b>Telegram ID:</b> {{ user.telegram_id }}<br>
-    <b>Joined:</b> {{ user.created_at.strftime('%d %b %Y %H:%M') if user.created_at else '—' }}
+    <b>Joined:</b> {{ user.created_at | ist('%d %b %Y %H:%M') if user.created_at else '—' }}
   </div>
   <form method="POST" action="{{ url_for('user_reset_cooldowns', user_id=user.id) }}" style="margin-top:.75rem;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -160,7 +174,7 @@
       <td style="font-weight:600;">{{ player.name }}</td>
       <td><span class="rating-badge tier-{{ player._tier_css }}">{{ player.rating }}</span></td>
       <td>{{ player.category }}</td>
-      <td style="font-size:.8rem;">{{ entry.acquired_date.strftime('%d %b') if entry.acquired_date else '—' }}</td>
+      <td style="font-size:.8rem;">{{ entry.acquired_date | ist('%d %b') if entry.acquired_date else '—' }}</td>
       <td>
         <form method="POST" action="{{ url_for('user_remove_player', user_id=user.id, roster_id=entry.id) }}" style="display:inline;" onsubmit="return confirm('Remove {{ player.name }}?')">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -184,7 +198,7 @@
     <tbody>
     {% for a in activities %}
     <tr>
-      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at.strftime('%d %b %H:%M') if a.created_at else '' }}</td>
+      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at | ist('%d %b %H:%M') if a.created_at else '' }}</td>
       <td><span style="background:var(--bg);padding:.15rem .5rem;border-radius:4px;font-size:.75rem;font-weight:600;">{{ a.action }}</span></td>
       <td style="font-size:.8rem;">{{ a.detail or '' }}</td>
       <td style="font-size:.8rem;{% if a.coins_change > 0 %}color:var(--green);{% elif a.coins_change < 0 %}color:var(--red);{% endif %}">
@@ -216,7 +230,7 @@
       vs <span style="color:var(--accent2);">{{ m.opp_name }}</span>
       <span style="color:var(--muted); font-size:.85rem;">
         · {{ m.match.overs }}ov · status: {{ m.match.status }}
-        {% if m.match.created_at %}· started {{ m.match.created_at.strftime('%d %b %H:%M') }}{% endif %}
+        {% if m.match.created_at %}· started {{ m.match.created_at | ist('%d %b %H:%M') }}{% endif %}
       </span>
     </div>
     <form method="POST"
@@ -264,7 +278,7 @@
       · {{ m.overs }}ov ·
       {% if m.user1_id == user.id %}user1{% else %}user2{% endif %}
       · {{ m.status }}
-      {% if m.created_at %}· {{ m.created_at.strftime('%d %b %H:%M') }}{% endif %}
+      {% if m.created_at %}· {{ m.created_at | ist('%d %b %H:%M') }}{% endif %}
     </span>
     {% if m.winner_id %}
       {% if m.winner_id == user.id %}

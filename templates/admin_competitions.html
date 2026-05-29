@@ -128,8 +128,8 @@
         <span style="color:var(--muted);">Inactive</span>
       {% endif %}
     </td>
-    <td style="font-size:.82rem;">{{ c.start_date.strftime('%Y-%m-%d %H:%M') }}</td>
-    <td style="font-size:.82rem;">{{ c.end_date.strftime('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;">{{ c.start_date | ist('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;">{{ c.end_date | ist('%Y-%m-%d %H:%M') }}</td>
     <td style="font-size:.82rem;">
       {{ "{:,}".format(c.prize_top1) }} / {{ "{:,}".format(c.prize_top2) }} / {{ "{:,}".format(c.prize_top3) }}
     </td>

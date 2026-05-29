@@ -107,7 +107,7 @@
           </span>
         </td>
         <td style="font-size:.72rem; color:var(--muted);">
-          {{ t.created_at.strftime('%d %b %H:%M') }}
+          {{ t.created_at | ist('%d %b %H:%M') }}
         </td>
         <td>
           <a href="{{ url_for('admin_tour_detail', tour_id=t.id) }}"

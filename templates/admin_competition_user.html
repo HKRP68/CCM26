@@ -37,18 +37,18 @@
       <br><span style="color:var(--muted);font-size:.7rem;font-family:monospace;">tg: {{ iv.telegram_id }}</span>
     </td>
     <td style="font-size:.78rem;color:var(--muted);">
-      {{ iv.created_at.strftime('%Y-%m-%d %H:%M') if iv.created_at else '—' }}
+      {{ iv.created_at | ist('%Y-%m-%d %H:%M') if iv.created_at else '—' }}
     </td>
     <td>
       {% if iv.completed_at %}
         <span style="color:var(--green);font-weight:700;">✅ /debut done</span>
-        <div style="font-size:.7rem;color:var(--muted);">{{ iv.completed_at.strftime('%Y-%m-%d %H:%M') }}</div>
+        <div style="font-size:.7rem;color:var(--muted);">{{ iv.completed_at | ist('%Y-%m-%d %H:%M') }}</div>
       {% else %}
         <span style="color:var(--accent);">⏳ Pending</span>
       {% endif %}
     </td>
     <td style="font-size:.78rem;color:var(--muted);">
-      {{ iv.reward_paid_at.strftime('%Y-%m-%d') if iv.reward_paid_at else '—' }}
+      {{ iv.reward_paid_at | ist('%Y-%m-%d') if iv.reward_paid_at else '—' }}
     </td>
     <td>
       {% if iv.is_valid %}

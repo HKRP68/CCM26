@@ -37,7 +37,7 @@
         <span style="color:var(--accent);">Lv.{{ pt.level }}</span>
         {% if pt.level == 5 %} 🌟{% endif %}
       </td>
-      <td style="padding:.6rem; text-align:center; color:var(--muted); font-size:.85rem;">{{ pt.acquired_at.strftime('%Y-%m-%d') }}</td>
+      <td style="padding:.6rem; text-align:center; color:var(--muted); font-size:.85rem;">{{ pt.acquired_at | ist('%Y-%m-%d') }}</td>
       <td style="padding:.6rem; text-align:right;">
         <form method="POST" action="{{ url_for('admin_revoke_player_trait', user_id=user.id, player_trait_id=pt.id) }}" style="display:inline;"
               onsubmit="return confirm('Revoke this trait? This is permanent.');">
@@ -71,7 +71,7 @@
     <tr style="border-bottom:1px solid var(--border);">
       <td style="padding:.6rem;">{{ t.emoji }} {{ t.name }}</td>
       <td style="padding:.6rem; text-align:center;">Lv.{{ inv.level }}</td>
-      <td style="padding:.6rem; text-align:center; color:var(--muted); font-size:.85rem;">{{ inv.acquired_at.strftime('%Y-%m-%d') }}</td>
+      <td style="padding:.6rem; text-align:center; color:var(--muted); font-size:.85rem;">{{ inv.acquired_at | ist('%Y-%m-%d') }}</td>
       <td style="padding:.6rem; text-align:right;">
         <form method="POST" action="{{ url_for('admin_delete_inventory', user_id=user.id, inv_id=inv.id) }}" style="display:inline;"
               onsubmit="return confirm('Delete this inventory entry?');">

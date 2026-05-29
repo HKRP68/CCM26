@@ -69,7 +69,7 @@
         {% endif %}
       </div>
       <div style="color:var(--muted); font-size:.78rem; margin-top:.25rem;">
-        Weight: {{ r.weight }} · Added {{ r.uploaded_at.strftime('%d %b %Y %H:%M') if r.uploaded_at else '—' }}
+        Weight: {{ r.weight }} · Added {{ r.uploaded_at | ist('%d %b %Y %H:%M') if r.uploaded_at else '—' }}
         {% if r.uploaded_by %} by {{ r.uploaded_by }}{% endif %}
       </div>
     </div>

@@ -82,24 +82,24 @@
   </div>
   <div class="stat-card">
     <div class="label">Created</div>
-    <div class="value" style="font-size:1rem;">{{ tour.created_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+    <div class="value" style="font-size:1rem;">{{ tour.created_at | ist('%d %b %Y, %H:%M') }}</div>
   </div>
   {% if tour.accepted_at %}
   <div class="stat-card">
     <div class="label">Accepted</div>
-    <div class="value" style="font-size:1rem;">{{ tour.accepted_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+    <div class="value" style="font-size:1rem;">{{ tour.accepted_at | ist('%d %b %Y, %H:%M') }}</div>
   </div>
   {% endif %}
   {% if tour.lifetime_expires_at %}
   <div class="stat-card">
     <div class="label">Ends</div>
-    <div class="value" style="font-size:1rem;">{{ tour.lifetime_expires_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+    <div class="value" style="font-size:1rem;">{{ tour.lifetime_expires_at | ist('%d %b %Y, %H:%M') }}</div>
   </div>
   {% endif %}
   {% if tour.completed_at %}
   <div class="stat-card">
     <div class="label">Completed</div>
-    <div class="value" style="font-size:1rem;">{{ tour.completed_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+    <div class="value" style="font-size:1rem;">{{ tour.completed_at | ist('%d %b %Y, %H:%M') }}</div>
   </div>
   {% endif %}
 </div>
@@ -144,7 +144,7 @@
           {% else %}—{% endif %}
         </td>
         <td style="font-size:.72rem; color:var(--muted);">
-          {% if tm.completed_at %}{{ tm.completed_at.strftime('%d %b %H:%M') }}{% else %}—{% endif %}
+          {% if tm.completed_at %}{{ tm.completed_at | ist('%d %b %H:%M') }}{% else %}—{% endif %}
         </td>
       </tr>
     {% endfor %}

@@ -55,10 +55,10 @@
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;padding-top:.5rem;border-top:1px dashed var(--border);font-size:.75rem;color:var(--muted);">
       <span>
-        Started {{ m.created_at.strftime('%d %b %H:%M') if m.created_at else '—' }}
+        Started {{ m.created_at | ist('%d %b %H:%M') if m.created_at else '—' }}
       </span>
       <span>
-        {% if m.last_modified %}Last ball: {{ m.last_modified.strftime('%H:%M:%S') }}{% endif %}
+        {% if m.last_modified %}Last ball: {{ m.last_modified | ist('%H:%M:%S') }}{% endif %}
       </span>
     </div>
 

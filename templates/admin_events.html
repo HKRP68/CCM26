@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🎉 Events</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;">
+  Time-limited events. A <b>coin_multiplier</b> event boosts coin rewards (login, quests) by its multiplier while active.
+</p>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 1rem;font-size:1rem;">Create event</h3>
+  <form method="POST" action="{{ url_for('admin_events_create') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Name</label>
+        <input type="text" name="name" required placeholder="Double Coins Weekend"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Emoji</label>
+        <input type="text" name="emoji" value="🎉" maxlength="10"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Type</label>
+        <select name="event_type" style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <option value="coin_multiplier">coin_multiplier</option>
+          <option value="announcement">announcement</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Multiplier (for coin_multiplier)</label>
+        <input type="number" name="multiplier" value="2.0" step="0.1" min="1"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Start (UTC, optional)</label>
+        <input type="datetime-local" name="start_at"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">End (UTC)</label>
+        <input type="datetime-local" name="end_at" required
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+    <div style="margin-top:1rem;">
+      <label style="font-size:.8rem;color:var(--muted);">Description</label>
+      <input type="text" name="description" placeholder="Earn double coins on all rewards!"
+             style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">➕ Create event</button>
+  </form>
+</div>
+
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:.78rem;">
+      <th style="padding:.5rem;">Event</th>
+      <th style="padding:.5rem;">Type</th>
+      <th style="padding:.5rem;">Window (UTC)</th>
+      <th style="padding:.5rem;">Status</th>
+      <th style="padding:.5rem;"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem .5rem;">{{ e.emoji }} <b>{{ e.name }}</b><br><span style="color:var(--muted);font-size:.72rem;">{{ e.description or '' }}</span></td>
+      <td style="padding:.6rem .5rem;font-size:.82rem;">{{ e.event_type }}{% if e.event_type == 'coin_multiplier' %} ×{{ e.multiplier }}{% endif %}</td>
+      <td style="padding:.6rem .5rem;font-size:.75rem;color:var(--muted);">{{ e.start_at | ist('%Y-%m-%d %H:%M') }}<br>→ {{ e.end_at | ist('%Y-%m-%d %H:%M') }}</td>
+      <td style="padding:.6rem .5rem;">
+        {% if e.id in active_ids %}<span style="color:var(--green,#3fb950);font-weight:700;">● LIVE</span>
+        {% elif e.is_active %}<span style="color:var(--muted);">scheduled/expired</span>
+        {% else %}<span style="color:var(--muted);">off</span>{% endif %}
+      </td>
+      <td style="padding:.6rem .5rem;white-space:nowrap;">
+        <form method="POST" action="{{ url_for('admin_events_toggle', event_id=e.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-ghost btn-sm">{{ 'Disable' if e.is_active else 'Enable' }}</button>
+        </form>
+        <form method="POST" action="{{ url_for('admin_events_delete', event_id=e.id) }}" style="display:inline;" onsubmit="return confirm('Delete this event?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-ghost btn-sm" style="color:var(--red,#f85149);">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="padding:1rem;color:var(--muted);text-align:center;">No events yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
