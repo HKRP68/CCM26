@@ -1331,6 +1331,14 @@ def _finalize_match(session, user, state, target_chased):
     except Exception:
         pass
 
+    # Quick Match contributes a small amount to the season (win only).
+    if user_won is True:
+        try:
+            from services.season_service import safe_add_season_points
+            safe_add_season_points(session, user, points=3, wins=1)
+        except Exception:
+            pass
+
     return {
         "user_won": user_won,
         "coin_reward": coin_reward,

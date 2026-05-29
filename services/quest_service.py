@@ -110,7 +110,33 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
                                 Quest.quest_type == quest_type)
                         .count())
     if already_assigned > 0:
-        return {"assigned": [], "auto_claimed": []}
+        # User already has their random set for this period. BUT a pinned quest
+        # (always_assign) might have been added after their assignment — make
+        # sure those are present too, so newly-pinned quests appear immediately.
+        pinned_now = (session.query(Quest)
+                      .filter(Quest.quest_type == quest_type,
+                              Quest.is_active == True,
+                              Quest.always_assign == True)
+                      .all())
+        newly_pinned = []
+        for q in pinned_now:
+            exists = (session.query(UserQuestProgress)
+                      .filter(UserQuestProgress.user_id == user_id,
+                              UserQuestProgress.quest_id == q.id,
+                              UserQuestProgress.period_key == current_period,
+                              UserQuestProgress.assigned == True)
+                      .first())
+            if not exists:
+                uqp = UserQuestProgress(
+                    user_id=user_id, quest_id=q.id, period_key=current_period,
+                    progress=0, completed=False, claimed=False,
+                    assigned=True, last_updated=now,
+                )
+                session.add(uqp)
+                newly_pinned.append(q)
+        if newly_pinned:
+            session.flush()
+        return {"assigned": newly_pinned, "auto_claimed": []}
 
     # ── Auto-claim from PREVIOUS period (if any unclaimed completed quests) ──
     auto_claimed = []
@@ -136,7 +162,14 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     if not pool:
         return {"assigned": [], "auto_claimed": auto_claimed}
 
-    chosen = random.sample(pool, min(max_count, len(pool)))
+    # Pinned quests (always_assign=True) are ALWAYS included for every user.
+    # They don't consume a random slot — they're added on top.
+    pinned = [q for q in pool if getattr(q, "always_assign", False)]
+    random_pool = [q for q in pool if not getattr(q, "always_assign", False)]
+
+    chosen = list(pinned)  # start with all pinned
+    if random_pool:
+        chosen += random.sample(random_pool, min(max_count, len(random_pool)))
 
     assigned_quests = []
     for q in chosen:
@@ -325,16 +358,30 @@ def claim_quest_reward(session, user_id, quest_id):
 
     # Award rewards
     user.quest_points = (user.quest_points or 0) + (quest.reward_points or 0)
-    if quest.reward_coins:
-        user.total_coins = (user.total_coins or 0) + quest.reward_coins
+    coins = quest.reward_coins or 0
+    # Apply active event coin multiplier
+    try:
+        from services.event_service import apply_coin_multiplier
+        coins, _m = apply_coin_multiplier(session, coins)
+    except Exception:
+        pass
+    if coins:
+        user.total_coins = (user.total_coins or 0) + coins
     if quest.reward_gems:
         user.total_gems = (user.total_gems or 0) + quest.reward_gems
     uqp.claimed = True
     uqp.claimed_at = datetime.utcnow()
 
+    # Quests contribute to the monthly season
+    try:
+        from services.season_service import safe_add_season_points
+        safe_add_season_points(session, user, points=10)
+    except Exception:
+        pass
+
     reward = {
         "points": quest.reward_points or 0,
-        "coins": quest.reward_coins or 0,
+        "coins": coins,
         "gems": quest.reward_gems or 0,
     }
     return True, "Reward claimed!", reward
