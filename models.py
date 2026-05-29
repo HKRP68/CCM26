@@ -28,6 +28,17 @@ class User(Base):
     matches_won = Column(Integer, default=0)
     matches_lost = Column(Integer, default=0)
     win_streak = Column(Integer, default=0)
+    # ── Monthly season ──
+    # season_points accumulate during the current season and reset at rollover.
+    # season_key is the season the points belong to ('YYYY-MM'); if it differs
+    # from the live season, the points are treated as 0 (stale, pre-reset).
+    season_points = Column(Integer, default=0)
+    season_key = Column(String(7), nullable=True)  # 'YYYY-MM'
+    season_wins = Column(Integer, default=0)
+    # Club membership (one club per user). NULL = not in a club.
+    club_id = Column(Integer, ForeignKey("clubs.id", ondelete="SET NULL"), nullable=True, index=True)
+    club_joined_at = Column(DateTime, nullable=True)
+    last_club_leave = Column(DateTime, nullable=True)  # for join cooldown
     best_streak = Column(Integer, default=0)
     active_days = Column(Integer, default=0)  # days with at least 1 match
     last_match_date = Column(DateTime, nullable=True)
@@ -128,6 +139,14 @@ class UserStats(Base):
     streak_count = Column(Integer, default=0)
     total_streaks_completed = Column(Integer, default=0)
     last_streak_reset = Column(DateTime, nullable=True)
+    # ── Login streak ladder (separate from the /daily milestone streak) ──
+    # Increments once per calendar day (UTC) the user opens the app.
+    # Drives a 7-day reward calendar that loops. login_streak_day is the
+    # 1-based position in the current ladder cycle (1..7).
+    login_streak = Column(Integer, default=0)            # consecutive days
+    login_best_streak = Column(Integer, default=0)
+    last_login_date = Column(String(10), nullable=True)  # 'YYYY-MM-DD'
+    login_reward_claimed_date = Column(String(10), nullable=True)  # last claim day
     # ── Multi-use spin/daily quota (24h rolling cycle) ──
     # When the user first spins/claims-daily, we record the cycle start.
     # During each cycle: 1 free use + N ad-gated uses. Cycle resets after 24h.
@@ -516,6 +535,9 @@ class Quest(Base):
     is_active = Column(Boolean, default=True)
     emoji = Column(String(10), default="🎯")
     sort_order = Column(Integer, default=0)
+    # When True, this quest is assigned to EVERY user each period (in addition
+    # to their random picks) — used for pinned quests like "watch N ads daily".
+    always_assign = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -1258,6 +1280,8 @@ class BotChat(Base):
     joined_at = Column(DateTime, default=datetime.utcnow)
     left_at = Column(DateTime, nullable=True)
     last_seen_at = Column(DateTime, default=datetime.utcnow)
+    # Welcome message for new members (per-group toggle via /ewm /dwm)
+    welcome_enabled = Column(Boolean, default=True, nullable=False)
 
 
 class Broadcast(Base):
@@ -1418,3 +1442,111 @@ class CompetitionTemplate(Base):
     created_by = Column(String(100), nullable=True)
     # Soft order in dropdowns
     sort_order = Column(Integer, default=100, nullable=False)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MONTHLY SEASON + EVENTS
+# ══════════════════════════════════════════════════════════════════════
+
+class Season(Base):
+    """A monthly competitive season. One row per month ('YYYY-MM').
+
+    The live season is the one matching the current month. When the month
+    rolls over, the old season is finalized (top players paid, standings
+    archived into SeasonStanding) and a new Season row is created.
+    """
+    __tablename__ = "seasons"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_key = Column(String(7), nullable=False, unique=True, index=True)  # 'YYYY-MM'
+    name = Column(String(80), nullable=True)  # e.g. "May 2026 Season"
+    started_at = Column(DateTime, default=datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+    finalized = Column(Boolean, default=False, nullable=False)
+    # Prize config (coins) for top finishers
+    prize_top1 = Column(Integer, default=50000)
+    prize_top2 = Column(Integer, default=25000)
+    prize_top3 = Column(Integer, default=10000)
+    prize_top10 = Column(Integer, default=2000)   # paid to ranks 4-10
+    prize_gems_top1 = Column(Integer, default=20)
+    prize_gems_top2 = Column(Integer, default=10)
+    prize_gems_top3 = Column(Integer, default=5)
+
+
+class SeasonStanding(Base):
+    """Archived final standings for a finalized season (top N snapshot)."""
+    __tablename__ = "season_standings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_key = Column(String(7), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    rank = Column(Integer, nullable=False)
+    points = Column(Integer, default=0)
+    wins = Column(Integer, default=0)
+    prize_coins = Column(Integer, default=0)
+    prize_gems = Column(Integer, default=0)
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Event(Base):
+    """A time-limited game event (e.g. double coins weekend).
+
+    event_type drives the effect:
+      - 'coin_multiplier'  : multiply coin rewards by `multiplier`
+      - 'pack_luck'        : (future) better pack odds
+      - 'announcement'     : display-only banner, no mechanical effect
+    """
+    __tablename__ = "events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+    emoji = Column(String(10), default="🎉")
+    event_type = Column(String(40), default="coin_multiplier", nullable=False)
+    multiplier = Column(Float, default=2.0)  # used by coin_multiplier
+    start_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    end_at = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(100), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CLUBS — social teams that compete on combined season points
+# ══════════════════════════════════════════════════════════════════════
+
+class Club(Base):
+    """A player-formed club. Members' season points sum to the club's score.
+
+    Club score is computed live from members (not stored), so it always
+    reflects the current season and resets naturally each month.
+    """
+    __tablename__ = "clubs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(40), nullable=False)
+    code = Column(String(8), nullable=False, unique=True, index=True)  # join code
+    description = Column(String(160), nullable=True)
+    emoji = Column(String(10), default="🛡️")
+    founder_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    member_count = Column(Integer, default=1)
+    max_members = Column(Integer, default=20)
+    is_open = Column(Boolean, default=True, nullable=False)  # open-join vs code-only
+    created_at = Column(DateTime, default=datetime.utcnow)
+    # All-time aggregates (for flavor / club profile)
+    total_seasons_won = Column(Integer, default=0)
+
+
+class ClubSeasonResult(Base):
+    """Archived club standing for a finalized season (top clubs snapshot)."""
+    __tablename__ = "club_season_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_key = Column(String(7), nullable=False, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    club_name = Column(String(40), nullable=True)
+    rank = Column(Integer, nullable=False)
+    points = Column(Integer, default=0)
+    member_count = Column(Integer, default=0)
+    prize_coins_each = Column(Integer, default=0)
+    recorded_at = Column(DateTime, default=datetime.utcnow)

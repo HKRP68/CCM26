@@ -262,6 +262,23 @@ def _migrate_add_columns():
     _try_add("user_stats", "notified_free_pack_ready", "BOOLEAN DEFAULT FALSE")
     _try_add("game_config", "free_pack_cooldown_minutes", "INTEGER DEFAULT 60")
     _try_add("game_config", "free_pack_bands_json", "TEXT")
+    # Pinned quests (always assigned to every user, e.g. watch N ads daily)
+    _try_add("quests", "always_assign", "BOOLEAN DEFAULT FALSE")
+    # Login streak ladder
+    _try_add("user_stats", "login_streak", "INTEGER DEFAULT 0")
+    _try_add("user_stats", "login_best_streak", "INTEGER DEFAULT 0")
+    _try_add("user_stats", "last_login_date", "VARCHAR(10)")
+    _try_add("user_stats", "login_reward_claimed_date", "VARCHAR(10)")
+    # Monthly season
+    _try_add("users", "season_points", "INTEGER DEFAULT 0")
+    _try_add("users", "season_key", "VARCHAR(7)")
+    _try_add("users", "season_wins", "INTEGER DEFAULT 0")
+    # Clubs
+    _try_add("users", "club_id", "INTEGER")
+    _try_add("users", "club_joined_at", "TIMESTAMP")
+    _try_add("users", "last_club_leave", "TIMESTAMP")
+    # Welcome message toggle per group
+    _try_add("bot_chats", "welcome_enabled", "BOOLEAN DEFAULT TRUE")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
@@ -342,6 +359,40 @@ def _migrate_add_columns():
     except Exception:
         import logging
         logging.getLogger(__name__).warning("Pack seed skipped (non-fatal)")
+
+    # Seed the pinned "Watch ads" daily quest (idempotent by event_key)
+    try:
+        from models import Quest
+        sess = SessionLocal()
+        try:
+            existing = (sess.query(Quest)
+                        .filter(Quest.event_key == "ad_watched",
+                                Quest.quest_type == "daily").first())
+            if not existing:
+                sess.add(Quest(
+                    name="Ad Enthusiast",
+                    description="Watch 5 ads today",
+                    quest_type="daily",
+                    event_key="ad_watched",
+                    target_count=5,
+                    reward_points=10,
+                    reward_coins=1000,
+                    reward_gems=0,
+                    is_active=True,
+                    emoji="📺",
+                    sort_order=1,
+                    always_assign=True,  # given to every user daily
+                ))
+                sess.commit()
+                import logging
+                logging.getLogger(__name__).info("Seeded pinned 'Watch ads' daily quest")
+        except Exception:
+            sess.rollback()
+        finally:
+            sess.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Ad quest seed skipped (non-fatal)")
 
     # Seed default GSpin rewards (idempotent — only if table is empty)
     try:

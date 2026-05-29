@@ -219,6 +219,12 @@ async def start_handler(update, context):
                 logging.exception("referral start payload handling failed")
             # Continue to show welcome — let them do /debut
 
+    if payload == "debut":
+        # Deep link from a group welcome button → run the debut flow in DM.
+        from handlers.debut import debut_handler
+        await debut_handler(update, context)
+        return
+
     if payload in ("spin", "daily", "market", "xi"):
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
         if webapp_url and webapp_url.startswith("https://"):
@@ -520,6 +526,16 @@ def main():
             ChatMemberHandler.MY_CHAT_MEMBER,
         ))
 
+        # ── Welcome new members + /ewm /dwm toggles ─────────────────
+        from handlers.welcome import (
+            new_member_handler, enable_welcome_handler, disable_welcome_handler,
+        )
+        from telegram.ext import MessageHandler, filters as _filters
+        app.add_handler(MessageHandler(
+            _filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member_handler))
+        app.add_handler(CommandHandler("ewm", enable_welcome_handler))
+        app.add_handler(CommandHandler("dwm", disable_welcome_handler))
+
         # ── Bowl-out command ─────────────────────────────────────────
         app.add_handler(CommandHandler(["pbo", "bowlout"], pbo_handler))
 
@@ -817,6 +833,27 @@ def main():
                 logger.info("Cooldown notification job scheduled (every 5 min)")
         except Exception:
             logger.exception("Failed to schedule cooldown notifications")
+
+        # ── Monthly season rollover safety net ──
+        try:
+            async def _season_rollover_job(context):
+                try:
+                    from database import get_session
+                    from services.season_service import ensure_current_season
+                    s = get_session()
+                    try:
+                        ensure_current_season(s)
+                        s.commit()
+                    finally:
+                        s.close()
+                except Exception:
+                    logger.exception("Season rollover job failed")
+            if app.job_queue:
+                app.job_queue.run_repeating(_season_rollover_job, interval=3600,
+                                             first=150, name="season_rollover")
+                logger.info("Season rollover job scheduled (hourly)")
+        except Exception:
+            logger.exception("Failed to schedule season rollover")
 
         # Wire up cross-thread bot ref for admin Send-Now button
         try:

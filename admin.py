@@ -154,6 +154,35 @@ def _fromjson_filter(s):
         return []
 
 
+# All stored datetimes are UTC. The website displays everything in IST.
+from datetime import timedelta as _timedelta
+_IST_OFFSET = _timedelta(hours=5, minutes=30)
+
+
+@app.template_filter("ist")
+def _ist_filter(dt, fmt="%Y-%m-%d %H:%M"):
+    """Convert a naive-UTC datetime to IST and format it.
+    Usage in templates: {{ some_dt | ist }} or {{ some_dt | ist('%d %b %Y, %I:%M %p') }}
+    """
+    if not dt:
+        return "—"
+    try:
+        return (dt + _IST_OFFSET).strftime(fmt) + " IST"
+    except Exception:
+        return str(dt)
+
+
+@app.template_filter("ist_short")
+def _ist_short_filter(dt):
+    """IST without the ' IST' suffix, for compact columns."""
+    if not dt:
+        return "—"
+    try:
+        return (dt + _IST_OFFSET).strftime("%d %b %H:%M")
+    except Exception:
+        return str(dt)
+
+
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def _handle_internal_error(e):
@@ -1816,6 +1845,59 @@ def admin_edit_qp(user_id):
     return redirect(url_for("user_detail", user_id=user_id))
 
 
+# ─── Send a direct message to a user (via bot) ───────────────────────
+@app.route("/users/<int:user_id>/message", methods=["POST"])
+@login_required
+def admin_message_user(user_id):
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash(f"User {user_id} not found", "error")
+            return redirect(url_for("users_list"))
+        text = (request.form.get("message") or "").strip()
+        if not text:
+            flash("Message is empty", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+        if len(text) > 4000:
+            text = text[:4000]
+
+        token = os.getenv("BOT_TOKEN", "").strip()
+        if not token:
+            flash("BOT_TOKEN not configured — can't send.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        import requests
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": user.telegram_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=10,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                flash(f"✅ Message sent to {user.first_name or user.telegram_id}", "success")
+                log_admin(db, "message_user", target_type="user",
+                          target_id=user.id, target_name=user.first_name or "",
+                          detail=text[:200])
+                db.commit()
+            else:
+                desc = data.get("description", "unknown error")
+                # Common: user hasn't started the bot, or blocked it
+                flash(f"❌ Telegram refused: {desc}", "error")
+        except Exception as e:
+            logger.exception("send message failed")
+            flash(f"❌ Send failed: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
 # ─── Reset user — wipe all data ──────────────────────────────────────
 @app.route("/users/<int:user_id>/reset", methods=["POST"])
 @login_required
@@ -2890,12 +2972,49 @@ def webapp_init():
                 "block_id": adsgram_service.get_block_id(),
             },
             "branding": _get_branding_safe(db),
+            "login_streak": _touch_login_safe(db, user, stats),
+            "season": _get_season_safe(db, user),
+            "events": _get_events_safe(db),
         }
     except Exception as e:
         logger.exception("webapp_init failed")
         return {"ok": False, "error": str(e)}, 500
     finally:
         db.close()
+
+
+def _get_season_safe(db, user):
+    try:
+        from services.season_service import get_season_info
+        info = get_season_info(db, user)
+        db.commit()
+        return info
+    except Exception:
+        db.rollback()
+        logger.exception("season info failed")
+        return None
+
+
+def _get_events_safe(db):
+    try:
+        from services.event_service import get_events_for_display
+        return get_events_for_display(db)
+    except Exception:
+        logger.exception("events display failed")
+        return []
+
+
+def _touch_login_safe(db, user, stats):
+    """Advance login streak on app open; return status. Never raises."""
+    try:
+        from services.login_streak_service import touch_login_streak
+        status = touch_login_streak(db, stats)
+        db.commit()
+        return status
+    except Exception:
+        db.rollback()
+        logger.exception("login streak touch failed")
+        return None
 
 
 def _get_branding_safe(db):
@@ -3334,6 +3453,15 @@ def webapp_spin():
 
         ad_provided = bool(verified_via)
 
+        # Track ad_watched for the daily quest — ONLY for postback/mock.
+        # client_token (CT-) ads were already tracked at /ad-completed.
+        if verified_via in ("server_postback", "mock"):
+            try:
+                from services.quest_service import safe_track
+                safe_track(db, user.id, "ad_watched", 1)
+            except Exception:
+                pass
+
         # ── Check quota ──
         allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db)
         if not allowed:
@@ -3416,6 +3544,14 @@ def webapp_ad_completed():
     try:
         from services import adsgram_service
         token = adsgram_service.issue_client_token(tg_id)
+        # Track for the "watch N ads" daily quest. This endpoint fires once per
+        # completed ad (the Adsgram SDK resolves only on full view).
+        try:
+            from services.quest_service import safe_track
+            safe_track(db, user.id, "ad_watched", 1)
+            db.commit()
+        except Exception:
+            db.rollback()
         return {"ok": True, "ad_token": token}
     finally:
         db.close()
@@ -3469,6 +3605,15 @@ def webapp_daily():
         verified_via = _verify_ad_for_action(
             db, tg_id, ad_token, dev_mode, ads_configured)
         ad_provided = bool(verified_via)
+
+        # Track ad_watched for daily quest — postback/mock only
+        # (CT- tracked at /ad-completed).
+        if verified_via in ("server_postback", "mock"):
+            try:
+                from services.quest_service import safe_track
+                safe_track(db, user.id, "ad_watched", 1)
+            except Exception:
+                pass
 
         # ── Check quota ──
         allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db)
@@ -4100,6 +4245,15 @@ def webapp_freepack_open():
                     "message": "Watch an ad to claim your free pack.",
                     "ads_configured": ads_configured}, 400
 
+        # Track ad_watched for the daily quest — ONLY postback/mock
+        # (CT- already tracked at /ad-completed).
+        if verified_via in ("server_postback", "mock"):
+            try:
+                from services.quest_service import safe_track
+                safe_track(db, user.id, "ad_watched", 1)
+            except Exception:
+                pass
+
         result = open_free_pack(db, user)
         if not result.get("ok"):
             db.rollback()
@@ -4115,6 +4269,196 @@ def webapp_freepack_open():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_freepack_open failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/packs", methods=["POST"])
+@csrf_exempt
+def webapp_packs():
+    """List buyable packs + the user's unopened inventory."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.pack_service import (
+            list_packs, list_user_inventory, get_user_pack_purchases_today,
+            count_main_pool, count_bonus_pool,
+        )
+        packs = list_packs(db, only_active=True)
+        shop = []
+        for p in packs:
+            bought_today = get_user_pack_purchases_today(db, user.id, p.id)
+            limit = p.daily_limit or 0
+            shop.append({
+                "id": p.id,
+                "slot_number": p.slot_number,
+                "name": p.name,
+                "description": p.description or "",
+                "emoji": p.emoji or "📦",
+                "cost_coins": p.cost_coins or 0,
+                "cost_gems": p.cost_gems or 0,
+                "cost_quest_points": p.cost_quest_points or 0,
+                "main_count": p.main_count or 1,
+                "bonus_count": p.bonus_count or 0,
+                "main_min_rating": p.main_min_rating,
+                "main_max_rating": p.main_max_rating,
+                "bonus_min_rating": p.bonus_min_rating,
+                "bonus_max_rating": p.bonus_max_rating,
+                "daily_limit": limit,
+                "bought_today": bought_today,
+                "sold_out_today": (limit > 0 and bought_today >= limit),
+            })
+
+        inv_rows = list_user_inventory(db, user.id)
+        inventory = []
+        for unopened, pack in inv_rows:
+            inventory.append({
+                "inventory_id": unopened.id,
+                "pack_id": pack.id,
+                "name": pack.name,
+                "emoji": pack.emoji or "📦",
+                "main_count": pack.main_count or 1,
+                "bonus_count": pack.bonus_count or 0,
+                "acquired_at": unopened.acquired_at.isoformat() if unopened.acquired_at else None,
+            })
+
+        return {
+            "ok": True,
+            "packs": shop,
+            "inventory": inventory,
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "quest_points": user.quest_points or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_packs failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/packs/buy", methods=["POST"])
+@csrf_exempt
+def webapp_packs_buy():
+    """Buy a pack → goes to inventory (does not auto-open).
+    Body: {pack_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import Pack
+        from services.pack_service import buy_pack, get_user_pack_purchases_today
+        data = request.get_json(silent=True) or {}
+        try:
+            pack_id = int(data.get("pack_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        pack = db.query(Pack).filter(Pack.id == pack_id, Pack.is_active == True).first()
+        if not pack:
+            return {"ok": False, "error": "not_found", "message": "Pack not found."}, 404
+
+        # Daily limit check
+        if pack.daily_limit and pack.daily_limit > 0:
+            bought = get_user_pack_purchases_today(db, user.id, pack.id)
+            if bought >= pack.daily_limit:
+                return {"ok": False, "error": "daily_limit",
+                        "message": f"Daily limit reached for {pack.name} ({pack.daily_limit}/day)."}, 400
+
+        result = buy_pack(db, user, pack)
+        if not result.get("success"):
+            db.rollback()
+            return {"ok": False, "error": "buy_failed",
+                    "message": result.get("message", "Could not buy pack.")}, 400
+
+        db.commit()
+        return {
+            "ok": True,
+            "inventory_id": result.get("inventory_id"),
+            "cost_paid": result.get("cost_paid", 0),
+            "currency": result.get("currency", "coins"),
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "quest_points": user.quest_points or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_packs_buy failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/packs/open", methods=["POST"])
+@csrf_exempt
+def webapp_packs_open():
+    """Open an unopened pack from inventory → reveal players.
+    Body: {inventory_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.pack_service import open_unopened_pack
+        data = request.get_json(silent=True) or {}
+        try:
+            inventory_id = int(data.get("inventory_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+
+        result = open_unopened_pack(db, user, inventory_id)
+        if not result.get("success"):
+            db.rollback()
+            return {"ok": False, "error": "open_failed",
+                    "message": result.get("message", "Could not open pack.")}, 400
+
+        # Build player reveal list (main first, then bonus)
+        try:
+            from config import get_sell_value
+        except Exception:
+            get_sell_value = lambda r: 0
+
+        players_out = []
+        for player, slot_type in result.get("players", []):
+            players_out.append({
+                "id": player.id,
+                "name": player.name,
+                "rating": player.rating,
+                "category": player.category,
+                "country": player.country,
+                "version": player.version or "Base",
+                "slot": slot_type,  # 'main' or 'bonus'
+                "sell_value": get_sell_value(player.rating),
+            })
+
+        # Players that couldn't fit (roster full)
+        overflow = [{"id": p.id, "name": p.name, "rating": p.rating}
+                    for p in result.get("players_to_claim", [])]
+
+        db.commit()
+        return {
+            "ok": True,
+            "pack_name": result["pack"].name if result.get("pack") else "Pack",
+            "players": players_out,
+            "overflow": overflow,
+            "pity_triggered": result.get("pity_triggered", False),
+            "balance": {
+                "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
+                "roster_count": user.roster_count or 0,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_packs_open failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -4666,6 +5010,341 @@ def webapp_quest_claim_all():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_quest_claim_all failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/login-streak", methods=["POST"])
+@csrf_exempt
+def webapp_login_streak():
+    """Return the user's login streak ladder status."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.login_streak_service import touch_login_streak, get_login_status
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush()
+        status = touch_login_streak(db, stats)
+        db.commit()
+        return {"ok": True, **status}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_login_streak failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/login-streak/claim", methods=["POST"])
+@csrf_exempt
+def webapp_login_streak_claim():
+    """Claim today's login ladder reward."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.login_streak_service import claim_login_reward, get_login_status
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush()
+        result = claim_login_reward(db, user, stats)
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+        db.commit()
+        result["status"] = get_login_status(db, stats)
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_login_streak_claim failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/achievements", methods=["POST"])
+@csrf_exempt
+def webapp_achievements():
+    """Return all achievements with unlock status + progress, grouped by category."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import achievement_service
+        # Opportunistically check for newly-met achievements (auto-awards)
+        try:
+            achievement_service.safe_check_and_award(db, user.id)
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        items = achievement_service.get_user_achievements_with_progress(db, user.id)
+        # Group by category
+        groups = {}
+        unlocked_count = 0
+        for a in items:
+            cat = a.get("category", "Other")
+            groups.setdefault(cat, [])
+            if a["unlocked"]:
+                unlocked_count += 1
+            groups[cat].append({
+                "key": a["key"],
+                "emoji": a.get("emoji", "🏆"),
+                "name": a.get("name", ""),
+                "desc": a.get("desc", ""),
+                "category": cat,
+                "coins": a.get("coins", 0),
+                "gems": a.get("gems", 0),
+                "unlocked": a["unlocked"],
+                "unlocked_at": a["unlocked_at"].isoformat() if a.get("unlocked_at") else None,
+            })
+        return {
+            "ok": True,
+            "groups": groups,
+            "total": len(items),
+            "unlocked": unlocked_count,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_achievements failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/season", methods=["POST"])
+@csrf_exempt
+def webapp_season():
+    """Return the live season leaderboard + the user's standing + prizes."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.season_service import get_season_leaderboard, get_season_info
+        info = get_season_info(db, user)
+        season, board = get_season_leaderboard(db, limit=25)
+        db.commit()
+        # Mark which row is me
+        for row in board:
+            row["is_me"] = (row["user_id"] == user.id)
+        return {
+            "ok": True,
+            "season": info,
+            "leaderboard": board,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_season failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/upgrade/options", methods=["POST"])
+@csrf_exempt
+def webapp_upgrade_options():
+    """Return the higher versions a roster entry can be upgraded to.
+    Body: {roster_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.upgrade_service import get_upgrade_options
+        data = request.get_json(silent=True) or {}
+        try:
+            roster_id = int(data.get("roster_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        result = get_upgrade_options(db, user.id, roster_id)
+        if not result.get("ok"):
+            return result, 400
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_upgrade_options failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/upgrade/apply", methods=["POST"])
+@csrf_exempt
+def webapp_upgrade_apply():
+    """Upgrade a roster entry to a higher version.
+    Body: {roster_id, target_player_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.upgrade_service import upgrade_player
+        data = request.get_json(silent=True) or {}
+        try:
+            roster_id = int(data.get("roster_id") or 0)
+            target_player_id = int(data.get("target_player_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        if not roster_id or not target_player_id:
+            return {"ok": False, "error": "missing_params"}, 400
+        result = upgrade_player(db, user, roster_id, target_player_id)
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_upgrade_apply failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubs", methods=["POST"])
+@csrf_exempt
+def webapp_clubs():
+    """Return my club (if any) + club leaderboard + open clubs list."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import club_service
+        my = club_service.get_my_club(db, user)
+        db.commit()
+        return {
+            "ok": True,
+            "my_club": my,
+            "leaderboard": club_service.get_club_leaderboard(db, limit=25),
+            "open_clubs": club_service.list_open_clubs(db, limit=30) if not my else [],
+            "create_cost": club_service.CREATE_COST_COINS,
+            "coins": user.total_coins or 0,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_clubs failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubs/create", methods=["POST"])
+@csrf_exempt
+def webapp_clubs_create():
+    """Create a club. Body: {name, description?, emoji?}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import club_service
+        data = request.get_json(silent=True) or {}
+        result = club_service.create_club(
+            db, user,
+            name=data.get("name", ""),
+            description=data.get("description", ""),
+            emoji=data.get("emoji", "🛡️"))
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_clubs_create failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubs/join", methods=["POST"])
+@csrf_exempt
+def webapp_clubs_join():
+    """Join a club. Body: {code} or {club_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import club_service
+        data = request.get_json(silent=True) or {}
+        code = (data.get("code") or "").strip() or None
+        club_id = data.get("club_id")
+        try:
+            club_id = int(club_id) if club_id else None
+        except (ValueError, TypeError):
+            club_id = None
+        result = club_service.join_club(db, user, code=code, club_id=club_id)
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_clubs_join failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubs/leave", methods=["POST"])
+@csrf_exempt
+def webapp_clubs_leave():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import club_service
+        result = club_service.leave_club(db, user)
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_clubs_leave failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubs/kick", methods=["POST"])
+@csrf_exempt
+def webapp_clubs_kick():
+    """Founder removes a member. Body: {user_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import club_service
+        data = request.get_json(silent=True) or {}
+        try:
+            target = int(data.get("user_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        result = club_service.kick_member(db, user, target)
+        if not result.get("ok"):
+            db.rollback()
+            return result, 400
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_clubs_kick failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -8470,6 +9149,210 @@ def admin_branding_save():
         return redirect(url_for("admin_branding"))
     finally:
         db.close()
+
+
+# ─── Events (time-limited) ───────────────────────────────────────────
+
+@app.route("/events")
+@login_required
+def admin_events():
+    db = get_session()
+    try:
+        from models import Event
+        events = db.query(Event).order_by(Event.start_at.desc()).limit(100).all()
+        from services.event_service import get_active_events
+        active_ids = {e.id for e in get_active_events(db)}
+        return render_template("admin_events.html", events=events, active_ids=active_ids)
+    finally:
+        db.close()
+
+
+@app.route("/events/create", methods=["POST"])
+@login_required
+def admin_events_create():
+    db = get_session()
+    try:
+        from models import Event
+        from datetime import datetime as _dt
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("❌ Name required", "error")
+            return redirect(url_for("admin_events"))
+        ev = Event(
+            name=name[:120],
+            description=(request.form.get("description") or "").strip()[:500] or None,
+            emoji=(request.form.get("emoji") or "🎉").strip()[:10],
+            event_type=request.form.get("event_type") or "coin_multiplier",
+            multiplier=float(request.form.get("multiplier") or 2.0),
+            start_at=_dt.fromisoformat(request.form.get("start_at")) if request.form.get("start_at") else _dt.utcnow(),
+            end_at=_dt.fromisoformat(request.form.get("end_at")),
+            is_active=True,
+            created_by="admin",
+        )
+        db.add(ev)
+        db.commit()
+        flash(f"✅ Event '{name}' created", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_events"))
+
+
+@app.route("/events/<int:event_id>/toggle", methods=["POST"])
+@login_required
+def admin_events_toggle(event_id):
+    db = get_session()
+    try:
+        from models import Event
+        ev = db.query(Event).get(event_id)
+        if ev:
+            ev.is_active = not ev.is_active
+            db.commit()
+            flash(f"✅ '{ev.name}' {'activated' if ev.is_active else 'deactivated'}", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_events"))
+
+
+@app.route("/events/<int:event_id>/delete", methods=["POST"])
+@login_required
+def admin_events_delete(event_id):
+    db = get_session()
+    try:
+        from models import Event
+        ev = db.query(Event).get(event_id)
+        if ev:
+            db.delete(ev)
+            db.commit()
+            flash("✅ Event deleted", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_events"))
+
+
+# ─── Seasons ─────────────────────────────────────────────────────────
+
+@app.route("/seasons")
+@login_required
+def admin_seasons():
+    db = get_session()
+    try:
+        from models import Season, SeasonStanding, User
+        from services.season_service import ensure_current_season, get_season_leaderboard
+        live = ensure_current_season(db)
+        db.commit()
+        seasons = db.query(Season).order_by(Season.season_key.desc()).limit(24).all()
+        _, board = get_season_leaderboard(db, limit=25)
+        # Resolve names for the live board
+        return render_template("admin_seasons.html",
+                               live=live, seasons=seasons, board=board)
+    finally:
+        db.close()
+
+
+# ─── Clubs (admin) ───────────────────────────────────────────────────
+
+@app.route("/clubs")
+@login_required
+def admin_clubs():
+    db = get_session()
+    try:
+        from services.club_service import admin_list_clubs, admin_get_club, CREATE_COST_COINS, MAX_MEMBERS
+        detail = None
+        view_id = request.args.get("view", type=int)
+        if view_id:
+            detail = admin_get_club(db, view_id)
+        clubs = admin_list_clubs(db)
+        return render_template("admin_clubs.html", clubs=clubs, detail=detail,
+                               create_cost=CREATE_COST_COINS, default_max=MAX_MEMBERS)
+    finally:
+        db.close()
+
+
+@app.route("/clubs/<int:club_id>/edit", methods=["POST"])
+@login_required
+def admin_clubs_edit(club_id):
+    db = get_session()
+    try:
+        from services.club_service import admin_rename_club
+        r = admin_rename_club(db, club_id,
+                              name=request.form.get("name"),
+                              description=request.form.get("description"),
+                              emoji=request.form.get("emoji"),
+                              max_members=request.form.get("max_members"))
+        if r.get("ok"):
+            db.commit(); flash("✅ Club updated", "info")
+        else:
+            flash(f"❌ {r.get('error')}", "error")
+    except Exception as e:
+        db.rollback(); flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_clubs", view=club_id))
+
+
+@app.route("/clubs/<int:club_id>/transfer", methods=["POST"])
+@login_required
+def admin_clubs_transfer(club_id):
+    db = get_session()
+    try:
+        from services.club_service import admin_transfer_founder
+        uid = request.form.get("user_id", type=int)
+        r = admin_transfer_founder(db, club_id, uid)
+        if r.get("ok"):
+            db.commit(); flash("✅ Ownership transferred", "info")
+        else:
+            flash(f"❌ {r.get('message', r.get('error'))}", "error")
+    except Exception as e:
+        db.rollback(); flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_clubs", view=club_id))
+
+
+@app.route("/clubs/<int:club_id>/kick", methods=["POST"])
+@login_required
+def admin_clubs_kick(club_id):
+    db = get_session()
+    try:
+        from services.club_service import admin_kick
+        uid = request.form.get("user_id", type=int)
+        r = admin_kick(db, club_id, uid)
+        if r.get("ok"):
+            db.commit(); flash("✅ Member removed", "info")
+        else:
+            flash(f"❌ {r.get('error')}", "error")
+    except Exception as e:
+        db.rollback(); flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_clubs", view=club_id))
+
+
+@app.route("/clubs/<int:club_id>/disband", methods=["POST"])
+@login_required
+def admin_clubs_disband(club_id):
+    db = get_session()
+    try:
+        from services.club_service import admin_disband_club
+        r = admin_disband_club(db, club_id)
+        if r.get("ok"):
+            db.commit(); flash(f"✅ Club disbanded ({r.get('removed_members',0)} members freed)", "info")
+        else:
+            flash(f"❌ {r.get('error')}", "error")
+    except Exception as e:
+        db.rollback(); flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_clubs"))
 
 
 # ── Run ──────────────────────────────────────────────────────────────
