@@ -695,6 +695,14 @@ async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
         w_gems = max(0, int(overs * cfg["match_win_gems_per_over"]))
         l_coins = int(overs * cfg["match_loss_coins_per_over"])
         l_gems = max(0, int(overs * cfg["match_loss_gems_per_over"]))
+        # Active event coin multiplier (e.g. double-coins weekend) — PvP only
+        if not s.get("is_vsbot"):
+            try:
+                from services.event_service import apply_coin_multiplier
+                w_coins, _m = apply_coin_multiplier(session, w_coins)
+                l_coins, _m = apply_coin_multiplier(session, l_coins)
+            except Exception:
+                pass
         if w:
             w.total_coins += w_coins; w.total_gems += w_gems
             log_activity(session, w.id, "match_reward", f"Win reward: +{w_coins} coins, +{w_gems} gems",
@@ -703,6 +711,19 @@ async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
             l.total_coins += l_coins; l.total_gems += l_gems
             log_activity(session, l.id, "match_reward", f"Loss reward: +{l_coins} coins, +{l_gems} gems",
                          coins_change=l_coins, gems_change=l_gems)
+
+        # ── Monthly season: PvP is the heaviest contributor ──
+        # Only real PvP (not vsbot) — winner +25 & a win, loser +5 for playing.
+        if not s.get("is_vsbot"):
+            try:
+                from services.season_service import safe_add_season_points
+                if w:
+                    safe_add_season_points(session, w, points=25, wins=1)
+                if l:
+                    safe_add_season_points(session, l, points=5)
+            except Exception:
+                logger.exception("Season points for PvP failed (non-fatal)")
+
         session.commit()
         return w_coins, w_gems, l_coins, l_gems
     except Exception: session.rollback(); return 0,0,0,0
