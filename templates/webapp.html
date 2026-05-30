@@ -5730,10 +5730,28 @@ function openLiveMatch(matchId) {
   navigate('livematch');
   document.getElementById('livematch-content').innerHTML =
     `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Joining match…</div></div>`;
-  // Ensure state exists (init is idempotent + participant-guarded)
-  api('/api/webapp/match/init', { match_id: matchId }).then(() => {
+  // Ensure state exists (init is idempotent + participant-guarded). If the
+  // server refuses to initialise, show the real reason instead of falling
+  // through to polling and incorrectly saying the match ended.
+  api('/api/webapp/match/init', { match_id: matchId }).then(({ ok, data }) => {
+    if (!ok) {
+      document.getElementById('livematch-content').innerHTML = `
+        <div class="lm-waiting">
+          <div class="big">⚠️</div>
+          ${escapeHtml(data.message || data.error || 'Could not join this match.')}
+          <div style="margin-top:1rem;"><button class="spin-button" onclick="navigate('home')">Back home</button></div>
+        </div>`;
+      return;
+    }
+    if (data.snapshot) lmApplySnapshot(data.snapshot);
     pollMatch();
     startMatchPolling();
+  }).catch((e) => {
+    document.getElementById('livematch-content').innerHTML = `
+      <div class="lm-waiting">
+        <div class="big">📡</div>Network error joining match: ${escapeHtml(e.message || String(e))}
+        <div style="margin-top:1rem;"><button class="spin-button" onclick="openLiveMatch(lmMatchId)">Try again</button></div>
+      </div>`;
   });
 }
 

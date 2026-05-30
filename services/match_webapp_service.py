@@ -22,6 +22,31 @@ from services.match_state_store import (
 
 logger = logging.getLogger(__name__)
 
+
+def _stat_for(stats, roster_id):
+    """Return a stat row regardless of JSON converting integer keys to text."""
+    if not isinstance(stats, dict):
+        return {}
+    return stats.get(roster_id) or stats.get(str(roster_id)) or {}
+
+
+def _ensure_stat(stats, roster_id, defaults):
+    """Use string roster ids as the canonical key before JSON persistence.
+
+    The DB stores match state as JSON, so integer dict keys come back as
+    strings. Canonicalising here prevents duplicate int/string stat rows and
+    keeps the Mini App scorecard live after each save/reload cycle.
+    """
+    key = str(roster_id)
+    existing = stats.get(key) or stats.get(roster_id)
+    if existing is None:
+        stats[key] = defaults.copy()
+    else:
+        stats[key] = existing
+        if roster_id in stats and roster_id != key:
+            stats.pop(roster_id, None)
+    return stats[key]
+
 # Setup-phase actions (before the ball loop): tracked in state["setup"]
 SETUP_PICKING = "PICKING"
 SETUP_AWAIT_OPENERS = "AWAIT_OPENERS"
@@ -137,7 +162,7 @@ def _bat_card(state, idx):
     if idx is None or idx < 0 or idx >= len(order):
         return None
     p = order[idx]
-    st = state.get("bat_stats", {}).get(p["roster_id"], {})
+    st = _stat_for(state.get("bat_stats", {}), p["roster_id"])
     return {
         "roster_id": p["roster_id"], "name": p["name"],
         "rating": p.get("rating"), "bat_rating": p.get("bat_rating"),
@@ -153,7 +178,7 @@ def _bowler_card(state):
     b = state.get("current_bowler")
     if not b:
         return None
-    bs = state.get("bowl_stats", {}).get(b["roster_id"], {})
+    bs = _stat_for(state.get("bowl_stats", {}), b["roster_id"])
     overs_done = bs.get("overs_done", 0)
     this_over = bs.get("this_over_balls", 0)
     ov_str = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
@@ -491,10 +516,10 @@ def set_delivery(match_id, user_id, variation, length=None):
 def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     """Mirror of the bot's _process_shot_core bookkeeping (deterministic given
     the outcome `oc`). Mutates state in place. Returns a result dict."""
-    bs = state["bat_stats"].setdefault(striker["roster_id"], {
+    bs = _ensure_stat(state["bat_stats"], striker["roster_id"], {
         "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
         "out": False, "how_out": "", "bowled_by": ""})
-    bws = state["bowl_stats"].setdefault(bowler["roster_id"], {
+    bws = _ensure_stat(state["bowl_stats"], bowler["roster_id"], {
         "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
         "this_over_balls": 0, "maidens": 0, "this_over_runs": 0})
 
@@ -706,7 +731,7 @@ def build_scorecard(match_id, user_id):
         current_rids = set(current_rids or [])
         rows = []
         for p in xi:
-            st = stats.get(p["roster_id"], {})
+            st = _stat_for(stats, p["roster_id"])
             if (p["roster_id"] not in current_rids and
                     not st.get("balls") and not st.get("out") and not st.get("runs")):
                 continue  # didn't bat and is not currently at the crease
@@ -723,7 +748,7 @@ def build_scorecard(match_id, user_id):
         current_rids = set(current_rids or [])
         rows = []
         for p in xi:
-            st = stats.get(p["roster_id"], {})
+            st = _stat_for(stats, p["roster_id"])
             if p["roster_id"] not in current_rids and not st.get("balls"):
                 continue
             overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))

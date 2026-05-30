@@ -515,6 +515,24 @@ class MatchState(Base):
     last_prompt_msg_id = Column(Integer, nullable=True)
 
 
+class QuickMatchState(Base):
+    """Persistent Mini App Quick Match state keyed by Telegram user id.
+
+    Quick Match is phase-by-phase, so requests can land on different web
+    workers. Keeping this state in the DB makes the miniapp game survive
+    worker switches and deploy restarts instead of losing the match between
+    phase taps.
+    """
+    __tablename__ = "quick_match_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tg_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    state_json = Column(Text, nullable=False)
+    last_activity = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # QUESTS — daily/monthly engagement objectives
 # ══════════════════════════════════════════════════════════════════════

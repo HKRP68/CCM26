@@ -14,8 +14,9 @@ match_engine.py / probability_engine.py. Quick match is for users who
 want a 60-second match.
 """
 
+import json
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # Base balls per phase (20-over T20 split: 6/9/5 overs)
@@ -882,23 +883,108 @@ def play_quick_match_xi(session, user, user_choices, opponent_difficulty="medium
 # Phase-by-phase quick match (v3) — reactive gameplay
 # ════════════════════════════════════════════════════════════════════
 #
-# State lives in-memory per user. User picks a phase tactic, server simulates
-# that one phase, returns result, waits for next pick. Allows reactive
-# decisions ("we lost wickets in PP, defend in middle") instead of one
-# up-front pick. State expires after 30 min of inactivity. Process restart
-# loses in-flight matches — acceptable for a "quick" match.
+# State is stored per user in quick_match_state. User picks a phase tactic,
+# server simulates that one phase, returns result, waits for next pick. Allows
+# reactive decisions ("we lost wickets in PP, defend in middle") instead of one
+# up-front pick. State expires after 30 min of inactivity.
 #
 # Quick Match stats are tracked SEPARATELY from global match stats. They do
 # NOT count toward leaderboard, matches_played/won/lost, or career records.
 # Quick Match has its own counters and a daily limit (default 5/day).
 
-import threading
 import uuid as _uuid
 import time
 
-_PHASE_MATCH_STORE = {}  # tg_id -> state dict
-_PHASE_MATCH_LOCK = threading.Lock()
 _PHASE_MATCH_TTL_SEC = 30 * 60  # 30 min
+
+# Quick Match state is persisted in the database instead of process memory so
+# phase taps keep working when the Mini App request lands on another web worker
+# or after a lightweight redeploy/restart.
+def _encode_state(state):
+    return json.dumps(state, default=str)
+
+
+def _decode_state(raw):
+    return json.loads(raw) if raw else None
+
+
+def _expire_stale_matches(session=None):
+    """Drop phase matches older than the inactivity TTL."""
+    from database import get_session
+    from models import QuickMatchState
+
+    own_session = session is None
+    db = session or get_session()
+    cutoff = datetime.utcnow() - timedelta(seconds=_PHASE_MATCH_TTL_SEC)
+    try:
+        stale = db.query(QuickMatchState).filter(QuickMatchState.last_activity < cutoff).all()
+        for row in stale:
+            db.delete(row)
+        if stale and own_session:
+            db.commit()
+    except Exception:
+        if own_session:
+            db.rollback()
+    finally:
+        if own_session:
+            db.close()
+
+
+def get_phase_match(tg_id, session=None):
+    """Return active phase match for user, or None."""
+    from database import get_session
+    from models import QuickMatchState
+
+    _expire_stale_matches(session)
+    own_session = session is None
+    db = session or get_session()
+    try:
+        row = db.query(QuickMatchState).filter(QuickMatchState.tg_id == tg_id).first()
+        return _decode_state(row.state_json) if row else None
+    finally:
+        if own_session:
+            db.close()
+
+
+def save_phase_match(session, tg_id, state):
+    """Upsert an active phase match. Caller commits."""
+    from models import QuickMatchState
+
+    now = datetime.utcnow()
+    row = session.query(QuickMatchState).filter(QuickMatchState.tg_id == tg_id).first()
+    if not row:
+        row = QuickMatchState(tg_id=tg_id, state_json=_encode_state(state),
+                              last_activity=now)
+        session.add(row)
+    else:
+        row.state_json = _encode_state(state)
+        row.last_activity = now
+        row.updated_at = now
+
+
+def drop_phase_match(tg_id, session=None):
+    """Clear any active match (used on completion or abandon)."""
+    from database import get_session
+    from models import QuickMatchState
+
+    own_session = session is None
+    db = session or get_session()
+    try:
+        row = db.query(QuickMatchState).filter(QuickMatchState.tg_id == tg_id).first()
+        if row:
+            db.delete(row)
+            if not own_session:
+                db.flush()
+        if own_session:
+            db.commit()
+    except Exception:
+        if own_session:
+            db.rollback()
+        raise
+    finally:
+        if own_session:
+            db.close()
+
 
 # Reward constants — easy to find when admins want to tune
 QUICK_MATCH_WIN_COIN_REWARD = 250
@@ -916,29 +1002,6 @@ def _now_ts():
 def _today_str():
     """Today's date in UTC as YYYY-MM-DD (for daily-counter comparisons)."""
     return datetime.utcnow().strftime("%Y-%m-%d")
-
-
-def _expire_stale_matches():
-    """Drop matches older than TTL. Cheap O(N) sweep."""
-    cutoff = _now_ts() - _PHASE_MATCH_TTL_SEC
-    with _PHASE_MATCH_LOCK:
-        stale = [k for k, v in _PHASE_MATCH_STORE.items()
-                 if v.get("last_activity", 0) < cutoff]
-        for k in stale:
-            _PHASE_MATCH_STORE.pop(k, None)
-
-
-def get_phase_match(tg_id):
-    """Return active phase match for user, or None."""
-    _expire_stale_matches()
-    with _PHASE_MATCH_LOCK:
-        return _PHASE_MATCH_STORE.get(tg_id)
-
-
-def drop_phase_match(tg_id):
-    """Clear any active match (used on completion or abandon)."""
-    with _PHASE_MATCH_LOCK:
-        _PHASE_MATCH_STORE.pop(tg_id, None)
 
 
 def get_daily_limit(session):
@@ -1041,8 +1104,7 @@ def start_phase_match(session, user, tg_id, toss_choice, opponent_difficulty="me
         "last_activity": _now_ts(),
     }
 
-    with _PHASE_MATCH_LOCK:
-        _PHASE_MATCH_STORE[tg_id] = state
+    save_phase_match(session, tg_id, state)
 
     return {
         "ok": True,
@@ -1079,7 +1141,7 @@ def play_phase(session, user, tg_id, choice):
 
     Returns: {ok, phase_result, state, innings_complete, match_complete, scorecard?, quota?}
     """
-    state = get_phase_match(tg_id)
+    state = get_phase_match(tg_id, session)
     if not state:
         return {"ok": False, "error": "no_match",
                 "message": "No active match. Start a new one."}
@@ -1188,6 +1250,11 @@ def play_phase(session, user, tg_id, choice):
     }
     if quota_after is not None:
         result["quota"] = quota_after
+
+    if match_complete:
+        drop_phase_match(tg_id, session)
+    else:
+        save_phase_match(session, tg_id, state)
     return result
 
 
