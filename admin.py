@@ -5839,15 +5839,21 @@ def webapp_match_deliver():
             from services.match_webapp_service import (auto_play_bot_turns,
                                                        get_state_is_vsbot)
             if get_state_is_vsbot(match_id):
+                # vs-bot: the AI plays its shot now, which CAN end the match.
                 steps = auto_play_bot_turns(db, match_id)
                 if steps:
                     result_after = steps[-1]
-            if _gna(match_id) == _DONE:
-                from services.match_webapp_service import finalize_webapp_match
-                fin = finalize_webapp_match(db, match_id)
-                _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+                if _gna(match_id) == _DONE:
+                    from services.match_webapp_service import finalize_webapp_match
+                    fin = finalize_webapp_match(db, match_id)
+                    _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+                else:
+                    _broadcast_match_scorecard(match_id)  # non-blocking
             else:
-                _broadcast_match_scorecard(match_id)  # non-blocking
+                # PvP: a single delivery just hands the ball to the batsman — it
+                # can never complete the match, so skip the extra completion
+                # check and just refresh the chat scorecard (fully async).
+                _broadcast_match_scorecard(match_id)
         except Exception:
             logger.exception("auto_play after deliver failed")
         return {"ok": True, "message": msg, "bot_step": result_after,
@@ -5883,38 +5889,54 @@ def _tg_send_async(payload):
 
 
 def _broadcast_match_scorecard(match_id):
-    """Send the live scorecard + Play Match button to the match chat. The
-    network call runs in a background thread (non-blocking)."""
-    from services.match_webapp_access import get_state, get_next_action
-    from services.match_broadcast import build_live_scorecard_text, _launch_url
-    from services.match_state_store import A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER
+    """Send the live scorecard + Play Match button to the match chat.
 
-    state = get_state(match_id)
-    if not state:
-        return
-    chat_id = state.get("chat_id")
-    if not chat_id:
-        return
+    The ENTIRE body (state reads + text build + network send) runs in a daemon
+    thread so the Mini App request that triggered it returns immediately and
+    never blocks on the small DB pool or a slow Telegram call. A laggy chat
+    broadcast must never slow down the bowler's delivery."""
+    import threading
 
-    na = get_next_action(match_id)
-    waiting = None
-    if na in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
-        uname = state.get("bowl_username")
-        waiting = f"@{uname}" if uname else state.get("bowl_team_name", "the bowler")
+    def _work():
+        try:
+            from services.match_webapp_access import get_state, get_next_action
+            from services.match_broadcast import build_live_scorecard_text, _launch_url
+            from services.match_state_store import (A_PICK_DELIVERY, A_PICK_LENGTH,
+                                                     A_PICK_NEW_BOWLER)
 
-    text = build_live_scorecard_text(state, waiting_for_mention=waiting)
+            state = get_state(match_id)
+            if not state:
+                return
+            chat_id = state.get("chat_id")
+            if not chat_id:
+                return
 
-    reply_markup = None
-    url = _launch_url(match_id)
-    if url:
-        reply_markup = {"inline_keyboard": [[
-            {"text": "🎮 Play Match (Mini App)", "url": url}]]}
+            na = get_next_action(match_id)
+            waiting = None
+            if na in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+                uname = state.get("bowl_username")
+                waiting = f"@{uname}" if uname else state.get("bowl_team_name", "the bowler")
 
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-               "disable_web_page_preview": True}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    _tg_send_async(payload)
+            text = build_live_scorecard_text(state, waiting_for_mention=waiting)
+
+            reply_markup = None
+            url = _launch_url(match_id)
+            if url:
+                reply_markup = {"inline_keyboard": [[
+                    {"text": "🎮 Play Match (Mini App)", "url": url}]]}
+
+            payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                       "disable_web_page_preview": True}
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+            _tg_send_async(payload)
+        except Exception:
+            logger.exception("scorecard broadcast worker failed")
+
+    try:
+        threading.Thread(target=_work, daemon=True).start()
+    except Exception:
+        logger.exception("could not spawn scorecard broadcast thread")
 
 
 def _broadcast_match_result(match_id, result):
