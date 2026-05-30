@@ -2284,7 +2284,7 @@
 </div>
 
 <!-- ════ Bottom tabs ════ -->
-<div class="tabs">
+<div class="tabs" id="bottom-nav">
   <button class="tab active" data-screen="home" onclick="navigate('home')">
     <div class="icon">🏠</div>
     <div>Home</div>
@@ -2434,6 +2434,8 @@ function navigate(screen) {
   // Stop live-match polling whenever we leave that screen
   if (currentScreen === 'livematch' && screen !== 'livematch') {
     stopMatchPolling();
+    const _nav = document.getElementById('bottom-nav');
+    if (_nav) _nav.style.display = '';
   }
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById('screen-' + screen);
@@ -5590,6 +5592,9 @@ function openLiveMatch(matchId) {
   lmMatchId = matchId;
   lmLastBallSeq = -1;
   lmSelectedVariation = null;
+  lmLastSig = '';
+  const _nav = document.getElementById('bottom-nav');
+  if (_nav) _nav.style.display = 'none';   // match-only: hide app nav
   navigate('livematch');
   document.getElementById('livematch-content').innerHTML =
     `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Joining match…</div></div>`;
@@ -5629,18 +5634,20 @@ async function pollMatch() {
     return;
   }
   // Whose turn is it for me? (drives poll cadence)
-  const myTurn = (data.role === 'bowler' && (data.turn === 'bowler')) ||
-                 (data.role === 'batsman' && (data.turn === 'batsman')) ||
-                 (data.setup && data.setup !== 'DONE' &&
-                   ((data.role === 'batsman' && data.setup === 'AWAIT_OPENERS') ||
-                    (data.role === 'bowler' && data.setup === 'AWAIT_BOWLER') ||
-                    (data.setup === 'AWAIT_READY')));
+  const _sp2 = data.setup_progress || {};
+  const inSetup = data.setup && data.setup !== 'DONE';
+  const myTurn = (data.role === 'bowler' && data.turn === 'bowler') ||
+                 (data.role === 'batsman' && data.turn === 'batsman') ||
+                 (inSetup &&
+                   ((data.role === 'batsman' && !_sp2.openers_done) ||
+                    (data.role === 'bowler' && !_sp2.bowler_done)));
   _lmReschedule(myTurn);
 
   // Skip re-render if nothing changed AND no local UI state pending — avoids
   // rebuilding the DOM under the user's finger mid-tap. We still re-render
   // when it's a setup phase (dropdowns) or our own turn changed.
-  const sig = `${data.ball_seq}|${data.setup}|${data.next_action}|${data.role}`;
+  const _sp = data.setup_progress || {};
+  const sig = `${data.ball_seq}|${data.setup}|${data.next_action}|${data.role}|${_sp.openers_done?1:0}${_sp.bowler_done?1:0}`;
   if (sig === lmLastSig && !lmForceRender) return;
   lmLastSig = sig;
   lmForceRender = false;
@@ -5733,9 +5740,9 @@ function timelineHtml(s) {
 
 function setupPhaseHtml(s) {
   const role = s.role;
-  // Batsman: pick openers
-  if (s.setup === 'AWAIT_OPENERS') {
-    if (role === 'batsman') {
+  const prog = s.setup_progress || {};
+  if (role === 'batsman') {
+    if (!prog.openers_done && s.openers_options) {
       const opts = (s.openers_options || []).map(o =>
         `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bat ${o.bat_rating}</option>`).join('');
       return `<div class="lm-panel">
@@ -5746,40 +5753,34 @@ function setupPhaseHtml(s) {
         <select id="lm-nonstriker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
         <div id="lm-opener-warn" style="color:var(--red);font-size:0.76rem;margin-bottom:0.5rem;display:none;">Striker and non-striker must be different.</div>
         <button class="spin-button" style="width:100%;" onclick="lmSubmitOpeners()">Lock in openers</button>
+        <div class="sub" style="color:var(--muted);font-size:0.72rem;margin-top:0.6rem;text-align:center;">
+          ${prog.bowler_done ? '✅ Opponent picked their bowler' : '⏳ Opponent is picking their bowler'}
+        </div>
       </div>`;
     }
-    return `<div class="lm-waiting"><div class="big">⏳</div>Waiting for ${escapeHtml(s.bat_team_name)} to choose openers…</div>`;
+    return `<div class="lm-waiting"><div class="big">✅</div>Openers locked in.<br>
+      <span class="sub" style="color:var(--muted);">${prog.bowler_done ? 'Starting…' : 'Waiting for the bowler…'}</span></div>`;
   }
-  // Bowler pick
-  if (s.setup === 'AWAIT_BOWLER') {
-    if (role === 'bowler') {
+  if (role === 'bowler') {
+    if (!prog.bowler_done && s.bowler_options) {
       const opts = (s.bowler_options || []).map(o =>
         `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bowl ${o.bowl_rating} (${escapeHtml(o.bowl_style||'')})</option>`).join('');
       return `<div class="lm-panel">
         <div class="lm-panel-title">Choose your opening bowler</div>
         <select id="lm-bowler" class="lm-dropdown">${opts}</select>
         <button class="spin-button" style="width:100%;" onclick="lmSubmitBowler()">Select bowler</button>
+        <div class="sub" style="color:var(--muted);font-size:0.72rem;margin-top:0.6rem;text-align:center;">
+          ${prog.openers_done ? '✅ Opponent picked their openers' : '⏳ Opponent is picking openers'}
+        </div>
       </div>`;
     }
-    return `<div class="lm-waiting"><div class="big">⏳</div>Waiting for ${escapeHtml(s.bowl_team_name)} to choose a bowler…</div>`;
+    return `<div class="lm-waiting"><div class="big">✅</div>Bowler selected.<br>
+      <span class="sub" style="color:var(--muted);">${prog.openers_done ? 'Starting…' : 'Waiting for the openers…'}</span></div>`;
   }
-  // Ready phase
-  if (s.setup === 'AWAIT_READY') {
-    const mine = role === 'batsman' ? s.ready.batsman : role === 'bowler' ? s.ready.bowler : true;
-    const other = role === 'batsman' ? s.ready.bowler : s.ready.batsman;
-    if (role === 'spectator') {
-      return `<div class="lm-waiting"><div class="big">⏳</div>Teams are getting ready…</div>`;
-    }
-    if (mine) {
-      return `<div class="lm-waiting"><div class="big">✅</div>You're ready! Waiting for the other side…</div>`;
-    }
-    return `<div class="lm-panel" style="text-align:center;">
-      <div class="lm-panel-title">All set?</div>
-      <p class="sub" style="color:var(--muted);font-size:0.82rem;margin:0 0 0.7rem;">Tap ready when you're set to begin.</p>
-      <button class="spin-button" style="width:100%;" onclick="lmReady()">✅ I'm Ready</button>
-    </div>`;
-  }
-  return '';
+  return `<div class="lm-waiting"><div class="big">⏳</div>Teams are setting up…<br>
+    <span class="sub" style="color:var(--muted);">
+      ${prog.openers_done ? '✅' : '⏳'} openers &nbsp; ${prog.bowler_done ? '✅' : '⏳'} bowler
+    </span></div>`;
 }
 
 function controlPanelHtml(s) {
@@ -5887,6 +5888,7 @@ async function lmSubmitOpeners() {
   const { ok, data } = await api('/api/webapp/match/select-openers',
     { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  lmForceRender = true;
   pollMatch();
 }
 async function lmSubmitBowler() {
@@ -5894,6 +5896,7 @@ async function lmSubmitBowler() {
   haptic('medium');
   const { ok, data } = await api('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  lmForceRender = true;
   pollMatch();
 }
 async function lmReady() {
@@ -6071,9 +6074,24 @@ function handleHashDeepLink() {
   }
 }
 
-refreshDashboard().then(() => {
-  handleHashDeepLink();
-});
+// Open directly into a match if launched via a match/scorecard deep link,
+// WITHOUT first showing the dashboard (no home-screen flash).
+(function bootstrap() {
+  let target = (window.location.hash || '').replace('#', '').toLowerCase();
+  if (!target) {
+    try {
+      target = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').toLowerCase();
+    } catch (e) {}
+  }
+  const isMatchLink = /^(?:livematch|lm)[_-]\d+$/.test(target) || /^sc[_-]\d+$/.test(target);
+  if (isMatchLink) {
+    handleHashDeepLink();   // opens the match screen immediately
+    refreshDashboard();     // load home data quietly in the background
+  } else {
+    refreshDashboard().then(() => { handleHashDeepLink(); });
+  }
+})();
+
 </script>
 </body>
 </html>
