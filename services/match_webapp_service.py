@@ -229,6 +229,7 @@ def build_snapshot(session, match_id, user_id):
         "timeline": state.get("timeline", [])[-12:],
         "selected_variation": state.get("selected_variation"),
         "current_delivery": state.get("current_delivery"),
+        "last_speed": state.get("last_speed"),
         "last_ball": state.get("last_ball"),
     }
 

@@ -1398,11 +1398,48 @@
   .lm-delivery-banner .sp { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; font-weight: 800; }
   .lm-waiting { text-align: center; padding: 1.5rem 1rem; color: var(--muted); }
   .lm-waiting .big { font-size: 2.4rem; margin-bottom: 0.4rem; }
-  .lm-dropdown {
-    width: 100%; padding: 0.65rem; background: var(--input-bg);
-    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
-    font-family: inherit; font-size: 0.88rem; margin-bottom: 0.6rem;
+  .lm-dropdown { display: none; }
+  .lm-premium-hero {
+    position: relative; overflow: hidden; margin-bottom: 0.9rem; padding: 1rem;
+    border-radius: 22px; border: 1px solid rgba(0, 212, 170, 0.24);
+    background:
+      radial-gradient(circle at 12% 0%, rgba(0,212,170,0.22), transparent 34%),
+      radial-gradient(circle at 88% 8%, rgba(167,139,250,0.2), transparent 34%),
+      linear-gradient(145deg, rgba(10,18,34,0.98), rgba(22,20,45,0.98));
+    box-shadow: 0 18px 46px rgba(0,0,0,0.34), inset 0 0 0 1px rgba(255,255,255,0.035);
   }
+  .lm-premium-kicker {
+    color: var(--green); font-size: 0.68rem; font-weight: 1000; letter-spacing: 0.14em;
+    text-transform: uppercase; margin-bottom: 0.35rem;
+  }
+  .lm-premium-title { font-size: 1.18rem; font-weight: 1000; color: #fff; margin-bottom: 0.28rem; }
+  .lm-premium-sub { color: var(--muted); font-size: 0.78rem; line-height: 1.35; font-weight: 750; }
+  .lm-player-grid { display: grid; grid-template-columns: 1fr; gap: 0.6rem; margin: 0.8rem 0; }
+  .lm-player-card {
+    width: 100%; text-align: left; display: grid; grid-template-columns: 54px 1fr auto; gap: 0.65rem;
+    align-items: center; padding: 0.7rem; border-radius: 18px; border: 1px solid rgba(74,158,255,0.18);
+    background: linear-gradient(145deg, rgba(20,30,55,0.92), rgba(12,18,34,0.95));
+    color: var(--text); font-family: inherit; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.025);
+  }
+  .lm-player-card.active {
+    border-color: rgba(0,212,170,0.72); box-shadow: 0 0 22px rgba(0,212,170,0.16), inset 0 0 0 1px rgba(0,212,170,0.25);
+    background: linear-gradient(145deg, rgba(0,212,170,0.13), rgba(20,30,55,0.96));
+  }
+  .lm-player-card.disabled { opacity: 0.42; cursor: not-allowed; }
+  .lm-player-ovr {
+    width: 54px; height: 54px; border-radius: 16px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--purple), var(--blue)); color: #fff;
+    font-weight: 1000; font-size: 1rem; box-shadow: 0 0 18px rgba(74,158,255,0.22);
+  }
+  .lm-player-name { font-weight: 1000; color: #fff; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lm-player-meta { color: var(--muted); font-size: 0.72rem; font-weight: 800; margin-top: 0.15rem; }
+  .lm-player-check { color: var(--green); font-size: 1.2rem; font-weight: 1000; }
+  .lm-pill-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.7rem 0; }
+  .lm-mini-pill {
+    padding: 0.38rem 0.58rem; border-radius: 999px; border: 1px solid rgba(0,212,170,0.2);
+    background: rgba(0,212,170,0.07); color: var(--muted); font-size: 0.72rem; font-weight: 850;
+  }
+  .lm-mini-pill b { color: #fff; }
   .lm-ball-result {
     text-align: center; padding: 1rem; border-radius: 18px; margin-bottom: 0.85rem;
     font-size: 1.1rem; font-weight: 950; color: #fff;
@@ -1426,10 +1463,16 @@
   }
   .lm-drawer {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 301;
-    background: var(--card); border-top: 2px solid var(--accent);
-    border-radius: 18px 18px 0 0; padding: 0.8rem 1rem 1.4rem;
-    max-height: 78vh; overflow-y: auto;
+    background:
+      radial-gradient(circle at 15% 0%, rgba(0,212,170,0.16), transparent 32%),
+      radial-gradient(circle at 86% 8%, rgba(167,139,250,0.14), transparent 35%),
+      linear-gradient(180deg, #111a31, #0a0f1a 88%);
+    border-top: 1px solid rgba(0,212,170,0.46);
+    border-left: 1px solid rgba(255,255,255,0.05); border-right: 1px solid rgba(255,255,255,0.05);
+    border-radius: 24px 24px 0 0; padding: 0.8rem 1rem 1.4rem;
+    max-height: 82vh; overflow-y: auto;
     transform: translateY(100%); transition: transform 0.3s ease;
+    box-shadow: 0 -22px 60px rgba(0,0,0,0.52);
   }
   .lm-drawer.open { transform: translateY(0); }
   .lm-drawer-handle {
@@ -1442,7 +1485,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-drawer-tab.active { background: var(--accent); color: #0a0f1a; }
+  .lm-drawer-tab.active { background: linear-gradient(135deg, var(--green), #22f0bf); color: #06111c; border-color: transparent; box-shadow: 0 0 18px rgba(0,212,170,0.18); }
   .lm-sc-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 0.9rem; }
   .lm-sc-table th { text-align: left; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); }
   .lm-sc-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
@@ -1450,7 +1493,7 @@
   .lm-sc-out { font-size: 0.66rem; color: var(--muted); }
   .lm-sc-fab {
     position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 100;
-    background: var(--accent); color: #0a0f1a; border: none;
+    background: linear-gradient(135deg, var(--green), #21f0bd); color: #06111c; border: none;
     border-radius: 50px; padding: 0.7rem 1.1rem; font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
@@ -5660,6 +5703,9 @@ let lmSelectedVariation = null;
 let lmSelectedLength = null;
 let lmSelectedSpinDelivery = null;
 let lmSelectedShot = null;
+let lmSelectedStrikerRid = null;
+let lmSelectedNonStrikerRid = null;
+let lmSelectedBowlerRid = null;
 let lmLastResultHtml = '';
 let lmPollFailCount = 0;     // consecutive failed state polls (transient-tolerant)
 let lmActionInFlight = false; // a mutating action (deliver/shot/pick) is running
@@ -5674,6 +5720,9 @@ function openLiveMatch(matchId) {
   lmSelectedLength = null;
   lmSelectedSpinDelivery = null;
   lmSelectedShot = null;
+  lmSelectedStrikerRid = null;
+  lmSelectedNonStrikerRid = null;
+  lmSelectedBowlerRid = null;
   lmCurrentSnapshot = null;
   lmLastSig = '';
   const _nav = document.getElementById('bottom-nav');
@@ -5767,6 +5816,7 @@ async function pollMatch() {
   lmLastSig = sig;
   lmForceRender = false;
   renderLiveMatch(data);
+  if (isScorecardOpen()) lmLoadScorecard(false);
 }
 
 function lmRefreshLocal() {
@@ -5920,40 +5970,86 @@ function lastBallHtml(s) {
   </div>`;
 }
 
+function lmRoleLabel(o, mode) {
+  const role = o.category || o.bowl_style || '';
+  const skill = mode === 'bat' ? (o.bat_rating || o.rating || '—') : (o.bowl_rating || o.rating || '—');
+  return `${escapeHtml(role || (mode === 'bat' ? 'Batter' : 'Bowler'))} · ${mode === 'bat' ? 'BAT' : 'BOWL'} ${skill}`;
+}
+function lmPlayerCard(o, active, disabled, onclick, mode) {
+  const ovr = o.rating || o.bat_rating || o.bowl_rating || '—';
+  return `<button type="button" class="lm-player-card ${active ? 'active' : ''} ${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : `onclick="${onclick}"`}>
+    <div class="lm-player-ovr">${escapeHtml(String(ovr))}</div>
+    <div style="min-width:0;">
+      <div class="lm-player-name">${escapeHtml(o.name)}</div>
+      <div class="lm-player-meta">${lmRoleLabel(o, mode)}</div>
+    </div>
+    <div class="lm-player-check">${active ? '✓' : ''}</div>
+  </button>`;
+}
+function lmSelectOpener(slot, rid) {
+  if (slot === 'striker') lmSelectedStrikerRid = rid;
+  else lmSelectedNonStrikerRid = rid;
+  haptic('light');
+  lmRefreshLocal();
+}
+function lmSelectBowlerCard(rid) {
+  lmSelectedBowlerRid = rid;
+  haptic('light');
+  lmRefreshLocal();
+}
 function setupPhaseHtml(s) {
   const role = s.role;
   const prog = s.setup_progress || {};
   if (role === 'batsman') {
-    if (!prog.openers_done && s.openers_options) {
-      const opts = (s.openers_options || []).map(o =>
-        `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bat ${o.bat_rating}</option>`).join('');
-      return `<div class="lm-panel">
-        <div class="lm-panel-title">Choose your two openers</div>
-        <label class="sub" style="font-size:0.75rem;color:var(--muted);">Striker</label>
-        <select id="lm-striker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
-        <label class="sub" style="font-size:0.75rem;color:var(--muted);">Non-striker</label>
-        <select id="lm-nonstriker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
-        <div id="lm-opener-warn" style="color:var(--red);font-size:0.76rem;margin-bottom:0.5rem;display:none;">Striker and non-striker must be different.</div>
-        <button class="spin-button" style="width:100%;" onclick="lmSubmitOpeners()">Lock in openers</button>
-        <div class="sub" style="color:var(--muted);font-size:0.72rem;margin-top:0.6rem;text-align:center;">
-          ${prog.bowler_done ? '✅ Opponent picked their bowler' : '⏳ Opponent is picking their bowler'}
+    const openers = s.openers_options || [];
+    if (!prog.openers_done && openers.length) {
+      if (!lmSelectedStrikerRid || !openers.some(o => o.roster_id === lmSelectedStrikerRid)) lmSelectedStrikerRid = openers[0]?.roster_id || null;
+      if (!lmSelectedNonStrikerRid || !openers.some(o => o.roster_id === lmSelectedNonStrikerRid) || lmSelectedNonStrikerRid === lmSelectedStrikerRid) {
+        const alt = openers.find(o => o.roster_id !== lmSelectedStrikerRid);
+        lmSelectedNonStrikerRid = alt ? alt.roster_id : null;
+      }
+      const strikerCards = openers.map(o => lmPlayerCard(o, o.roster_id === lmSelectedStrikerRid, o.roster_id === lmSelectedNonStrikerRid, `lmSelectOpener('striker',${o.roster_id})`, 'bat')).join('');
+      const nonCards = openers.map(o => lmPlayerCard(o, o.roster_id === lmSelectedNonStrikerRid, o.roster_id === lmSelectedStrikerRid, `lmSelectOpener('non',${o.roster_id})`, 'bat')).join('');
+      const invalid = lmSelectedStrikerRid && lmSelectedNonStrikerRid && lmSelectedStrikerRid === lmSelectedNonStrikerRid;
+      return `<div class="lm-premium-hero">
+        <div class="lm-premium-kicker">Starting XI setup</div>
+        <div class="lm-premium-title">Pick your opening pair</div>
+        <div class="lm-premium-sub">Select a striker and non-striker from your XI. The same batter cannot occupy both ends.</div>
+        <div class="lm-pill-row">
+          <span class="lm-mini-pill">Opponent bowler: <b>${prog.bowler_done ? 'locked' : 'pending'}</b></span>
+          <span class="lm-mini-pill">Your role: <b>Batting</b></span>
         </div>
+      </div>
+      <div class="lm-panel">
+        <div class="lm-panel-title">1 · Striker</div>
+        <div class="lm-player-grid">${strikerCards}</div>
+        <div class="lm-panel-title">2 · Non-striker</div>
+        <div class="lm-player-grid">${nonCards}</div>
+        <div id="lm-opener-warn" style="color:var(--red);font-size:0.76rem;margin-bottom:0.5rem;${invalid ? '' : 'display:none;'}">Striker and non-striker must be different.</div>
+        <button class="lm-action-btn" style="margin-top:0.2rem;" onclick="lmSubmitOpeners()">✅ Lock opening pair</button>
       </div>`;
     }
     return `<div class="lm-waiting"><div class="big">✅</div>Openers locked in.<br>
       <span class="sub" style="color:var(--muted);">${prog.bowler_done ? 'Starting…' : 'Waiting for the bowler…'}</span></div>`;
   }
   if (role === 'bowler') {
-    if (!prog.bowler_done && s.bowler_options) {
-      const opts = (s.bowler_options || []).map(o =>
-        `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bowl ${o.bowl_rating} (${escapeHtml(o.bowl_style||'')})</option>`).join('');
-      return `<div class="lm-panel">
-        <div class="lm-panel-title">Choose your opening bowler</div>
-        <select id="lm-bowler" class="lm-dropdown">${opts}</select>
-        <button class="spin-button" style="width:100%;" onclick="lmSubmitBowler()">Select bowler</button>
-        <div class="sub" style="color:var(--muted);font-size:0.72rem;margin-top:0.6rem;text-align:center;">
-          ${prog.openers_done ? '✅ Opponent picked their openers' : '⏳ Opponent is picking openers'}
+    const bowlers = s.bowler_options || [];
+    if (!prog.bowler_done && bowlers.length) {
+      if (!lmSelectedBowlerRid || !bowlers.some(o => o.roster_id === lmSelectedBowlerRid)) lmSelectedBowlerRid = bowlers[0]?.roster_id || null;
+      const cards = bowlers.map(o => lmPlayerCard(o, o.roster_id === lmSelectedBowlerRid, false, `lmSelectBowlerCard(${o.roster_id})`, 'bowl')).join('');
+      return `<div class="lm-premium-hero">
+        <div class="lm-premium-kicker">Opening spell</div>
+        <div class="lm-premium-title">Choose your first bowler</div>
+        <div class="lm-premium-sub">Pick the bowler who will take the new ball. Style and OVR are shown on each card.</div>
+        <div class="lm-pill-row">
+          <span class="lm-mini-pill">Opponent openers: <b>${prog.openers_done ? 'locked' : 'pending'}</b></span>
+          <span class="lm-mini-pill">Your role: <b>Bowling</b></span>
         </div>
+      </div>
+      <div class="lm-panel">
+        <div class="lm-panel-title">Opening bowler</div>
+        <div class="lm-player-grid">${cards}</div>
+        <button class="lm-action-btn" onclick="lmSubmitBowler()">🎳 Select bowler</button>
       </div>`;
     }
     return `<div class="lm-waiting"><div class="big">✅</div>Bowler selected.<br>
@@ -6027,7 +6123,7 @@ function bowlingControlsHtml(s) {
     const delBtns = deliveries.map((d, i) =>
       lmChoiceButton(d, d === lmSelectedSpinDelivery, `lmSetBowlChoice('spin',${i})`)).join('');
     return `<div class="lm-panel">
-      <div class="lm-panel-title">Bowling selection</div>
+      <div class="lm-panel-title">Bowling controls · variations</div>
       <div class="lm-control-row">
         <label>Variation / delivery</label>
         <div class="lm-choice-grid">${delBtns}</div>
@@ -6050,7 +6146,7 @@ function bowlingControlsHtml(s) {
   const lenBtns = lengths.map((l, i) =>
     lmChoiceButton(l, l === lmSelectedLength, `lmSetBowlChoice('length',${i})`)).join('');
   return `<div class="lm-panel">
-    <div class="lm-panel-title">Bowling selection</div>
+    <div class="lm-panel-title">Bowling controls · variations & length</div>
     <div class="lm-control-row">
       <label>Variation</label>
       <div class="lm-choice-grid">${varBtns}</div>
@@ -6065,7 +6161,7 @@ function bowlingControlsHtml(s) {
 }
 
 function deliveryBannerHtml(s) {
-  const sp = s.current_delivery && window._lmSpeed ? `${window._lmSpeed} km/h` : '';
+  const sp = s.current_delivery && s.last_speed ? `${s.last_speed} km/h` : '';
   return `<div class="lm-delivery-banner">
     <div class="sp">Delivery incoming…</div>
     <div class="dl">${escapeHtml(s.current_delivery || '')}</div>
@@ -6082,7 +6178,7 @@ function shotGridHtml() {
   const btns = LM_SHOTS.map((sh, i) =>
     lmChoiceButton(sh, i === lmSelectedShot, `lmPlayShot(${i})`)).join('');
   return `<div class="lm-panel">
-    <div class="lm-panel-title">Batsman — tap a shot to play immediately</div>
+    <div class="lm-panel-title">Batting controls · shot choices</div>
     <div class="lm-choice-grid compact">${btns}</div>
   </div>`;
 }
@@ -6108,16 +6204,12 @@ function lmApplySnapshot(s) {
   lmLastSig = `${s.ball_seq}|${s.setup}|${s.next_action}|${s.role}|${sp.openers_done?1:0}${sp.bowler_done?1:0}`;
   renderLiveMatch(s);
 }
-function lmSyncOpenerDropdowns() {
-  const a = document.getElementById('lm-striker').value;
-  const b = document.getElementById('lm-nonstriker').value;
-  document.getElementById('lm-opener-warn').style.display = (a === b) ? 'block' : 'none';
-}
+function lmSyncOpenerDropdowns() { lmRefreshLocal(); }
 async function lmSubmitOpeners() {
   if (lmActionInFlight) return;
-  const striker = parseInt(document.getElementById('lm-striker').value, 10);
-  const non = parseInt(document.getElementById('lm-nonstriker').value, 10);
-  if (striker === non) { document.getElementById('lm-opener-warn').style.display = 'block'; return; }
+  const striker = parseInt(lmSelectedStrikerRid, 10);
+  const non = parseInt(lmSelectedNonStrikerRid, 10);
+  if (!striker || !non || striker === non) { toast('Pick two different openers', 'error'); lmRefreshLocal(); return; }
   haptic('medium');
   const { ok, data } = await lmAction('/api/webapp/match/select-openers',
     { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non });
@@ -6128,7 +6220,8 @@ async function lmSubmitOpeners() {
 }
 async function lmSubmitBowler() {
   if (lmActionInFlight) return;
-  const rid = parseInt(document.getElementById('lm-bowler').value, 10);
+  const rid = parseInt(lmSelectedBowlerRid, 10);
+  if (!rid) { toast('Pick a bowler first', 'error'); return; }
   haptic('medium');
   const { ok, data } = await lmAction('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
@@ -6219,13 +6312,21 @@ async function openScorecard() {
   const drawer = document.getElementById('lm-drawer');
   drawer.classList.add('open');
   document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  await lmLoadScorecard(true);
+}
+
+async function lmLoadScorecard(forceCurrentTab = false) {
   const { ok, data } = await api('/api/webapp/match/scorecard', { match_id: lmMatchId });
   if (!ok) {
     document.getElementById('lm-drawer-body').innerHTML = `<div class="empty">Scorecard unavailable</div>`;
     return;
   }
+  const current = data.current_innings || 1;
+  const previousCurrent = lmScorecardData ? (lmScorecardData.current_innings || 1) : null;
   lmScorecardData = data;
-  lmScorecardTab = data.current_innings || 1;
+  if (forceCurrentTab || lmScorecardTab === null || previousCurrent !== current) {
+    lmScorecardTab = current;
+  }
   renderScorecard();
 }
 
@@ -6240,6 +6341,10 @@ async function openScorecardOnly(matchId) {
 function closeScorecard() {
   document.getElementById('lm-drawer').classList.remove('open');
   document.getElementById('lm-drawer-backdrop').style.display = 'none';
+}
+function isScorecardOpen() {
+  const drawer = document.getElementById('lm-drawer');
+  return !!(drawer && drawer.classList.contains('open'));
 }
 
 function renderScorecard() {
