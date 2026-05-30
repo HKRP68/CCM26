@@ -5587,10 +5587,14 @@ let lmLastSig = '';
 let lmForceRender = false;
 let lmSelectedVariation = null;
 let lmLastResultHtml = '';
+let lmPollFailCount = 0;     // consecutive failed state polls (transient-tolerant)
+let lmActionInFlight = false; // a mutating action (deliver/shot/pick) is running
 
 function openLiveMatch(matchId) {
   lmMatchId = matchId;
   lmLastBallSeq = -1;
+  lmPollFailCount = 0;
+  lmActionInFlight = false;
   lmSelectedVariation = null;
   lmLastSig = '';
   const _nav = document.getElementById('bottom-nav');
@@ -5625,14 +5629,37 @@ function _lmReschedule(myTurn) {
 
 async function pollMatch() {
   if (!lmMatchId || currentScreen !== 'livematch') return;
-  const { ok, data } = await api('/api/webapp/match/state', { match_id: lmMatchId });
+  // Don't poll while a mutating action (deliver / shot / bowler pick) is in
+  // flight. A concurrent poll competes for the small DB pool and can race the
+  // action's own response — the action renders its fresh snapshot and resumes
+  // polling itself.
+  if (lmActionInFlight) return;
+  const { ok, status, data } = await api('/api/webapp/match/state', { match_id: lmMatchId });
   if (!ok) {
-    document.getElementById('livematch-content').innerHTML =
-      `<div class="lm-waiting"><div class="big">🏁</div>This match has ended or is no longer available.
-       <div style="margin-top:1rem;"><button class="spin-button" onclick="navigate('home')">Back home</button></div></div>`;
-    stopMatchPolling();
+    // Only a definitive "no live match" (404 / no_match) means the match is
+    // truly gone. Transient failures — a network blip, or a 500 thrown while a
+    // delivery is being committed under DB-pool contention — must NOT tear the
+    // board down. Keep the current screen and recover on the next tick.
+    const gone = (status === 404) || (data && data.error === 'no_match');
+    if (gone) {
+      document.getElementById('livematch-content').innerHTML =
+        `<div class="lm-waiting"><div class="big">🏁</div>This match has ended or is no longer available.
+         <div style="margin-top:1rem;"><button class="spin-button" onclick="navigate('home')">Back home</button></div></div>`;
+      stopMatchPolling();
+      return;
+    }
+    lmPollFailCount++;
+    // Persistent backend trouble: ease off the poll rate so we don't pile onto
+    // a struggling server, but keep trying — the match is almost certainly
+    // still live and will come back.
+    if (lmPollFailCount === 6 && lmPollTimer) {
+      clearInterval(lmPollTimer);
+      lmPollInterval = 4000;
+      lmPollTimer = setInterval(pollMatch, lmPollInterval);
+    }
     return;
   }
+  lmPollFailCount = 0;
   // Whose turn is it for me? (drives poll cadence)
   const _sp2 = data.setup_progress || {};
   const inSetup = data.setup && data.setup !== 'DONE';
@@ -5875,50 +5902,81 @@ function shotGridHtml() {
 }
 
 // ── Actions ──
+// Run a mutating action with the in-flight guard set so the poll loop pauses
+// (avoids racing the action and competing for the DB pool). Always clears the
+// flag, even on error, so a failed action never wedges polling.
+async function lmAction(path, body) {
+  lmActionInFlight = true;
+  try {
+    return await api(path, body);
+  } finally {
+    lmActionInFlight = false;
+  }
+}
+// Render immediately from a snapshot returned by an action (instant feedback,
+// no extra round-trip) and keep the poll signature in sync so the next poll
+// doesn't needlessly re-render the same state.
+function lmApplySnapshot(s) {
+  if (!s) return;
+  const sp = s.setup_progress || {};
+  lmLastSig = `${s.ball_seq}|${s.setup}|${s.next_action}|${s.role}|${sp.openers_done?1:0}${sp.bowler_done?1:0}`;
+  renderLiveMatch(s);
+}
 function lmSyncOpenerDropdowns() {
   const a = document.getElementById('lm-striker').value;
   const b = document.getElementById('lm-nonstriker').value;
   document.getElementById('lm-opener-warn').style.display = (a === b) ? 'block' : 'none';
 }
 async function lmSubmitOpeners() {
+  if (lmActionInFlight) return;
   const striker = parseInt(document.getElementById('lm-striker').value, 10);
   const non = parseInt(document.getElementById('lm-nonstriker').value, 10);
   if (striker === non) { document.getElementById('lm-opener-warn').style.display = 'block'; return; }
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/match/select-openers',
+  const { ok, data } = await lmAction('/api/webapp/match/select-openers',
     { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmForceRender = true;
+  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmSubmitBowler() {
+  if (lmActionInFlight) return;
   const rid = parseInt(document.getElementById('lm-bowler').value, 10);
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  const { ok, data } = await lmAction('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmForceRender = true;
+  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmReady() {
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/match/ready', { match_id: lmMatchId });
+  const { ok, data } = await lmAction('/api/webapp/match/ready', { match_id: lmMatchId });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 function lmPickVariation(v) { haptic('light'); lmSelectedVariation = v; lmForceRender = true; pollMatch(); }
 async function lmDeliver(variation, length) {
+  if (lmActionInFlight) return;       // ignore double-taps while delivering
   haptic('medium');
   const body = { match_id: lmMatchId, variation };
   if (length) body.length = length;
-  const { ok, data } = await api('/api/webapp/match/deliver', body);
+  const { ok, data } = await lmAction('/api/webapp/match/deliver', body);
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmSelectedVariation = null;
   window._lmBowlOpts = null;  // refetch next over
+  // The deliver response already carries the post-delivery snapshot — render it
+  // straight away so the bowler instantly sees "waiting for batsman" instead of
+  // waiting for the next poll.
+  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmPlayShot(idx) {
+  if (lmActionInFlight) return;       // ignore double-taps while resolving
   haptic('heavy');
-  const { ok, data } = await api('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx });
+  const { ok, data } = await lmAction('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   const r = data.result;
   // Show the ball result prominently for a moment
@@ -5926,6 +5984,7 @@ async function lmPlayShot(idx) {
   if (r.type === 'wicket') hapticNotif('error');
   else if (r.runs === 6 || r.runs === 4) { hapticNotif('success'); launchConfetti(r.runs === 6 ? 60 : 40); }
   setTimeout(() => { lmLastResultHtml = ''; }, 4000);
+  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmLoadNewBowlers() {
@@ -5936,10 +5995,12 @@ async function lmLoadNewBowlers() {
   document.getElementById('lm-newbowler-area').innerHTML = `<div class="lm-opt-grid">${btns}</div>`;
 }
 async function lmNewBowler(rid) {
+  if (lmActionInFlight) return;
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  const { ok, data } = await lmAction('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   window._lmBowlOpts = null;
+  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 
