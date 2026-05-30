@@ -225,13 +225,37 @@ async def start_handler(update, context):
         await debut_handler(update, context)
         return
 
-    if payload in ("spin", "daily", "market", "xi"):
+    # Live match deep link: lm_<id> → open the Mini App live-match board
+    if payload.startswith("lm_"):
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
         if webapp_url and webapp_url.startswith("https://"):
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-            labels = {"spin": "🎡 Open Spin", "daily": "📅 Open Daily",
-                      "market": "🌟 Open Market", "xi": "👥 Open XI"}
-            label = labels.get(payload, "Open Mini App")
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🎮 Open Match",
+                    web_app=WebAppInfo(url=webapp_url + "#" + payload),
+                )
+            ]])
+            await update.message.reply_text(
+                "🏏 Tap below to open the live match board.",
+                parse_mode="HTML", reply_markup=kb,
+            )
+            return
+
+    _MINIAPP_SCREENS = {
+        "spin": "🎡 Open Spin", "daily": "📅 Open Daily",
+        "market": "🌟 Open Market", "xi": "👥 Open XI",
+        "roster": "👥 Open Squad", "packs": "🎴 Open Packs",
+        "freepack": "📦 Open Free Pack", "quests": "🎯 Open Quests",
+        "achievements": "🏆 Open Achievements", "season": "👑 Open Season",
+        "clubs": "🛡️ Open Clubs", "leaderboard": "🏆 Open Ranks",
+        "invite": "🎟️ Open Invite",
+    }
+    if payload in _MINIAPP_SCREENS:
+        webapp_url = os.getenv("WEBAPP_URL", "").strip()
+        if webapp_url and webapp_url.startswith("https://"):
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            label = _MINIAPP_SCREENS[payload]
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     label,

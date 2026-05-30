@@ -768,6 +768,14 @@ class GameConfig(Base):
     branding_channel_label = Column(String(80), nullable=True)
     branding_group_username = Column(String(64), nullable=True)
     branding_group_label = Column(String(80), nullable=True)
+    # Official group for buying players. /buypl only allows purchase here.
+    # official_group_id is the numeric chat ID (e.g. -1001234567890) used to
+    # compare the current chat; official_group_link is the t.me invite/handle.
+    official_group_id = Column(BigInteger, nullable=True)
+    official_group_link = Column(String(200), nullable=True)
+    # Editable welcome message for new group members. Supports placeholders:
+    #   @User or {name} → mentions/uses the new member's name
+    welcome_message = Column(Text, nullable=True)
     branding_tagline = Column(String(200), nullable=True)
     # Debut bonus
     debut_coins = Column(Integer, default=100000)

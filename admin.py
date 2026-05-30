@@ -2937,8 +2937,26 @@ def webapp_init():
         played = user.matches_played or 0
         won = user.matches_won or 0
         win_rate = round(won / played * 100, 1) if played else 0
+        # Resume affordance: is this user in a live Mini-App match right now?
+        live_match = None
+        try:
+            from models import Match as _M
+            lm = (db.query(_M)
+                  .filter(((_M.user1_id == user.id) | (_M.user2_id == user.id)),
+                          _M.status == "playing")
+                  .order_by(_M.id.desc()).first())
+            if lm:
+                from services.match_webapp_access import get_state as _gst
+                st = _gst(lm.id)
+                if st and st.get("played_via") == "webapp":
+                    live_match = {"match_id": lm.id,
+                                  "bat_team": st.get("bat_team_name", ""),
+                                  "bowl_team": st.get("bowl_team_name", "")}
+        except Exception:
+            logger.exception("live_match lookup failed (non-fatal)")
         return {
             "ok": True,
+            "live_match": live_match,
             "user": {
                 "user_id": user.id,
                 "telegram_id": user.telegram_id,
@@ -5210,6 +5228,262 @@ def webapp_upgrade_apply():
         db.close()
 
 
+@app.route("/api/webapp/player-detail", methods=["POST"])
+@csrf_exempt
+def webapp_roster_player_detail():
+    """Full detail for a roster entry: player info, aggregate stats, last-10
+    matches, equipped traits, available inventory traits, and whether an
+    upgrade (higher version) is available.
+    Body: {roster_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import (UserRoster, Player, PlayerGameStats, PlayerMatchStats,
+                             Match)
+        from services.trait_service import get_player_traits
+        from services.version_service import get_base_id, get_all_versions
+        from config import (TRAIT_MAX_PER_PLAYER, TRAIT_REPLACE_COST,
+                            TRAIT_UPGRADE_COSTS)
+
+        data = request.get_json(silent=True) or {}
+        try:
+            roster_id = int(data.get("roster_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+
+        entry = (db.query(UserRoster)
+                 .filter(UserRoster.id == roster_id,
+                         UserRoster.user_id == user.id).first())
+        if not entry:
+            return {"ok": False, "error": "not_found",
+                    "message": "Player not in your roster."}, 404
+        player = db.query(Player).get(entry.player_id)
+        if not player:
+            return {"ok": False, "error": "player_missing"}, 404
+
+        try:
+            from config import get_sell_value
+            sell_value = get_sell_value(player.rating)
+        except Exception:
+            sell_value = 0
+
+        # ── Aggregate stats (this user with this player) ──
+        gs = (db.query(PlayerGameStats)
+              .filter(PlayerGameStats.user_id == user.id,
+                      PlayerGameStats.player_id == player.id).first())
+        if gs:
+            stats = {
+                "has_stats": (gs.bat_inns or 0) + (gs.bowl_inns or 0) > 0,
+                "potm": gs.potm or 0,
+                "bat_inns": gs.bat_inns or 0,
+                "runs": gs.runs or 0,
+                "bat_avg": gs.bat_avg if hasattr(gs, "bat_avg") else 0,
+                "fifties": gs.fifties or 0,
+                "hundreds": gs.hundreds or 0,
+                "fours": gs.fours or 0,
+                "sixes": gs.sixes or 0,
+                "balls_faced": gs.balls_faced or 0,
+                "highest_score": gs.highest_score or 0,
+                "highest_not_out": bool(gs.highest_score_not_out),
+                "bowl_inns": gs.bowl_inns or 0,
+                "wickets_taken": gs.wickets_taken or 0,
+                "runs_conceded": gs.runs_conceded or 0,
+                "overs_bowled": gs.overs_bowled or 0,
+                "three_fers": gs.three_fers or 0,
+                "five_fers": gs.five_fers or 0,
+                "best_bowl": (f"{gs.best_bowl_wickets}/{gs.best_bowl_runs}"
+                              if (gs.best_bowl_wickets or 0) > 0 else "—"),
+                "strike_rate": (round(gs.runs * 100 / gs.balls_faced, 1)
+                                if gs.balls_faced else 0),
+            }
+        else:
+            stats = {"has_stats": False}
+
+        # ── Last 10 matches (per-match snapshots) ──
+        last10_rows = (db.query(PlayerMatchStats)
+                       .filter(PlayerMatchStats.user_id == user.id,
+                               PlayerMatchStats.player_id == player.id)
+                       .order_by(PlayerMatchStats.created_at.desc())
+                       .limit(10).all())
+        last10 = []
+        for m in last10_rows:
+            bowl = (f"{m.bowl_wickets}/{m.bowl_runs}"
+                    if (m.bowl_balls or 0) > 0 else None)
+            bat = None
+            if (m.bat_balls or 0) > 0 or (m.bat_runs or 0) > 0:
+                bat = f"{m.bat_runs}{'' if m.bat_out else '*'} ({m.bat_balls})"
+            last10.append({
+                "bat": bat, "bowl": bowl,
+                "bat_runs": m.bat_runs or 0, "bat_balls": m.bat_balls or 0,
+                "bat_out": bool(m.bat_out),
+                "fours": m.bat_fours or 0, "sixes": m.bat_sixes or 0,
+                "bowl_wickets": m.bowl_wickets or 0,
+                "bowl_runs": m.bowl_runs or 0, "bowl_balls": m.bowl_balls or 0,
+                "when": m.created_at.isoformat() if m.created_at else None,
+            })
+
+        # ── Traits equipped on this roster entry ──
+        equipped = get_player_traits(db, roster_id)
+        traits = []
+        for pt, t in equipped:
+            up_cost = TRAIT_UPGRADE_COSTS.get(pt.level) if pt.level < 5 else None
+            traits.append({
+                "player_trait_id": pt.id,
+                "trait_id": t.id,
+                "name": t.name, "emoji": t.emoji, "category": t.category,
+                "description": t.description,
+                "level": pt.level, "max_level": 5,
+                "upgrade_cost": up_cost,
+                "can_upgrade": (pt.level < 5 and up_cost is not None),
+            })
+
+        # ── Inventory traits available to apply ──
+        from models import TraitInventory, Trait
+        inv_rows = (db.query(TraitInventory, Trait)
+                    .join(Trait, TraitInventory.trait_id == Trait.id)
+                    .filter(TraitInventory.user_id == user.id).all())
+        equipped_trait_ids = {t.id for _pt, t in equipped}
+        inventory = []
+        for inv, t in inv_rows:
+            inventory.append({
+                "inventory_id": inv.id,
+                "trait_id": t.id,
+                "name": t.name, "emoji": t.emoji, "category": t.category,
+                "description": t.description, "level": inv.level,
+                "already_on_player": (t.id in equipped_trait_ids),
+            })
+
+        slots_full = len(equipped) >= TRAIT_MAX_PER_PLAYER
+
+        # ── Upgrade availability (higher versions of same base player) ──
+        base_id = get_base_id(player.id, db)
+        versions = get_all_versions(db, base_id)
+        higher = [v for v in versions if v.rating > player.rating]
+        upgrade_available = len(higher) > 0
+
+        return {
+            "ok": True,
+            "player": {
+                "roster_id": entry.id,
+                "id": player.id,
+                "name": player.name,
+                "rating": player.rating,
+                "bat_rating": player.bat_rating,
+                "bowl_rating": player.bowl_rating,
+                "category": player.category,
+                "country": player.country,
+                "version": player.version or "Base",
+                "bat_hand": player.bat_hand,
+                "bowl_hand": player.bowl_hand,
+                "bowl_style": player.bowl_style,
+                "sell_value": sell_value,
+                "is_captain": False,
+            },
+            "stats": stats,
+            "last10": last10,
+            "traits": traits,
+            "inventory": inventory,
+            "trait_slots": {"used": len(equipped), "max": TRAIT_MAX_PER_PLAYER,
+                            "full": slots_full},
+            "replace_cost": TRAIT_REPLACE_COST,
+            "upgrade_available": upgrade_available,
+            "gems": user.total_gems or 0,
+            "coins": user.total_coins or 0,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_player_detail failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/trait/apply", methods=["POST"])
+@csrf_exempt
+def webapp_trait_apply():
+    """Apply an inventory trait to a roster entry. Body: {roster_id, inventory_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.trait_service import apply_trait_to_player
+        data = request.get_json(silent=True) or {}
+        roster_id = int(data.get("roster_id") or 0)
+        inventory_id = int(data.get("inventory_id") or 0)
+        ok, msg = apply_trait_to_player(db, user, inventory_id, roster_id)
+        if not ok:
+            db.rollback()
+            return {"ok": False, "message": msg}, 400
+        db.commit()
+        return {"ok": True, "message": msg}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_trait_apply failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/trait/remove", methods=["POST"])
+@csrf_exempt
+def webapp_trait_remove():
+    """Remove (unequip) a trait from a player. Returns it to inventory.
+    Body: {player_trait_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import PlayerTrait, TraitInventory
+        data = request.get_json(silent=True) or {}
+        ptid = int(data.get("player_trait_id") or 0)
+        pt = (db.query(PlayerTrait)
+              .filter(PlayerTrait.id == ptid,
+                      PlayerTrait.user_id == user.id).first())
+        if not pt:
+            return {"ok": False, "message": "Trait not found."}, 404
+        # Return to inventory at same level
+        db.add(TraitInventory(user_id=user.id, trait_id=pt.trait_id, level=pt.level))
+        db.delete(pt)
+        db.commit()
+        return {"ok": True, "message": "Trait removed and returned to inventory."}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_trait_remove failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/trait/upgrade", methods=["POST"])
+@csrf_exempt
+def webapp_trait_upgrade():
+    """Upgrade an equipped trait's level (costs gems). Body: {player_trait_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.trait_service import upgrade_player_trait
+        data = request.get_json(silent=True) or {}
+        ptid = int(data.get("player_trait_id") or 0)
+        ok, msg = upgrade_player_trait(db, user, ptid)
+        if not ok:
+            db.rollback()
+            return {"ok": False, "message": msg}, 400
+        db.commit()
+        return {"ok": True, "message": msg, "gems": user.total_gems or 0}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_trait_upgrade failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/clubs", methods=["POST"])
 @csrf_exempt
 def webapp_clubs():
@@ -5345,6 +5619,336 @@ def webapp_clubs_kick():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_clubs_kick failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+# ══════════════════ Mini App live match (Phase 1) ════════════════════
+
+@app.route("/api/webapp/match/state", methods=["POST"])
+@csrf_exempt
+def webapp_match_state():
+    """Role-aware polling snapshot of a live match. Body: {match_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import build_snapshot
+        data = request.get_json(silent=True) or {}
+        try:
+            match_id = int(data.get("match_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        snap = build_snapshot(db, match_id, user.id)
+        if not snap:
+            return {"ok": False, "error": "no_match",
+                    "message": "No live match found."}, 404
+        return snap
+    except Exception as e:
+        logger.exception("webapp_match_state failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/init", methods=["POST"])
+@csrf_exempt
+def webapp_match_init():
+    """Initialize live state for a Mini-App match after the toss.
+    Body: {match_id}. Idempotent."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import init_match_for_webapp, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        # Only participants can initialize
+        from models import Match
+        m = db.query(Match).get(match_id)
+        if not m:
+            return {"ok": False, "error": "no_match"}, 404
+        if user.id not in (m.user1_id, m.user2_id):
+            return {"ok": False, "error": "not_participant",
+                    "message": "You're not in this match."}, 403
+        ok, msg = init_match_for_webapp(db, match_id)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        snap = build_snapshot(db, match_id, user.id)
+        return {"ok": True, "message": msg, "snapshot": snap}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_match_init failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/select-openers", methods=["POST"])
+@csrf_exempt
+def webapp_match_select_openers():
+    """Batsman picks striker + non-striker.
+    Body: {match_id, striker_rid, non_striker_rid}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import select_openers, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        striker = int(data.get("striker_rid") or 0)
+        non_striker = int(data.get("non_striker_rid") or 0)
+        ok, msg = select_openers(match_id, user.id, striker, non_striker)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        return {"ok": True, "message": msg,
+                "snapshot": build_snapshot(db, match_id, user.id)}
+    except Exception as e:
+        logger.exception("webapp_match_select_openers failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/select-bowler", methods=["POST"])
+@csrf_exempt
+def webapp_match_select_bowler():
+    """Bowling side picks the bowler. Body: {match_id, bowler_rid}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import select_bowler, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        bowler_rid = int(data.get("bowler_rid") or 0)
+        ok, msg = select_bowler(match_id, user.id, bowler_rid)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        return {"ok": True, "message": msg,
+                "snapshot": build_snapshot(db, match_id, user.id)}
+    except Exception as e:
+        logger.exception("webapp_match_select_bowler failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/ready", methods=["POST"])
+@csrf_exempt
+def webapp_match_ready():
+    """A side marks ready. Body: {match_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import mark_ready, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        ok, both, msg = mark_ready(match_id, user.id)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        return {"ok": True, "both_ready": both, "message": msg,
+                "snapshot": build_snapshot(db, match_id, user.id)}
+    except Exception as e:
+        logger.exception("webapp_match_ready failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/bowling-options", methods=["POST"])
+@csrf_exempt
+def webapp_match_bowling_options():
+    """Bowler's delivery options. Body: {match_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import get_bowling_options
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        result = get_bowling_options(match_id, user.id)
+        if not result.get("ok"):
+            return result, 400
+        return result
+    except Exception as e:
+        logger.exception("webapp_match_bowling_options failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/deliver", methods=["POST"])
+@csrf_exempt
+def webapp_match_deliver():
+    """Bowler sets the delivery. Body: {match_id, variation, length?}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import set_delivery, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        variation = (data.get("variation") or "").strip()
+        length = (data.get("length") or "").strip() or None
+        if not variation:
+            return {"ok": False, "message": "Pick a variation."}, 400
+        ok, msg = set_delivery(match_id, user.id, variation, length)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        return {"ok": True, "message": msg,
+                "snapshot": build_snapshot(db, match_id, user.id)}
+    except Exception as e:
+        logger.exception("webapp_match_deliver failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+def _broadcast_match_scorecard(match_id):
+    """Send the live scorecard + Play Match button to the match chat via the
+    Telegram HTTP API (Flask is sync, so we can't use the bot's async send)."""
+    import os as _os
+    import requests as _rq
+    from services.match_webapp_access import get_state, get_next_action
+    from services.match_broadcast import build_live_scorecard_text, _launch_url
+    from services.match_state_store import A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER
+
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return
+    state = get_state(match_id)
+    if not state:
+        return
+    chat_id = state.get("chat_id")
+    if not chat_id:
+        return
+
+    # Whose turn (for the "waiting for…" line)
+    na = get_next_action(match_id)
+    waiting = None
+    if na in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+        uname = state.get("bowl_username")
+        waiting = f"@{uname}" if uname else state.get("bowl_team_name", "the bowler")
+
+    text = build_live_scorecard_text(state, waiting_for_mention=waiting)
+
+    reply_markup = None
+    url = _launch_url(match_id)
+    if url:
+        reply_markup = {"inline_keyboard": [[
+            {"text": "🎮 Play Match (Mini App)", "url": url}]]}
+
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+               "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                 json=payload, timeout=8)
+    except Exception:
+        logger.exception("scorecard HTTP send failed")
+
+
+@app.route("/api/webapp/match/play-shot", methods=["POST"])
+@csrf_exempt
+def webapp_match_play_shot():
+    """Batsman plays a shot, resolving the ball. Body: {match_id, shot_index}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import play_shot, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        shot_index = int(data.get("shot_index"))
+        ok, res = play_shot(match_id, user.id, shot_index)
+        if not ok:
+            return {"ok": False, "message": res}, 400
+        # Broadcast the live scorecard to the match chat (best-effort, sync HTTP)
+        try:
+            _broadcast_match_scorecard(match_id)
+        except Exception:
+            logger.exception("scorecard broadcast failed (non-fatal)")
+        return {"ok": True, "result": res,
+                "snapshot": build_snapshot(db, match_id, user.id)}
+    except Exception as e:
+        logger.exception("webapp_match_play_shot failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/new-bowler-options", methods=["POST"])
+@csrf_exempt
+def webapp_match_new_bowler_options():
+    """Eligible bowlers for the next over. Body: {match_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import get_new_bowler_options
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        return get_new_bowler_options(match_id, user.id)
+    except Exception as e:
+        logger.exception("webapp_match_new_bowler_options failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/new-bowler", methods=["POST"])
+@csrf_exempt
+def webapp_match_new_bowler():
+    """Bowling side picks next over's bowler. Body: {match_id, bowler_rid}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import select_new_bowler, build_snapshot
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        bowler_rid = int(data.get("bowler_rid") or 0)
+        ok, msg = select_new_bowler(match_id, user.id, bowler_rid)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        return {"ok": True, "message": msg,
+                "snapshot": build_snapshot(db, match_id, user.id)}
+    except Exception as e:
+        logger.exception("webapp_match_new_bowler failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/scorecard", methods=["POST"])
+@csrf_exempt
+def webapp_match_scorecard():
+    """Full tabbed scorecard for both innings. Body: {match_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import build_scorecard
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        return build_scorecard(match_id, user.id)
+    except Exception as e:
+        logger.exception("webapp_match_scorecard failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -9125,6 +9729,20 @@ def admin_branding_save():
         cfg.branding_group_username = _clean(request.form.get("group_username"), 64)
         cfg.branding_group_label = (request.form.get("group_label") or "").strip()[:80] or None
         cfg.branding_tagline = (request.form.get("tagline") or "").strip()[:200] or None
+
+        # Official group for buying restriction
+        ogid = (request.form.get("official_group_id") or "").strip()
+        if ogid:
+            try:
+                cfg.official_group_id = int(ogid)
+            except (ValueError, TypeError):
+                flash("⚠️ Official group ID must be a number (e.g. -1001234567890). Ignored.", "error")
+        else:
+            cfg.official_group_id = None
+        cfg.official_group_link = (request.form.get("official_group_link") or "").strip()[:200] or None
+        # Editable welcome message (supports @User mention)
+        wm = (request.form.get("welcome_message") or "").strip()
+        cfg.welcome_message = wm[:2000] or None
 
         # Refresh in-memory config cache (used by config_service)
         try:

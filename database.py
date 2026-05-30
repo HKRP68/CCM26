@@ -279,6 +279,10 @@ def _migrate_add_columns():
     _try_add("users", "last_club_leave", "TIMESTAMP")
     # Welcome message toggle per group
     _try_add("bot_chats", "welcome_enabled", "BOOLEAN DEFAULT TRUE")
+    # Official group restriction for buying
+    _try_add("game_config", "official_group_id", "BIGINT")
+    _try_add("game_config", "official_group_link", "VARCHAR(200)")
+    _try_add("game_config", "welcome_message", "TEXT")
 
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
