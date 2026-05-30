@@ -100,6 +100,13 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             if not mem:
                 continue
 
+            # Mini-App-driven matches are advanced by player taps via the web
+            # endpoints, NOT by the bot. Don't re-render bot prompts or
+            # auto-decide them here — that would double-drive the match.
+            # (A separate webapp timeout sweep handles abandoned Mini-App matches.)
+            if mem.get("played_via") == "webapp":
+                continue
+
             if idle_seconds >= AUTODECIDE_THRESHOLD:
                 # Long idle — auto-decide
                 await _auto_decide(context, mid, mem, ms.next_action)
