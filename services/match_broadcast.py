@@ -41,7 +41,7 @@ def play_match_keyboard(match_id):
     if not url:
         return None
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎮 Play Match (Mini App)", url=url)
+        InlineKeyboardButton("▶️ Play Match", url=url)
     ]])
 
 

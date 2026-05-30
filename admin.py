@@ -5653,6 +5653,198 @@ def webapp_match_state():
         db.close()
 
 
+
+
+# Public REST aliases for the premium live-match board. These endpoints keep the
+# documented `/api/match/*` contract while reusing the authenticated Mini App
+# service layer above. `userId` is the internal user id; callers may pass
+# `matchId`/`match_id`, otherwise the latest playing match for that user is used.
+def _match_rest_user_and_match(db, user_id, match_id=None):
+    from models import User, Match
+    try:
+        uid = int(user_id or 0)
+    except (TypeError, ValueError):
+        return None, None, ({"ok": False, "error": "bad_user_id"}, 400)
+    user = db.query(User).get(uid)
+    if not user:
+        return None, None, ({"ok": False, "error": "no_user"}, 404)
+    if match_id:
+        try:
+            mid = int(match_id)
+        except (TypeError, ValueError):
+            return user, None, ({"ok": False, "error": "bad_match_id"}, 400)
+        match = db.query(Match).get(mid)
+    else:
+        match = (db.query(Match)
+                 .filter(((Match.user1_id == user.id) | (Match.user2_id == user.id)),
+                         Match.status == "playing")
+                 .order_by(Match.id.desc()).first())
+    if not match:
+        return user, None, ({"ok": False, "error": "no_match"}, 404)
+    if user.id not in (match.user1_id, match.user2_id):
+        return user, match, ({"ok": False, "error": "not_participant"}, 403)
+    return user, match, None
+
+
+def _match_rest_full_state(db, match_id, user_id):
+    import copy as _copy
+    from services.match_webapp_service import build_snapshot, role_for
+    from services.match_webapp_access import get_state, get_next_action, get_ball_seq
+    state = get_state(match_id)
+    if not state:
+        return None
+    participant_roles = {
+        str(state.get("bat_team_id")): "batsman",
+        str(state.get("bowl_team_id")): "bowler",
+    }
+    return {
+        "ok": True,
+        "match_id": match_id,
+        "user_id": user_id,
+        "role": role_for(state, user_id),
+        "next_action": get_next_action(match_id),
+        "ball_seq": get_ball_seq(match_id),
+        "roles": participant_roles,
+        "snapshot": build_snapshot(db, match_id, user_id),
+        "state": _copy.deepcopy(state),
+    }
+
+
+@app.route("/api/match/state", methods=["GET"])
+@csrf_exempt
+def match_rest_state():
+    """GET /api/match/state?userId=X[&matchId=Y]
+    Returns the full serialized live match state plus a role-aware snapshot.
+    """
+    db = get_session()
+    try:
+        user, match, err = _match_rest_user_and_match(
+            db, request.args.get("userId") or request.args.get("user_id"),
+            request.args.get("matchId") or request.args.get("match_id"))
+        if err:
+            return err
+        result = _match_rest_full_state(db, match.id, user.id)
+        if not result:
+            return {"ok": False, "error": "no_match"}, 404
+        return result
+    except Exception as e:
+        logger.exception("match_rest_state failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/match/select-players", methods=["POST"])
+@csrf_exempt
+def match_rest_select_players():
+    """POST /api/match/select-players
+    Body: {userId, matchId?, striker_rid, non_striker_rid, bowler_rid}.
+    Batting and bowling sides can submit independently; duplicate openers are
+    rejected by the service layer and by the premium picker UI.
+    """
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        from services.match_webapp_service import select_openers, select_bowler, role_for
+        from services.match_webapp_access import get_state
+        state = get_state(match.id)
+        if not state:
+            return {"ok": False, "error": "no_match"}, 404
+        role = role_for(state, user.id)
+        messages = []
+        started = False
+        if role == "batsman":
+            striker = int(data.get("striker_rid") or data.get("striker") or 0)
+            non = int(data.get("non_striker_rid") or data.get("nonStriker") or 0)
+            ok, st, msg = select_openers(match.id, user.id, striker, non)
+            if not ok:
+                return {"ok": False, "message": msg}, 400
+            started = started or st; messages.append(msg)
+        elif role == "bowler":
+            rid = int(data.get("bowler_rid") or data.get("bowler") or 0)
+            ok, st, msg = select_bowler(match.id, user.id, rid)
+            if not ok:
+                return {"ok": False, "message": msg}, 400
+            started = started or st; messages.append(msg)
+        else:
+            return {"ok": False, "error": "spectator", "message": "Spectators cannot select players."}, 403
+        return {"ok": True, "started": started, "message": " ".join(messages),
+                "match": _match_rest_full_state(db, match.id, user.id)}
+    except Exception as e:
+        logger.exception("match_rest_select_players failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/match/action", methods=["POST"])
+@csrf_exempt
+def match_rest_action():
+    """POST /api/match/action
+    Body for bowler: {userId, matchId?, delivery_type/variation, length?, speed?}
+    Body for batter: {userId, matchId?, shot_choice/shot_index}.
+    """
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        from services.match_webapp_service import set_delivery, play_shot, role_for
+        from services.match_webapp_access import get_state, get_next_action, save_state
+        state = get_state(match.id)
+        if not state:
+            return {"ok": False, "error": "no_match"}, 404
+        role = role_for(state, user.id)
+        if role == "bowler":
+            variation = (data.get("delivery_type") or data.get("variation") or data.get("delivery") or "").strip()
+            length = (data.get("length") or "").strip() or None
+            ok, res = set_delivery(match.id, user.id, variation, length)
+            if ok and data.get("speed") is not None:
+                try:
+                    state = get_state(match.id) or state
+                    state["last_speed"] = int(data.get("speed"))
+                    save_state(match.id, state, next_action=get_next_action(match.id))
+                except (TypeError, ValueError):
+                    pass
+        elif role == "batsman":
+            if data.get("shot_index") is not None:
+                shot_index = int(data.get("shot_index"))
+            else:
+                from services.bowling_service import AVAILABLE_SHOTS
+                shot = (data.get("shot_choice") or data.get("shot") or "").strip()
+                shot_index = AVAILABLE_SHOTS.index(shot) if shot in AVAILABLE_SHOTS else int(data.get("shot") or 0)
+            ok, res = play_shot(match.id, user.id, shot_index)
+        else:
+            return {"ok": False, "error": "spectator", "message": "Spectators cannot act."}, 403
+        if not ok:
+            return {"ok": False, "message": res}, 400
+        try:
+            from services.match_state_store import A_COMPLETED as _DONE
+            if get_next_action(match.id) == _DONE:
+                from services.match_webapp_service import finalize_webapp_match
+                fin = finalize_webapp_match(db, match.id)
+                _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+            else:
+                _broadcast_match_scorecard(match.id)
+        except Exception:
+            logger.exception("match_rest_action broadcast/finalize failed")
+        return {"ok": True, "result": res,
+                "match": _match_rest_full_state(db, match.id, user.id)}
+    except Exception as e:
+        logger.exception("match_rest_action failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/match/init", methods=["POST"])
 @csrf_exempt
 def webapp_match_init():
@@ -5943,7 +6135,7 @@ def _broadcast_match_scorecard(match_id):
             url = _launch_url(match_id)
             if url:
                 reply_markup = {"inline_keyboard": [[
-                    {"text": "🎮 Play Match (Mini App)", "url": url}]]}
+                    {"text": "▶️ Play Match", "url": url}]]}
 
             message_id = state.get("live_score_msg_id")
             edited = False
@@ -6000,10 +6192,26 @@ def _broadcast_match_result(match_id, result):
         if not m or not m.chat_id:
             return
         chat_id = m.chat_id
+        try:
+            from services.match_webapp_service import load_final_scorecard
+            sc = load_final_scorecard(db, match_id) or {}
+            innings = sc.get("innings") or []
+        except Exception:
+            innings = []
+            sc = {}
+        score_lines = []
+        colors = ["🔴", "🟢"]
+        for i, inn in enumerate(innings[:2]):
+            score_lines.append(
+                f"{colors[i]} {inn.get('bat_team', 'Team')}: "
+                f"{inn.get('runs', 0)}/{inn.get('wickets', 0)} "
+                f"({inn.get('overs', '0')})")
+        score_block = "\n".join(score_lines) if score_lines else "Match completed."
+        result_text = result.get('text') or sc.get('result_text') or 'Match finished.'
         text = (
-            "🏆 <b>MATCH RESULT</b>\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"{result.get('text', 'Match finished.')}\n"
+            "━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULTS</b>\n\n"
+            f"{score_block}\n\n"
+            f"🏆 <b>{result_text}</b>\n\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             "Tap below to view the full scorecard."
         )
