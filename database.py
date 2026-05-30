@@ -45,7 +45,7 @@ def init_db():
         PlayerGameStats, Match, AdminLog,
         Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
         PlayerMarket, BotTeam, BotTeamPlayer,
-        MatchState, Quest, UserQuestProgress,
+        MatchState, QuickMatchState, Quest, UserQuestProgress,
         UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
         NotificationSchedule, NotificationLog, ClaimRarityTier, GameConfig,
         MessageTemplate, Bowlout, BowloutBall,

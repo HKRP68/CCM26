@@ -4087,9 +4087,9 @@ def webapp_quickmatch_start():
             difficulty = "medium"
 
         # Abandon any stale in-flight match (defensive cleanup)
-        existing = get_phase_match(tg_id)
+        existing = get_phase_match(tg_id, db)
         if existing and not existing.get("complete"):
-            drop_phase_match(tg_id)
+            drop_phase_match(tg_id, db)
 
         result = start_phase_match(db, user, tg_id, toss_choice, difficulty)
         # If start was blocked (limit/xi), we may have modified user fields
@@ -4121,8 +4121,7 @@ def webapp_quickmatch_phase():
             choice = "balanced"
 
         result = play_phase(db, user, tg_id, choice)
-        if result.get("match_complete"):
-            db.commit()  # Persist QM counters + coins
+        db.commit()  # Persist phase state, and counters/coins on completion.
         return result
     except Exception as e:
         db.rollback()
@@ -4142,7 +4141,8 @@ def webapp_quickmatch_abandon():
     db, user, tg_id = auth
     try:
         from services.quick_match_service import drop_phase_match
-        drop_phase_match(tg_id)
+        drop_phase_match(tg_id, db)
+        db.commit()
         return {"ok": True}
     except Exception as e:
         logger.exception("webapp_quickmatch_abandon failed")
