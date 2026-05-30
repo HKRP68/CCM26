@@ -474,28 +474,30 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
         await context.bot.send_message(chat_id, bat_render, parse_mode="HTML")
         await context.bot.send_message(chat_id, bowl_render, parse_mode="HTML")
 
-        # ── Opener selection ──
-        # If bot is batting, it picks openers automatically
-        if bat_uid == bot_user.id:
-            # Bot batting: auto-pick top-2 batsmen (or first 2 by batting order)
-            op1 = bat_xi[0]; op2 = bat_xi[1]
-            context.bot_data[f"opener1_{mid}"] = op1
-            context.bot_data[f"opener2_{mid}"] = op2
-            await context.bot.send_message(
-                chat_id,
-                f"🤖 Bot openers: <b>{op1['name']}</b> & <b>{op2['name']}</b>",
-                parse_mode="HTML",
-            )
-            # Now, the bowling user picks the opening bowler
-            if bowl_uid == user.id:
-                # Show user the bowler picker
-                await _show_user_opening_bowler(context, chat_id, mid, user, bowl_xi)
-            else:
-                # Both bot — shouldn't happen but handle anyway
-                await _bot_pick_and_start(context, chat_id, mid)
-        else:
-            # User batting: show opener picker
-            await _show_user_opener_picker(context, chat_id, mid, user, bat_xi, opener_num=1)
+        # ── Mini-App-only flow ──
+        # Initialize the live match state (vsbot-aware: the bot's openers/bowler
+        # are auto-set inside init), then post the Match Ready card + Play button.
+        # The human plays in the Mini App; the bot's turns are auto-played
+        # server-side. No in-chat opener/bowler pickers.
+        m.status = "playing"
+        session.commit()
+        try:
+            from services.match_webapp_service import init_match_for_webapp
+            # The bot's XI isn't in UserRoster — pass it explicitly.
+            overrides = {bot_user.id: bot_xi}
+            init_match_for_webapp(session, mid, xi_overrides=overrides)
+        except Exception:
+            logger.exception("vsbot webapp init failed")
+        try:
+            from services.match_broadcast import send_match_ready_message
+            from handlers.match import _mention as _mm
+            bat_mention = ("🤖 AI" if bat_uid == bot_user.id else _mm(user))
+            bowl_mention = ("🤖 AI" if bowl_uid == bot_user.id else _mm(user))
+            await send_match_ready_message(
+                context, chat_id, m, bat_team_name, bowl_team_name,
+                bat_mention, bowl_mention)
+        except Exception:
+            logger.exception("vsbot match-ready message failed")
 
     except Exception:
         session.rollback()

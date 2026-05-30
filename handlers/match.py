@@ -1249,6 +1249,78 @@ async def _save_match_stats(s):
 
 # ═══════════════════════════ /lastmatch ══════════════════════════════
 
+async def recentmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List the user's recent completed matches, each with a button that opens
+    the read-only scorecard in the Mini App."""
+    import os as _os
+    tg = update.effective_user
+    session = get_session()
+    try:
+        u = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not u:
+            await update.message.reply_text(
+                "❌ You haven't played yet. Use /debut then /playmatch.")
+            return
+        matches = (session.query(Match)
+                   .filter(Match.status == "completed",
+                           or_(Match.user1_id == u.id, Match.user2_id == u.id))
+                   .order_by(Match.completed_at.desc().nullslast(), Match.id.desc())
+                   .limit(8).all())
+        if not matches:
+            await update.message.reply_text(
+                "🏏 <b>No completed matches yet.</b>\n\nPlay one with "
+                "<code>/playmatch @user</code>.", parse_mode="HTML")
+            return
+
+        bot_username = (_os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+        miniapp_name = (_os.getenv("MINIAPP_NAME", "") or "").strip()
+
+        def _label(uid):
+            usr = session.query(User).get(uid) if uid else None
+            if not usr:
+                return "—"
+            return f"@{usr.username}" if usr.username else (usr.first_name or "Player")
+
+        lines = ["🏏 <b>YOUR RECENT MATCHES</b>", "━━━━━━━━━━━━━━━━━━━"]
+        btns = []
+        for m in matches:
+            opp_id = m.user2_id if m.user1_id == u.id else m.user1_id
+            opp = _label(opp_id)
+            won = (m.winner_id == u.id)
+            tied = (m.margin_type == "tie")
+            icon = "🏆" if won else ("🤝" if tied else "❌")
+            margin = ""
+            if m.margin_type == "tie":
+                margin = "Tied"
+            elif m.margin_type == "forfeit":
+                margin = "Forfeit"
+            elif m.margin_type and m.margin_value is not None:
+                margin = f"by {m.margin_value} {m.margin_type}"
+            score = ""
+            if m.inn1_runs is not None and m.inn2_runs is not None:
+                score = f" · {m.inn1_runs}/{m.inn1_wickets or 0} vs {m.inn2_runs}/{m.inn2_wickets or 0}"
+            when = m.completed_at.strftime("%d %b") if m.completed_at else ""
+            lines.append(f"{icon} vs {opp} — {margin}{score} <i>({when})</i>")
+            # Scorecard button (deep link into Mini App read-only scorecard)
+            if bot_username:
+                if miniapp_name:
+                    url = f"https://t.me/{bot_username}/{miniapp_name}?startapp=sc_{m.id}"
+                else:
+                    url = f"https://t.me/{bot_username}?start=sc_{m.id}"
+                btns.append([InlineKeyboardButton(
+                    f"📋 Scorecard: vs {opp} ({when})", url=url)])
+
+        kb = InlineKeyboardMarkup(btns) if btns else None
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML",
+                                        reply_markup=kb,
+                                        disable_web_page_preview=True)
+    except Exception:
+        logger.exception("recentmatches err")
+        await update.message.reply_text("❌ Couldn't load your recent matches.")
+    finally:
+        session.close()
+
+
 async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the user's most recent completed match by re-sending a summary
     and (if we still have it) the original result message id for a jump link."""
