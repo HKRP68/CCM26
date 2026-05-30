@@ -65,6 +65,38 @@
     <p style="color:var(--muted);font-size:.72rem;margin:.25rem 0 0;">Italicized, sits above the channel/group lines</p>
   </div>
 
+  <h3 style="margin:0 0 .8rem;font-size:1rem;">🔴 Official Group (buy restriction)</h3>
+  <div style="background:rgba(196,30,58,.05);border:1px solid rgba(196,30,58,.25);border-radius:8px;padding:1rem;margin-bottom:1.5rem;">
+    <p style="color:var(--muted);font-size:.78rem;margin:0 0 .8rem;line-height:1.5;">
+      When set, <code>/buypl</code> only allows purchases in this group. In any other group the bot shows the player + a "Join the GC to buy" button. DMs are unaffected. Leave the ID blank to disable the restriction.
+    </p>
+    <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Official group chat ID</label>
+    <input type="text" name="official_group_id" value="{{ cfg.official_group_id or '' }}"
+           placeholder="-1001234567890" maxlength="32"
+           style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:.6rem;">
+    <p style="color:var(--muted);font-size:.72rem;margin:0 0 .8rem;">
+      To find it: add the bot to your group and send <code>/start</code> there, or forward a group message to <code>@userinfobot</code>. Supergroup IDs start with <code>-100</code>.
+    </p>
+    <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Join link (button target)</label>
+    <input type="text" name="official_group_link" value="{{ cfg.official_group_link or '' }}"
+           placeholder="https://t.me/yourgroup" maxlength="200"
+           style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    <p style="color:var(--muted);font-size:.72rem;margin:.25rem 0 0;">If blank, falls back to the group username link above.</p>
+  </div>
+
+  <h3 style="margin:0 0 .8rem;font-size:1rem;">👋 Group Welcome Message</h3>
+  <div style="margin-bottom:1.5rem;">
+    <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Message sent when a new member joins a group</label>
+    <textarea name="welcome_message" rows="6" maxlength="2000"
+              placeholder="Leave blank to use the default message"
+              style="width:100%;padding:.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;resize:vertical;">{{ cfg.welcome_message or '' }}</textarea>
+    <p style="color:var(--muted);font-size:.72rem;margin:.35rem 0 0;line-height:1.5;">
+      Use <code>@User</code> (or <code>{name}</code>) to mention the new member — it becomes a real tap-able mention.
+      HTML allowed: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;a href&gt;</code>.
+      The "welcome surprise" button (→ /debut) is added automatically below your text.
+    </p>
+  </div>
+
   <h3 style="margin:0 0 .5rem;font-size:1rem;">🔍 Preview</h3>
   <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1.5rem;line-height:1.7;">
     {% if cfg.branding_tagline %}<div><em>{{ cfg.branding_tagline }}</em></div>{% endif %}

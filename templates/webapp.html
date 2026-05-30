@@ -52,6 +52,23 @@
   .appbar .logo {
     font-size: 1.4rem;
   }
+
+  /* Top community links bar */
+  .top-links {
+    position: sticky; top: 0; z-index: 49;
+    display: flex; gap: 0.5rem; padding: 0.5rem 0.8rem;
+    background: var(--card-2, #12201a);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .top-link {
+    flex: 1; text-align: center; white-space: nowrap;
+    background: rgba(0,212,170,0.08); border: 1px solid rgba(0,212,170,0.35);
+    color: var(--accent); text-decoration: none;
+    padding: 0.4rem 0.7rem; border-radius: 8px;
+    font-size: 0.8rem; font-weight: 700;
+  }
+  .top-link:active { background: rgba(0,212,170,0.18); }
   .appbar h1 {
     margin: 0; font-size: 1.05rem; letter-spacing: 0.05em;
     font-weight: 700; color: var(--accent);
@@ -490,19 +507,32 @@
     background: linear-gradient(145deg, #ff6b9d, #c41e6a 60%, #7a1142);
     box-shadow: 0 12px 40px rgba(255,107,157,0.4);
     display: flex; align-items: center; justify-content: center;
-    animation: packShake 0.8s ease-in-out infinite;
+    animation: packShake 0.6s ease-in-out infinite;
   }
-  .pack-anim-pack.bursting { animation: packBurst 0.5s ease-out forwards; }
+  .pack-anim-pack.bursting { animation: packBurst 0.55s ease-out forwards; }
   @keyframes packShake {
-    0%,100% { transform: rotate(-2deg) scale(1); }
-    25% { transform: rotate(2deg) scale(1.02); }
-    50% { transform: rotate(-1deg) scale(1.01); }
-    75% { transform: rotate(1.5deg) scale(1.02); }
+    0%,100% { transform: rotate(-3deg) scale(1); }
+    20% { transform: rotate(3deg) scale(1.03); }
+    40% { transform: rotate(-2deg) scale(1.01); }
+    60% { transform: rotate(2.5deg) scale(1.04); }
+    80% { transform: rotate(-2.5deg) scale(1.02); }
   }
   @keyframes packBurst {
-    0% { transform: scale(1); opacity: 1; }
-    40% { transform: scale(1.3); opacity: 1; }
-    100% { transform: scale(2.2); opacity: 0; }
+    0% { transform: scale(1) rotate(0); opacity: 1; }
+    30% { transform: scale(0.85) rotate(-4deg); opacity: 1; }
+    55% { transform: scale(1.5) rotate(3deg); opacity: 1; filter: brightness(2); }
+    100% { transform: scale(2.6) rotate(0); opacity: 0; filter: brightness(3); }
+  }
+  /* white flash that fills screen at the moment of burst */
+  .pack-flash {
+    position: fixed; inset: 0; z-index: 10500; pointer-events: none;
+    background: radial-gradient(circle at center, rgba(255,255,255,0.9), rgba(255,255,255,0) 60%);
+    opacity: 0; animation: packFlash 0.5s ease-out forwards;
+  }
+  @keyframes packFlash {
+    0% { opacity: 0; }
+    30% { opacity: 1; }
+    100% { opacity: 0; }
   }
   .pack-anim-emoji { font-size: 5rem; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3)); }
   .pack-anim-glow {
@@ -979,20 +1009,72 @@
   }
   .reward-banner {
     margin-top: 1.5rem;
-    padding: 1.25rem;
-    background: linear-gradient(135deg, rgba(212, 168, 42, 0.15), rgba(0, 212, 170, 0.1));
+    padding: 1.4rem 1.25rem;
+    background: linear-gradient(135deg, rgba(212, 168, 42, 0.18), rgba(0, 212, 170, 0.12));
     border: 1px solid var(--accent);
     border-radius: 14px;
     text-align: center;
-    animation: pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    position: relative; overflow: hidden;
+    animation: rewardReveal 0.6s cubic-bezier(0.34, 1.8, 0.5, 1);
+  }
+  .reward-banner.tier-rare { border-color: #4a9eff; box-shadow: 0 0 28px rgba(74,158,255,0.4); }
+  .reward-banner.tier-epic { border-color: #a78bfa; box-shadow: 0 0 32px rgba(167,139,250,0.5); }
+  .reward-banner.tier-legend {
+    border-color: #ffd966;
+    box-shadow: 0 0 40px rgba(255,217,102,0.6);
+    background: linear-gradient(135deg, rgba(255,217,102,0.25), rgba(255,140,0,0.15));
+  }
+  /* sweeping shine across the banner */
+  .reward-banner::after {
+    content: ''; position: absolute; top: 0; left: -60%;
+    width: 50%; height: 100%;
+    background: linear-gradient(110deg, transparent, rgba(255,255,255,0.35), transparent);
+    transform: skewX(-20deg);
+    animation: shine 1.1s ease-out 0.3s;
+  }
+  @keyframes shine { from { left: -60%; } to { left: 140%; } }
+  @keyframes rewardReveal {
+    0% { transform: scale(0.3) translateY(20px); opacity: 0; }
+    60% { transform: scale(1.08); opacity: 1; }
+    100% { transform: scale(1) translateY(0); opacity: 1; }
   }
   @keyframes pop {
     0% { transform: scale(0.5); opacity: 0; }
     100% { transform: scale(1); opacity: 1; }
   }
-  .reward-banner .emoji { font-size: 3rem; }
-  .reward-banner .label { font-size: 1.15rem; font-weight: 800; margin-top: 0.5rem; }
+  .reward-banner .emoji {
+    font-size: 3.4rem; display: inline-block;
+    animation: rewardEmoji 0.7s cubic-bezier(0.34, 1.8, 0.5, 1) 0.1s both;
+  }
+  @keyframes rewardEmoji {
+    0% { transform: scale(0) rotate(-30deg); }
+    60% { transform: scale(1.3) rotate(10deg); }
+    100% { transform: scale(1) rotate(0); }
+  }
+  .reward-banner .label { font-size: 1.2rem; font-weight: 800; margin-top: 0.5rem; }
   .reward-banner .detail { font-size: 0.95rem; color: var(--muted); margin-top: 0.4rem; }
+
+  /* ════ Confetti (shared: spin + pack reveal) ════ */
+  .confetti-layer {
+    position: fixed; inset: 0; pointer-events: none; z-index: 11000; overflow: hidden;
+  }
+  .confetti-piece {
+    position: absolute; top: -12px; width: 10px; height: 14px;
+    opacity: 0.95; will-change: transform;
+    animation: confettiFall linear forwards;
+  }
+  @keyframes confettiFall {
+    0% { transform: translateY(-20px) rotateZ(0deg); opacity: 1; }
+    100% { transform: translateY(100vh) rotateZ(720deg); opacity: 0.6; }
+  }
+  /* anticipation glow ring behind the wheel while spinning */
+  .wheel-outer.spinning {
+    box-shadow:
+      0 0 0 8px var(--card),
+      0 0 0 10px var(--accent),
+      0 0 50px rgba(212, 168, 42, 0.7),
+      0 0 90px rgba(255, 217, 102, 0.35);
+  }
 
   /* ════ Player detail modal ════ */
   .modal-backdrop {
@@ -1129,14 +1211,14 @@
   }
   .roster-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     gap: 0.55rem;
   }
   .roster-item {
     background: var(--card-2);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 0.65rem;
+    padding: 0.7rem 0.85rem;
     position: relative;
   }
   .roster-item.captain { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
@@ -1183,6 +1265,177 @@
     font-family: inherit;
   }
   .release-btn:active { background: rgba(255, 77, 109, 0.25); }
+
+  /* Roster item — single-row layout */
+  .roster-item-main { display: flex; align-items: center; gap: 0.5rem; }
+  .roster-chevron { font-size: 1.6rem; color: var(--muted); line-height: 1; }
+
+  /* Player detail screen */
+  /* ════ Live PvP match board ════ */
+  .lm-scorebar {
+    position: sticky; top: 0; z-index: 5;
+    background: linear-gradient(135deg, #16241c, var(--card));
+    border: 1px solid var(--accent); border-radius: 12px;
+    padding: 0.7rem 0.9rem; margin-bottom: 0.7rem;
+  }
+  .lm-teams { display: flex; justify-content: space-between; align-items: baseline; }
+  .lm-bat-team { font-weight: 800; font-size: 0.95rem; }
+  .lm-score { font-size: 1.6rem; font-weight: 900; }
+  .lm-overs { font-size: 0.78rem; color: var(--muted); }
+  .lm-target { font-size: 0.74rem; color: var(--accent); margin-top: 0.2rem; }
+  .lm-batters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
+  .lm-batter {
+    flex: 1; background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.5rem 0.6rem;
+  }
+  .lm-batter.on-strike { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .lm-batter .nm { font-weight: 700; font-size: 0.82rem; }
+  .lm-batter .rn { font-size: 0.95rem; font-weight: 800; }
+  .lm-batter .sub { font-size: 0.66rem; color: var(--muted); }
+  .lm-bowler {
+    background: var(--card-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.5rem 0.7rem; margin-bottom: 0.6rem; font-size: 0.82rem;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .lm-timeline { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+  .lm-tl-ball {
+    width: 26px; height: 26px; border-radius: 50%; font-size: 0.7rem;
+    display: flex; align-items: center; justify-content: center; font-weight: 700;
+    background: var(--card-2); border: 1px solid var(--border);
+  }
+  .lm-panel {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.9rem; margin-bottom: 0.7rem;
+  }
+  .lm-panel-title { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }
+  .lm-shot-grid, .lm-opt-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;
+  }
+  .lm-shot-btn, .lm-opt-btn {
+    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 0.7rem 0.4rem; font-family: inherit;
+    font-size: 0.8rem; font-weight: 700; cursor: pointer;
+  }
+  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--accent); color: #0a0f1a; }
+  .lm-opt-btn.selected { background: var(--accent); color: #0a0f1a; }
+  .lm-delivery-banner {
+    text-align: center; padding: 1.1rem; border-radius: 12px;
+    background: linear-gradient(135deg, rgba(255,77,109,0.15), rgba(212,168,42,0.1));
+    border: 1px solid var(--accent); margin-bottom: 0.8rem;
+    animation: pop 0.4s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .lm-delivery-banner .dl { font-size: 1.2rem; font-weight: 900; }
+  .lm-delivery-banner .sp { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+  .lm-waiting {
+    text-align: center; padding: 1.5rem 1rem; color: var(--muted);
+  }
+  .lm-waiting .big { font-size: 2.4rem; margin-bottom: 0.4rem; }
+  .lm-dropdown {
+    width: 100%; padding: 0.65rem; background: var(--input-bg);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+    font-family: inherit; font-size: 0.88rem; margin-bottom: 0.6rem;
+  }
+  .lm-ball-result {
+    text-align: center; padding: 1rem; border-radius: 12px; margin-bottom: 0.7rem;
+    font-size: 1.1rem; font-weight: 800;
+    background: var(--card-2); border: 1px solid var(--accent);
+    animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .lm-role-badge {
+    display: inline-block; font-size: 0.66rem; font-weight: 800;
+    padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem;
+  }
+  .lm-role-bat { background: var(--green); color: #0a0f1a; }
+  .lm-role-bowl { background: #4a9eff; color: #0a0f1a; }
+  .lm-role-spec { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
+
+  /* Scorecard drawer */
+  .lm-drawer-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 300;
+  }
+  .lm-drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 301;
+    background: var(--card); border-top: 2px solid var(--accent);
+    border-radius: 18px 18px 0 0; padding: 0.8rem 1rem 1.4rem;
+    max-height: 78vh; overflow-y: auto;
+    transform: translateY(100%); transition: transform 0.3s ease;
+  }
+  .lm-drawer.open { transform: translateY(0); }
+  .lm-drawer-handle {
+    width: 40px; height: 4px; border-radius: 2px; background: var(--muted);
+    margin: 0 auto 0.7rem; opacity: 0.5; cursor: pointer;
+  }
+  .lm-drawer-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.8rem; }
+  .lm-drawer-tab {
+    flex: 1; padding: 0.5rem; background: var(--card-2); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
+    font-size: 0.8rem; font-weight: 700; cursor: pointer;
+  }
+  .lm-drawer-tab.active { background: var(--accent); color: #0a0f1a; }
+  .lm-sc-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 0.9rem; }
+  .lm-sc-table th { text-align: left; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); }
+  .lm-sc-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
+  .lm-sc-table td.num { text-align: right; font-weight: 700; }
+  .lm-sc-out { font-size: 0.66rem; color: var(--muted); }
+  .lm-sc-fab {
+    position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 100;
+    background: var(--accent); color: #0a0f1a; border: none;
+    border-radius: 50px; padding: 0.7rem 1.1rem; font-weight: 800;
+    font-family: inherit; font-size: 0.85rem; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+
+  .pd-hero {
+    text-align: center; padding: 1.2rem 1rem;
+    background: linear-gradient(135deg, rgba(212,168,42,0.1), rgba(0,212,170,0.06));
+    border: 1px solid var(--border); border-radius: 14px; margin-bottom: 0.9rem;
+  }
+  .pd-rating { font-size: 2.6rem; font-weight: 900; line-height: 1; }
+  .pd-name { font-size: 1.3rem; font-weight: 800; margin-top: 0.3rem; }
+  .pd-meta { color: var(--muted); font-size: 0.82rem; margin-top: 0.25rem; }
+  .pd-version-tag {
+    display: inline-block; margin-top: 0.4rem; background: rgba(167,139,250,0.18);
+    color: #a78bfa; font-size: 0.72rem; font-weight: 800; padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+  }
+  .pd-section { margin-bottom: 0.9rem; }
+  .pd-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.7rem; }
+  .pd-tab {
+    flex: 1; padding: 0.5rem; background: var(--card); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
+    font-size: 0.8rem; font-weight: 600; cursor: pointer;
+  }
+  .pd-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .pd-stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;
+  }
+  .pd-stat {
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.6rem; text-align: center;
+  }
+  .pd-stat-val { font-size: 1.2rem; font-weight: 800; }
+  .pd-stat-label { font-size: 0.64rem; color: var(--muted); text-transform: uppercase; margin-top: 0.15rem; }
+  .pd-match-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem;
+  }
+  .pd-match-row:last-child { border-bottom: none; }
+  .pd-trait {
+    display: flex; align-items: center; gap: 0.6rem;
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.6rem 0.7rem; margin-bottom: 0.5rem;
+  }
+  .pd-trait-info { flex: 1; }
+  .pd-trait-name { font-weight: 700; font-size: 0.88rem; }
+  .pd-trait-lvl { font-size: 0.7rem; color: var(--accent); }
+  .pd-trait-desc { font-size: 0.7rem; color: var(--muted); margin-top: 0.1rem; }
+  .pd-mini-btn {
+    border: none; border-radius: 6px; padding: 0.35rem 0.6rem;
+    font-family: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer;
+  }
+  .pd-btn-up { background: rgba(167,139,250,0.2); color: #a78bfa; }
+  .pd-btn-rm { background: rgba(255,77,109,0.15); color: var(--red); }
+  .pd-btn-add { background: var(--green); color: #0a0f1a; }
   .link-btn {
     background: var(--card);
     color: var(--text);
@@ -1413,10 +1666,14 @@
   </div>
 </div>
 
+<!-- Top community links (channel + official group) — populated from init -->
+<div class="top-links" id="top-links" style="display:none;"></div>
+
 <div class="toast-container" id="toasts"></div>
 
 <!-- ════ Home / Dashboard screen ════ -->
 <div class="screen active" id="screen-home">
+  <div id="resume-match-banner" style="display:none;"></div>
   <div class="greeting">
     <p class="hi">Welcome back,</p>
     <p class="name" id="user-name">…</p>
@@ -1679,7 +1936,6 @@
       ☑️ Select
     </button>
     <button class="link-btn" onclick="navigate('xi')">👥 Manage XI</button>
-    <button class="link-btn" onclick="navigate('market')">🌟 Market</button>
   </div>
   <div id="squad-bulk-bar" style="display:none;background:rgba(212,168,42,0.12);border:1px solid var(--accent);border-radius:8px;padding:0.6rem 0.75rem;margin-bottom:0.65rem;align-items:center;gap:0.6rem;">
     <span style="flex:1;font-size:0.85rem;"><b id="squad-bulk-count">0</b> selected · <b id="squad-bulk-coins">0</b> 🪙</span>
@@ -2037,9 +2293,9 @@
     <div class="icon">🎡</div>
     <div>Spin</div>
   </button>
-  <button class="tab" data-screen="browse" onclick="navigate('browse')">
-    <div class="icon">📚</div>
-    <div>Browse</div>
+  <button class="tab" data-screen="market" onclick="navigate('market')">
+    <div class="icon">🌟</div>
+    <div>Market</div>
   </button>
   <button class="tab" data-screen="roster" onclick="navigate('roster')">
     <div class="icon">👥</div>
@@ -2058,6 +2314,31 @@
     <div class="modal-grab"></div>
     <div id="modal-body"></div>
   </div>
+</div>
+
+<!-- ════ Player detail screen ════ -->
+<div class="screen" id="screen-playerdetail">
+  <div style="margin-bottom:0.6rem;">
+    <button class="link-btn" onclick="navigate('roster')">← Squad</button>
+  </div>
+  <div id="playerdetail-content"><div class="empty"><div class="spinner"></div></div></div>
+</div>
+
+<!-- ════ LIVE MATCH screen (PvP via Mini App) ════ -->
+<div class="screen" id="screen-livematch">
+  <div id="livematch-content"><div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading match…</div></div></div>
+</div>
+
+<!-- Scorecard drawer (sliding bottom sheet) -->
+<div id="lm-drawer-backdrop" class="lm-drawer-backdrop" style="display:none;" onclick="closeScorecard()"></div>
+<div id="lm-drawer" class="lm-drawer">
+  <div class="lm-drawer-handle" onclick="closeScorecard()"></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+    <h3 style="margin:0;font-size:1.05rem;">📋 Scorecard</h3>
+    <button class="link-btn" onclick="closeScorecard()">✕</button>
+  </div>
+  <div id="lm-drawer-tabs" class="lm-drawer-tabs"></div>
+  <div id="lm-drawer-body"></div>
 </div>
 
 <!-- ════ Player upgrade modal ════ -->
@@ -2150,6 +2431,10 @@ function hapticNotif(type = 'success') {
 // ════════════════ Navigation ════════════════
 function navigate(screen) {
   haptic('light');
+  // Stop live-match polling whenever we leave that screen
+  if (currentScreen === 'livematch' && screen !== 'livematch') {
+    stopMatchPolling();
+  }
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById('screen-' + screen);
   if (!target) return;
@@ -2254,12 +2539,53 @@ async function refreshDashboard() {
   // Active events banner
   updateEventBanner(data.events || []);
 
+  // Top community links (channel + official group)
+  renderTopLinks(data.branding || {});
+
+  // Resume live match banner
+  renderResumeBanner(data.live_match || null);
+
   // Season tile sub
   if (data.season && data.season.me) {
     const sub = document.getElementById('season-tile-sub');
     if (sub && data.season.me.rank) sub.textContent = `Rank #${data.season.me.rank}`;
   }
   window._seasonInfo = data.season || null;
+}
+
+function renderResumeBanner(lm) {
+  const el = document.getElementById('resume-match-banner');
+  if (!el) return;
+  if (!lm || !lm.match_id) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div style="background:linear-gradient(135deg,rgba(255,77,109,0.18),rgba(212,168,42,0.12));
+                border:1px solid var(--accent);border-radius:12px;padding:0.8rem 1rem;margin-bottom:0.8rem;
+                display:flex;align-items:center;gap:0.7rem;">
+      <div style="font-size:1.6rem;">🏏</div>
+      <div style="flex:1;">
+        <div style="font-weight:800;font-size:0.9rem;">Live match in progress</div>
+        <div style="font-size:0.74rem;color:var(--muted);">${escapeHtml(lm.bat_team)} vs ${escapeHtml(lm.bowl_team)}</div>
+      </div>
+      <button class="spin-button" style="padding:0.5rem 0.9rem;font-size:0.82rem;" onclick="openLiveMatch(${lm.match_id})">▶ Resume</button>
+    </div>
+  `;
+}
+
+function renderTopLinks(branding) {
+  const el = document.getElementById('top-links');
+  if (!el) return;
+  if (!branding || !branding.has_any) { el.style.display = 'none'; return; }
+  const links = [];
+  if (branding.channel_username && branding.channel_link) {
+    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" onclick="openBrandingLink(event,'${escapeHtmlAttr(branding.channel_link)}')">📢 ${escapeHtml(branding.channel_label || 'Channel')}</a>`);
+  }
+  if (branding.group_username && branding.group_link) {
+    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.group_link)}" target="_blank" onclick="openBrandingLink(event,'${escapeHtmlAttr(branding.group_link)}')">💬 ${escapeHtml(branding.group_label || 'Group')}</a>`);
+  }
+  if (!links.length) { el.style.display = 'none'; return; }
+  el.innerHTML = links.join('');
+  el.style.display = 'flex';
 }
 
 function updateEventBanner(events) {
@@ -3068,8 +3394,11 @@ async function onSpinClick() {
   wheel.style.transform = 'rotate(0deg)';
   // Force reflow so the next transition triggers
   void wheel.offsetWidth;
+  wheel.classList.add('spinning');  // anticipation glow
   wheel.style.transition = 'transform 2.5s cubic-bezier(0.17, 0.67, 0.32, 1.34)';
   wheel.style.transform = `rotate(${landingDeg}deg)`;
+  // Build-up haptic ticks as the wheel slows
+  [400, 900, 1400, 1800, 2100, 2300].forEach(t => setTimeout(() => haptic('light'), t));
 
   const apiPromise = api('/api/webapp/spin', { ad_token: adToken });
   const minAnimation = new Promise(r => setTimeout(r, 2500));
@@ -3080,6 +3409,8 @@ async function onSpinClick() {
   const { ok, data } = apiResult;
 
   isSpinning = false;
+  const _wheelEl = document.getElementById('wheel');
+  if (_wheelEl) _wheelEl.classList.remove('spinning');
   if (!ok) {
     toast(data.message || 'Spin failed', 'error');
     hapticNotif('error');
@@ -3141,6 +3472,46 @@ async function showAd() {
   return 'MOCK-' + Date.now();
 }
 
+// Celebration confetti — bursts from top, falls down. count scales with tier.
+function launchConfetti(count = 60, tier = '') {
+  const colors = tier === 'legend'
+    ? ['#ffd966', '#ff8c00', '#fff2b3', '#ffb347']
+    : tier === 'epic'
+    ? ['#a78bfa', '#7c5ce0', '#c4b5fd', '#ffd966']
+    : ['#ffd966', '#00d4aa', '#4a9eff', '#ff4d6d', '#a78bfa'];
+  const layer = document.createElement('div');
+  layer.className = 'confetti-layer';
+  document.body.appendChild(layer);
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-piece';
+    const c = colors[i % colors.length];
+    p.style.background = c;
+    p.style.left = Math.random() * 100 + 'vw';
+    p.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
+    const dur = 1.6 + Math.random() * 1.6;
+    p.style.animationDuration = dur + 's';
+    p.style.animationDelay = (Math.random() * 0.3) + 's';
+    p.style.transform = `scale(${0.6 + Math.random() * 0.9})`;
+    layer.appendChild(p);
+  }
+  setTimeout(() => layer.remove(), 3600);
+}
+
+// Map a reward to a celebration tier (drives glow + confetti intensity)
+function rewardTier(r) {
+  if (r.type === 'player') {
+    const rt = r.player_rating || 0;
+    if (rt >= 90) return 'legend';
+    if (rt >= 85) return 'epic';
+    if (rt >= 80) return 'rare';
+    return '';
+  }
+  if (r.type === 'gems' || r.type === 'pack') return 'epic';
+  if (r.type === 'coins' && (r.amount || 0) >= 5000) return 'rare';
+  return '';
+}
+
 function showReward(r) {
   const el = document.getElementById('spin-result');
   let detail = '';
@@ -3151,13 +3522,22 @@ function showReward(r) {
     if (r.squad_full) detail = `🎉 ${r.player_name} (${r.player_rating}) — but squad is full!`;
     else detail = `🎉 ${r.player_name} (${r.player_rating}) added to squad!`;
   } else if (r.type === 'pack') detail = `🎁 Pack added to inventory`;
+
+  const tier = rewardTier(r);
+  const tierClass = tier ? `tier-${tier}` : '';
   el.innerHTML = `
-    <div class="reward-banner">
+    <div class="reward-banner ${tierClass}">
+      ${tier === 'legend' ? '<div style="font-size:0.7rem;font-weight:800;color:#ffd966;letter-spacing:0.1em;">⭐ LEGENDARY PULL ⭐</div>' : ''}
       <div class="emoji">${r.emoji || '🎁'}</div>
       <div class="label">${r.label}</div>
       <div class="detail">${detail}</div>
     </div>
   `;
+  // Celebration: confetti scaled to tier
+  if (tier === 'legend') launchConfetti(120, 'legend');
+  else if (tier === 'epic') launchConfetti(90, 'epic');
+  else if (tier === 'rare') launchConfetti(60, 'rare');
+  else launchConfetti(40);
 }
 
 // ════════════════ Browse (players with filters) ════════════════
@@ -3452,18 +3832,22 @@ function renderSquadList() {
   }
   el.innerHTML = `<div class="roster-grid">${cachedRoster.map(r => `
     <div class="roster-item ${r.is_captain ? 'captain' : ''} ${squadSelected.has(r.roster_id) ? 'selected' : ''}"
-         ${squadSelectMode ? `onclick="toggleSquadSelection(${r.roster_id})"` : ''}
-         style="${squadSelectMode ? 'cursor:pointer;' : ''}">
+         ${squadSelectMode ? `onclick="toggleSquadSelection(${r.roster_id})"` : `onclick="openPlayerDetail(${r.roster_id})"`}
+         style="cursor:pointer;">
       ${r.is_captain ? '<div class="captain-tag">CAPT</div>' : ''}
       ${squadSelectMode ? `<div class="select-mark">${squadSelected.has(r.roster_id) ? '✅' : '⬜'}</div>` : ''}
-      <div class="pos">#${r.position} · ${ratingBadge(r.rating)}</div>
-      <div class="name">${escapeHtml(r.name)}</div>
-      <div class="meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}</div>
-      <div class="sell-row">
-        <span class="sell-val">+${r.sell_value.toLocaleString()} 🪙</span>
-        ${!squadSelectMode ? `<button class="upgrade-btn" onclick="event.stopPropagation(); openUpgrade(${r.roster_id}, '${escapeHtmlAttr(r.name)}')">⬆️ Upgrade</button>` : ''}
-        ${(!squadSelectMode && !r.is_captain) ? `<button class="release-btn" onclick="event.stopPropagation(); releaseOne(${r.roster_id}, '${escapeHtmlAttr(r.name)}', ${r.sell_value})">✕ Release</button>` : ''}
+      <div class="roster-item-main">
+        <div style="flex:1;">
+          <div class="pos">#${r.position} · ${ratingBadge(r.rating)}</div>
+          <div class="name">${escapeHtml(r.name)}</div>
+          <div class="meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}${r.version && r.version !== 'Base' ? ` · <span style="color:var(--accent);">${escapeHtml(r.version)}</span>` : ''}</div>
+        </div>
+        ${!squadSelectMode ? '<div class="roster-chevron">›</div>' : ''}
       </div>
+      ${!squadSelectMode ? `<div class="sell-row">
+        <span class="sell-val">Sell +${r.sell_value.toLocaleString()} 🪙</span>
+        ${!r.is_captain ? `<button class="release-btn" onclick="event.stopPropagation(); releaseOne(${r.roster_id}, '${escapeHtmlAttr(r.name)}', ${r.sell_value})">✕ Release</button>` : ''}
+      </div>` : ''}
     </div>
   `).join('')}</div>`;
   updateSquadBulkBar();
@@ -3987,35 +4371,8 @@ async function loadInvite() {
     `;
   }
 
-  // Branding footer (channel + group)
-  const branding = data.branding || {};
-  let brandingBlock = '';
-  if (branding.has_any) {
-    const parts = [];
-    if (branding.tagline) {
-      parts.push(`<div style="font-style:italic;color:var(--muted);margin-bottom:0.5rem;font-size:0.85rem;">${escapeHtml(branding.tagline)}</div>`);
-    }
-    if (branding.channel_username) {
-      parts.push(`<a href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" class="brand-link" onclick="openBrandingLink(event, '${escapeHtmlAttr(branding.channel_link)}')">
-        📢 <b>@${escapeHtml(branding.channel_username)}</b>
-        <span style="color:var(--muted);">— ${escapeHtml(branding.channel_label || 'official channel')}</span>
-      </a>`);
-    }
-    if (branding.group_username) {
-      parts.push(`<a href="${escapeHtmlAttr(branding.group_link)}" target="_blank" class="brand-link" onclick="openBrandingLink(event, '${escapeHtmlAttr(branding.group_link)}')">
-        💬 <b>@${escapeHtml(branding.group_username)}</b>
-        <span style="color:var(--muted);">— ${escapeHtml(branding.group_label || 'official group')}</span>
-      </a>`);
-    }
-    brandingBlock = `
-      <div class="card" style="margin-bottom:0.7rem;background:rgba(0,212,170,0.04);border-color:rgba(0,212,170,0.3);">
-        <p class="card-title">🌟 Join our community</p>
-        ${parts.join('')}
-      </div>
-    `;
-  }
-
-  el.innerHTML = compBlock + myStats + codeBlock + linkBlock + redeemBlock + lbBlock + invitesBlock + brandingBlock;
+  // Branding now lives in the top links bar (rendered globally), not here.
+  el.innerHTML = compBlock + myStats + codeBlock + linkBlock + redeemBlock + lbBlock + invitesBlock;
 }
 
 function copyInviteCode() {
@@ -4370,6 +4727,11 @@ function showFreePackReveal(player, band) {
     </div>
   `;
   document.body.appendChild(overlay);
+  // Celebrate based on pull quality
+  if (tier === 'elite') launchConfetti(110, 'epic');
+  else if (tier === 'rare') launchConfetti(70, 'rare');
+  else launchConfetti(45);
+  hapticNotif('success');
 }
 
 function closeFreePackReveal() {
@@ -4530,8 +4892,20 @@ function revealPackCards() {
   const cards = document.getElementById('pack-open-cards');
   const doneBtn = document.getElementById('pack-open-done');
 
-  // Burst the pack
+  // Burst the pack + screen flash
   pack.classList.add('bursting');
+  const flash = document.createElement('div');
+  flash.className = 'pack-flash';
+  document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 520);
+
+  // Best card in the pack drives the celebration intensity
+  const allPlayers = pendingRevealPlayers.players || [];
+  const bestRating = allPlayers.reduce((m, p) => Math.max(m, p.rating || 0), 0);
+  const packTier = bestRating >= 84 ? 'epic' : (bestRating >= 81 ? 'rare' : '');
+  if (packTier === 'epic') launchConfetti(110, 'epic');
+  else if (packTier === 'rare') launchConfetti(70, 'rare');
+  else launchConfetti(45);
 
   setTimeout(() => {
     pack.style.display = 'none';
@@ -4809,8 +5183,12 @@ async function doUpgrade(targetPlayerId, cost) {
   hapticNotif('success');
   closeUpgrade();
   refreshDashboard();
-  if (typeof loadSquad === 'function') loadSquad();
-  else if (typeof loadRoster === 'function') loadRoster();
+  // If we're on the player detail screen, refresh it; else refresh roster
+  if (document.getElementById('screen-playerdetail').classList.contains('active') && pdRosterId) {
+    openPlayerDetail(pdRosterId);
+  } else if (typeof loadRoster === 'function') {
+    loadRoster();
+  }
 }
 
 function closeUpgrade() {
@@ -5015,14 +5393,658 @@ async function kickMember(userId, name) {
   loadClubs();
 }
 
+// ════════════════ Player detail screen ════════════════
+let pdData = null;
+let pdTab = 'stats';
+let pdRosterId = null;
+
+async function openPlayerDetail(rosterId) {
+  haptic('light');
+  pdRosterId = rosterId;
+  pdTab = 'stats';
+  navigate('playerdetail');
+  const el = document.getElementById('playerdetail-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/player-detail', { roster_id: rosterId });
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    return;
+  }
+  pdData = data;
+  renderPlayerDetail();
+}
+
+function renderPlayerDetail() {
+  const el = document.getElementById('playerdetail-content');
+  const d = pdData;
+  if (!d) return;
+  const p = d.player;
+
+  const hero = `
+    <div class="pd-hero">
+      <div class="pd-rating">${p.rating}</div>
+      <div style="font-size:0.65rem;color:var(--muted);">OVR</div>
+      <div class="pd-name">${escapeHtml(p.name)}</div>
+      <div class="pd-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)} · 🏏${p.bat_rating} ⚾${p.bowl_rating}</div>
+      ${p.version && p.version !== 'Base' ? `<div class="pd-version-tag">${escapeHtml(p.version)}</div>` : ''}
+    </div>
+    ${d.upgrade_available ? `
+      <button class="spin-button" style="width:100%;margin-bottom:0.9rem;background:linear-gradient(135deg,#a78bfa,#7c5ce0);"
+              onclick="openUpgrade(${p.roster_id}, '${escapeHtmlAttr(p.name)}')">
+        ⬆️ Upgrade this player (higher version available)
+      </button>` : ''}
+  `;
+
+  const tabs = `
+    <div class="pd-tabs">
+      <button class="pd-tab ${pdTab==='stats'?'active':''}" onclick="setPdTab('stats')">📊 Stats</button>
+      <button class="pd-tab ${pdTab==='last10'?'active':''}" onclick="setPdTab('last10')">🏏 Last 10</button>
+      <button class="pd-tab ${pdTab==='traits'?'active':''}" onclick="setPdTab('traits')">✨ Traits</button>
+    </div>
+  `;
+
+  let body = '';
+  if (pdTab === 'stats') body = renderPdStats(d.stats);
+  else if (pdTab === 'last10') body = renderPdLast10(d.last10);
+  else body = renderPdTraits(d);
+
+  el.innerHTML = hero + tabs + `<div id="pd-tab-body">${body}</div>`;
+}
+
+function setPdTab(t) { pdTab = t; renderPlayerDetail(); }
+
+function renderPdStats(st) {
+  if (!st || !st.has_stats) {
+    return `<div class="empty" style="padding:1.5rem;"><div class="icon">📊</div>No match stats yet.<br><span style="font-size:0.8rem;">Play matches with this player to build a record.</span></div>`;
+  }
+  const cell = (v, l) => `<div class="pd-stat"><div class="pd-stat-val">${v}</div><div class="pd-stat-label">${l}</div></div>`;
+  let html = `<div class="pd-section"><p class="card-title">🏏 Batting</p><div class="pd-stat-grid">
+    ${cell(st.runs, 'Runs')}
+    ${cell(st.bat_avg, 'Average')}
+    ${cell(st.strike_rate, 'Strike Rate')}
+    ${cell(st.bat_inns, 'Innings')}
+    ${cell((st.highest_score||0) + (st.highest_not_out ? '*' : ''), 'Highest')}
+    ${cell(st.hundreds + 'x', '100s')}
+    ${cell(st.fifties + 'x', '50s')}
+    ${cell(st.fours, '4s')}
+    ${cell(st.sixes, '6s')}
+  </div></div>`;
+  if ((st.bowl_inns||0) > 0 || (st.wickets_taken||0) > 0) {
+    html += `<div class="pd-section"><p class="card-title">⚾ Bowling</p><div class="pd-stat-grid">
+      ${cell(st.wickets_taken, 'Wickets')}
+      ${cell(st.runs_conceded, 'Runs Con.')}
+      ${cell(st.bowl_inns, 'Innings')}
+      ${cell(st.best_bowl, 'Best')}
+      ${cell(st.three_fers + 'x', '3+ W')}
+      ${cell(st.five_fers + 'x', '5+ W')}
+    </div></div>`;
+  }
+  html += `<div class="pd-section"><div class="pd-stat-grid">${cell('🏅 ' + st.potm, 'POTM')}</div></div>`;
+  return html;
+}
+
+function renderPdLast10(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="empty" style="padding:1.5rem;"><div class="icon">🏏</div>No recent matches.</div>`;
+  }
+  return `<div class="card" style="padding:0.4rem 0.8rem;">` + rows.map((m, i) => {
+    const parts = [];
+    if (m.bat) parts.push(`🏏 ${m.bat}`);
+    if (m.bowl) parts.push(`⚾ ${m.bowl}`);
+    const perf = parts.length ? parts.join(' · ') : 'DNB';
+    const dt = m.when ? new Date(m.when).toLocaleDateString() : '';
+    return `<div class="pd-match-row">
+      <div style="width:1.5rem;color:var(--muted);font-size:0.75rem;">${i+1}</div>
+      <div style="flex:1;">${perf}</div>
+      <div style="color:var(--muted);font-size:0.7rem;">${dt}</div>
+    </div>`;
+  }).join('') + `</div>`;
+}
+
+function renderPdTraits(d) {
+  let html = `<div class="pd-section">
+    <p class="card-title">✨ Equipped (${d.trait_slots.used}/${d.trait_slots.max})</p>`;
+  if (!d.traits.length) {
+    html += `<div class="empty" style="padding:0.8rem;"><span style="font-size:0.82rem;">No traits equipped. Add one from your inventory below.</span></div>`;
+  } else {
+    html += d.traits.map(t => `
+      <div class="pd-trait">
+        <div style="font-size:1.4rem;">${escapeHtml(t.emoji)}</div>
+        <div class="pd-trait-info">
+          <div class="pd-trait-name">${escapeHtml(t.name)} <span class="pd-trait-lvl">Lv.${t.level}/${t.max_level}</span></div>
+          <div class="pd-trait-desc">${escapeHtml(t.description)}</div>
+        </div>
+        ${t.can_upgrade ? `<button class="pd-mini-btn pd-btn-up" onclick="pdUpgradeTrait(${t.player_trait_id}, ${t.upgrade_cost})">⬆️ ${t.upgrade_cost}💎</button>` : ''}
+        <button class="pd-mini-btn pd-btn-rm" onclick="pdRemoveTrait(${t.player_trait_id})">✕</button>
+      </div>
+    `).join('');
+  }
+  html += `</div>`;
+
+  // Inventory (available to add)
+  html += `<div class="pd-section"><p class="card-title">🎒 Your trait inventory</p>`;
+  if (!d.inventory.length) {
+    html += `<div class="empty" style="padding:0.8rem;"><span style="font-size:0.82rem;">No spare traits. Buy from the Trait Shop (/tshop in the bot).</span></div>`;
+  } else if (d.trait_slots.full) {
+    html += `<p style="color:var(--muted);font-size:0.78rem;">Trait slots full. Remove one to add another.</p>`;
+    html += d.inventory.map(t => pdInvRow(t, true)).join('');
+  } else {
+    html += d.inventory.map(t => pdInvRow(t, false)).join('');
+  }
+  html += `</div>`;
+  return html;
+}
+
+function pdInvRow(t, disabled) {
+  return `<div class="pd-trait">
+    <div style="font-size:1.4rem;">${escapeHtml(t.emoji)}</div>
+    <div class="pd-trait-info">
+      <div class="pd-trait-name">${escapeHtml(t.name)} <span class="pd-trait-lvl">Lv.${t.level}</span></div>
+      <div class="pd-trait-desc">${escapeHtml(t.description)}</div>
+    </div>
+    ${t.already_on_player
+      ? `<span style="font-size:0.7rem;color:var(--muted);">on player</span>`
+      : (disabled
+          ? `<button class="pd-mini-btn" style="opacity:0.4;" disabled>Add</button>`
+          : `<button class="pd-mini-btn pd-btn-add" onclick="pdApplyTrait(${t.inventory_id})">+ Add</button>`)}
+  </div>`;
+}
+
+async function pdApplyTrait(inventoryId) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/trait/apply', { roster_id: pdRosterId, inventory_id: inventoryId });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  toast(data.message, 'success'); hapticNotif('success');
+  openPlayerDetail(pdRosterId);
+}
+
+async function pdRemoveTrait(ptId) {
+  if (!confirm('Remove this trait? It returns to your inventory.')) return;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/trait/remove', { player_trait_id: ptId });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  toast('Trait removed', 'success');
+  openPlayerDetail(pdRosterId);
+}
+
+async function pdUpgradeTrait(ptId, cost) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/trait/upgrade', { player_trait_id: ptId });
+  if (!ok) { toast(data.message || 'Failed', 'error'); hapticNotif('error'); return; }
+  toast(data.message, 'success'); hapticNotif('success');
+  refreshDashboard();
+  openPlayerDetail(pdRosterId);
+}
+
+// ════════════════ Live PvP match (Mini App game board) ════════════════
+let lmMatchId = null;
+let lmPollTimer = null;
+let lmPollInterval = 2500;
+let lmLastBallSeq = -1;
+let lmLastSig = '';
+let lmForceRender = false;
+let lmSelectedVariation = null;
+let lmLastResultHtml = '';
+
+function openLiveMatch(matchId) {
+  lmMatchId = matchId;
+  lmLastBallSeq = -1;
+  lmSelectedVariation = null;
+  navigate('livematch');
+  document.getElementById('livematch-content').innerHTML =
+    `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Joining match…</div></div>`;
+  // Ensure state exists (init is idempotent + participant-guarded)
+  api('/api/webapp/match/init', { match_id: matchId }).then(() => {
+    pollMatch();
+    startMatchPolling();
+  });
+}
+
+function startMatchPolling() {
+  stopMatchPolling();
+  lmPollTimer = setInterval(pollMatch, 2500);
+}
+function stopMatchPolling() {
+  if (lmPollTimer) { clearInterval(lmPollTimer); lmPollTimer = null; }
+}
+
+function _lmReschedule(myTurn) {
+  // Poll faster when it's my turn (snappy), slower while waiting (cheap).
+  const want = myTurn ? 1200 : 3500;
+  if (lmPollInterval !== want) {
+    lmPollInterval = want;
+    if (lmPollTimer) { clearInterval(lmPollTimer); }
+    lmPollTimer = setInterval(pollMatch, want);
+  }
+}
+
+async function pollMatch() {
+  if (!lmMatchId || currentScreen !== 'livematch') return;
+  const { ok, data } = await api('/api/webapp/match/state', { match_id: lmMatchId });
+  if (!ok) {
+    document.getElementById('livematch-content').innerHTML =
+      `<div class="lm-waiting"><div class="big">🏁</div>This match has ended or is no longer available.
+       <div style="margin-top:1rem;"><button class="spin-button" onclick="navigate('home')">Back home</button></div></div>`;
+    stopMatchPolling();
+    return;
+  }
+  // Whose turn is it for me? (drives poll cadence)
+  const myTurn = (data.role === 'bowler' && (data.turn === 'bowler')) ||
+                 (data.role === 'batsman' && (data.turn === 'batsman')) ||
+                 (data.setup && data.setup !== 'DONE' &&
+                   ((data.role === 'batsman' && data.setup === 'AWAIT_OPENERS') ||
+                    (data.role === 'bowler' && data.setup === 'AWAIT_BOWLER') ||
+                    (data.setup === 'AWAIT_READY')));
+  _lmReschedule(myTurn);
+
+  // Skip re-render if nothing changed AND no local UI state pending — avoids
+  // rebuilding the DOM under the user's finger mid-tap. We still re-render
+  // when it's a setup phase (dropdowns) or our own turn changed.
+  const sig = `${data.ball_seq}|${data.setup}|${data.next_action}|${data.role}`;
+  if (sig === lmLastSig && !lmForceRender) return;
+  lmLastSig = sig;
+  lmForceRender = false;
+  renderLiveMatch(data);
+}
+
+function renderLiveMatch(s) {
+  const el = document.getElementById('livematch-content');
+  const role = s.role;
+  const roleBadge = role === 'batsman'
+    ? '<span class="lm-role-badge lm-role-bat">🏏 BATTING</span>'
+    : role === 'bowler'
+    ? '<span class="lm-role-badge lm-role-bowl">🎳 BOWLING</span>'
+    : '<span class="lm-role-badge lm-role-spec">👁 SPECTATING</span>';
+
+  // Header / scorebar (always shown once the match has a score state)
+  let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+      <button class="link-btn" onclick="navigate('home')">← Leave</button>
+      <div>${roleBadge}</div>
+    </div>
+    ${scorebarHtml(s)}
+  `;
+
+  // Setup phase
+  if (s.setup && s.setup !== 'DONE') {
+    html += setupPhaseHtml(s);
+    el.innerHTML = html;
+    return;
+  }
+
+  // Ball loop — batters + bowler + timeline always visible
+  html += battersHtml(s) + bowlerHtml(s) + timelineHtml(s);
+
+  // Last ball result (kept between polls so it doesn't flash away)
+  if (lmLastResultHtml) html += lmLastResultHtml;
+
+  // Role + turn specific control panel
+  html += controlPanelHtml(s);
+
+  // Scorecard FAB (once the match is underway)
+  if (s.setup === 'DONE' || !s.setup) {
+    html += `<button class="lm-sc-fab" onclick="openScorecard()">📋 Scorecard</button>`;
+  }
+
+  el.innerHTML = html;
+}
+
+function scorebarHtml(s) {
+  if (!s.score) return '';
+  const tgt = s.score.target ? `<div class="lm-target">🎯 Target: ${s.score.target} · Need ${Math.max(0, s.score.target - s.score.runs)} more</div>` : '';
+  return `
+    <div class="lm-scorebar">
+      <div class="lm-teams">
+        <span class="lm-bat-team">${escapeHtml(s.bat_team_name)}</span>
+        <span class="lm-overs">Inns ${s.innings} · ${s.score.overs_str}/${s.overs_limit} ov</span>
+      </div>
+      <div class="lm-score">${s.score.runs}/${s.score.wickets}</div>
+      ${tgt}
+    </div>
+  `;
+}
+
+function battersHtml(s) {
+  if (!s.striker && !s.non_striker) return '';
+  const card = (b, onStrike) => b ? `
+    <div class="lm-batter ${onStrike ? 'on-strike' : ''}">
+      <div class="nm">${escapeHtml(b.name)} ${onStrike ? '🏏' : ''}</div>
+      <div class="rn">${b.runs} <span class="sub">(${b.balls})</span></div>
+      <div class="sub">SR ${b.sr} · 4s ${b.fours} · 6s ${b.sixes}</div>
+    </div>` : '<div class="lm-batter"><div class="sub">—</div></div>';
+  return `<div class="lm-batters">${card(s.striker, true)}${card(s.non_striker, false)}</div>`;
+}
+
+function bowlerHtml(s) {
+  if (!s.bowler) return '';
+  const b = s.bowler;
+  return `<div class="lm-bowler">
+    <span>🎳 <b>${escapeHtml(b.name)}</b> <span class="sub" style="color:var(--muted);font-size:0.7rem;">${escapeHtml(b.bowl_style||'')}</span></span>
+    <span>${b.wickets}-${b.runs} (${b.overs} ov)</span>
+  </div>`;
+}
+
+function timelineHtml(s) {
+  if (!s.timeline || !s.timeline.length) return '';
+  return `<div class="lm-timeline">` +
+    s.timeline.map(t => `<div class="lm-tl-ball">${escapeHtml(t)}</div>`).join('') +
+    `</div>`;
+}
+
+function setupPhaseHtml(s) {
+  const role = s.role;
+  // Batsman: pick openers
+  if (s.setup === 'AWAIT_OPENERS') {
+    if (role === 'batsman') {
+      const opts = (s.openers_options || []).map(o =>
+        `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bat ${o.bat_rating}</option>`).join('');
+      return `<div class="lm-panel">
+        <div class="lm-panel-title">Choose your two openers</div>
+        <label class="sub" style="font-size:0.75rem;color:var(--muted);">Striker</label>
+        <select id="lm-striker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
+        <label class="sub" style="font-size:0.75rem;color:var(--muted);">Non-striker</label>
+        <select id="lm-nonstriker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
+        <div id="lm-opener-warn" style="color:var(--red);font-size:0.76rem;margin-bottom:0.5rem;display:none;">Striker and non-striker must be different.</div>
+        <button class="spin-button" style="width:100%;" onclick="lmSubmitOpeners()">Lock in openers</button>
+      </div>`;
+    }
+    return `<div class="lm-waiting"><div class="big">⏳</div>Waiting for ${escapeHtml(s.bat_team_name)} to choose openers…</div>`;
+  }
+  // Bowler pick
+  if (s.setup === 'AWAIT_BOWLER') {
+    if (role === 'bowler') {
+      const opts = (s.bowler_options || []).map(o =>
+        `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bowl ${o.bowl_rating} (${escapeHtml(o.bowl_style||'')})</option>`).join('');
+      return `<div class="lm-panel">
+        <div class="lm-panel-title">Choose your opening bowler</div>
+        <select id="lm-bowler" class="lm-dropdown">${opts}</select>
+        <button class="spin-button" style="width:100%;" onclick="lmSubmitBowler()">Select bowler</button>
+      </div>`;
+    }
+    return `<div class="lm-waiting"><div class="big">⏳</div>Waiting for ${escapeHtml(s.bowl_team_name)} to choose a bowler…</div>`;
+  }
+  // Ready phase
+  if (s.setup === 'AWAIT_READY') {
+    const mine = role === 'batsman' ? s.ready.batsman : role === 'bowler' ? s.ready.bowler : true;
+    const other = role === 'batsman' ? s.ready.bowler : s.ready.batsman;
+    if (role === 'spectator') {
+      return `<div class="lm-waiting"><div class="big">⏳</div>Teams are getting ready…</div>`;
+    }
+    if (mine) {
+      return `<div class="lm-waiting"><div class="big">✅</div>You're ready! Waiting for the other side…</div>`;
+    }
+    return `<div class="lm-panel" style="text-align:center;">
+      <div class="lm-panel-title">All set?</div>
+      <p class="sub" style="color:var(--muted);font-size:0.82rem;margin:0 0 0.7rem;">Tap ready when you're set to begin.</p>
+      <button class="spin-button" style="width:100%;" onclick="lmReady()">✅ I'm Ready</button>
+    </div>`;
+  }
+  return '';
+}
+
+function controlPanelHtml(s) {
+  const role = s.role;
+  // Spectator — read-only
+  if (role === 'spectator') {
+    return `<div class="lm-waiting"><div class="big">👁</div>Spectating — ${s.turn === 'bowler' ? 'bowler to deliver' : s.turn === 'batsman' ? 'batsman to play' : 'in progress'}…</div>`;
+  }
+
+  const na = s.next_action;
+
+  // Bowler's turn: pick delivery
+  if (role === 'bowler') {
+    if (na === 'PICK_DELIVERY' || na === 'PICK_LENGTH') {
+      return bowlingControlsHtml(s);
+    }
+    if (na === 'PICK_NEW_BOWLER') {
+      return `<div class="lm-panel"><div class="lm-panel-title">End of over — pick the next bowler</div>
+        <div id="lm-newbowler-area"><button class="spin-button" style="width:100%;" onclick="lmLoadNewBowlers()">Choose bowler</button></div></div>`;
+    }
+    if (na === 'PICK_SHOT') {
+      return `<div class="lm-waiting"><div class="big">⏳</div>Delivery sent — waiting for the batsman to play…</div>`;
+    }
+  }
+
+  // Batsman's turn
+  if (role === 'batsman') {
+    if (na === 'PICK_SHOT' && s.current_delivery) {
+      return deliveryBannerHtml(s) + shotGridHtml();
+    }
+    if (na === 'PICK_DELIVERY' || na === 'PICK_LENGTH') {
+      return `<div class="lm-waiting"><div class="big">⏳</div>Waiting for the bowler to deliver…</div>`;
+    }
+  }
+
+  if (na === 'INNINGS_BREAK') {
+    return `<div class="lm-waiting"><div class="big">🔄</div>Innings break — next innings starting…</div>`;
+  }
+  if (na === 'COMPLETED' || s.status === 'completed') {
+    return `<div class="lm-waiting"><div class="big">🏁</div>Match complete! Check the chat for the result.</div>`;
+  }
+  return '';
+}
+
+function bowlingControlsHtml(s) {
+  // We lazy-load options into a cached global the first time
+  if (!window._lmBowlOpts) {
+    api('/api/webapp/match/bowling-options', { match_id: lmMatchId }).then(({ ok, data }) => {
+      if (ok && data.options) { window._lmBowlOpts = data.options; pollMatch(); }
+    });
+    return `<div class="lm-panel"><div class="empty"><div class="spinner"></div></div></div>`;
+  }
+  const opts = window._lmBowlOpts;
+  if (opts.is_spinner) {
+    const btns = opts.deliveries.map(d =>
+      `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(d)}')">${escapeHtml(d)}</button>`).join('');
+    return `<div class="lm-panel"><div class="lm-panel-title">Pick your delivery</div>
+      <div class="lm-opt-grid">${btns}</div></div>`;
+  }
+  // Pacer: variation first, then length
+  if (!lmSelectedVariation) {
+    const btns = opts.variations.map(v =>
+      `<button class="lm-opt-btn" onclick="lmPickVariation('${escapeHtmlAttr(v)}')">${escapeHtml(v)}</button>`).join('');
+    return `<div class="lm-panel"><div class="lm-panel-title">Step 1: Pick a variation</div>
+      <div class="lm-opt-grid">${btns}</div></div>`;
+  }
+  const lenBtns = opts.lengths.map(l =>
+    `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(lmSelectedVariation)}','${escapeHtmlAttr(l)}')">${escapeHtml(l)}</button>`).join('');
+  return `<div class="lm-panel">
+    <div class="lm-panel-title">Step 2: Pick a length — <b style="color:var(--accent);">${escapeHtml(lmSelectedVariation)}</b></div>
+    <div class="lm-opt-grid">${lenBtns}</div>
+    <button class="link-btn" style="margin-top:0.5rem;" onclick="lmSelectedVariation=null;lmForceRender=true;pollMatch();">← Change variation</button>
+  </div>`;
+}
+
+function deliveryBannerHtml(s) {
+  const sp = s.current_delivery && window._lmSpeed ? `${window._lmSpeed} km/h` : '';
+  return `<div class="lm-delivery-banner">
+    <div class="sp">Delivery incoming…</div>
+    <div class="dl">${escapeHtml(s.current_delivery || '')}</div>
+    ${sp ? `<div class="sp">⚡ ${sp}</div>` : ''}
+    <div class="sp" style="margin-top:0.3rem;">Play your shot! 👇</div>
+  </div>`;
+}
+
+const LM_SHOTS = ["Drive","Cut","Pull","Leg Glance","Flick","Sweep","Switch Hit","Slog","Loft","Defend","Leave"];
+function shotGridHtml() {
+  const btns = LM_SHOTS.map((sh, i) =>
+    `<button class="lm-shot-btn" onclick="lmPlayShot(${i})">${escapeHtml(sh)}</button>`).join('');
+  return `<div class="lm-panel"><div class="lm-panel-title">Choose your shot</div>
+    <div class="lm-shot-grid">${btns}</div></div>`;
+}
+
+// ── Actions ──
+function lmSyncOpenerDropdowns() {
+  const a = document.getElementById('lm-striker').value;
+  const b = document.getElementById('lm-nonstriker').value;
+  document.getElementById('lm-opener-warn').style.display = (a === b) ? 'block' : 'none';
+}
+async function lmSubmitOpeners() {
+  const striker = parseInt(document.getElementById('lm-striker').value, 10);
+  const non = parseInt(document.getElementById('lm-nonstriker').value, 10);
+  if (striker === non) { document.getElementById('lm-opener-warn').style.display = 'block'; return; }
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/match/select-openers',
+    { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  pollMatch();
+}
+async function lmSubmitBowler() {
+  const rid = parseInt(document.getElementById('lm-bowler').value, 10);
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  pollMatch();
+}
+async function lmReady() {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/match/ready', { match_id: lmMatchId });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  pollMatch();
+}
+function lmPickVariation(v) { haptic('light'); lmSelectedVariation = v; lmForceRender = true; pollMatch(); }
+async function lmDeliver(variation, length) {
+  haptic('medium');
+  const body = { match_id: lmMatchId, variation };
+  if (length) body.length = length;
+  const { ok, data } = await api('/api/webapp/match/deliver', body);
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  lmSelectedVariation = null;
+  window._lmBowlOpts = null;  // refetch next over
+  pollMatch();
+}
+async function lmPlayShot(idx) {
+  haptic('heavy');
+  const { ok, data } = await api('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  const r = data.result;
+  // Show the ball result prominently for a moment
+  lmLastResultHtml = `<div class="lm-ball-result">${escapeHtml(r.rtxt)}</div>`; lmForceRender = true;
+  if (r.type === 'wicket') hapticNotif('error');
+  else if (r.runs === 6 || r.runs === 4) { hapticNotif('success'); launchConfetti(r.runs === 6 ? 60 : 40); }
+  setTimeout(() => { lmLastResultHtml = ''; }, 4000);
+  pollMatch();
+}
+async function lmLoadNewBowlers() {
+  const { ok, data } = await api('/api/webapp/match/new-bowler-options', { match_id: lmMatchId });
+  if (!ok) return;
+  const btns = data.options.map(o =>
+    `<button class="lm-opt-btn" ${o.disabled ? 'disabled style="opacity:0.4;"' : `onclick="lmNewBowler(${o.roster_id})"`}>${escapeHtml(o.name)}<br><span style="font-size:0.62rem;">Bowl ${o.bowl_rating}</span></button>`).join('');
+  document.getElementById('lm-newbowler-area').innerHTML = `<div class="lm-opt-grid">${btns}</div>`;
+}
+async function lmNewBowler(rid) {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  if (!ok) { toast(data.message || 'Failed', 'error'); return; }
+  window._lmBowlOpts = null;
+  pollMatch();
+}
+
+// ── Scorecard drawer ──
+let lmScorecardData = null;
+let lmScorecardTab = null;
+
+async function openScorecard() {
+  haptic('light');
+  document.getElementById('lm-drawer-backdrop').style.display = 'block';
+  const drawer = document.getElementById('lm-drawer');
+  drawer.classList.add('open');
+  document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/match/scorecard', { match_id: lmMatchId });
+  if (!ok) {
+    document.getElementById('lm-drawer-body').innerHTML = `<div class="empty">Scorecard unavailable</div>`;
+    return;
+  }
+  lmScorecardData = data;
+  // Default to the current innings
+  lmScorecardTab = data.current_innings || 1;
+  renderScorecard();
+}
+
+function closeScorecard() {
+  document.getElementById('lm-drawer').classList.remove('open');
+  document.getElementById('lm-drawer-backdrop').style.display = 'none';
+}
+
+function renderScorecard() {
+  const d = lmScorecardData;
+  if (!d) return;
+  // Tabs (one per innings)
+  const tabs = d.innings.map(inn =>
+    `<button class="lm-drawer-tab ${lmScorecardTab === inn.number ? 'active' : ''}" onclick="setScorecardTab(${inn.number})">
+      Inns ${inn.number}: ${escapeHtml(inn.bat_team)}
+    </button>`).join('');
+  document.getElementById('lm-drawer-tabs').innerHTML = tabs;
+
+  const inn = d.innings.find(i => i.number === lmScorecardTab) || d.innings[0];
+  if (!inn) { document.getElementById('lm-drawer-body').innerHTML = '<div class="empty">No data yet</div>'; return; }
+
+  const batRows = inn.batting.length ? inn.batting.map(b => `
+    <tr>
+      <td>${escapeHtml(b.name)}<div class="lm-sc-out">${escapeHtml(b.how_out)}</div></td>
+      <td class="num">${b.runs}</td>
+      <td class="num">${b.balls}</td>
+      <td class="num">${b.fours}</td>
+      <td class="num">${b.sixes}</td>
+      <td class="num">${b.sr}</td>
+    </tr>`).join('') : `<tr><td colspan="6" style="color:var(--muted);">Yet to bat</td></tr>`;
+
+  const bowlRows = inn.bowling.length ? inn.bowling.map(b => `
+    <tr>
+      <td>${escapeHtml(b.name)}</td>
+      <td class="num">${b.overs}</td>
+      <td class="num">${b.maidens}</td>
+      <td class="num">${b.runs}</td>
+      <td class="num">${b.wickets}</td>
+      <td class="num">${b.econ}</td>
+    </tr>`).join('') : `<tr><td colspan="6" style="color:var(--muted);">—</td></tr>`;
+
+  document.getElementById('lm-drawer-body').innerHTML = `
+    <div style="font-weight:800;margin-bottom:0.5rem;">
+      ${escapeHtml(inn.bat_team)} — ${inn.runs}/${inn.wickets} (${inn.overs} ov)
+    </div>
+    <table class="lm-sc-table">
+      <thead><tr><th>Batter</th><th style="text-align:right;">R</th><th style="text-align:right;">B</th><th style="text-align:right;">4s</th><th style="text-align:right;">6s</th><th style="text-align:right;">SR</th></tr></thead>
+      <tbody>${batRows}</tbody>
+    </table>
+    <div style="font-weight:800;margin:0.6rem 0 0.4rem;">🎳 Bowling</div>
+    <table class="lm-sc-table">
+      <thead><tr><th>Bowler</th><th style="text-align:right;">O</th><th style="text-align:right;">M</th><th style="text-align:right;">R</th><th style="text-align:right;">W</th><th style="text-align:right;">Econ</th></tr></thead>
+      <tbody>${bowlRows}</tbody>
+    </table>
+  `;
+}
+
+function setScorecardTab(n) { lmScorecardTab = n; renderScorecard(); }
+
 // ════════════════ Initial load ════════════════
-// Honor URL hash for deep-linking (e.g. https://.../webapp#spin opens Spin tab)
+// Honor deep-link target so a command opens the SAME feature's screen, not home.
+// Two sources: (1) URL hash (#spin) used by in-DM WebApp buttons, and
+// (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const hash = (window.location.hash || '').replace('#', '').toLowerCase();
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs'];
-  if (validScreens.includes(hash) && hash !== 'home') {
-    // refreshDashboard fires first then navigate
-    navigate(hash);
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch'];
+  const alias = {
+    gspin: 'spin', wheel: 'spin', myroster: 'roster', squad: 'roster',
+    lb: 'leaderboard', ranks: 'leaderboard', pack: 'packs',
+    quest: 'quests', achievement: 'achievements', club: 'clubs',
+    freepacks: 'freepack', playingxi: 'xi', pxi: 'xi',
+  };
+  let target = (window.location.hash || '').replace('#', '').toLowerCase();
+  if (!target) {
+    try {
+      const sp = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').toLowerCase();
+      if (sp) target = sp;
+    } catch (e) {}
+  }
+  // Live match deep link: "livematch_123" or "lm_123" → open match 123
+  const lm = target.match(/^(?:livematch|lm)[_-](\d+)$/);
+  if (lm) {
+    openLiveMatch(parseInt(lm[1], 10));
+    return;
+  }
+  target = alias[target] || target;
+  if (validScreens.includes(target) && target !== 'home') {
+    navigate(target);
   }
 }
 
