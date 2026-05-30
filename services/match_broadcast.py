@@ -17,15 +17,17 @@ logger = logging.getLogger(__name__)
 
 
 def _launch_url(match_id):
-    """Build the t.me deep link that opens the live match in the Mini App."""
+    """Build the t.me deep link that opens the live match in the Mini App
+    DIRECTLY (no DM, no /start). Both forms use `startapp`, which opens the
+    Mini App in place — in groups too. The Mini App reads start_param and
+    routes straight to the match."""
     bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
     miniapp_name = (os.getenv("MINIAPP_NAME", "") or "").strip()
     if not bot_username:
         return None
     if miniapp_name:
         return f"https://t.me/{bot_username}/{miniapp_name}?startapp=lm_{match_id}"
-    # Fallback: /start deep link (opens DM; Mini App must be the bot's main app)
-    return f"https://t.me/{bot_username}?start=lm_{match_id}"
+    return f"https://t.me/{bot_username}?startapp=lm_{match_id}"
 
 
 def play_match_keyboard(match_id):

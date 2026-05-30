@@ -23,6 +23,7 @@ from services.match_state_store import (
 logger = logging.getLogger(__name__)
 
 # Setup-phase actions (before the ball loop): tracked in state["setup"]
+SETUP_PICKING = "PICKING"
 SETUP_AWAIT_OPENERS = "AWAIT_OPENERS"
 SETUP_AWAIT_BOWLER = "AWAIT_BOWLER"
 SETUP_AWAIT_READY = "AWAIT_READY"
@@ -89,15 +90,13 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
     s["bat_username"] = bu.username
     s["bowl_username"] = bwu.username
     s["pitch_type"] = m.pitch_type
-    s["setup"] = SETUP_AWAIT_OPENERS
-    s["ready_bat"] = False
-    s["ready_bowl"] = False
+    s["setup"] = SETUP_PICKING
+    s["openers_done"] = False
+    s["bowler_done"] = False
     s["batting_order"] = []
     s["current_bowler"] = None
     s["played_via"] = "webapp"
 
-    # vsbot detection: if either side is the AI bot user, mark the match and
-    # auto-complete that side's setup so the human only does their own picks.
     try:
         from handlers.match import BOT_TG_ID_
         bot_user = None
@@ -108,31 +107,21 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
         if bot_user:
             s["is_vsbot"] = True
             s["bot_user_id"] = bot_user.id
-            # Bot batting → auto-pick its openers
             if bu.id == bot_user.id:
                 s["batting_order"] = [bxi[0], bxi[1]] + [p for p in bxi if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])]
                 s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
-                s["ready_bat"] = True
-            # Bot bowling → auto-pick its opening bowler
+                s["openers_done"] = True
             if bwu.id == bot_user.id:
                 s["current_bowler"] = bwxi[0]
-                s["ready_bowl"] = True
-            # Advance setup phase appropriately
-            if s["ready_bat"] and not s["ready_bowl"]:
-                s["setup"] = SETUP_AWAIT_BOWLER  # human still picks bowler... wait
-            # Recompute setup: what does the HUMAN still need to do?
-            human_bats = (bu.id != bot_user.id)
-            human_bowls = (bwu.id != bot_user.id)
-            if human_bats and not s["batting_order"]:
-                s["setup"] = SETUP_AWAIT_OPENERS
-            elif human_bowls and not s["current_bowler"]:
-                s["setup"] = SETUP_AWAIT_BOWLER
-            else:
-                s["setup"] = SETUP_AWAIT_READY
+                s["bowler_done"] = True
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
 
-    mwa.save_state(match_id, s, next_action="SETUP")
+    next_act = "SETUP"
+    if s.get("openers_done") and s.get("bowler_done"):
+        s["setup"] = SETUP_DONE
+        next_act = A_PICK_DELIVERY
+    mwa.save_state(match_id, s, next_action=next_act)
     m.status = "playing"
     session.commit()
     return True, "Match initialized for Mini App."
@@ -236,15 +225,19 @@ def build_snapshot(session, match_id, user_id):
         "current_delivery": state.get("current_delivery"),
     }
 
-    # Role-specific option payloads for the setup phase
-    if role == "batsman" and setup == SETUP_AWAIT_OPENERS:
+    # Role-specific option payloads — both pickers available at once.
+    in_setup = setup in (SETUP_PICKING, SETUP_AWAIT_OPENERS, SETUP_AWAIT_BOWLER,
+                         SETUP_AWAIT_READY)
+    openers_done = bool(state.get("openers_done"))
+    bowler_done = bool(state.get("bowler_done"))
+    if role == "batsman" and in_setup and not openers_done:
         snap["openers_options"] = [
             {"roster_id": p["roster_id"], "name": p["name"],
              "bat_rating": p.get("bat_rating"), "rating": p.get("rating"),
              "category": p.get("category")}
             for p in state.get("bat_xi", [])
         ]
-    if role == "bowler" and setup == SETUP_AWAIT_BOWLER:
+    if role == "bowler" and in_setup and not bowler_done:
         snap["bowler_options"] = [
             {"roster_id": p["roster_id"], "name": p["name"],
              "bowl_rating": p.get("bowl_rating"), "rating": p.get("rating"),
@@ -252,34 +245,54 @@ def build_snapshot(session, match_id, user_id):
             for p in state.get("bowl_xi", [])
         ]
 
-    # Ready flags
-    snap["ready"] = {
-        "batsman": bool(state.get("ready_bat")),
-        "bowler": bool(state.get("ready_bowl")),
+    snap["setup_progress"] = {
+        "openers_done": openers_done,
+        "bowler_done": bowler_done,
     }
     return snap
 
 
+def get_state_is_vsbot(match_id):
+    """Quick check: is this a vs-bot match?"""
+    st = mwa.get_state(match_id)
+    return bool(st and st.get("is_vsbot"))
+
+
+def _maybe_start_match(state, match_id):
+    """If both openers and bowler are chosen, start the ball loop."""
+    if state.get("openers_done") and state.get("bowler_done"):
+        state["setup"] = SETUP_DONE
+        mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+        return True
+    mwa.save_state(match_id, state)
+    return False
+
+
+def _in_setup(state):
+    return state.get("setup") in (SETUP_PICKING, SETUP_AWAIT_OPENERS,
+                                  SETUP_AWAIT_BOWLER, SETUP_AWAIT_READY)
+
+
 def select_openers(match_id, user_id, striker_rid, non_striker_rid):
-    """Batsman picks the two openers. Returns (ok, msg)."""
+    """Batsman picks openers. Independent of bowler pick; auto-starts when both
+    are in. Returns (ok, started, msg)."""
     state = mwa.get_state(match_id)
     if not state:
-        return False, "Match not found."
+        return False, False, "Match not found."
     if user_id != state.get("bat_team_id"):
-        return False, "Only the batting side picks openers."
-    if state.get("setup") != SETUP_AWAIT_OPENERS:
-        return False, "Openers already chosen."
+        return False, False, "Only the batting side picks openers."
+    if not _in_setup(state) or state.get("openers_done"):
+        return False, False, "Openers already chosen."
     if striker_rid == non_striker_rid:
-        return False, "Striker and non-striker must be different players."
+        return False, False, "Striker and non-striker must be different players."
 
     bat_xi = state.get("bat_xi", [])
     by_rid = {p["roster_id"]: p for p in bat_xi}
     if striker_rid not in by_rid or non_striker_rid not in by_rid:
-        return False, "Pick players from your XI."
+        return False, False, "Pick players from your XI."
 
     opener1 = by_rid[striker_rid]
     opener2 = by_rid[non_striker_rid]
-    # Rebuild batting order: openers first, then the rest in XI order
     order = [opener1, opener2]
     for p in bat_xi:
         if p["roster_id"] not in (striker_rid, non_striker_rid):
@@ -288,60 +301,45 @@ def select_openers(match_id, user_id, striker_rid, non_striker_rid):
     state["striker_idx"] = 0
     state["non_striker_idx"] = 1
     state["next_batsman_idx"] = 2
-    state["setup"] = SETUP_AWAIT_BOWLER  # now wait for bowler pick
-    mwa.save_state(match_id, state)
-    return True, "Openers locked in."
+    state["openers_done"] = True
+    started = _maybe_start_match(state, match_id)
+    return True, started, ("Openers locked in — match starting!" if started
+                           else "Openers locked in. Waiting for the bowler…")
 
 
 def select_bowler(match_id, user_id, bowler_rid):
-    """Bowling side picks the opening bowler. Returns (ok, msg)."""
+    """Bowling side picks bowler. Independent of openers pick; auto-starts when
+    both are in. Returns (ok, started, msg)."""
     state = mwa.get_state(match_id)
     if not state:
-        return False, "Match not found."
+        return False, False, "Match not found."
     if user_id != state.get("bowl_team_id"):
-        return False, "Only the bowling side picks the bowler."
-    if state.get("setup") not in (SETUP_AWAIT_BOWLER, SETUP_AWAIT_OPENERS):
-        return False, "Bowler already chosen."
+        return False, False, "Only the bowling side picks the bowler."
+    if not _in_setup(state) or state.get("bowler_done"):
+        return False, False, "Bowler already chosen."
 
     bowl_xi = state.get("bowl_xi", [])
     by_rid = {p["roster_id"]: p for p in bowl_xi}
     if bowler_rid not in by_rid:
-        return False, "Pick a bowler from your XI."
+        return False, False, "Pick a bowler from your XI."
 
     state["current_bowler"] = by_rid[bowler_rid]
-    # If openers not yet picked, keep waiting on them; else move to ready
-    if state.get("batting_order"):
-        state["setup"] = SETUP_AWAIT_READY
-    mwa.save_state(match_id, state)
-    return True, "Bowler selected."
+    state["bowler_done"] = True
+    started = _maybe_start_match(state, match_id)
+    return True, started, ("Bowler selected — match starting!" if started
+                           else "Bowler selected. Waiting for the openers…")
 
 
 def mark_ready(match_id, user_id):
-    """A side marks itself ready. When both ready, the ball loop begins.
-    Returns (ok, both_ready, msg)."""
+    """Deprecated in the simultaneous model; reports/forces start state."""
     state = mwa.get_state(match_id)
     if not state:
         return False, False, "Match not found."
-    role = role_for(state, user_id)
-    if role == "batsman":
-        if not state.get("batting_order"):
-            return False, False, "Pick your openers first."
-        state["ready_bat"] = True
-    elif role == "bowler":
-        if not state.get("current_bowler"):
-            return False, False, "Pick your bowler first."
-        state["ready_bowl"] = True
-    else:
-        return False, False, "Spectators can't ready up."
-
-    both = bool(state.get("ready_bat") and state.get("ready_bowl"))
-    if both:
+    both = bool(state.get("openers_done") and state.get("bowler_done"))
+    if both and state.get("setup") != SETUP_DONE:
         state["setup"] = SETUP_DONE
         mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
-    else:
-        mwa.save_state(match_id, state)
-    return True, both, ("Both teams ready — play begins!" if both
-                        else "You're ready. Waiting for the other side…")
+    return True, both, ("Match starting!" if both else "Waiting for both picks…")
 
 
 # ══════════════════ Phase 2: the live ball loop ══════════════════════
