@@ -262,6 +262,8 @@ def transition_to_second_innings(s):
     s["next_batsman_idx"] = 2
     s["prev_bowler_rid"] = None
     s["selected_variation"] = None
+    s["current_delivery"] = None
+    s["last_ball"] = None
     s["current_bowler"] = None
     s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0,
                                        "sixes": 0, "out": False, "how_out": "",

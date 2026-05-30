@@ -5865,9 +5865,13 @@ def webapp_match_deliver():
         db.close()
 
 
-def _tg_send_async(payload):
-    """Fire a Telegram sendMessage in a daemon thread so the request handler
-    returns immediately (never blocks the Mini App on a slow Telegram call)."""
+def _tg_send_async(payload, *, pin=False):
+    """Fire a Telegram sendMessage in a daemon thread.
+
+    When pin=True, best-effort pin the sent message so the chat always has the
+    latest Mini App match score/result visible. Pin failures are non-fatal
+    because groups may not grant pin permissions to the bot.
+    """
     import os as _os
     import threading
     token = _os.getenv("BOT_TOKEN", "").strip()
@@ -5877,8 +5881,25 @@ def _tg_send_async(payload):
     def _send():
         try:
             import requests as _rq
-            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                     json=payload, timeout=8)
+            resp = _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                            json=payload, timeout=8)
+            if pin:
+                try:
+                    data = resp.json() if resp is not None else {}
+                    msg_id = (data.get("result") or {}).get("message_id")
+                    chat_id = payload.get("chat_id")
+                    if msg_id and chat_id:
+                        _rq.post(
+                            f"https://api.telegram.org/bot{token}/pinChatMessage",
+                            json={
+                                "chat_id": chat_id,
+                                "message_id": msg_id,
+                                "disable_notification": True,
+                            },
+                            timeout=8,
+                        )
+                except Exception:
+                    logger.exception("async tg pin failed")
         except Exception:
             logger.exception("async tg send failed")
 
@@ -5929,7 +5950,7 @@ def _broadcast_match_scorecard(match_id):
                        "disable_web_page_preview": True}
             if reply_markup:
                 payload["reply_markup"] = reply_markup
-            _tg_send_async(payload)
+            _tg_send_async(payload, pin=True)
         except Exception:
             logger.exception("scorecard broadcast worker failed")
 
@@ -5970,7 +5991,7 @@ def _broadcast_match_result(match_id, result):
                "disable_web_page_preview": True}
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    _tg_send_async(payload)
+    _tg_send_async(payload, pin=True)
 
 
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
@@ -6063,6 +6084,10 @@ def webapp_match_new_bowler():
             auto_play_bot_turns(db, match_id)
         except Exception:
             logger.exception("auto_play after new-bowler failed")
+        try:
+            _broadcast_match_scorecard(match_id)
+        except Exception:
+            logger.exception("scorecard broadcast after new-bowler failed")
         return {"ok": True, "message": msg,
                 "snapshot": build_snapshot(db, match_id, user.id)}
     except Exception as e:

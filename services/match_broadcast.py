@@ -75,6 +75,12 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
         logger.exception("send_match_ready_message failed")
 
 
+def _stat_lookup(stats, roster_id):
+    if not isinstance(stats, dict):
+        return {}
+    return stats.get(roster_id) or stats.get(str(roster_id)) or {}
+
+
 def build_live_scorecard_text(state, waiting_for_mention=None):
     """Build the improved LIVE SCORECARD broadcast text for the chat."""
     bat_team = state.get("bat_team_name", "Batting")
@@ -93,12 +99,12 @@ def build_live_scorecard_text(state, waiting_for_mention=None):
         if idx is None or idx < 0 or idx >= len(order):
             return None
         p = order[idx]
-        st = bat_stats.get(p["roster_id"], {})
+        st = _stat_lookup(bat_stats, p["roster_id"])
         arrow = "👉 " if on_strike else "• "
         return f"{arrow}{p['name']} : {st.get('runs', 0)} ({st.get('balls', 0)}b)"
 
     bowler = state.get("current_bowler") or {}
-    bws = state.get("bowl_stats", {}).get(bowler.get("roster_id"), {}) if bowler else {}
+    bws = _stat_lookup(state.get("bowl_stats", {}), bowler.get("roster_id")) if bowler else {}
     b_overs_done = bws.get("overs_done", 0)
     b_this = bws.get("this_over_balls", 0)
     b_ov = f"{b_overs_done}.{b_this}" if b_this else f"{b_overs_done}"
@@ -124,6 +130,10 @@ def build_live_scorecard_text(state, waiting_for_mention=None):
                      f"{bws.get('wickets', 0)}-{bws.get('runs', 0)} ({b_ov} ov)")
     else:
         lines.append("• —")
+    last_ball = state.get("last_ball") or {}
+    if last_ball:
+        lines.append("")
+        lines.append(f"💬 <i>{last_ball.get('commentary') or last_ball.get('rtxt', '')}</i>")
     lines.append("══════════════════════════════")
     if waiting_for_mention:
         lines.append(f"🎳 <b>Waiting for {waiting_for_mention} to deliver…</b>")

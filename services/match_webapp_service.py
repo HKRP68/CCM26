@@ -138,12 +138,29 @@ def role_for(state, user_id):
     return "spectator"
 
 
+def _stat_lookup(stats, roster_id):
+    """Return a stats row regardless of JSON stringifying dict keys."""
+    if not isinstance(stats, dict):
+        return {}
+    return stats.get(roster_id) or stats.get(str(roster_id)) or {}
+
+
+def _stat_slot(stats, roster_id, default):
+    """Mutable stats slot that tolerates int keys before JSON and str keys after."""
+    if str(roster_id) in stats:
+        return stats[str(roster_id)]
+    if roster_id in stats:
+        return stats[roster_id]
+    stats[str(roster_id)] = default
+    return stats[str(roster_id)]
+
+
 def _bat_card(state, idx):
     order = state.get("batting_order", [])
     if idx is None or idx < 0 or idx >= len(order):
         return None
     p = order[idx]
-    st = state.get("bat_stats", {}).get(p["roster_id"], {})
+    st = _stat_lookup(state.get("bat_stats", {}), p["roster_id"])
     return {
         "roster_id": p["roster_id"], "name": p["name"],
         "rating": p.get("rating"), "bat_rating": p.get("bat_rating"),
@@ -159,7 +176,7 @@ def _bowler_card(state):
     b = state.get("current_bowler")
     if not b:
         return None
-    bs = state.get("bowl_stats", {}).get(b["roster_id"], {})
+    bs = _stat_lookup(state.get("bowl_stats", {}), b["roster_id"])
     overs_done = bs.get("overs_done", 0)
     this_over = bs.get("this_over_balls", 0)
     ov_str = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
@@ -214,6 +231,18 @@ def build_snapshot(session, match_id, user_id):
             "ball": state.get("current_ball", 0),
             "overs_str": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
             "target": state.get("target"),
+            "crr": round(
+                (state.get("total_runs", 0) / max(
+                    1,
+                    ((state.get("current_over", 1) - 1) * 6
+                     + state.get("current_ball", 0)),
+                )) * 6,
+                2,
+            ),
+        },
+        "partnership": {
+            "runs": state.get("partnership_runs", 0),
+            "balls": state.get("partnership_balls", 0),
         },
         "bat_team_name": state.get("bat_team_name", "Batting"),
         "bowl_team_name": state.get("bowl_team_name", "Bowling"),
@@ -223,6 +252,7 @@ def build_snapshot(session, match_id, user_id):
         "timeline": state.get("timeline", [])[-12:],
         "selected_variation": state.get("selected_variation"),
         "current_delivery": state.get("current_delivery"),
+        "last_ball": state.get("last_ball"),
     }
 
     # Role-specific option payloads — both pickers available at once.
@@ -390,15 +420,33 @@ def set_delivery(match_id, user_id, variation, length=None):
         return False, "Not your turn to bowl right now."
 
     bowler = state.get("current_bowler") or {}
+    opts = _get_delivery_options(bowler.get("bowl_style", "Medium Pacer"),
+                                 bowler.get("bowl_hand", "Right"))
     spinner = _is_spinner(bowler.get("bowl_style", ""))
     if spinner:
-        delivery = variation  # spinners pick a single delivery
+        deliveries = opts.get("deliveries") or []
+        if variation not in deliveries:
+            return False, "Pick a valid delivery."
+        delivery = variation
+        if variation == "Surprise":
+            import random
+            choices = [d for d in deliveries if d != "Surprise"]
+            if choices:
+                delivery = random.choice(choices) + " (Surprise)"
     else:
+        variations = opts.get("variations") or []
+        lengths = opts.get("lengths") or []
+        if variation not in variations:
+            return False, "Pick a valid variation."
         if not length:
-            # store the variation, wait for length selection
+            # Store the selected variation for clients that still submit the
+            # legacy two-step pacer flow. The Mini App now usually sends both
+            # variation and length together when the Bowl button is tapped.
             state["selected_variation"] = variation
             mwa.save_state(match_id, state, next_action=A_PICK_LENGTH)
             return True, "Variation set — now pick a length."
+        if length not in lengths:
+            return False, "Pick a valid length."
         delivery = f"{variation} {length}".strip()
 
     state["current_delivery"] = delivery
@@ -415,10 +463,10 @@ def set_delivery(match_id, user_id, variation, length=None):
 def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     """Mirror of the bot's _process_shot_core bookkeeping (deterministic given
     the outcome `oc`). Mutates state in place. Returns a result dict."""
-    bs = state["bat_stats"].setdefault(striker["roster_id"], {
+    bs = _stat_slot(state["bat_stats"], striker["roster_id"], {
         "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
         "out": False, "how_out": "", "bowled_by": ""})
-    bws = state["bowl_stats"].setdefault(bowler["roster_id"], {
+    bws = _stat_slot(state["bowl_stats"], bowler["roster_id"], {
         "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
         "this_over_balls": 0, "maidens": 0, "this_over_runs": 0})
 
@@ -528,6 +576,7 @@ def play_shot(match_id, user_id, shot_index):
     res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
 
     # Same commentary line the bot would generate for this ball
+    commentary = None
     try:
         commentary = _bm._maybe_pick_commentary(oc, striker, bowler,
                                                  oc.get("runs", 0))
@@ -566,11 +615,22 @@ def play_shot(match_id, user_id, shot_index):
     else:
         next_act = A_PICK_DELIVERY
 
+    res["shot"] = shot
+    res["delivery"] = delivery
+    state["last_ball"] = {
+        "rtxt": res.get("rtxt"),
+        "type": res.get("type"),
+        "runs": res.get("runs", 0),
+        "shot": shot,
+        "delivery": delivery,
+        "batsman": striker.get("name"),
+        "bowler": bowler.get("name"),
+        "commentary": commentary,
+    }
+
     mwa.save_state(match_id, state, next_action=next_act)
     mwa.bump_ball_seq(match_id)
 
-    res["shot"] = shot
-    res["delivery"] = delivery
     res["speed"] = state.get("last_speed")
     res["next_action"] = next_act
     res["innings_over"] = is_innings_over(state)
@@ -621,7 +681,7 @@ def build_scorecard(match_id, user_id):
     def _batting(xi, stats):
         rows = []
         for p in xi:
-            st = stats.get(p["roster_id"], {})
+            st = _stat_lookup(stats, p["roster_id"])
             if not st.get("balls") and not st.get("out") and not st.get("runs"):
                 continue  # didn't bat
             rows.append({
@@ -636,7 +696,7 @@ def build_scorecard(match_id, user_id):
     def _bowling(xi, stats):
         rows = []
         for p in xi:
-            st = stats.get(p["roster_id"], {})
+            st = _stat_lookup(stats, p["roster_id"])
             if not st.get("balls"):
                 continue
             overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))
@@ -989,7 +1049,24 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             shot = AVAILABLE_SHOTS[idx]
             oc = _bm._calc(state, striker, bowler, shot, delivery)
             res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
-            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"]})
+            commentary = None
+            try:
+                commentary = _bm._maybe_pick_commentary(oc, striker, bowler,
+                                                         oc.get("runs", 0))
+            except Exception:
+                pass
+            state["last_ball"] = {
+                "rtxt": res.get("rtxt"),
+                "type": res.get("type"),
+                "runs": res.get("runs", 0),
+                "shot": shot,
+                "delivery": delivery,
+                "batsman": striker.get("name"),
+                "bowler": bowler.get("name"),
+                "commentary": commentary,
+            }
+            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"],
+                          "commentary": commentary})
 
             # Determine next action (same logic as human play_shot)
             if is_innings_over(state):
