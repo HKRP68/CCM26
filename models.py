@@ -1558,3 +1558,16 @@ class ClubSeasonResult(Base):
     member_count = Column(Integer, default=0)
     prize_coins_each = Column(Integer, default=0)
     recorded_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MatchScorecard(Base):
+    """Persisted final scorecard for a completed match, so it can be viewed
+    read-only later (via /recentmatches → Mini App). The live match_state is
+    ephemeral and cleaned up after completion, so we snapshot it here."""
+    __tablename__ = "match_scorecards"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=False, unique=True, index=True)
+    scorecard_json = Column(Text, nullable=False)  # full innings data as JSON
+    result_text = Column(String(300), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

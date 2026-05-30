@@ -5754,6 +5754,12 @@ def webapp_match_ready():
         ok, both, msg = mark_ready(match_id, user.id)
         if not ok:
             return {"ok": False, "message": msg}, 400
+        if both:
+            try:
+                from services.match_webapp_service import auto_play_bot_turns
+                auto_play_bot_turns(db, match_id)
+            except Exception:
+                logger.exception("auto_play_bot_turns (ready) failed")
         return {"ok": True, "both_ready": both, "message": msg,
                 "snapshot": build_snapshot(db, match_id, user.id)}
     except Exception as e:
@@ -5805,7 +5811,24 @@ def webapp_match_deliver():
         ok, msg = set_delivery(match_id, user.id, variation, length)
         if not ok:
             return {"ok": False, "message": msg}, 400
-        return {"ok": True, "message": msg,
+        # vsbot: if the bot is batting, it plays its shot immediately
+        result_after = None
+        try:
+            from services.match_webapp_service import auto_play_bot_turns
+            from services.match_webapp_access import get_next_action as _gna
+            from services.match_state_store import A_COMPLETED as _DONE
+            steps = auto_play_bot_turns(db, match_id)
+            if steps:
+                result_after = steps[-1]
+            if _gna(match_id) == _DONE:
+                from services.match_webapp_service import finalize_webapp_match
+                fin = finalize_webapp_match(db, match_id)
+                _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+            else:
+                _broadcast_match_scorecard(match_id)
+        except Exception:
+            logger.exception("auto_play after deliver failed")
+        return {"ok": True, "message": msg, "bot_step": result_after,
                 "snapshot": build_snapshot(db, match_id, user.id)}
     except Exception as e:
         logger.exception("webapp_match_deliver failed")
@@ -5859,6 +5882,49 @@ def _broadcast_match_scorecard(match_id):
         logger.exception("scorecard HTTP send failed")
 
 
+def _broadcast_match_result(match_id, result):
+    """Announce the final result to the match chat + a button to view the
+    read-only scorecard in the Mini App."""
+    import os as _os
+    import requests as _rq
+    from services.match_broadcast import _launch_url
+    from models import Match
+
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return
+    db = get_session()
+    try:
+        m = db.query(Match).get(match_id)
+        if not m or not m.chat_id:
+            return
+        chat_id = m.chat_id
+        text = (
+            "🏆 <b>MATCH COMPLETE!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"{result.get('text', 'Match finished.')}\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "Tap below to view the full scorecard."
+        )
+    finally:
+        db.close()
+
+    url = _launch_url(match_id)
+    reply_markup = None
+    if url:
+        reply_markup = {"inline_keyboard": [[
+            {"text": "📋 View Scorecard", "url": url}]]}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+               "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                 json=payload, timeout=8)
+    except Exception:
+        logger.exception("result broadcast send failed")
+
+
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
 @csrf_exempt
 def webapp_match_play_shot():
@@ -5875,13 +5941,31 @@ def webapp_match_play_shot():
         ok, res = play_shot(match_id, user.id, shot_index)
         if not ok:
             return {"ok": False, "message": res}, 400
-        # Broadcast the live scorecard to the match chat (best-effort, sync HTTP)
+        # vsbot: advance any consecutive AI turns after the human's shot
         try:
-            _broadcast_match_scorecard(match_id)
+            from services.match_webapp_service import auto_play_bot_turns
+            auto_play_bot_turns(db, match_id)
         except Exception:
-            logger.exception("scorecard broadcast failed (non-fatal)")
-        return {"ok": True, "result": res,
-                "snapshot": build_snapshot(db, match_id, user.id)}
+            logger.exception("auto_play_bot_turns failed (non-fatal)")
+        # Completion can be triggered by the human's shot OR the bot's auto-play.
+        from services.match_webapp_access import get_next_action as _gna
+        from services.match_state_store import A_COMPLETED as _DONE
+        ended = (isinstance(res, dict) and res.get("match_over")) or (_gna(match_id) == _DONE)
+        if ended:
+            try:
+                from services.match_webapp_service import finalize_webapp_match
+                fin = finalize_webapp_match(db, match_id)
+                result = (fin or {}).get("result") or (res.get("result") if isinstance(res, dict) else {}) or {}
+                _broadcast_match_result(match_id, result)
+            except Exception:
+                logger.exception("match finalize/broadcast failed")
+        else:
+            try:
+                _broadcast_match_scorecard(match_id)
+            except Exception:
+                logger.exception("scorecard broadcast failed (non-fatal)")
+        snap = build_snapshot(db, match_id, user.id)
+        return {"ok": True, "result": res, "snapshot": snap}
     except Exception as e:
         logger.exception("webapp_match_play_shot failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
@@ -5925,10 +6009,43 @@ def webapp_match_new_bowler():
         ok, msg = select_new_bowler(match_id, user.id, bowler_rid)
         if not ok:
             return {"ok": False, "message": msg}, 400
+        try:
+            from services.match_webapp_service import auto_play_bot_turns
+            auto_play_bot_turns(db, match_id)
+        except Exception:
+            logger.exception("auto_play after new-bowler failed")
         return {"ok": True, "message": msg,
                 "snapshot": build_snapshot(db, match_id, user.id)}
     except Exception as e:
         logger.exception("webapp_match_new_bowler failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/match/abandon", methods=["POST"])
+@csrf_exempt
+def webapp_match_abandon():
+    """A participant forfeits the live match. Body: {match_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.match_webapp_service import abandon_match
+        data = request.get_json(silent=True) or {}
+        match_id = int(data.get("match_id") or 0)
+        ok, msg = abandon_match(db, match_id, user.id)
+        if not ok:
+            return {"ok": False, "message": msg}, 400
+        try:
+            _broadcast_match_result(match_id, {"text": "Match ended by forfeit."})
+        except Exception:
+            pass
+        return {"ok": True, "message": msg}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_match_abandon failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -5943,10 +6060,10 @@ def webapp_match_scorecard():
         return err
     db, user, tg_id = auth
     try:
-        from services.match_webapp_service import build_scorecard
+        from services.match_webapp_service import get_scorecard_any
         data = request.get_json(silent=True) or {}
         match_id = int(data.get("match_id") or 0)
-        return build_scorecard(match_id, user.id)
+        return get_scorecard_any(db, match_id, user.id)
     except Exception as e:
         logger.exception("webapp_match_scorecard failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500

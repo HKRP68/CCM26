@@ -75,7 +75,7 @@ from handlers.match import (
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
-    resume_handler, lastmatch_handler, info_handler,
+    resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
 )
 
 # Trait handlers
@@ -226,18 +226,20 @@ async def start_handler(update, context):
         return
 
     # Live match deep link: lm_<id> → open the Mini App live-match board
-    if payload.startswith("lm_"):
+    if payload.startswith("lm_") or payload.startswith("sc_"):
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
         if webapp_url and webapp_url.startswith("https://"):
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            is_sc = payload.startswith("sc_")
+            label = "📋 View Scorecard" if is_sc else "🎮 Open Match"
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
-                    "🎮 Open Match",
+                    label,
                     web_app=WebAppInfo(url=webapp_url + "#" + payload),
                 )
             ]])
             await update.message.reply_text(
-                "🏏 Tap below to open the live match board.",
+                "🏏 Tap below to open in the Mini App.",
                 parse_mode="HTML", reply_markup=kb,
             )
             return
@@ -530,6 +532,7 @@ def main():
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
+        app.add_handler(CommandHandler(["recentmatches", "recent", "matches"], recentmatches_handler))
         app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
 
         # ── User feedback ────────────────────────────────────────────
@@ -850,6 +853,19 @@ def main():
                     await run_cooldown_notifications(context.application)
                 except Exception:
                     logger.exception("Cooldown notification job failed")
+                # Also sweep abandoned Mini-App matches (force-end after timeout)
+                try:
+                    from database import get_session
+                    from services.match_webapp_service import sweep_stale_webapp_matches
+                    _s = get_session()
+                    try:
+                        n = sweep_stale_webapp_matches(_s)
+                        if n:
+                            logger.info(f"Swept {n} stale Mini-App match(es)")
+                    finally:
+                        _s.close()
+                except Exception:
+                    logger.exception("Stale webapp match sweep failed")
             if app.job_queue:
                 # Every 5 minutes. First run after 90s (let startup settle).
                 app.job_queue.run_repeating(_cooldown_notify_job, interval=300,
