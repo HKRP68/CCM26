@@ -5888,18 +5888,38 @@ def _tg_send_async(payload):
         logger.exception("could not spawn tg send thread")
 
 
-def _broadcast_match_scorecard(match_id):
-    """Send the live scorecard + Play Match button to the match chat.
 
-    The ENTIRE body (state reads + text build + network send) runs in a daemon
-    thread so the Mini App request that triggered it returns immediately and
-    never blocks on the small DB pool or a slow Telegram call. A laggy chat
-    broadcast must never slow down the bowler's delivery."""
+def _tg_api_post(method, payload, timeout=8):
+    """Synchronous Telegram API helper for already-background workers."""
+    import os as _os
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return None
+    try:
+        import requests as _rq
+        resp = _rq.post(f"https://api.telegram.org/bot{token}/{method}",
+                        json=payload, timeout=timeout)
+        try:
+            return resp.json()
+        except Exception:
+            return None
+    except Exception:
+        logger.exception("telegram %s failed", method)
+        return None
+
+
+def _broadcast_match_scorecard(match_id):
+    """Update the pinned live scorecard message in the match chat.
+
+    The worker edits the same Telegram message whenever possible, sends it once
+    if missing, and pins that live scorecard so the chat always has the latest
+    score without spam. All Telegram/network work stays off the request path.
+    """
     import threading
 
     def _work():
         try:
-            from services.match_webapp_access import get_state, get_next_action
+            from services.match_webapp_access import get_state, get_next_action, save_state
             from services.match_broadcast import build_live_scorecard_text, _launch_url
             from services.match_state_store import (A_PICK_DELIVERY, A_PICK_LENGTH,
                                                      A_PICK_NEW_BOWLER)
@@ -5925,11 +5945,40 @@ def _broadcast_match_scorecard(match_id):
                 reply_markup = {"inline_keyboard": [[
                     {"text": "🎮 Play Match (Mini App)", "url": url}]]}
 
-            payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                       "disable_web_page_preview": True}
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
-            _tg_send_async(payload)
+            message_id = state.get("live_score_msg_id")
+            edited = False
+            if message_id:
+                payload = {"chat_id": chat_id, "message_id": message_id,
+                           "text": text, "parse_mode": "HTML",
+                           "disable_web_page_preview": True}
+                if reply_markup:
+                    payload["reply_markup"] = reply_markup
+                res = _tg_api_post("editMessageText", payload)
+                edited = bool(res and (res.get("ok") or "not modified" in (res.get("description", "").lower())))
+
+            if not edited:
+                payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                           "disable_web_page_preview": True}
+                if reply_markup:
+                    payload["reply_markup"] = reply_markup
+                res = _tg_api_post("sendMessage", payload)
+                if res and res.get("ok"):
+                    msg = (res.get("result") or {})
+                    new_mid = msg.get("message_id")
+                    if new_mid:
+                        state["live_score_msg_id"] = new_mid
+                        message_id = new_mid
+                        save_state(match_id, state)
+
+            if message_id and not state.get("live_score_pinned"):
+                pin_res = _tg_api_post("pinChatMessage", {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "disable_notification": True,
+                })
+                if pin_res and pin_res.get("ok"):
+                    state["live_score_pinned"] = True
+                    save_state(match_id, state)
         except Exception:
             logger.exception("scorecard broadcast worker failed")
 
@@ -5952,7 +6001,7 @@ def _broadcast_match_result(match_id, result):
             return
         chat_id = m.chat_id
         text = (
-            "🏆 <b>MATCH COMPLETE!</b>\n"
+            "🏆 <b>MATCH RESULT</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             f"{result.get('text', 'Match finished.')}\n"
             "━━━━━━━━━━━━━━━━━━━\n"

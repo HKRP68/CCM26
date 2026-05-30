@@ -1409,6 +1409,8 @@
     background: rgba(0, 212, 170, 0.08); border: 1px solid rgba(0, 212, 170, 0.26);
     animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1);
   }
+  .lm-commentary { margin-top: 0.45rem; font-size: 0.86rem; line-height: 1.35; font-weight: 650; color: var(--muted); }
+  .lm-ball-meta { margin-top: 0.35rem; font-size: 0.72rem; font-weight: 800; color: rgba(255,255,255,0.62); }
   .lm-role-badge {
     display: inline-block; font-size: 0.66rem; font-weight: 950;
     padding: 0.18rem 0.55rem; border-radius: 999px; margin-top: 0.45rem;
@@ -5688,7 +5690,8 @@ function openLiveMatch(matchId) {
 
 function startMatchPolling() {
   stopMatchPolling();
-  lmPollTimer = setInterval(pollMatch, 2500);
+  lmPollInterval = 900;
+  lmPollTimer = setInterval(pollMatch, lmPollInterval);
 }
 function stopMatchPolling() {
   if (lmPollTimer) { clearInterval(lmPollTimer); lmPollTimer = null; }
@@ -5696,7 +5699,7 @@ function stopMatchPolling() {
 
 function _lmReschedule(myTurn) {
   // Poll faster when it's my turn (snappy), slower while waiting (cheap).
-  const want = myTurn ? 1200 : 3500;
+  const want = myTurn ? 700 : 1200;
   if (lmPollInterval !== want) {
     lmPollInterval = want;
     if (lmPollTimer) { clearInterval(lmPollTimer); }
@@ -5823,6 +5826,7 @@ function renderLiveMatch(s) {
 
   html += battersHtml(s) + timelineHtml(s);
   if (lmLastResultHtml) html += lmLastResultHtml;
+  else html += lastBallHtml(s);
   html += controlPanelHtml(s);
 
   if (s.setup === 'DONE' || !s.setup) {
@@ -5903,6 +5907,17 @@ function timelineHtml(s) {
     const overText = `${s.score?.over || 0}.${Math.max(0, ballNo)}`;
     return `<div class="lm-tl-row"><div class="lm-tl-over">${overText}</div><div class="lm-tl-ball">${escapeHtml(t)}</div><div class="lm-tl-text">Last ball result: <b>${escapeHtml(t)}</b></div></div>`;
   }).join('') + `</div>`;
+}
+
+function lastBallHtml(s) {
+  const lb = s.last_ball || null;
+  if (!lb || !lb.text) return '';
+  const meta = [lb.delivery, lb.shot].filter(Boolean).map(escapeHtml).join(' · ');
+  return `<div class="lm-ball-result">
+    <div>${escapeHtml(lb.text)}</div>
+    ${lb.commentary ? `<div class="lm-commentary">💬 ${escapeHtml(lb.commentary)}</div>` : ''}
+    ${meta ? `<div class="lm-ball-meta">${meta}</div>` : ''}
+  </div>`;
 }
 
 function setupPhaseHtml(s) {
@@ -6065,12 +6080,10 @@ function shotGridHtml() {
     lmSelectedShot = 0;
   }
   const btns = LM_SHOTS.map((sh, i) =>
-    lmChoiceButton(sh, i === lmSelectedShot, `lmSetShotChoice(${i})`)).join('');
+    lmChoiceButton(sh, i === lmSelectedShot, `lmPlayShot(${i})`)).join('');
   return `<div class="lm-panel">
-    <div class="lm-panel-title">Batsman — shot selection</div>
+    <div class="lm-panel-title">Batsman — tap a shot to play immediately</div>
     <div class="lm-choice-grid compact">${btns}</div>
-    <div class="lm-control-summary">Shot: <b>${escapeHtml(LM_SHOTS[lmSelectedShot])}</b></div>
-    <button class="lm-action-btn" onclick="lmPlaySelectedShot()">🏏 Play Shot</button>
   </div>`;
 }
 
@@ -6169,7 +6182,10 @@ async function lmPlayShot(idx) {
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   const r = data.result;
   // Show the ball result prominently for a moment
-  lmLastResultHtml = `<div class="lm-ball-result">${escapeHtml(r.rtxt)}</div>`; lmForceRender = true;
+  lmLastResultHtml = `<div class="lm-ball-result">
+    <div>${escapeHtml(r.rtxt)}</div>
+    ${r.commentary ? `<div class="lm-commentary">💬 ${escapeHtml(r.commentary)}</div>` : ''}
+  </div>`; lmForceRender = true;
   if (r.type === 'wicket') hapticNotif('error');
   else if (r.runs === 6 || r.runs === 4) { hapticNotif('success'); launchConfetti(r.runs === 6 ? 60 : 40); }
   setTimeout(() => { lmLastResultHtml = ''; }, 4000);
