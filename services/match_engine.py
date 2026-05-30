@@ -212,3 +212,100 @@ def build_live_scorecard(s):
         f"⏱ <b>TIMELINE</b>\n➤ {tl}\n\n"
         f"━━━━━━━━━━━━━━━━━━━"
     )
+
+
+# ══════════════════ Pure innings/result helpers (shared) ═════════════
+# These contain NO Telegram/ctx code so both the bot and the Mini App can use
+# them. They mutate/read the state dict only. (Addresses scoring-path drift.)
+
+def transition_to_second_innings(s):
+    """Pure: end of 1st innings → set up 2nd innings (target, team swap, resets).
+    Mirrors the bookkeeping in handlers.match._end_innings (innings 1 branch),
+    minus all the Telegram sends. Returns the target."""
+    s["inn1_runs"] = s["total_runs"]
+    s["inn1_wickets"] = s["total_wickets"]
+    s["inn1_overs"] = format_overs(s)
+    s["inn1_team"] = s["bat_team_name"]
+    target = s["total_runs"] + 1
+
+    # Snapshot 1st innings for the scorecard
+    s["inn1_bat_stats"] = dict(s["bat_stats"])
+    s["inn1_bowl_stats"] = dict(s["bowl_stats"])
+    s["inn1_bat_team_id"] = s.get("bat_team_id")
+    s["inn1_bowl_team_id"] = s.get("bowl_team_id")
+    s["inn1_bat_xi"] = list(s["bat_xi"])
+    s["inn1_bowl_xi"] = list(s["bowl_xi"])
+    s["inn1_batting_order"] = list(s.get("batting_order", []))
+
+    # Reset + swap for 2nd innings
+    s["innings"] = 2
+    s["target"] = target
+    s["total_runs"] = 0
+    s["total_wickets"] = 0
+    s["extras_total"] = 0
+    s["wides"] = 0
+    s["noballs"] = 0
+    s["legbyes"] = 0
+    s["current_over"] = 1
+    s["current_ball"] = 0
+    s["timeline"] = []
+    s["partnership_runs"] = 0
+    s["partnership_balls"] = 0
+    s["bat_team_id"], s["bowl_team_id"] = s.get("bowl_team_id"), s.get("bat_team_id")
+    s["bat_user_tg"], s["bowl_user_tg"] = s.get("bowl_user_tg"), s.get("bat_user_tg")
+    s["bat_team_name"], s["bowl_team_name"] = s["bowl_team_name"], s["bat_team_name"]
+    s["bat_username"], s["bowl_username"] = s.get("bowl_username"), s.get("bat_username")
+    s["bat_xi"], s["bowl_xi"] = s["bowl_xi"], s["bat_xi"]
+    s["batting_order"] = list(s["bat_xi"])
+    s["striker_idx"] = 0
+    s["non_striker_idx"] = 1
+    s["next_batsman_idx"] = 2
+    s["prev_bowler_rid"] = None
+    s["selected_variation"] = None
+    s["current_bowler"] = None
+    s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0,
+                                       "sixes": 0, "out": False, "how_out": "",
+                                       "bowled_by": ""} for p in s["bat_xi"]}
+    s["bowl_stats"] = {p["roster_id"]: {"balls": 0, "runs": 0, "wickets": 0,
+                                        "overs_done": 0, "this_over_balls": 0,
+                                        "maidens": 0, "this_over_runs": 0}
+                       for p in s["bowl_xi"]}
+    s["fow"] = []
+    return target
+
+
+def compute_match_result(s):
+    """Pure: determine the result after the 2nd innings.
+    Returns dict {winner_team_id, loser_team_id, margin_type, margin_value, text}
+    or None if the match isn't actually over."""
+    if s.get("innings") != 2:
+        return None
+    target = s.get("target")
+    chasing_runs = s.get("total_runs", 0)
+    chasing_wkts = s.get("total_wickets", 0)
+    chasing_team_id = s.get("bat_team_id")
+    defending_team_id = s.get("bowl_team_id")
+    chasing_name = s.get("bat_team_name", "Chasing")
+    defending_name = s.get("bowl_team_name", "Defending")
+
+    if not target:
+        return None
+
+    if chasing_runs >= target:
+        # Chasing side won — by wickets remaining
+        wickets_left = 10 - chasing_wkts
+        return {"winner_team_id": chasing_team_id, "loser_team_id": defending_team_id,
+                "margin_type": "wickets", "margin_value": wickets_left,
+                "text": f"{chasing_name} won by {wickets_left} wicket"
+                        f"{'s' if wickets_left != 1 else ''}"}
+    # Innings over without reaching target
+    if not is_innings_over(s):
+        return None
+    runs_short = target - 1 - chasing_runs
+    if runs_short == 0:
+        return {"winner_team_id": None, "loser_team_id": None,
+                "margin_type": "tie", "margin_value": 0, "text": "Match tied!"}
+    return {"winner_team_id": defending_team_id, "loser_team_id": chasing_team_id,
+            "margin_type": "runs", "margin_value": runs_short,
+            "text": f"{defending_name} won by {runs_short} run"
+                    f"{'s' if runs_short != 1 else ''}"}

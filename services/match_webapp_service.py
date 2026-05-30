@@ -29,13 +29,19 @@ SETUP_AWAIT_READY = "AWAIT_READY"
 SETUP_DONE = "DONE"
 
 
-def init_match_for_webapp(session, match_id):
+def init_match_for_webapp(session, match_id, xi_overrides=None):
     """Create the initial live state for a Mini-App-played match, right after
     the toss. Openers/bowler are placeholders until the teams pick them.
     Returns (ok, msg). Safe to call once; no-op if state already exists.
+
+    xi_overrides: optional {user_id: [xi player dicts]} for synthetic teams
+    (e.g. the AI bot, whose XI isn't in UserRoster). When a user_id is present
+    here, that XI is used instead of querying UserRoster.
     """
     from services.match_engine import create_match_state
     from models import UserRoster, Player
+
+    xi_overrides = xi_overrides or {}
 
     if mwa.get_state(match_id):
         return True, "Already initialized."
@@ -50,6 +56,8 @@ def init_match_for_webapp(session, match_id):
         return False, "Players missing."
 
     def _xi(uid):
+        if uid in xi_overrides:
+            return xi_overrides[uid]
         rows = (session.query(UserRoster, Player)
                 .join(Player, UserRoster.player_id == Player.id)
                 .filter(UserRoster.user_id == uid)
@@ -87,6 +95,43 @@ def init_match_for_webapp(session, match_id):
     s["batting_order"] = []
     s["current_bowler"] = None
     s["played_via"] = "webapp"
+
+    # vsbot detection: if either side is the AI bot user, mark the match and
+    # auto-complete that side's setup so the human only does their own picks.
+    try:
+        from handlers.match import BOT_TG_ID_
+        bot_user = None
+        if bu.telegram_id == BOT_TG_ID_:
+            bot_user = bu
+        elif bwu.telegram_id == BOT_TG_ID_:
+            bot_user = bwu
+        if bot_user:
+            s["is_vsbot"] = True
+            s["bot_user_id"] = bot_user.id
+            # Bot batting → auto-pick its openers
+            if bu.id == bot_user.id:
+                s["batting_order"] = [bxi[0], bxi[1]] + [p for p in bxi if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])]
+                s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
+                s["ready_bat"] = True
+            # Bot bowling → auto-pick its opening bowler
+            if bwu.id == bot_user.id:
+                s["current_bowler"] = bwxi[0]
+                s["ready_bowl"] = True
+            # Advance setup phase appropriately
+            if s["ready_bat"] and not s["ready_bowl"]:
+                s["setup"] = SETUP_AWAIT_BOWLER  # human still picks bowler... wait
+            # Recompute setup: what does the HUMAN still need to do?
+            human_bats = (bu.id != bot_user.id)
+            human_bowls = (bwu.id != bot_user.id)
+            if human_bats and not s["batting_order"]:
+                s["setup"] = SETUP_AWAIT_OPENERS
+            elif human_bowls and not s["current_bowler"]:
+                s["setup"] = SETUP_AWAIT_BOWLER
+            else:
+                s["setup"] = SETUP_AWAIT_READY
+    except Exception:
+        logger.exception("vsbot init detection failed (non-fatal)")
+
     mwa.save_state(match_id, s, next_action="SETUP")
     m.status = "playing"
     session.commit()
@@ -484,17 +529,40 @@ def play_shot(match_id, user_id, shot_index):
     oc = _bm._calc(state, striker, bowler, shot, delivery)
     res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
 
+    # Same commentary line the bot would generate for this ball
+    try:
+        commentary = _bm._maybe_pick_commentary(oc, striker, bowler,
+                                                 oc.get("runs", 0))
+        if commentary:
+            res["commentary"] = commentary
+    except Exception:
+        pass
+
     # Next action
     if is_innings_over(state):
-        next_act = A_INNINGS_BREAK
+        from services.match_engine import (transition_to_second_innings,
+                                           compute_match_result)
+        if state.get("innings", 1) == 1:
+            # End of 1st innings → set up the chase
+            transition_to_second_innings(state)
+            # 2nd innings: bowling side must pick a bowler first
+            next_act = A_PICK_NEW_BOWLER
+            state["setup"] = SETUP_DONE
+            res["innings_break"] = True
+        else:
+            # End of 2nd innings → match over
+            result = compute_match_result(state)
+            state["match_result"] = result
+            next_act = A_COMPLETED
+            res["match_over"] = True
+            res["result"] = result
     elif res["need_new_bat"] and state["total_wickets"] < 10:
         next_act = A_PICK_NEW_BATSMAN
-        # auto-advance to next batsman
         nb = state.get("next_batsman_idx", 2)
         if nb < len(state.get("batting_order", [])):
             state["striker_idx"] = nb
             state["next_batsman_idx"] = nb + 1
-            next_act = A_PICK_DELIVERY  # new batsman in, continue bowling
+            next_act = A_PICK_DELIVERY
     elif res["eoo"]:
         next_act = A_PICK_NEW_BOWLER
     else:
@@ -627,3 +695,345 @@ def build_scorecard(match_id, user_id):
 
     return {"ok": True, "innings": innings, "current_innings": cur_inn,
             "target": state.get("target")}
+
+
+# ══════════════════ Persisted scorecards (completed matches) ═════════
+
+def save_final_scorecard(session, match_id, result_text=None):
+    """Snapshot the final scorecard from live state into MatchScorecard so it
+    can be viewed read-only after the match. Idempotent. Call at completion,
+    BEFORE the live state is cleaned up."""
+    import json as _json
+    from models import MatchScorecard
+
+    existing = (session.query(MatchScorecard)
+                .filter(MatchScorecard.match_id == match_id).first())
+    if existing:
+        return True  # already saved
+
+    sc = build_scorecard(match_id, None)  # user_id not needed for full card
+    if not sc.get("ok"):
+        return False
+    row = MatchScorecard(
+        match_id=match_id,
+        scorecard_json=_json.dumps({"innings": sc["innings"],
+                                    "current_innings": sc.get("current_innings"),
+                                    "target": sc.get("target")}),
+        result_text=(result_text or "")[:300] or None,
+    )
+    session.add(row)
+    return True
+
+
+def load_final_scorecard(session, match_id):
+    """Load a persisted scorecard for a completed match. Returns dict or None."""
+    import json as _json
+    from models import MatchScorecard
+    row = (session.query(MatchScorecard)
+           .filter(MatchScorecard.match_id == match_id).first())
+    if not row:
+        return None
+    try:
+        data = _json.loads(row.scorecard_json)
+    except Exception:
+        return None
+    data["result_text"] = row.result_text
+    data["completed"] = True
+    return data
+
+
+def get_scorecard_any(session, match_id, user_id):
+    """Return the live scorecard if the match is in progress, else the
+    persisted final one. Used by the Mini App scorecard view (read-only for
+    completed matches)."""
+    state = mwa.get_state(match_id)
+    if state:
+        sc = build_scorecard(match_id, user_id)
+        sc["completed"] = False
+        return sc
+    final = load_final_scorecard(session, match_id)
+    if final:
+        final["ok"] = True
+        return final
+    return {"ok": False, "message": "No scorecard available for this match."}
+
+
+def finalize_webapp_match(session, match_id):
+    """Finalize a completed Mini-App match: update the Match record, persist
+    the scorecard, and clean up live state. Returns the result dict.
+    Idempotent. Rewards are applied via the existing award path if available."""
+    from models import Match, User
+    state = mwa.get_state(match_id)
+    m = session.query(Match).get(match_id)
+    if not m:
+        return None
+    if m.status == "completed":
+        return {"already": True}
+
+    result = (state or {}).get("match_result") or {}
+    # Map team ids → user ids (bat/bowl team ids ARE user ids in our state)
+    winner_uid = result.get("winner_team_id")
+    loser_uid = result.get("loser_team_id")
+
+    m.status = "completed"
+    m.completed_at = __import__("datetime").datetime.utcnow()
+    m.margin_type = result.get("margin_type")
+    m.margin_value = result.get("margin_value")
+    if winner_uid:
+        m.winner_id = winner_uid
+    if loser_uid:
+        m.loser_id = loser_uid
+    # Innings scores from state snapshots
+    if state:
+        m.inn1_runs = state.get("inn1_runs")
+        m.inn1_wickets = state.get("inn1_wickets")
+        m.inn2_runs = state.get("total_runs")
+        m.inn2_wickets = state.get("total_wickets")
+
+    # Persist the full scorecard BEFORE cleaning up live state
+    try:
+        save_final_scorecard(session, match_id, result_text=result.get("text"))
+    except Exception:
+        logger.exception("save_final_scorecard failed")
+
+    # Full rewards via the shared reward core (coins/gems/season points/W-L).
+    # Map winner/loser team ids → user ids (they ARE user ids in our state).
+    rewards = None
+    try:
+        from services.match_rewards import award_match_rewards_core
+        is_vsbot = bool((state or {}).get("is_vsbot"))
+        # tie → no winner; both still get a "played" + loss-tier reward each
+        if result.get("margin_type") == "tie":
+            # credit both as participants (loss-tier each), no W/L winner
+            u1 = m.user1_id; u2 = m.user2_id
+            from models import User as _U
+            for uid in (u1, u2):
+                usr = session.query(_U).get(uid)
+                if usr:
+                    usr.matches_played = (usr.matches_played or 0) + 1
+        elif winner_uid:
+            wc, wg, lc, lg = award_match_rewards_core(
+                session, winner_uid, loser_uid, m.overs or 1, is_vsbot=is_vsbot)
+            rewards = {"winner_coins": wc, "winner_gems": wg,
+                       "loser_coins": lc, "loser_gems": lg}
+    except Exception:
+        logger.exception("reward core failed (non-fatal)")
+
+    session.commit()
+
+    # Clean up the live state now that everything is persisted
+    try:
+        from services.match_state_store import cleanup_state
+        cleanup_state(mwa.fresh_ctx(), match_id)
+    except Exception:
+        pass
+
+    return {"ok": True, "result": result, "rewards": rewards}
+
+
+# ══════════════════ Abandon / timeout ═══════════════════════════════
+
+# A Mini-App match with no ball activity for this long is considered stale.
+WEBAPP_MATCH_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
+
+
+def abandon_match(session, match_id, by_user_id, reason="abandoned"):
+    """A participant abandons the match → the OTHER side wins by forfeit.
+    Finalizes + persists scorecard. Returns (ok, msg)."""
+    from models import Match
+    state = mwa.get_state(match_id)
+    m = session.query(Match).get(match_id)
+    if not m:
+        return False, "Match not found."
+    if m.status == "completed":
+        return False, "Match already finished."
+    if by_user_id not in (m.user1_id, m.user2_id):
+        return False, "You're not in this match."
+
+    winner_id = m.user2_id if by_user_id == m.user1_id else m.user1_id
+    if state:
+        state["match_result"] = {
+            "winner_team_id": winner_id, "loser_team_id": by_user_id,
+            "margin_type": "forfeit", "margin_value": 0,
+            "text": f"Won by forfeit ({reason})",
+        }
+        mwa.save_state(match_id, state)
+    m.status = "completed"
+    m.completed_at = __import__("datetime").datetime.utcnow()
+    m.margin_type = "forfeit"
+    m.winner_id = winner_id
+    m.loser_id = by_user_id
+    if state:
+        m.inn1_runs = state.get("inn1_runs"); m.inn1_wickets = state.get("inn1_wickets")
+        m.inn2_runs = state.get("total_runs"); m.inn2_wickets = state.get("total_wickets")
+    try:
+        save_final_scorecard(session, match_id, result_text="Match abandoned (forfeit)")
+    except Exception:
+        pass
+    session.commit()
+    try:
+        from services.match_state_store import cleanup_state
+        cleanup_state(mwa.fresh_ctx(), match_id)
+    except Exception:
+        pass
+    return True, "Match ended (forfeit)."
+
+
+def sweep_stale_webapp_matches(session):
+    """Force-end Mini-App matches idle past the timeout. Returns count ended.
+    Intended to be called periodically (e.g. from the cooldown/heartbeat job)."""
+    from datetime import datetime, timedelta
+    from models import MatchState, Match
+    cutoff = datetime.utcnow() - timedelta(seconds=WEBAPP_MATCH_TIMEOUT_SECONDS)
+    ended = 0
+    rows = session.query(MatchState).all()
+    for ms in rows:
+        last = ms.last_modified or datetime.utcnow()
+        if last >= cutoff:
+            continue
+        state = mwa.get_state(ms.match_id)
+        if not state or state.get("played_via") != "webapp":
+            continue
+        m = session.query(Match).get(ms.match_id)
+        if not m or m.status == "completed":
+            continue
+        # Whoever's turn it is forfeits (they're the idle one)
+        na = mwa.get_next_action(ms.match_id)
+        if na in ("PICK_SHOT", "PICK_NEW_BATSMAN"):
+            idle = state.get("bat_team_id")
+        else:
+            idle = state.get("bowl_team_id")
+        if idle:
+            abandon_match(session, ms.match_id, idle, reason="timeout")
+            ended += 1
+    return ended
+
+
+# ══════════════════ vsbot: auto-play the bot's side ═════════════════
+# When a match is vs the AI, the bot's turns are decided server-side using
+# services.bot_ai (the same logic the Telegram /vsbot flow uses). After each
+# human action we call auto_play_bot_turns() which advances every consecutive
+# bot turn until it's the human's turn again or the match ends.
+
+def _is_bot_side(state, role_side):
+    """role_side: 'bat' or 'bowl'. Returns True if that side is the AI."""
+    bot_uid = state.get("bot_user_id")
+    if not bot_uid:
+        return False
+    return state.get(f"{role_side}_team_id") == bot_uid
+
+
+def _bot_controls_current_action(state, next_action):
+    """Does the AI control whatever the next action requires?"""
+    from services.match_state_store import (
+        A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+        A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER,
+    )
+    if next_action in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+        return _is_bot_side(state, "bowl")
+    if next_action in (A_PICK_SHOT, A_PICK_NEW_BATSMAN):
+        return _is_bot_side(state, "bat")
+    return False
+
+
+def auto_play_bot_turns(session, match_id, max_steps=200):
+    """Advance all consecutive AI turns. Returns list of step descriptions
+    (for optional commentary). Stops when it's the human's turn or match ends.
+    Caller need not commit; this saves state as it goes."""
+    import handlers.match as _bm
+    from services import bot_ai
+    from services.bowling_service import AVAILABLE_SHOTS
+    from services.match_engine import (get_striker, get_bowler, is_innings_over,
+                                        transition_to_second_innings,
+                                        compute_match_result)
+    from services.match_state_store import (
+        A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+        A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER, A_COMPLETED,
+    )
+
+    steps = []
+    for _ in range(max_steps):
+        state = mwa.get_state(match_id)
+        if not state:
+            break
+        na = mwa.get_next_action(match_id)
+        if na == A_COMPLETED:
+            break
+        if not _bot_controls_current_action(state, na):
+            break  # human's turn (or nothing to do)
+
+        over = state.get("current_over", 1)
+        total = state.get("overs", 1)
+
+        if na in (A_PICK_DELIVERY, A_PICK_LENGTH):
+            bowler = get_bowler(state)
+            pick = bot_ai.pick_bot_delivery(bowler, over, total)
+            state["current_delivery"] = pick["delivery"]
+            state["selected_variation"] = pick.get("variation")
+            mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
+            # If the human is batting, stop here so they can play their shot
+            if not _is_bot_side(state, "bat"):
+                steps.append({"type": "bot_delivery", "delivery": pick["delivery"]})
+                break
+            # Bot batting too → continue to auto-shot below on next loop
+            steps.append({"type": "bot_delivery", "delivery": pick["delivery"]})
+            continue
+
+        if na == A_PICK_SHOT:
+            # Bot batting plays a shot
+            striker = get_striker(state)
+            bowler = get_bowler(state)
+            delivery = state.get("current_delivery") or "Good"
+            _name, idx = bot_ai.pick_bot_shot(
+                striker, bowler, over, total,
+                state.get("total_runs", 0), state.get("total_wickets", 0),
+                target=state.get("target"), current_ball=state.get("current_ball", 0))
+            shot = AVAILABLE_SHOTS[idx]
+            oc = _bm._calc(state, striker, bowler, shot, delivery)
+            res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
+            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"]})
+
+            # Determine next action (same logic as human play_shot)
+            if is_innings_over(state):
+                if state.get("innings", 1) == 1:
+                    transition_to_second_innings(state)
+                    state["setup"] = SETUP_DONE
+                    mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
+                else:
+                    state["match_result"] = compute_match_result(state)
+                    mwa.save_state(match_id, state, next_action=A_COMPLETED)
+                    mwa.bump_ball_seq(match_id)
+                    break
+            elif res["need_new_bat"] and state["total_wickets"] < 10:
+                nb = state.get("next_batsman_idx", 2)
+                if nb < len(state.get("batting_order", [])):
+                    state["striker_idx"] = nb
+                    state["next_batsman_idx"] = nb + 1
+                mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            elif res["eoo"]:
+                mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
+            else:
+                mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            mwa.bump_ball_seq(match_id)
+            continue
+
+        if na == A_PICK_NEW_BOWLER:
+            new_bowler = bot_ai.pick_bot_next_bowler(
+                state["bowl_xi"], state.get("prev_bowler_rid"),
+                state["bowl_stats"], state["overs"])
+            state["current_bowler"] = new_bowler
+            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            steps.append({"type": "bot_bowler", "name": new_bowler["name"]})
+            continue
+
+        if na == A_PICK_NEW_BATSMAN:
+            nb = state.get("next_batsman_idx", 2)
+            if nb < len(state.get("batting_order", [])):
+                state["striker_idx"] = nb
+                state["next_batsman_idx"] = nb + 1
+            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            continue
+
+        break
+
+    return steps
