@@ -107,13 +107,7 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
         if bot_user:
             s["is_vsbot"] = True
             s["bot_user_id"] = bot_user.id
-            if bu.id == bot_user.id:
-                s["batting_order"] = [bxi[0], bxi[1]] + [p for p in bxi if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])]
-                s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
-                s["openers_done"] = True
-            if bwu.id == bot_user.id:
-                s["current_bowler"] = bwxi[0]
-                s["bowler_done"] = True
+            _auto_lock_bot_setup(s)
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
 
@@ -235,6 +229,7 @@ def build_snapshot(session, match_id, user_id):
         "timeline": state.get("timeline", [])[-12:],
         "selected_variation": state.get("selected_variation"),
         "current_delivery": state.get("current_delivery"),
+        "last_ball": state.get("last_ball"),
     }
 
     # Role-specific option payloads — both pickers available at once.
@@ -283,6 +278,56 @@ def _maybe_start_match(state, match_id):
 def _in_setup(state):
     return state.get("setup") in (SETUP_PICKING, SETUP_AWAIT_OPENERS,
                                   SETUP_AWAIT_BOWLER, SETUP_AWAIT_READY)
+
+
+def _auto_lock_bot_setup(state):
+    """Auto-pick openers/bowler when the AI controls either side.
+
+    Used at match start and after the innings swap so vs-bot Mini App matches
+    do not stall waiting for a bot-side setup choice. Human-vs-human matches
+    keep both flags false and show the setup pickers to the newly swapped sides.
+    """
+    bot_uid = state.get("bot_user_id")
+    if not bot_uid:
+        return
+    if state.get("bat_team_id") == bot_uid and not state.get("openers_done"):
+        bxi = state.get("bat_xi", [])
+        if len(bxi) >= 2:
+            state["batting_order"] = [bxi[0], bxi[1]] + [
+                p for p in bxi
+                if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])
+            ]
+            state["striker_idx"] = 0
+            state["non_striker_idx"] = 1
+            state["next_batsman_idx"] = 2
+            state["openers_done"] = True
+    if state.get("bowl_team_id") == bot_uid and not state.get("bowler_done"):
+        bwxi = state.get("bowl_xi", [])
+        if bwxi:
+            state["current_bowler"] = bwxi[0]
+            state["bowler_done"] = True
+
+
+def _reset_second_innings_setup(state):
+    """Put the swapped innings into setup mode so the new batting side picks
+    openers and the new bowling side picks the first bowler immediately.
+    """
+    state["setup"] = SETUP_PICKING
+    state["openers_done"] = False
+    state["bowler_done"] = False
+    state["batting_order"] = []
+    state["striker_idx"] = 0
+    state["non_striker_idx"] = 1
+    state["next_batsman_idx"] = 2
+    state["current_bowler"] = None
+    state["selected_variation"] = None
+    state["current_delivery"] = None
+    state["last_ball"] = None
+    _auto_lock_bot_setup(state)
+    if state.get("openers_done") and state.get("bowler_done"):
+        state["setup"] = SETUP_DONE
+        return A_PICK_DELIVERY
+    return "SETUP"
 
 
 def select_openers(match_id, user_id, striker_rid, non_striker_rid):
@@ -566,16 +611,24 @@ def play_shot(match_id, user_id, shot_index):
     except Exception:
         pass
 
+    state["last_ball"] = {
+        "text": res.get("rtxt", ""),
+        "commentary": res.get("commentary", ""),
+        "shot": shot,
+        "delivery": delivery,
+        "runs": res.get("runs", 0),
+        "type": res.get("type"),
+    }
+
     # Next action
     if is_innings_over(state):
         from services.match_engine import (transition_to_second_innings,
                                            compute_match_result)
         if state.get("innings", 1) == 1:
-            # End of 1st innings → set up the chase
+            # End of 1st innings → swap sides, then require 2nd-innings
+            # openers + first bowler (auto-picked for bot-controlled sides).
             transition_to_second_innings(state)
-            # 2nd innings: bowling side must pick a bowler first
-            next_act = A_PICK_NEW_BOWLER
-            state["setup"] = SETUP_DONE
+            next_act = _reset_second_innings_setup(state)
             res["innings_break"] = True
         else:
             # End of 2nd innings → match over
@@ -648,12 +701,14 @@ def build_scorecard(match_id, user_id):
     if not state:
         return {"ok": False, "message": "Match not found."}
 
-    def _batting(xi, stats):
+    def _batting(xi, stats, current_rids=None):
+        current_rids = set(current_rids or [])
         rows = []
         for p in xi:
             st = stats.get(p["roster_id"], {})
-            if not st.get("balls") and not st.get("out") and not st.get("runs"):
-                continue  # didn't bat
+            if (p["roster_id"] not in current_rids and
+                    not st.get("balls") and not st.get("out") and not st.get("runs")):
+                continue  # didn't bat and is not currently at the crease
             rows.append({
                 "name": p["name"], "runs": st.get("runs", 0),
                 "balls": st.get("balls", 0), "fours": st.get("fours", 0),
@@ -663,11 +718,12 @@ def build_scorecard(match_id, user_id):
             })
         return rows
 
-    def _bowling(xi, stats):
+    def _bowling(xi, stats, current_rids=None):
+        current_rids = set(current_rids or [])
         rows = []
         for p in xi:
             st = stats.get(p["roster_id"], {})
-            if not st.get("balls"):
+            if p["roster_id"] not in current_rids and not st.get("balls"):
                 continue
             overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))
             econ = round(st.get("runs", 0) / (st.get("balls", 1) / 6), 2) if st.get("balls") else 0
@@ -706,8 +762,15 @@ def build_scorecard(match_id, user_id):
     innings.append({
         "number": 1, "bat_team": inn1_bat_team, "bowl_team": inn1_bowl_team,
         "runs": inn1_runs, "wickets": inn1_wkts, "overs": inn1_overs,
-        "batting": _batting(inn1_bat_xi, inn1_bat_stats),
-        "bowling": _bowling(inn1_bowl_xi, inn1_bowl_stats),
+        "batting": _batting(inn1_bat_xi, inn1_bat_stats, [
+            (state.get("batting_order", [{}])[state.get("striker_idx", 0)].get("roster_id")
+             if cur_inn == 1 and state.get("batting_order") and state.get("striker_idx", 0) < len(state.get("batting_order", [])) else None),
+            (state.get("batting_order", [{}])[state.get("non_striker_idx", 1)].get("roster_id")
+             if cur_inn == 1 and state.get("batting_order") and state.get("non_striker_idx", 1) < len(state.get("batting_order", [])) else None),
+        ]),
+        "bowling": _bowling(inn1_bowl_xi, inn1_bowl_stats, [
+            (state.get("current_bowler") or {}).get("roster_id") if cur_inn == 1 else None,
+        ]),
     })
 
     # Innings 2 (only if in progress)
@@ -717,8 +780,15 @@ def build_scorecard(match_id, user_id):
             "bowl_team": state.get("bowl_team_name", ""),
             "runs": state.get("total_runs", 0), "wickets": state.get("total_wickets", 0),
             "overs": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
-            "batting": _batting(state.get("bat_xi", []), state.get("bat_stats", {})),
-            "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {})),
+            "batting": _batting(state.get("bat_xi", []), state.get("bat_stats", {}), [
+                (state.get("batting_order", [{}])[state.get("striker_idx", 0)].get("roster_id")
+                 if state.get("batting_order") and state.get("striker_idx", 0) < len(state.get("batting_order", [])) else None),
+                (state.get("batting_order", [{}])[state.get("non_striker_idx", 1)].get("roster_id")
+                 if state.get("batting_order") and state.get("non_striker_idx", 1) < len(state.get("batting_order", [])) else None),
+            ]),
+            "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {}), [
+                (state.get("current_bowler") or {}).get("roster_id"),
+            ]),
         })
 
     return {"ok": True, "innings": innings, "current_innings": cur_inn,
@@ -1019,14 +1089,26 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             shot = AVAILABLE_SHOTS[idx]
             oc = _bm._calc(state, striker, bowler, shot, delivery)
             res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
-            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"]})
+            try:
+                commentary = _bm._maybe_pick_commentary(oc, striker, bowler, oc.get("runs", 0))
+                if commentary:
+                    res["commentary"] = commentary
+            except Exception:
+                pass
+            state["last_ball"] = {
+                "text": res.get("rtxt", ""), "commentary": res.get("commentary", ""),
+                "shot": shot, "delivery": delivery, "runs": res.get("runs", 0),
+                "type": res.get("type"),
+            }
+            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"],
+                          "commentary": res.get("commentary", "")})
 
             # Determine next action (same logic as human play_shot)
             if is_innings_over(state):
                 if state.get("innings", 1) == 1:
                     transition_to_second_innings(state)
-                    state["setup"] = SETUP_DONE
-                    mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
+                    next_act = _reset_second_innings_setup(state)
+                    mwa.save_state(match_id, state, next_action=next_act)
                 else:
                     state["match_result"] = compute_match_result(state)
                     mwa.save_state(match_id, state, next_action=A_COMPLETED)
