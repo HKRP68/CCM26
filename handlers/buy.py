@@ -16,6 +16,53 @@ from services.card_text import format_player_card
 logger = logging.getLogger(__name__)
 
 
+def _official_group_config(session):
+    """Return (official_group_id, official_group_link) from GameConfig."""
+    try:
+        from models import GameConfig
+        cfg = session.query(GameConfig).first()
+        if cfg:
+            link = cfg.official_group_link
+            # Fall back to building a link from the branding group username
+            if not link and cfg.branding_group_username:
+                link = "https://t.me/" + cfg.branding_group_username.lstrip("@")
+            return cfg.official_group_id, link
+    except Exception:
+        logger.exception("official group config read failed")
+    return None, None
+
+
+def _is_buy_restricted(session, update):
+    """True if /buypl is used in a group that is NOT the official group.
+
+    DMs are never restricted. If no official group is configured, nothing is
+    restricted (so existing behavior is preserved until you set it).
+    Returns (restricted: bool, official_link: str|None).
+    """
+    chat = update.effective_chat
+    official_id, official_link = _official_group_config(session)
+    # Not configured → don't restrict anything
+    if not official_id:
+        return False, official_link
+    # Private chat (DM) → always allowed
+    if chat is None or chat.type == "private":
+        return False, official_link
+    # Group/supergroup → restricted unless it's the official group
+    if chat.id == official_id:
+        return False, official_link
+    return True, official_link
+
+
+def _join_gc_keyboard(official_link):
+    """Single button that jumps to the official group."""
+    if not official_link:
+        # No link configured — show a disabled-looking note instead of a button
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔗 Join the GC to buy this player", url=official_link)
+    ]])
+
+
 async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
 
@@ -54,10 +101,15 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_player = versions[0]
         current_idx = 0
 
+        # Official-GC restriction: in a non-official group, show the player but
+        # only a "join the GC" button (no buy / nav / cancel).
+        restricted, official_link = _is_buy_restricted(session, update)
+
         await _send_version_page(
             session=session, user=user, versions=versions,
             current_idx=current_idx, owner_tg=tg_user.id,
             send_to=update.message, context=context,
+            restricted=restricted, official_link=official_link,
         )
 
     except Exception:
@@ -68,9 +120,13 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
-                             send_to, context, edit_query=None):
+                             send_to, context, edit_query=None,
+                             restricted=False, official_link=None):
     """Render one version page. If edit_query is set, edit that message in
     place; otherwise send a new one via send_to.
+
+    If restricted=True (used in a non-official group), the normal buy/nav
+    buttons are replaced by a single "Join the GC to buy this player" button.
     """
     from services.version_paginator import build_pagination_keyboard, _format_version_label
     import io as _io
@@ -81,12 +137,33 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     # Caption text
     caption_lines = []
     page_label = f"<b>Page {current_idx + 1}/{n}</b>" if n > 1 else ""
-    if page_label:
+    if page_label and not restricted:
         caption_lines.append(page_label)
     caption_lines.append(format_player_card(player))
-    if n > 1:
+    if n > 1 and not restricted:
         version_label = _format_version_label(player)
         caption_lines.append(f"\n🎴 <i>Version: <b>{version_label}</b></i>")
+
+    if restricted:
+        # Show info but make clear buying is locked to the official group.
+        caption_lines.append(
+            "\n🔴 <b>Buying is restricted to the Official Group.</b>\n"
+            "Tap below to join and buy this player."
+        )
+        caption = "\n".join(caption_lines)
+        keyboard = _join_gc_keyboard(official_link)
+        card_bytes = generate_card(player)
+        from services.card_sender import send_player_card
+        chat_id = (send_to.chat_id if hasattr(send_to, 'chat_id')
+                   else send_to.chat.id)
+        sent = await send_player_card(
+            bot=context.bot, chat_id=chat_id, player=player,
+            caption=caption, reply_markup=keyboard, session=None,
+        )
+        if sent is None:
+            await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
+        return
+
     caption_lines.append(f"\n💳 Your Balance: <b>{user.total_coins:,}</b> 🪙")
     caption = "\n".join(caption_lines)
 
@@ -212,6 +289,18 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         user = session.query(User).get(owner_user_id)
         if not user or user.telegram_id != tg_user.id:
             await query.edit_message_reply_markup(reply_markup=None)
+            return
+
+        # Official-GC restriction: block purchase if the callback fires from a
+        # non-official group (e.g. a stale/forwarded button).
+        restricted, official_link = _is_buy_restricted(session, update)
+        if restricted:
+            kb = _join_gc_keyboard(official_link)
+            try:
+                await query.edit_message_reply_markup(reply_markup=kb)
+            except Exception:
+                pass
+            await query.answer("Buying is restricted to the Official Group.", show_alert=True)
             return
 
         player = session.query(Player).get(player_id)

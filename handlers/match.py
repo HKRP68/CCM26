@@ -1735,10 +1735,21 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         context.bot_data[f"bat_xi_{mid}"] = bxi; context.bot_data[f"bowl_xi_{mid}"] = bwxi
         context.bot_data[f"bat_uname_{mid}"] = bu.username; context.bot_data[f"bowl_uname_{mid}"] = bwu.username
         context.bot_data[f"bat_uid_{mid}"] = bu.id; context.bot_data[f"bowl_uid_{mid}"] = bwu.id
-        # Show ALL 11 players for opener selection
-        btns = [[InlineKeyboardButton(f"{p['name']} - {p['rating']} | {p['category']}", callback_data=f"op1_{mid}_{bu.id}_{p['roster_id']}")] for p in bxi]
-        bu_mention = _mention(bu)
-        await context.bot.send_message(cid, f"🏏 <b>SELECT OPENER 1</b>\n\n{bu_mention}, pick the opening batter:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        # ── Mini-App-only flow: initialize the live match state now, then post
+        # the Match Ready card with the Play Match button. No in-chat opener
+        # buttons — the whole match is played in the Mini App. ──
+        m.status = "playing"; session.commit()
+        try:
+            from services.match_webapp_service import init_match_for_webapp
+            init_match_for_webapp(session, mid)
+        except Exception:
+            logger.exception("webapp match init at toss failed")
+        try:
+            from services.match_broadcast import send_match_ready_message
+            await send_match_ready_message(
+                context, cid, m, bt, bwt, _mention(bu), _mention(bwu))
+        except Exception:
+            logger.exception("match-ready mini app message failed")
     except Exception: session.rollback(); logger.exception("Toss err")
     finally: session.close()
 

@@ -60,15 +60,55 @@ async def _is_group_admin(update, context):
         return False
 
 
-def _intro_text(new_name=None):
-    who = f"Welcome, {new_name}! " if new_name else "Welcome! "
+def _default_intro_text():
     return (
-        f"🏏 <b>{who}</b>\n\n"
+        "🏏 <b>Welcome, @User!</b>\n\n"
         "This is <b>CricMaster Ultra</b> — collect real cricketers, build your "
         "dream XI, play matches, climb the season leaderboard, and join a club.\n\n"
         "👉 To get started, tap <b>/debut</b> to create your account and claim "
         "your starting squad.\n\n"
         "🎁 Even better — start the bot in DM for a welcome surprise:"
+    )
+
+
+def _get_welcome_template(session):
+    try:
+        from models import GameConfig
+        cfg = session.query(GameConfig).first()
+        if cfg and cfg.welcome_message and cfg.welcome_message.strip():
+            return cfg.welcome_message
+    except Exception:
+        logger.exception("welcome template read failed")
+    return _default_intro_text()
+
+
+def _mention_html(member):
+    """An HTML mention that pings the user."""
+    name = member.first_name or member.username or "player"
+    # escape minimal HTML in the name
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f'<a href="tg://user?id={member.id}">{safe}</a>'
+
+
+def _render_welcome(template, member):
+    """Substitute @User / {name} / {mention} with a real mention of the member."""
+    mention = _mention_html(member)
+    out = template
+    # @User → mention (word-boundary-ish; simple replace is fine here)
+    out = out.replace("@User", mention).replace("@user", mention)
+    out = out.replace("{mention}", mention).replace("{name}", mention)
+    return out
+
+
+def _intro_text(new_name=None):
+    # Back-compat shim (unused by new flow but kept for safety)
+    who = f"Welcome, {new_name}! " if new_name else "Welcome! "
+    return (
+        f"🏏 <b>{who}</b>\n\n"
+        "This is <b>CricMaster Ultra</b> — collect cricketers, build your XI, "
+        "play matches, and compete in seasons & clubs.\n\n"
+        "👉 Tap <b>/debut</b> to begin.\n\n"
+        "🎁 Start the bot in DM for a welcome surprise:"
     )
 
 
@@ -100,6 +140,13 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     kb = _welcome_keyboard()
 
+    # Load the (editable) welcome template once per batch
+    session = get_session()
+    try:
+        template = _get_welcome_template(session)
+    finally:
+        session.close()
+
     for member in msg.new_chat_members:
         if member.id == bot_id:
             # The bot itself was added to the group
@@ -124,12 +171,11 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if member.is_bot:
             continue  # don't greet other bots
 
-        # Greet the human
-        name = member.first_name or member.username or "player"
+        # Greet the human using the editable template (with @User mention)
         try:
             await context.bot.send_message(
                 chat_id=chat.id,
-                text=_intro_text(name),
+                text=_render_welcome(template, member),
                 parse_mode="HTML",
                 reply_markup=kb,
                 disable_web_page_preview=True,
