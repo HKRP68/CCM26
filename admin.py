@@ -5702,10 +5702,17 @@ def webapp_match_select_openers():
         match_id = int(data.get("match_id") or 0)
         striker = int(data.get("striker_rid") or 0)
         non_striker = int(data.get("non_striker_rid") or 0)
-        ok, msg = select_openers(match_id, user.id, striker, non_striker)
+        ok, started, msg = select_openers(match_id, user.id, striker, non_striker)
         if not ok:
             return {"ok": False, "message": msg}, 400
-        return {"ok": True, "message": msg,
+        if started:
+            try:
+                from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
+                if get_state_is_vsbot(match_id):
+                    auto_play_bot_turns(db, match_id)
+            except Exception:
+                logger.exception("auto-play after openers failed")
+        return {"ok": True, "message": msg, "started": started,
                 "snapshot": build_snapshot(db, match_id, user.id)}
     except Exception as e:
         logger.exception("webapp_match_select_openers failed")
@@ -5727,10 +5734,17 @@ def webapp_match_select_bowler():
         data = request.get_json(silent=True) or {}
         match_id = int(data.get("match_id") or 0)
         bowler_rid = int(data.get("bowler_rid") or 0)
-        ok, msg = select_bowler(match_id, user.id, bowler_rid)
+        ok, started, msg = select_bowler(match_id, user.id, bowler_rid)
         if not ok:
             return {"ok": False, "message": msg}, 400
-        return {"ok": True, "message": msg,
+        if started:
+            try:
+                from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
+                if get_state_is_vsbot(match_id):
+                    auto_play_bot_turns(db, match_id)
+            except Exception:
+                logger.exception("auto-play after bowler failed")
+        return {"ok": True, "message": msg, "started": started,
                 "snapshot": build_snapshot(db, match_id, user.id)}
     except Exception as e:
         logger.exception("webapp_match_select_bowler failed")
@@ -5811,21 +5825,29 @@ def webapp_match_deliver():
         ok, msg = set_delivery(match_id, user.id, variation, length)
         if not ok:
             return {"ok": False, "message": msg}, 400
-        # vsbot: if the bot is batting, it plays its shot immediately
         result_after = None
         try:
-            from services.match_webapp_service import auto_play_bot_turns
             from services.match_webapp_access import get_next_action as _gna
-            from services.match_state_store import A_COMPLETED as _DONE
-            steps = auto_play_bot_turns(db, match_id)
-            if steps:
-                result_after = steps[-1]
+            from services.match_state_store import (A_COMPLETED as _DONE,
+                                                     A_PICK_LENGTH as _LEN)
+            na_now = _gna(match_id)
+            # Pacer's first step (variation set, awaiting length): return fast,
+            # nothing to broadcast or auto-play yet.
+            if na_now == _LEN:
+                return {"ok": True, "message": msg,
+                        "snapshot": build_snapshot(db, match_id, user.id)}
+            from services.match_webapp_service import (auto_play_bot_turns,
+                                                       get_state_is_vsbot)
+            if get_state_is_vsbot(match_id):
+                steps = auto_play_bot_turns(db, match_id)
+                if steps:
+                    result_after = steps[-1]
             if _gna(match_id) == _DONE:
                 from services.match_webapp_service import finalize_webapp_match
                 fin = finalize_webapp_match(db, match_id)
                 _broadcast_match_result(match_id, (fin or {}).get("result") or {})
             else:
-                _broadcast_match_scorecard(match_id)
+                _broadcast_match_scorecard(match_id)  # non-blocking
         except Exception:
             logger.exception("auto_play after deliver failed")
         return {"ok": True, "message": msg, "bot_step": result_after,
@@ -5837,18 +5859,36 @@ def webapp_match_deliver():
         db.close()
 
 
-def _broadcast_match_scorecard(match_id):
-    """Send the live scorecard + Play Match button to the match chat via the
-    Telegram HTTP API (Flask is sync, so we can't use the bot's async send)."""
+def _tg_send_async(payload):
+    """Fire a Telegram sendMessage in a daemon thread so the request handler
+    returns immediately (never blocks the Mini App on a slow Telegram call)."""
     import os as _os
-    import requests as _rq
+    import threading
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return
+
+    def _send():
+        try:
+            import requests as _rq
+            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                     json=payload, timeout=8)
+        except Exception:
+            logger.exception("async tg send failed")
+
+    try:
+        threading.Thread(target=_send, daemon=True).start()
+    except Exception:
+        logger.exception("could not spawn tg send thread")
+
+
+def _broadcast_match_scorecard(match_id):
+    """Send the live scorecard + Play Match button to the match chat. The
+    network call runs in a background thread (non-blocking)."""
     from services.match_webapp_access import get_state, get_next_action
     from services.match_broadcast import build_live_scorecard_text, _launch_url
     from services.match_state_store import A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER
 
-    token = _os.getenv("BOT_TOKEN", "").strip()
-    if not token:
-        return
     state = get_state(match_id)
     if not state:
         return
@@ -5856,7 +5896,6 @@ def _broadcast_match_scorecard(match_id):
     if not chat_id:
         return
 
-    # Whose turn (for the "waiting for…" line)
     na = get_next_action(match_id)
     waiting = None
     if na in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
@@ -5875,24 +5914,15 @@ def _broadcast_match_scorecard(match_id):
                "disable_web_page_preview": True}
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    try:
-        _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                 json=payload, timeout=8)
-    except Exception:
-        logger.exception("scorecard HTTP send failed")
+    _tg_send_async(payload)
 
 
 def _broadcast_match_result(match_id, result):
-    """Announce the final result to the match chat + a button to view the
-    read-only scorecard in the Mini App."""
-    import os as _os
-    import requests as _rq
+    """Announce the final result to the match chat + a scorecard button.
+    Non-blocking network send."""
     from services.match_broadcast import _launch_url
     from models import Match
 
-    token = _os.getenv("BOT_TOKEN", "").strip()
-    if not token:
-        return
     db = get_session()
     try:
         m = db.query(Match).get(match_id)
@@ -5918,11 +5948,7 @@ def _broadcast_match_result(match_id, result):
                "disable_web_page_preview": True}
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    try:
-        _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                 json=payload, timeout=8)
-    except Exception:
-        logger.exception("result broadcast send failed")
+    _tg_send_async(payload)
 
 
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
@@ -5943,8 +5969,9 @@ def webapp_match_play_shot():
             return {"ok": False, "message": res}, 400
         # vsbot: advance any consecutive AI turns after the human's shot
         try:
-            from services.match_webapp_service import auto_play_bot_turns
-            auto_play_bot_turns(db, match_id)
+            from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
+            if get_state_is_vsbot(match_id):
+                auto_play_bot_turns(db, match_id)
         except Exception:
             logger.exception("auto_play_bot_turns failed (non-fatal)")
         # Completion can be triggered by the human's shot OR the bot's auto-play.

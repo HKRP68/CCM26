@@ -63,6 +63,7 @@ from handlers.bowlout import (
     pbo_handler, pbo_accept_callback, pbo_decline_callback,
     bowlout_pick_callback,
 )
+from handlers.catch import catch_handler
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
@@ -565,6 +566,7 @@ def main():
 
         # ── Bowl-out command ─────────────────────────────────────────
         app.add_handler(CommandHandler(["pbo", "bowlout"], pbo_handler))
+        app.add_handler(CommandHandler("catch", catch_handler))
 
         # ── Trait system ─────────────────────────────────────────────
         app.add_handler(CommandHandler(["traits", "tt"], traits_handler))
