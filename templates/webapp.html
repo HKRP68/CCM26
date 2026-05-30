@@ -1283,6 +1283,18 @@
   .lm-score { font-size: 1.6rem; font-weight: 900; }
   .lm-overs { font-size: 0.78rem; color: var(--muted); }
   .lm-target { font-size: 0.74rem; color: var(--accent); margin-top: 0.2rem; }
+  .lm-rr { display: flex; gap: 0.9rem; font-size: 0.72rem; color: var(--muted); margin-top: 0.3rem; }
+  .lm-rr b { color: var(--text); font-weight: 800; }
+  .lm-rr .rrr b { color: var(--accent); }
+  .lm-busy {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.7rem; background: rgba(8,12,18,0.55); -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px); animation: lmFade 0.15s ease;
+  }
+  .lm-busy .spinner { width: 34px; height: 34px; border-width: 3px; }
+  .lm-busy .lbl { font-size: 0.9rem; font-weight: 700; color: var(--text); }
+  @keyframes lmFade { from { opacity: 0; } to { opacity: 1; } }
   .lm-batters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
   .lm-batter {
     flex: 1; background: var(--card-2); border: 1px solid var(--border);
@@ -5597,6 +5609,7 @@ function openLiveMatch(matchId) {
   lmActionInFlight = false;
   lmSelectedVariation = null;
   lmLastSig = '';
+  lmHideBusy();
   const _nav = document.getElementById('bottom-nav');
   if (_nav) _nav.style.display = 'none';   // match-only: hide app nav
   navigate('livematch');
@@ -5725,17 +5738,45 @@ function renderLiveMatch(s) {
 
 function scorebarHtml(s) {
   if (!s.score) return '';
-  const tgt = s.score.target ? `<div class="lm-target">🎯 Target: ${s.score.target} · Need ${Math.max(0, s.score.target - s.score.runs)} more</div>` : '';
+  const sc = s.score;
+  let tgt = '';
+  if (sc.target) {
+    const ballsBowled = (sc.over || 0) * 6 + (sc.ball || 0);
+    const ballsRem = Math.max(0, (s.overs_limit || 0) * 6 - ballsBowled);
+    const need = Math.max(0, sc.target - sc.runs);
+    tgt = `<div class="lm-target">🎯 Target ${sc.target} · Need ${need} off ${ballsRem} ball${ballsRem === 1 ? '' : 's'}</div>`;
+  }
   return `
     <div class="lm-scorebar">
       <div class="lm-teams">
         <span class="lm-bat-team">${escapeHtml(s.bat_team_name)}</span>
-        <span class="lm-overs">Inns ${s.innings} · ${s.score.overs_str}/${s.overs_limit} ov</span>
+        <span class="lm-overs">Inns ${s.innings} · ${sc.overs_str}/${s.overs_limit} ov</span>
       </div>
-      <div class="lm-score">${s.score.runs}/${s.score.wickets}</div>
+      <div class="lm-score">${sc.runs}/${sc.wickets}</div>
+      ${lmRunRates(s)}
       ${tgt}
     </div>
   `;
+}
+
+// Current + required run rate. CRR shows once a ball has been bowled; RRR shows
+// during a chase while balls remain. Computed entirely from the snapshot.
+function lmRunRates(s) {
+  const sc = s.score; if (!sc) return '';
+  const ballsBowled = (sc.over || 0) * 6 + (sc.ball || 0);
+  const parts = [];
+  if (ballsBowled > 0) {
+    const crr = sc.runs / (ballsBowled / 6);
+    parts.push(`<span class="crr">CRR <b>${crr.toFixed(2)}</b></span>`);
+  }
+  if (sc.target) {
+    const ballsRem = (s.overs_limit || 0) * 6 - ballsBowled;
+    if (ballsRem > 0) {
+      const rrr = Math.max(0, sc.target - sc.runs) / (ballsRem / 6);
+      parts.push(`<span class="rrr">RRR <b>${rrr.toFixed(2)}</b></span>`);
+    }
+  }
+  return parts.length ? `<div class="lm-rr">${parts.join('')}</div>` : '';
 }
 
 function battersHtml(s) {
@@ -5905,13 +5946,32 @@ function shotGridHtml() {
 // Run a mutating action with the in-flight guard set so the poll loop pauses
 // (avoids racing the action and competing for the DB pool). Always clears the
 // flag, even on error, so a failed action never wedges polling.
-async function lmAction(path, body) {
+async function lmAction(path, body, busyLabel) {
   lmActionInFlight = true;
+  if (busyLabel) lmShowBusy(busyLabel);
   try {
     return await api(path, body);
   } finally {
     lmActionInFlight = false;
+    lmHideBusy();
   }
+}
+// Full-screen "processing" overlay shown the instant an action is tapped, so
+// the game feels responsive even while the request is in flight.
+function lmShowBusy(label) {
+  let el = document.getElementById('lm-busy');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'lm-busy';
+    el.className = 'lm-busy';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<div class="spinner"></div><div class="lbl">${escapeHtml(label || 'Working…')}</div>`;
+  el.style.display = 'flex';
+}
+function lmHideBusy() {
+  const el = document.getElementById('lm-busy');
+  if (el) el.style.display = 'none';
 }
 // Render immediately from a snapshot returned by an action (instant feedback,
 // no extra round-trip) and keep the poll signature in sync so the next poll
@@ -5934,7 +5994,7 @@ async function lmSubmitOpeners() {
   if (striker === non) { document.getElementById('lm-opener-warn').style.display = 'block'; return; }
   haptic('medium');
   const { ok, data } = await lmAction('/api/webapp/match/select-openers',
-    { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non });
+    { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non }, 'Locking in openers…');
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmForceRender = true;
   if (data.snapshot) lmApplySnapshot(data.snapshot);
@@ -5944,7 +6004,7 @@ async function lmSubmitBowler() {
   if (lmActionInFlight) return;
   const rid = parseInt(document.getElementById('lm-bowler').value, 10);
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  const { ok, data } = await lmAction('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid }, 'Selecting bowler…');
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmForceRender = true;
   if (data.snapshot) lmApplySnapshot(data.snapshot);
@@ -5952,7 +6012,7 @@ async function lmSubmitBowler() {
 }
 async function lmReady() {
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/ready', { match_id: lmMatchId });
+  const { ok, data } = await lmAction('/api/webapp/match/ready', { match_id: lmMatchId }, 'Getting ready…');
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
@@ -5963,7 +6023,7 @@ async function lmDeliver(variation, length) {
   haptic('medium');
   const body = { match_id: lmMatchId, variation };
   if (length) body.length = length;
-  const { ok, data } = await lmAction('/api/webapp/match/deliver', body);
+  const { ok, data } = await lmAction('/api/webapp/match/deliver', body, 'Bowling…');
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmSelectedVariation = null;
   window._lmBowlOpts = null;  // refetch next over
@@ -5976,7 +6036,7 @@ async function lmDeliver(variation, length) {
 async function lmPlayShot(idx) {
   if (lmActionInFlight) return;       // ignore double-taps while resolving
   haptic('heavy');
-  const { ok, data } = await lmAction('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx });
+  const { ok, data } = await lmAction('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx }, 'Playing shot…');
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   const r = data.result;
   // Show the ball result prominently for a moment
@@ -5997,7 +6057,7 @@ async function lmLoadNewBowlers() {
 async function lmNewBowler(rid) {
   if (lmActionInFlight) return;
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  const { ok, data } = await lmAction('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid }, 'Changing bowler…');
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   window._lmBowlOpts = null;
   if (data.snapshot) lmApplySnapshot(data.snapshot);
