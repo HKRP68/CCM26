@@ -214,6 +214,18 @@ def build_snapshot(session, match_id, user_id):
             "ball": state.get("current_ball", 0),
             "overs_str": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
             "target": state.get("target"),
+            "crr": round(
+                (state.get("total_runs", 0) / max(
+                    1,
+                    ((state.get("current_over", 1) - 1) * 6
+                     + state.get("current_ball", 0)),
+                )) * 6,
+                2,
+            ),
+        },
+        "partnership": {
+            "runs": state.get("partnership_runs", 0),
+            "balls": state.get("partnership_balls", 0),
         },
         "bat_team_name": state.get("bat_team_name", "Batting"),
         "bowl_team_name": state.get("bowl_team_name", "Bowling"),
@@ -390,15 +402,33 @@ def set_delivery(match_id, user_id, variation, length=None):
         return False, "Not your turn to bowl right now."
 
     bowler = state.get("current_bowler") or {}
+    opts = _get_delivery_options(bowler.get("bowl_style", "Medium Pacer"),
+                                 bowler.get("bowl_hand", "Right"))
     spinner = _is_spinner(bowler.get("bowl_style", ""))
     if spinner:
-        delivery = variation  # spinners pick a single delivery
+        deliveries = opts.get("deliveries") or []
+        if variation not in deliveries:
+            return False, "Pick a valid delivery."
+        delivery = variation
+        if variation == "Surprise":
+            import random
+            choices = [d for d in deliveries if d != "Surprise"]
+            if choices:
+                delivery = random.choice(choices) + " (Surprise)"
     else:
+        variations = opts.get("variations") or []
+        lengths = opts.get("lengths") or []
+        if variation not in variations:
+            return False, "Pick a valid variation."
         if not length:
-            # store the variation, wait for length selection
+            # Store the selected variation for clients that still submit the
+            # legacy two-step pacer flow. The Mini App now usually sends both
+            # variation and length together when the Bowl button is tapped.
             state["selected_variation"] = variation
             mwa.save_state(match_id, state, next_action=A_PICK_LENGTH)
             return True, "Variation set — now pick a length."
+        if length not in lengths:
+            return False, "Pick a valid length."
         delivery = f"{variation} {length}".strip()
 
     state["current_delivery"] = delivery

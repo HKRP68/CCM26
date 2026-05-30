@@ -1272,63 +1272,131 @@
 
   /* Player detail screen */
   /* ════ Live PvP match board ════ */
+  .lm-topbar {
+    display: grid; grid-template-columns: 42px 1fr 42px; align-items: center;
+    gap: 0.35rem; margin-bottom: 1.15rem;
+  }
+  .lm-back-btn, .lm-icon-btn {
+    width: 38px; height: 38px; border: 0; border-radius: 12px;
+    background: transparent; color: var(--muted); font-size: 1.45rem;
+    font-family: inherit; cursor: pointer;
+  }
+  .lm-title { text-align: center; min-width: 0; }
+  .lm-title .teams {
+    display: flex; justify-content: center; align-items: center; gap: 0.5rem;
+    min-width: 0; font-size: 1.02rem; font-weight: 950; color: #fff;
+    letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .lm-title .team-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
+  .lm-title .vs {
+    flex: 0 0 auto; color: var(--green); background: rgba(0, 212, 170, 0.12);
+    border: 1px solid rgba(0, 212, 170, 0.24); border-radius: 8px;
+    padding: 0.05rem 0.42rem; font-size: 0.78rem; font-weight: 950;
+  }
+  .lm-title .match-id { color: var(--muted); font-size: 0.72rem; font-weight: 800; margin-top: 0.12rem; letter-spacing: 0.08em; }
   .lm-scorebar {
-    position: sticky; top: 0; z-index: 5;
-    background: linear-gradient(135deg, #16241c, var(--card));
-    border: 1px solid var(--accent); border-radius: 12px;
-    padding: 0.7rem 0.9rem; margin-bottom: 0.7rem;
+    background: linear-gradient(145deg, rgba(28, 37, 64, 0.98), rgba(18, 23, 42, 0.98));
+    border: 1px solid rgba(74, 158, 255, 0.18); border-radius: 22px;
+    padding: 1.15rem 1rem; margin-bottom: 1rem;
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255,255,255,0.025);
   }
-  .lm-teams { display: flex; justify-content: space-between; align-items: baseline; }
-  .lm-bat-team { font-weight: 800; font-size: 0.95rem; }
-  .lm-score { font-size: 1.6rem; font-weight: 900; }
-  .lm-overs { font-size: 0.78rem; color: var(--muted); }
-  .lm-target { font-size: 0.74rem; color: var(--accent); margin-top: 0.2rem; }
-  .lm-batters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
-  .lm-batter {
-    flex: 1; background: var(--card-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 0.5rem 0.6rem;
+  .lm-score-hero { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
+  .lm-score-main { font-size: clamp(3.2rem, 16vw, 5rem); line-height: 0.9; font-weight: 1000; color: #fff; letter-spacing: -0.08em; }
+  .lm-score-meta { display: flex; gap: 1rem; margin-top: 0.55rem; font-weight: 900; }
+  .lm-score-meta .crr { color: var(--green); }
+  .lm-score-meta .ovs { color: var(--muted); }
+  .lm-innings-pill {
+    flex: 1; max-width: 64%; align-self: center; text-align: right;
+    background: rgba(212, 168, 42, 0.08); color: var(--accent-2);
+    border: 1px solid rgba(212, 168, 42, 0.22); border-radius: 999px;
+    padding: 0.65rem 0.85rem; font-size: 0.74rem; line-height: 1.35;
+    font-weight: 950; letter-spacing: 0.04em; text-transform: uppercase;
   }
-  .lm-batter.on-strike { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-  .lm-batter .nm { font-weight: 700; font-size: 0.82rem; }
-  .lm-batter .rn { font-size: 0.95rem; font-weight: 800; }
-  .lm-batter .sub { font-size: 0.66rem; color: var(--muted); }
-  .lm-bowler {
-    background: var(--card-2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 0.5rem 0.7rem; margin-bottom: 0.6rem; font-size: 0.82rem;
-    display: flex; justify-content: space-between; align-items: center;
+  .lm-target { font-size: 0.78rem; color: var(--accent); margin-top: 0.55rem; font-weight: 800; }
+  .lm-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; margin: 0.8rem 0 1rem; border-bottom: 1px solid var(--border); }
+  .lm-tab {
+    position: relative; border: 0; background: transparent; color: var(--muted);
+    padding: 0.8rem 0 0.7rem; font-family: inherit; font-size: 0.85rem;
+    font-weight: 950; letter-spacing: 0.06em; cursor: pointer;
   }
-  .lm-timeline { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+  .lm-tab.active { color: var(--green); }
+  .lm-tab.active::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 4px;
+    border-radius: 999px; background: var(--green);
+  }
+  .lm-match-card {
+    background: linear-gradient(145deg, rgba(28, 37, 64, 0.96), rgba(18, 23, 42, 0.96));
+    border: 1px solid rgba(74, 158, 255, 0.16); border-radius: 20px;
+    padding: 1rem; margin-bottom: 0.85rem;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.025);
+  }
+  .lm-batters { display: grid; grid-template-columns: 1fr 0.85fr 1fr; gap: 0.75rem; align-items: center; }
+  .lm-batter { min-width: 0; display: flex; gap: 0.65rem; align-items: center; }
+  .lm-batter.right { flex-direction: row-reverse; text-align: right; }
+  .lm-avatar {
+    width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
+    background: linear-gradient(145deg, var(--green), #00a878); color: #fff;
+    font-weight: 1000; font-size: 1.25rem; box-shadow: 0 0 20px rgba(0, 212, 170, 0.28);
+    border: 3px solid rgba(255,255,255,0.08); flex: 0 0 auto;
+  }
+  .lm-batter:not(.on-strike) .lm-avatar { background: #252d44; color: var(--muted); box-shadow: none; }
+  .lm-batter .nm { font-weight: 950; color: #fff; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lm-batter.on-strike .nm { color: var(--accent-2); }
+  .lm-batter .rn { color: var(--muted); font-weight: 850; margin-top: 0.18rem; }
+  .lm-center-stat { text-align: center; border-left: 1px solid var(--border); border-right: 1px solid var(--border); padding: 0.25rem 0.35rem; }
+  .lm-center-stat .lbl { color: var(--muted); font-size: 0.68rem; font-weight: 950; letter-spacing: 0.07em; text-transform: uppercase; }
+  .lm-center-stat .val { color: #fff; font-weight: 1000; font-size: 0.92rem; margin: 0.22rem 0 0.5rem; }
+  .lm-bowler { display: none; }
+  .lm-timeline { display: flex; flex-direction: column; gap: 0.55rem; margin-bottom: 0.85rem; }
+  .lm-tl-row { display: grid; grid-template-columns: 42px 34px 1fr; gap: 0.65rem; align-items: center; color: #fff; }
+  .lm-tl-over { color: var(--muted); font-size: 0.9rem; font-weight: 900; }
   .lm-tl-ball {
-    width: 26px; height: 26px; border-radius: 50%; font-size: 0.7rem;
-    display: flex; align-items: center; justify-content: center; font-weight: 700;
-    background: var(--card-2); border: 1px solid var(--border);
+    width: 34px; height: 34px; border-radius: 50%; font-size: 0.85rem;
+    display: flex; align-items: center; justify-content: center; font-weight: 1000;
+    background: #262a38; border: 1px solid rgba(255,255,255,0.05); color: #fff;
   }
+  .lm-tl-text { font-size: 0.86rem; line-height: 1.35; color: rgba(255,255,255,0.92); }
   .lm-panel {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 0.9rem; margin-bottom: 0.7rem;
+    background: linear-gradient(145deg, rgba(28,37,64,0.98), rgba(16,21,38,0.98));
+    border: 1px solid rgba(74, 158, 255, 0.16); border-radius: 20px;
+    padding: 1rem; margin-bottom: 0.85rem;
   }
-  .lm-panel-title { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }
-  .lm-shot-grid, .lm-opt-grid {
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;
+  .lm-panel-title { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.7rem; font-weight: 950; }
+  .lm-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+  .lm-choice-grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lm-choice-btn {
+    background: rgba(255,255,255,0.035); border: 1px solid var(--border); color: var(--text);
+    border-radius: 14px; padding: 0.75rem 0.45rem; font-family: inherit;
+    font-size: 0.8rem; font-weight: 900; cursor: pointer; min-height: 46px;
   }
-  .lm-shot-btn, .lm-opt-btn {
-    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 9px; padding: 0.7rem 0.4rem; font-family: inherit;
-    font-size: 0.8rem; font-weight: 700; cursor: pointer;
+  .lm-choice-btn.active {
+    color: #071018; background: linear-gradient(135deg, var(--green), #27f0be);
+    border-color: transparent; box-shadow: 0 0 18px rgba(0, 212, 170, 0.22);
   }
-  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--accent); color: #0a0f1a; }
-  .lm-opt-btn.selected { background: var(--accent); color: #0a0f1a; }
+  .lm-choice-btn:active { transform: scale(0.98); }
+  .lm-control-row { margin-bottom: 0.85rem; }
+  .lm-control-row label { display: block; font-size: 0.7rem; color: var(--muted); margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 950; }
+  .lm-control-summary {
+    background: rgba(0, 212, 170, 0.07); border: 1px solid rgba(0, 212, 170, 0.18); border-radius: 999px;
+    padding: 0.65rem 0.85rem; margin: 0.25rem 0 0.85rem; font-size: 0.82rem; color: var(--muted); font-weight: 800;
+  }
+  .lm-control-summary b { color: var(--accent-2); }
+  .lm-action-btn {
+    width: 100%; border: 0; border-radius: 16px; padding: 0.95rem 1rem;
+    background: linear-gradient(135deg, var(--accent-2), var(--accent)); color: #09111c;
+    font-family: inherit; font-size: 1rem; font-weight: 1000; cursor: pointer;
+    box-shadow: 0 12px 24px rgba(212, 168, 42, 0.22);
+  }
+  .lm-action-btn:active { transform: scale(0.985); }
   .lm-delivery-banner {
-    text-align: center; padding: 1.1rem; border-radius: 12px;
-    background: linear-gradient(135deg, rgba(255,77,109,0.15), rgba(212,168,42,0.1));
-    border: 1px solid var(--accent); margin-bottom: 0.8rem;
+    text-align: center; padding: 1.1rem; border-radius: 18px;
+    background: linear-gradient(135deg, rgba(255,77,109,0.16), rgba(212,168,42,0.11));
+    border: 1px solid rgba(212,168,42,0.3); margin-bottom: 0.85rem;
     animation: pop 0.4s cubic-bezier(0.34,1.56,0.64,1);
   }
-  .lm-delivery-banner .dl { font-size: 1.2rem; font-weight: 900; }
-  .lm-delivery-banner .sp { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
-  .lm-waiting {
-    text-align: center; padding: 1.5rem 1rem; color: var(--muted);
-  }
+  .lm-delivery-banner .dl { font-size: 1.25rem; font-weight: 1000; color: #fff; }
+  .lm-delivery-banner .sp { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; font-weight: 800; }
+  .lm-waiting { text-align: center; padding: 1.5rem 1rem; color: var(--muted); }
   .lm-waiting .big { font-size: 2.4rem; margin-bottom: 0.4rem; }
   .lm-dropdown {
     width: 100%; padding: 0.65rem; background: var(--input-bg);
@@ -1336,18 +1404,19 @@
     font-family: inherit; font-size: 0.88rem; margin-bottom: 0.6rem;
   }
   .lm-ball-result {
-    text-align: center; padding: 1rem; border-radius: 12px; margin-bottom: 0.7rem;
-    font-size: 1.1rem; font-weight: 800;
-    background: var(--card-2); border: 1px solid var(--accent);
+    text-align: center; padding: 1rem; border-radius: 18px; margin-bottom: 0.85rem;
+    font-size: 1.1rem; font-weight: 950; color: #fff;
+    background: rgba(0, 212, 170, 0.08); border: 1px solid rgba(0, 212, 170, 0.26);
     animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1);
   }
   .lm-role-badge {
-    display: inline-block; font-size: 0.66rem; font-weight: 800;
-    padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem;
+    display: inline-block; font-size: 0.66rem; font-weight: 950;
+    padding: 0.18rem 0.55rem; border-radius: 999px; margin-top: 0.45rem;
   }
-  .lm-role-bat { background: var(--green); color: #0a0f1a; }
-  .lm-role-bowl { background: #4a9eff; color: #0a0f1a; }
+  .lm-role-bat { background: rgba(0,212,170,0.16); color: var(--green); border: 1px solid rgba(0,212,170,0.25); }
+  .lm-role-bowl { background: rgba(74,158,255,0.14); color: #8fc2ff; border: 1px solid rgba(74,158,255,0.28); }
   .lm-role-spec { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
+
 
   /* Scorecard drawer */
   .lm-drawer-backdrop {
@@ -5586,9 +5655,13 @@ let lmLastBallSeq = -1;
 let lmLastSig = '';
 let lmForceRender = false;
 let lmSelectedVariation = null;
+let lmSelectedLength = null;
+let lmSelectedSpinDelivery = null;
+let lmSelectedShot = null;
 let lmLastResultHtml = '';
 let lmPollFailCount = 0;     // consecutive failed state polls (transient-tolerant)
 let lmActionInFlight = false; // a mutating action (deliver/shot/pick) is running
+let lmCurrentSnapshot = null;
 
 function openLiveMatch(matchId) {
   lmMatchId = matchId;
@@ -5596,6 +5669,10 @@ function openLiveMatch(matchId) {
   lmPollFailCount = 0;
   lmActionInFlight = false;
   lmSelectedVariation = null;
+  lmSelectedLength = null;
+  lmSelectedSpinDelivery = null;
+  lmSelectedShot = null;
+  lmCurrentSnapshot = null;
   lmLastSig = '';
   const _nav = document.getElementById('bottom-nav');
   if (_nav) _nav.style.display = 'none';   // match-only: hide app nav
@@ -5660,6 +5737,14 @@ async function pollMatch() {
     return;
   }
   lmPollFailCount = 0;
+  if (data.ball_seq !== lmLastBallSeq) {
+    lmLastBallSeq = data.ball_seq;
+    lmSelectedVariation = null;
+    lmSelectedLength = null;
+    lmSelectedSpinDelivery = null;
+    lmSelectedShot = null;
+    window._lmBowlOpts = null;
+  }
   // Whose turn is it for me? (drives poll cadence)
   const _sp2 = data.setup_progress || {};
   const inSetup = data.setup && data.setup !== 'DONE';
@@ -5681,7 +5766,29 @@ async function pollMatch() {
   renderLiveMatch(data);
 }
 
+function lmRefreshLocal() {
+  if (!lmCurrentSnapshot) return;
+  lmForceRender = true;
+  renderLiveMatch(lmCurrentSnapshot);
+}
+
+function lmSetBowlChoice(kind, index) {
+  const opts = window._lmBowlOpts || {};
+  if (kind === 'variation') lmSelectedVariation = (opts.variations || [])[index] || lmSelectedVariation;
+  else if (kind === 'length') lmSelectedLength = (opts.lengths || [])[index] || lmSelectedLength;
+  else if (kind === 'spin') lmSelectedSpinDelivery = (opts.deliveries || [])[index] || lmSelectedSpinDelivery;
+  haptic('light');
+  lmRefreshLocal();
+}
+
+function lmSetShotChoice(idx) {
+  lmSelectedShot = idx;
+  haptic('light');
+  lmRefreshLocal();
+}
+
 function renderLiveMatch(s) {
+  lmCurrentSnapshot = s;
   const el = document.getElementById('livematch-content');
   const role = s.role;
   const roleBadge = role === 'batsman'
@@ -5690,32 +5797,34 @@ function renderLiveMatch(s) {
     ? '<span class="lm-role-badge lm-role-bowl">🎳 BOWLING</span>'
     : '<span class="lm-role-badge lm-role-spec">👁 SPECTATING</span>';
 
-  // Header / scorebar (always shown once the match has a score state)
   let html = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-      <button class="link-btn" onclick="navigate('home')">← Leave</button>
-      <div>${roleBadge}${role !== 'spectator' ? ` <button class="link-btn" style="color:var(--red);font-size:0.72rem;" onclick="lmAbandon()">🏳️ Forfeit</button>` : ''}</div>
+    <div class="lm-topbar">
+      <button class="lm-back-btn" onclick="navigate('home')">‹</button>
+      <div class="lm-title">
+        <div class="teams">
+          <span class="team-name">${escapeHtml(s.bat_team_name || 'Batting')}</span>
+          <span class="vs">VS</span>
+          <span class="team-name">${escapeHtml(s.bowl_team_name || 'Bowling')}</span>
+        </div>
+        <div class="match-id">MATCH ID: C_${s.match_id}</div>
+        ${roleBadge}
+      </div>
+      ${role !== 'spectator' ? `<button class="lm-icon-btn" title="Forfeit" onclick="lmAbandon()">🏳️</button>` : '<span></span>'}
     </div>
     ${scorebarHtml(s)}
+    ${matchTabsHtml()}
   `;
 
-  // Setup phase
   if (s.setup && s.setup !== 'DONE') {
     html += setupPhaseHtml(s);
     el.innerHTML = html;
     return;
   }
 
-  // Ball loop — batters + bowler + timeline always visible
-  html += battersHtml(s) + bowlerHtml(s) + timelineHtml(s);
-
-  // Last ball result (kept between polls so it doesn't flash away)
+  html += battersHtml(s) + timelineHtml(s);
   if (lmLastResultHtml) html += lmLastResultHtml;
-
-  // Role + turn specific control panel
   html += controlPanelHtml(s);
 
-  // Scorecard FAB (once the match is underway)
   if (s.setup === 'DONE' || !s.setup) {
     html += `<button class="lm-sc-fab" onclick="openScorecard()">📋 Scorecard</button>`;
   }
@@ -5723,16 +5832,31 @@ function renderLiveMatch(s) {
   el.innerHTML = html;
 }
 
+function matchTabsHtml() {
+  return `<div class="lm-tabs">
+    <button class="lm-tab active" type="button">MATCH</button>
+    <button class="lm-tab" type="button" onclick="openScorecard()">SCORECARD</button>
+    <button class="lm-tab" type="button" onclick="toast('Squads view coming soon', 'info')">SQUADS</button>
+  </div>`;
+}
+
 function scorebarHtml(s) {
   if (!s.score) return '';
-  const tgt = s.score.target ? `<div class="lm-target">🎯 Target: ${s.score.target} · Need ${Math.max(0, s.score.target - s.score.runs)} more</div>` : '';
+  const balls = ((s.score.over || 0) * 6) + (s.score.ball || 0);
+  const crrVal = s.score.crr || (balls ? ((s.score.runs || 0) / balls * 6).toFixed(1) : '0.0');
+  const tgt = s.score.target ? `<div class="lm-target">🎯 Target ${s.score.target} · Need ${Math.max(0, s.score.target - s.score.runs)} more</div>` : '';
+  const status = s.score.target
+    ? `${escapeHtml(s.bat_team_name)} chasing ${s.score.target}`
+    : `${escapeHtml(s.bat_team_name)} batting first`;
   return `
     <div class="lm-scorebar">
-      <div class="lm-teams">
-        <span class="lm-bat-team">${escapeHtml(s.bat_team_name)}</span>
-        <span class="lm-overs">Inns ${s.innings} · ${s.score.overs_str}/${s.overs_limit} ov</span>
+      <div class="lm-score-hero">
+        <div>
+          <div class="lm-score-main">${s.score.runs}/${s.score.wickets}</div>
+          <div class="lm-score-meta"><span class="crr">CRR: ${crrVal}</span><span class="ovs">${s.score.overs_str}/${s.overs_limit} OV</span></div>
+        </div>
+        <div class="lm-innings-pill">● ${status}</div>
       </div>
-      <div class="lm-score">${s.score.runs}/${s.score.wickets}</div>
       ${tgt}
     </div>
   `;
@@ -5740,13 +5864,26 @@ function scorebarHtml(s) {
 
 function battersHtml(s) {
   if (!s.striker && !s.non_striker) return '';
-  const card = (b, onStrike) => b ? `
-    <div class="lm-batter ${onStrike ? 'on-strike' : ''}">
-      <div class="nm">${escapeHtml(b.name)} ${onStrike ? '🏏' : ''}</div>
-      <div class="rn">${b.runs} <span class="sub">(${b.balls})</span></div>
-      <div class="sub">SR ${b.sr} · 4s ${b.fours} · 6s ${b.sixes}</div>
-    </div>` : '<div class="lm-batter"><div class="sub">—</div></div>';
-  return `<div class="lm-batters">${card(s.striker, true)}${card(s.non_striker, false)}</div>`;
+  const batter = (b, onStrike, side) => b ? `
+    <div class="lm-batter ${side === 'right' ? 'right' : ''} ${onStrike ? 'on-strike' : ''}">
+      <div class="lm-avatar">${onStrike ? 'C' : (escapeHtml(b.name || '?').slice(0, 1) || 'B')}</div>
+      <div style="min-width:0;">
+        <div class="nm">${escapeHtml(b.name)}${onStrike ? ' 🏏' : ''}</div>
+        <div class="rn">${b.runs} (${b.balls}) · SR ${b.sr}</div>
+      </div>
+    </div>` : '<div class="lm-batter"><div class="rn">—</div></div>';
+  const p = s.partnership || { runs: 0, balls: 0 };
+  const bw = s.bowler || {};
+  return `<div class="lm-match-card"><div class="lm-batters">
+    ${batter(s.striker, true, 'left')}
+    <div class="lm-center-stat">
+      <div class="lbl">Partnership</div>
+      <div class="val">${p.runs || 0}(${p.balls || 0})</div>
+      <div class="lbl">Bowler</div>
+      <div class="val">${escapeHtml(bw.name || '—')} ${bw.wickets ?? 0}-${bw.runs ?? 0}</div>
+    </div>
+    ${batter(s.non_striker, false, 'right')}
+  </div></div>`;
 }
 
 function bowlerHtml(s) {
@@ -5760,9 +5897,12 @@ function bowlerHtml(s) {
 
 function timelineHtml(s) {
   if (!s.timeline || !s.timeline.length) return '';
-  return `<div class="lm-timeline">` +
-    s.timeline.map(t => `<div class="lm-tl-ball">${escapeHtml(t)}</div>`).join('') +
-    `</div>`;
+  const recent = s.timeline.slice(-4).reverse();
+  return `<div class="lm-timeline">` + recent.map((t, i) => {
+    const ballNo = Math.max(0, (s.score?.ball || 0) - i);
+    const overText = `${s.score?.over || 0}.${Math.max(0, ballNo)}`;
+    return `<div class="lm-tl-row"><div class="lm-tl-over">${overText}</div><div class="lm-tl-ball">${escapeHtml(t)}</div><div class="lm-tl-text">Last ball result: <b>${escapeHtml(t)}</b></div></div>`;
+  }).join('') + `</div>`;
 }
 
 function setupPhaseHtml(s) {
@@ -5852,34 +5992,60 @@ function controlPanelHtml(s) {
   return '';
 }
 
+function lmChoiceButton(label, active, onclick) {
+  return `<button type="button" class="lm-choice-btn ${active ? 'active' : ''}" onclick="${onclick}">${escapeHtml(label)}</button>`;
+}
+
 function bowlingControlsHtml(s) {
-  // We lazy-load options into a cached global the first time
   if (!window._lmBowlOpts) {
     api('/api/webapp/match/bowling-options', { match_id: lmMatchId }).then(({ ok, data }) => {
-      if (ok && data.options) { window._lmBowlOpts = data.options; pollMatch(); }
+      if (ok && data.options) { window._lmBowlOpts = data.options; lmForceRender = true; pollMatch(); }
     });
     return `<div class="lm-panel"><div class="empty"><div class="spinner"></div></div></div>`;
   }
   const opts = window._lmBowlOpts;
   if (opts.is_spinner) {
-    const btns = opts.deliveries.map(d =>
-      `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(d)}')">${escapeHtml(d)}</button>`).join('');
-    return `<div class="lm-panel"><div class="lm-panel-title">Pick your delivery</div>
-      <div class="lm-opt-grid">${btns}</div></div>`;
+    const deliveries = opts.deliveries || [];
+    if (!lmSelectedSpinDelivery || !deliveries.includes(lmSelectedSpinDelivery)) {
+      lmSelectedSpinDelivery = deliveries[0] || '';
+    }
+    const delBtns = deliveries.map((d, i) =>
+      lmChoiceButton(d, d === lmSelectedSpinDelivery, `lmSetBowlChoice('spin',${i})`)).join('');
+    return `<div class="lm-panel">
+      <div class="lm-panel-title">Bowling selection</div>
+      <div class="lm-control-row">
+        <label>Variation / delivery</label>
+        <div class="lm-choice-grid">${delBtns}</div>
+      </div>
+      <div class="lm-control-summary">Selected: <b>${escapeHtml(lmSelectedSpinDelivery)}</b></div>
+      <button class="lm-action-btn" onclick="lmBowlSelected()">🎳 Bowl</button>
+    </div>`;
   }
-  // Pacer: variation first, then length
-  if (!lmSelectedVariation) {
-    const btns = opts.variations.map(v =>
-      `<button class="lm-opt-btn" onclick="lmPickVariation('${escapeHtmlAttr(v)}')">${escapeHtml(v)}</button>`).join('');
-    return `<div class="lm-panel"><div class="lm-panel-title">Step 1: Pick a variation</div>
-      <div class="lm-opt-grid">${btns}</div></div>`;
+
+  const variations = opts.variations || [];
+  const lengths = opts.lengths || [];
+  if (!lmSelectedVariation || !variations.includes(lmSelectedVariation)) {
+    lmSelectedVariation = variations[0] || '';
   }
-  const lenBtns = opts.lengths.map(l =>
-    `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(lmSelectedVariation)}','${escapeHtmlAttr(l)}')">${escapeHtml(l)}</button>`).join('');
+  if (!lmSelectedLength || !lengths.includes(lmSelectedLength)) {
+    lmSelectedLength = lengths[0] || '';
+  }
+  const varBtns = variations.map((v, i) =>
+    lmChoiceButton(v, v === lmSelectedVariation, `lmSetBowlChoice('variation',${i})`)).join('');
+  const lenBtns = lengths.map((l, i) =>
+    lmChoiceButton(l, l === lmSelectedLength, `lmSetBowlChoice('length',${i})`)).join('');
   return `<div class="lm-panel">
-    <div class="lm-panel-title">Step 2: Pick a length — <b style="color:var(--accent);">${escapeHtml(lmSelectedVariation)}</b></div>
-    <div class="lm-opt-grid">${lenBtns}</div>
-    <button class="link-btn" style="margin-top:0.5rem;" onclick="lmSelectedVariation=null;lmForceRender=true;pollMatch();">← Change variation</button>
+    <div class="lm-panel-title">Bowling selection</div>
+    <div class="lm-control-row">
+      <label>Variation</label>
+      <div class="lm-choice-grid">${varBtns}</div>
+    </div>
+    <div class="lm-control-row">
+      <label>Length</label>
+      <div class="lm-choice-grid compact">${lenBtns}</div>
+    </div>
+    <div class="lm-control-summary">Selected: <b>${escapeHtml(lmSelectedVariation)}</b> · <b>${escapeHtml(lmSelectedLength)}</b></div>
+    <button class="lm-action-btn" onclick="lmBowlSelected()">🎳 Bowl</button>
   </div>`;
 }
 
@@ -5895,10 +6061,17 @@ function deliveryBannerHtml(s) {
 
 const LM_SHOTS = ["Drive","Cut","Pull","Leg Glance","Flick","Sweep","Switch Hit","Slog","Loft","Defend","Leave"];
 function shotGridHtml() {
+  if (lmSelectedShot === null || lmSelectedShot < 0 || lmSelectedShot >= LM_SHOTS.length) {
+    lmSelectedShot = 0;
+  }
   const btns = LM_SHOTS.map((sh, i) =>
-    `<button class="lm-shot-btn" onclick="lmPlayShot(${i})">${escapeHtml(sh)}</button>`).join('');
-  return `<div class="lm-panel"><div class="lm-panel-title">Choose your shot</div>
-    <div class="lm-shot-grid">${btns}</div></div>`;
+    lmChoiceButton(sh, i === lmSelectedShot, `lmSetShotChoice(${i})`)).join('');
+  return `<div class="lm-panel">
+    <div class="lm-panel-title">Batsman — shot selection</div>
+    <div class="lm-choice-grid compact">${btns}</div>
+    <div class="lm-control-summary">Shot: <b>${escapeHtml(LM_SHOTS[lmSelectedShot])}</b></div>
+    <button class="lm-action-btn" onclick="lmPlaySelectedShot()">🏏 Play Shot</button>
+  </div>`;
 }
 
 // ── Actions ──
@@ -5958,6 +6131,16 @@ async function lmReady() {
   pollMatch();
 }
 function lmPickVariation(v) { haptic('light'); lmSelectedVariation = v; lmForceRender = true; pollMatch(); }
+function lmBowlSelected() {
+  const opts = window._lmBowlOpts || {};
+  if (opts.is_spinner) {
+    if (!lmSelectedSpinDelivery) { toast('Pick a delivery first', 'error'); return; }
+    lmDeliver(lmSelectedSpinDelivery);
+    return;
+  }
+  if (!lmSelectedVariation || !lmSelectedLength) { toast('Pick variation and length first', 'error'); return; }
+  lmDeliver(lmSelectedVariation, lmSelectedLength);
+}
 async function lmDeliver(variation, length) {
   if (lmActionInFlight) return;       // ignore double-taps while delivering
   haptic('medium');
@@ -5966,12 +6149,18 @@ async function lmDeliver(variation, length) {
   const { ok, data } = await lmAction('/api/webapp/match/deliver', body);
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmSelectedVariation = null;
+  lmSelectedLength = null;
+  lmSelectedSpinDelivery = null;
   window._lmBowlOpts = null;  // refetch next over
   // The deliver response already carries the post-delivery snapshot — render it
   // straight away so the bowler instantly sees "waiting for batsman" instead of
   // waiting for the next poll.
   if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
+}
+function lmPlaySelectedShot() {
+  if (lmSelectedShot === null || lmSelectedShot === undefined) { toast('Pick a shot first', 'error'); return; }
+  lmPlayShot(parseInt(lmSelectedShot, 10));
 }
 async function lmPlayShot(idx) {
   if (lmActionInFlight) return;       // ignore double-taps while resolving
