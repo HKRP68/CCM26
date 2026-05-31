@@ -237,6 +237,8 @@ def _migrate_add_columns():
     # Admin-tunable Mini App quota sizes
     _try_add("game_config", "spin_ad_quota", "INTEGER DEFAULT 5")
     _try_add("game_config", "daily_ad_quota", "INTEGER DEFAULT 5")
+    # Global gameplay style: preserve the original in-chat bot flow by default.
+    _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     # Telegram channel storage — cache file_ids for player images
     _try_add("player_images", "tg_file_id", "VARCHAR(200)")
     # Referral code + branding (per the invite + branding feature)

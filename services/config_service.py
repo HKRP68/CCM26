@@ -51,7 +51,25 @@ DEFAULTS = {
     "maintenance_until": None,
     "maintenance_started_at": None,
     "maintenance_bypass_ids": None,
+    # Match gameplay style. Telegram restores the original in-chat buttons;
+    # webapp opts every newly started match into the Mini App board.
+    "match_style": "telegram",
 }
+
+
+MATCH_STYLES = {"telegram", "webapp"}
+
+
+def get_match_style(session=None):
+    """Return the global gameplay style for newly started matches.
+
+    Unknown or missing values safely fall back to the original Telegram flow.
+    """
+    # Refresh instead of using the process-local cache: the admin website and
+    # Telegram bot commonly run as separate processes, and a website save must
+    # affect the next match without requiring a bot restart.
+    style = str(_refresh(session).get("match_style") or "telegram").lower()
+    return style if style in MATCH_STYLES else "telegram"
 
 
 # Module-level cache (refreshed when admin saves)
