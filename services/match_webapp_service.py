@@ -89,6 +89,17 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
     s["bowl_team_name"] = bwt
     s["bat_username"] = bu.username
     s["bowl_username"] = bwu.username
+    # Stable host (user1) / guest (user2) display names for the match header,
+    # independent of which side is batting in the current innings.
+    def _disp(uid):
+        if uid == bu.id:
+            return bt
+        if uid == bwu.id:
+            return bwt
+        uu = session.query(User).get(uid)
+        return (uu.team_name or (f"@{uu.username}" if uu and uu.username else "Player")) if uu else "Player"
+    s["host_name"] = _disp(m.user1_id)
+    s["guest_name"] = _disp(m.user2_id)
     s["pitch_type"] = m.pitch_type
     s["setup"] = SETUP_PICKING
     s["openers_done"] = False
@@ -107,7 +118,13 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
         if bot_user:
             s["is_vsbot"] = True
             s["bot_user_id"] = bot_user.id
-            _auto_lock_bot_setup(s)
+            if bu.id == bot_user.id:
+                s["batting_order"] = [bxi[0], bxi[1]] + [p for p in bxi if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])]
+                s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
+                s["openers_done"] = True
+            if bwu.id == bot_user.id:
+                s["current_bowler"] = bwxi[0]
+                s["bowler_done"] = True
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
 
@@ -130,6 +147,53 @@ def role_for(state, user_id):
     if user_id == state.get("bowl_team_id"):
         return "bowler"
     return "spectator"
+
+
+# ── Spec-aligned vocabulary ──────────────────────────────────────────
+# The engine uses internal constants (PICK_DELIVERY, setup=PICKING, etc.).
+# These mappers expose the cleaner names the Mini App spec uses, without
+# renaming the internal machinery (which other code depends on).
+
+def phase_status(state, match_status):
+    """Normalized match phase:
+      'xi_selection' (setup), 'innings1', 'innings2', 'completed', or the raw
+      match status as a fallback."""
+    if match_status == "completed":
+        return "completed"
+    setup = state.get("setup")
+    if setup in (SETUP_PICKING, SETUP_AWAIT_OPENERS, SETUP_AWAIT_BOWLER,
+                 SETUP_AWAIT_READY):
+        return "xi_selection"
+    inn = state.get("innings", 1)
+    return "innings2" if inn == 2 else "innings1"
+
+
+def turn_state_name(next_action):
+    """Map the internal next_action to the spec's gameplay turn states:
+      bowling_delivery / batting_shot / selecting_wicket_batsman /
+      selecting_over_bowler. Returns None outside the ball loop."""
+    return {
+        A_PICK_DELIVERY: "bowling_delivery",
+        A_PICK_LENGTH: "bowling_delivery",   # still the bowler's delivery step
+        A_PICK_SHOT: "batting_shot",
+        A_PICK_NEW_BATSMAN: "selecting_wicket_batsman",
+        A_PICK_NEW_BOWLER: "selecting_over_bowler",
+    }.get(next_action)
+
+
+def whose_turn(state, next_action, user_id):
+    """Compute, for a given user, whether it's their turn and what side acts.
+    Returns (turn_side, is_my_turn) where turn_side is 'bowler'/'batsman'/None.
+    Based on status/turnState + batting team id + current user (per spec)."""
+    turn_side = None
+    if next_action in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+        turn_side = "bowler"
+    elif next_action in (A_PICK_SHOT, A_PICK_NEW_BATSMAN):
+        turn_side = "batsman"
+    role = role_for(state, user_id)
+    is_mine = ((turn_side == "bowler" and role == "bowler") or
+               (turn_side == "batsman" and role == "batsman"))
+    return turn_side, is_mine
 
 
 def _bat_card(state, idx):
@@ -208,18 +272,6 @@ def build_snapshot(session, match_id, user_id):
             "ball": state.get("current_ball", 0),
             "overs_str": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
             "target": state.get("target"),
-            "crr": round(
-                (state.get("total_runs", 0) / max(
-                    1,
-                    ((state.get("current_over", 1) - 1) * 6
-                     + state.get("current_ball", 0)),
-                )) * 6,
-                2,
-            ),
-        },
-        "partnership": {
-            "runs": state.get("partnership_runs", 0),
-            "balls": state.get("partnership_balls", 0),
         },
         "bat_team_name": state.get("bat_team_name", "Batting"),
         "bowl_team_name": state.get("bowl_team_name", "Bowling"),
@@ -229,8 +281,19 @@ def build_snapshot(session, match_id, user_id):
         "timeline": state.get("timeline", [])[-12:],
         "selected_variation": state.get("selected_variation"),
         "current_delivery": state.get("current_delivery"),
-        "last_speed": state.get("last_speed"),
-        "last_ball": state.get("last_ball"),
+        # Spec-aligned vocabulary (computed from the engine state)
+        "phase": phase_status(state, status),
+        "turn_state": turn_state_name(next_action),
+        "is_my_turn": whose_turn(state, next_action, user_id)[1],
+        # Squad lists (names + role) for the Squads tab
+        "bat_xi": [{"name": p.get("name"), "bowl_style": p.get("bowl_style"),
+                    "category": p.get("category")} for p in state.get("bat_xi", [])],
+        "bowl_xi": [{"name": p.get("name"), "bowl_style": p.get("bowl_style"),
+                     "category": p.get("category")} for p in state.get("bowl_xi", [])],
+        # Stable host/guest identities for the match header (independent of who
+        # is currently batting). host = user1, guest = user2.
+        "host_name": state.get("host_name"),
+        "guest_name": state.get("guest_name"),
     }
 
     # Role-specific option payloads — both pickers available at once.
@@ -260,6 +323,109 @@ def build_snapshot(session, match_id, user_id):
     return snap
 
 
+def build_match_state_api(session, match_id, user_id):
+    """Richer, fully-serialized match state for GET /api/match.
+
+    Wraps build_snapshot and adds: pitch, toss winner/decision, explicit
+    role booleans, host/guest blocks, innings data, last ball, and commentary.
+    Returns dict or None if the match has no live state.
+    """
+    base = build_snapshot(session, match_id, user_id)
+    if not base:
+        return None
+    state = mwa.get_state(match_id)
+    m = session.query(Match).get(match_id)
+
+    role = base.get("role")  # batsman / bowler / spectator
+    turn = base.get("turn")  # batsman / bowler / None
+
+    # host = match.user1, guest = match.user2 (stable identities)
+    def _user_block(uid):
+        if not uid:
+            return None
+        u = session.query(User).get(uid)
+        if not u:
+            return None
+        is_bat = (uid == state.get("bat_team_id"))
+        is_bowl = (uid == state.get("bowl_team_id"))
+        return {
+            "user_id": u.id,
+            "telegram_id": u.telegram_id,
+            "name": u.first_name or u.username or "Player",
+            "username": u.username,
+            "team_name": u.team_name,
+            "side": "batting" if is_bat else ("bowling" if is_bowl else None),
+        }
+
+    host = _user_block(m.user1_id) if m else None
+    guest = _user_block(m.user2_id) if m else None
+
+    # Toss winner as a friendly label
+    toss_winner = None
+    if m and m.toss_winner_id:
+        tw = session.query(User).get(m.toss_winner_id)
+        toss_winner = {
+            "user_id": m.toss_winner_id,
+            "name": (tw.first_name or tw.username) if tw else None,
+            "is_host": (m.toss_winner_id == m.user1_id),
+        }
+
+    is_my_turn = (
+        (role == "batsman" and turn == "batsman") or
+        (role == "bowler" and turn == "bowler")
+    )
+
+    return {
+        "ok": True,
+        "match_id": match_id,
+        "pitch": (m.pitch_type if m else None) or state.get("pitch_type"),
+        "overs": base.get("overs_limit"),
+        "status": base.get("status"),                 # raw match.status
+        "phase": base.get("phase"),                    # xi_selection/innings1/innings2/completed
+        "toss_winner": toss_winner,
+        "toss_decision": (m.toss_decision if m else None),
+        "turn_state": base.get("turn_state"),          # bowling_delivery / batting_shot / ...
+        "raw_action": base.get("next_action"),         # internal action (debug)
+        "setup": base.get("setup"),
+        "setup_progress": base.get("setup_progress"),
+        # Explicit role booleans (per spec)
+        "is_batting": role == "batsman",
+        "is_bowling": role == "bowler",
+        "is_spectator": role == "spectator",
+        "is_my_turn": bool(is_my_turn),
+        "role": role,
+        "turn": turn,
+        # Identities
+        "host": host,
+        "guest": guest,
+        "is_vsbot": bool(state.get("is_vsbot")),
+        # Innings + score
+        "innings": base.get("innings"),
+        "innings_data": {
+            "number": base.get("innings"),
+            "batting_team": base.get("bat_team_name"),
+            "bowling_team": base.get("bowl_team_name"),
+            "target": state.get("target"),
+        },
+        "score": base.get("score"),
+        # Players on the field
+        "striker": base.get("striker"),
+        "non_striker": base.get("non_striker"),
+        "bowler": base.get("bowler"),
+        # Setup pickers (if applicable for this user)
+        "openers_options": base.get("openers_options"),
+        "bowler_options": base.get("bowler_options"),
+        # Live texture
+        "timeline": base.get("timeline"),
+        "current_delivery": base.get("current_delivery"),
+        "selected_variation": base.get("selected_variation"),
+        "last_ball": state.get("last_ball"),
+        "commentary": state.get("last_commentary"),
+        # Sync
+        "ball_seq": base.get("ball_seq"),
+    }
+
+
 def get_state_is_vsbot(match_id):
     """Quick check: is this a vs-bot match?"""
     st = mwa.get_state(match_id)
@@ -279,56 +445,6 @@ def _maybe_start_match(state, match_id):
 def _in_setup(state):
     return state.get("setup") in (SETUP_PICKING, SETUP_AWAIT_OPENERS,
                                   SETUP_AWAIT_BOWLER, SETUP_AWAIT_READY)
-
-
-def _auto_lock_bot_setup(state):
-    """Auto-pick openers/bowler when the AI controls either side.
-
-    Used at match start and after the innings swap so vs-bot Mini App matches
-    do not stall waiting for a bot-side setup choice. Human-vs-human matches
-    keep both flags false and show the setup pickers to the newly swapped sides.
-    """
-    bot_uid = state.get("bot_user_id")
-    if not bot_uid:
-        return
-    if state.get("bat_team_id") == bot_uid and not state.get("openers_done"):
-        bxi = state.get("bat_xi", [])
-        if len(bxi) >= 2:
-            state["batting_order"] = [bxi[0], bxi[1]] + [
-                p for p in bxi
-                if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])
-            ]
-            state["striker_idx"] = 0
-            state["non_striker_idx"] = 1
-            state["next_batsman_idx"] = 2
-            state["openers_done"] = True
-    if state.get("bowl_team_id") == bot_uid and not state.get("bowler_done"):
-        bwxi = state.get("bowl_xi", [])
-        if bwxi:
-            state["current_bowler"] = bwxi[0]
-            state["bowler_done"] = True
-
-
-def _reset_second_innings_setup(state):
-    """Put the swapped innings into setup mode so the new batting side picks
-    openers and the new bowling side picks the first bowler immediately.
-    """
-    state["setup"] = SETUP_PICKING
-    state["openers_done"] = False
-    state["bowler_done"] = False
-    state["batting_order"] = []
-    state["striker_idx"] = 0
-    state["non_striker_idx"] = 1
-    state["next_batsman_idx"] = 2
-    state["current_bowler"] = None
-    state["selected_variation"] = None
-    state["current_delivery"] = None
-    state["last_ball"] = None
-    _auto_lock_bot_setup(state)
-    if state.get("openers_done") and state.get("bowler_done"):
-        state["setup"] = SETUP_DONE
-        return A_PICK_DELIVERY
-    return "SETUP"
 
 
 def select_openers(match_id, user_id, striker_rid, non_striker_rid):
@@ -400,6 +516,52 @@ def mark_ready(match_id, user_id):
     return True, both, ("Match starting!" if both else "Waiting for both picks…")
 
 
+def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
+                   bowler_idx=None):
+    """Unified index-based setup submission (POST /api/match/select-players).
+
+    The batting side sends strikerIdx + nonStrikerIdx; the bowling side sends
+    bowlerIdx. Indices are positions into the user's XI (bat_xi / bowl_xi).
+    Converts indices → roster ids and reuses the validated select_openers /
+    select_bowler logic (which enforces role, dedupe, and auto-starts the match
+    when both sides have submitted).
+
+    Returns (ok, started, msg).
+    """
+    state = mwa.get_state(match_id)
+    if not state:
+        return False, False, "Match not found."
+
+    role = role_for(state, user_id)
+
+    # Batting side → openers
+    if striker_idx is not None or non_striker_idx is not None:
+        if role != "batsman":
+            return False, False, "Only the batting side picks openers."
+        if striker_idx is None or non_striker_idx is None:
+            return False, False, "Provide both strikerIdx and nonStrikerIdx."
+        bat_xi = state.get("bat_xi", [])
+        if not (0 <= striker_idx < len(bat_xi)) or not (0 <= non_striker_idx < len(bat_xi)):
+            return False, False, "Player index out of range."
+        if striker_idx == non_striker_idx:
+            return False, False, "Striker and non-striker must be different players."
+        s_rid = bat_xi[striker_idx]["roster_id"]
+        ns_rid = bat_xi[non_striker_idx]["roster_id"]
+        return select_openers(match_id, user_id, s_rid, ns_rid)
+
+    # Bowling side → bowler
+    if bowler_idx is not None:
+        if role != "bowler":
+            return False, False, "Only the bowling side picks the bowler."
+        bowl_xi = state.get("bowl_xi", [])
+        if not (0 <= bowler_idx < len(bowl_xi)):
+            return False, False, "Bowler index out of range."
+        b_rid = bowl_xi[bowler_idx]["roster_id"]
+        return select_bowler(match_id, user_id, b_rid)
+
+    return False, False, "Nothing to select — send openers or a bowler."
+
+
 # ══════════════════ Phase 2: the live ball loop ══════════════════════
 # We reuse the bot's outcome engine (_calc → calculate_outcome) so the
 # Mini App produces identical outcomes (same probabilities/traits/form).
@@ -448,33 +610,15 @@ def set_delivery(match_id, user_id, variation, length=None):
         return False, "Not your turn to bowl right now."
 
     bowler = state.get("current_bowler") or {}
-    opts = _get_delivery_options(bowler.get("bowl_style", "Medium Pacer"),
-                                 bowler.get("bowl_hand", "Right"))
     spinner = _is_spinner(bowler.get("bowl_style", ""))
     if spinner:
-        deliveries = opts.get("deliveries") or []
-        if variation not in deliveries:
-            return False, "Pick a valid delivery."
-        delivery = variation
-        if variation == "Surprise":
-            import random
-            choices = [d for d in deliveries if d != "Surprise"]
-            if choices:
-                delivery = random.choice(choices) + " (Surprise)"
+        delivery = variation  # spinners pick a single delivery
     else:
-        variations = opts.get("variations") or []
-        lengths = opts.get("lengths") or []
-        if variation not in variations:
-            return False, "Pick a valid variation."
         if not length:
-            # Store the selected variation for clients that still submit the
-            # legacy two-step pacer flow. The Mini App now usually sends both
-            # variation and length together when the Bowl button is tapped.
+            # store the variation, wait for length selection
             state["selected_variation"] = variation
             mwa.save_state(match_id, state, next_action=A_PICK_LENGTH)
             return True, "Variation set — now pick a length."
-        if length not in lengths:
-            return False, "Pick a valid length."
         delivery = f"{variation} {length}".strip()
 
     state["current_delivery"] = delivery
@@ -486,6 +630,184 @@ def set_delivery(match_id, user_id, variation, length=None):
         state["last_speed"] = max(115, min(155, base + random.randint(-6, 8)))
     mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
     return True, "Delivery on its way — batsman to play."
+
+
+# ── Processing lock: stops a double-tap from firing two actions ───────
+import time as _time
+_ACTION_LOCK_SECONDS = 8  # auto-expires so a crashed action can't wedge a match
+
+
+def _is_processing(state):
+    """True if a prior action is still within the processing window."""
+    ts = state.get("action_processing_at")
+    if not ts:
+        return False
+    return (_time.time() - ts) < _ACTION_LOCK_SECONDS
+
+
+def _set_processing(state, on=True):
+    state["action_processing_at"] = _time.time() if on else None
+
+
+# ── Speed: qualitative → km/h (bowler-type aware) ────────────────────
+def _speed_to_kmh(speed_label, bowler):
+    """Map slow/medium/fast to a realistic km/h, modulated by bowler type and
+    rating. Spinners top out far lower than pacers."""
+    import random
+    style = (bowler.get("bowl_style", "") or "").lower()
+    rating = bowler.get("bowl_rating", 80) or 80
+    spinner = _is_spinner(bowler.get("bowl_style", ""))
+    label = (speed_label or "medium").lower()
+    if spinner:
+        bands = {"slow": (70, 82), "medium": (82, 92), "fast": (92, 102)}
+    else:
+        bands = {"slow": (118, 128), "medium": (130, 142), "fast": (142, 154)}
+    lo, hi = bands.get(label, bands["medium"])
+    # Higher-rated bowlers lean to the top of the band.
+    skill = max(0, min(1, (rating - 70) / 30.0))
+    base = lo + (hi - lo) * (0.4 + 0.5 * skill)
+    return int(round(base + random.uniform(-2, 2)))
+
+
+def set_delivery_action(match_id, user_id, delivery, speed=None):
+    """Unified bowling action (POST /api/match/action, type=delivery).
+
+    Accepts a single {delivery, speed} per the spec (e.g. yorker/fast) rather
+    than the two-step variation→length. Validates role/turn/processing, stores
+    currentDelivery + currentSpeed + a generated km/h, and hands over to the
+    batsman. Returns (ok, msg, info) where info carries the resolved km/h.
+    """
+    state = mwa.get_state(match_id)
+    if not state:
+        return False, "Match not found.", None
+    # user must be in the match and NOT batting (i.e. must be the bowler)
+    if user_id != state.get("bowl_team_id"):
+        return False, "Only the bowling side delivers.", None
+    na = mwa.get_next_action(match_id)
+    if na not in (A_PICK_DELIVERY, A_PICK_LENGTH):
+        return False, "It's not the bowling delivery phase.", None
+    if _is_processing(state):
+        return False, "Previous action still processing — hold on.", None
+    if not delivery:
+        return False, "Pick a delivery.", None
+
+    _set_processing(state, True)
+    bowler = state.get("current_bowler") or {}
+    kmh = _speed_to_kmh(speed, bowler)
+
+    state["current_delivery"] = str(delivery)
+    state["current_speed"] = (speed or "medium")
+    state["last_speed"] = kmh          # km/h, surfaced to clients
+    state["selected_variation"] = str(delivery)
+    _set_processing(state, False)
+    mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
+    return True, "Delivery on its way — batsman to play.", {
+        "delivery": str(delivery), "speed": speed or "medium", "kmh": kmh}
+
+
+def _resolve_shot_index(shot):
+    """Map a shot to its AVAILABLE_SHOTS index. Accepts an int index, an exact
+    name, or a case-insensitive name ('pull' → 'Pull'). Returns int or None."""
+    from services.bowling_service import AVAILABLE_SHOTS
+    if shot is None:
+        return None
+    # numeric index
+    if isinstance(shot, int):
+        return shot if 0 <= shot < len(AVAILABLE_SHOTS) else None
+    sval = str(shot).strip()
+    if sval.isdigit():
+        i = int(sval)
+        return i if 0 <= i < len(AVAILABLE_SHOTS) else None
+    # name (case-insensitive, tolerant of spacing)
+    norm = sval.lower().replace("_", " ").replace("-", " ")
+    for i, name in enumerate(AVAILABLE_SHOTS):
+        if name.lower() == norm:
+            return i
+    return None
+
+
+def set_shot_action(match_id, user_id, shot):
+    """Batting action (POST /api/match/action, type=shot). Accepts a shot name
+    (e.g. 'pull') or index, validates role/phase/processing, and plays the ball.
+    Returns (ok, result_or_msg, info)."""
+    state = mwa.get_state(match_id)
+    if not state:
+        return False, "Match not found.", None
+    if user_id != state.get("bat_team_id"):
+        return False, "Only the batting side plays shots.", None
+    na = mwa.get_next_action(match_id)
+    if na != A_PICK_SHOT:
+        return False, "It's not the batting shot phase.", None
+    if _is_processing(state):
+        return False, "Previous action still processing — hold on.", None
+
+    idx = _resolve_shot_index(shot)
+    if idx is None:
+        from services.bowling_service import AVAILABLE_SHOTS
+        return False, f"Unknown shot '{shot}'. Options: {', '.join(AVAILABLE_SHOTS)}", None
+
+    from services.bowling_service import AVAILABLE_SHOTS
+    state["current_shot"] = AVAILABLE_SHOTS[idx]
+    state["manual_batsman"] = True   # envelope flow: player picks next batsman
+    _set_processing(state, True)
+    mwa.save_state(match_id, state)
+    ok, res = play_shot(match_id, user_id, idx)
+    # play_shot saves state; clear the lock afterward.
+    st2 = mwa.get_state(match_id)
+    if st2:
+        _set_processing(st2, False)
+        mwa.save_state(match_id, st2)
+    if not ok:
+        return False, res, None
+    return True, res, {"shot": AVAILABLE_SHOTS[idx]}
+
+
+def select_wicket_batsman(match_id, user_id, index):
+    """After a wicket, the batting player picks the next batsman (by index into
+    the batting order). Validates per spec:
+      • only the batting side selects
+      • match is in selecting_wicket_batsman (A_PICK_NEW_BATSMAN)
+      • the selected player exists
+      • not already on strike / non-strike
+      • not already out
+    On success the player becomes striker and play returns to bowling delivery.
+    Returns (ok, msg, info)."""
+    state = mwa.get_state(match_id)
+    if not state:
+        return False, "Match not found.", None
+    if user_id != state.get("bat_team_id"):
+        return False, "Only the batting side selects the next batsman.", None
+    na = mwa.get_next_action(match_id)
+    if na != A_PICK_NEW_BATSMAN:
+        return False, "It's not the new-batsman selection phase.", None
+
+    order = state.get("batting_order", [])
+    try:
+        idx = int(index)
+    except (ValueError, TypeError):
+        return False, "Invalid batsman index.", None
+    if not (0 <= idx < len(order)):
+        return False, "Selected player does not exist.", None
+
+    player = order[idx]
+    rid = player.get("roster_id")
+    bat_stats = state.get("bat_stats", {})
+    # State is JSON-round-tripped, so dict keys may be strings. Check both.
+    st = bat_stats.get(rid) or bat_stats.get(str(rid))
+    if st and st.get("out"):
+        return False, "That batsman is already out.", None
+    if idx in (state.get("striker_idx"), state.get("non_striker_idx")):
+        return False, "That batsman is already at the crease.", None
+
+    # Install as striker; resume the delivery loop.
+    state["striker_idx"] = idx
+    # Keep next_batsman_idx ahead of the highest used position.
+    used = max(idx, state.get("non_striker_idx", 1))
+    state["next_batsman_idx"] = max(state.get("next_batsman_idx", 2), used + 1)
+    state["last_dismissed"] = None
+    mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+    return True, f"{player.get('name')} comes to the crease.", {
+        "index": idx, "name": player.get("name")}
 
 
 def _apply_outcome(state, oc, shot, delivery, striker, bowler):
@@ -604,6 +926,7 @@ def play_shot(match_id, user_id, shot_index):
     res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
 
     # Same commentary line the bot would generate for this ball
+    commentary = None
     try:
         commentary = _bm._maybe_pick_commentary(oc, striker, bowler,
                                                  oc.get("runs", 0))
@@ -612,25 +935,40 @@ def play_shot(match_id, user_id, shot_index):
     except Exception:
         pass
 
+    # Persist last-ball summary + commentary in state so the match-state API
+    # can surface them to clients that weren't the one who made the call.
     state["last_ball"] = {
-        "text": res.get("rtxt", ""),
-        "commentary": res.get("commentary", ""),
+        "text": res.get("rtxt"),
+        "type": res.get("type"),
+        "runs": res.get("runs", 0),
         "shot": shot,
         "delivery": delivery,
-        "runs": res.get("runs", 0),
-        "type": res.get("type"),
+        "batsman": striker.get("name") if striker else None,
+        "bowler": bowler.get("name") if bowler else None,
+        "how": res.get("how"),
     }
+    state["last_commentary"] = commentary or res.get("rtxt")
 
     # Next action
     if is_innings_over(state):
         from services.match_engine import (transition_to_second_innings,
                                            compute_match_result)
         if state.get("innings", 1) == 1:
-            # End of 1st innings → swap sides, then require 2nd-innings
-            # openers + first bowler (auto-picked for bot-controlled sides).
+            # End of 1st innings → set up the chase
             transition_to_second_innings(state)
-            next_act = _reset_second_innings_setup(state)
             res["innings_break"] = True
+            if state.get("is_vsbot"):
+                # vsbot: keep it flowing — bowling side picks a bowler (auto for bot).
+                next_act = A_PICK_NEW_BOWLER
+                state["setup"] = SETUP_DONE
+            else:
+                # PvP: re-enter player selection so BOTH sides pick again
+                # (new batting side → openers, new bowling side → bowler).
+                state["setup"] = SETUP_PICKING
+                state["openers_done"] = False
+                state["bowler_done"] = False
+                state["current_bowler"] = None
+                next_act = "SETUP"
         else:
             # End of 2nd innings → match over
             result = compute_match_result(state)
@@ -639,12 +977,23 @@ def play_shot(match_id, user_id, shot_index):
             res["match_over"] = True
             res["result"] = result
     elif res["need_new_bat"] and state["total_wickets"] < 10:
+        # Save the dismissed batsman name (for selecting_wicket_batsman UI).
+        try:
+            dismissed = get_striker(state)
+            state["last_dismissed"] = dismissed.get("name") if dismissed else None
+        except Exception:
+            state["last_dismissed"] = None
         next_act = A_PICK_NEW_BATSMAN
-        nb = state.get("next_batsman_idx", 2)
-        if nb < len(state.get("batting_order", [])):
-            state["striker_idx"] = nb
-            state["next_batsman_idx"] = nb + 1
-            next_act = A_PICK_DELIVERY
+        if state.get("manual_batsman"):
+            # Manual mode: the batting player picks the next batsman.
+            # Stay in A_PICK_NEW_BATSMAN (do NOT auto-advance).
+            pass
+        else:
+            nb = state.get("next_batsman_idx", 2)
+            if nb < len(state.get("batting_order", [])):
+                state["striker_idx"] = nb
+                state["next_batsman_idx"] = nb + 1
+                next_act = A_PICK_DELIVERY
     elif res["eoo"]:
         next_act = A_PICK_NEW_BOWLER
     else:
@@ -702,14 +1051,12 @@ def build_scorecard(match_id, user_id):
     if not state:
         return {"ok": False, "message": "Match not found."}
 
-    def _batting(xi, stats, current_rids=None):
-        current_rids = set(current_rids or [])
+    def _batting(xi, stats):
         rows = []
         for p in xi:
             st = stats.get(p["roster_id"], {})
-            if (p["roster_id"] not in current_rids and
-                    not st.get("balls") and not st.get("out") and not st.get("runs")):
-                continue  # didn't bat and is not currently at the crease
+            if not st.get("balls") and not st.get("out") and not st.get("runs"):
+                continue  # didn't bat
             rows.append({
                 "name": p["name"], "runs": st.get("runs", 0),
                 "balls": st.get("balls", 0), "fours": st.get("fours", 0),
@@ -719,12 +1066,11 @@ def build_scorecard(match_id, user_id):
             })
         return rows
 
-    def _bowling(xi, stats, current_rids=None):
-        current_rids = set(current_rids or [])
+    def _bowling(xi, stats):
         rows = []
         for p in xi:
             st = stats.get(p["roster_id"], {})
-            if p["roster_id"] not in current_rids and not st.get("balls"):
+            if not st.get("balls"):
                 continue
             overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))
             econ = round(st.get("runs", 0) / (st.get("balls", 1) / 6), 2) if st.get("balls") else 0
@@ -763,15 +1109,8 @@ def build_scorecard(match_id, user_id):
     innings.append({
         "number": 1, "bat_team": inn1_bat_team, "bowl_team": inn1_bowl_team,
         "runs": inn1_runs, "wickets": inn1_wkts, "overs": inn1_overs,
-        "batting": _batting(inn1_bat_xi, inn1_bat_stats, [
-            (state.get("batting_order", [{}])[state.get("striker_idx", 0)].get("roster_id")
-             if cur_inn == 1 and state.get("batting_order") and state.get("striker_idx", 0) < len(state.get("batting_order", [])) else None),
-            (state.get("batting_order", [{}])[state.get("non_striker_idx", 1)].get("roster_id")
-             if cur_inn == 1 and state.get("batting_order") and state.get("non_striker_idx", 1) < len(state.get("batting_order", [])) else None),
-        ]),
-        "bowling": _bowling(inn1_bowl_xi, inn1_bowl_stats, [
-            (state.get("current_bowler") or {}).get("roster_id") if cur_inn == 1 else None,
-        ]),
+        "batting": _batting(inn1_bat_xi, inn1_bat_stats),
+        "bowling": _bowling(inn1_bowl_xi, inn1_bowl_stats),
     })
 
     # Innings 2 (only if in progress)
@@ -781,15 +1120,8 @@ def build_scorecard(match_id, user_id):
             "bowl_team": state.get("bowl_team_name", ""),
             "runs": state.get("total_runs", 0), "wickets": state.get("total_wickets", 0),
             "overs": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
-            "batting": _batting(state.get("bat_xi", []), state.get("bat_stats", {}), [
-                (state.get("batting_order", [{}])[state.get("striker_idx", 0)].get("roster_id")
-                 if state.get("batting_order") and state.get("striker_idx", 0) < len(state.get("batting_order", [])) else None),
-                (state.get("batting_order", [{}])[state.get("non_striker_idx", 1)].get("roster_id")
-                 if state.get("batting_order") and state.get("non_striker_idx", 1) < len(state.get("batting_order", [])) else None),
-            ]),
-            "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {}), [
-                (state.get("current_bowler") or {}).get("roster_id"),
-            ]),
+            "batting": _batting(state.get("bat_xi", []), state.get("bat_stats", {})),
+            "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {})),
         })
 
     return {"ok": True, "innings": innings, "current_innings": cur_inn,
@@ -857,6 +1189,89 @@ def get_scorecard_any(session, match_id, user_id):
     return {"ok": False, "message": "No scorecard available for this match."}
 
 
+# ── Completed-match cache: keep a finished match queryable for 5 minutes ──
+import time as _time2
+_COMPLETED_CACHE = {}            # match_id -> (expires_at, payload)
+_COMPLETED_TTL = 5 * 60          # 5 minutes
+
+
+def _cache_completed(match_id, payload):
+    _COMPLETED_CACHE[match_id] = (_time2.time() + _COMPLETED_TTL, payload)
+    # opportunistic sweep of expired entries
+    now = _time2.time()
+    for mid in [k for k, (exp, _) in _COMPLETED_CACHE.items() if exp < now]:
+        _COMPLETED_CACHE.pop(mid, None)
+
+
+def get_completed_cached(match_id):
+    """Return a recently-completed match payload if still within the 5-min
+    window, else None."""
+    entry = _COMPLETED_CACHE.get(match_id)
+    if not entry:
+        return None
+    exp, payload = entry
+    if _time2.time() > exp:
+        _COMPLETED_CACHE.pop(match_id, None)
+        return None
+    return payload
+
+
+def _pick_player_of_match(state, result):
+    """Choose Player of the Match from both innings' stats. Simple, explainable
+    scoring: runs + 20×wickets + small boundary bonus; the winning side's
+    players get a modest edge on ties. Returns {name, team, runs, wickets} or None."""
+    if not state:
+        return None
+    candidates = {}  # roster_id -> {name, runs, wkts, fours, sixes, side_winner}
+    winner_uid = (result or {}).get("winner_team_id")
+
+    def _ingest(bat_stats, bowl_stats, xi, team_uid):
+        by_rid = {p["roster_id"]: p for p in (xi or [])}
+        for rid, st in (bat_stats or {}).items():
+            try:
+                rid_i = int(rid)
+            except (ValueError, TypeError):
+                rid_i = rid
+            p = by_rid.get(rid_i) or by_rid.get(rid)
+            name = p["name"] if p else str(rid)
+            c = candidates.setdefault(rid_i, {"name": name, "runs": 0, "wkts": 0,
+                                              "fours": 0, "sixes": 0,
+                                              "winner": team_uid == winner_uid})
+            c["runs"] += st.get("runs", 0)
+            c["fours"] += st.get("fours", 0)
+            c["sixes"] += st.get("sixes", 0)
+        for rid, st in (bowl_stats or {}).items():
+            try:
+                rid_i = int(rid)
+            except (ValueError, TypeError):
+                rid_i = rid
+            p = by_rid.get(rid_i) or by_rid.get(rid)
+            name = p["name"] if p else str(rid)
+            c = candidates.setdefault(rid_i, {"name": name, "runs": 0, "wkts": 0,
+                                              "fours": 0, "sixes": 0,
+                                              "winner": team_uid == winner_uid})
+            c["wkts"] += st.get("wickets", 0)
+
+    # Innings 1 (snapshotted) + innings 2 (current)
+    _ingest(state.get("inn1_bat_stats"), state.get("inn1_bowl_stats"),
+            state.get("inn1_bat_xi"), state.get("inn1_bat_team_id"))
+    # innings-1 bowlers belong to innings-1 bowling team
+    _ingest({}, state.get("inn1_bowl_stats"), state.get("inn1_bowl_xi"),
+            state.get("inn1_bowl_team_id"))
+    _ingest(state.get("bat_stats"), state.get("bowl_stats"),
+            state.get("bat_xi"), state.get("bat_team_id"))
+    _ingest({}, state.get("bowl_stats"), state.get("bowl_xi"),
+            state.get("bowl_team_id"))
+
+    if not candidates:
+        return None
+    def score(c):
+        return c["runs"] + 20 * c["wkts"] + c["fours"] * 1 + c["sixes"] * 2 + (5 if c["winner"] else 0)
+    best_rid = max(candidates, key=lambda r: score(candidates[r]))
+    b = candidates[best_rid]
+    return {"name": b["name"], "runs": b["runs"], "wickets": b["wkts"]}
+
+
 def finalize_webapp_match(session, match_id):
     """Finalize a completed Mini-App match: update the Match record, persist
     the scorecard, and clean up live state. Returns the result dict.
@@ -918,7 +1333,25 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         logger.exception("reward core failed (non-fatal)")
 
+    # Player of the match (from both innings' stats, before cleanup).
+    pom = None
+    try:
+        pom = _pick_player_of_match(state, result)
+        if pom:
+            result["player_of_match"] = pom
+    except Exception:
+        logger.exception("player-of-match selection failed (non-fatal)")
+
     session.commit()
+
+    payload = {"ok": True, "result": result, "rewards": rewards,
+               "player_of_match": pom}
+
+    # Keep the finished match queryable for 5 minutes after state cleanup.
+    try:
+        _cache_completed(match_id, payload)
+    except Exception:
+        pass
 
     # Clean up the live state now that everything is persisted
     try:
@@ -927,13 +1360,150 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         pass
 
-    return {"ok": True, "result": result, "rewards": rewards}
+    return payload
 
 
 # ══════════════════ Abandon / timeout ═══════════════════════════════
 
-# A Mini-App match with no ball activity for this long is considered stale.
-WEBAPP_MATCH_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
+# A Mini-App match with no ball activity for this long is force-terminated.
+WEBAPP_MATCH_TIMEOUT_SECONDS = 20 * 60  # 20 minutes (per spec)
+
+
+def _balls_bowled_total(state):
+    """Total legal balls bowled across the match so far (both innings).
+    1st-innings balls are snapshotted at the break; 2nd-innings balls come from
+    the live over/ball counters."""
+    if not state:
+        return 0
+    inn = state.get("innings", 1)
+    cur = (state.get("current_over", 1) - 1) * 6 + state.get("current_ball", 0)
+    if inn == 1:
+        return cur
+    # innings 2: add the completed first-innings balls
+    i1_over = state.get("inn1_overs")  # stored as "x.y" string
+    i1_balls = 0
+    if isinstance(i1_over, str) and "." in i1_over:
+        try:
+            o, b = i1_over.split(".")
+            i1_balls = int(o) * 6 + int(b)
+        except Exception:
+            i1_balls = 0
+    return i1_balls + cur
+
+
+def quit_penalty_quote(match_id, user_id=None):
+    """Compute the quit penalty for a confirmation prompt (no mutation).
+      ratio   = ballsBowled / (totalOvers * 12)
+      penalty = ratio * totalOvers * 1000
+    The penalty is the same regardless of which player quits, so user_id is
+    optional (accepted for API symmetry). Returns dict or None."""
+    state = mwa.get_state(match_id)
+    if not state:
+        return None
+    total_overs = state.get("overs", 1) or 1
+    balls = _balls_bowled_total(state)
+    denom = total_overs * 12
+    ratio = (balls / denom) if denom else 0.0
+    penalty = int(round(ratio * total_overs * 1000))
+    return {
+        "balls_bowled": balls,
+        "total_overs": total_overs,
+        "ratio": round(ratio, 4),
+        "penalty": penalty,
+        "has_progress": balls > 0,
+    }
+
+
+def handle_match_termination(session, match_id, quitter_id, reason="quit"):
+    """Terminate a match because a player quit (or timed out).
+
+    • No balls bowled → no penalty, no rewards; the match just ends with no W/L.
+    • Balls bowled → quitter loses `penalty` coins (capped at their balance),
+      opponent receives the same as compensation, and W/L records update
+      (quitter = loss, opponent = win).
+    Returns (ok, info|msg).
+    """
+    from models import Match, User
+    from services.activity_service import log_activity
+    m = session.query(Match).get(match_id)
+    if not m:
+        return False, "Match not found."
+    if m.status == "completed":
+        return False, "Match already finished."
+    if quitter_id not in (m.user1_id, m.user2_id):
+        return False, "You're not in this match."
+
+    opponent_id = m.user2_id if quitter_id == m.user1_id else m.user1_id
+    state = mwa.get_state(match_id)
+    q = quit_penalty_quote(match_id) or {"balls_bowled": 0, "penalty": 0,
+                                         "has_progress": False}
+    penalty = q["penalty"]
+    balls = q["balls_bowled"]
+
+    quitter = session.query(User).get(quitter_id)
+    opponent = session.query(User).get(opponent_id)
+
+    applied_penalty = 0
+    compensation = 0
+    if q["has_progress"]:
+        # Quitter loses coins (never below zero).
+        applied_penalty = min(penalty, quitter.total_coins or 0) if quitter else 0
+        if quitter:
+            quitter.total_coins = (quitter.total_coins or 0) - applied_penalty
+            quitter.matches_lost = (quitter.matches_lost or 0) + 1
+            quitter.matches_played = (quitter.matches_played or 0) + 1
+            log_activity(session, quitter.id, "match_quit",
+                         f"Quit match #{match_id} ({balls} balls) — penalty",
+                         coins_change=-applied_penalty)
+        # Opponent compensation = full penalty value (not just what was deducted).
+        compensation = penalty
+        if opponent:
+            opponent.total_coins = (opponent.total_coins or 0) + compensation
+            opponent.matches_won = (opponent.matches_won or 0) + 1
+            opponent.matches_played = (opponent.matches_played or 0) + 1
+            log_activity(session, opponent.id, "match_quit_comp",
+                         f"Opponent quit match #{match_id} — compensation",
+                         coins_change=compensation)
+        margin_type = "forfeit"
+        win_id, lose_id = opponent_id, quitter_id
+        result_text = f"Won by forfeit ({reason})"
+    else:
+        # No progress → clean cancel, no rewards, no records.
+        margin_type = "cancelled"
+        win_id, lose_id = None, None
+        result_text = "Match cancelled — no balls bowled."
+
+    if state:
+        state["match_result"] = {
+            "winner_team_id": win_id, "loser_team_id": lose_id,
+            "margin_type": margin_type, "margin_value": 0,
+            "text": result_text,
+            "penalty": applied_penalty, "compensation": compensation,
+        }
+        mwa.save_state(match_id, state)
+
+    m.status = "completed"
+    m.completed_at = __import__("datetime").datetime.utcnow()
+    m.margin_type = margin_type
+    m.winner_id = win_id
+    m.loser_id = lose_id
+    if state:
+        m.inn1_runs = state.get("inn1_runs"); m.inn1_wickets = state.get("inn1_wickets")
+        m.inn2_runs = state.get("total_runs"); m.inn2_wickets = state.get("total_wickets")
+    try:
+        save_final_scorecard(session, match_id, result_text=result_text)
+    except Exception:
+        pass
+    session.commit()
+    try:
+        from services.match_state_store import cleanup_state
+        cleanup_state(mwa.fresh_ctx(), match_id)
+    except Exception:
+        pass
+    return True, {"penalty": applied_penalty, "compensation": compensation,
+                  "balls_bowled": balls, "cancelled": not q["has_progress"],
+                  "winner_id": win_id, "loser_id": lose_id,
+                  "result_text": result_text}
 
 
 def abandon_match(session, match_id, by_user_id, reason="abandoned"):
@@ -978,6 +1548,74 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
     return True, "Match ended (forfeit)."
 
 
+def restore_active_matches(session):
+    """On bot startup, load and validate all active (non-completed) Mini-App
+    matches from the database so live games survive a restart.
+
+    The full game state already lives in the match_state table (state_json),
+    upserted on every save, and the matches table holds chat/host/guest/status.
+    This re-validates each live match, drops orphaned/stale state, and returns a
+    summary dict. It does NOT mutate healthy live matches — they simply resume,
+    because both the bot and the Mini App read the same DB-backed state.
+    """
+    from models import MatchState, Match
+    restored, orphaned, completed_leftover = [], 0, 0
+    try:
+        rows = session.query(MatchState).all()
+    except Exception:
+        logger.exception("restore_active_matches: could not query match_state")
+        return {"restored": 0, "orphaned": 0, "completed_cleaned": 0, "active": []}
+
+    for ms in rows:
+        mid = ms.match_id
+        m = session.query(Match).get(mid)
+        # Orphan: state with no parent match → clean up.
+        if not m:
+            try:
+                from services.match_state_store import cleanup_state
+                cleanup_state(mwa.fresh_ctx(), mid)
+                orphaned += 1
+            except Exception:
+                logger.exception("restore: failed to clean orphan state %s", mid)
+            continue
+        # Completed match with lingering live state → clean up.
+        if m.status == "completed":
+            try:
+                from services.match_state_store import cleanup_state
+                cleanup_state(mwa.fresh_ctx(), mid)
+                completed_leftover += 1
+            except Exception:
+                pass
+            continue
+        # Validate the state actually deserializes.
+        state = mwa.get_state(mid)
+        if not state:
+            try:
+                from services.match_state_store import cleanup_state
+                cleanup_state(mwa.fresh_ctx(), mid)
+                orphaned += 1
+            except Exception:
+                pass
+            continue
+        # Healthy active match — it will resume from DB state as-is.
+        restored.append({
+            "match_id": mid,
+            "chat_id": state.get("chat_id") or m.chat_id,
+            "host_id": m.user1_id,
+            "guest_id": m.user2_id,
+            "status": m.status,
+            "next_action": mwa.get_next_action(mid),
+            "innings": state.get("innings", 1),
+            "is_vsbot": bool(state.get("is_vsbot")),
+        })
+
+    logger.info("restore_active_matches: %d active, %d orphan(s) cleaned, "
+                "%d completed-leftover cleaned",
+                len(restored), orphaned, completed_leftover)
+    return {"restored": len(restored), "orphaned": orphaned,
+            "completed_cleaned": completed_leftover, "active": restored}
+
+
 def sweep_stale_webapp_matches(session):
     """Force-end Mini-App matches idle past the timeout. Returns count ended.
     Intended to be called periodically (e.g. from the cooldown/heartbeat job)."""
@@ -1003,7 +1641,14 @@ def sweep_stale_webapp_matches(session):
         else:
             idle = state.get("bowl_team_id")
         if idle:
-            abandon_match(session, ms.match_id, idle, reason="timeout")
+            # PvP timeout → terminate with the proportional penalty (the idle
+            # player is treated as the quitter). vsbot → plain forfeit (no
+            # penalty against a human for a bot stall).
+            if state.get("is_vsbot"):
+                abandon_match(session, ms.match_id, idle, reason="timeout")
+            else:
+                handle_match_termination(session, ms.match_id, idle,
+                                         reason="inactivity timeout")
             ended += 1
     return ended
 
@@ -1091,25 +1736,25 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             oc = _bm._calc(state, striker, bowler, shot, delivery)
             res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
             try:
-                commentary = _bm._maybe_pick_commentary(oc, striker, bowler, oc.get("runs", 0))
-                if commentary:
-                    res["commentary"] = commentary
+                _c = _bm._maybe_pick_commentary(oc, striker, bowler, oc.get("runs", 0))
             except Exception:
-                pass
+                _c = None
             state["last_ball"] = {
-                "text": res.get("rtxt", ""), "commentary": res.get("commentary", ""),
-                "shot": shot, "delivery": delivery, "runs": res.get("runs", 0),
-                "type": res.get("type"),
+                "text": res.get("rtxt"), "type": res.get("type"),
+                "runs": res.get("runs", 0), "shot": shot, "delivery": delivery,
+                "batsman": striker.get("name") if striker else None,
+                "bowler": bowler.get("name") if bowler else None,
+                "how": res.get("how"),
             }
-            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"],
-                          "commentary": res.get("commentary", "")})
+            state["last_commentary"] = _c or res.get("rtxt")
+            steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"]})
 
             # Determine next action (same logic as human play_shot)
             if is_innings_over(state):
                 if state.get("innings", 1) == 1:
                     transition_to_second_innings(state)
-                    next_act = _reset_second_innings_setup(state)
-                    mwa.save_state(match_id, state, next_action=next_act)
+                    state["setup"] = SETUP_DONE
+                    mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
                 else:
                     state["match_result"] = compute_match_result(state)
                     mwa.save_state(match_id, state, next_action=A_COMPLETED)

@@ -1,54 +1,109 @@
 """Chat-side helpers for Mini-App matches: the post-toss launch message,
-the live scorecard broadcast, and per-user "Play Match" buttons.
+the live scorecard broadcast, and the "Play Match" button.
 
-The launch message lets each participant jump into the right Mini App screen:
-the batting side → batting board, the bowling side → bowling board, and
-everyone else → spectate. We use a startapp deep link (works in groups) of
-the form  t.me/<bot>/<app>?startapp=lm_<match_id>  — the Mini App reads the
-start_param and routes to the live-match screen for that id.
+Launch scheme:
+  • Private chats → a Telegram Web App button opening
+        https://<host>/cricket?match_id=<id>&chat_id=<chat>
+  • Group chats   → a deep link with startapp=cricket_<matchId>_<chatId>
+    (Web App keyboard buttons aren't allowed in groups, so a t.me deep link
+    is used; the Mini App reads start_param and routes to the match.)
+
+Backward-compatible: the Mini App still understands the older lm_/sc_ forms.
 """
 
 import logging
 import os
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo)
 
 logger = logging.getLogger(__name__)
 
 
-def _launch_url(match_id):
-    """Build the t.me deep link that opens the live match in the Mini App
-    DIRECTLY (no DM, no /start). Both forms use `startapp`, which opens the
-    Mini App in place — in groups too. The Mini App reads start_param and
-    routes straight to the match."""
+def _webapp_host():
+    """Base https host for the Mini App, from WEBAPP_URL (strip trailing path)."""
+    url = (os.getenv("WEBAPP_URL", "") or "").strip().rstrip("/")
+    if not url.startswith("https://"):
+        return None
+    # WEBAPP_URL may already point at /webapp; reduce to scheme+host.
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return f"{p.scheme}://{p.netloc}"
+    except Exception:
+        return url
+
+
+def _cricket_webapp_url(match_id, chat_id):
+    """Direct Mini App URL with match + chat in the query string."""
+    host = _webapp_host()
+    if not host:
+        return None
+    return f"{host}/cricket?match_id={match_id}&chat_id={chat_id}"
+
+
+def _cricket_deep_link(match_id, chat_id):
+    """Group deep link: startapp=cricket_<matchId>_<chatId>."""
+    bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+    miniapp_name = (os.getenv("MINIAPP_NAME", "") or "").strip()
+    if not bot_username:
+        return None
+    param = f"cricket_{match_id}_{chat_id}"
+    if miniapp_name:
+        return f"https://t.me/{bot_username}/{miniapp_name}?startapp={param}"
+    return f"https://t.me/{bot_username}?startapp={param}"
+
+
+def _launch_url(match_id, chat_id=None):
+    """Group-style deep link (kept for the scorecard/result broadcasts, which
+    always post to a group chat). Uses the new cricket_ scheme when chat_id is
+    known, else falls back to the match-only form."""
+    if chat_id is not None:
+        link = _cricket_deep_link(match_id, chat_id)
+        if link:
+            return link
     bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
     miniapp_name = (os.getenv("MINIAPP_NAME", "") or "").strip()
     if not bot_username:
         return None
     if miniapp_name:
-        return f"https://t.me/{bot_username}/{miniapp_name}?startapp=lm_{match_id}"
-    return f"https://t.me/{bot_username}?startapp=lm_{match_id}"
+        return f"https://t.me/{bot_username}/{miniapp_name}?startapp=cricket_{match_id}"
+    return f"https://t.me/{bot_username}?startapp=cricket_{match_id}"
 
 
-def play_match_keyboard(match_id):
-    """Single 'Play Match' button that deep-links into the Mini App live match.
+def play_match_keyboard(match_id, chat_id=None, is_private=False):
+    """'Play Match' button.
 
-    One button for all — the Mini App itself detects the user's role
-    (batsman / bowler / spectator) from the live state, so a single link
-    routes everyone correctly.
+    • Private chat → Telegram Web App button → /cricket?match_id&chat_id
+      (opens the Mini App in place; user id resolves from Telegram initData).
+    • Group chat → t.me deep link with startapp=cricket_<matchId>_<chatId>.
+
+    The Mini App detects each user's role (batsman / bowler / spectator) from
+    the live state, so one button routes everyone correctly.
     """
-    url = _launch_url(match_id)
+    if is_private:
+        wa_url = _cricket_webapp_url(match_id, chat_id if chat_id is not None else 0)
+        if wa_url:
+            return InlineKeyboardMarkup([[
+                InlineKeyboardButton("🎮 Play Match",
+                                     web_app=WebAppInfo(url=wa_url))
+            ]])
+        # Fall through to deep link if no host configured
+    url = _launch_url(match_id, chat_id)
     if not url:
         return None
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("▶️ Play Match", url=url)
+        InlineKeyboardButton("🎮 Play Match (Mini App)", url=url)
     ]])
 
 
 async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
                                    bat_mention, bowl_mention):
     """Post the 'Match Ready' card with all details + the Play Match button."""
-    kb = play_match_keyboard(match.id)
+    # A private chat with the bot uses a positive user-id chat_id; groups are
+    # negative. Web App buttons only work in private chats, so pick the right
+    # button type for the chat we're posting into.
+    is_private = isinstance(chat_id, int) and chat_id > 0
+    kb = play_match_keyboard(match.id, chat_id=chat_id, is_private=is_private)
     text = (
         "🏏 <b>MATCH READY!</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
