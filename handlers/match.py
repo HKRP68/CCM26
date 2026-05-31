@@ -84,21 +84,44 @@ def _bowl_label(p, s):
     return f"{p['name']} | {h}-{p['bowl_style']} | {ov_str}•{bws.get('runs',0)}•{bws.get('wickets',0)}"
 
 
-def _active_match_in_chat(session, chat_id):
-    """Returns the Match row of any currently-active match in this chat,
-    or None. Used to enforce one-match-per-chat.
+ACTIVE_MATCH_STATUSES = (
+    "pending", "accepted", "toss", "selecting", "playing", "active",
+)
 
-    A match is "active" if its status is 'active' OR 'pending' (a pending
-    invite blocks a new one too — otherwise rapid /playmatch spam would
-    work around the rule).
-    """
+
+def _active_match_in_chat(session, chat_id):
+    """Return the newest unfinished match in a chat, if one exists."""
     if not chat_id:
         return None
     return (session.query(Match)
             .filter(Match.chat_id == chat_id,
-                    Match.status.in_(("active", "pending")))
+                    Match.status.in_(ACTIVE_MATCH_STATUSES))
             .order_by(Match.id.desc())
             .first())
+
+
+def _active_match_for_user(session, user_id):
+    """Return an unfinished match involving ``user_id``, if one exists."""
+    return (session.query(Match)
+            .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
+                    Match.status.in_(ACTIVE_MATCH_STATUSES))
+            .order_by(Match.id.desc())
+            .first())
+
+
+def _cric_lobby_key(chat_id):
+    return f"cric_lobby_{chat_id}"
+
+
+def _cric_lobby_for_user(bot_data, user_id):
+    """Find a waiting /cric lobby hosted by ``user_id``."""
+    return next((lobby for key, lobby in bot_data.items()
+                 if key.startswith("cric_lobby_")
+                 and lobby.get("host_user_id") == user_id), None)
+
+
+def _user_label(user):
+    return f"@{user.username}" if user.username else (user.first_name or "Player")
 
 
 def _chat_busy_message(match):
@@ -1592,6 +1615,174 @@ async def endmatch_no_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.edit_message_text("🔄 Match continues!")
 
 
+# ════════════════════════ /cric Mini-App lobby ════════════════════════
+
+async def cric_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create an UnderCover-style chat lobby that launches the cricket Mini App."""
+    tg = update.effective_user
+    cid = update.effective_chat.id
+    try:
+        overs = int(context.args[0]) if context.args else 1
+    except ValueError:
+        overs = 0
+    if overs < 1 or overs > 5:
+        await update.message.reply_text(
+            "ℹ️ <b>Usage:</b> <code>/cric &lt;overs (1-5)&gt;</code> to start a match lobby.",
+            parse_mode="HTML")
+        return
+
+    session = get_session()
+    try:
+        host = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not host:
+            await update.message.reply_text("❌ Use /debut first!")
+            return
+        existing = _active_match_in_chat(session, cid)
+        if existing:
+            await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
+            return
+        if _active_match_for_user(session, host.id):
+            await update.message.reply_text("⚠️ You already have an active match running!")
+            return
+        if context.bot_data.get(_cric_lobby_key(cid)):
+            await update.message.reply_text("⚠️ There is already a match lobby waiting in this chat!")
+            return
+        if _cric_lobby_for_user(context.bot_data, host.id):
+            await update.message.reply_text("⚠️ You already have an active match lobby!")
+            return
+
+        from handlers.lineup import validate_xi, _get_ordered_roster
+        valid, errors = validate_xi(_get_ordered_roster(session, host.id))
+        if not valid:
+            await update.message.reply_text(
+                "❌ <b>Lobby creation failed — your XI is invalid:</b>\n"
+                + "\n".join(f"• {error}" for error in errors), parse_mode="HTML")
+            return
+
+        context.bot_data[_cric_lobby_key(cid)] = {
+            "host_user_id": host.id,
+            "host_tg_id": host.telegram_id,
+            "host_label": _user_label(host),
+            "overs": overs,
+        }
+        await update.message.reply_text(
+            "🏏 <b>CRICKET MATCH LOBBY CREATED!</b> 🏏\n"
+            "═════════════════════════════\n"
+            f"• <b>Host:</b> {_user_label(host)}\n"
+            f"• <b>Length:</b> {overs} Over(s)\n\n"
+            "Click the button below to join the match!",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🤝 Join Match", callback_data="cric_join"),
+                InlineKeyboardButton("❌ Cancel Lobby", callback_data="cric_cancel_lobby"),
+            ]]))
+    except Exception:
+        logger.exception("/cric lobby creation failed")
+        await update.message.reply_text("❌ Failed to create cricket lobby.")
+    finally:
+        session.close()
+
+
+async def cric_cancel_lobby_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    cid = q.message.chat_id
+    key = _cric_lobby_key(cid)
+    lobby = context.bot_data.get(key)
+    if not lobby:
+        await q.answer("No active lobby in this chat.", show_alert=True)
+        return
+    is_admin = False
+    try:
+        member = await context.bot.get_chat_member(cid, q.from_user.id)
+        is_admin = member.status in ("administrator", "creator")
+    except Exception:
+        pass
+    if q.from_user.id != lobby["host_tg_id"] and not is_admin:
+        await q.answer("Only the host or a chat admin can cancel this lobby.", show_alert=True)
+        return
+    context.bot_data.pop(key, None)
+    await q.answer("Lobby cancelled.")
+    await q.edit_message_text("❌ Match lobby has been cancelled.")
+
+
+async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    cid = q.message.chat_id
+    key = _cric_lobby_key(cid)
+    lobby = context.bot_data.get(key)
+    if not lobby:
+        await q.answer("No active lobby in this chat.", show_alert=True)
+        return
+    if q.from_user.id == lobby["host_tg_id"]:
+        await q.answer("You cannot join your own lobby!", show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        host = session.query(User).get(lobby["host_user_id"])
+        guest = session.query(User).filter(User.telegram_id == q.from_user.id).first()
+        if not guest:
+            await q.answer("Use /debut first!", show_alert=True)
+            return
+        if not host:
+            context.bot_data.pop(key, None)
+            await q.answer("Lobby host no longer exists.", show_alert=True)
+            return
+        existing = _active_match_in_chat(session, cid)
+        if existing:
+            context.bot_data.pop(key, None)
+            await q.answer("A match is already active in this chat.", show_alert=True)
+            return
+        if _active_match_for_user(session, host.id):
+            context.bot_data.pop(key, None)
+            await q.answer("The lobby host is already in another active match.", show_alert=True)
+            return
+        if _active_match_for_user(session, guest.id):
+            await q.answer("You already have an active match!", show_alert=True)
+            return
+
+        from handlers.lineup import validate_xi, _get_ordered_roster
+        valid, errors = validate_xi(_get_ordered_roster(session, guest.id))
+        if not valid:
+            await q.answer("Join failed: your playing XI is invalid. Use /xi to fix it.", show_alert=True)
+            return
+
+        settings = random_match_settings()
+        now = datetime.utcnow()
+        winner_id = random.choice([host.id, guest.id])
+        match = Match(
+            user1_id=host.id, user2_id=guest.id, status="toss", overs=lobby["overs"],
+            toss_winner_id=winner_id, stadium=settings["stadium"],
+            pitch_type=settings["pitch_type"], weather=settings["weather"],
+            temperature=settings["temperature"], umpire1=settings["umpire1"],
+            umpire2=settings["umpire2"], chat_id=cid, created_at=now,
+        )
+        session.add(match)
+        session.commit()
+        context.bot_data.pop(key, None)
+        # /cric is the UnderCover-compatible fast path: unlike /playmatch it
+        # always launches the dedicated cricket Mini App after the toss.
+        context.bot_data[f"cric_miniapp_{match.id}"] = True
+        winner = host if winner_id == host.id else guest
+        await q.answer("Joined match lobby!")
+        await q.edit_message_text(
+            "🪙 <b>TOSS COMPLETED!</b> 🪙\n"
+            "═════════════════════════════\n"
+            f"• Host: {_user_label(host)}\n"
+            f"• Guest: {_user_label(guest)}\n\n"
+            f"🎉 <b>{_user_label(winner)}</b> won the toss!\n"
+            "Choose your decision:",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Bat First 🏏", callback_data=f"toss_bat_{match.id}_{winner.id}"),
+                InlineKeyboardButton("Bowl First 🎳", callback_data=f"toss_bowl_{match.id}_{winner.id}"),
+            ]]))
+    except Exception:
+        session.rollback()
+        logger.exception("/cric lobby join failed")
+        await q.answer("Failed to join lobby.", show_alert=True)
+    finally:
+        session.close()
+
+
 # ═══════════════════════════ /playmatch ══════════════════════════════
 
 async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1811,7 +2002,8 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         # Default to the original Telegram callback flow so gameplay stays in
         # the bot unless an admin explicitly enables the Mini App board.
         from services.config_service import get_match_style
-        if get_match_style(session) == "webapp":
+        force_cric_miniapp = context.bot_data.pop(f"cric_miniapp_{mid}", False)
+        if force_cric_miniapp or get_match_style(session) == "webapp":
             m.status = "playing"; session.commit()
             try:
                 from services.match_webapp_service import init_match_for_webapp
