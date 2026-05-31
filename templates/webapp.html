@@ -7,6 +7,9 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   :root {
@@ -22,12 +25,22 @@
     --red: #ff4d6d;
     --blue: #4a9eff;
     --purple: #a78bfa;
+    /* Spec-named design tokens (aliases over the existing palette so the
+       documented vocabulary exists without recolouring the app). */
+    --bg-color: var(--bg);
+    --card-bg: var(--card);
+    --card-border: var(--border);
+    --primary-accent: var(--green);      /* success / active / Crickidex green */
+    --warning-accent: var(--accent);     /* incoming delivery / toss / pending  */
+    --danger-accent: var(--red);         /* exit / wicket / danger              */
+    --app-max-width: 480px;
+    --font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-family);
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
   }
@@ -38,6 +51,11 @@
       var(--bg);
     min-height: 100vh;
     padding-bottom: 70px; /* leave space for bottom nav */
+    /* Mobile-first: constrain the whole app to a phone-width column, centered
+       on larger screens so it reads as a polished Mini App, not a website. */
+    max-width: var(--app-max-width);
+    margin: 0 auto;
+    position: relative;
   }
 
   /* ════ Top app bar ════ */
@@ -86,7 +104,8 @@
 
   /* ════ Bottom tabs ════ */
   .tabs {
-    position: fixed; bottom: 0; left: 0; right: 0;
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: var(--app-max-width);
     background: var(--card);
     border-top: 1px solid var(--border);
     display: flex;
@@ -1185,6 +1204,56 @@
   @keyframes fadeOutT { to { opacity: 0; transform: translateY(-10px); } }
 
   /* ════ Misc ════ */
+  /* ════ Structured match header: back · host · VS · guest · #id ════ */
+  .lm-header {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;
+  }
+  .lm-back {
+    flex-shrink: 0; background: var(--card-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 9px; width: 34px; height: 34px;
+    font-size: 1.1rem; cursor: pointer; font-family: inherit;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .lm-back:active { transform: scale(0.92); }
+  .lm-vs-wrap {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.4rem;
+    justify-content: center;
+  }
+  .lm-team {
+    flex: 1; min-width: 0; font-weight: 800; font-size: 0.9rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lm-team.host { text-align: right; }
+  .lm-team.guest { text-align: left; }
+  .lm-vs-badge {
+    flex-shrink: 0; background: var(--warning-accent); color: #2a1d00;
+    font-weight: 900; font-size: 0.62rem; padding: 0.15rem 0.4rem;
+    border-radius: 6px; letter-spacing: 0.05em;
+  }
+  .lm-matchid {
+    flex-shrink: 0; font-size: 0.62rem; color: var(--muted);
+    font-variant-numeric: tabular-nums; font-weight: 700;
+    background: var(--card); border: 1px solid var(--border);
+    padding: 0.2rem 0.4rem; border-radius: 6px;
+  }
+  /* ════ Cricket-ball loader ════ */
+  .ball-loader {
+    width: 54px; height: 54px; margin: 0 auto 0.8rem; border-radius: 50%;
+    background:
+      radial-gradient(circle at 32% 30%, rgba(255,255,255,0.45) 0 12%, transparent 13%),
+      linear-gradient(135deg, #c0392b 0%, #8e2419 100%);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.18), 0 4px 14px rgba(192,57,43,0.4);
+    position: relative; animation: ballspin 0.9s linear infinite;
+  }
+  .ball-loader::before, .ball-loader::after {
+    content: ''; position: absolute; left: 50%; top: 8%;
+    width: 2px; height: 84%;
+    background: repeating-linear-gradient(180deg,
+      rgba(255,255,255,0.85) 0 3px, transparent 3px 7px);
+  }
+  .ball-loader::before { transform: translateX(-7px); }
+  .ball-loader::after { transform: translateX(5px); }
+  @keyframes ballspin { to { transform: rotate(360deg); } }
   .spinner {
     display: inline-block; width: 18px; height: 18px;
     border: 2px solid var(--card-2);
@@ -1272,190 +1341,123 @@
 
   /* Player detail screen */
   /* ════ Live PvP match board ════ */
-  .lm-topbar {
-    display: grid; grid-template-columns: 42px 1fr 42px; align-items: center;
-    gap: 0.35rem; margin-bottom: 1.15rem;
-  }
-  .lm-back-btn, .lm-icon-btn {
-    width: 38px; height: 38px; border: 0; border-radius: 12px;
-    background: transparent; color: var(--muted); font-size: 1.45rem;
-    font-family: inherit; cursor: pointer;
-  }
-  .lm-title { text-align: center; min-width: 0; }
-  .lm-title .teams {
-    display: flex; justify-content: center; align-items: center; gap: 0.5rem;
-    min-width: 0; font-size: 1.02rem; font-weight: 950; color: #fff;
-    letter-spacing: 0.02em; text-transform: uppercase;
-  }
-  .lm-title .team-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
-  .lm-title .vs {
-    flex: 0 0 auto; color: var(--green); background: rgba(0, 212, 170, 0.12);
-    border: 1px solid rgba(0, 212, 170, 0.24); border-radius: 8px;
-    padding: 0.05rem 0.42rem; font-size: 0.78rem; font-weight: 950;
-  }
-  .lm-title .match-id { color: var(--muted); font-size: 0.72rem; font-weight: 800; margin-top: 0.12rem; letter-spacing: 0.08em; }
   .lm-scorebar {
-    background: linear-gradient(145deg, rgba(28, 37, 64, 0.98), rgba(18, 23, 42, 0.98));
-    border: 1px solid rgba(74, 158, 255, 0.18); border-radius: 22px;
-    padding: 1.15rem 1rem; margin-bottom: 1rem;
-    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255,255,255,0.025);
+    position: sticky; top: 0; z-index: 5;
+    background: linear-gradient(135deg, #16241c, var(--card));
+    border: 1px solid var(--accent); border-radius: 12px;
+    padding: 0.7rem 0.9rem; margin-bottom: 0.7rem;
   }
-  .lm-score-hero { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
-  .lm-score-main { font-size: clamp(3.2rem, 16vw, 5rem); line-height: 0.9; font-weight: 1000; color: #fff; letter-spacing: -0.08em; }
-  .lm-score-meta { display: flex; gap: 1rem; margin-top: 0.55rem; font-weight: 900; }
-  .lm-score-meta .crr { color: var(--green); }
-  .lm-score-meta .ovs { color: var(--muted); }
-  .lm-innings-pill {
-    flex: 1; max-width: 64%; align-self: center; text-align: right;
-    background: rgba(212, 168, 42, 0.08); color: var(--accent-2);
-    border: 1px solid rgba(212, 168, 42, 0.22); border-radius: 999px;
-    padding: 0.65rem 0.85rem; font-size: 0.74rem; line-height: 1.35;
-    font-weight: 950; letter-spacing: 0.04em; text-transform: uppercase;
+  .lm-teams { display: flex; justify-content: space-between; align-items: baseline; }
+  .lm-bat-team { font-weight: 800; font-size: 0.95rem; }
+  .lm-score { font-size: 1.6rem; font-weight: 900; }
+  .lm-overs { font-size: 0.78rem; color: var(--muted); }
+  .lm-target { font-size: 0.74rem; color: var(--accent); margin-top: 0.2rem; }
+  .lm-batters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
+  .lm-batter {
+    flex: 1; background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.5rem 0.6rem;
   }
-  .lm-target { font-size: 0.78rem; color: var(--accent); margin-top: 0.55rem; font-weight: 800; }
-  .lm-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; margin: 0.8rem 0 1rem; border-bottom: 1px solid var(--border); }
+  /* ════ In-match tabs (Match / Scorecard / Squads) ════ */
+  .lm-tabs {
+    display: flex; gap: 0.3rem; margin: 0.2rem 0 0.7rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.25rem;
+  }
   .lm-tab {
-    position: relative; border: 0; background: transparent; color: var(--muted);
-    padding: 0.8rem 0 0.7rem; font-family: inherit; font-size: 0.85rem;
-    font-weight: 950; letter-spacing: 0.06em; cursor: pointer;
+    flex: 1; text-align: center; padding: 0.5rem 0.3rem;
+    border-radius: 9px; font-size: 0.78rem; font-weight: 700;
+    color: var(--muted); cursor: pointer; border: none; background: transparent;
+    font-family: inherit; transition: background 0.15s, color 0.15s;
   }
-  .lm-tab.active { color: var(--green); }
-  .lm-tab.active::after {
-    content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 4px;
-    border-radius: 999px; background: var(--green);
+  .lm-tab.active { background: var(--primary-accent); color: #06231d; }
+  .lm-tab:active { transform: scale(0.97); }
+  /* ════ Cricbuzz-style commentary feed ════ */
+  .lm-comm {
+    margin-top: 0.6rem; border-top: 1px dashed var(--border); padding-top: 0.6rem;
   }
-  .lm-match-card {
-    background: linear-gradient(145deg, rgba(28, 37, 64, 0.96), rgba(18, 23, 42, 0.96));
-    border: 1px solid rgba(74, 158, 255, 0.16); border-radius: 20px;
-    padding: 1rem; margin-bottom: 0.85rem;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.025);
+  .lm-comm-title {
+    font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.06em; margin-bottom: 0.5rem; font-weight: 700;
   }
-  .lm-batters { display: grid; grid-template-columns: 1fr 0.85fr 1fr; gap: 0.75rem; align-items: center; }
-  .lm-batter { min-width: 0; display: flex; gap: 0.65rem; align-items: center; }
-  .lm-batter.right { flex-direction: row-reverse; text-align: right; }
-  .lm-avatar {
-    width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
-    background: linear-gradient(145deg, var(--green), #00a878); color: #fff;
-    font-weight: 1000; font-size: 1.25rem; box-shadow: 0 0 20px rgba(0, 212, 170, 0.28);
-    border: 3px solid rgba(255,255,255,0.08); flex: 0 0 auto;
+  .lm-comm-row {
+    display: flex; gap: 0.6rem; align-items: flex-start;
+    padding: 0.5rem 0; border-bottom: 1px solid rgba(42,54,80,0.5);
   }
-  .lm-batter:not(.on-strike) .lm-avatar { background: #252d44; color: var(--muted); box-shadow: none; }
-  .lm-batter .nm { font-weight: 950; color: #fff; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lm-batter.on-strike .nm { color: var(--accent-2); }
-  .lm-batter .rn { color: var(--muted); font-weight: 850; margin-top: 0.18rem; }
-  .lm-center-stat { text-align: center; border-left: 1px solid var(--border); border-right: 1px solid var(--border); padding: 0.25rem 0.35rem; }
-  .lm-center-stat .lbl { color: var(--muted); font-size: 0.68rem; font-weight: 950; letter-spacing: 0.07em; text-transform: uppercase; }
-  .lm-center-stat .val { color: #fff; font-weight: 1000; font-size: 0.92rem; margin: 0.22rem 0 0.5rem; }
-  .lm-bowler { display: none; }
-  .lm-timeline { display: flex; flex-direction: column; gap: 0.55rem; margin-bottom: 0.85rem; }
-  .lm-tl-row { display: grid; grid-template-columns: 42px 34px 1fr; gap: 0.65rem; align-items: center; color: #fff; }
-  .lm-tl-over { color: var(--muted); font-size: 0.9rem; font-weight: 900; }
+  .lm-comm-ball {
+    flex-shrink: 0; min-width: 2.6rem; text-align: center;
+    font-size: 0.72rem; font-weight: 800; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .lm-comm-badge {
+    display: inline-block; min-width: 1.5rem; padding: 0.12rem 0.35rem;
+    border-radius: 6px; font-weight: 900; font-size: 0.78rem; line-height: 1.3;
+  }
+  .lm-comm-badge.four { background: rgba(74,158,255,0.18); color: var(--blue); }
+  .lm-comm-badge.six { background: rgba(167,139,250,0.2); color: var(--purple); }
+  .lm-comm-badge.wkt { background: rgba(255,77,109,0.2); color: var(--danger-accent); }
+  .lm-comm-badge.dot { background: rgba(125,137,166,0.15); color: var(--muted); }
+  .lm-comm-badge.run { background: rgba(0,212,170,0.16); color: var(--primary-accent); }
+  .lm-comm-text { flex: 1; font-size: 0.82rem; line-height: 1.35; }
+  .lm-batter.on-strike { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .lm-batter .nm { font-weight: 700; font-size: 0.82rem; }
+  .lm-batter .rn { font-size: 0.95rem; font-weight: 800; }
+  .lm-batter .sub { font-size: 0.66rem; color: var(--muted); }
+  .lm-bowler {
+    background: var(--card-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.5rem 0.7rem; margin-bottom: 0.6rem; font-size: 0.82rem;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .lm-timeline { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
   .lm-tl-ball {
-    width: 34px; height: 34px; border-radius: 50%; font-size: 0.85rem;
-    display: flex; align-items: center; justify-content: center; font-weight: 1000;
-    background: #262a38; border: 1px solid rgba(255,255,255,0.05); color: #fff;
+    width: 26px; height: 26px; border-radius: 50%; font-size: 0.7rem;
+    display: flex; align-items: center; justify-content: center; font-weight: 700;
+    background: var(--card-2); border: 1px solid var(--border);
   }
-  .lm-tl-text { font-size: 0.86rem; line-height: 1.35; color: rgba(255,255,255,0.92); }
   .lm-panel {
-    background: linear-gradient(145deg, rgba(28,37,64,0.98), rgba(16,21,38,0.98));
-    border: 1px solid rgba(74, 158, 255, 0.16); border-radius: 20px;
-    padding: 1rem; margin-bottom: 0.85rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.9rem; margin-bottom: 0.7rem;
   }
-  .lm-panel-title { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.7rem; font-weight: 950; }
-  .lm-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
-  .lm-choice-grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .lm-choice-btn {
-    background: rgba(255,255,255,0.035); border: 1px solid var(--border); color: var(--text);
-    border-radius: 14px; padding: 0.75rem 0.45rem; font-family: inherit;
-    font-size: 0.8rem; font-weight: 900; cursor: pointer; min-height: 46px;
+  .lm-panel-title { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }
+  .lm-shot-grid, .lm-opt-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;
   }
-  .lm-choice-btn.active {
-    color: #071018; background: linear-gradient(135deg, var(--green), #27f0be);
-    border-color: transparent; box-shadow: 0 0 18px rgba(0, 212, 170, 0.22);
+  .lm-shot-btn, .lm-opt-btn {
+    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 0.7rem 0.4rem; font-family: inherit;
+    font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-choice-btn:active { transform: scale(0.98); }
-  .lm-control-row { margin-bottom: 0.85rem; }
-  .lm-control-row label { display: block; font-size: 0.7rem; color: var(--muted); margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 950; }
-  .lm-control-summary {
-    background: rgba(0, 212, 170, 0.07); border: 1px solid rgba(0, 212, 170, 0.18); border-radius: 999px;
-    padding: 0.65rem 0.85rem; margin: 0.25rem 0 0.85rem; font-size: 0.82rem; color: var(--muted); font-weight: 800;
-  }
-  .lm-control-summary b { color: var(--accent-2); }
-  .lm-action-btn {
-    width: 100%; border: 0; border-radius: 16px; padding: 0.95rem 1rem;
-    background: linear-gradient(135deg, var(--accent-2), var(--accent)); color: #09111c;
-    font-family: inherit; font-size: 1rem; font-weight: 1000; cursor: pointer;
-    box-shadow: 0 12px 24px rgba(212, 168, 42, 0.22);
-  }
-  .lm-action-btn:active { transform: scale(0.985); }
+  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--accent); color: #0a0f1a; }
+  .lm-opt-btn.selected { background: var(--accent); color: #0a0f1a; }
   .lm-delivery-banner {
-    text-align: center; padding: 1.1rem; border-radius: 18px;
-    background: linear-gradient(135deg, rgba(255,77,109,0.16), rgba(212,168,42,0.11));
-    border: 1px solid rgba(212,168,42,0.3); margin-bottom: 0.85rem;
+    text-align: center; padding: 1.1rem; border-radius: 12px;
+    background: linear-gradient(135deg, rgba(255,77,109,0.15), rgba(212,168,42,0.1));
+    border: 1px solid var(--accent); margin-bottom: 0.8rem;
     animation: pop 0.4s cubic-bezier(0.34,1.56,0.64,1);
   }
-  .lm-delivery-banner .dl { font-size: 1.25rem; font-weight: 1000; color: #fff; }
-  .lm-delivery-banner .sp { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; font-weight: 800; }
-  .lm-waiting { text-align: center; padding: 1.5rem 1rem; color: var(--muted); }
+  .lm-delivery-banner .dl { font-size: 1.2rem; font-weight: 900; }
+  .lm-delivery-banner .sp { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+  .lm-waiting {
+    text-align: center; padding: 1.5rem 1rem; color: var(--muted);
+  }
   .lm-waiting .big { font-size: 2.4rem; margin-bottom: 0.4rem; }
-  .lm-dropdown { display: none; }
-  .lm-premium-hero {
-    position: relative; overflow: hidden; margin-bottom: 0.9rem; padding: 1rem;
-    border-radius: 22px; border: 1px solid rgba(0, 212, 170, 0.24);
-    background:
-      radial-gradient(circle at 12% 0%, rgba(0,212,170,0.22), transparent 34%),
-      radial-gradient(circle at 88% 8%, rgba(167,139,250,0.2), transparent 34%),
-      linear-gradient(145deg, rgba(10,18,34,0.98), rgba(22,20,45,0.98));
-    box-shadow: 0 18px 46px rgba(0,0,0,0.34), inset 0 0 0 1px rgba(255,255,255,0.035);
+  .lm-dropdown {
+    width: 100%; padding: 0.65rem; background: var(--input-bg);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+    font-family: inherit; font-size: 0.88rem; margin-bottom: 0.6rem;
   }
-  .lm-premium-kicker {
-    color: var(--green); font-size: 0.68rem; font-weight: 1000; letter-spacing: 0.14em;
-    text-transform: uppercase; margin-bottom: 0.35rem;
-  }
-  .lm-premium-title { font-size: 1.18rem; font-weight: 1000; color: #fff; margin-bottom: 0.28rem; }
-  .lm-premium-sub { color: var(--muted); font-size: 0.78rem; line-height: 1.35; font-weight: 750; }
-  .lm-player-grid { display: grid; grid-template-columns: 1fr; gap: 0.6rem; margin: 0.8rem 0; }
-  .lm-player-card {
-    width: 100%; text-align: left; display: grid; grid-template-columns: 54px 1fr auto; gap: 0.65rem;
-    align-items: center; padding: 0.7rem; border-radius: 18px; border: 1px solid rgba(74,158,255,0.18);
-    background: linear-gradient(145deg, rgba(20,30,55,0.92), rgba(12,18,34,0.95));
-    color: var(--text); font-family: inherit; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.025);
-  }
-  .lm-player-card.active {
-    border-color: rgba(0,212,170,0.72); box-shadow: 0 0 22px rgba(0,212,170,0.16), inset 0 0 0 1px rgba(0,212,170,0.25);
-    background: linear-gradient(145deg, rgba(0,212,170,0.13), rgba(20,30,55,0.96));
-  }
-  .lm-player-card.disabled { opacity: 0.42; cursor: not-allowed; }
-  .lm-player-ovr {
-    width: 54px; height: 54px; border-radius: 16px; display: grid; place-items: center;
-    background: linear-gradient(135deg, var(--purple), var(--blue)); color: #fff;
-    font-weight: 1000; font-size: 1rem; box-shadow: 0 0 18px rgba(74,158,255,0.22);
-  }
-  .lm-player-name { font-weight: 1000; color: #fff; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lm-player-meta { color: var(--muted); font-size: 0.72rem; font-weight: 800; margin-top: 0.15rem; }
-  .lm-player-check { color: var(--green); font-size: 1.2rem; font-weight: 1000; }
-  .lm-pill-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.7rem 0; }
-  .lm-mini-pill {
-    padding: 0.38rem 0.58rem; border-radius: 999px; border: 1px solid rgba(0,212,170,0.2);
-    background: rgba(0,212,170,0.07); color: var(--muted); font-size: 0.72rem; font-weight: 850;
-  }
-  .lm-mini-pill b { color: #fff; }
   .lm-ball-result {
-    text-align: center; padding: 1rem; border-radius: 18px; margin-bottom: 0.85rem;
-    font-size: 1.1rem; font-weight: 950; color: #fff;
-    background: rgba(0, 212, 170, 0.08); border: 1px solid rgba(0, 212, 170, 0.26);
+    text-align: center; padding: 1rem; border-radius: 12px; margin-bottom: 0.7rem;
+    font-size: 1.1rem; font-weight: 800;
+    background: var(--card-2); border: 1px solid var(--accent);
     animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1);
   }
-  .lm-commentary { margin-top: 0.45rem; font-size: 0.86rem; line-height: 1.35; font-weight: 650; color: var(--muted); }
-  .lm-ball-meta { margin-top: 0.35rem; font-size: 0.72rem; font-weight: 800; color: rgba(255,255,255,0.62); }
   .lm-role-badge {
-    display: inline-block; font-size: 0.66rem; font-weight: 950;
-    padding: 0.18rem 0.55rem; border-radius: 999px; margin-top: 0.45rem;
+    display: inline-block; font-size: 0.66rem; font-weight: 800;
+    padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem;
   }
-  .lm-role-bat { background: rgba(0,212,170,0.16); color: var(--green); border: 1px solid rgba(0,212,170,0.25); }
-  .lm-role-bowl { background: rgba(74,158,255,0.14); color: #8fc2ff; border: 1px solid rgba(74,158,255,0.28); }
+  .lm-role-bat { background: var(--green); color: #0a0f1a; }
+  .lm-role-bowl { background: #4a9eff; color: #0a0f1a; }
   .lm-role-spec { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
-
 
   /* Scorecard drawer */
   .lm-drawer-backdrop {
@@ -1463,16 +1465,10 @@
   }
   .lm-drawer {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 301;
-    background:
-      radial-gradient(circle at 15% 0%, rgba(0,212,170,0.16), transparent 32%),
-      radial-gradient(circle at 86% 8%, rgba(167,139,250,0.14), transparent 35%),
-      linear-gradient(180deg, #111a31, #0a0f1a 88%);
-    border-top: 1px solid rgba(0,212,170,0.46);
-    border-left: 1px solid rgba(255,255,255,0.05); border-right: 1px solid rgba(255,255,255,0.05);
-    border-radius: 24px 24px 0 0; padding: 0.8rem 1rem 1.4rem;
-    max-height: 82vh; overflow-y: auto;
+    background: var(--card); border-top: 2px solid var(--accent);
+    border-radius: 18px 18px 0 0; padding: 0.8rem 1rem 1.4rem;
+    max-height: 78vh; overflow-y: auto;
     transform: translateY(100%); transition: transform 0.3s ease;
-    box-shadow: 0 -22px 60px rgba(0,0,0,0.52);
   }
   .lm-drawer.open { transform: translateY(0); }
   .lm-drawer-handle {
@@ -1485,7 +1481,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-drawer-tab.active { background: linear-gradient(135deg, var(--green), #22f0bf); color: #06111c; border-color: transparent; box-shadow: 0 0 18px rgba(0,212,170,0.18); }
+  .lm-drawer-tab.active { background: var(--accent); color: #0a0f1a; }
   .lm-sc-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 0.9rem; }
   .lm-sc-table th { text-align: left; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); }
   .lm-sc-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
@@ -1493,7 +1489,7 @@
   .lm-sc-out { font-size: 0.66rem; color: var(--muted); }
   .lm-sc-fab {
     position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 100;
-    background: linear-gradient(135deg, var(--green), #21f0bd); color: #06111c; border: none;
+    background: var(--accent); color: #0a0f1a; border: none;
     border-radius: 50px; padding: 0.7rem 1.1rem; font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
@@ -5694,42 +5690,28 @@ async function pdUpgradeTrait(ptId, cost) {
 
 // ════════════════ Live PvP match (Mini App game board) ════════════════
 let lmMatchId = null;
+let lmChatId = null;
 let lmPollTimer = null;
-let lmPollInterval = 2500;
+let lmPollInterval = 1500;
 let lmLastBallSeq = -1;
 let lmLastSig = '';
 let lmForceRender = false;
 let lmSelectedVariation = null;
-let lmSelectedLength = null;
-let lmSelectedSpinDelivery = null;
-let lmSelectedShot = null;
-let lmSelectedStrikerRid = null;
-let lmSelectedNonStrikerRid = null;
-let lmSelectedBowlerRid = null;
 let lmLastResultHtml = '';
-let lmPollFailCount = 0;     // consecutive failed state polls (transient-tolerant)
-let lmActionInFlight = false; // a mutating action (deliver/shot/pick) is running
-let lmCurrentSnapshot = null;
+let lmTab = 'match';   // match | scorecard | squads
+function lmSetTab(t) { lmTab = t; lmForceRender = true; pollMatch(); }
 
-function openLiveMatch(matchId) {
+function openLiveMatch(matchId, chatId) {
   lmMatchId = matchId;
+  lmChatId = (chatId !== undefined && chatId !== null) ? chatId : null;
   lmLastBallSeq = -1;
-  lmPollFailCount = 0;
-  lmActionInFlight = false;
   lmSelectedVariation = null;
-  lmSelectedLength = null;
-  lmSelectedSpinDelivery = null;
-  lmSelectedShot = null;
-  lmSelectedStrikerRid = null;
-  lmSelectedNonStrikerRid = null;
-  lmSelectedBowlerRid = null;
-  lmCurrentSnapshot = null;
   lmLastSig = '';
   const _nav = document.getElementById('bottom-nav');
   if (_nav) _nav.style.display = 'none';   // match-only: hide app nav
   navigate('livematch');
   document.getElementById('livematch-content').innerHTML =
-    `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Joining match…</div></div>`;
+    `<div class="empty"><div class="ball-loader"></div><div style="margin-top:0.2rem;">Connecting to the match room…</div></div>`;
   // Ensure state exists (init is idempotent + participant-guarded)
   api('/api/webapp/match/init', { match_id: matchId }).then(() => {
     pollMatch();
@@ -5739,16 +5721,16 @@ function openLiveMatch(matchId) {
 
 function startMatchPolling() {
   stopMatchPolling();
-  lmPollInterval = 900;
-  lmPollTimer = setInterval(pollMatch, lmPollInterval);
+  lmPollInterval = 1500;
+  lmPollTimer = setInterval(pollMatch, 1500);   // poll match state every 1.5s
 }
 function stopMatchPolling() {
   if (lmPollTimer) { clearInterval(lmPollTimer); lmPollTimer = null; }
 }
 
 function _lmReschedule(myTurn) {
-  // Poll faster when it's my turn (snappy), slower while waiting (cheap).
-  const want = myTurn ? 700 : 1200;
+  // Stay snappy: 1.5s baseline, slightly slower (3s) only while idly waiting.
+  const want = myTurn ? 1500 : 3000;
   if (lmPollInterval !== want) {
     lmPollInterval = want;
     if (lmPollTimer) { clearInterval(lmPollTimer); }
@@ -5758,44 +5740,13 @@ function _lmReschedule(myTurn) {
 
 async function pollMatch() {
   if (!lmMatchId || currentScreen !== 'livematch') return;
-  // Don't poll while a mutating action (deliver / shot / bowler pick) is in
-  // flight. A concurrent poll competes for the small DB pool and can race the
-  // action's own response — the action renders its fresh snapshot and resumes
-  // polling itself.
-  if (lmActionInFlight) return;
-  const { ok, status, data } = await api('/api/webapp/match/state', { match_id: lmMatchId });
+  const { ok, data } = await api('/api/webapp/match/state', { match_id: lmMatchId });
   if (!ok) {
-    // Only a definitive "no live match" (404 / no_match) means the match is
-    // truly gone. Transient failures — a network blip, or a 500 thrown while a
-    // delivery is being committed under DB-pool contention — must NOT tear the
-    // board down. Keep the current screen and recover on the next tick.
-    const gone = (status === 404) || (data && data.error === 'no_match');
-    if (gone) {
-      document.getElementById('livematch-content').innerHTML =
-        `<div class="lm-waiting"><div class="big">🏁</div>This match has ended or is no longer available.
-         <div style="margin-top:1rem;"><button class="spin-button" onclick="navigate('home')">Back home</button></div></div>`;
-      stopMatchPolling();
-      return;
-    }
-    lmPollFailCount++;
-    // Persistent backend trouble: ease off the poll rate so we don't pile onto
-    // a struggling server, but keep trying — the match is almost certainly
-    // still live and will come back.
-    if (lmPollFailCount === 6 && lmPollTimer) {
-      clearInterval(lmPollTimer);
-      lmPollInterval = 4000;
-      lmPollTimer = setInterval(pollMatch, lmPollInterval);
-    }
+    document.getElementById('livematch-content').innerHTML =
+      `<div class="lm-waiting"><div class="big">🏁</div>This match has ended or is no longer available.
+       <div style="margin-top:1rem;"><button class="spin-button" onclick="navigate('home')">Back home</button></div></div>`;
+    stopMatchPolling();
     return;
-  }
-  lmPollFailCount = 0;
-  if (data.ball_seq !== lmLastBallSeq) {
-    lmLastBallSeq = data.ball_seq;
-    lmSelectedVariation = null;
-    lmSelectedLength = null;
-    lmSelectedSpinDelivery = null;
-    lmSelectedShot = null;
-    window._lmBowlOpts = null;
   }
   // Whose turn is it for me? (drives poll cadence)
   const _sp2 = data.setup_progress || {};
@@ -5816,32 +5767,9 @@ async function pollMatch() {
   lmLastSig = sig;
   lmForceRender = false;
   renderLiveMatch(data);
-  if (isScorecardOpen()) lmLoadScorecard(false);
-}
-
-function lmRefreshLocal() {
-  if (!lmCurrentSnapshot) return;
-  lmForceRender = true;
-  renderLiveMatch(lmCurrentSnapshot);
-}
-
-function lmSetBowlChoice(kind, index) {
-  const opts = window._lmBowlOpts || {};
-  if (kind === 'variation') lmSelectedVariation = (opts.variations || [])[index] || lmSelectedVariation;
-  else if (kind === 'length') lmSelectedLength = (opts.lengths || [])[index] || lmSelectedLength;
-  else if (kind === 'spin') lmSelectedSpinDelivery = (opts.deliveries || [])[index] || lmSelectedSpinDelivery;
-  haptic('light');
-  lmRefreshLocal();
-}
-
-function lmSetShotChoice(idx) {
-  lmSelectedShot = idx;
-  haptic('light');
-  lmRefreshLocal();
 }
 
 function renderLiveMatch(s) {
-  lmCurrentSnapshot = s;
   const el = document.getElementById('livematch-content');
   const role = s.role;
   const roleBadge = role === 'batsman'
@@ -5850,67 +5778,155 @@ function renderLiveMatch(s) {
     ? '<span class="lm-role-badge lm-role-bowl">🎳 BOWLING</span>'
     : '<span class="lm-role-badge lm-role-spec">👁 SPECTATING</span>';
 
+  // Structured header: back · host · VS · guest · #matchId (names truncated)
+  const host = escapeHtml(s.host_name || s.bat_team_name || 'Host');
+  const guest = escapeHtml(s.guest_name || s.bowl_team_name || 'Guest');
   let html = `
-    <div class="lm-topbar">
-      <button class="lm-back-btn" onclick="navigate('home')">‹</button>
-      <div class="lm-title">
-        <div class="teams">
-          <span class="team-name">${escapeHtml(s.bat_team_name || 'Batting')}</span>
-          <span class="vs">VS</span>
-          <span class="team-name">${escapeHtml(s.bowl_team_name || 'Bowling')}</span>
-        </div>
-        <div class="match-id">MATCH ID: C_${s.match_id}</div>
-        ${roleBadge}
+    <div class="lm-header">
+      <button class="lm-back" onclick="navigate('home')" title="Leave">←</button>
+      <div class="lm-vs-wrap">
+        <span class="lm-team host" title="${host}">${host}</span>
+        <span class="lm-vs-badge">VS</span>
+        <span class="lm-team guest" title="${guest}">${guest}</span>
       </div>
-      ${role !== 'spectator' ? `<button class="lm-icon-btn" title="Forfeit" onclick="lmAbandon()">🏳️</button>` : '<span></span>'}
+      <span class="lm-matchid">#${lmMatchId}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+      <div>${roleBadge}</div>
+      ${role !== 'spectator' ? `<button class="link-btn" style="color:var(--danger-accent);font-size:0.72rem;" onclick="lmAbandon()">🏳️ Forfeit</button>` : ''}
     </div>
     ${scorebarHtml(s)}
-    ${matchTabsHtml()}
   `;
 
+  // Setup phase
   if (s.setup && s.setup !== 'DONE') {
     html += setupPhaseHtml(s);
     el.innerHTML = html;
     return;
   }
 
-  html += battersHtml(s) + timelineHtml(s);
+  // Ball loop — once underway, show Match / Scorecard / Squads tabs.
+  html += `
+    <div class="lm-tabs">
+      <button class="lm-tab ${lmTab==='match'?'active':''}" onclick="lmSetTab('match')">Match</button>
+      <button class="lm-tab ${lmTab==='scorecard'?'active':''}" onclick="lmSetTab('scorecard')">Scorecard</button>
+      <button class="lm-tab ${lmTab==='squads'?'active':''}" onclick="lmSetTab('squads')">Squads</button>
+    </div>`;
+
+  if (lmTab === 'scorecard') {
+    html += `<div id="lm-inline-sc">${inlineScorecardHtml(s)}</div>`;
+    el.innerHTML = html;
+    return;
+  }
+  if (lmTab === 'squads') {
+    html += squadsHtml(s);
+    el.innerHTML = html;
+    return;
+  }
+
+  // --- Match tab (default): live state + controls + commentary ---
+  html += battersHtml(s) + bowlerHtml(s) + timelineHtml(s);
+
+  // Last ball result (kept between polls so it doesn't flash away)
   if (lmLastResultHtml) html += lmLastResultHtml;
-  else html += lastBallHtml(s);
+
+  // Role + turn specific control panel
   html += controlPanelHtml(s);
 
+  // Cricbuzz-style commentary feed
+  html += commentaryFeedHtml(s);
+
+  // Scorecard FAB (once the match is underway)
   if (s.setup === 'DONE' || !s.setup) {
-    html += `<button class="lm-sc-fab" onclick="openScorecard()">📋 Scorecard</button>`;
+    html += `<button class="lm-sc-fab" onclick="openScorecard()">📋 Full Scorecard</button>`;
   }
 
   el.innerHTML = html;
 }
 
-function matchTabsHtml() {
-  return `<div class="lm-tabs">
-    <button class="lm-tab active" type="button">MATCH</button>
-    <button class="lm-tab" type="button" onclick="openScorecard()">SCORECARD</button>
-    <button class="lm-tab" type="button" onclick="toast('Squads view coming soon', 'info')">SQUADS</button>
+// Cricbuzz-style commentary feed from the rolling timeline + last commentary.
+function commentaryFeedHtml(s) {
+  const tl = (s.timeline || []).slice(-10).reverse();
+  if (!tl.length && !s.commentary) return '';
+  const badge = (sym) => {
+    const v = String(sym).trim();
+    let cls = 'run', label = v;
+    if (v === 'W') { cls = 'wkt'; label = 'W'; }
+    else if (v === '4') { cls = 'four'; }
+    else if (v === '6') { cls = 'six'; }
+    else if (v === '0' || v === '•' || v === '.') { cls = 'dot'; label = '•'; }
+    return `<span class="lm-comm-badge ${cls}">${escapeHtml(label)}</span>`;
+  };
+  let rows = '';
+  // Lead with the latest commentary line if present
+  if (s.commentary) {
+    rows += `<div class="lm-comm-row">
+      <div class="lm-comm-ball">now</div>
+      <div class="lm-comm-text">${escapeHtml(s.commentary)}</div></div>`;
+  }
+  tl.forEach((sym, i) => {
+    rows += `<div class="lm-comm-row">
+      <div class="lm-comm-ball">${badge(sym)}</div>
+      <div class="lm-comm-text" style="color:var(--muted);">${ballDesc(sym)}</div></div>`;
+  });
+  return `<div class="lm-comm"><div class="lm-comm-title">⚡ Commentary</div>${rows}</div>`;
+}
+function ballDesc(sym) {
+  const v = String(sym).trim();
+  if (v === 'W') return 'OUT! Wicket falls.';
+  if (v === '6') return 'SIX! Into the crowd.';
+  if (v === '4') return 'FOUR! Races to the boundary.';
+  if (v === '0' || v === '•' || v === '.') return 'Dot ball.';
+  if (v === 'wd' || v === 'Wd') return 'Wide.';
+  if (v === 'nb' || v === 'Nb') return 'No ball.';
+  return `${v} run${v === '1' ? '' : 's'}.`;
+}
+
+// Inline scorecard (reuses the drawer renderer if present, else a compact view)
+function inlineScorecardHtml(s) {
+  try {
+    if (typeof renderScorecardInto === 'function') return renderScorecardInto(s);
+  } catch (e) {}
+  // Fallback compact summary
+  const sc = s.score || {};
+  return `<div class="lm-panel">
+    <div class="lm-panel-title">${escapeHtml(s.bat_team_name||'Batting')} — Innings ${s.innings||1}</div>
+    <div style="font-size:1.4rem;font-weight:900;">${sc.runs||0}/${sc.wickets||0}
+      <span class="sub" style="font-size:0.8rem;color:var(--muted);">(${sc.overs_str||'0.0'} ov)</span></div>
+    ${sc.target?`<div class="lm-target">🎯 Target ${sc.target}</div>`:''}
+    <button class="spin-button" style="width:100%;margin-top:0.8rem;" onclick="openScorecard()">Open full scorecard</button>
   </div>`;
+}
+
+// Squads tab — both XIs.
+function squadsHtml(s) {
+  const xiList = (title, players) => {
+    if (!players || !players.length) return '';
+    const rows = players.map((p, i) =>
+      `<div style="display:flex;justify-content:space-between;padding:0.35rem 0;border-bottom:1px solid rgba(42,54,80,0.4);font-size:0.84rem;">
+        <span>${i+1}. ${escapeHtml(p.name)}</span>
+        <span class="sub" style="color:var(--muted);">${escapeHtml(p.bowl_style||p.category||'')}</span></div>`).join('');
+    return `<div class="lm-panel"><div class="lm-panel-title">${escapeHtml(title)}</div>${rows}</div>`;
+  };
+  const batXi = s.bat_xi || s.batting_xi || [];
+  const bowlXi = s.bowl_xi || s.bowling_xi || [];
+  if (!batXi.length && !bowlXi.length) {
+    return `<div class="lm-waiting"><div class="big">👥</div>Squad info loads once the match is underway.</div>`;
+  }
+  return xiList((s.bat_team_name||'Team A')+' (Batting)', batXi)
+       + xiList((s.bowl_team_name||'Team B')+' (Bowling)', bowlXi);
 }
 
 function scorebarHtml(s) {
   if (!s.score) return '';
-  const balls = ((s.score.over || 0) * 6) + (s.score.ball || 0);
-  const crrVal = s.score.crr || (balls ? ((s.score.runs || 0) / balls * 6).toFixed(1) : '0.0');
-  const tgt = s.score.target ? `<div class="lm-target">🎯 Target ${s.score.target} · Need ${Math.max(0, s.score.target - s.score.runs)} more</div>` : '';
-  const status = s.score.target
-    ? `${escapeHtml(s.bat_team_name)} chasing ${s.score.target}`
-    : `${escapeHtml(s.bat_team_name)} batting first`;
+  const tgt = s.score.target ? `<div class="lm-target">🎯 Target: ${s.score.target} · Need ${Math.max(0, s.score.target - s.score.runs)} more</div>` : '';
   return `
     <div class="lm-scorebar">
-      <div class="lm-score-hero">
-        <div>
-          <div class="lm-score-main">${s.score.runs}/${s.score.wickets}</div>
-          <div class="lm-score-meta"><span class="crr">CRR: ${crrVal}</span><span class="ovs">${s.score.overs_str}/${s.overs_limit} OV</span></div>
-        </div>
-        <div class="lm-innings-pill">● ${status}</div>
+      <div class="lm-teams">
+        <span class="lm-bat-team">${escapeHtml(s.bat_team_name)}</span>
+        <span class="lm-overs">Inns ${s.innings} · ${s.score.overs_str}/${s.overs_limit} ov</span>
       </div>
+      <div class="lm-score">${s.score.runs}/${s.score.wickets}</div>
       ${tgt}
     </div>
   `;
@@ -5918,26 +5934,13 @@ function scorebarHtml(s) {
 
 function battersHtml(s) {
   if (!s.striker && !s.non_striker) return '';
-  const batter = (b, onStrike, side) => b ? `
-    <div class="lm-batter ${side === 'right' ? 'right' : ''} ${onStrike ? 'on-strike' : ''}">
-      <div class="lm-avatar">${onStrike ? 'C' : (escapeHtml(b.name || '?').slice(0, 1) || 'B')}</div>
-      <div style="min-width:0;">
-        <div class="nm">${escapeHtml(b.name)}${onStrike ? ' 🏏' : ''}</div>
-        <div class="rn">${b.runs} (${b.balls}) · SR ${b.sr}</div>
-      </div>
-    </div>` : '<div class="lm-batter"><div class="rn">—</div></div>';
-  const p = s.partnership || { runs: 0, balls: 0 };
-  const bw = s.bowler || {};
-  return `<div class="lm-match-card"><div class="lm-batters">
-    ${batter(s.striker, true, 'left')}
-    <div class="lm-center-stat">
-      <div class="lbl">Partnership</div>
-      <div class="val">${p.runs || 0}(${p.balls || 0})</div>
-      <div class="lbl">Bowler</div>
-      <div class="val">${escapeHtml(bw.name || '—')} ${bw.wickets ?? 0}-${bw.runs ?? 0}</div>
-    </div>
-    ${batter(s.non_striker, false, 'right')}
-  </div></div>`;
+  const card = (b, onStrike) => b ? `
+    <div class="lm-batter ${onStrike ? 'on-strike' : ''}">
+      <div class="nm">${escapeHtml(b.name)} ${onStrike ? '🏏' : ''}</div>
+      <div class="rn">${b.runs} <span class="sub">(${b.balls})</span></div>
+      <div class="sub">SR ${b.sr} · 4s ${b.fours} · 6s ${b.sixes}</div>
+    </div>` : '<div class="lm-batter"><div class="sub">—</div></div>';
+  return `<div class="lm-batters">${card(s.striker, true)}${card(s.non_striker, false)}</div>`;
 }
 
 function bowlerHtml(s) {
@@ -5951,105 +5954,45 @@ function bowlerHtml(s) {
 
 function timelineHtml(s) {
   if (!s.timeline || !s.timeline.length) return '';
-  const recent = s.timeline.slice(-4).reverse();
-  return `<div class="lm-timeline">` + recent.map((t, i) => {
-    const ballNo = Math.max(0, (s.score?.ball || 0) - i);
-    const overText = `${s.score?.over || 0}.${Math.max(0, ballNo)}`;
-    return `<div class="lm-tl-row"><div class="lm-tl-over">${overText}</div><div class="lm-tl-ball">${escapeHtml(t)}</div><div class="lm-tl-text">Last ball result: <b>${escapeHtml(t)}</b></div></div>`;
-  }).join('') + `</div>`;
+  return `<div class="lm-timeline">` +
+    s.timeline.map(t => `<div class="lm-tl-ball">${escapeHtml(t)}</div>`).join('') +
+    `</div>`;
 }
 
-function lastBallHtml(s) {
-  const lb = s.last_ball || null;
-  if (!lb || !lb.text) return '';
-  const meta = [lb.delivery, lb.shot].filter(Boolean).map(escapeHtml).join(' · ');
-  return `<div class="lm-ball-result">
-    <div>${escapeHtml(lb.text)}</div>
-    ${lb.commentary ? `<div class="lm-commentary">💬 ${escapeHtml(lb.commentary)}</div>` : ''}
-    ${meta ? `<div class="lm-ball-meta">${meta}</div>` : ''}
-  </div>`;
-}
-
-function lmRoleLabel(o, mode) {
-  const role = o.category || o.bowl_style || '';
-  const skill = mode === 'bat' ? (o.bat_rating || o.rating || '—') : (o.bowl_rating || o.rating || '—');
-  return `${escapeHtml(role || (mode === 'bat' ? 'Batter' : 'Bowler'))} · ${mode === 'bat' ? 'BAT' : 'BOWL'} ${skill}`;
-}
-function lmPlayerCard(o, active, disabled, onclick, mode) {
-  const ovr = o.rating || o.bat_rating || o.bowl_rating || '—';
-  return `<button type="button" class="lm-player-card ${active ? 'active' : ''} ${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : `onclick="${onclick}"`}>
-    <div class="lm-player-ovr">${escapeHtml(String(ovr))}</div>
-    <div style="min-width:0;">
-      <div class="lm-player-name">${escapeHtml(o.name)}</div>
-      <div class="lm-player-meta">${lmRoleLabel(o, mode)}</div>
-    </div>
-    <div class="lm-player-check">${active ? '✓' : ''}</div>
-  </button>`;
-}
-function lmSelectOpener(slot, rid) {
-  if (slot === 'striker') lmSelectedStrikerRid = rid;
-  else lmSelectedNonStrikerRid = rid;
-  haptic('light');
-  lmRefreshLocal();
-}
-function lmSelectBowlerCard(rid) {
-  lmSelectedBowlerRid = rid;
-  haptic('light');
-  lmRefreshLocal();
-}
 function setupPhaseHtml(s) {
   const role = s.role;
   const prog = s.setup_progress || {};
   if (role === 'batsman') {
-    const openers = s.openers_options || [];
-    if (!prog.openers_done && openers.length) {
-      if (!lmSelectedStrikerRid || !openers.some(o => o.roster_id === lmSelectedStrikerRid)) lmSelectedStrikerRid = openers[0]?.roster_id || null;
-      if (!lmSelectedNonStrikerRid || !openers.some(o => o.roster_id === lmSelectedNonStrikerRid) || lmSelectedNonStrikerRid === lmSelectedStrikerRid) {
-        const alt = openers.find(o => o.roster_id !== lmSelectedStrikerRid);
-        lmSelectedNonStrikerRid = alt ? alt.roster_id : null;
-      }
-      const strikerCards = openers.map(o => lmPlayerCard(o, o.roster_id === lmSelectedStrikerRid, o.roster_id === lmSelectedNonStrikerRid, `lmSelectOpener('striker',${o.roster_id})`, 'bat')).join('');
-      const nonCards = openers.map(o => lmPlayerCard(o, o.roster_id === lmSelectedNonStrikerRid, o.roster_id === lmSelectedStrikerRid, `lmSelectOpener('non',${o.roster_id})`, 'bat')).join('');
-      const invalid = lmSelectedStrikerRid && lmSelectedNonStrikerRid && lmSelectedStrikerRid === lmSelectedNonStrikerRid;
-      return `<div class="lm-premium-hero">
-        <div class="lm-premium-kicker">Starting XI setup</div>
-        <div class="lm-premium-title">Pick your opening pair</div>
-        <div class="lm-premium-sub">Select a striker and non-striker from your XI. The same batter cannot occupy both ends.</div>
-        <div class="lm-pill-row">
-          <span class="lm-mini-pill">Opponent bowler: <b>${prog.bowler_done ? 'locked' : 'pending'}</b></span>
-          <span class="lm-mini-pill">Your role: <b>Batting</b></span>
+    if (!prog.openers_done && s.openers_options) {
+      const opts = (s.openers_options || []).map(o =>
+        `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bat ${o.bat_rating}</option>`).join('');
+      return `<div class="lm-panel">
+        <div class="lm-panel-title">Choose your two openers</div>
+        <label class="sub" style="font-size:0.75rem;color:var(--muted);">Striker</label>
+        <select id="lm-striker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
+        <label class="sub" style="font-size:0.75rem;color:var(--muted);">Non-striker</label>
+        <select id="lm-nonstriker" class="lm-dropdown" onchange="lmSyncOpenerDropdowns()">${opts}</select>
+        <div id="lm-opener-warn" style="color:var(--red);font-size:0.76rem;margin-bottom:0.5rem;display:none;">Striker and non-striker must be different.</div>
+        <button class="spin-button" style="width:100%;" onclick="lmSubmitOpeners()">Lock in openers</button>
+        <div class="sub" style="color:var(--muted);font-size:0.72rem;margin-top:0.6rem;text-align:center;">
+          ${prog.bowler_done ? '✅ Opponent picked their bowler' : '⏳ Opponent is picking their bowler'}
         </div>
-      </div>
-      <div class="lm-panel">
-        <div class="lm-panel-title">1 · Striker</div>
-        <div class="lm-player-grid">${strikerCards}</div>
-        <div class="lm-panel-title">2 · Non-striker</div>
-        <div class="lm-player-grid">${nonCards}</div>
-        <div id="lm-opener-warn" style="color:var(--red);font-size:0.76rem;margin-bottom:0.5rem;${invalid ? '' : 'display:none;'}">Striker and non-striker must be different.</div>
-        <button class="lm-action-btn" style="margin-top:0.2rem;" onclick="lmSubmitOpeners()">✅ Lock opening pair</button>
       </div>`;
     }
     return `<div class="lm-waiting"><div class="big">✅</div>Openers locked in.<br>
       <span class="sub" style="color:var(--muted);">${prog.bowler_done ? 'Starting…' : 'Waiting for the bowler…'}</span></div>`;
   }
   if (role === 'bowler') {
-    const bowlers = s.bowler_options || [];
-    if (!prog.bowler_done && bowlers.length) {
-      if (!lmSelectedBowlerRid || !bowlers.some(o => o.roster_id === lmSelectedBowlerRid)) lmSelectedBowlerRid = bowlers[0]?.roster_id || null;
-      const cards = bowlers.map(o => lmPlayerCard(o, o.roster_id === lmSelectedBowlerRid, false, `lmSelectBowlerCard(${o.roster_id})`, 'bowl')).join('');
-      return `<div class="lm-premium-hero">
-        <div class="lm-premium-kicker">Opening spell</div>
-        <div class="lm-premium-title">Choose your first bowler</div>
-        <div class="lm-premium-sub">Pick the bowler who will take the new ball. Style and OVR are shown on each card.</div>
-        <div class="lm-pill-row">
-          <span class="lm-mini-pill">Opponent openers: <b>${prog.openers_done ? 'locked' : 'pending'}</b></span>
-          <span class="lm-mini-pill">Your role: <b>Bowling</b></span>
+    if (!prog.bowler_done && s.bowler_options) {
+      const opts = (s.bowler_options || []).map(o =>
+        `<option value="${o.roster_id}">${escapeHtml(o.name)} — Bowl ${o.bowl_rating} (${escapeHtml(o.bowl_style||'')})</option>`).join('');
+      return `<div class="lm-panel">
+        <div class="lm-panel-title">Choose your opening bowler</div>
+        <select id="lm-bowler" class="lm-dropdown">${opts}</select>
+        <button class="spin-button" style="width:100%;" onclick="lmSubmitBowler()">Select bowler</button>
+        <div class="sub" style="color:var(--muted);font-size:0.72rem;margin-top:0.6rem;text-align:center;">
+          ${prog.openers_done ? '✅ Opponent picked their openers' : '⏳ Opponent is picking openers'}
         </div>
-      </div>
-      <div class="lm-panel">
-        <div class="lm-panel-title">Opening bowler</div>
-        <div class="lm-player-grid">${cards}</div>
-        <button class="lm-action-btn" onclick="lmSubmitBowler()">🎳 Select bowler</button>
       </div>`;
     }
     return `<div class="lm-waiting"><div class="big">✅</div>Bowler selected.<br>
@@ -6063,9 +6006,25 @@ function setupPhaseHtml(s) {
 
 function controlPanelHtml(s) {
   const role = s.role;
-  // Spectator — read-only
+  // Spectator — read-only, with a state-specific status line.
   if (role === 'spectator') {
-    return `<div class="lm-waiting"><div class="big">👁</div>Spectating — ${s.turn === 'bowler' ? 'bowler to deliver' : s.turn === 'batsman' ? 'batsman to play' : 'in progress'}…</div>`;
+    const na = s.next_action;
+    let line = 'Spectating match…';
+    if (s.setup && s.setup !== 'DONE') {
+      const prog = s.setup_progress || {};
+      if (!prog.openers_done && !prog.bowler_done) line = 'Teams are selecting players…';
+      else if (!prog.openers_done) line = 'Waiting for batsman selection…';
+      else if (!prog.bowler_done) line = 'Waiting for bowler selection…';
+    } else if (na === 'PICK_DELIVERY' || na === 'PICK_LENGTH') {
+      line = 'Bowler is preparing delivery…';
+    } else if (na === 'PICK_SHOT') {
+      line = 'Batsman is preparing shot…';
+    } else if (na === 'PICK_NEW_BATSMAN') {
+      line = 'Waiting for batsman selection…';
+    } else if (na === 'PICK_NEW_BOWLER') {
+      line = 'Waiting for bowler selection…';
+    }
+    return `<div class="lm-waiting"><div class="big">👁</div>${escapeHtml(line)}</div>`;
   }
 
   const na = s.next_action;
@@ -6103,65 +6062,39 @@ function controlPanelHtml(s) {
   return '';
 }
 
-function lmChoiceButton(label, active, onclick) {
-  return `<button type="button" class="lm-choice-btn ${active ? 'active' : ''}" onclick="${onclick}">${escapeHtml(label)}</button>`;
-}
-
 function bowlingControlsHtml(s) {
+  // We lazy-load options into a cached global the first time
   if (!window._lmBowlOpts) {
     api('/api/webapp/match/bowling-options', { match_id: lmMatchId }).then(({ ok, data }) => {
-      if (ok && data.options) { window._lmBowlOpts = data.options; lmForceRender = true; pollMatch(); }
+      if (ok && data.options) { window._lmBowlOpts = data.options; pollMatch(); }
     });
     return `<div class="lm-panel"><div class="empty"><div class="spinner"></div></div></div>`;
   }
   const opts = window._lmBowlOpts;
   if (opts.is_spinner) {
-    const deliveries = opts.deliveries || [];
-    if (!lmSelectedSpinDelivery || !deliveries.includes(lmSelectedSpinDelivery)) {
-      lmSelectedSpinDelivery = deliveries[0] || '';
-    }
-    const delBtns = deliveries.map((d, i) =>
-      lmChoiceButton(d, d === lmSelectedSpinDelivery, `lmSetBowlChoice('spin',${i})`)).join('');
-    return `<div class="lm-panel">
-      <div class="lm-panel-title">Bowling controls · variations</div>
-      <div class="lm-control-row">
-        <label>Variation / delivery</label>
-        <div class="lm-choice-grid">${delBtns}</div>
-      </div>
-      <div class="lm-control-summary">Selected: <b>${escapeHtml(lmSelectedSpinDelivery)}</b></div>
-      <button class="lm-action-btn" onclick="lmBowlSelected()">🎳 Bowl</button>
-    </div>`;
+    const btns = opts.deliveries.map(d =>
+      `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(d)}')">${escapeHtml(d)}</button>`).join('');
+    return `<div class="lm-panel"><div class="lm-panel-title">Pick your delivery</div>
+      <div class="lm-opt-grid">${btns}</div></div>`;
   }
-
-  const variations = opts.variations || [];
-  const lengths = opts.lengths || [];
-  if (!lmSelectedVariation || !variations.includes(lmSelectedVariation)) {
-    lmSelectedVariation = variations[0] || '';
+  // Pacer: variation first, then length
+  if (!lmSelectedVariation) {
+    const btns = opts.variations.map(v =>
+      `<button class="lm-opt-btn" onclick="lmPickVariation('${escapeHtmlAttr(v)}')">${escapeHtml(v)}</button>`).join('');
+    return `<div class="lm-panel"><div class="lm-panel-title">Step 1: Pick a variation</div>
+      <div class="lm-opt-grid">${btns}</div></div>`;
   }
-  if (!lmSelectedLength || !lengths.includes(lmSelectedLength)) {
-    lmSelectedLength = lengths[0] || '';
-  }
-  const varBtns = variations.map((v, i) =>
-    lmChoiceButton(v, v === lmSelectedVariation, `lmSetBowlChoice('variation',${i})`)).join('');
-  const lenBtns = lengths.map((l, i) =>
-    lmChoiceButton(l, l === lmSelectedLength, `lmSetBowlChoice('length',${i})`)).join('');
+  const lenBtns = opts.lengths.map(l =>
+    `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(lmSelectedVariation)}','${escapeHtmlAttr(l)}')">${escapeHtml(l)}</button>`).join('');
   return `<div class="lm-panel">
-    <div class="lm-panel-title">Bowling controls · variations & length</div>
-    <div class="lm-control-row">
-      <label>Variation</label>
-      <div class="lm-choice-grid">${varBtns}</div>
-    </div>
-    <div class="lm-control-row">
-      <label>Length</label>
-      <div class="lm-choice-grid compact">${lenBtns}</div>
-    </div>
-    <div class="lm-control-summary">Selected: <b>${escapeHtml(lmSelectedVariation)}</b> · <b>${escapeHtml(lmSelectedLength)}</b></div>
-    <button class="lm-action-btn" onclick="lmBowlSelected()">🎳 Bowl</button>
+    <div class="lm-panel-title">Step 2: Pick a length — <b style="color:var(--accent);">${escapeHtml(lmSelectedVariation)}</b></div>
+    <div class="lm-opt-grid">${lenBtns}</div>
+    <button class="link-btn" style="margin-top:0.5rem;" onclick="lmSelectedVariation=null;lmForceRender=true;pollMatch();">← Change variation</button>
   </div>`;
 }
 
 function deliveryBannerHtml(s) {
-  const sp = s.current_delivery && s.last_speed ? `${s.last_speed} km/h` : '';
+  const sp = s.current_delivery && window._lmSpeed ? `${window._lmSpeed} km/h` : '';
   return `<div class="lm-delivery-banner">
     <div class="sp">Delivery incoming…</div>
     <div class="dl">${escapeHtml(s.current_delivery || '')}</div>
@@ -6172,117 +6105,64 @@ function deliveryBannerHtml(s) {
 
 const LM_SHOTS = ["Drive","Cut","Pull","Leg Glance","Flick","Sweep","Switch Hit","Slog","Loft","Defend","Leave"];
 function shotGridHtml() {
-  if (lmSelectedShot === null || lmSelectedShot < 0 || lmSelectedShot >= LM_SHOTS.length) {
-    lmSelectedShot = 0;
-  }
   const btns = LM_SHOTS.map((sh, i) =>
-    lmChoiceButton(sh, i === lmSelectedShot, `lmPlayShot(${i})`)).join('');
-  return `<div class="lm-panel">
-    <div class="lm-panel-title">Batting controls · shot choices</div>
-    <div class="lm-choice-grid compact">${btns}</div>
-  </div>`;
+    `<button class="lm-shot-btn" onclick="lmPlayShot(${i})">${escapeHtml(sh)}</button>`).join('');
+  return `<div class="lm-panel"><div class="lm-panel-title">Choose your shot</div>
+    <div class="lm-shot-grid">${btns}</div></div>`;
 }
 
 // ── Actions ──
-// Run a mutating action with the in-flight guard set so the poll loop pauses
-// (avoids racing the action and competing for the DB pool). Always clears the
-// flag, even on error, so a failed action never wedges polling.
-async function lmAction(path, body) {
-  lmActionInFlight = true;
-  try {
-    return await api(path, body);
-  } finally {
-    lmActionInFlight = false;
-  }
+function lmSyncOpenerDropdowns() {
+  const a = document.getElementById('lm-striker').value;
+  const b = document.getElementById('lm-nonstriker').value;
+  document.getElementById('lm-opener-warn').style.display = (a === b) ? 'block' : 'none';
 }
-// Render immediately from a snapshot returned by an action (instant feedback,
-// no extra round-trip) and keep the poll signature in sync so the next poll
-// doesn't needlessly re-render the same state.
-function lmApplySnapshot(s) {
-  if (!s) return;
-  const sp = s.setup_progress || {};
-  lmLastSig = `${s.ball_seq}|${s.setup}|${s.next_action}|${s.role}|${sp.openers_done?1:0}${sp.bowler_done?1:0}`;
-  renderLiveMatch(s);
-}
-function lmSyncOpenerDropdowns() { lmRefreshLocal(); }
 async function lmSubmitOpeners() {
-  if (lmActionInFlight) return;
-  const striker = parseInt(lmSelectedStrikerRid, 10);
-  const non = parseInt(lmSelectedNonStrikerRid, 10);
-  if (!striker || !non || striker === non) { toast('Pick two different openers', 'error'); lmRefreshLocal(); return; }
+  const striker = parseInt(document.getElementById('lm-striker').value, 10);
+  const non = parseInt(document.getElementById('lm-nonstriker').value, 10);
+  if (striker === non) { document.getElementById('lm-opener-warn').style.display = 'block'; return; }
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/select-openers',
+  const { ok, data } = await api('/api/webapp/match/select-openers',
     { match_id: lmMatchId, striker_rid: striker, non_striker_rid: non });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmForceRender = true;
-  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmSubmitBowler() {
-  if (lmActionInFlight) return;
-  const rid = parseInt(lmSelectedBowlerRid, 10);
-  if (!rid) { toast('Pick a bowler first', 'error'); return; }
+  const rid = parseInt(document.getElementById('lm-bowler').value, 10);
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  const { ok, data } = await api('/api/webapp/match/select-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmForceRender = true;
-  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmReady() {
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/ready', { match_id: lmMatchId });
+  const { ok, data } = await api('/api/webapp/match/ready', { match_id: lmMatchId });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
-  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 function lmPickVariation(v) { haptic('light'); lmSelectedVariation = v; lmForceRender = true; pollMatch(); }
-function lmBowlSelected() {
-  const opts = window._lmBowlOpts || {};
-  if (opts.is_spinner) {
-    if (!lmSelectedSpinDelivery) { toast('Pick a delivery first', 'error'); return; }
-    lmDeliver(lmSelectedSpinDelivery);
-    return;
-  }
-  if (!lmSelectedVariation || !lmSelectedLength) { toast('Pick variation and length first', 'error'); return; }
-  lmDeliver(lmSelectedVariation, lmSelectedLength);
-}
 async function lmDeliver(variation, length) {
-  if (lmActionInFlight) return;       // ignore double-taps while delivering
   haptic('medium');
   const body = { match_id: lmMatchId, variation };
   if (length) body.length = length;
-  const { ok, data } = await lmAction('/api/webapp/match/deliver', body);
+  const { ok, data } = await api('/api/webapp/match/deliver', body);
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmSelectedVariation = null;
-  lmSelectedLength = null;
-  lmSelectedSpinDelivery = null;
   window._lmBowlOpts = null;  // refetch next over
-  // The deliver response already carries the post-delivery snapshot — render it
-  // straight away so the bowler instantly sees "waiting for batsman" instead of
-  // waiting for the next poll.
-  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
-function lmPlaySelectedShot() {
-  if (lmSelectedShot === null || lmSelectedShot === undefined) { toast('Pick a shot first', 'error'); return; }
-  lmPlayShot(parseInt(lmSelectedShot, 10));
-}
 async function lmPlayShot(idx) {
-  if (lmActionInFlight) return;       // ignore double-taps while resolving
   haptic('heavy');
-  const { ok, data } = await lmAction('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx });
+  const { ok, data } = await api('/api/webapp/match/play-shot', { match_id: lmMatchId, shot_index: idx });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   const r = data.result;
   // Show the ball result prominently for a moment
-  lmLastResultHtml = `<div class="lm-ball-result">
-    <div>${escapeHtml(r.rtxt)}</div>
-    ${r.commentary ? `<div class="lm-commentary">💬 ${escapeHtml(r.commentary)}</div>` : ''}
-  </div>`; lmForceRender = true;
+  lmLastResultHtml = `<div class="lm-ball-result">${escapeHtml(r.rtxt)}</div>`; lmForceRender = true;
   if (r.type === 'wicket') hapticNotif('error');
   else if (r.runs === 6 || r.runs === 4) { hapticNotif('success'); launchConfetti(r.runs === 6 ? 60 : 40); }
   setTimeout(() => { lmLastResultHtml = ''; }, 4000);
-  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 async function lmLoadNewBowlers() {
@@ -6293,12 +6173,10 @@ async function lmLoadNewBowlers() {
   document.getElementById('lm-newbowler-area').innerHTML = `<div class="lm-opt-grid">${btns}</div>`;
 }
 async function lmNewBowler(rid) {
-  if (lmActionInFlight) return;
   haptic('medium');
-  const { ok, data } = await lmAction('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
+  const { ok, data } = await api('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   window._lmBowlOpts = null;
-  if (data.snapshot) lmApplySnapshot(data.snapshot);
   pollMatch();
 }
 
@@ -6312,21 +6190,13 @@ async function openScorecard() {
   const drawer = document.getElementById('lm-drawer');
   drawer.classList.add('open');
   document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-  await lmLoadScorecard(true);
-}
-
-async function lmLoadScorecard(forceCurrentTab = false) {
   const { ok, data } = await api('/api/webapp/match/scorecard', { match_id: lmMatchId });
   if (!ok) {
     document.getElementById('lm-drawer-body').innerHTML = `<div class="empty">Scorecard unavailable</div>`;
     return;
   }
-  const current = data.current_innings || 1;
-  const previousCurrent = lmScorecardData ? (lmScorecardData.current_innings || 1) : null;
   lmScorecardData = data;
-  if (forceCurrentTab || lmScorecardTab === null || previousCurrent !== current) {
-    lmScorecardTab = current;
-  }
+  lmScorecardTab = data.current_innings || 1;
   renderScorecard();
 }
 
@@ -6341,10 +6211,6 @@ async function openScorecardOnly(matchId) {
 function closeScorecard() {
   document.getElementById('lm-drawer').classList.remove('open');
   document.getElementById('lm-drawer-backdrop').style.display = 'none';
-}
-function isScorecardOpen() {
-  const drawer = document.getElementById('lm-drawer');
-  return !!(drawer && drawer.classList.contains('open'));
 }
 
 function renderScorecard() {
@@ -6411,6 +6277,52 @@ async function lmAbandon() {
 // ════════════════ Initial load ════════════════
 // Honor deep-link target so a command opens the SAME feature's screen, not home.
 // Two sources: (1) URL hash (#spin) used by in-DM WebApp buttons, and
+// Resolve a match launch from URL query params OR Telegram start_param.
+// Supported forms:
+//   /cricket?match_id=<m>&chat_id=<c>      (Web App button, private chat)
+//   /cricket?matchId=<m>&chatId=<c>        (camelCase variant)
+//   ?startapp=cricket_<m>_<c>              (group deep link)
+//   ?startapp=lm_<m> / #lm_<m> / livematch_<m>   (legacy, still supported)
+//   ?startapp=sc_<m> / #sc_<m>             (read-only scorecard)
+// Returns { matchId, chatId, scorecard } or null.
+function resolveMatchLaunch() {
+  // 1) URL query params (Web App button URL)
+  try {
+    const qs = new URLSearchParams(window.location.search);
+    const mId = qs.get('match_id') || qs.get('matchId');
+    if (mId && /^\d+$/.test(mId)) {
+      const cId = qs.get('chat_id') || qs.get('chatId') || null;
+      return { matchId: parseInt(mId, 10), chatId: cId, scorecard: false };
+    }
+  } catch (e) {}
+
+  // 2) start_param / hash (deep links)
+  let p = '';
+  try {
+    p = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').trim();
+  } catch (e) {}
+  if (!p) p = (window.location.hash || '').replace('#', '').trim();
+  if (!p) return null;
+  const lower = p.toLowerCase();
+
+  // cricket_<matchId>_<chatId>  (strip prefix, split on underscore)
+  if (lower.startsWith('cricket_')) {
+    const rest = p.slice('cricket_'.length);
+    const parts = rest.split('_');
+    const m = parseInt(parts[0], 10);
+    const c = parts.length > 1 ? parts.slice(1).join('_') : null;
+    if (!isNaN(m)) return { matchId: m, chatId: c, scorecard: false };
+  }
+  // legacy lm_/livematch_
+  const lm = lower.match(/^(?:livematch|lm)[_-](\d+)$/);
+  if (lm) return { matchId: parseInt(lm[1], 10), chatId: null, scorecard: false };
+  // scorecard sc_
+  const sc = lower.match(/^sc[_-](\d+)$/);
+  if (sc) return { matchId: parseInt(sc[1], 10), chatId: null, scorecard: true };
+
+  return null;
+}
+
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
   const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch'];
@@ -6420,6 +6332,13 @@ function handleHashDeepLink() {
     quest: 'quests', achievement: 'achievements', club: 'clubs',
     freepacks: 'freepack', playingxi: 'xi', pxi: 'xi',
   };
+  // Match launch (query params or deep link) takes priority.
+  const ml = resolveMatchLaunch();
+  if (ml) {
+    if (ml.scorecard) openScorecardOnly(ml.matchId);
+    else openLiveMatch(ml.matchId, ml.chatId);
+    return;
+  }
   let target = (window.location.hash || '').replace('#', '').toLowerCase();
   if (!target) {
     try {
@@ -6427,35 +6346,17 @@ function handleHashDeepLink() {
       if (sp) target = sp;
     } catch (e) {}
   }
-  // Live match deep link: "livematch_123" or "lm_123" → open match 123
-  const lm = target.match(/^(?:livematch|lm)[_-](\d+)$/);
-  if (lm) {
-    openLiveMatch(parseInt(lm[1], 10));
-    return;
-  }
-  // Read-only scorecard deep link: "sc_123" → open scorecard for match 123
-  const sc = target.match(/^sc[_-](\d+)$/);
-  if (sc) {
-    openScorecardOnly(parseInt(sc[1], 10));
-    return;
-  }
   target = alias[target] || target;
   if (validScreens.includes(target) && target !== 'home') {
     navigate(target);
   }
 }
 
-// Open directly into a match if launched via a match/scorecard deep link,
+// Open directly into a match if launched via a match/scorecard link,
 // WITHOUT first showing the dashboard (no home-screen flash).
 (function bootstrap() {
-  let target = (window.location.hash || '').replace('#', '').toLowerCase();
-  if (!target) {
-    try {
-      target = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').toLowerCase();
-    } catch (e) {}
-  }
-  const isMatchLink = /^(?:livematch|lm)[_-]\d+$/.test(target) || /^sc[_-]\d+$/.test(target);
-  if (isMatchLink) {
+  const ml = resolveMatchLaunch();
+  if (ml) {
     handleHashDeepLink();   // opens the match screen immediately
     refreshDashboard();     // load home data quietly in the background
   } else {
