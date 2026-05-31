@@ -81,6 +81,12 @@ from handlers.match import (
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
 )
 
+# Open-lobby cricket match (/cric → WebApp board)
+from handlers.cric import (
+    cric_handler, cric_join_callback, cric_cancel_callback,
+    cric_decision_callback,
+)
+
 # Trait handlers
 from handlers.traits import (
     traits_handler, traitshop_handler, traitapply_handler,
@@ -207,6 +213,7 @@ BOT_MENU_COMMANDS = (
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
+    ("cric", "Open a match lobby anyone can join (Mini App)"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
     ("lastmatch", "View your last match"),
@@ -299,6 +306,33 @@ async def start_handler(update, context):
         await debut_handler(update, context)
         return
 
+    # Open-lobby match deep link from a group: cricket_<matchId>_<chatId>
+    # (the group "Play Match" button routes here). Open the same Mini App
+    # board, passing match_id/chat_id on the query string the frontend reads.
+    if payload.startswith("cricket_"):
+        webapp_url = os.getenv("WEBAPP_URL", "").strip()
+        if webapp_url and webapp_url.startswith("https://"):
+            from urllib.parse import urlparse
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            rest = args[0][len("cricket_"):]  # keep original case for ids
+            last = rest.rfind("_")
+            if last != -1:
+                m_id, c_id = rest[:last], rest[last + 1:]
+            else:
+                m_id, c_id = rest, "0"
+            p = urlparse(webapp_url)
+            host = f"{p.scheme}://{p.netloc}"
+            url = f"{host}/cricket?match_id={m_id}&chat_id={c_id}"
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🎮 Open Match",
+                                     web_app=WebAppInfo(url=url))
+            ]])
+            await update.message.reply_text(
+                "🏏 Tap below to open the match board in the Mini App.",
+                parse_mode="HTML", reply_markup=kb,
+            )
+            return
+
     # Live match deep link: lm_<id> → open the Mini App live-match board
     if payload.startswith("lm_") or payload.startswith("sc_"):
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
@@ -370,6 +404,7 @@ async def start_handler(update, context):
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
+        "/cric [overs] - Open a match lobby anyone can join (Mini App)\n"
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
@@ -619,6 +654,7 @@ def main():
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
+        app.add_handler(CommandHandler(["cric"], cric_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
@@ -815,6 +851,10 @@ def main():
         # ── Match callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
         app.add_handler(CallbackQueryHandler(match_deny_callback, pattern=r"^matchdeny_"))
+        # ── Open /cric lobby callbacks ───────────────────────────────
+        app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
+        app.add_handler(CallbackQueryHandler(cric_cancel_callback, pattern=r"^cric_cancel$"))
+        app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cricdec_"))
         app.add_handler(CallbackQueryHandler(toss_decision_callback, pattern=r"^toss_"))
         app.add_handler(CallbackQueryHandler(opener1_callback, pattern=r"^op1_"))
         app.add_handler(CallbackQueryHandler(opener2_callback, pattern=r"^op2_"))
