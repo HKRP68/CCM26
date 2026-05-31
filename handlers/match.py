@@ -132,11 +132,38 @@ def _cric_lobby_key(chat_id):
     return f"cric_lobby_{chat_id}"
 
 
+def _active_cric_match_in_chat(session, chat_id):
+    """Return a launched /cric-style Mini App match in ``chat_id``.
+
+    UnderCover does not treat an abandoned pre-match lobby as an active match:
+    its match manager only receives a match after the toss decision.  Keep the
+    same boundary here so old ``pending``/``toss`` rows from callback matches
+    cannot make a fresh ``/cric`` lobby look busy.
+    """
+    if not chat_id:
+        return None
+    return (session.query(Match)
+            .filter(Match.chat_id == chat_id,
+                    Match.status.in_(("playing", "active")))
+            .order_by(Match.id.desc())
+            .first())
+
+
+def _active_cric_match_for_user(session, user_id):
+    """Return a launched /cric-style Mini App match involving ``user_id``."""
+    return (session.query(Match)
+            .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
+                    Match.status.in_(("playing", "active")))
+            .order_by(Match.id.desc())
+            .first())
+
+
 def _cric_lobby_for_user(bot_data, user_id):
-    """Find a waiting /cric lobby hosted by ``user_id``."""
+    """Find an in-memory /cric lobby containing ``user_id``."""
     return next((lobby for key, lobby in bot_data.items()
                  if key.startswith("cric_lobby_")
-                 and lobby.get("host_user_id") == user_id), None)
+                 and user_id in (lobby.get("host_user_id"),
+                                 lobby.get("guest_user_id"))), None)
 
 
 def _user_label(user):
@@ -1656,11 +1683,11 @@ async def cric_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not host:
             await update.message.reply_text("❌ Use /debut first!")
             return
-        existing = _active_match_in_chat(session, cid)
+        existing = _active_cric_match_in_chat(session, cid)
         if existing:
             await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
             return
-        if _active_match_for_user(session, host.id):
+        if _active_cric_match_for_user(session, host.id):
             await update.message.reply_text("⚠️ You already have an active match running!")
             return
         if context.bot_data.get(_cric_lobby_key(cid)):
@@ -1746,17 +1773,21 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.bot_data.pop(key, None)
             await q.answer("Lobby host no longer exists.", show_alert=True)
             return
-        existing = _active_match_in_chat(session, cid)
+        if lobby.get("guest_user_id"):
+            await q.answer("Lobby is already full.", show_alert=True)
+            return
+        existing = _active_cric_match_in_chat(session, cid)
         if existing:
             context.bot_data.pop(key, None)
             await q.answer("A match is already active in this chat.", show_alert=True)
             return
-        if _active_match_for_user(session, host.id):
+        if _active_cric_match_for_user(session, host.id):
             context.bot_data.pop(key, None)
             await q.answer("The lobby host is already in another active match.", show_alert=True)
             return
-        if _active_match_for_user(session, guest.id):
-            await q.answer("You already have an active match!", show_alert=True)
+        if (_active_cric_match_for_user(session, guest.id)
+                or _cric_lobby_for_user(context.bot_data, guest.id)):
+            await q.answer("You already have an active match or lobby!", show_alert=True)
             return
 
         from handlers.lineup import validate_xi, _get_ordered_roster
@@ -1765,23 +1796,14 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await q.answer("Join failed: your playing XI is invalid. Use /xi to fix it.", show_alert=True)
             return
 
-        settings = random_match_settings()
-        now = datetime.utcnow()
-        winner_id = random.choice([host.id, guest.id])
-        match = Match(
-            user1_id=host.id, user2_id=guest.id, status="toss", overs=lobby["overs"],
-            toss_winner_id=winner_id, stadium=settings["stadium"],
-            pitch_type=settings["pitch_type"], weather=settings["weather"],
-            temperature=settings["temperature"], umpire1=settings["umpire1"],
-            umpire2=settings["umpire2"], chat_id=cid, created_at=now,
-        )
-        session.add(match)
-        session.commit()
-        context.bot_data.pop(key, None)
-        # /cric is the UnderCover-compatible fast path: unlike /playmatch it
-        # always launches the dedicated cricket Mini App after the toss.
-        context.bot_data[f"cric_miniapp_{match.id}"] = True
-        winner = host if winner_id == host.id else guest
+        winner = random.choice([host, guest])
+        lobby.update({
+            "guest_user_id": guest.id,
+            "guest_tg_id": guest.telegram_id,
+            "guest_label": _user_label(guest),
+            "toss_winner_user_id": winner.id,
+            "toss_winner_tg_id": winner.telegram_id,
+        })
         await q.answer("Joined match lobby!")
         await q.edit_message_text(
             "🪙 <b>TOSS COMPLETED!</b> 🪙\n"
@@ -1791,13 +1813,99 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🎉 <b>{_user_label(winner)}</b> won the toss!\n"
             "Choose your decision:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Bat First 🏏", callback_data=f"toss_bat_{match.id}_{winner.id}"),
-                InlineKeyboardButton("Bowl First 🎳", callback_data=f"toss_bowl_{match.id}_{winner.id}"),
+                InlineKeyboardButton("Bat First 🏏", callback_data="cric_decision:bat"),
+                InlineKeyboardButton("Bowl First 🎳", callback_data="cric_decision:bowl"),
             ]]))
     except Exception:
         session.rollback()
         logger.exception("/cric lobby join failed")
         await q.answer("Failed to join lobby.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Launch a joined /cric lobby after its toss winner chooses bat or bowl.
+
+    This mirrors UnderCover's lifecycle: the lobby remains in memory through
+    the toss and only becomes a persisted, active Mini App match here.
+    """
+    q = update.callback_query
+    cid = q.message.chat_id
+    key = _cric_lobby_key(cid)
+    lobby = context.bot_data.get(key)
+    if not lobby or not lobby.get("guest_user_id"):
+        await q.answer("No joined lobby in this chat.", show_alert=True)
+        return
+    if q.from_user.id != lobby.get("toss_winner_tg_id"):
+        await q.answer("Only the toss winner can make the decision!", show_alert=True)
+        return
+
+    decision = q.data.split(":", 1)[1]
+    if decision not in ("bat", "bowl"):
+        await q.answer("Invalid toss decision.", show_alert=True)
+        return
+    session = get_session()
+    match = None
+    try:
+        host = session.query(User).get(lobby["host_user_id"])
+        guest = session.query(User).get(lobby["guest_user_id"])
+        if not host or not guest:
+            context.bot_data.pop(key, None)
+            await q.answer("Lobby players no longer exist.", show_alert=True)
+            return
+        if _active_cric_match_in_chat(session, cid):
+            context.bot_data.pop(key, None)
+            await q.answer("A match is already active in this chat.", show_alert=True)
+            return
+        if (_active_cric_match_for_user(session, host.id)
+                or _active_cric_match_for_user(session, guest.id)):
+            context.bot_data.pop(key, None)
+            await q.answer("A lobby player is already in another active match.", show_alert=True)
+            return
+
+        winner_id = lobby["toss_winner_user_id"]
+        opponent_id = guest.id if winner_id == host.id else host.id
+        settings = random_match_settings()
+        match = Match(
+            user1_id=host.id, user2_id=guest.id, status="toss",
+            overs=lobby["overs"], toss_winner_id=winner_id,
+            toss_decision=decision,
+            batting_first_id=winner_id if decision == "bat" else opponent_id,
+            bowling_first_id=opponent_id if decision == "bat" else winner_id,
+            stadium=settings["stadium"], pitch_type=settings["pitch_type"],
+            weather=settings["weather"], temperature=settings["temperature"],
+            umpire1=settings["umpire1"], umpire2=settings["umpire2"],
+            chat_id=cid, created_at=datetime.utcnow(),
+        )
+        session.add(match)
+        session.commit()
+
+        from services.match_webapp_service import init_match_for_webapp
+        ok, message = init_match_for_webapp(session, match.id)
+        if not ok:
+            session.delete(match)
+            session.commit()
+            await q.answer(f"Failed to launch match: {message}", show_alert=True)
+            return
+
+        context.bot_data.pop(key, None)
+        winner = host if winner_id == host.id else guest
+        await q.answer()
+        await q.edit_message_text(
+            f"✅ {_user_label(winner)} elected to {'BAT' if decision == 'bat' else 'BOWL'} FIRST")
+        bat_user = session.query(User).get(match.batting_first_id)
+        bowl_user = session.query(User).get(match.bowling_first_id)
+        bat_team = bat_user.team_name or f"@{bat_user.username}'s XI"
+        bowl_team = bowl_user.team_name or f"@{bowl_user.username}'s XI"
+        from services.match_broadcast import send_match_ready_message
+        await send_match_ready_message(
+            context, cid, match, bat_team, bowl_team,
+            _mention(bat_user), _mention(bowl_user))
+    except Exception:
+        session.rollback()
+        logger.exception("/cric toss decision failed")
+        await q.answer("Failed to launch cricket match.", show_alert=True)
     finally:
         session.close()
 
