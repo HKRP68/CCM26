@@ -5725,6 +5725,10 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
         return None, None, ({"ok": False, "error": "bad_user_id"}, 400)
     user = db.query(User).get(uid)
     if not user:
+        # The Crickidex Arena frontend sends the raw Telegram id as userId;
+        # fall back to a telegram_id lookup so those links resolve too.
+        user = db.query(User).filter(User.telegram_id == uid).first()
+    if not user:
         return None, None, ({"ok": False, "error": "no_user"}, 404)
     if match_id:
         try:
@@ -5808,7 +5812,8 @@ def match_rest_select_players():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
-        from services.match_webapp_service import select_openers, select_bowler, role_for
+        from services.match_webapp_service import (select_openers, select_bowler,
+                                                    select_players, role_for)
         from services.match_webapp_access import get_state
         state = get_state(match.id)
         if not state:
@@ -5816,18 +5821,39 @@ def match_rest_select_players():
         role = role_for(state, user.id)
         messages = []
         started = False
+
+        # Crickidex Arena frontend submits XI *indices* (strikerIdx /
+        # nonStrikerIdx / bowlerIdx). Detect that shape and route through the
+        # index-based service; otherwise fall back to the roster-id contract.
+        has_idx = any(data.get(k) is not None
+                      for k in ("strikerIdx", "nonStrikerIdx", "bowlerIdx"))
+        if has_idx:
+            def _i(v):
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return None
+            ok, st, msg = select_players(
+                match.id, user.id,
+                striker_idx=_i(data.get("strikerIdx")),
+                non_striker_idx=_i(data.get("nonStrikerIdx")),
+                bowler_idx=_i(data.get("bowlerIdx")))
+            if not ok:
+                return {"ok": False, "error": msg, "message": msg}, 400
+            return {"ok": True, "success": True, "started": st, "message": msg}
+
         if role == "batsman":
             striker = int(data.get("striker_rid") or data.get("striker") or 0)
             non = int(data.get("non_striker_rid") or data.get("nonStriker") or 0)
             ok, st, msg = select_openers(match.id, user.id, striker, non)
             if not ok:
-                return {"ok": False, "message": msg}, 400
+                return {"ok": False, "error": msg, "message": msg}, 400
             started = started or st; messages.append(msg)
         elif role == "bowler":
             rid = int(data.get("bowler_rid") or data.get("bowler") or 0)
             ok, st, msg = select_bowler(match.id, user.id, rid)
             if not ok:
-                return {"ok": False, "message": msg}, 400
+                return {"ok": False, "error": msg, "message": msg}, 400
             started = started or st; messages.append(msg)
         else:
             return {"ok": False, "error": "spectator", "message": "Spectators cannot select players."}, 403
@@ -5861,6 +5887,57 @@ def match_rest_action():
         if not state:
             return {"ok": False, "error": "no_match"}, 404
         role = role_for(state, user.id)
+
+        def _finalize_and_respond(res):
+            """Shared post-action broadcast/finalize + success response."""
+            try:
+                from services.match_state_store import A_COMPLETED as _DONE
+                if get_next_action(match.id) == _DONE:
+                    from services.match_webapp_service import finalize_webapp_match
+                    fin = finalize_webapp_match(db, match.id)
+                    _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                else:
+                    _broadcast_match_scorecard(match.id)
+            except Exception:
+                logger.exception("match_rest_action broadcast/finalize failed")
+            return {"ok": True, "success": True, "result": res}
+
+        # ── Crickidex Arena envelope: {type, action:{...}} ──────────────
+        # The frontend sends every gameplay action as {type, action}. Dispatch
+        # those here (including the two post-event selections the legacy body
+        # shape below doesn't cover).
+        env_type = data.get("type")
+        if env_type and isinstance(data.get("action"), dict):
+            act = data.get("action")
+            from services.match_webapp_service import (
+                set_delivery_action, set_shot_action,
+                select_wicket_batsman, select_new_bowler)
+            from services.crickidex_arena import (
+                xi_index_to_batting_order_index, xi_index_to_bowler_rid)
+            if role not in ("batsman", "bowler"):
+                return {"ok": False, "error": "Spectators cannot act."}, 403
+            if env_type == "delivery":
+                ok, res, _info = set_delivery_action(
+                    match.id, user.id, (act.get("delivery") or "").strip(),
+                    act.get("speed"))
+            elif env_type == "shot":
+                ok, res, _info = set_shot_action(match.id, user.id, act.get("shot"))
+            elif env_type == "wicket_batsman":
+                boi = xi_index_to_batting_order_index(state, act.get("index"))
+                if boi is None:
+                    return {"ok": False, "error": "Invalid batsman selection."}, 400
+                ok, res, _info = select_wicket_batsman(match.id, user.id, boi)
+            elif env_type == "over_bowler":
+                rid = xi_index_to_bowler_rid(state, act.get("index"))
+                if rid is None:
+                    return {"ok": False, "error": "Invalid bowler selection."}, 400
+                ok, res = select_new_bowler(match.id, user.id, rid)
+            else:
+                return {"ok": False, "error": f"Unknown action type '{env_type}'."}, 400
+            if not ok:
+                return {"ok": False, "error": res, "message": res}, 400
+            return _finalize_and_respond(res)
+
         if role == "bowler":
             variation = (data.get("delivery_type") or data.get("variation") or data.get("delivery") or "").strip()
             length = (data.get("length") or "").strip() or None
@@ -5899,6 +5976,69 @@ def match_rest_action():
     except Exception as e:
         logger.exception("match_rest_action failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+# ── Crickidex Arena Mini App (the UnderCover-style live-match frontend) ──
+# Served from static/cricket/. The "Play Match" button (services.match_broadcast)
+# opens /cricket?match_id=<id>&chat_id=<chat>; the page reads the Telegram user
+# from initData and polls GET /api/match.
+_CRICKET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "static", "cricket")
+
+
+@app.route("/cricket")
+def cricket_arena_index():
+    from flask import send_from_directory
+    return send_from_directory(_CRICKET_DIR, "index.html")
+
+
+@app.route("/cricket/<path:filename>")
+def cricket_arena_asset(filename):
+    from flask import send_from_directory
+    return send_from_directory(_CRICKET_DIR, filename)
+
+
+# ── Lucky Spin standalone Mini App (UnderCover-style wheel) ──────────────
+# Self-contained page wired to the existing POST /api/webapp/spin (+ ad-gating
+# via /api/webapp/ad-completed). Open it with a Telegram Web App button so the
+# page receives initData for auth.
+_SPIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "static", "spin")
+
+
+@app.route("/spin")
+def spin_wheel_index():
+    from flask import send_from_directory
+    return send_from_directory(_SPIN_DIR, "index.html")
+
+
+@app.route("/api/match", methods=["GET"])
+@csrf_exempt
+def match_rest_poll():
+    """GET /api/match?userId=<telegram_id>[&matchId=<id>]
+    Crickidex Arena polling endpoint. Returns the full UnderCover-style
+    serialized match state (xi_selection / innings1 / innings2 / completed)."""
+    db = get_session()
+    try:
+        from services.crickidex_arena import (resolve_viewer, find_active_match,
+                                               serialize_match_state)
+        uid = request.args.get("userId") or request.args.get("user_id")
+        mid = request.args.get("matchId") or request.args.get("match_id")
+        if not uid and not mid:
+            return {"error": "userId or matchId is required"}, 400
+        viewer = resolve_viewer(db, uid)
+        match = find_active_match(db, viewer, mid)
+        if not match:
+            return {"error": "No active match found."}, 404
+        payload = serialize_match_state(db, match, viewer)
+        if not payload:
+            return {"error": "No active match found."}, 404
+        return payload
+    except Exception as e:
+        logger.exception("match_rest_poll failed")
+        return {"error": "internal", "message": str(e)}, 500
     finally:
         db.close()
 

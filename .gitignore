@@ -1,0 +1,15 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment / secrets
+.env
+
+# SQLite databases
+*.db
+*.sqlite3
+
+# Logs
+logs/
+*.log
