@@ -68,23 +68,51 @@ def _p(pd):
     }
 
 
-def _merge_stats(state):
+def _merge_stats(state, innings_filter=None):
     """Build the ``stats`` map keyed by str(roster_id), combining batting and
-    bowling figures the way UnderCover's frontend expects."""
+    bowling figures the way UnderCover's frontend expects.
+
+    innings_filter: None (both) | 1 (innings-1 only) | 2 (innings-2 only).
+    """
     out = {}
     bat = state.get("bat_stats", {}) or {}
     bowl = state.get("bowl_stats", {}) or {}
+    inn1_bat = state.get("inn1_bat_stats", {}) or {}
+    inn1_bowl = state.get("inn1_bowl_stats", {}) or {}
+
     keys = set()
-    for d in (bat, bowl):
+    for d in (bat, bowl, inn1_bat, inn1_bowl):
         for k in d.keys():
             keys.add(str(k))
-    # also include every XI member so lookups never KeyError on the client
-    for side in ("bat_xi", "bowl_xi", "batting_order"):
+    for side in ("bat_xi", "bowl_xi", "batting_order",
+                 "inn1_bat_xi", "inn1_bowl_xi"):
         for pl in state.get(side, []) or []:
             keys.add(str(pl.get("roster_id")))
+
+    # Which stats pools to use based on innings_filter
+    if innings_filter == 1:
+        bat_pool, bowl_pool = inn1_bat, inn1_bowl
+    elif innings_filter == 2:
+        bat_pool, bowl_pool = bat, bowl
+    else:
+        # Merge: prefer current-innings bat stats; fall back to inn1 for players
+        # who have only batted in innings 1 (e.g. viewing inn1 scorecard in inn2).
+        bat_pool = bat
+        bowl_pool = bowl
+
     for k in keys:
-        bs = _stat(bat, k)
-        ws = _stat(bowl, k)
+        bs = _stat(bat_pool, k)
+        # For the combined view, if current innings has no batting data for this
+        # player, try innings-1 stats (covers the inn1 scorecard tab in inn2).
+        if innings_filter is None and not any(bs.values()):
+            bs_alt = _stat(inn1_bat, k)
+            if any(bs_alt.values()):
+                bs = bs_alt
+        ws = _stat(bowl_pool, k)
+        if innings_filter is None and not any(ws.values()):
+            ws_alt = _stat(inn1_bowl, k)
+            if any(ws_alt.values()):
+                ws = ws_alt
         out[k] = {
             "runs": bs.get("runs", 0),
             "balls": bs.get("balls", 0),
@@ -94,8 +122,6 @@ def _merge_stats(state):
             "how_out": bs.get("how_out", ""),
             "wickets": ws.get("wickets", 0),
             "runsConceded": ws.get("runs", 0),
-            # integer completed-overs — app.js compares this to the per-bowler
-            # quota numerically when picking the next over's bowler
             "overs": ws.get("overs_done", 0),
             "ballsBowled": ws.get("balls", 0),
         }
@@ -420,6 +446,9 @@ def serialize_match_state(session, match, viewer_user):
         "battingXI": [_p(p) for p in state.get("bat_xi", [])],
         "bowlingXI": [_p(p) for p in state.get("bowl_xi", [])],
         "stats": _merge_stats(state),
+        # Per-innings stats for the scorecard tabs
+        "innings1Stats": _merge_stats(state, innings_filter=1),
+        "innings2Stats": _merge_stats(state, innings_filter=2),
         "commentary": commentary,
         "currentDelivery": state.get("current_delivery"),
         "currentSpeed": state.get("last_speed") or state.get("current_speed"),

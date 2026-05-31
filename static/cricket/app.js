@@ -315,7 +315,7 @@ function selectIdentity(selectedId) {
 function startPolling() {
   fetchState();
   if (!pollingInterval) {
-    pollingInterval = setInterval(fetchState, 1500);
+    pollingInterval = setInterval(fetchState, 600);
   }
 }
 
@@ -387,7 +387,7 @@ async function fetchState() {
     }
 
     // Trigger autoplay evaluation after state update
-    setTimeout(runAutoplayAction, 1000);
+    setTimeout(runAutoplayAction, 400);
   } catch (err) {
     console.error("Polling error:", err);
   } finally {
@@ -1228,6 +1228,69 @@ async function selectNextBowler(index) {
   }
 }
 
+// Vivid commentary fallback templates used when DB commentary is not available
+const COMM_TEMPLATES = {
+  six: [
+    "{bat} launches it into orbit! MAXIMUM — {bowler} is stunned!",
+    "That's HUGE! {bat} clears the ropes with absolute authority! SIX!",
+    "BOOM! {bat} hits it out of the ground! {bowler} can only watch!",
+    "Muscle power! {bat} deposits it into the stands for SIX!",
+    "What a shot! {bat} smashes {bowler} over the boundary!",
+  ],
+  four: [
+    "CRACKING shot! {bat} finds the gap and races away for FOUR!",
+    "Beautiful timing from {bat} — it races to the boundary!",
+    "{bat} punishes the loose delivery from {bowler} — FOUR!",
+    "Exquisite placement! {bat} threads through the covers for FOUR!",
+    "Sweetly timed by {bat} — the fielder had no chance!",
+  ],
+  wicket: [
+    "BOWLED 'EM! {bowler} has {bat} completely deceived!",
+    "OUT! {bat} walks back — brilliant delivery from {bowler}!",
+    "WICKET! {bowler} strikes — {bat} is on his way back to the pavilion!",
+    "CAUGHT! {bat} mistimes the shot and walks off — {bowler} is pumped!",
+    "Huge breakthrough! {bowler} removes {bat} — this changes everything!",
+  ],
+  dot: [
+    "Tight line from {bowler} — {bat} can't score off that one. Dot ball.",
+    "Good length delivery — {bat} plays it back cautiously.",
+    "Defended solidly by {bat}. {bowler} keeps it tight.",
+    "{bat} has a look but leaves it — well bowled by {bowler}.",
+    "No run. {bowler} generates good movement — {bat} watches it go.",
+  ],
+  one: [
+    "Quick single — {bat} rotates the strike smartly.",
+    "Pushed into the gap, {bat} calls for one.",
+    "Good running by {bat} — worked away for a single.",
+    "Clever cricket from {bat} — finds a gap for one.",
+    "{bat} nudges it into the leg side and takes the single.",
+  ],
+  two: [
+    "Good running between the wickets — two for {bat}!",
+    "{bat} places it well and they come back for two.",
+    "Two runs — quick feet from {bat}!",
+    "Driven into the outfield — they scamper back for two.",
+  ],
+};
+
+function _randomComm(pool, bat, bowler) {
+  const t = pool[Math.floor(Math.random() * pool.length)];
+  return t.replace(/{bat}/g, bat || 'Batsman').replace(/{bowler}/g, bowler || 'Bowler');
+}
+
+function _enrichCommentaryText(comm) {
+  if (comm.text && comm.text.length > 20) return comm.text; // Already has good text
+  const bat = comm.batsmanName || '';
+  const bowler = comm.bowlerName || '';
+  if (comm.isWicket) return _randomComm(COMM_TEMPLATES.wicket, bat, bowler);
+  if (comm.runs === 6) return _randomComm(COMM_TEMPLATES.six, bat, bowler);
+  if (comm.runs === 4) return _randomComm(COMM_TEMPLATES.four, bat, bowler);
+  if (comm.runs === 0) return _randomComm(COMM_TEMPLATES.dot, bat, bowler);
+  if (comm.runs === 1) return _randomComm(COMM_TEMPLATES.one, bat, bowler);
+  if (comm.runs === 2) return _randomComm(COMM_TEMPLATES.two, bat, bowler);
+  return comm.text || `${comm.runs} run${comm.runs !== 1 ? 's' : ''}`;
+}
+
 // Render Commentary feed in Cricbuzz style
 function renderCommentaryFeed() {
   const list = document.getElementById('commentary-list');
@@ -1237,26 +1300,26 @@ function renderCommentaryFeed() {
   }
 
   list.innerHTML = '';
-  
+
   matchState.commentary.forEach(comm => {
     const item = document.createElement('div');
-    
+
     if (comm.type === 'end_of_over') {
       item.className = "cricbuzz-over-end";
       item.innerHTML = `
         <div class="over-end-header">
           <span class="over-num-title">END OF OVER ${comm.overNumber}</span>
           <span class="over-runs-badge">${comm.runsScored} Runs</span>
-          <span class="over-total-score">Score: ${comm.totalRuns}/${comm.totalWickets}</span>
+          <span class="over-total-score">${comm.totalRuns}/${comm.totalWickets}</span>
         </div>
         <div class="over-end-stats">
           <div class="stats-row">
             <div class="stat-batsmen">
-              ${comm.striker ? `<span>${comm.striker.name}: <b>${comm.striker.runs}</b> (${comm.striker.balls}b)</span>` : ''}
-              ${comm.nonStriker ? `<span>${comm.nonStriker.name}: <b>${comm.nonStriker.runs}</b> (${comm.nonStriker.balls}b)</span>` : ''}
+              ${comm.striker ? `<span>${comm.striker.name}: <b>${comm.striker.runs}</b>(${comm.striker.balls}b)</span>` : ''}
+              ${comm.nonStriker ? `<span>${comm.nonStriker.name}: <b>${comm.nonStriker.runs}</b>(${comm.nonStriker.balls}b)</span>` : ''}
             </div>
             <div class="stat-bowler">
-              <span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${comm.bowler.overs} ov)</span>
+              ${comm.bowler ? `<span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${comm.bowler.overs}ov)</span>` : ''}
             </div>
           </div>
         </div>
@@ -1265,26 +1328,27 @@ function renderCommentaryFeed() {
       item.className = "cricbuzz-innings-end";
       item.innerHTML = `
         <div class="innings-end-header">
-          🎯 Innings ${comm.inningsIdx + 1} Completed
+          🎯 INNINGS ${comm.inningsIdx + 1} COMPLETE
         </div>
         <div class="innings-end-body">
           <div class="total-score">Total: <b>${comm.runs}/${comm.wickets}</b> in ${comm.overs} ov</div>
-          ${comm.target ? `<div class="target-needed">Target: <b>${comm.target} runs</b></div>` : ''}
-          ${comm.winner ? `<div class="match-winner">🏆 Winner: <b>${comm.winner}</b></div>` : ''}
-          ${comm.motm ? `<div class="match-motm">🌟 Man of the Match: <b>${comm.motm.name}</b> (${comm.motm.runs} runs, ${comm.motm.wickets} wkts)</div>` : ''}
+          ${comm.target ? `<div class="target-needed">🏹 Target: <b>${comm.target} runs</b></div>` : ''}
+          ${comm.winner ? `<div class="match-winner">🏆 <b>${comm.winner} WIN!</b></div>` : ''}
+          ${comm.motm ? `<div class="match-motm">⭐ MOTM: <b>${comm.motm.name}</b> — ${comm.motm.runs}R ${comm.motm.wickets}W</div>` : ''}
         </div>
       `;
     } else {
       item.className = "cricbuzz-ball-row";
-      
-      // Clean text highlights
-      let highlightedText = comm.text
-        .replace(/([A-Z][a-zA-Z\s0-9]+(?=\s+to\s+|\s+bowls\s+))/g, "<span class='hl-player'>$1</span>")
-        .replace(/(OUT!|WICKET!|FOUR|SIX|runs|runs conceded)/gi, "<b>$1</b>");
 
-      const outcomeClass = comm.isWicket ? 'outcome-wicket' : 
-                           (comm.runs === 4 ? 'outcome-four' : 
-                           (comm.runs === 6 ? 'outcome-six' : 
+      const richText = _enrichCommentaryText(comm);
+      let highlightedText = richText
+        .replace(/\b([A-Z][a-z]+ [A-Z][a-z]+)\b/g, "<span class='hl-player'>$1</span>")
+        .replace(/\b(WICKET!?|OUT!?|FOUR!?|SIX!?|MAXIMUM|BOUNDARY|BOWLED|CAUGHT|LBW|STUMPED)/gi,
+                 "<b class='hl-event'>$1</b>");
+
+      const outcomeClass = comm.isWicket ? 'outcome-wicket' :
+                           (comm.runs === 4 ? 'outcome-four' :
+                           (comm.runs === 6 ? 'outcome-six' :
                            (comm.runs === 0 ? 'outcome-dot' : 'outcome-normal')));
 
       const outcomeText = comm.isWicket ? 'W' : comm.runs.toString();
@@ -1295,7 +1359,7 @@ function renderCommentaryFeed() {
         <div class="ball-comm-text">${highlightedText}</div>
       `;
     }
-    
+
     list.appendChild(item);
   });
 }
@@ -1365,35 +1429,45 @@ function renderScorecardPanel() {
   const opposingTeam = activeScorecardTab === 'innings1' ? secondTeam : firstTeam;
   const activeInnings = activeScorecardTab === 'innings1' ? firstInn : secondInn;
 
+  // Use innings-specific stats pool (backend sends innings1Stats / innings2Stats)
+  const statsPool = activeScorecardTab === 'innings1'
+    ? (matchState.innings1Stats || matchState.stats)
+    : (matchState.innings2Stats || matchState.stats);
+
   // Set titles
-  document.getElementById('scorecard-batting-title').innerText = `${activeTeam.teamName.toUpperCase()} BATTING`;
-  document.getElementById('scorecard-bowling-title').innerText = `${opposingTeam.teamName.toUpperCase()} BOWLING`;
+  const battingTitle = (activeTeam.teamName || 'BATTING').toUpperCase();
+  const bowlingTitle = (opposingTeam.teamName || 'BOWLING').toUpperCase();
+  document.getElementById('scorecard-batting-title').innerText = `${battingTitle} BATTING`;
+  document.getElementById('scorecard-bowling-title').innerText = `${bowlingTitle} BOWLING`;
 
-  // Render batting rows
+  // Render batting rows — always show striker/non-striker even with 0 balls
+  let anyBatRow = false;
   activeTeam.xi.forEach((player) => {
-    // Check stats
-    const pStat = matchState.stats[player.id.toString()] || { runs: 0, balls: 0, fours: 0, sixes: 0 };
-    const isActive = (matchState.striker && matchState.striker.id.toString() === player.id.toString()) || 
-                     (matchState.nonStriker && matchState.nonStriker.id.toString() === player.id.toString());
+    const pid = player.id ? player.id.toString() : '';
+    const pStat = (pid && statsPool[pid]) ? statsPool[pid] : { runs: 0, balls: 0, fours: 0, sixes: 0 };
 
-    if (!isActive && (!pStat || !pStat.balls || pStat.balls === 0)) return;
+    const isStriker = matchState.striker && matchState.striker.id && matchState.striker.id.toString() === pid;
+    const isNonStriker = matchState.nonStriker && matchState.nonStriker.id && matchState.nonStriker.id.toString() === pid;
+    const isActive = isStriker || isNonStriker;
 
-    const runs = pStat.runs;
-    const balls = pStat.balls;
+    if (!isActive && (!pStat || pStat.balls === 0)) return;
+
+    anyBatRow = true;
+    const runs = pStat.runs || 0;
+    const balls = pStat.balls || 0;
     const fours = pStat.fours || 0;
     const sixes = pStat.sixes || 0;
     const sr = balls > 0 ? ((runs / balls) * 100).toFixed(1) : '0.0';
 
-    // Status label
     let statusText = '';
     let statusClass = 'out';
     if (isActive) {
-      statusText = 'not out*';
+      statusText = isStriker ? 'batting*' : 'not out';
       statusClass = 'active';
     } else if (pStat.isOut) {
-      statusText = pStat.outDetail || 'out';
+      statusText = pStat.how_out || pStat.outDetail || 'out';
       statusClass = 'out';
-    } else if (pStat.balls > 0) {
+    } else if (balls > 0) {
       statusText = 'not out';
       statusClass = 'active';
     }
@@ -1414,49 +1488,61 @@ function renderScorecardPanel() {
     container.appendChild(row);
   });
 
-  // Extras
-  document.getElementById('scorecard-extras').innerText = `Extras ${activeInnings.extras || 0} (w 0, nb 0, lb 0, b 0, p 0)`;
-  document.getElementById('scorecard-total').innerText = 
+  if (!anyBatRow) {
+    container.innerHTML = '<div class="sc-empty-msg">Innings not started yet</div>';
+  }
+
+  // Extras & total
+  document.getElementById('scorecard-extras').innerText = `Extras ${activeInnings.extras || 0} (w 0, nb 0, lb 0, b 0)`;
+  document.getElementById('scorecard-total').innerText =
     `TOTAL ${activeInnings.runs}/${activeInnings.wickets} (${activeInnings.overs}.${activeInnings.balls} Ov)`;
 
   // Yet to bat
-  const dismissedNames = matchState.commentary.filter(c => c.isWicket).map(c => {
-    // try to match any name from xi
-    const matched = activeTeam.xi.find(p => c.text.includes(p.name));
-    return matched ? matched.id : null;
-  }).filter(Boolean);
+  const activeIds = [
+    matchState.striker?.id?.toString(),
+    matchState.nonStriker?.id?.toString()
+  ].filter(Boolean);
 
-  const activeIds = [matchState.striker?.id?.toString(), matchState.nonStriker?.id?.toString()].filter(Boolean);
-  const dismissedNamesString = dismissedNames.map(id => id ? id.toString() : '');
-  const ytbPlayers = activeTeam.xi.filter(p => p.id && !activeIds.includes(p.id.toString()) && !dismissedNamesString.includes(p.id.toString()));
-  document.getElementById('scorecard-yet-to-bat').innerText = ytbPlayers.map(p => p.name).join(', ') || 'None';
+  const ytbPlayers = (activeScorecardTab === activeScorecardTab) && activeTeam.xi.filter(p => {
+    if (!p.id) return false;
+    const pid = p.id.toString();
+    const st = statsPool[pid] || {};
+    const isOut = st.isOut;
+    const hasBatted = (st.balls || 0) > 0;
+    const isAtCrease = activeIds.includes(pid);
+    return !isAtCrease && !isOut && !hasBatted;
+  });
+  document.getElementById('scorecard-yet-to-bat').innerText =
+    (ytbPlayers && ytbPlayers.length > 0) ? ytbPlayers.map(p => p.name).join(', ') : 'None';
 
   // Render bowling rows
   const bowlContainer = document.getElementById('scorecard-bowling-rows');
   bowlContainer.innerHTML = '';
 
   opposingTeam.xi.forEach((player) => {
-    const isCurrent = matchState.bowler && matchState.bowler.id.toString() === player.id.toString();
-    const pStat = matchState.stats[player.id.toString()] || (isCurrent ? matchState.bowler.stats : null);
-    if (!isCurrent && (!pStat || (parseFloat(pStat.overs) === 0 && pStat.runsConceded === 0 && pStat.wickets === 0))) return;
+    const pid = player.id ? player.id.toString() : '';
+    const isCurrent = matchState.bowler && matchState.bowler.id && matchState.bowler.id.toString() === pid;
+    const pStat = (pid && statsPool[pid]) ? statsPool[pid] : null;
 
-    const overs = pStat ? (pStat.overs || '0.0') : '0.0';
-    const maidens = 0;
-    const runs = pStat ? (pStat.runsConceded || 0) : 0;
-    const wickets = pStat ? (pStat.wickets || 0) : 0;
-    const er = pStat && parseFloat(overs) > 0 ? (runs / parseFloat(overs)).toFixed(2) : '0.00';
+    const overs = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.overs : (pStat ? pStat.overs : 0);
+    const runsC = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.runsConceded : (pStat ? pStat.runsConceded : 0);
+    const wkts = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.wickets : (pStat ? pStat.wickets : 0);
+
+    if (!isCurrent && (parseFloat(overs) === 0 && runsC === 0 && wkts === 0)) return;
+
+    const er = parseFloat(overs) > 0 ? (runsC / parseFloat(overs)).toFixed(2) : '0.00';
 
     const row = document.createElement('div');
     row.className = 'tb-row';
     row.innerHTML = `
       <span class="tb-row-name">
         <span class="tb-row-name-text">${player.name}</span>
-        ${isCurrent ? '<span class="tb-row-status active">bowling</span>' : ''}
+        ${isCurrent ? '<span class="tb-row-status active">bowling*</span>' : ''}
       </span>
-      <span class="tb-num-val">${overs}</span>
-      <span class="tb-num-val">${maidens}</span>
-      <span class="tb-num-val">${runs}</span>
-      <span class="tb-num-val">${wickets}</span>
+      <span class="tb-num-val">${overs || '0'}</span>
+      <span class="tb-num-val">0</span>
+      <span class="tb-num-val">${runsC}</span>
+      <span class="tb-num-val">${wkts}</span>
       <span class="tb-num-val">${er}</span>
     `;
     bowlContainer.appendChild(row);
