@@ -11,6 +11,8 @@ let chatId = null;
 let userId = null;
 let matchState = null;
 let pollingInterval = null;
+let fetchInFlight = false;
+let identitySelectionRequired = false;
 
 // Selected actions
 let selectedDelivery = null;
@@ -55,9 +57,15 @@ async function init() {
     }
   }
 
-  // 3. Fallback to spectator if userId is still unresolved
+  // 3. Direct/browser launches do not receive Telegram identity. Reuse an
+  // explicitly chosen local identity when possible; otherwise poll once as a
+  // spectator so the identity picker can render the current room participants.
+  if (!userId) {
+    userId = cleanParam(localStorage.getItem('crickidex_user_id'));
+  }
   if (!userId) {
     userId = 'spectator';
+    identitySelectionRequired = true;
   }
 
   // Bind exit handlers
@@ -295,16 +303,20 @@ function showIdentitySelection(match) {
 
 function selectIdentity(selectedId) {
   userId = selectedId.toString();
+  identitySelectionRequired = false;
   localStorage.setItem('crickidex_user_id', userId);
-  
-  // Start the regular polling
+
+  // Refresh immediately. startPolling() is idempotent, so switching identity
+  // cannot leak a second interval that races the existing room poller.
   startPolling();
 }
 
 // Polling Loop
 function startPolling() {
   fetchState();
-  pollingInterval = setInterval(fetchState, 1500);
+  if (!pollingInterval) {
+    pollingInterval = setInterval(fetchState, 1500);
+  }
 }
 
 function stopPolling() {
@@ -316,6 +328,8 @@ function stopPolling() {
 
 // API Call - GET state
 async function fetchState() {
+  if (fetchInFlight) return;
+  fetchInFlight = true;
   try {
     // Build query safely without sending stringified "null" or "undefined"
     const params = new URLSearchParams();
@@ -335,6 +349,14 @@ async function fetchState() {
 
     const data = await response.json();
     matchState = data;
+
+    // Direct browser links have no trusted Telegram user context. Show the
+    // intended room identity picker after the first spectator snapshot; an
+    // explicit spectator choice continues into the live board normally.
+    if (identitySelectionRequired) {
+      showIdentitySelection(matchState);
+      return;
+    }
 
     // Check for new ball events to trigger premium alerts & haptic feedback
     if (matchState.commentary && matchState.commentary.length > 0) {
@@ -368,6 +390,8 @@ async function fetchState() {
     setTimeout(runAutoplayAction, 1000);
   } catch (err) {
     console.error("Polling error:", err);
+  } finally {
+    fetchInFlight = false;
   }
 }
 
