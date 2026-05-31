@@ -179,6 +179,33 @@ from handlers.botmatch import (
     botmatch_cancel_callback,
 )
 
+# New social & gambling games
+from handlers.lucky7 import lucky7_handler, lucky7_callback
+from handlers.powerplay import powerplay_handler
+from handlers.score21 import score21_handler, score21_callback
+from handlers.statduel import statduel_handler, statduel_end_handler, statduel_callback
+from handlers.wordchase import (
+    wordchase_handler, wordchase_end_handler,
+    wordchase_end_callback, wordchase_message_handler,
+)
+from handlers.bluffmaster import (
+    bluff_handler, bluff_accept_callback, bluff_decline_callback,
+    bluff_action_callback, bluff_answer_message,
+)
+from handlers.molehunt import (
+    mole_handler,
+    mh_join_callback, mh_start_callback, mh_theme_callback,
+    mh_cancel_callback, mh_vote_callback,
+    molehunt_message_handler,
+)
+from handlers.cartel import (
+    cartel_handler,
+    ct_join_callback, ct_start_callback, ct_theme_callback,
+    ct_cancel_callback, ct_vote_callback,
+    cartel_message_handler,
+)
+from handlers.feedback import feedback_handler
+
 logger = logging.getLogger(__name__)
 
 
@@ -242,6 +269,16 @@ BOT_MENU_COMMANDS = (
     ("redeem", "Redeem a reward code"),
     ("botvsbot", "Configure a bot-versus-bot match"),
     ("botmatch", "Spectate a bot-versus-bot match"),
+    # New social & gambling games
+    ("lucky7", "Bet on two dice summing below/above/exactly 7"),
+    ("powerplay", "Crash game — bet on a multiplier before it crashes"),
+    ("score21", "Play Blackjack against the dealer"),
+    ("statduel", "Compare cricket player stats with dynamic multiplier betting"),
+    ("wordchase", "Host a word-guessing game (group)"),
+    ("bluff", "Challenge someone to a cricket trivia bluff duel"),
+    ("mole", "Start a Mole Hunt social deduction game (group)"),
+    ("cartel", "Start a Cricket Cartel multi-role deduction game (group)"),
+    ("feedback", "Send feedback or a bug report"),
 )
 
 
@@ -881,6 +918,63 @@ def main():
         app.add_handler(CallbackQueryHandler(trade_reject_callback, pattern=r"^treject_"))
         app.add_handler(CallbackQueryHandler(trade_cancel_callback, pattern=r"^tcancel$"))
         app.add_handler(CallbackQueryHandler(trade_back_callback, pattern=r"^tback_"))
+
+        # ── Social & Gambling Games ──────────────────────────────────
+        app.add_handler(CommandHandler("lucky7", lucky7_handler))
+        app.add_handler(CallbackQueryHandler(lucky7_callback, pattern=r"^l7_"))
+
+        app.add_handler(CommandHandler(["powerplay", "pp"], powerplay_handler))
+
+        app.add_handler(CommandHandler(["score21", "s21"], score21_handler))
+        app.add_handler(CallbackQueryHandler(score21_callback, pattern=r"^s21_"))
+
+        app.add_handler(CommandHandler(["statduel", "sd"], statduel_handler))
+        app.add_handler(CommandHandler("endstatduel", statduel_end_handler))
+        app.add_handler(CallbackQueryHandler(statduel_callback, pattern=r"^sd_"))
+
+        app.add_handler(CommandHandler(["wordchase", "wc"], wordchase_handler))
+        app.add_handler(CommandHandler(["endchase", "ewc"], wordchase_end_handler))
+        app.add_handler(CallbackQueryHandler(wordchase_end_callback, pattern=r"^wc_end_"))
+
+        app.add_handler(CommandHandler("bluff", bluff_handler))
+        app.add_handler(CallbackQueryHandler(bluff_accept_callback, pattern=r"^bm_accept_"))
+        app.add_handler(CallbackQueryHandler(bluff_decline_callback, pattern=r"^bm_decline_"))
+        app.add_handler(CallbackQueryHandler(bluff_action_callback, pattern=r"^bm_answer_|^bm_steal_"))
+
+        app.add_handler(CommandHandler("mole", mole_handler))
+        app.add_handler(CallbackQueryHandler(mh_join_callback, pattern=r"^mh_join_"))
+        app.add_handler(CallbackQueryHandler(mh_start_callback, pattern=r"^mh_start_"))
+        app.add_handler(CallbackQueryHandler(mh_theme_callback, pattern=r"^mh_theme_"))
+        app.add_handler(CallbackQueryHandler(mh_cancel_callback, pattern=r"^mh_cancel_"))
+        app.add_handler(CallbackQueryHandler(mh_vote_callback, pattern=r"^mh_vote"))
+
+        app.add_handler(CommandHandler("cartel", cartel_handler))
+        app.add_handler(CallbackQueryHandler(ct_join_callback, pattern=r"^ct_join_"))
+        app.add_handler(CallbackQueryHandler(ct_start_callback, pattern=r"^ct_start_"))
+        app.add_handler(CallbackQueryHandler(ct_theme_callback, pattern=r"^ct_theme_"))
+        app.add_handler(CallbackQueryHandler(ct_cancel_callback, pattern=r"^ct_cancel_"))
+        app.add_handler(CallbackQueryHandler(ct_vote_callback, pattern=r"^ct_vote"))
+
+        app.add_handler(CommandHandler(["feedback", "fb"], feedback_handler))
+
+        # Social game group message handlers run alongside overs_text_handler
+        # (separate groups so each processes independently)
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            wordchase_message_handler,
+        ), group=2)
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            molehunt_message_handler,
+        ), group=3)
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            cartel_message_handler,
+        ), group=4)
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            bluff_answer_message,
+        ), group=2)
 
         # ── Text handler for over selection (must be LAST) ───────────
         app.add_handler(MessageHandler(
