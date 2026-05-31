@@ -5840,14 +5840,25 @@ let lmLastSig = '';
 let lmForceRender = false;
 let lmSelectedVariation = null;
 let lmLastResultHtml = '';
+let lmLatestState = null;
+let lmBowlOptsRequest = null;
+let lmBowlOptsGeneration = 0;
 let lmTab = 'match';   // match | scorecard | squads
 function lmSetTab(t) { lmTab = t; lmForceRender = true; pollMatch(); }
+
+function lmResetBowlingOptions() {
+  window._lmBowlOpts = null;
+  lmBowlOptsRequest = null;
+  lmBowlOptsGeneration += 1;
+}
 
 function openLiveMatch(matchId, chatId) {
   lmMatchId = matchId;
   lmChatId = (chatId !== undefined && chatId !== null) ? chatId : null;
   lmLastBallSeq = -1;
   lmSelectedVariation = null;
+  lmLatestState = null;
+  lmResetBowlingOptions();
   lmLastSig = '';
   const _nav = document.getElementById('bottom-nav');
   if (_nav) _nav.style.display = 'none';   // match-only: hide app nav
@@ -5890,6 +5901,8 @@ async function pollMatch() {
     stopMatchPolling();
     return;
   }
+  lmLatestState = data;
+
   // Whose turn is it for me? (drives poll cadence)
   const _sp2 = data.setup_progress || {};
   const inSetup = data.setup && data.setup !== 'DONE';
@@ -6205,11 +6218,25 @@ function controlPanelHtml(s) {
 }
 
 function bowlingControlsHtml(s) {
-  // We lazy-load options into a cached global the first time
+  // Load once per bowler and render immediately when options arrive. Calling
+  // pollMatch() here used to leave the spinner visible because an unchanged
+  // match-state signature intentionally skips re-rendering.
   if (!window._lmBowlOpts) {
-    api('/api/webapp/match/bowling-options', { match_id: lmMatchId }).then(({ ok, data }) => {
-      if (ok && data.options) { window._lmBowlOpts = data.options; pollMatch(); }
-    });
+    if (!lmBowlOptsRequest) {
+      const matchId = lmMatchId;
+      const generation = lmBowlOptsGeneration;
+      const request = api('/api/webapp/match/bowling-options', { match_id: matchId })
+        .then(({ ok, data }) => {
+          if (ok && data.options && matchId === lmMatchId && generation === lmBowlOptsGeneration) {
+            window._lmBowlOpts = data.options;
+            if (currentScreen === 'livematch' && lmLatestState) renderLiveMatch(lmLatestState);
+          }
+        })
+        .finally(() => {
+          if (lmBowlOptsRequest === request) lmBowlOptsRequest = null;
+        });
+      lmBowlOptsRequest = request;
+    }
     return `<div class="lm-panel"><div class="empty"><div class="spinner"></div></div></div>`;
   }
   const opts = window._lmBowlOpts;
@@ -6292,7 +6319,7 @@ async function lmDeliver(variation, length) {
   const { ok, data } = await api('/api/webapp/match/deliver', body);
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
   lmSelectedVariation = null;
-  window._lmBowlOpts = null;  // refetch next over
+  lmResetBowlingOptions();  // refetch for the next bowling turn
   pollMatch();
 }
 async function lmPlayShot(idx) {
@@ -6318,7 +6345,7 @@ async function lmNewBowler(rid) {
   haptic('medium');
   const { ok, data } = await api('/api/webapp/match/new-bowler', { match_id: lmMatchId, bowler_rid: rid });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
-  window._lmBowlOpts = null;
+  lmResetBowlingOptions();
   pollMatch();
 }
 
