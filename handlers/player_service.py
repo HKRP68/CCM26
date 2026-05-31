@@ -75,24 +75,44 @@ def get_player_values(rating: int) -> tuple[int, int]:
 
 
 def get_players_for_debut(session: Session) -> list[Player]:
-    """Return 8 players for debut: 1x83-85, 3x75-80, 4x50-74."""
+    """Return a balanced 11-player starter squad.
+
+    The squad always targets 5 batsmen, 3 bowlers, 2 all-rounders and one
+    wicket keeper. One randomly selected role receives an 83-85 OVR card;
+    the other ten cards are 72-80 OVR. If a role-specific pool is short, no
+    partial squad is returned: an admin should fix the player seed instead.
+    """
+    role_slots = [
+        "Batsman", "Batsman", "Batsman", "Batsman", "Batsman",
+        "Bowler", "Bowler", "Bowler",
+        "All-rounder", "All-rounder",
+        "Wicket Keeper",
+    ]
+    star_slot = random.randrange(len(role_slots))
     result: list[Player] = []
     seen_ids: set[int] = set()
 
-    def pick(low, high, count):
-        pool = (
-            session.query(Player)
-            .filter(and_(Player.rating >= low, Player.rating <= high, Player.is_active == True))
-            .all()
+    def pick_one(low: int, high: int, category: str | None = None) -> Player | None:
+        query = session.query(Player).filter(
+            and_(Player.rating >= low, Player.rating <= high,
+                 Player.is_active == True, ~Player.id.in_(seen_ids))
         )
-        pool = [p for p in pool if p.id not in seen_ids]
-        random.shuffle(pool)
-        chosen = pool[:count]
-        for p in chosen:
-            seen_ids.add(p.id)
-        return chosen
+        if category:
+            query = query.filter(Player.category == category)
+        pool = query.all()
+        if not pool:
+            return None
+        player = random.choice(pool)
+        seen_ids.add(player.id)
+        return player
 
-    result.extend(pick(83, 85, 1))
-    result.extend(pick(75, 80, 3))
-    result.extend(pick(50, 74, 4))
+    for index, category in enumerate(role_slots):
+        low, high = ((83, 85) if index == star_slot else (72, 80))
+        player = pick_one(low, high, category)
+        if not player:
+            # Do not grant an unbalanced squad. A partial seed should be fixed
+            # by an admin instead of silently giving a new user the wrong XI.
+            return []
+        result.append(player)
+
     return result

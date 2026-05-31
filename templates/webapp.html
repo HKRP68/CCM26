@@ -1763,6 +1763,29 @@
   }
   .brand-link:last-child { margin-bottom: 0; }
   .brand-link:active { background: var(--card-2); }
+
+  /* New-user setup + first-session guide */
+  .onboarding-hero, .starter-guide {
+    background: linear-gradient(145deg, rgba(0, 212, 170, 0.12), rgba(74, 158, 255, 0.08), var(--card));
+    border: 1px solid rgba(0, 212, 170, 0.45);
+    border-radius: 18px;
+    padding: 1rem;
+    margin-bottom: 0.9rem;
+  }
+  .onboarding-hero h2, .starter-guide h3 { margin: 0 0 0.35rem; }
+  .onboarding-copy { color: var(--muted); font-size: 0.84rem; line-height: 1.55; margin: 0.45rem 0 0.85rem; }
+  .squad-breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem; margin: 0.7rem 0; }
+  .squad-chip { background: var(--card-2); border: 1px solid var(--border); border-radius: 9px; padding: 0.55rem; font-size: 0.78rem; }
+  .setup-loop { margin: 0.75rem 0; padding-left: 1.2rem; color: var(--text); font-size: 0.82rem; line-height: 1.65; }
+  .guide-step { display: flex; gap: 0.65rem; align-items: center; border-top: 1px solid var(--border); padding: 0.68rem 0; }
+  .guide-state { width: 1.3rem; height: 1.3rem; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--card-2); color: var(--muted); font-size: 0.7rem; font-weight: 800; }
+  .guide-step.done .guide-state { background: var(--green); color: #06251e; }
+  .guide-step.later .guide-state { background: rgba(167,139,250,0.2); color: #a78bfa; }
+  .guide-body { flex: 1; min-width: 0; }
+  .guide-title { font-size: 0.84rem; font-weight: 800; }
+  .guide-sub { margin-top: 0.12rem; color: var(--muted); font-size: 0.7rem; line-height: 1.35; }
+  .guide-btn { border: 1px solid var(--accent); background: transparent; color: var(--accent); border-radius: 8px; padding: 0.4rem 0.52rem; font: inherit; font-size: 0.7rem; font-weight: 800; cursor: pointer; }
+
 </style>
 </head>
 <body>
@@ -1781,6 +1804,32 @@
 
 <div class="toast-container" id="toasts"></div>
 
+
+<!-- ════ New-user setup screen ════ -->
+<div class="screen" id="screen-onboarding">
+  <div class="onboarding-hero">
+    <div style="font-size:2.4rem;">🏏</div>
+    <h2>Build your first XI</h2>
+    <p class="onboarding-copy">
+      Welcome to CricMaster. Complete your debut in the bot and we’ll hand you
+      a balanced 11-player starter squad, including one standout card.
+    </p>
+    <div class="squad-breakdown" id="setup-squad-breakdown">
+      <div class="squad-chip">🏏 5 Batsmen</div><div class="squad-chip">🎯 3 Bowlers</div>
+      <div class="squad-chip">⚡ 2 All-rounders</div><div class="squad-chip">🧤 1 Wicket Keeper</div>
+    </div>
+    <p class="onboarding-copy"><b style="color:var(--text);">Your starter ratings:</b> ten cards at 72–80 OVR plus one 83–85 OVR star.</p>
+    <ol class="setup-loop">
+      <li>Open your squad and set your Playing XI.</li>
+      <li>Claim rewards to add players and currency.</li>
+      <li>Play a casual Quick Match, then improve your team.</li>
+      <li>Join a club later when you’re ready for the community.</li>
+    </ol>
+    <button class="spin-button" style="width:100%;" onclick="openSetupBot()">🤖 Return to bot &amp; complete setup</button>
+    <p class="onboarding-copy" style="margin-bottom:0;text-align:center;">Telegram will take you back to the bot. After <b>/debut</b>, tap <b>Continue in Mini App</b>.</p>
+  </div>
+</div>
+
 <!-- ════ Home / Dashboard screen ════ -->
 <div class="screen active" id="screen-home">
   <div id="resume-match-banner" style="display:none;"></div>
@@ -1788,6 +1837,9 @@
     <p class="hi">Welcome back,</p>
     <p class="name" id="user-name">…</p>
   </div>
+
+
+  <div class="starter-guide" id="starter-guide" style="display:none;"></div>
 
   <div class="stat-grid">
     <div class="stat coins">
@@ -2075,7 +2127,10 @@
 <div class="screen" id="screen-xi">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
     <h2 style="margin:0;font-size:1.25rem;">👥 Playing XI</h2>
-    <button class="link-btn" onclick="navigate('roster')">← Squad</button>
+    <div style="display:flex;gap:0.35rem;">
+      <button class="link-btn" onclick="autoBuildXi()">✨ Auto-build</button>
+      <button class="link-btn" onclick="navigate('roster')">← Squad</button>
+    </div>
   </div>
   <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
     Drag the ⠿ handle OR use ▲▼ buttons to reorder. Tap a bench player to swap them in (same category only).
@@ -2501,6 +2556,8 @@ let userData = null;
 let searchTimer = null;
 let currentCat = '';
 let isSpinning = false;
+let setupBotUsername = '';
+let lastOnboardingData = null;
 
 // ════════════════ API ════════════════
 async function api(path, body) {
@@ -2536,6 +2593,71 @@ function haptic(style = 'light') {
 }
 function hapticNotif(type = 'success') {
   try { tg?.HapticFeedback?.notificationOccurred(type); } catch (e) {}
+}
+
+// ════════════════ New-user onboarding ════════════════
+function setNativeSetupButton(show) {
+  const btn = tg?.MainButton;
+  if (!btn) return;
+  if (show) {
+    btn.setText('RETURN TO BOT & COMPLETE SETUP');
+    btn.offClick(openSetupBot);
+    btn.onClick(openSetupBot);
+    btn.show();
+  } else {
+    btn.offClick(openSetupBot);
+    btn.hide();
+  }
+}
+
+function openSetupBot() {
+  haptic('medium');
+  if (!setupBotUsername) {
+    toast('Open the bot chat and send /debut to complete setup.', 'info');
+    return;
+  }
+  const link = `https://t.me/${setupBotUsername}?start=debut_app`;
+  if (tg?.openTelegramLink) tg.openTelegramLink(link);
+  else window.location.href = link;
+}
+
+function showSetupScreen(setup = {}) {
+  setupBotUsername = setup.bot_username || '';
+  document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
+  document.getElementById('screen-onboarding').classList.add('active');
+  currentScreen = 'onboarding';
+  document.getElementById('bottom-nav').style.display = 'none';
+  document.getElementById('balance-pill').style.display = 'none';
+  setNativeSetupButton(true);
+}
+
+function markSquadOpened() {
+  localStorage.setItem('cm_starter_squad_opened', '1');
+  navigate('roster');
+  renderStarterGuide(lastOnboardingData || {});
+}
+
+function renderStarterGuide(onboarding = {}) {
+  lastOnboardingData = onboarding;
+  const guide = document.getElementById('starter-guide');
+  if (!guide) return;
+  const squadOpened = localStorage.getItem('cm_starter_squad_opened') === '1';
+  const steps = [
+    [squadOpened, 'Open your starter squad', 'Meet your 11 debut cards and your 83–85 OVR star.', "markSquadOpened()", 'Open'],
+    [onboarding.xi_set, 'Set your Playing XI', 'Put all 11 starters into your match lineup.', "navigate('xi')", 'Set XI'],
+    [onboarding.first_reward_claimed, 'Claim your first reward', 'Visit Daily and collect your first boost.', "navigate('daily')", 'Claim'],
+    [onboarding.casual_match_played, 'Play your first casual match', 'Try Quick Match once your XI is ready.', "navigate('match')", 'Play'],
+    [false, 'Join a club later', 'Clubs unlock a community to grow with when you are ready.', "navigate('clubs')", 'Explore', true],
+  ];
+  const completed = steps.slice(0, 4).filter(step => step[0]).length;
+  guide.style.display = completed === 4 ? 'none' : '';
+  guide.innerHTML = `<h3>🌱 Your first innings</h3><p class="onboarding-copy">${completed}/4 starter steps complete. Follow this path to get match-ready.</p>` +
+    steps.map(([done, title, sub, action, label, later], index) => `
+      <div class="guide-step ${done ? 'done' : ''} ${later ? 'later' : ''}">
+        <div class="guide-state">${done ? '✓' : (later ? '↗' : index + 1)}</div>
+        <div class="guide-body"><div class="guide-title">${title}</div><div class="guide-sub">${sub}</div></div>
+        ${done ? '' : `<button class="guide-btn" onclick="${action}">${label}</button>`}
+      </div>`).join('');
 }
 
 // ════════════════ Navigation ════════════════
@@ -2589,8 +2711,15 @@ async function refreshDashboard() {
     toast(data.message || 'Couldn\'t load dashboard', 'error');
     return;
   }
+  if (data.needs_setup) {
+    showSetupScreen(data.setup || {});
+    return;
+  }
+  setNativeSetupButton(false);
+  document.getElementById('bottom-nav').style.display = '';
   userData = data.user;
   lastInitData = data;
+  renderStarterGuide(data.onboarding || {});
   document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
   document.getElementById('stat-coins').textContent = formatNum(userData.coins);
   document.getElementById('stat-gems').textContent = formatNum(userData.gems);
@@ -4111,6 +4240,19 @@ const XI_CATEGORY_SHORT = {
   'All-rounder': 'AR',
   'Bowler': 'BOWL',
 };
+
+async function autoBuildXi() {
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/xi/autobuild', {});
+  if (!ok) {
+    toast(data.message || 'Could not build your XI', 'error');
+    return;
+  }
+  toast('✨ Your Playing XI is ready!', 'success');
+  hapticNotif('success');
+  await loadXi();
+  refreshDashboard();
+}
 
 async function loadXi() {
   const list = document.getElementById('xi-list');
