@@ -66,7 +66,7 @@ def get_bowler(s):
 
 
 def is_innings_over(s):
-    if s["total_wickets"] >= 10:
+    if s["total_wickets"] >= s.get("wicket_limit", 10):
         return True
     total_balls = (s["current_over"] - 1) * 6 + s["current_ball"]
     if total_balls >= s["overs"] * 6:

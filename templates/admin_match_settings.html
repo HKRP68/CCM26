@@ -30,11 +30,17 @@
     Sends players to the Mini App game board after the toss. Enable this only when the Mini App is configured.
   </p>
 
+  <label style="display:block; margin:1rem 0 .4rem;">
+    <strong>⚔️ Challenge-mode maximum overs</strong>
+  </label>
+  <input type="number" name="challenge_max_overs" min="1" max="20" value="{{ cfg.challenge_max_overs or 2 }}" style="max-width:120px; margin-bottom:1.2rem;">
+  <p style="color:var(--muted); margin:-.7rem 0 1.2rem;">Used by new <code>/cm @user</code> matches. Challenge innings always end after two wickets.</p>
+
   <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.8rem 1rem; margin-bottom:1.2rem; color:var(--muted); font-size:.85rem;">
     ℹ️ Saving changes the default for matches started afterward. Matches already in progress keep their current flow.
   </div>
 
-  <button type="submit" class="btn">💾 Save Match Style</button>
+  <button type="submit" class="btn">💾 Save Match Settings</button>
 </form>
 
 {% endblock %}

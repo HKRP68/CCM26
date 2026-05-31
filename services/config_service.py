@@ -54,10 +54,19 @@ DEFAULTS = {
     # Match gameplay style. Telegram restores the original in-chat buttons;
     # webapp opts every newly started match into the Mini App board.
     "match_style": "telegram",
+    "challenge_max_overs": 2,
 }
 
 
 MATCH_STYLES = {"telegram", "webapp"}
+
+
+def get_challenge_max_overs(session=None):
+    """Return the website-configured /cm innings limit for newly started matches."""
+    try:
+        return max(1, min(20, int(_refresh(session).get("challenge_max_overs", 2))))
+    except (TypeError, ValueError):
+        return 2
 
 
 def get_match_style(session=None):

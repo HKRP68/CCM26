@@ -16,8 +16,9 @@ A Telegram bot where users collect cricket player cards, build rosters, trade wi
 | `/release [name]` | Release a player for sell value coins | — |
 | `/releasemultiple` | Release duplicate players in bulk | — |
 | `/trade @user` | Trade same-rating players with another user | — |
-| `/catch [bet] [height]` | Play the separate Telegram-storage-backed CRIC catching game | — |
-| `/bal cric` | Check the CRIC wallet used by `/catch` | — |
+| `/catch [bet] [height]` | Risk purse coins in the catching game | — |
+| `/cm @user` | Start a 2-batsman, 2-bowler, 2-wicket challenge match | — |
+| `/unscramble` | Create an in-memory Unscramble Player lobby (`/ju`, `/eu`, `/su`, `/cu`) | — |
 
 ## Phase 2 Features
 
@@ -106,7 +107,7 @@ Auto-creates SQLite DB and seeds 3,165 players on first run.
 2. render.com → New → Background Worker
 3. Build: `pip install -r requirements.txt` | Start: `python bot.py`
 4. Add env var: `BOT_TOKEN=your_token`
-5. For `/catch`, add `CATCH_STORAGE_CHAT_ID=-100...`; make the bot a channel admin with permission to post and pin messages. Optional: set `CATCH_STARTING_CRIC` (default: `1000`).
+5. `/catch` uses each user’s normal purse coins, so no separate wallet-storage channel is required.
 
 ### Docker
 ```bash
