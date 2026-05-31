@@ -73,7 +73,8 @@ from handlers.app import app_handler
 # Match handlers
 from handlers.match import (
     playmatch_handler, cric_handler, cric_join_callback,
-    cric_cancel_lobby_callback, match_accept_callback, match_deny_callback,
+    cric_cancel_lobby_callback, cric_decision_callback,
+    match_accept_callback, match_deny_callback,
     overs_text_handler, toss_decision_callback,
     opener1_callback, opener2_callback, select_bowler_callback,
     variation_callback, length_callback, spinner_delivery_callback,
@@ -817,6 +818,7 @@ def main():
         # ── Match callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
         app.add_handler(CallbackQueryHandler(cric_cancel_lobby_callback, pattern=r"^cric_cancel_lobby$"))
+        app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cric_decision:"))
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
         app.add_handler(CallbackQueryHandler(match_deny_callback, pattern=r"^matchdeny_"))
         app.add_handler(CallbackQueryHandler(toss_decision_callback, pattern=r"^toss_"))
