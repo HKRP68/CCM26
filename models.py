@@ -818,6 +818,9 @@ class GameConfig(Base):
     # Comma-separated telegram IDs allowed to use commands during maintenance
     # (admins testing the bot, for example).
     maintenance_bypass_ids = Column(String(500), nullable=True)
+    # Global gameplay style for all newly started matches: original Telegram
+    # callback buttons (default) or the optional Mini App live board.
+    match_style = Column(String(20), default="telegram", nullable=False)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

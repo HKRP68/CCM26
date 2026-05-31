@@ -1807,21 +1807,33 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         context.bot_data[f"bat_xi_{mid}"] = bxi; context.bot_data[f"bowl_xi_{mid}"] = bwxi
         context.bot_data[f"bat_uname_{mid}"] = bu.username; context.bot_data[f"bowl_uname_{mid}"] = bwu.username
         context.bot_data[f"bat_uid_{mid}"] = bu.id; context.bot_data[f"bowl_uid_{mid}"] = bwu.id
-        # ── Mini-App-only flow: initialize the live match state now, then post
-        # the Match Ready card with the Play Match button. No in-chat opener
-        # buttons — the whole match is played in the Mini App. ──
-        m.status = "playing"; session.commit()
-        try:
-            from services.match_webapp_service import init_match_for_webapp
-            init_match_for_webapp(session, mid)
-        except Exception:
-            logger.exception("webapp match init at toss failed")
-        try:
-            from services.match_broadcast import send_match_ready_message
-            await send_match_ready_message(
-                context, cid, m, bt, bwt, _mention(bu), _mention(bwu))
-        except Exception:
-            logger.exception("match-ready mini app message failed")
+        # Match style is a global website setting, not a per-match choice.
+        # Default to the original Telegram callback flow so gameplay stays in
+        # the bot unless an admin explicitly enables the Mini App board.
+        from services.config_service import get_match_style
+        if get_match_style(session) == "webapp":
+            m.status = "playing"; session.commit()
+            try:
+                from services.match_webapp_service import init_match_for_webapp
+                init_match_for_webapp(session, mid)
+            except Exception:
+                logger.exception("webapp match init at toss failed")
+            try:
+                from services.match_broadcast import send_match_ready_message
+                await send_match_ready_message(
+                    context, cid, m, bt, bwt, _mention(bu), _mention(bwu))
+            except Exception:
+                logger.exception("match-ready mini app message failed")
+        else:
+            # Original bot gameplay: show all 11 players for opener selection.
+            btns = [[InlineKeyboardButton(
+                f"{p['name']} - {p['rating']} | {p['category']}",
+                callback_data=f"op1_{mid}_{bu.id}_{p['roster_id']}")]
+                for p in bxi]
+            await context.bot.send_message(
+                cid,
+                f"🏏 <b>SELECT OPENER 1</b>\n\n{_mention(bu)}, pick the opening batter:",
+                parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: session.rollback(); logger.exception("Toss err")
     finally: session.close()
 

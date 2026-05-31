@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Match Gameplay{% endblock %}
+{% block content %}
+
+<h1>🏏 Match Gameplay</h1>
+<p style="color:var(--muted); margin-bottom:1.5rem;">
+  Choose the gameplay style used for every newly started <code>/playmatch</code> and
+  <code>/vsbot</code> match. This is one global setting: players do not choose a
+  different style for an individual match.
+</p>
+
+<form method="POST" action="{{ url_for('admin_match_settings') }}" class="form-card" style="max-width:900px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <label style="display:block; margin-bottom:.75rem;">
+    <input type="radio" name="match_style" value="telegram"
+           {% if cfg.match_style != 'webapp' %}checked{% endif %}>
+    <strong>🤖 Telegram bot gameplay</strong> <span style="color:var(--green);">(recommended)</span>
+  </label>
+  <p style="color:var(--muted); margin:-.35rem 0 1.25rem 1.5rem;">
+    Restores the original in-chat opener, bowler, delivery, and shot buttons. No Mini App is needed.
+  </p>
+
+  <label style="display:block; margin-bottom:.75rem;">
+    <input type="radio" name="match_style" value="webapp"
+           {% if cfg.match_style == 'webapp' %}checked{% endif %}>
+    <strong>📱 Mini App live board</strong>
+  </label>
+  <p style="color:var(--muted); margin:-.35rem 0 1.25rem 1.5rem;">
+    Sends players to the Mini App game board after the toss. Enable this only when the Mini App is configured.
+  </p>
+
+  <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.8rem 1rem; margin-bottom:1.2rem; color:var(--muted); font-size:.85rem;">
+    ℹ️ Saving changes the default for matches started afterward. Matches already in progress keep their current flow.
+  </div>
+
+  <button type="submit" class="btn">💾 Save Match Style</button>
+</form>
+
+{% endblock %}

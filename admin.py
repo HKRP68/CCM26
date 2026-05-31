@@ -7909,6 +7909,36 @@ SCORECARD_COLOR_PRESETS = [
 ]
 
 
+@app.route("/settings/matches", methods=["GET", "POST"])
+@login_required
+def admin_match_settings():
+    """Choose one global gameplay style for newly started matches."""
+    db = get_session()
+    try:
+        from services.config_service import MATCH_STYLES, get_config, save_config
+        if request.method == "POST":
+            match_style = (request.form.get("match_style") or "telegram").lower()
+            if match_style not in MATCH_STYLES:
+                flash("Invalid match style.", "error")
+                return redirect(url_for("admin_match_settings"))
+            save_config(db, {"match_style": match_style},
+                        updated_by=session.get("admin_user", "admin"))
+            db.commit()
+            log_admin(db, "match_style_save", "config", 0, "matches",
+                      f"match_style={match_style}")
+            db.commit()
+            flash("✅ Match gameplay style saved for all new matches.", "info")
+            return redirect(url_for("admin_match_settings"))
+        return render_template("admin_match_settings.html", cfg=get_config(db))
+    except Exception as e:
+        db.rollback()
+        logger.exception("match settings save failed")
+        flash(f"Error: {e}", "error")
+        return redirect(url_for("admin_match_settings"))
+    finally:
+        db.close()
+
+
 @app.route("/settings/scorecard", methods=["GET", "POST"])
 @login_required
 def admin_scorecard_settings():
