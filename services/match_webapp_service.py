@@ -813,10 +813,14 @@ def select_wicket_batsman(match_id, user_id, index):
 def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     """Mirror of the bot's _process_shot_core bookkeeping (deterministic given
     the outcome `oc`). Mutates state in place. Returns a result dict."""
-    bs = state["bat_stats"].setdefault(striker["roster_id"], {
+    # Always use str keys so JSON round-trips don't create duplicate int/str key
+    # collisions that silently reset accumulated stats to zero.
+    s_rid = str(striker["roster_id"])
+    b_rid = str(bowler["roster_id"])
+    bs = state["bat_stats"].setdefault(s_rid, {
         "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
         "out": False, "how_out": "", "bowled_by": ""})
-    bws = state["bowl_stats"].setdefault(bowler["roster_id"], {
+    bws = state["bowl_stats"].setdefault(b_rid, {
         "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
         "this_over_balls": 0, "maidens": 0, "this_over_runs": 0})
 
