@@ -881,6 +881,8 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         bws["this_over_balls"] = 0
         if bws.get("this_over_runs", 0) == 0:
             bws["maidens"] = bws.get("maidens", 0) + 1
+        # Preserve the just-bowled over's runs for the end-of-over card.
+        bws["last_over_runs"] = bws.get("this_over_runs", 0)
         bws["this_over_runs"] = 0
         state["current_over"] += 1
         state["current_ball"] = 0
@@ -894,6 +896,89 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     return {"rtxt": rtxt, "type": t, "runs": oc.get("runs", 0),
             "legal": legal, "need_new_bat": need_new_bat, "eoo": eoo,
             "how": oc.get("how"), "traits": oc.get("traits_activated") or []}
+
+
+def _append_commentary_log(state, res, striker, bowler, text):
+    """Accumulate a scrolling commentary feed in ``state['commentary_log']``.
+
+    Stores three event kinds, exactly matching the fields UnderCover's
+    frontend renders (static/cricket/app.js renderCommentaryFeed):
+      • ``ball``           — one row per delivery
+      • ``end_of_over``    — summary card when an over completes
+      • ``end_of_innings`` — summary card when an innings ends
+    Kept newest-last here; serialize_match_state reverses it for display.
+    """
+    log = state.get("commentary_log")
+    if not isinstance(log, list):
+        log = []
+
+    overs_done = max(0, state.get("current_over", 1) - 1)
+    balls = state.get("current_ball", 0)
+    runs = res.get("runs", 0)
+    is_wkt = res.get("type") == "wicket"
+
+    # Ball row. After an over rolls (eoo), current_ball was reset to 0 and the
+    # over counter advanced, so reconstruct the ball's real over.address here.
+    if res.get("eoo"):
+        ball_over_label = f"{overs_done - 1}.6" if overs_done >= 1 else "0.6"
+    else:
+        ball_over_label = f"{overs_done}.{balls}"
+    log.append({
+        "type": "ball",
+        "over": ball_over_label,
+        "runs": runs,
+        "isWicket": is_wkt,
+        "text": text or res.get("rtxt") or "",
+    })
+
+    def _bat_card(player):
+        if not player:
+            return None
+        bs = (state.get("bat_stats", {}) or {}).get(player.get("roster_id"), {})
+        return {"name": player.get("name"),
+                "runs": bs.get("runs", 0), "balls": bs.get("balls", 0)}
+
+    # End-of-over summary card.
+    if res.get("eoo"):
+        bws = (state.get("bowl_stats", {}) or {}).get(bowler.get("roster_id"), {}) if bowler else {}
+        b_overs_done = bws.get("overs_done", 0)
+        b_this = bws.get("this_over_balls", 0)
+        log.append({
+            "type": "end_of_over",
+            "overNumber": overs_done,  # the over that just finished
+            "runsScored": bws.get("last_over_runs", 0),
+            "totalRuns": state.get("total_runs", 0),
+            "totalWickets": state.get("total_wickets", 0),
+            "striker": _bat_card(get_striker(state)),
+            "nonStriker": _bat_card(get_non_striker(state)),
+            "bowler": {
+                "name": bowler.get("name") if bowler else "",
+                "wickets": bws.get("wickets", 0),
+                "runsConceded": bws.get("runs", 0),
+                "overs": f"{b_overs_done}.{b_this}" if b_this else f"{b_overs_done}",
+            },
+        })
+
+    # End-of-innings summary card. Called before the next-action block runs,
+    # so state still holds the just-completed innings totals (the transition
+    # that resets them hasn't happened yet). Detect directly.
+    if is_innings_over(state):
+        innings_idx = state.get("innings", 1) - 1
+        log.append({
+            "type": "end_of_innings",
+            "inningsIdx": innings_idx,
+            "runs": state.get("total_runs", 0),
+            "wickets": state.get("total_wickets", 0),
+            "overs": f"{overs_done}.{balls}",
+            "target": state.get("target"),
+            "winner": None,   # filled on the result screen via result.motm
+            "motm": None,
+        })
+
+    # Cap the log so state stays small.
+    if len(log) > 60:
+        log = log[-60:]
+    state["commentary_log"] = log
 
 
 def play_shot(match_id, user_id, shot_index):
@@ -948,6 +1033,11 @@ def play_shot(match_id, user_id, shot_index):
         "how": res.get("how"),
     }
     state["last_commentary"] = commentary or res.get("rtxt")
+
+    # Accumulate a scrolling commentary log (ball rows + end-of-over /
+    # end-of-innings summary cards) so the Mini App feed matches UnderCover.
+    _append_commentary_log(state, res, striker, bowler,
+                           commentary or res.get("rtxt"))
 
     # Next action
     if is_innings_over(state):
@@ -1747,6 +1837,8 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                 "how": res.get("how"),
             }
             state["last_commentary"] = _c or res.get("rtxt")
+            _append_commentary_log(state, res, striker, bowler,
+                                   _c or res.get("rtxt"))
             steps.append({"type": "bot_shot", "shot": shot, "rtxt": res["rtxt"]})
 
             # Determine next action (same logic as human play_shot)

@@ -370,6 +370,12 @@ def serialize_match_state(session, match, viewer_user):
             "text": state.get("last_commentary") or last_ball_raw.get("text") or "",
         }]
 
+    # Prefer the full accumulated feed (ball rows + end_of_over /
+    # end_of_innings cards) when present, newest-first like UnderCover.
+    full_log = state.get("commentary_log")
+    if isinstance(full_log, list) and full_log:
+        commentary = list(reversed(full_log))
+
     # ── toss ──
     toss_winner_tg = tg_of.get(match.toss_winner_id) if match.toss_winner_id else None
 
@@ -377,6 +383,17 @@ def serialize_match_state(session, match, viewer_user):
     result = None
     if status == "completed":
         result = _build_result(session, state, match, tg_of, host, guest)
+        # Enrich the final end_of_innings card with winner/MOTM so the
+        # commentary feed's innings-end overlay reads the same as the result.
+        if isinstance(commentary, list) and result:
+            win = result.get("winner") or {}
+            win_name = win.get("teamName") or win.get("username")
+            for ev in commentary:
+                if isinstance(ev, dict) and ev.get("type") == "end_of_innings":
+                    if ev.get("winner") is None:
+                        ev["winner"] = win_name
+                    if ev.get("motm") is None:
+                        ev["motm"] = result.get("motm")
 
     return {
         "id": str(match_id),

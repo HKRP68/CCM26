@@ -209,6 +209,7 @@ BOT_MENU_COMMANDS = (
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
+    ("cric", "Open a match lobby anyone can join (Mini App)"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
     ("lastmatch", "View your last match"),
@@ -301,6 +302,33 @@ async def start_handler(update, context):
         await debut_handler(update, context)
         return
 
+    # Open-lobby match deep link from a group: cricket_<matchId>_<chatId>
+    # (the group "Play Match" button routes here). Open the same Mini App
+    # board, passing match_id/chat_id on the query string the frontend reads.
+    if payload.startswith("cricket_"):
+        webapp_url = os.getenv("WEBAPP_URL", "").strip()
+        if webapp_url and webapp_url.startswith("https://"):
+            from urllib.parse import urlparse
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            rest = args[0][len("cricket_"):]  # keep original case for ids
+            last = rest.rfind("_")
+            if last != -1:
+                m_id, c_id = rest[:last], rest[last + 1:]
+            else:
+                m_id, c_id = rest, "0"
+            p = urlparse(webapp_url)
+            host = f"{p.scheme}://{p.netloc}"
+            url = f"{host}/cricket?match_id={m_id}&chat_id={c_id}"
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🎮 Open Match",
+                                     web_app=WebAppInfo(url=url))
+            ]])
+            await update.message.reply_text(
+                "🏏 Tap below to open the match board in the Mini App.",
+                parse_mode="HTML", reply_markup=kb,
+            )
+            return
+
     # Live match deep link: lm_<id> → open the Mini App live-match board
     if payload.startswith("lm_") or payload.startswith("sc_"):
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
@@ -372,6 +400,7 @@ async def start_handler(update, context):
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
+        "/cric [overs] - Open a match lobby anyone can join (Mini App)\n"
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
