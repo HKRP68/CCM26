@@ -136,6 +136,27 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             text, parse_mode="HTML", disable_web_page_preview=True)
 
+        # Return Mini App visitors to the app so the in-app starter guide can
+        # walk them through their squad, XI, first reward and casual match.
+        try:
+            import os
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            webapp_url = os.getenv("WEBAPP_URL", "").strip()
+            if webapp_url.startswith("https://"):
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🏏 Continue in Mini App",
+                        web_app=WebAppInfo(url=webapp_url + "#onboarding"),
+                    )
+                ]])
+                await update.message.reply_text(
+                    "✅ <b>Your squad is ready.</b> Return to the Mini App to set "
+                    "your Playing XI and play your first casual match.",
+                    parse_mode="HTML", reply_markup=kb,
+                )
+        except Exception:
+            logger.exception("Post-debut Mini App link failed (non-fatal)")
+
         # If no referral was completed by the link path, ask for a code.
         # Sets a flag so the text-message catcher knows they're a fresh
         # debutant whose next typed line might be a referral code.

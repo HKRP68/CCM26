@@ -7,7 +7,7 @@ A Telegram bot where users collect cricket player cards, build rosters, trade wi
 | Command | Description | Cooldown |
 |---------|-------------|----------|
 | `/start` | Welcome message | — |
-| `/debut` | Create account, 8 starter players + 5,000 coins + 100 gems | Once |
+| `/debut` | Create account, balanced 11-player starter XI + coins + gems | Once |
 | `/claim` | Get 1 rarity-weighted player + 500 coins | 1 hour |
 | `/daily` | 5,000 coins + 2 random players + streak tracking | 24 hours |
 | `/gspin` | Spin reward wheel (coins / gems / players) | 8 hours |

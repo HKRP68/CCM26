@@ -54,7 +54,7 @@ SECTIONS = {
         "title": "Squad — Roster & Players",
         "body": (
             "<b>👥 Building Your Squad</b>\n\n"
-            "<b>/debut</b> (or <b>/d</b>) — start your career, get 5 starter players\n"
+            "<b>/debut</b> (or <b>/d</b>) — start your career, get a balanced starter XI\n"
             "<b>/myroster</b> (or <b>/mr</b>) — view your full squad\n\n"
             "<b>📥 Getting players</b>\n"
             "<b>/claim</b> (or <b>/c</b>) — random pull every 8 hours\n"

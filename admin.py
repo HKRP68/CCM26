@@ -2858,10 +2858,12 @@ def health():
 # in the Authorization header. CSRF is exempt — Telegram's HMAC signature
 # is the authentication.
 
-def _webapp_auth():
+def _webapp_auth(allow_not_debuted=False):
     """Verify Telegram initData from Authorization header.
 
-    Returns ((db, user, tg_id), None, None) on success.
+    Returns ((db, user, tg_id), None, None) on success. ``user`` is only
+    allowed to be ``None`` when ``allow_not_debuted`` is true, which lets the
+    init endpoint render the setup screen without exposing gameplay APIs.
     Returns (None, None, (error_dict, http_status)) on failure.
     """
     import os as _os
@@ -2890,10 +2892,10 @@ def _webapp_auth():
 
     db = get_session()
     user = db.query(User).filter(User.telegram_id == tg_id).first()
-    if not user:
+    if not user and not allow_not_debuted:
         db.close()
         return None, tg_id, ({"ok": False, "error": "not_debuted",
-                              "message": "Open the bot and run /debut first."}, 403)
+                              "message": "Complete your debut to unlock the Mini App."}, 403)
     return (db, user, tg_id), None, None
 
 
@@ -2907,11 +2909,24 @@ def webapp():
 @csrf_exempt
 def webapp_init():
     """Dashboard endpoint."""
-    auth, tg_id, err = _webapp_auth()
+    auth, tg_id, err = _webapp_auth(allow_not_debuted=True)
     if err:
         return err
     db, user, tg_id = auth
     try:
+        if not user:
+            return {
+                "ok": True,
+                "needs_setup": True,
+                "setup": {
+                    "bot_username": os.getenv("BOT_USERNAME", "").strip().lstrip("@"),
+                    "starter_squad": {
+                        "total": 11, "batsmen": 5, "bowlers": 3,
+                        "all_rounders": 2, "wicket_keepers": 1,
+                        "standard_rating": "72-80", "star_rating": "83-85",
+                    },
+                },
+            }
         from models import UserStats
         from services import adsgram_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -2984,6 +2999,14 @@ def webapp_init():
                 "cooldown_remaining": daily_remaining,
                 "cooldown_total": DAILY_COOLDOWN,
                 "quota": _quota_service.get_quota_status(stats, "daily", session=db),
+            },
+            "onboarding": {
+                "xi_set": (db.query(UserRoster)
+                           .filter(UserRoster.user_id == user.id,
+                                   UserRoster.order_position <= 11).count() == 11),
+                "first_reward_claimed": bool(stats and (stats.last_claim or stats.last_daily)),
+                "casual_match_played": bool((user.quick_matches_played or 0) > 0),
+                "club_joined": bool(user.club_id),
             },
             "adsgram": {
                 "configured": adsgram_service.is_configured(),
@@ -4684,6 +4707,41 @@ def webapp_xi():
                 "roster_count": len(rows)}
     except Exception as e:
         logger.exception("webapp_xi failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/xi/autobuild", methods=["POST"])
+@csrf_exempt
+def webapp_xi_autobuild():
+    """Pick the strongest valid Playing XI from the user's roster."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from handlers.lineup import _build_best_xi
+        rows = (db.query(UserRoster, Player)
+                .join(Player, UserRoster.player_id == Player.id)
+                .filter(UserRoster.user_id == user.id)
+                .order_by(UserRoster.order_position.asc()).all())
+        if len(rows) < 11:
+            return {"ok": False, "error": "not_enough_players",
+                    "message": "You need at least 11 players to build an XI."}, 400
+        xi, bench, build_error = _build_best_xi(rows)
+        if build_error:
+            return {"ok": False, "error": "invalid_roster",
+                    "message": build_error}, 400
+        for position, (entry, _) in enumerate(xi, start=1):
+            entry.order_position = position
+        for position, (entry, _) in enumerate(bench, start=12):
+            entry.order_position = position
+        db.commit()
+        return {"ok": True, "message": "Your Playing XI is ready."}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_xi_autobuild failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()

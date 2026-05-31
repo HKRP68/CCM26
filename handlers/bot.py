@@ -122,7 +122,7 @@ async def start_handler(update, context):
         "🏏 <b>Welcome to Cricket Simulator Bot!</b>\n\n"
         "Use /debut (or /d) to create your account and receive your starting squad.\n\n"
         "<b>Commands</b> <i>(short aliases in brackets)</i>:\n"
-        "/debut /d - Create account & get 8 players\n"
+        "/debut /d - Create account & get your starter XI\n"
         "/claim /c - Claim 1 player + coins (hourly)\n"
         "/daily /dl - Daily reward (24h)\n"
         "/gspin /gs - Spin the wheel (8h)\n"
