@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Relative assets (style.css / app.js) resolve under /cricket/ regardless
+       of the ?match_id=... query string the page is opened with. -->
+  <base href="/cricket/">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Crickidex Arena</title>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Telegram Web App SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Custom Styling -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app-container">
+    
+    <!-- HEADER BAR -->
+    <header class="app-header">
+      <button class="header-icon-btn" id="exit-btn-back">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      </button>
+      <div class="match-meta-header">
+        <div class="header-teams">
+          <span id="header-host-name">MY TEAM</span>
+          <span class="vs-badge">VS</span>
+          <span id="header-guest-name">INDIA</span>
+        </div>
+        <div class="header-match-id" id="header-match-uuid">MATCH ID: E2265B</div>
+      </div>
+      <div class="header-spacer" style="width: 36px; height: 36px;"></div>
+    </header>
+
+    <!-- LOADING SCREEN -->
+    <section id="loading-screen" class="screen active">
+      <div class="spinner-container">
+        <div class="cricket-ball-spinner"></div>
+        <p class="loading-text">Connecting to the match room...</p>
+      </div>
+    </section>
+
+    <!-- IDENTITY SELECTION SCREEN -->
+    <section id="identity-screen" class="screen">
+      <div class="identity-card glass-card">
+        <div class="identity-header">
+          <span class="stadium-icon">🏟️</span>
+          <h2>Crickidex PVP Arena</h2>
+          <p>Choose your identity to join the match</p>
+        </div>
+        <div class="identity-buttons" id="identity-options">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </section>
+
+    <!-- SETUP SCREEN (XI SELECTION) -->
+    <section id="setup-screen" class="screen">
+      <div class="glass-card header-card">
+        <h2 class="card-title">Match Setup</h2>
+        <p class="setup-subtitle" id="setup-match-details">Loading room details...</p>
+      </div>
+
+      <div class="setup-container">
+        <!-- BATTING SETUP -->
+        <div id="batting-setup" class="setup-section hidden">
+          <div class="glass-card">
+            <h3 class="section-title">Select Opening Batsmen</h3>
+            <p class="section-description">Choose who walks out to open the innings.</p>
+            
+            <div class="form-group">
+              <label>Striker (Batsman 1)</label>
+              <div id="striker-list" class="selection-list"></div>
+            </div>
+            
+            <div class="form-group">
+              <label>Non-Striker (Batsman 2)</label>
+              <div id="non-striker-list" class="selection-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- BOWLING SETUP -->
+        <div id="bowling-setup" class="setup-section hidden">
+          <div class="glass-card">
+            <h3 class="section-title">Select Opening Bowler</h3>
+            <p class="section-description">Pick the bowler to bowl the first over of the match.</p>
+            
+            <div class="form-group">
+              <label>Opening Bowler</label>
+              <div id="bowler-list" class="selection-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LINEUP STATUS TRACKER -->
+        <div id="setup-status-tracker" class="glass-card setup-status-card hidden">
+          <!-- Populated dynamically -->
+        </div>
+
+        <!-- BUTTON AND WAITING STATE -->
+        <div class="setup-actions">
+          <button id="submit-setup-btn" class="btn btn-primary btn-block">Confirm Selection</button>
+          
+          <div id="setup-waiting" class="waiting-indicator hidden">
+            <div class="spinner-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <p>Waiting for opponent to submit...</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MAIN GAMEPLAY SCREEN -->
+    <section id="gameplay-screen" class="screen">
+      <!-- LIVE SCOREBOARD CARD -->
+      <div class="scoreboard-section">
+        <div class="score-row">
+          <div class="runs-col">
+            <div class="live-runs" id="live-runs-display">0/0</div>
+            <div class="crr-over-row">
+              <span class="crr-badge">CRR: <span id="live-crr">0.0</span></span>
+              <span class="overs-display"><span id="live-overs">0.0</span>/<span id="total-overs">1</span> OV</span>
+            </div>
+          </div>
+          <div class="toss-col">
+            <div class="toss-badge" id="toss-badge-display">⚫ LOADING MATCH DETAILS...</div>
+          </div>
+        </div>
+
+        <!-- TARGET DISPLAY FOR INNINGS 2 -->
+        <div id="target-display" class="target-bar hidden">
+          🎯 Need <span id="target-runs-needed" class="glow-text">0</span> runs from <span id="target-balls-left">0</span> balls
+        </div>
+      </div>
+
+      <!-- TAB SELECTION -->
+      <div class="tabs-container">
+        <button class="tab-btn active" id="tab-match">MATCH</button>
+        <button class="tab-btn" id="tab-scorecard">SCORECARD</button>
+        <button class="tab-btn" id="tab-squads">SQUADS</button>
+      </div>
+
+      <!-- MATCH PANEL (Default view) -->
+      <div id="panel-match" class="tab-panel active">
+        <!-- CREASE DETAILS CARD (Unified layout) -->
+        <div class="crease-card-unified">
+          <div class="crease-player-left" id="card-striker">
+            <div class="player-circle-icon"><span class="inner-c">c</span></div>
+            <div class="crease-player-info">
+              <span class="p-name" id="striker-name">E Lewis*</span>
+              <span class="p-score" id="striker-stats">0(0)</span>
+            </div>
+          </div>
+          
+          <div class="crease-middle-col">
+            <div class="crease-meta-row">
+              <span class="meta-label">PARTNERSHIP</span>
+              <span class="meta-value" id="partnership-display">0(0)</span>
+            </div>
+            <div class="crease-meta-row">
+              <span class="meta-label">BOWLER</span>
+              <span class="meta-value" id="bowler-name-stats">K Roach 0-0</span>
+            </div>
+          </div>
+          
+          <div class="crease-player-right" id="card-non-striker">
+            <div class="crease-player-info">
+              <span class="p-name" id="non-striker-name">T Wyllie</span>
+              <span class="p-score" id="non-striker-stats">0(0)</span>
+            </div>
+            <div class="player-circle-icon"><span class="inner-c">c</span></div>
+          </div>
+        </div>
+
+        <!-- AUTOPLAY SWITCH STRIP -->
+        <div class="autoplay-strip">
+          <div class="autoplay-label">
+            <span class="autoplay-text">AUTOPLAY</span>
+          </div>
+          <button class="autoplay-pill-btn" id="autoplay-toggle-btn">
+            <span class="pill-dot"></span>
+            <span class="pill-label">OFF</span>
+          </button>
+        </div>
+
+        <!-- COMMENTARY FEED -->
+        <div class="commentary-feed-container">
+          <div class="timeline" id="commentary-list">
+            <!-- Commentary items will go here -->
+          </div>
+        </div>
+      </div>
+
+      <!-- SCORECARD PANEL -->
+      <div id="panel-scorecard" class="tab-panel">
+        <div class="scorecard-wrapper">
+          <!-- TEAM TOGGLE TABS -->
+          <div class="scorecard-team-tabs">
+            <button class="sc-tab-btn active" id="scorecard-tab-host">HOST XI 0/0</button>
+            <button class="sc-tab-btn" id="scorecard-tab-guest">GUEST XI</button>
+          </div>
+
+          <!-- Batting Team Section -->
+          <div class="scorecard-section-title" id="scorecard-batting-title">BATTING</div>
+          <div class="scorecard-table">
+            <div class="th-row">
+              <span class="th-player">BATTING</span>
+              <span class="th-num">R</span>
+              <span class="th-num">B</span>
+              <span class="th-num">4s</span>
+              <span class="th-num">6s</span>
+              <span class="th-num">SR</span>
+            </div>
+            <div class="tb-rows" id="scorecard-batting-rows">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <div class="extras-row" id="scorecard-extras">Extras 0 (w 0, lb 0, b 0, nb 0, p 0)</div>
+          <div class="total-row" id="scorecard-total">TOTAL 0/0 (0.0 Ov)</div>
+
+          <div class="yet-to-bat-section">
+            <span class="ytb-label">YET TO BAT:</span>
+            <span class="ytb-list" id="scorecard-yet-to-bat"></span>
+          </div>
+
+          <!-- Bowling Team Section -->
+          <div class="scorecard-section-title" id="scorecard-bowling-title" style="margin-top: 16px;">BOWLING</div>
+          <div class="scorecard-table">
+            <div class="th-row">
+              <span class="th-player">BOWLING</span>
+              <span class="th-num">O</span>
+              <span class="th-num">M</span>
+              <span class="th-num">R</span>
+              <span class="th-num">W</span>
+              <span class="th-num">ER</span>
+            </div>
+            <div class="tb-rows" id="scorecard-bowling-rows">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SQUADS PANEL -->
+      <div id="panel-squads" class="tab-panel">
+        <div class="squads-wrapper">
+          <div class="squad-column">
+            <div class="squad-title" id="squad-host-title">Host XI</div>
+            <div class="squad-list" id="squad-host-list"></div>
+          </div>
+          <div class="squad-column">
+            <div class="squad-title" id="squad-guest-title">Guest XI</div>
+            <div class="squad-list" id="squad-guest-list"></div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+    
+    <!-- STICKY DOCKED CONTROL PANEL -->
+    <div id="controls-sheet" class="bottom-sheet hidden">
+      <div class="sheet-content">
+        <div class="sheet-header">
+          <div class="sheet-header-text">
+            <h2 id="controls-prompt-text">CHOOSE YOUR SHOT</h2>
+            <p id="controls-prompt-subtitle">Pick the best shot for this ball</p>
+            <div id="controls-match-status-bar" class="match-status-bar-inline"></div>
+          </div>
+          <button class="sheet-toggle-btn" id="toggle-controls-btn" title="Toggle Controls View">
+            <svg id="toggle-controls-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+        </div>
+
+        <div class="sheet-body">
+          <!-- INCOMING BALL TYPE DISPLAY -->
+          <div class="incoming-delivery-card hidden" id="incoming-delivery-container">
+            <span class="incoming-tag">INCOMING</span>
+            <span class="incoming-value" id="incoming-delivery-val">FULL LENGTH (OUTSWINGER)</span>
+          </div>
+
+          <!-- BATTING SHOTS GRID -->
+          <div id="batting-controls" class="controls-section hidden">
+            <div class="button-grid premium-grid">
+              <button class="btn btn-action-card" data-shot="defend">
+                <span class="label">Defend</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="straight_drive">
+                <span class="label">Drive</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="cut">
+                <span class="label">Cut</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="pull">
+                <span class="label">Pull</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="sweep">
+                <span class="label">Sweep</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="loft">
+                <span class="label">Loft</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="flick">
+                <span class="label">Flick</span>
+              </button>
+              <button class="btn btn-action-card" data-shot="leave">
+                <span class="label">Leave</span>
+              </button>
+            </div>
+            <div class="controls-hint">
+              * Check the pitch type and bowler rating for a higher success rate.
+            </div>
+          </div>
+
+          <!-- BOWLING DELIVERIES GRID -->
+          <div id="bowling-controls" class="controls-section hidden">
+            <div class="delivery-selection-area">
+              <div class="button-grid premium-grid" id="bowler-delivery-grid">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+            
+            <div class="speed-selection-area" id="bowling-speed-section">
+              <h3 class="section-subtitle">Speed Variation</h3>
+              <div class="speed-button-group">
+                <button class="btn btn-speed" data-speed="fast">Fast</button>
+                <button class="btn btn-speed active" data-speed="normal">Normal</button>
+                <button class="btn btn-speed" data-speed="slow">Slow</button>
+              </div>
+            </div>
+
+            <button id="submit-delivery-btn" class="btn btn-primary btn-block btn-green mt-3">Bowl Ball</button>
+          </div>
+
+          <!-- INCOMING BATSMAN SELECTION -->
+          <div id="wicket-batsman-controls" class="controls-section hidden">
+            <p class="warning-text">Striker got out! Select your next batsman:</p>
+            <div id="wicket-batsman-list" class="selection-list mb-3"></div>
+            <button id="submit-wicket-batsman-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Batsman</button>
+          </div>
+
+          <!-- INCOMING BOWLER SELECTION -->
+          <div id="over-bowler-controls" class="controls-section hidden">
+            <p class="info-text">Bowler for the next over:</p>
+            <div id="over-bowler-list" class="selection-list mb-3"></div>
+            <button id="submit-over-bowler-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Bowler</button>
+          </div>
+
+          <!-- OPPONENT WAITING STATE -->
+          <div id="controls-waiting" class="controls-state">
+            <div class="waiting-turn">
+              <div class="wave-dots">
+                <span></span><span></span><span></span>
+              </div>
+              <p id="waiting-status-text">Waiting for opponent...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESULT OVERLAY -->
+    <div id="result-overlay" class="overlay hidden">
+      <div class="result-card glass-card">
+        <div class="trophy-emoji">🏆</div>
+        <h2 id="result-winner-title">Match Finished!</h2>
+        
+        <div class="reward-section">
+          <div class="coin-badge">
+            <span class="coin-icon">🪙</span>
+            <span id="result-reward-amount">+1,500</span>
+          </div>
+          <p class="reward-sub">added to your balance</p>
+        </div>
+
+        <div class="scoreboard-summary">
+          <div class="summary-innings">
+            <span class="label">1st Innings:</span>
+            <span id="result-inn1-score">0/0 (0.0 ov)</span>
+          </div>
+          <div class="summary-innings">
+            <span class="label">2nd Innings:</span>
+            <span id="result-inn2-score">0/0 (0.0 ov)</span>
+          </div>
+        </div>
+
+        <div id="result-motm-section" class="motm-section hidden">
+          <div class="motm-badge">🌟 MAN OF THE MATCH 🌟</div>
+          <h3 id="result-motm-name">-</h3>
+          <p id="result-motm-stats">-</p>
+        </div>
+
+        <div class="result-buttons" style="display: flex; gap: 10px; width: 100%;">
+          <button id="view-match-btn" class="btn btn-secondary btn-block" style="margin-top: 0; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);">View Match</button>
+          <button id="close-app-btn" class="btn btn-primary btn-block btn-green" style="margin-top: 0;">Back to Telegram</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  
+  <script src="app.js"></script>
+</body>
+</html>
