@@ -11,6 +11,7 @@ A Telegram bot where users collect cricket player cards, build rosters, trade wi
 | `/claim` | Get 1 rarity-weighted player + 500 coins | 1 hour |
 | `/daily` | 5,000 coins + 2 random players + streak tracking | 24 hours |
 | `/gspin` | Spin reward wheel (coins / gems / players) | 8 hours |
+| `/cric [1-5]` | Open a joinable cricket lobby and launch the live Mini App after the toss | — |
 | `/myroster` | Paginated roster with stats | — |
 | `/playerinfo [name]` | Full stats + card image | — |
 | `/release [name]` | Release a player for sell value coins | — |
