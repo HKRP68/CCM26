@@ -6000,6 +6000,18 @@ def cricket_arena_asset(filename):
     return send_from_directory(_CRICKET_DIR, filename)
 
 
+# ── Player photos (migrated from UnderCover assets/players/) ─────────────
+_PLAYERS_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "static", "players")
+
+
+@app.route("/players/photo/<path:filename>")
+def player_photo(filename):
+    """Serve a player photo from static/players/. Used by mini-app shop."""
+    from flask import send_from_directory
+    return send_from_directory(_PLAYERS_IMG_DIR, filename)
+
+
 # ── Lucky Spin standalone Mini App (UnderCover-style wheel) ──────────────
 # Self-contained page wired to the existing POST /api/webapp/spin (+ ad-gating
 # via /api/webapp/ad-completed). Open it with a Telegram Web App button so the

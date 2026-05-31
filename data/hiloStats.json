@@ -1,0 +1,659 @@
+[
+    {
+        "name": "Virat Kohli",
+        "Test Runs": 8848,
+        "ODI Runs": 13848,
+        "T20I Runs": 4188,
+        "Test Wickets": 0,
+        "ODI Wickets": 5,
+        "T20I Wickets": 4
+    },
+    {
+        "name": "Rohit Sharma",
+        "Test Runs": 4137,
+        "ODI Runs": 10709,
+        "T20I Runs": 4231,
+        "Test Wickets": 2,
+        "ODI Wickets": 9,
+        "T20I Wickets": 1
+    },
+    {
+        "name": "Sachin Tendulkar",
+        "Test Runs": 15921,
+        "ODI Runs": 18426,
+        "T20I Runs": 10,
+        "Test Wickets": 46,
+        "ODI Wickets": 154,
+        "T20I Wickets": 1
+    },
+    {
+        "name": "MS Dhoni",
+        "Test Runs": 4876,
+        "ODI Runs": 10773,
+        "T20I Runs": 1617,
+        "Test Wickets": 0,
+        "ODI Wickets": 1,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Yuvraj Singh",
+        "Test Runs": 1900,
+        "ODI Runs": 8701,
+        "T20I Runs": 1177,
+        "Test Wickets": 9,
+        "ODI Wickets": 111,
+        "T20I Wickets": 28
+    },
+    {
+        "name": "Jasprit Bumrah",
+        "Test Runs": 159,
+        "ODI Runs": 19,
+        "T20I Runs": 8,
+        "Test Wickets": 159,
+        "ODI Wickets": 149,
+        "T20I Wickets": 89
+    },
+    {
+        "name": "Virender Sehwag",
+        "Test Runs": 8586,
+        "ODI Runs": 8273,
+        "T20I Runs": 394,
+        "Test Wickets": 40,
+        "ODI Wickets": 96,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Rahul Dravid",
+        "Test Runs": 13288,
+        "ODI Runs": 10889,
+        "T20I Runs": 31,
+        "Test Wickets": 1,
+        "ODI Wickets": 4,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Anil Kumble",
+        "Test Runs": 2506,
+        "ODI Runs": 938,
+        "T20I Runs": 0,
+        "Test Wickets": 619,
+        "ODI Wickets": 337,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Harbhajan Singh",
+        "Test Runs": 2224,
+        "ODI Runs": 1237,
+        "T20I Runs": 108,
+        "Test Wickets": 417,
+        "ODI Wickets": 269,
+        "T20I Wickets": 25
+    },
+    {
+        "name": "Ricky Ponting",
+        "Test Runs": 13378,
+        "ODI Runs": 13704,
+        "T20I Runs": 401,
+        "Test Wickets": 5,
+        "ODI Wickets": 3,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Steve Waugh",
+        "Test Runs": 10927,
+        "ODI Runs": 7569,
+        "T20I Runs": 0,
+        "Test Wickets": 92,
+        "ODI Wickets": 195,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Shane Warne",
+        "Test Runs": 3154,
+        "ODI Runs": 1018,
+        "T20I Runs": 0,
+        "Test Wickets": 708,
+        "ODI Wickets": 293,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Glenn McGrath",
+        "Test Runs": 641,
+        "ODI Runs": 115,
+        "T20I Runs": 5,
+        "Test Wickets": 563,
+        "ODI Wickets": 381,
+        "T20I Wickets": 5
+    },
+    {
+        "name": "Adam Gilchrist",
+        "Test Runs": 5570,
+        "ODI Runs": 9619,
+        "T20I Runs": 272,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Brett Lee",
+        "Test Runs": 1451,
+        "ODI Runs": 1176,
+        "T20I Runs": 101,
+        "Test Wickets": 310,
+        "ODI Wickets": 380,
+        "T20I Wickets": 28
+    },
+    {
+        "name": "Matthew Hayden",
+        "Test Runs": 8625,
+        "ODI Runs": 6133,
+        "T20I Runs": 308,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Michael Clarke",
+        "Test Runs": 8643,
+        "ODI Runs": 7981,
+        "T20I Runs": 488,
+        "Test Wickets": 31,
+        "ODI Wickets": 57,
+        "T20I Wickets": 6
+    },
+    {
+        "name": "Steve Smith",
+        "Test Runs": 9685,
+        "ODI Runs": 5356,
+        "T20I Runs": 1094,
+        "Test Wickets": 19,
+        "ODI Wickets": 28,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "David Warner",
+        "Test Runs": 8786,
+        "ODI Runs": 6932,
+        "T20I Runs": 3277,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Brian Lara",
+        "Test Runs": 11953,
+        "ODI Runs": 10405,
+        "T20I Runs": 0,
+        "Test Wickets": 0,
+        "ODI Wickets": 4,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Vivian Richards",
+        "Test Runs": 8540,
+        "ODI Runs": 6721,
+        "T20I Runs": 0,
+        "Test Wickets": 32,
+        "ODI Wickets": 118,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Chris Gayle",
+        "Test Runs": 7214,
+        "ODI Runs": 10480,
+        "T20I Runs": 1899,
+        "Test Wickets": 73,
+        "ODI Wickets": 167,
+        "T20I Wickets": 20
+    },
+    {
+        "name": "Courtney Walsh",
+        "Test Runs": 936,
+        "ODI Runs": 321,
+        "T20I Runs": 0,
+        "Test Wickets": 519,
+        "ODI Wickets": 227,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Curtly Ambrose",
+        "Test Runs": 1439,
+        "ODI Runs": 639,
+        "T20I Runs": 0,
+        "Test Wickets": 405,
+        "ODI Wickets": 225,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Malcolm Marshall",
+        "Test Runs": 1810,
+        "ODI Runs": 955,
+        "T20I Runs": 0,
+        "Test Wickets": 376,
+        "ODI Wickets": 157,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Shivnarine Chanderpaul",
+        "Test Runs": 11867,
+        "ODI Runs": 8778,
+        "T20I Runs": 343,
+        "Test Wickets": 9,
+        "ODI Wickets": 14,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Jacques Kallis",
+        "Test Runs": 13289,
+        "ODI Runs": 11579,
+        "T20I Runs": 666,
+        "Test Wickets": 292,
+        "ODI Wickets": 273,
+        "T20I Wickets": 12
+    },
+    {
+        "name": "AB de Villiers",
+        "Test Runs": 8765,
+        "ODI Runs": 9577,
+        "T20I Runs": 1672,
+        "Test Wickets": 2,
+        "ODI Wickets": 7,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Hashim Amla",
+        "Test Runs": 9282,
+        "ODI Runs": 8113,
+        "T20I Runs": 1277,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Dale Steyn",
+        "Test Runs": 1251,
+        "ODI Runs": 365,
+        "T20I Runs": 42,
+        "Test Wickets": 439,
+        "ODI Wickets": 196,
+        "T20I Wickets": 64
+    },
+    {
+        "name": "Graeme Smith",
+        "Test Runs": 9265,
+        "ODI Runs": 6989,
+        "T20I Runs": 982,
+        "Test Wickets": 8,
+        "ODI Wickets": 18,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Makhaya Ntini",
+        "Test Runs": 277,
+        "ODI Runs": 199,
+        "T20I Runs": 5,
+        "Test Wickets": 390,
+        "ODI Wickets": 266,
+        "T20I Wickets": 6
+    },
+    {
+        "name": "Shaun Pollock",
+        "Test Runs": 3781,
+        "ODI Runs": 3519,
+        "T20I Runs": 86,
+        "Test Wickets": 421,
+        "ODI Wickets": 393,
+        "T20I Wickets": 15
+    },
+    {
+        "name": "Kagiso Rabada",
+        "Test Runs": 918,
+        "ODI Runs": 354,
+        "T20I Runs": 169,
+        "Test Wickets": 291,
+        "ODI Wickets": 157,
+        "T20I Wickets": 58
+    },
+    {
+        "name": "Kumar Sangakkara",
+        "Test Runs": 12400,
+        "ODI Runs": 14234,
+        "T20I Runs": 1382,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Mahela Jayawardene",
+        "Test Runs": 11814,
+        "ODI Runs": 12650,
+        "T20I Runs": 1493,
+        "Test Wickets": 6,
+        "ODI Wickets": 8,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Sanath Jayasuriya",
+        "Test Runs": 6973,
+        "ODI Runs": 13430,
+        "T20I Runs": 629,
+        "Test Wickets": 98,
+        "ODI Wickets": 323,
+        "T20I Wickets": 19
+    },
+    {
+        "name": "Muttiah Muralitharan",
+        "Test Runs": 1261,
+        "ODI Runs": 674,
+        "T20I Runs": 0,
+        "Test Wickets": 800,
+        "ODI Wickets": 534,
+        "T20I Wickets": 13
+    },
+    {
+        "name": "Lasith Malinga",
+        "Test Runs": 275,
+        "ODI Runs": 567,
+        "T20I Runs": 136,
+        "Test Wickets": 101,
+        "ODI Wickets": 338,
+        "T20I Wickets": 107
+    },
+    {
+        "name": "Chaminda Vaas",
+        "Test Runs": 3089,
+        "ODI Runs": 2025,
+        "T20I Runs": 33,
+        "Test Wickets": 355,
+        "ODI Wickets": 400,
+        "T20I Wickets": 6
+    },
+    {
+        "name": "Tillakaratne Dilshan",
+        "Test Runs": 5492,
+        "ODI Runs": 10290,
+        "T20I Runs": 1889,
+        "Test Wickets": 39,
+        "ODI Wickets": 106,
+        "T20I Wickets": 9
+    },
+    {
+        "name": "Alastair Cook",
+        "Test Runs": 12472,
+        "ODI Runs": 3204,
+        "T20I Runs": 61,
+        "Test Wickets": 1,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Kevin Pietersen",
+        "Test Runs": 8181,
+        "ODI Runs": 4440,
+        "T20I Runs": 1176,
+        "Test Wickets": 10,
+        "ODI Wickets": 7,
+        "T20I Wickets": 1
+    },
+    {
+        "name": "Joe Root",
+        "Test Runs": 11736,
+        "ODI Runs": 6522,
+        "T20I Runs": 893,
+        "Test Wickets": 60,
+        "ODI Wickets": 26,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "James Anderson",
+        "Test Runs": 1339,
+        "ODI Runs": 273,
+        "T20I Runs": 20,
+        "Test Wickets": 700,
+        "ODI Wickets": 269,
+        "T20I Wickets": 18
+    },
+    {
+        "name": "Stuart Broad",
+        "Test Runs": 3662,
+        "ODI Runs": 529,
+        "T20I Runs": 118,
+        "Test Wickets": 604,
+        "ODI Wickets": 178,
+        "T20I Wickets": 65
+    },
+    {
+        "name": "Eoin Morgan",
+        "Test Runs": 700,
+        "ODI Runs": 7701,
+        "T20I Runs": 2458,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Ian Botham",
+        "Test Runs": 5200,
+        "ODI Runs": 2113,
+        "T20I Runs": 0,
+        "Test Wickets": 383,
+        "ODI Wickets": 145,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Kane Williamson",
+        "Test Runs": 8743,
+        "ODI Runs": 6810,
+        "T20I Runs": 2628,
+        "Test Wickets": 30,
+        "ODI Wickets": 37,
+        "T20I Wickets": 6
+    },
+    {
+        "name": "Ross Taylor",
+        "Test Runs": 7683,
+        "ODI Runs": 8607,
+        "T20I Runs": 1909,
+        "Test Wickets": 3,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Brendon McCullum",
+        "Test Runs": 6453,
+        "ODI Runs": 6083,
+        "T20I Runs": 2140,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Daniel Vettori",
+        "Test Runs": 4531,
+        "ODI Runs": 2253,
+        "T20I Runs": 205,
+        "Test Wickets": 362,
+        "ODI Wickets": 305,
+        "T20I Wickets": 38
+    },
+    {
+        "name": "Trent Boult",
+        "Test Runs": 759,
+        "ODI Runs": 190,
+        "T20I Runs": 28,
+        "Test Wickets": 317,
+        "ODI Wickets": 211,
+        "T20I Wickets": 74
+    },
+    {
+        "name": "Richard Hadlee",
+        "Test Runs": 3124,
+        "ODI Runs": 1751,
+        "T20I Runs": 0,
+        "Test Wickets": 431,
+        "ODI Wickets": 158,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Tim Southee",
+        "Test Runs": 2049,
+        "ODI Runs": 729,
+        "T20I Runs": 286,
+        "Test Wickets": 376,
+        "ODI Wickets": 221,
+        "T20I Wickets": 157
+    },
+    {
+        "name": "Imran Khan",
+        "Test Runs": 3807,
+        "ODI Runs": 3323,
+        "T20I Runs": 0,
+        "Test Wickets": 362,
+        "ODI Wickets": 182,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Wasim Akram",
+        "Test Runs": 2898,
+        "ODI Runs": 3717,
+        "T20I Runs": 0,
+        "Test Wickets": 414,
+        "ODI Wickets": 502,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Waqar Younis",
+        "Test Runs": 1010,
+        "ODI Runs": 969,
+        "T20I Runs": 0,
+        "Test Wickets": 373,
+        "ODI Wickets": 416,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Inzamam-ul-Haq",
+        "Test Runs": 8830,
+        "ODI Runs": 11739,
+        "T20I Runs": 11,
+        "Test Wickets": 0,
+        "ODI Wickets": 3,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Javed Miandad",
+        "Test Runs": 8832,
+        "ODI Runs": 7381,
+        "T20I Runs": 0,
+        "Test Wickets": 17,
+        "ODI Wickets": 7,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Shoaib Akhtar",
+        "Test Runs": 544,
+        "ODI Runs": 394,
+        "T20I Runs": 21,
+        "Test Wickets": 178,
+        "ODI Wickets": 247,
+        "T20I Wickets": 19
+    },
+    {
+        "name": "Younis Khan",
+        "Test Runs": 10099,
+        "ODI Runs": 7249,
+        "T20I Runs": 442,
+        "Test Wickets": 9,
+        "ODI Wickets": 3,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Babar Azam",
+        "Test Runs": 3898,
+        "ODI Runs": 5729,
+        "T20I Runs": 4145,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Shahid Afridi",
+        "Test Runs": 1716,
+        "ODI Runs": 8064,
+        "T20I Runs": 1416,
+        "Test Wickets": 48,
+        "ODI Wickets": 395,
+        "T20I Wickets": 98
+    },
+    {
+        "name": "Shaheen Afridi",
+        "Test Runs": 178,
+        "ODI Runs": 147,
+        "T20I Runs": 139,
+        "Test Wickets": 113,
+        "ODI Wickets": 104,
+        "T20I Wickets": 73
+    },
+    {
+        "name": "Saeed Anwar",
+        "Test Runs": 4052,
+        "ODI Runs": 8824,
+        "T20I Runs": 0,
+        "Test Wickets": 0,
+        "ODI Wickets": 6,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Shakib Al Hasan",
+        "Test Runs": 4505,
+        "ODI Runs": 7570,
+        "T20I Runs": 2551,
+        "Test Wickets": 237,
+        "ODI Wickets": 317,
+        "T20I Wickets": 149
+    },
+    {
+        "name": "Tamim Iqbal",
+        "Test Runs": 5134,
+        "ODI Runs": 8357,
+        "T20I Runs": 1758,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Mushfiqur Rahim",
+        "Test Runs": 5676,
+        "ODI Runs": 7792,
+        "T20I Runs": 1500,
+        "Test Wickets": 0,
+        "ODI Wickets": 0,
+        "T20I Wickets": 0
+    },
+    {
+        "name": "Mahmudullah",
+        "Test Runs": 2914,
+        "ODI Runs": 5386,
+        "T20I Runs": 2394,
+        "Test Wickets": 43,
+        "ODI Wickets": 82,
+        "T20I Wickets": 39
+    },
+    {
+        "name": "Rashid Khan",
+        "Test Runs": 106,
+        "ODI Runs": 1269,
+        "T20I Runs": 420,
+        "Test Wickets": 34,
+        "ODI Wickets": 183,
+        "T20I Wickets": 138
+    },
+    {
+        "name": "Mohammad Nabi",
+        "Test Runs": 33,
+        "ODI Runs": 3222,
+        "T20I Runs": 1967,
+        "Test Wickets": 8,
+        "ODI Wickets": 163,
+        "T20I Wickets": 90
+    }
+]

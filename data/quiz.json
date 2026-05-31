@@ -1,0 +1,5204 @@
+{
+  "categories": {
+    "Cricket": [
+      {
+        "q": "Who has the record for the highest individual score in Test cricket?",
+        "a": "Brian Lara",
+        "v": [
+          "lara",
+          "brian lara"
+        ]
+      },
+      {
+        "q": "Which country won the first ever Cricket World Cup in 1975?",
+        "a": "West Indies",
+        "v": [
+          "west indies",
+          "wi"
+        ]
+      },
+      {
+        "q": "Who is known as the 'God of Cricket'?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar",
+          "master blaster"
+        ]
+      },
+      {
+        "q": "Which bowler has taken the most wickets in Test history?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan",
+          "muttiah muralitharan"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Indian team that won the 2011 World Cup?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni",
+          "msd",
+          "mahi"
+        ]
+      },
+      {
+        "q": "Which stadium is known as the 'Home of Cricket'?",
+        "a": "Lords",
+        "v": [
+          "lords",
+          "lord's"
+        ]
+      },
+      {
+        "q": "What is the maximum number of players in a cricket team on the field?",
+        "a": "11",
+        "v": [
+          "11",
+          "eleven"
+        ]
+      },
+      {
+        "q": "Who hit 6 sixes in an over in the 2007 T20 World Cup?",
+        "a": "Yuvraj Singh",
+        "v": [
+          "yuvraj",
+          "yuvi",
+          "yuvraj singh"
+        ]
+      },
+      {
+        "q": "Which team has won the most IPL titles?",
+        "a": "Mumbai Indians",
+        "v": [
+          "mi",
+          "mumbai indians",
+          "mumbai"
+        ]
+      },
+      {
+        "q": "Who is the only player to score 100 international centuries?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "What does LBW stand for in cricket?",
+        "a": "Leg Before Wicket",
+        "v": [
+          "leg before wicket",
+          "lbw"
+        ]
+      },
+      {
+        "q": "Which player is famously known as 'King Kohli'?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli",
+          "king kohli"
+        ]
+      },
+      {
+        "q": "In which city is the Narendra Modi Stadium located?",
+        "a": "Ahmedabad",
+        "v": [
+          "ahmedabad",
+          "amdavad"
+        ]
+      },
+      {
+        "q": "Who was the first cricketer to be given out by a third umpire?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "What is the length of a cricket pitch in yards?",
+        "a": "22",
+        "v": [
+          "22",
+          "22 yards"
+        ]
+      },
+      {
+        "q": "Who is the fastest bowler to reach 100 wickets in IPL history?",
+        "a": "Kagiso Rabada",
+        "v": [
+          "rabada",
+          "kagiso rabada"
+        ]
+      },
+      {
+        "q": "Which player has the most runs in T20 Internationals?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who is the only player to take 10 wickets in an innings for India?",
+        "a": "Anil Kumble",
+        "v": [
+          "kumble",
+          "anil kumble"
+        ]
+      },
+      {
+        "q": "Which cricket ground is known as 'Gabba'?",
+        "a": "Brisbane Cricket Ground",
+        "v": [
+          "gabba",
+          "brisbane"
+        ]
+      },
+      {
+        "q": "Who won the ICC Men's T20 World Cup 2022?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 1983 World Cup Final?",
+        "a": "Mohinder Amarnath",
+        "v": [
+          "mohinder amarnath",
+          "amarnath"
+        ]
+      },
+      {
+        "q": "Which batsman scored the first ever double century in ODIs?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "Which country did AB de Villiers play for?",
+        "a": "South Africa",
+        "v": [
+          "south africa",
+          "rsa",
+          "sa"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Indian Test team?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit sharma",
+          "rohit"
+        ]
+      },
+      {
+        "q": "What is the name of the trophy played for between Australia and England?",
+        "a": "The Ashes",
+        "v": [
+          "ashes",
+          "the ashes"
+        ]
+      },
+      {
+        "q": "Which player has the highest individual score in ODIs (264 runs)?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma",
+          "hitman"
+        ]
+      },
+      {
+        "q": "Which country is known as the 'Kiwis' in cricket?",
+        "a": "New Zealand",
+        "v": [
+          "new zealand",
+          "nz"
+        ]
+      },
+      {
+        "q": "Who was the winner of the first IPL in 2008?",
+        "a": "Rajasthan Royals",
+        "v": [
+          "rr",
+          "rajasthan royals",
+          "rajasthan"
+        ]
+      },
+      {
+        "q": "Which bowler is nicknamed 'The Rawalpindi Express'?",
+        "a": "Shoaib Akhtar",
+        "v": [
+          "shoaib akhtar",
+          "akhtar"
+        ]
+      },
+      {
+        "q": "Who is the only captain to win all three ICC trophies (T20, ODI, Champions Trophy)?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni",
+          "msd"
+        ]
+      },
+      {
+        "q": "Which player hit the fastest century in ODI history (31 balls)?",
+        "a": "AB de Villiers",
+        "v": [
+          "ab de villiers",
+          "abd",
+          "de villiers"
+        ]
+      },
+      {
+        "q": "Which country did Kumar Sangakkara play for?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to take a hat-trick in Test cricket?",
+        "a": "Harbhajan Singh",
+        "v": [
+          "harbhajan",
+          "harbhajan singh",
+          "turbanator"
+        ]
+      },
+      {
+        "q": "Who is the mentor of Kolkata Knight Riders for IPL 2024?",
+        "a": "Gautam Gambhir",
+        "v": [
+          "gautam gambhir",
+          "gambhir"
+        ]
+      },
+      {
+        "q": "Which stadium in India is the second largest after Narendra Modi Stadium?",
+        "a": "Eden Gardens",
+        "v": [
+          "eden gardens",
+          "eden"
+        ]
+      },
+      {
+        "q": "Which cricketer is nicknamed 'Punter'?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ricky ponting",
+          "ponting",
+          "punter"
+        ]
+      },
+      {
+        "q": "Who has the most centuries as a captain in all formats?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ricky ponting",
+          "ponting"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Proteas'?",
+        "a": "South Africa",
+        "v": [
+          "south africa",
+          "sa"
+        ]
+      },
+      {
+        "q": "Who bowled the 'Ball of the Century' to Mike Gatting?",
+        "a": "Shane Warne",
+        "v": [
+          "shane warne",
+          "warne"
+        ]
+      },
+      {
+        "q": "Which country did Chris Gayle represent?",
+        "a": "West Indies",
+        "v": [
+          "west indies",
+          "gayle"
+        ]
+      },
+      {
+        "q": "Who is the leading run-scorer in World Cup history?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "Which player has played the most international matches?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "In which city is the M. Chinnaswamy Stadium?",
+        "a": "Bengaluru",
+        "v": [
+          "bengaluru",
+          "bangalore"
+        ]
+      },
+      {
+        "q": "Which team is nicknamed 'The Tigers'?",
+        "a": "Bangladesh",
+        "v": [
+          "bangladesh",
+          "tigers"
+        ]
+      },
+      {
+        "q": "Who won the first T20 World Cup in 2007?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Which female cricketer is the leading run-scorer in Women's ODIs?",
+        "a": "Mithali Raj",
+        "v": [
+          "mithali raj",
+          "mithali"
+        ]
+      },
+      {
+        "q": "Who is the pink ball test highest wicket taker for India?",
+        "a": "Axar Patel",
+        "v": [
+          "axar",
+          "axar patel"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Lions'?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl"
+        ]
+      },
+      {
+        "q": "Who is the head coach of the Indian Men's Cricket Team (as of July 2024)?",
+        "a": "Gautam Gambhir",
+        "v": [
+          "gambhir",
+          "gautam gambhir",
+          "gg"
+        ]
+      },
+      {
+        "q": "Which cricketer is known as 'The Wall'?",
+        "a": "Rahul Dravid",
+        "v": [
+          "rahul dravid",
+          "dravid",
+          "the wall"
+        ]
+      },
+      {
+        "q": "Who won the ICC Test Championship 2023?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Which Indian bowler is known as 'Smiling Assassin'?",
+        "a": "Lakshmipathy Balaji",
+        "v": [
+          "balaji",
+          "lakshmipathy balaji",
+          "l balaji"
+        ]
+      },
+      {
+        "q": "Who is the only player to have scored two triple centuries for India?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Which country did Brendon McCullum play for?",
+        "a": "New Zealand",
+        "v": [
+          "new zealand",
+          "nz",
+          "mccullum"
+        ]
+      },
+      {
+        "q": "Who was the captain of the 1983 World Cup winning team?",
+        "a": "Kapil Dev",
+        "v": [
+          "kapil dev",
+          "kapil"
+        ]
+      },
+      {
+        "q": "Which cricketer is called 'Haryana Hurricane'?",
+        "a": "Kapil Dev",
+        "v": [
+          "kapil dev",
+          "kapil"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker in IPL history currently?",
+        "a": "Yuzvendra Chahal",
+        "v": [
+          "chahal",
+          "yuzvendra chahal"
+        ]
+      },
+      {
+        "q": "Which country did Jacques Kallis represent?",
+        "a": "South Africa",
+        "v": [
+          "south africa",
+          "sa",
+          "kallis"
+        ]
+      },
+      {
+        "q": "Which delivery is also known as the 'wrong-un'?",
+        "a": "Googly",
+        "v": [
+          "googly",
+          "wrong un"
+        ]
+      },
+      {
+        "q": "Which type of bowler bowls a 'Chinaman'?",
+        "a": "Left-arm wrist spin",
+        "v": [
+          "left arm wrist spin",
+          "chinaman",
+          "left arm spin"
+        ]
+      },
+      {
+        "q": "Who is the first cricketer to take a hat-trick in ODI history?",
+        "a": "Jalal-ud-Din",
+        "v": [
+          "jalal-ud-din",
+          "jalaluddin"
+        ]
+      },
+      {
+        "q": "In which country was the first ever T20 match played?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who won the Purple Cap in IPL 2023?",
+        "a": "Mohammed Shami",
+        "v": [
+          "shami",
+          "mohammed shami"
+        ]
+      },
+      {
+        "q": "Who won the Orange Cap in IPL 2023?",
+        "a": "Shubman Gill",
+        "v": [
+          "shubman gill",
+          "gill"
+        ]
+      },
+      {
+        "q": "Which country did Lasith Malinga play for?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl",
+          "malinga"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Bending Bullets' bowler?",
+        "a": "Wasim Akram",
+        "v": [
+          "wasim akram",
+          "akram"
+        ]
+      },
+      {
+        "q": "Which country did Shane Warne play for?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus",
+          "warne"
+        ]
+      },
+      {
+        "q": "Who has scored the most runs in a single IPL season?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "What is the maximum number of people allow on field during powerplay in ODIs?",
+        "a": "2",
+        "v": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "q": "Which player is called 'Universe Boss'?",
+        "a": "Chris Gayle",
+        "v": [
+          "chris gayle",
+          "gayle",
+          "universe boss"
+        ]
+      },
+      {
+        "q": "Who is the leading wicket-taker in T20 Internationals currently?",
+        "a": "Rashid Khan",
+        "v": [
+          "rashid",
+          "rashid khan",
+          "rashid khan arman"
+        ]
+      },
+      {
+        "q": "In which city is the Wankhede Stadium?",
+        "a": "Mumbai",
+        "v": [
+          "mumbai",
+          "bombay"
+        ]
+      },
+      {
+        "q": "Who is the first female to commentate on cricket matches in India?",
+        "a": "Anjum Chopra",
+        "v": [
+          "anjum chopra",
+          "anjum"
+        ]
+      },
+      {
+        "q": "Which player is nicknamed 'Lala'?",
+        "a": "Shahid Afridi",
+        "v": [
+          "afridi",
+          "shahid afridi",
+          "lala"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 8000 runs in ODIs?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which country did Muttiah Muralitharan play for?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl",
+          "murali"
+        ]
+      },
+      {
+        "q": "Who hit the longest six in cricket history (158m)?",
+        "a": "Shahid Afridi",
+        "v": [
+          "afridi",
+          "shahid afridi"
+        ]
+      },
+      {
+        "q": "Which stadium is also known as 'The Chepauk'?",
+        "a": "M. A. Chidambaram Stadium",
+        "v": [
+          "chepauk",
+          "chidambaram"
+        ]
+      },
+      {
+        "q": "Who is the lead run scorer in Women's T20 Internationals?",
+        "a": "Suzie Bates",
+        "v": [
+          "suzie bates",
+          "suzie"
+        ]
+      },
+      {
+        "q": "Which country did Glenn McGrath play for?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus",
+          "mcgrath"
+        ]
+      },
+      {
+        "q": "Who won the Champions Trophy 2017?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Little Master'?",
+        "a": "Sunil Gavaskar",
+        "v": [
+          "gavaskar",
+          "sunil gavaskar",
+          "little master"
+        ]
+      },
+      {
+        "q": "Which player was the first to hit six sixes in an over in first-class cricket?",
+        "a": "Garfield Sobers",
+        "v": [
+          "sobers",
+          "garfield sobers"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Bajans'?",
+        "a": "Barbados",
+        "v": [
+          "barbados"
+        ]
+      },
+      {
+        "q": "Who won the ICC Champions Trophy 2013?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the South African Test team?",
+        "a": "Temba Bavuma",
+        "v": [
+          "bavuma",
+          "temba bavuma"
+        ]
+      },
+      {
+        "q": "Which bowler hit the most sixes in Test cricket history?",
+        "a": "Ben Stokes",
+        "v": [
+          "ben stokes",
+          "stokes"
+        ]
+      },
+      {
+        "q": "Who was the captain of Pakistan T20 team in 2024?",
+        "a": "Babar Azam",
+        "v": [
+          "babar",
+          "babar azam"
+        ]
+      },
+      {
+        "q": "Which team did MS Dhoni play for in IPL 2016 and 2017?",
+        "a": "Rising Pune Supergiant",
+        "v": [
+          "rps",
+          "rising pune supergiant"
+        ]
+      },
+      {
+        "q": "Which team was banned from IPL for 2 years (2016-2017)?",
+        "a": "Chennai Super Kings",
+        "v": [
+          "csk",
+          "chennai super kings",
+          "chennai"
+        ]
+      },
+      {
+        "q": "Who is called 'Mr. 360'?",
+        "a": "AB de Villiers",
+        "v": [
+          "abd",
+          "ab de villiers",
+          "mr 360"
+        ]
+      },
+      {
+        "q": "Which country won the Under-19 World Cup 2024?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who is the highest wicket-taker for India in ODI World Cups?",
+        "a": "Mohammed Shami",
+        "v": [
+          "shami",
+          "mohammed shami"
+        ]
+      },
+      {
+        "q": "Who won the IPL 2022 title?",
+        "a": "Gujarat Titans",
+        "v": [
+          "gt",
+          "gujarat titans"
+        ]
+      },
+      {
+        "q": "Who is the captain of Chennai Super Kings (2024)?",
+        "a": "Ruturaj Gaikwad",
+        "v": [
+          "ruturaj gaikwad",
+          "ruturaj"
+        ]
+      },
+      {
+        "q": "Which city is the home of Rajasthan Royals?",
+        "a": "Jaipur",
+        "v": [
+          "jaipur"
+        ]
+      },
+      {
+        "q": "Who is the highest run scorer in the 2011 World Cup?",
+        "a": "Tillakaratne Dilshan",
+        "v": [
+          "dilshan",
+          "tillakaratne dilshan"
+        ]
+      },
+      {
+        "q": "Which player is called 'Gabbar'?",
+        "a": "Shikhar Dhawan",
+        "v": [
+          "shikhar dhawan",
+          "dhawan",
+          "gabbar"
+        ]
+      },
+      {
+        "q": "Who is the highest run-scorer in IPL 2024?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who has the most runs in a single World Cup (673 runs in 2003)?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "Who won the T20 World Cup 2024?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind",
+          "bharat"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in T20 WC 2024?",
+        "a": "Jasprit Bumrah",
+        "v": [
+          "bumrah",
+          "jasprit bumrah"
+        ]
+      },
+      {
+        "q": "Who hit the winning runs for India in T20 WC 2024 final?",
+        "a": "Hardik Pandya",
+        "v": [
+          "hardik",
+          "pandya",
+          "hardik pandya"
+        ]
+      },
+      {
+        "q": "Which team won the IPL 2024 title?",
+        "a": "Kolkata Knight Riders",
+        "v": [
+          "kkr",
+          "kolkata knight riders",
+          "kolkata"
+        ]
+      },
+      {
+        "q": "Who won the Purple Cap in IPL 2024?",
+        "a": "Harshal Patel",
+        "v": [
+          "harshal",
+          "harshal patel"
+        ]
+      },
+      {
+        "q": "Who won the Orange Cap in IPL 2024?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to score a century in IPL history?",
+        "a": "Manish Pandey",
+        "v": [
+          "manish pandey",
+          "manish"
+        ]
+      },
+      {
+        "q": "Which bowler has the best figures in IPL history (6/12)?",
+        "a": "Alzarri Joseph",
+        "v": [
+          "alzarri joseph",
+          "joseph"
+        ]
+      },
+      {
+        "q": "Who is the only player to win 6 IPL titles as a player?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "In which year did the IPL start?",
+        "a": "2008",
+        "v": [
+          "2008"
+        ]
+      },
+      {
+        "q": "What is the highest ever team score in IPL (287/3)?",
+        "a": "Sunrisers Hyderabad",
+        "v": [
+          "srh",
+          "sunrisers hyderabad"
+        ]
+      },
+      {
+        "q": "Who hit the fastest 50 in IPL history (13 balls)?",
+        "a": "Yashasvi Jaiswal",
+        "v": [
+          "jaiswal",
+          "yashasvi jaiswal"
+        ]
+      },
+      {
+        "q": "Who was the captain of Mumbai Indians in 2024?",
+        "a": "Hardik Pandya",
+        "v": [
+          "hardik",
+          "pandya",
+          "hardik pandya"
+        ]
+      },
+      {
+        "q": "Who was the first captain to win an IPL title?",
+        "a": "Shane Warne",
+        "v": [
+          "warne",
+          "shane warne"
+        ]
+      },
+      {
+        "q": "Which team has the record for the lowest score in IPL (49 all out)?",
+        "a": "Royal Challengers Bangalore",
+        "v": [
+          "rcb",
+          "royal challengers bangalore"
+        ]
+      },
+      {
+        "q": "Who has scored the most number of centuries in IPL history?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which bowler has bowled the most maiden overs in IPL?",
+        "a": "Praveen Kumar",
+        "v": [
+          "praveen kumar",
+          "praveen"
+        ]
+      },
+      {
+        "q": "Who hit the most sixes in IPL history?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Who is the only player to win 3 consecutive Man of the Match awards in IPL finals?",
+        "a": "None",
+        "v": [
+          "none"
+        ]
+      },
+      {
+        "q": "Who was the captain of KKR when they won their first title in 2012?",
+        "a": "Gautam Gambhir",
+        "v": [
+          "gambhir",
+          "gautam gambhir"
+        ]
+      },
+      {
+        "q": "Which country hosted the 2007 T20 World Cup?",
+        "a": "South Africa",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Who is the only player to score two centuries in a single T20 World Cup edition?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Who took the catch of David Miller in the T20 WC 2024 Final?",
+        "a": "Suryakumar Yadav",
+        "v": [
+          "sky",
+          "surya",
+          "suryakumar yadav"
+        ]
+      },
+      {
+        "q": "Who won the first ever Under-19 T20 Women's World Cup?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who is the fastest woman to score a century in T20Is?",
+        "a": "Sophie Devine",
+        "v": [
+          "sophie devine",
+          "devine"
+        ]
+      },
+      {
+        "q": "Which country won the most ICC Women's T20 World Cups?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who was the first player to score 10,000 runs in Test cricket?",
+        "a": "Sunil Gavaskar",
+        "v": [
+          "gavaskar",
+          "sunil gavaskar"
+        ]
+      },
+      {
+        "q": "Which bowler has the record for most wickets in a single Test match (19)?",
+        "a": "Jim Laker",
+        "v": [
+          "jim laker",
+          "laker"
+        ]
+      },
+      {
+        "q": "Who is the only player to score 400 runs in a single Test innings?",
+        "a": "Brian Lara",
+        "v": [
+          "lara",
+          "brian lara"
+        ]
+      },
+      {
+        "q": "Which cricket ground has the largest seating capacity in the world?",
+        "a": "Narendra Modi Stadium",
+        "v": [
+          "narendra modi stadium",
+          "motera"
+        ]
+      },
+      {
+        "q": "What is the nickname of the Australian national cricket team?",
+        "a": "Baggy Greens",
+        "v": [
+          "baggy greens",
+          "australia"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to score a triple century in Tests?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Which country is famously known as the 'Barmy Army' supporters?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who hit the first ever six in IPL history?",
+        "a": "Brendon McCullum",
+        "v": [
+          "mccullum",
+          "brendon mccullum"
+        ]
+      },
+      {
+        "q": "Which player has the most catches in IPL history as a fielder?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Nawab of Najafgarh'?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Which city is the home of the Sunrisers Hyderabad?",
+        "a": "Hyderabad",
+        "v": [
+          "hyderabad"
+        ]
+      },
+      {
+        "q": "Who was the leading run scorer in the 2023 ODI World Cup?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which country won the 2023 ODI World Cup?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2023 ODI World Cup Final?",
+        "a": "Travis Head",
+        "v": [
+          "head",
+          "travis head"
+        ]
+      },
+      {
+        "q": "Which Indian bowler took 7 wickets in the 2023 World Cup semi-final against NZ?",
+        "a": "Mohammed Shami",
+        "v": [
+          "shami",
+          "mohammed shami"
+        ]
+      },
+      {
+        "q": "Who is the fastest bowler to 50 wickets in ODI World Cup history?",
+        "a": "Mitchell Starc",
+        "v": [
+          "starc",
+          "mitchell starc"
+        ]
+      },
+      {
+        "q": "In which city was the 2023 ODI World Cup final played?",
+        "a": "Ahmedabad",
+        "v": [
+          "ahmedabad"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Delhi Capitals in 2024?",
+        "a": "Rishabh Pant",
+        "v": [
+          "pant",
+          "rishabh pant"
+        ]
+      },
+      {
+        "q": "Which team won the first ever Champions League T20?",
+        "a": "New South Wales Blues",
+        "v": [
+          "nsw",
+          "new south wales"
+        ]
+      },
+      {
+        "q": "Who is the only player to score 3 double centuries in ODIs?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Which country did Sanath Jayasuriya represent?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl",
+          "jayasuriya"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Sultan of Swing'?",
+        "a": "Wasim Akram",
+        "v": [
+          "wasim akram",
+          "akram"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 10,000 runs in ODIs?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which bowler has the most hat-tricks in IPL history (3)?",
+        "a": "Amit Mishra",
+        "v": [
+          "amit mishra",
+          "mishra"
+        ]
+      },
+      {
+        "q": "Who hit the most sixes in a single ODI innings (17)?",
+        "a": "Eoin Morgan",
+        "v": [
+          "morgan",
+          "eoin morgan"
+        ]
+      },
+      {
+        "q": "Which country is known as the 'Chevrons'?",
+        "a": "Zimbabwe",
+        "v": [
+          "zimbabwe",
+          "zim"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Australian Test team?",
+        "a": "Pat Cummins",
+        "v": [
+          "cummins",
+          "pat cummins"
+        ]
+      },
+      {
+        "q": "Which Indian player is nicknamed 'Jaddu'?",
+        "a": "Ravindra Jadeja",
+        "v": [
+          "jadeja",
+          "ravindra jadeja",
+          "jaddu"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2011 World Cup Final?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Which country has won the most ODI World Cups?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who is the only player to have taken 10 wickets in a Test innings twice?",
+        "a": "None",
+        "v": [
+          "none"
+        ]
+      },
+      {
+        "q": "Which cricketer is called 'Jammy'?",
+        "a": "Rahul Dravid",
+        "v": [
+          "rahul dravid",
+          "dravid",
+          "jammy"
+        ]
+      },
+      {
+        "q": "Who is the leading run scorer in Test cricket history?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "sachin tendulkar"
+        ]
+      },
+      {
+        "q": "Which country hosted the first ever Cricket World Cup?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who hit the first ever century in T20 Internationals?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Lucknow Super Giants in 2024?",
+        "a": "KL Rahul",
+        "v": [
+          "kl rahul",
+          "rahul"
+        ]
+      },
+      {
+        "q": "Which bowler is nicknamed 'The Steyn Gun'?",
+        "a": "Dale Steyn",
+        "v": [
+          "steyn",
+          "dale steyn"
+        ]
+      },
+      {
+        "q": "Who is the only player to score a century and take 5 wickets in the same ODI?",
+        "a": "Viv Richards",
+        "v": [
+          "viv richards",
+          "richards"
+        ]
+      },
+      {
+        "q": "Which country won the first ever Women's World Cup?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Indian Women's T20 team?",
+        "a": "Harmanpreet Kaur",
+        "v": [
+          "harmanpreet",
+          "harmanpreet kaur"
+        ]
+      },
+      {
+        "q": "Which cricket ground is known as 'The Oval'?",
+        "a": "Kennington Oval",
+        "v": [
+          "the oval",
+          "oval"
+        ]
+      },
+      {
+        "q": "Who hit more than 100 international half-centuries?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which player is called 'Captain Cool'?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni",
+          "captain cool"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to 100 Test wickets for India?",
+        "a": "Ravichandran Ashwin",
+        "v": [
+          "ashwin",
+          "r ashwin"
+        ]
+      },
+      {
+        "q": "Which country did Muttiah Muralitharan represent?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl"
+        ]
+      },
+      {
+        "q": "What is the nickname of the England national cricket team?",
+        "a": "Three Lions",
+        "v": [
+          "three lions",
+          "england"
+        ]
+      },
+      {
+        "q": "Who won the first ever Test match in 1877?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Bangladesh Test team?",
+        "a": "Najmul Hossain Shanto",
+        "v": [
+          "shanto",
+          "najmul hossain shanto"
+        ]
+      },
+      {
+        "q": "Which bowler has the most wickets in World Cup history?",
+        "a": "Glenn McGrath",
+        "v": [
+          "mcgrath",
+          "glenn mcgrath"
+        ]
+      },
+      {
+        "q": "Who hit the fastest 50 in T20 Internationals (9 balls)?",
+        "a": "Dipendra Singh Airee",
+        "v": [
+          "dipendra",
+          "airee"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Windies'?",
+        "a": "West Indies",
+        "v": [
+          "west indies",
+          "wi"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Afghanistan T20 team?",
+        "a": "Rashid Khan",
+        "v": [
+          "rashid",
+          "rashid khan"
+        ]
+      },
+      {
+        "q": "Which player is called 'Boom Boom'?",
+        "a": "Shahid Afridi",
+        "v": [
+          "afridi",
+          "shahid afridi",
+          "boom boom"
+        ]
+      },
+      {
+        "q": "Who is the leading run scorer for India in T20 Internationals?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which team won the first ever IPL match?",
+        "a": "Kolkata Knight Riders",
+        "v": [
+          "kkr",
+          "kolkata knight riders"
+        ]
+      },
+      {
+        "q": "Who was the mentor of LSG in IPL 2024?",
+        "a": "Justin Langer",
+        "v": [
+          "langer",
+          "justin langer"
+        ]
+      },
+      {
+        "q": "Which Indian city is the home of the Eden Gardens?",
+        "a": "Kolkata",
+        "v": [
+          "kolkata",
+          "calcutta"
+        ]
+      },
+      {
+        "q": "Who is the leading wicket-taker in Test cricket for India?",
+        "a": "Anil Kumble",
+        "v": [
+          "kumble",
+          "anil kumble"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2007 T20 World Cup Final?",
+        "a": "Irfan Pathan",
+        "v": [
+          "irfan",
+          "irfan pathan"
+        ]
+      },
+      {
+        "q": "Which field position is located behind the wicket keeper?",
+        "a": "Slips",
+        "v": [
+          "slips",
+          "slip"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Sri Lankan ODI team?",
+        "a": "Charith Asalanka",
+        "v": [
+          "asalanka",
+          "charith asalanka"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Black Caps'?",
+        "a": "New Zealand",
+        "v": [
+          "new zealand",
+          "nz",
+          "black caps"
+        ]
+      },
+      {
+        "q": "Who won the most Test matches as a captain for India?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which stadium is famously called 'The Bullring'?",
+        "a": "Wanderers Stadium",
+        "v": [
+          "wanderers",
+          "bullring"
+        ]
+      },
+      {
+        "q": "Who is the lead run scorer in the history of the IPL?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which player hit the first ever double century in Test cricket for India?",
+        "a": "Polly Umrigar",
+        "v": [
+          "umrigar",
+          "polly umrigar"
+        ]
+      },
+      {
+        "q": "Who is the legendary South African all-rounder with over 10,000 runs and 250 wickets in both Tests and ODIs?",
+        "a": "Jacques Kallis",
+        "v": [
+          "kallis",
+          "jacques kallis",
+          "jakes kallis"
+        ]
+      },
+      {
+        "q": "In which year did India win the ICC Champions Trophy last (Jointly)?",
+        "a": "2002",
+        "v": [
+          "2002"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Punjab Kings in 2024?",
+        "a": "Shikhar Dhawan",
+        "v": [
+          "dhawan",
+          "shikhar dhawan"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Men in Green'?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who hit 4 sixes in the final over of the 2016 T20 World Cup?",
+        "a": "Carlos Brathwaite",
+        "v": [
+          "brathwaite",
+          "carlos brathwaite"
+        ]
+      },
+      {
+        "q": "Which Indian bowler is known as 'Turbo'?",
+        "a": "Harbhajan Singh",
+        "v": [
+          "harbhajan",
+          "harbhajan singh"
+        ]
+      },
+      {
+        "q": "Who is the most successful captain in ODI history (by win percentage)?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Which country hosted the 2023 ODI World Cup?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who won the first ever Asia Cup in 1984?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Hitman'?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma",
+          "hitman"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in the 2011 World Cup?",
+        "a": "Yuvraj Singh",
+        "v": [
+          "yuvi",
+          "yuvraj singh"
+        ]
+      },
+      {
+        "q": "Which team has the record for the highest team total in ODIs (498/4)?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who holds the record for the most ducks (0s) in international cricket?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan"
+        ]
+      },
+      {
+        "q": "Which country won the most ICC Champions Trophies?",
+        "a": "India and Australia",
+        "v": [
+          "india",
+          "australia"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for South Africa in Tests?",
+        "a": "Dale Steyn",
+        "v": [
+          "steyn",
+          "dale steyn"
+        ]
+      },
+      {
+        "q": "Which player is nicknamed 'Baz'?",
+        "a": "Brendon McCullum",
+        "v": [
+          "baz",
+          "mccullum"
+        ]
+      },
+      {
+        "q": "What is the name of the stadium in Dharamshala?",
+        "a": "HPCA Stadium",
+        "v": [
+          "hpca",
+          "dharamshala"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the West Indies T20 team?",
+        "a": "Rovman Powell",
+        "v": [
+          "powell",
+          "rovman powell"
+        ]
+      },
+      {
+        "q": "Which player hit the fastest century for India in ODIs?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Australian team in the 2003 World Cup?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Blue Tigers'?",
+        "a": "Afghanistan",
+        "v": [
+          "afghanistan",
+          "afg"
+        ]
+      },
+      {
+        "q": "Who is the only player to score 1000 runs in a single IPL season?",
+        "a": "None",
+        "v": [
+          "none"
+        ]
+      },
+      {
+        "q": "Which player hit the winning six for India in the 2011 World Cup?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Who is the only batsman to score 5 centuries in a single ODI World Cup?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Which cricket ground is known as 'The Bullring'?",
+        "a": "Wanderers Stadium",
+        "v": [
+          "wanderers",
+          "bullring"
+        ]
+      },
+      {
+        "q": "Who was the first player to reach 100 international centuries?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which country won the ICC Champions Trophy 2004?",
+        "a": "West Indies",
+        "v": [
+          "west indies",
+          "wi"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for Australia in Test cricket?",
+        "a": "Shane Warne",
+        "v": [
+          "warne",
+          "shane warne"
+        ]
+      },
+      {
+        "q": "Which Indian bowler is nicknamed 'The Turbanator'?",
+        "a": "Harbhajan Singh",
+        "v": [
+          "harbhajan",
+          "harbhajan singh",
+          "turbanator"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 20,000 international runs?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which team won the first ever Women's T20 World Cup in 2009?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in the 2007 T20 World Cup?",
+        "a": "Shahid Afridi",
+        "v": [
+          "afridi",
+          "shahid afridi"
+        ]
+      },
+      {
+        "q": "Which batsman has the highest individual score in a World Cup final (149)?",
+        "a": "Adam Gilchrist",
+        "v": [
+          "gilchrist",
+          "adam gilchrist"
+        ]
+      },
+      {
+        "q": "Who is the only player to have taken two hat-tricks in World Cups?",
+        "a": "Lasith Malinga",
+        "v": [
+          "malinga",
+          "lasith malinga"
+        ]
+      },
+      {
+        "q": "In which city is the Basin Reserve cricket ground located?",
+        "a": "Wellington",
+        "v": [
+          "wellington"
+        ]
+      },
+      {
+        "q": "Who was the first cricketer to play 200 Test matches?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which country did Muttiah Muralitharan play for?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl"
+        ]
+      },
+      {
+        "q": "What is the nickname of the South African national team?",
+        "a": "Proteas",
+        "v": [
+          "proteas",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Who was the captain of the 1992 World Cup winning team?",
+        "a": "Imran Khan",
+        "v": [
+          "imran khan",
+          "imran"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Sultan of Multan'?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Who is the leading run scorer in Women's international cricket?",
+        "a": "Mithali Raj",
+        "v": [
+          "mithali",
+          "mithali raj"
+        ]
+      },
+      {
+        "q": "Which country won the 2015 ODI World Cup?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who hit the longest six in IPL history (125m)?",
+        "a": "Albie Morkel",
+        "v": [
+          "albie morkel",
+          "morkel"
+        ]
+      },
+      {
+        "q": "Which player has the most centuries in ODI history?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "In which year was the first ever ODI match played?",
+        "a": "1971",
+        "v": [
+          "1971"
+        ]
+      },
+      {
+        "q": "Who is the leading wicket-taker in ODI history?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan"
+        ]
+      },
+      {
+        "q": "Which stadium in India is known as 'The Chepauk'?",
+        "a": "M. A. Chidambaram Stadium",
+        "v": [
+          "chepauk",
+          "chidambaram"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the Indian Women's ODI team?",
+        "a": "Harmanpreet Kaur",
+        "v": [
+          "harmanpreet",
+          "harmanpreet kaur"
+        ]
+      },
+      {
+        "q": "Which bowler has the best figures in a Test innings (10/53)?",
+        "a": "Jim Laker",
+        "v": [
+          "laker",
+          "jim laker"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 50 international centuries?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which country did Courtney Walsh represent?",
+        "a": "West Indies",
+        "v": [
+          "wi",
+          "west indies",
+          "walsh"
+        ]
+      },
+      {
+        "q": "Who is the first player to score a century in each of his first three Tests?",
+        "a": "Mohammad Azharuddin",
+        "v": [
+          "azharuddin",
+          "mohammad azharuddin"
+        ]
+      },
+      {
+        "q": "In which city is the HPCA Stadium located?",
+        "a": "Dharamshala",
+        "v": [
+          "dharamshala"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to take 500 Test wickets?",
+        "a": "Anil Kumble",
+        "v": [
+          "kumble",
+          "anil kumble"
+        ]
+      },
+      {
+        "q": "Which player is known as 'White Lightning'?",
+        "a": "Allan Donald",
+        "v": [
+          "allan donald",
+          "donald"
+        ]
+      },
+      {
+        "q": "Who won the first ever ICC Champions Trophy in 1998?",
+        "a": "South Africa",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Which country did Richard Hadlee represent?",
+        "a": "New Zealand",
+        "v": [
+          "nz",
+          "new zealand",
+          "hadlee"
+        ]
+      },
+      {
+        "q": "Who has the most stumpings in international cricket?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Which cricketer is famously called 'Dada'?",
+        "a": "Sourav Ganguly",
+        "v": [
+          "sourav ganguly",
+          "ganguly",
+          "dada"
+        ]
+      },
+      {
+        "q": "Who was the first player to score a double century in a World Cup?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Which country won the most Under-19 World Cups?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who hit the fastest 50 in World Cup history (18 balls)?",
+        "a": "Brendon McCullum",
+        "v": [
+          "mccullum",
+          "brendon mccullum"
+        ]
+      },
+      {
+        "q": "Which city is the home of the WACA Ground?",
+        "a": "Perth",
+        "v": [
+          "perth"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in the 2011 ODI World Cup?",
+        "a": "Yuvraj Singh",
+        "v": [
+          "yuvi",
+          "yuvraj singh"
+        ]
+      },
+      {
+        "q": "Which country did Younis Khan play for?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who hit the winning runs for England in the 2019 World Cup final?",
+        "a": "Jos Buttler",
+        "v": [
+          "buttler",
+          "jos buttler"
+        ]
+      },
+      {
+        "q": "Who is the leading run scorer in the history of the T20 World Cup?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which country won the Under-19 World Cup 2022?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who was the captain of the England team that won the 2010 T20 World Cup?",
+        "a": "Paul Collingwood",
+        "v": [
+          "collingwood",
+          "paul collingwood"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Rawalpindi Express'?",
+        "a": "Shoaib Akhtar",
+        "v": [
+          "akhtar",
+          "shoaib akhtar"
+        ]
+      },
+      {
+        "q": "Who is the fastest bowler to reach 400 Test wickets?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan"
+        ]
+      },
+      {
+        "q": "In which city is the Sawai Mansingh Stadium located?",
+        "a": "Jaipur",
+        "v": [
+          "jaipur"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to score 10,000 runs in ODIs?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which country won the ICC Champions Trophy 2017?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who is nickname for Virat Kohli?",
+        "a": "Cheeku",
+        "v": [
+          "cheeku",
+          "chiku"
+        ]
+      },
+      {
+        "q": "Which player has the most sixes in international cricket history?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Who hit six sixes in an over in first-class cricket for India?",
+        "a": "Ravi Shastri",
+        "v": [
+          "shastri",
+          "ravi shastri"
+        ]
+      },
+      {
+        "q": "Which stadium is also known as 'The Brickfield'?",
+        "a": "National Stadium, Karachi",
+        "v": [
+          "karachi"
+        ]
+      },
+      {
+        "q": "Who is the only captain to win two T20 World Cups?",
+        "a": "Daren Sammy",
+        "v": [
+          "sammy",
+          "daren sammy"
+        ]
+      },
+      {
+        "q": "Which country did Wasim Akram represent?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for England in Test cricket?",
+        "a": "James Anderson",
+        "v": [
+          "anderson",
+          "james anderson"
+        ]
+      },
+      {
+        "q": "What is the name of the trophy for India vs Australia Test series?",
+        "a": "Border-Gavaskar Trophy",
+        "v": [
+          "bgt",
+          "border gavaskar"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 1999 World Cup Final?",
+        "a": "Shane Warne",
+        "v": [
+          "warne",
+          "shane warne"
+        ]
+      },
+      {
+        "q": "Which player is called 'Smiling Assassin'?",
+        "a": "Lakshmipathy Balaji",
+        "v": [
+          "balaji",
+          "lakshmipathy balaji",
+          "l balaji"
+        ]
+      },
+      {
+        "q": "In which city is the Holkar Stadium?",
+        "a": "Indore",
+        "v": [
+          "indore"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to score a century in T20Is?",
+        "a": "Suresh Raina",
+        "v": [
+          "raina",
+          "suresh raina"
+        ]
+      },
+      {
+        "q": "Which country won the first ever Asia Cup?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who hit the winning runs for India in the 2007 T20 World Cup final?",
+        "a": "Joginder Sharma",
+        "v": [
+          "joginder sharma",
+          "joginder"
+        ]
+      },
+      {
+        "q": "Which player has the most catches in World Cup history?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Nawab of Pataudi'?",
+        "a": "Mansoor Ali Khan Pataudi",
+        "v": [
+          "pataudi",
+          "mansoor ali khan"
+        ]
+      },
+      {
+        "q": "Which country won the most ODI World Cups before 2000?",
+        "a": "West Indies and Australia",
+        "v": [
+          "wi",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who hit the fastest century for India in Test cricket?",
+        "a": "Rishabh Pant",
+        "v": [
+          "pant",
+          "rishabh pant"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Universe Boss'?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "In which city is the Sher-e-Bangla Stadium?",
+        "a": "Mirpur",
+        "v": [
+          "mirpur",
+          "dhaka"
+        ]
+      },
+      {
+        "q": "Who is the lead run scorer for Pakistan in Tests?",
+        "a": "Younis Khan",
+        "v": [
+          "younis khan",
+          "younis"
+        ]
+      },
+      {
+        "q": "Which team has won the most Asia Cups?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who was the first player to hit six sixes in an over in international cricket?",
+        "a": "Herschelle Gibbs",
+        "v": [
+          "gibbs",
+          "herschelle gibbs"
+        ]
+      },
+      {
+        "q": "Which country did Glenn McGrath represent?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Master Blaster'?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar",
+          "master blaster"
+        ]
+      },
+      {
+        "q": "Which city is the home of the MCG?",
+        "a": "Melbourne",
+        "v": [
+          "melbourne"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2011 ODI World Cup Final?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Which country won the ICC Champions Trophy 2000?",
+        "a": "New Zealand",
+        "v": [
+          "nz",
+          "new zealand"
+        ]
+      },
+      {
+        "q": "Who hit the winning four for India in the 1983 World Cup final?",
+        "a": "Mohinder Amarnath",
+        "v": [
+          "amarnath",
+          "mohinder amarnath"
+        ]
+      },
+      {
+        "q": "Which player is called 'Punter'?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 2000 runs in T20Is?",
+        "a": "Babar Azam",
+        "v": [
+          "babar",
+          "babar azam"
+        ]
+      },
+      {
+        "q": "Which field position is located right behind the bowler?",
+        "a": "Straight Drive",
+        "v": [
+          "straight",
+          "long on"
+        ]
+      },
+      {
+        "q": "Who was the mentor of GT in IPL 2024?",
+        "a": "Ashish Nehra",
+        "v": [
+          "nehra",
+          "ashish nehra"
+        ]
+      },
+      {
+        "q": "Which stadium is famously known as 'The Fortress' for Australia?",
+        "a": "The Gabba",
+        "v": [
+          "gabba",
+          "brisbane"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for India in ODI history?",
+        "a": "Anil Kumble",
+        "v": [
+          "kumble",
+          "anil kumble"
+        ]
+      },
+      {
+        "q": "Which country did Sunil Narine represent?",
+        "a": "West Indies",
+        "v": [
+          "wi",
+          "west indies",
+          "narine"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Rawalpindi Express'?",
+        "a": "Shoaib Akhtar",
+        "v": [
+          "akhtar",
+          "shoaib akhtar"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for England in the 2019 WC Final tie?",
+        "a": "Ben Stokes",
+        "v": [
+          "stokes",
+          "ben stokes"
+        ]
+      },
+      {
+        "q": "Which country won the first ever T20 match in Women's cricket?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in the 2019 ODI World Cup?",
+        "a": "Kane Williamson",
+        "v": [
+          "williamson",
+          "kane williamson"
+        ]
+      },
+      {
+        "q": "Which player scored the most runs in a single Test series (974)?",
+        "a": "Don Bradman",
+        "v": [
+          "bradman",
+          "don bradman"
+        ]
+      },
+      {
+        "q": "In which city is the Rajiv Gandhi Stadium located?",
+        "a": "Hyderabad",
+        "v": [
+          "hyderabad"
+        ]
+      },
+      {
+        "q": "Who was the first Indian captain to win a Test series in England?",
+        "a": "Ajit Wadekar",
+        "v": [
+          "wadekar",
+          "ajit wadekar"
+        ]
+      },
+      {
+        "q": "Which country did Brian Lara play for?",
+        "a": "West Indies",
+        "v": [
+          "wi",
+          "west indies",
+          "lara"
+        ]
+      },
+      {
+        "q": "Who hit the winning runs for CSK in the IPL 2023 final?",
+        "a": "Ravindra Jadeja",
+        "v": [
+          "jadeja",
+          "ravindra jadeja",
+          "jaddu"
+        ]
+      },
+      {
+        "q": "Which team has won the most consecutive matches in ODI history (21)?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Finisher'?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Which country did Malcolm Marshall represent?",
+        "a": "West Indies",
+        "v": [
+          "wi",
+          "west indies",
+          "marshall"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 1983 World Cup Final?",
+        "a": "Mohinder Amarnath",
+        "v": [
+          "amarnath",
+          "mohinder amarnath"
+        ]
+      },
+      {
+        "q": "Which player is famously known as 'King Kohli'?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who was the leading run scorer in the 2015 ODI World Cup?",
+        "a": "Martin Guptill",
+        "v": [
+          "guptill",
+          "martin guptill"
+        ]
+      },
+      {
+        "q": "Which team won the first ever ICC Test Championship in 2021?",
+        "a": "New Zealand",
+        "v": [
+          "nz",
+          "new zealand"
+        ]
+      },
+      {
+        "q": "Who hit the fastest 50 for India in ODIs?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which city is the home of the SCG?",
+        "a": "Sydney",
+        "v": [
+          "sydney",
+          "scg"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Indian team in the 2007 T20 World Cup?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Which country did Shane Bond play for?",
+        "a": "New Zealand",
+        "v": [
+          "nz",
+          "new zealand",
+          "bond"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for Pakistan in ODIs?",
+        "a": "Wasim Akram",
+        "v": [
+          "akram",
+          "wasim akram"
+        ]
+      },
+      {
+        "q": "Which stadium is also known as 'The Chepauk'?",
+        "a": "M. A. Chidambaram Stadium",
+        "v": [
+          "chepauk",
+          "chidambaram"
+        ]
+      },
+      {
+        "q": "Who hit 4 sixes in the final over of the 2016 T20 World Cup final?",
+        "a": "Carlos Brathwaite",
+        "v": [
+          "brathwaite",
+          "carlos brathwaite"
+        ]
+      },
+      {
+        "q": "What is the nickname for New Zealand's national cricket team?",
+        "a": "Black Caps",
+        "v": [
+          "black caps",
+          "nz"
+        ]
+      },
+      {
+        "q": "Who is the only player to have two triple centuries in Test cricket for India?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Which country won the most ODI World Cups in the 20th century?",
+        "a": "Australia and West Indies",
+        "v": [
+          "aus",
+          "wi"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker in the history of the Champions Trophy?",
+        "a": "Kyle Mills",
+        "v": [
+          "mills",
+          "kyle mills"
+        ]
+      },
+      {
+        "q": "Who was the mentor of KKR in IPL 2024?",
+        "a": "Gautam Gambhir",
+        "v": [
+          "gambhir",
+          "gautam gambhir"
+        ]
+      },
+      {
+        "q": "Which player has the most runs in a single IPL edition (973)?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Who is nickname for Hardik Pandya?",
+        "a": "Kung Fu Pandya",
+        "v": [
+          "hardik",
+          "pandya"
+        ]
+      },
+      {
+        "q": "Which country did Waqar Younis play for?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who hit more than 10,000 runs in all three formats (ODI, Test, T20)?",
+        "a": "None",
+        "v": [
+          "none"
+        ]
+      },
+      {
+        "q": "Which cricketer is called 'The Sultan of Swing'?",
+        "a": "Wasim Akram",
+        "v": [
+          "akram",
+          "wasim akram"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for Australia in the 2021 T20 WC Final?",
+        "a": "Mitchell Marsh",
+        "v": [
+          "marsh",
+          "mitchell marsh"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Tigers'?",
+        "a": "Bangladesh",
+        "v": [
+          "bangladesh",
+          "bangla"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Don'?",
+        "a": "Don Bradman",
+        "v": [
+          "bradman",
+          "don bradman"
+        ]
+      },
+      {
+        "q": "Which stadium is famous for its 'green' pitch in South Africa?",
+        "a": "Wanderers",
+        "v": [
+          "wanderers"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to 500 Test wickets?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan"
+        ]
+      },
+      {
+        "q": "Who won the first ever Under-19 World Cup in 1988?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Which country did Mohammad Hafeez represent?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2003 World Cup Final?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Which player is famously called 'Captain Cool'?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for India in the 2023 ODI World Cup?",
+        "a": "Mohammed Shami",
+        "v": [
+          "shami",
+          "mohammed shami"
+        ]
+      },
+      {
+        "q": "Which team won the Border-Gavaskar Trophy in 2020-21?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who hit 6 sixes in an over in the 2007 T20 World Cup?",
+        "a": "Yuvraj Singh",
+        "v": [
+          "yuvi",
+          "yuvraj singh"
+        ]
+      },
+      {
+        "q": "Which stadium in India hosted the first ever day-night Test match?",
+        "a": "Eden Gardens",
+        "v": [
+          "eden gardens",
+          "eden"
+        ]
+      },
+      {
+        "q": "Who won the ICC Test Championship 2023?",
+        "a": "Australia",
+        "v": [
+          "australia",
+          "aus"
+        ]
+      },
+      {
+        "q": "Which player hit the fastest century for Australia in ODIs?",
+        "a": "Glenn Maxwell",
+        "v": [
+          "maxwell",
+          "glenn maxwell"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in the 2011 WC?",
+        "a": "Yuvraj Singh",
+        "v": [
+          "yuvi",
+          "yuvraj singh"
+        ]
+      },
+      {
+        "q": "Which country hosted the first Asia Cup in 1984?",
+        "a": "United Arab Emirates",
+        "v": [
+          "uae",
+          "emirates"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Sultan of Multan'?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Which bowler has the most 5-wicket hauls in Test history (67)?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan"
+        ]
+      },
+      {
+        "q": "Who was the first player to hit double century in ODIs?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Lions'?",
+        "a": "Sri Lanka",
+        "v": [
+          "sri lanka",
+          "sl"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 10,000 runs in Tests?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Who won the first IPL in 2008?",
+        "a": "Rajasthan Royals",
+        "v": [
+          "rr",
+          "rajasthan royals"
+        ]
+      },
+      {
+        "q": "Which Indian player hit 11 sixes in a single T20I innings for India?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Who is the only player to have scored a century in both his 100th ODI and 100th Test match?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Which country won the inaugural ICC Men's Champions Trophy in 1998 (then called ICC KnockOut)?",
+        "a": "South Africa",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for Australia in the 2023 ODI World Cup Final?",
+        "a": "Glenn Maxwell",
+        "v": [
+          "maxwell",
+          "glenn maxwell"
+        ]
+      },
+      {
+        "q": "Which Indian bowler is known as 'The Professor'?",
+        "a": "Ravichandran Ashwin",
+        "v": [
+          "ashwin",
+          "r ashwin"
+        ]
+      },
+      {
+        "q": "Who holds the record for the most runs in an over in Test cricket (35 runs)?",
+        "a": "Jasprit Bumrah",
+        "v": [
+          "bumrah",
+          "jasprit bumrah"
+        ]
+      },
+      {
+        "q": "Which player has the most wickets in a single T20 World Cup edition (17)?",
+        "a": "Fazalhaq Farooqi",
+        "v": [
+          "farooqi",
+          "fazalhaq farooqi"
+        ]
+      },
+      {
+        "q": "Who was the captain of the South African T20 team in 2024?",
+        "a": "Aiden Markram",
+        "v": [
+          "markram",
+          "aiden markram"
+        ]
+      },
+      {
+        "q": "Which stadium is famously known as 'The Chepauk'?",
+        "a": "M. A. Chidambaram Stadium",
+        "v": [
+          "chepauk",
+          "chidambaram"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to score a century in T20 Internationals?",
+        "a": "Suresh Raina",
+        "v": [
+          "raina",
+          "suresh raina"
+        ]
+      },
+      {
+        "q": "Which team won the 2024 Women's Premier League (WPL) title?",
+        "a": "Royal Challengers Bangalore",
+        "v": [
+          "rcb",
+          "royal challengers bangalore"
+        ]
+      },
+      {
+        "q": "Who was the Orange Cap winner in WPL 2024?",
+        "a": "Ellyse Perry",
+        "v": [
+          "perry",
+          "ellyse perry"
+        ]
+      },
+      {
+        "q": "Who won the Purple Cap in WPL 2024?",
+        "a": "Shreyanka Patil",
+        "v": [
+          "shreyanka patil",
+          "shreyanka"
+        ]
+      },
+      {
+        "q": "In which city was the WPL 2024 final played?",
+        "a": "Delhi",
+        "v": [
+          "delhi"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Sergeant' in Australian cricket?",
+        "a": "Steve Smith",
+        "v": [
+          "smith",
+          "steve smith"
+        ]
+      },
+      {
+        "q": "Who hit the winning six for KKR in the IPL 2024 final?",
+        "a": "Venkatesh Iyer",
+        "v": [
+          "iyer",
+          "venkatesh iyer"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Men in Blue'?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind",
+          "bharat"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Australian team in the 1999 World Cup?",
+        "a": "Steve Waugh",
+        "v": [
+          "waugh",
+          "steve waugh"
+        ]
+      },
+      {
+        "q": "Which player has the most centuries as an opener in ODI history?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 7000 runs in Tests?",
+        "a": "Steve Smith",
+        "v": [
+          "smith",
+          "steve smith"
+        ]
+      },
+      {
+        "q": "Which country did Muttiah Muralitharan represent?",
+        "a": "Sri Lanka",
+        "v": [
+          "sl",
+          "sri lanka"
+        ]
+      },
+      {
+        "q": "What is the nickname for the cricket match played between India and Pakistan?",
+        "a": "The Mother of All Battles",
+        "v": [
+          "india vs pakistan",
+          "ind vs pak"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Nawab of Najafgarh'?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Which stadium is famous for its 'Lord's Slope'?",
+        "a": "Lord's Cricket Ground",
+        "v": [
+          "lords",
+          "lord's"
+        ]
+      },
+      {
+        "q": "Who hit the fastest 50 in ODI history (16 balls)?",
+        "a": "AB de Villiers",
+        "v": [
+          "abd",
+          "ab de villiers"
+        ]
+      },
+      {
+        "q": "Which team won the first ever ICC World Test Championship?",
+        "a": "New Zealand",
+        "v": [
+          "nz",
+          "new zealand"
+        ]
+      },
+      {
+        "q": "Who was the captain of the England ODI team in 2024?",
+        "a": "Jos Buttler",
+        "v": [
+          "buttler",
+          "jos buttler"
+        ]
+      },
+      {
+        "q": "Which player is nicknamed 'Gilly'?",
+        "a": "Adam Gilchrist",
+        "v": [
+          "gilly",
+          "gilchrist"
+        ]
+      },
+      {
+        "q": "Who is the leading wicket-taker for South Africa in ODIs?",
+        "a": "Shaun Pollock",
+        "v": [
+          "pollock",
+          "shaun pollock"
+        ]
+      },
+      {
+        "q": "Which country did Sanath Jayasuriya represent?",
+        "a": "Sri Lanka",
+        "v": [
+          "sl",
+          "sri lanka"
+        ]
+      },
+      {
+        "q": "What is the record for the most runs scored in a single over in ODIs (36)?",
+        "a": "Herschelle Gibbs",
+        "v": [
+          "gibbs",
+          "herschelle gibbs"
+        ]
+      },
+      {
+        "q": "Who was the mentor of RR in IPL 2024?",
+        "a": "Kumar Sangakkara",
+        "v": [
+          "sangakkara",
+          "kumar sangakkara"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Wall'?",
+        "a": "Rahul Dravid",
+        "v": [
+          "dravid",
+          "rahul dravid"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to reach 100 international centuries?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which country hosted the 2011 ODI World Cup?",
+        "a": "India, Sri Lanka and Bangladesh",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who hit the longest six in the 2024 T20 World Cup?",
+        "a": "Shakib Al Hasan",
+        "v": [
+          "shakib"
+        ]
+      },
+      {
+        "q": "Which bowler has the most five-wicket hauls in ODIs?",
+        "a": "Waqar Younis",
+        "v": [
+          "waqar",
+          "waqar younis"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Universe Boss' to his fans?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Which team won the 2024 Asia Cup (Women's)?",
+        "a": "Sri Lanka",
+        "v": [
+          "sl",
+          "sri lanka"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for India in the 1983 World Cup final?",
+        "a": "Mohinder Amarnath",
+        "v": [
+          "amarnath",
+          "mohinder amarnath"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Proteas'?",
+        "a": "South Africa",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Who is the fastest player to 10,000 runs in all formats combined?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli"
+        ]
+      },
+      {
+        "q": "Which player has the most runs in Champions Trophy history?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2011 WC semi-final (Ind vs Pak)?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which country won the Under-19 World Cup 2024?",
+        "a": "Australia",
+        "v": [
+          "aus",
+          "australia"
+        ]
+      },
+      {
+        "q": "Who is the current head coach of the Pakistan team (2024)?",
+        "a": "Gary Kirsten",
+        "v": [
+          "gary kirsten",
+          "kirsten"
+        ]
+      },
+      {
+        "q": "Who holds the record for the most double centuries in Test cricket (12)?",
+        "a": "Don Bradman",
+        "v": [
+          "bradman",
+          "don bradman"
+        ]
+      },
+      {
+        "q": "Which cricketer is called 'The Finisher'?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "In which city is the Optus Stadium?",
+        "a": "Perth",
+        "v": [
+          "perth"
+        ]
+      },
+      {
+        "q": "Who was the first player to be given out by a hawk-eye review in international cricket?",
+        "a": "Samiullah Shenwari",
+        "v": [
+          "shenwari"
+        ]
+      },
+      {
+        "q": "Which team won the first ever T20 International match in 2005?",
+        "a": "Australia",
+        "v": [
+          "aus",
+          "australia"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 1975 World Cup Final?",
+        "a": "Clive Lloyd",
+        "v": [
+          "clive lloyd",
+          "lloyd"
+        ]
+      },
+      {
+        "q": "Which player hit the fastest century for India in T20Is (35 balls)?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Who is the leading run scorer in Test cricket for Australia?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Which country did Jacques Kallis play for?",
+        "a": "South Africa",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "What is the name of the trophy played for between India and West Indies?",
+        "a": "Wisden Trophy",
+        "v": [
+          "wisden"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 1992 World Cup Final?",
+        "a": "Wasim Akram",
+        "v": [
+          "akram",
+          "wasim akram"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Hitman'?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "In which city is the Hagley Oval located?",
+        "a": "Christchurch",
+        "v": [
+          "christchurch"
+        ]
+      },
+      {
+        "q": "Who was the first Indian to score a double century in Tests?",
+        "a": "Polly Umrigar",
+        "v": [
+          "umrigar",
+          "polly umrigar"
+        ]
+      },
+      {
+        "q": "Which country won the most ODI World Cups in the 1980s?",
+        "a": "India and Australia",
+        "v": [
+          "india",
+          "aus"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for West Indies in the 2016 T20 WC Final?",
+        "a": "Carlos Brathwaite",
+        "v": [
+          "brathwaite",
+          "carlos brathwaite"
+        ]
+      },
+      {
+        "q": "Which player has the most catches in international cricket history?",
+        "a": "Mahela Jayawardene",
+        "v": [
+          "mahela",
+          "jayawardene"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Captain' in IPL history due to his 5 titles?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Which city is the home of the Maharashtra Cricket Association Stadium?",
+        "a": "Pune",
+        "v": [
+          "pune"
+        ]
+      },
+      {
+        "q": "Who was the leading run scorer for India in the 2024 T20 World Cup?",
+        "a": "Rohit Sharma",
+        "v": [
+          "rohit",
+          "rohit sharma"
+        ]
+      },
+      {
+        "q": "Which team won the IPL in 2021?",
+        "a": "Chennai Super Kings",
+        "v": [
+          "csk",
+          "chennai super kings",
+          "chennai"
+        ]
+      },
+      {
+        "q": "Who hit the fastest century in IPL history (30 balls)?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Which bowler has the most 10-wicket hauls in a Test match (22)?",
+        "a": "Muttiah Muralitharan",
+        "v": [
+          "murali",
+          "muralitharan"
+        ]
+      },
+      {
+        "q": "Who was the first player to play 100 T20 International matches?",
+        "a": "Shoaib Malik",
+        "v": [
+          "shoaib malik",
+          "malik"
+        ]
+      },
+      {
+        "q": "Which stadium is famously known as 'The SCG'?",
+        "a": "Sydney Cricket Ground",
+        "v": [
+          "sydney",
+          "scg"
+        ]
+      },
+      {
+        "q": "Who hit the winning six for England in the 2022 T20 World Cup final?",
+        "a": "Ben Stokes",
+        "v": [
+          "stokes",
+          "ben stokes"
+        ]
+      },
+      {
+        "q": "What is the nickname for the Australian Test captain Pat Cummins?",
+        "a": "Cid",
+        "v": [
+          "cummins"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 1987 World Cup Final?",
+        "a": "David Boon",
+        "v": [
+          "boon",
+          "david boon"
+        ]
+      },
+      {
+        "q": "Which country did Kumar Sangakkara represent?",
+        "a": "Sri Lanka",
+        "v": [
+          "sl",
+          "sri lanka"
+        ]
+      },
+      {
+        "q": "Who hit 6 sixes in an over in first-class cricket for India in 1985?",
+        "a": "Ravi Shastri",
+        "v": [
+          "shastri",
+          "ravi shastri"
+        ]
+      },
+      {
+        "q": "Which field position is located behind the bowler at the boundary?",
+        "a": "Long On",
+        "v": [
+          "long on"
+        ]
+      },
+      {
+        "q": "Who was the first cricketer to be knighted?",
+        "a": "Sir Don Bradman",
+        "v": [
+          "bradman",
+          "don bradman"
+        ]
+      },
+      {
+        "q": "Which stadium is famous for its 'Lord's Pavilion'?",
+        "a": "Lord's Cricket Ground",
+        "v": [
+          "lords",
+          "lord's"
+        ]
+      },
+      {
+        "q": "Who hit the winning four for India in the 2007 T20 World Cup semi-final?",
+        "a": "Yuvraj Singh",
+        "v": [
+          "yuvi",
+          "yuvraj singh"
+        ]
+      },
+      {
+        "q": "Which player is called 'Punter'?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for South Africa in ODIs?",
+        "a": "Shaun Pollock",
+        "v": [
+          "pollock",
+          "shaun pollock"
+        ]
+      },
+      {
+        "q": "Which country did Inzamam-ul-Haq play for?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who hit the winning runs for India in the 2013 Champions Trophy final?",
+        "a": "Ravindra Jadeja",
+        "v": [
+          "jadeja",
+          "ravindra jadeja"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Kiwis'?",
+        "a": "New Zealand",
+        "v": [
+          "nz",
+          "new zealand"
+        ]
+      },
+      {
+        "q": "Who hit the fastest century in Test history (54 balls)?",
+        "a": "Brendon McCullum",
+        "v": [
+          "mccullum",
+          "brendon mccullum"
+        ]
+      },
+      {
+        "q": "Who won the first ever Women's ODI World Cup?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Which player is famously known as 'Captain Cool'?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Tournament in the 2023 ODI World Cup?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which team has the highest team total in IPL history (287/3)?",
+        "a": "Sunrisers Hyderabad",
+        "v": [
+          "srh",
+          "sunrisers hyderabad"
+        ]
+      },
+      {
+        "q": "Who was the leading wicket-taker in the 1992 World Cup?",
+        "a": "Wasim Akram",
+        "v": [
+          "akram",
+          "wasim akram"
+        ]
+      },
+      {
+        "q": "Which country hosted the 2003 World Cup?",
+        "a": "South Africa, Zimbabwe and Kenya",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Who hit the winning six for India in the 2011 World Cup final?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Which Indian city is home to the M. Chinnaswamy Stadium?",
+        "a": "Bengaluru",
+        "v": [
+          "bengaluru",
+          "bangalore"
+        ]
+      },
+      {
+        "q": "Who held the previous record for most ODI centuries before Virat Kohli?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin",
+          "tendulkar"
+        ]
+      },
+      {
+        "q": "Which bowler has the most hat-tricks in ODIs (3)?",
+        "a": "Lasith Malinga",
+        "v": [
+          "malinga",
+          "lasith malinga"
+        ]
+      },
+      {
+        "q": "Who was the first Indian captain to win the World Cup?",
+        "a": "Kapil Dev",
+        "v": [
+          "kapil dev",
+          "kapil"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Tigers'?",
+        "a": "Bangladesh",
+        "v": [
+          "bangladesh",
+          "bangla"
+        ]
+      },
+      {
+        "q": "Who is the lead run scorer for Sri Lanka in Test history?",
+        "a": "Kumar Sangakkara",
+        "v": [
+          "sangakkara",
+          "kumar sangakkara"
+        ]
+      },
+      {
+        "q": "Which stadium is famous for its 'Green' pitch in Australia?",
+        "a": "WACA Ground",
+        "v": [
+          "waca",
+          "perth"
+        ]
+      },
+      {
+        "q": "Who is the current head coach of the Indian team for August 2024?",
+        "a": "Gautam Gambhir",
+        "v": [
+          "gambhir",
+          "gautam gambhir"
+        ]
+      },
+      {
+        "q": "Which player hit the winning boundaries for Australia in the 2021 T20 WC?",
+        "a": "Mitchell Marsh",
+        "v": [
+          "marsh",
+          "mitchell marsh"
+        ]
+      },
+      {
+        "q": "Who won the ICC Test Championship 2021-2023?",
+        "a": "Australia",
+        "v": [
+          "aus",
+          "australia"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Universe Boss'?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "In which city is the Old Trafford cricket ground?",
+        "a": "Manchester",
+        "v": [
+          "manchester"
+        ]
+      },
+      {
+        "q": "Who was the Man of the Match in the 2024 T20 World Cup Final?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which country won the most T20 World Cups between 2007-2022?",
+        "a": "West Indies and England",
+        "v": [
+          "wi",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who hit the winning six for India in the 2024 T20 World Cup final?",
+        "a": "None",
+        "v": [
+          "none"
+        ]
+      },
+      {
+        "q": "Who won the Player of the Tournament in T20 WC 2024?",
+        "a": "Jasprit Bumrah",
+        "v": [
+          "bumrah",
+          "jasprit bumrah"
+        ]
+      },
+      {
+        "q": "Which team won the inaugural T20 World Cup in 2007?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for India in the 2024 T20 WC Final over?",
+        "a": "Hardik Pandya",
+        "v": [
+          "hardik",
+          "pandya"
+        ]
+      },
+      {
+        "q": "Which country hosted the 2022 T20 World Cup?",
+        "a": "Australia",
+        "v": [
+          "aus",
+          "australia"
+        ]
+      },
+      {
+        "q": "Who was the captain of the Indian team in the 1983 World Cup?",
+        "a": "Kapil Dev",
+        "v": [
+          "kapil dev",
+          "kapil"
+        ]
+      },
+      {
+        "q": "Which player has the most wickets in T20 Internationals (as of 2024)?",
+        "a": "Rashid Khan",
+        "v": [
+          "rashid",
+          "rashid khan"
+        ]
+      },
+      {
+        "q": "What is the name of the stadium in Cardiff?",
+        "a": "Sophia Gardens",
+        "v": [
+          "sophia gardens"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Little Master' in world cricket?",
+        "a": "Sachin Tendulkar and Sunil Gavaskar",
+        "v": [
+          "sachin",
+          "sunil"
+        ]
+      },
+      {
+        "q": "Which country won the Under-19 World Cup in 2020?",
+        "a": "Bangladesh",
+        "v": [
+          "bangladesh",
+          "bangla"
+        ]
+      },
+      {
+        "q": "Who was the first player to take 10 wickets in a Test match?",
+        "a": "Jim Laker",
+        "v": [
+          "laker",
+          "jim laker"
+        ]
+      },
+      {
+        "q": "Which cricketer is called 'The Wall'?",
+        "a": "Rahul Dravid",
+        "v": [
+          "dravid",
+          "rahul dravid"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for England in ODIs?",
+        "a": "James Anderson",
+        "v": [
+          "anderson",
+          "james anderson"
+        ]
+      },
+      {
+        "q": "Which field position is located between slip and point?",
+        "a": "Gully",
+        "v": [
+          "gully"
+        ]
+      },
+      {
+        "q": "Who hit the fastest 50 in Test cricket for India?",
+        "a": "Rishabh Pant",
+        "v": [
+          "pant",
+          "rishabh pant"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Proteas'?",
+        "a": "South Africa",
+        "v": [
+          "sa",
+          "south africa"
+        ]
+      },
+      {
+        "q": "Who won the most Test matches as a captain of Australia?",
+        "a": "Ricky Ponting",
+        "v": [
+          "ponting",
+          "ricky ponting"
+        ]
+      },
+      {
+        "q": "Which player is called '360 degree player'?",
+        "a": "AB de Villiers",
+        "v": [
+          "abd",
+          "ab de villiers"
+        ]
+      },
+      {
+        "q": "In which city is the SuperSport Park located?",
+        "a": "Centurion",
+        "v": [
+          "centurion"
+        ]
+      },
+      {
+        "q": "Who hit more than 50 centuries in ODI history?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which team won the Champions Trophy in 2013?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who is the only player to have a 100-plus average in Test cricket for a season?",
+        "a": "Don Bradman",
+        "v": [
+          "bradman",
+          "don bradman"
+        ]
+      },
+      {
+        "q": "Which country hosted the first ever T20 match?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Who hit the winning boundaries for Australia in the 1999 World Cup Final?",
+        "a": "Adam Gilchrist",
+        "v": [
+          "gilchrist",
+          "adam gilchrist"
+        ]
+      },
+      {
+        "q": "Which player is famously known as 'The Finisher'?",
+        "a": "MS Dhoni",
+        "v": [
+          "dhoni",
+          "ms dhoni"
+        ]
+      },
+      {
+        "q": "Who won the most Asia Cups as a player for India?",
+        "a": "Ravindra Jadeja and Rohit Sharma",
+        "v": [
+          "jadeja",
+          "rohit"
+        ]
+      },
+      {
+        "q": "Which Indian city is the home of the Wankhede Stadium?",
+        "a": "Mumbai",
+        "v": [
+          "mumbai",
+          "bombay"
+        ]
+      },
+      {
+        "q": "Who hit the winning runs for Pakistan in the 1992 World Cup final?",
+        "a": "Wasim Akram",
+        "v": [
+          "akram",
+          "wasim akram"
+        ]
+      },
+      {
+        "q": "Which player is called 'Smiling Assassin'?",
+        "a": "Lakshmipathy Balaji",
+        "v": [
+          "balaji",
+          "lakshmipathy balaji",
+          "l balaji"
+        ]
+      },
+      {
+        "q": "Who won the most IPL titles as a coach?",
+        "a": "Stephen Fleming",
+        "v": [
+          "fleming",
+          "stephen fleming"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Tigers'?",
+        "a": "Bangladesh",
+        "v": [
+          "bangladesh",
+          "bangla"
+        ]
+      },
+      {
+        "q": "Who is the current head coach of the Australian Men's team (2024)?",
+        "a": "Andrew McDonald",
+        "v": [
+          "mcdonald",
+          "andrew mcdonald"
+        ]
+      },
+      {
+        "q": "Which stadium is famous for its 'Short' boundaries in New Zealand?",
+        "a": "Eden Park",
+        "v": [
+          "eden park",
+          "auckland"
+        ]
+      },
+      {
+        "q": "Who is known as the 'Nawab of Najafgarh'?",
+        "a": "Virender Sehwag",
+        "v": [
+          "sehwag",
+          "virender sehwag"
+        ]
+      },
+      {
+        "q": "Who won the first ever Women's T20 World Cup?",
+        "a": "England",
+        "v": [
+          "england",
+          "eng"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Men in Green'?",
+        "a": "Pakistan",
+        "v": [
+          "pakistan",
+          "pak"
+        ]
+      },
+      {
+        "q": "Who hit the most sixes in the history of the T20 World Cup?",
+        "a": "Chris Gayle",
+        "v": [
+          "gayle",
+          "chris gayle"
+        ]
+      },
+      {
+        "q": "Which player is nickname for David Warner?",
+        "a": "The Reverend",
+        "v": [
+          "warner",
+          "david warner"
+        ]
+      },
+      {
+        "q": "Who won the ICC Test Championship 2023 Final?",
+        "a": "Australia",
+        "v": [
+          "aus",
+          "australia"
+        ]
+      },
+      {
+        "q": "Which stadium in India is known as 'The Eden'?",
+        "a": "Eden Gardens",
+        "v": [
+          "eden gardens",
+          "eden"
+        ]
+      },
+      {
+        "q": "Who is the lead wicket-taker for Afghanistan in all formats?",
+        "a": "Rashid Khan",
+        "v": [
+          "rashid",
+          "rashid khan"
+        ]
+      },
+      {
+        "q": "Which player hit the winning single for India in 1983 World Cup?",
+        "a": "Mohinder Amarnath",
+        "v": [
+          "amarnath",
+          "mohinder amarnath"
+        ]
+      },
+      {
+        "q": "Which team won the ICC T20 World Cup in 2026?",
+        "a": "India",
+        "v": [
+          "india",
+          "ind"
+        ]
+      },
+      {
+        "q": "Who was the Player of the Tournament in the 2026 T20 World Cup?",
+        "a": "Yashasvi Jaiswal",
+        "v": [
+          "jaiswal",
+          "yashasvi jaiswal"
+        ]
+      },
+      {
+        "q": "Who holds the record for most runs in a single IPL season (as of 2026)?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which Indian city is famously known for the Eden Gardens stadium?",
+        "a": "Kolkata",
+        "v": [
+          "kolkata",
+          "calcutta"
+        ]
+      },
+      {
+        "q": "Who is the current Head Coach of the Indian Men's Team in 2026?",
+        "a": "Gautam Gambhir",
+        "v": [
+          "gambhir",
+          "gautam gambhir",
+          "gg"
+        ]
+      },
+      {
+        "q": "Which bowler took the most wickets in IPL 2025?",
+        "a": "Jasprit Bumrah",
+        "v": [
+          "bumrah",
+          "jasprit bumrah"
+        ]
+      },
+      {
+        "q": "Who is the captain of Chennai Super Kings in 2026?",
+        "a": "Ruturaj Gaikwad",
+        "v": [
+          "ruturaj",
+          "gaikwad",
+          "ruturaj gaikwad"
+        ]
+      },
+      {
+        "q": "Which player is famously known as 'Sky'?",
+        "a": "Suryakumar Yadav",
+        "v": [
+          "sky",
+          "surya",
+          "suryakumar yadav"
+        ]
+      },
+      {
+        "q": "In which city did India play the 2026 T20 World Cup Final?",
+        "a": "Colombo",
+        "v": [
+          "colombo"
+        ]
+      },
+      {
+        "q": "Which cricket board is famously known as BCCI?",
+        "a": "Board of Control for Cricket in India",
+        "v": [
+          "board of control for cricket in india"
+        ]
+      },
+      {
+        "q": "Who holds the record for the highest score by an Indian in T20Is (as of 2026)?",
+        "a": "Shubman Gill",
+        "v": [
+          "shubman gill",
+          "gill"
+        ]
+      },
+      {
+        "q": "Which country won the inaugural World Test Championship (WTC) in 2021?",
+        "a": "New Zealand",
+        "v": [
+          "new zealand",
+          "nz",
+          "black caps"
+        ]
+      },
+      {
+        "q": "Who won the Orange Cap in IPL 2026?",
+        "a": "Yashasvi Jaiswal",
+        "v": [
+          "jaiswal",
+          "yashasvi jaiswal"
+        ]
+      },
+      {
+        "q": "What is the name of the stadium located in Lucknow?",
+        "a": "Ekana Stadium",
+        "v": [
+          "ekana",
+          "ekana stadium",
+          "bbrsa bhev",
+          "bbrsa"
+        ]
+      },
+      {
+        "q": "Which player is called 'The Prince of Kolkata'?",
+        "a": "Sourav Ganguly",
+        "v": [
+          "ganguly",
+          "sourav ganguly",
+          "dada"
+        ]
+      },
+      {
+        "q": "Who was the captain of Australia in Test Cricket in 2024?",
+        "a": "Pat Cummins",
+        "v": [
+          "cummins",
+          "pat cummins"
+        ]
+      },
+      {
+        "q": "Which stadium is known as 'The Gabbatoir'?",
+        "a": "The Gabba",
+        "v": [
+          "the gabba",
+          "gabba",
+          "brisbane"
+        ]
+      },
+      {
+        "q": "Who hit 6 sixes in an over in first-class cricket from Saurashtra?",
+        "a": "Ravindra Jadeja",
+        "v": [
+          "jadeja",
+          "ravindra jadeja"
+        ]
+      },
+      {
+        "q": "Which bowler has the alias 'Fizz'?",
+        "a": "Mustafizur Rahman",
+        "v": [
+          "fizz",
+          "mustafizur",
+          "mustafizur rahman"
+        ]
+      },
+      {
+        "q": "Who is the all-time leading run scorer in WPL?",
+        "a": "Meg Lanning",
+        "v": [
+          "meg lanning",
+          "lanning"
+        ]
+      },
+      {
+        "q": "Who is known as 'Mr. Cricket'?",
+        "a": "Michael Hussey",
+        "v": [
+          "hussey",
+          "michael hussey"
+        ]
+      },
+      {
+        "q": "Who is known as 'The Chasemaster'?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which fast bowler is famously nicknamed 'Whispering Death'?",
+        "a": "Michael Holding",
+        "v": [
+          "michael holding",
+          "holding"
+        ]
+      },
+      {
+        "q": "Who was the first batsman to be given out 'Timed Out' in international cricket?",
+        "a": "Angelo Mathews",
+        "v": [
+          "angelo mathews",
+          "mathews"
+        ]
+      },
+      {
+        "q": "Who bowled the fastest recorded delivery in international cricket history?",
+        "a": "Shoaib Akhtar",
+        "v": [
+          "shoaib akhtar",
+          "akhtar"
+        ]
+      },
+      {
+        "q": "Which Australian spinner is affectionately nicknamed 'Gaz' or 'Garry'?",
+        "a": "Nathan Lyon",
+        "v": [
+          "nathan lyon",
+          "lyon"
+        ]
+      },
+      {
+        "q": "Which Indian bowler is popularly known to fans as 'Lord'? ",
+        "a": "Shardul Thakur",
+        "v": [
+          "shardul thakur",
+          "shardul",
+          "lord shardul"
+        ]
+      },
+      {
+        "q": "Who was the first bowler to take 500 Test wickets?",
+        "a": "Courtney Walsh",
+        "v": [
+          "courtney walsh",
+          "walsh"
+        ]
+      },
+      {
+        "q": "Who was the first Indian batsman to score a century in an ODI World Cup (in 1983)?",
+        "a": "Kapil Dev",
+        "v": [
+          "kapil dev",
+          "kapil"
+        ]
+      },
+      {
+        "q": "Which batsman scored the most runs in a single Test match (456 runs overall)?",
+        "a": "Graham Gooch",
+        "v": [
+          "graham gooch",
+          "gooch"
+        ]
+      },
+      {
+        "q": "Which team holds the record for the highest team total in men's T20 Internationals (314/3)?",
+        "a": "Nepal",
+        "v": [
+          "nepal"
+        ]
+      },
+      {
+        "q": "Which bowler holds the record for the most wickets in a single edition of the ODI World Cup (27 in 2019)?",
+        "a": "Mitchell Starc",
+        "v": [
+          "starc",
+          "mitchell starc"
+        ]
+      },
+      {
+        "q": "Which batsman has hit the highest number of boundaries (fours) in IPL history?",
+        "a": "Shikhar Dhawan",
+        "v": [
+          "shikhar dhawan",
+          "dhawan",
+          "gabbar"
+        ]
+      },
+      {
+        "q": "Which Indian bowler has bowled the most dot balls in IPL history?",
+        "a": "Bhuvneshwar Kumar",
+        "v": [
+          "bhuvneshwar kumar",
+          "bhuvneshwar",
+          "bhuvi"
+        ]
+      },
+      {
+        "q": "Who was the first bowler to take 4 wickets in 4 balls in T20 Internationals?",
+        "a": "Lasith Malinga",
+        "v": [
+          "lasith malinga",
+          "malinga"
+        ]
+      },
+      {
+        "q": "Which captain led the Indian team to victory in the Under-19 World Cup in 2008?",
+        "a": "Virat Kohli",
+        "v": [
+          "virat",
+          "kohli",
+          "virat kohli"
+        ]
+      },
+      {
+        "q": "Which fielder holds the record for the most catches by a non-wicketkeeper in Test cricket history?",
+        "a": "Rahul Dravid",
+        "v": [
+          "rahul dravid",
+          "dravid"
+        ]
+      },
+      {
+        "q": "Who is the only player to have taken a hat-trick and scored a century in the same Test match?",
+        "a": "Sohag Gazi",
+        "v": [
+          "sohag gazi",
+          "gazi"
+        ]
+      },
+      {
+        "q": "Which two players hold the record for the highest partnership in Test cricket history (624 runs)?",
+        "a": "Mahela Jayawardene and Kumar Sangakkara",
+        "v": [
+          "jayawardene and sangakkara",
+          "sangakkara and jayawardene",
+          "mahela and kumar"
+        ]
+      },
+      {
+        "q": "Who is the first batsman to score a double century in a run chase in ODIs?",
+        "a": "Glenn Maxwell",
+        "v": [
+          "maxwell",
+          "glenn maxwell"
+        ]
+      },
+      {
+        "q": "Who was the first bowler to take a hat-trick in the very first over of a Test match?",
+        "a": "Irfan Pathan",
+        "v": [
+          "irfan pathan",
+          "irfan"
+        ]
+      },
+      {
+        "q": "Which player became the 'Player of the Match' in both the WTC Final and ODI WC Final in 2023?",
+        "a": "Travis Head",
+        "v": [
+          "travis head",
+          "head"
+        ]
+      },
+      {
+        "q": "Which two players share the record for hitting the most number of T20I centuries (5 each)?",
+        "a": "Rohit Sharma and Glenn Maxwell",
+        "v": [
+          "rohit and maxwell",
+          "maxwell and rohit"
+        ]
+      },
+      {
+        "q": "What is the name of the prestigious trophy contested between the Women's Test teams of England and Australia?",
+        "a": "The Women's Ashes",
+        "v": [
+          "ashes",
+          "the women's ashes",
+          "womens ashes"
+        ]
+      },
+      {
+        "q": "Who was the first ever man to cross 10,000 runs in all forms of T20 cricket?",
+        "a": "Chris Gayle",
+        "v": [
+          "chris gayle",
+          "gayle"
+        ]
+      },
+      {
+        "q": "Who was the top run-scorer for India in the 1983 World Cup Final?",
+        "a": "Kris Srikkanth",
+        "v": [
+          "kris srikkanth",
+          "srikkanth"
+        ]
+      },
+      {
+        "q": "Who holds the record as the leading run-scorer in Big Bash League (BBL) history?",
+        "a": "Chris Lynn",
+        "v": [
+          "chris lynn",
+          "lynn"
+        ]
+      },
+      {
+        "q": "Which franchise has won the most Big Bash League (BBL) titles?",
+        "a": "Perth Scorchers",
+        "v": [
+          "perth scorchers",
+          "scorchers",
+          "perth"
+        ]
+      },
+      {
+        "q": "What is the name of the trophy played between India and England in Test series taking place in England?",
+        "a": "Pataudi Trophy",
+        "v": [
+          "pataudi trophy",
+          "pataudi"
+        ]
+      },
+      {
+        "q": "What is the common term used for an unplayable delivery that easily beats the batsman?",
+        "a": "Jaffa",
+        "v": [
+          "jaffa"
+        ]
+      },
+      {
+        "q": "What is the term for a batsman being dismissed on the very first ball they face?",
+        "a": "Golden Duck",
+        "v": [
+          "golden duck"
+        ]
+      },
+      {
+        "q": "Who holds the record for the highest individual score on Test debut (287)?",
+        "a": "Tip Foster",
+        "v": [
+          "tip foster",
+          "foster"
+        ]
+      },
+      {
+        "q": "Which spinner famously bowled 'The Ball of the Century' to dismiss Mike Gatting in 1993?",
+        "a": "Shane Warne",
+        "v": [
+          "shane warne",
+          "warne"
+        ]
+      },
+      {
+        "q": "Which international cricket team is known as 'The Chevrons'?",
+        "a": "Zimbabwe",
+        "v": [
+          "zimbabwe",
+          "zim"
+        ]
+      },
+      {
+        "q": "Who was the first substitute fielder to take a catch in a World Cup final?",
+        "a": "Marnus Labuschagne",
+        "v": [
+          "labuschagne",
+          "marnus labuschagne"
+        ]
+      },
+      {
+        "q": "Which batsman remained stranded on 299* when the last wicket fell in Tests?",
+        "a": "Don Bradman",
+        "v": [
+          "don bradman",
+          "bradman"
+        ]
+      },
+      {
+        "q": "Which team won the 2004 ICC Champions Trophy?",
+        "a": "West Indies",
+        "v": [
+          "west indies",
+          "wi"
+        ]
+      },
+      {
+        "q": "Which Indian city hosts matches at the M. Chinnaswamy Stadium?",
+        "a": "Bengaluru",
+        "v": [
+          "bengaluru",
+          "bangalore"
+        ]
+      },
+      {
+        "q": "Which fast bowler breached the 160 kmph mark twice in the 2015 WC?",
+        "a": "Mitchell Starc",
+        "v": [
+          "mitchell starc",
+          "starc"
+        ]
+      },
+      {
+        "q": "Which country is home to the 'SuperSport Park'?",
+        "a": "South Africa",
+        "v": [
+          "south africa",
+          "sa"
+        ]
+      },
+      {
+        "q": "Who captained New Zealand during their 2015 World Cup Final run?",
+        "a": "Brendon McCullum",
+        "v": [
+          "mccullum",
+          "brendon mccullum"
+        ]
+      },
+      {
+        "q": "Who hit the winning four in the 2021 World Test Championship Final?",
+        "a": "Ross Taylor",
+        "v": [
+          "ross taylor",
+          "taylor"
+        ]
+      },
+      {
+        "q": "Which English batsman famously employed the 'Switch Hit' repeatedly against Muralitharan?",
+        "a": "Kevin Pietersen",
+        "v": [
+          "kevin pietersen",
+          "pietersen",
+          "kp"
+        ]
+      },
+      {
+        "q": "Who has taken the most wickets in Women's ODIs?",
+        "a": "Jhulan Goswami",
+        "v": [
+          "jhulan goswami",
+          "jhulan",
+          "goswami"
+        ]
+      },
+      {
+        "q": "Which player is known as 'The Rawalpindi Express'?",
+        "a": "Shoaib Akhtar",
+        "v": [
+          "shoaib akhtar",
+          "akhtar"
+        ]
+      },
+      {
+        "q": "What is the color of the ball used in Daytime Test matches?",
+        "a": "Red",
+        "v": [
+          "red",
+          "red ball"
+        ]
+      },
+      {
+        "q": "Which player has represented India in both the 1992 and 2011 ICC World Cups?",
+        "a": "Sachin Tendulkar",
+        "v": [
+          "sachin tendulkar",
+          "sachin"
+        ]
+      },
+      {
+        "q": "Who is the only player to score 400 runs in a single Test innings?",
+        "a": "Brian Lara",
+        "v": [
+          "brian lara",
+          "lara"
+        ]
+      },
+      {
+        "q": "Which team got bowled out for a record low of 35 in ODIs by Sri Lanka?",
+        "a": "Zimbabwe",
+        "v": [
+          "zimbabwe",
+          "zim"
+        ]
+      },
+      {
+        "q": "Who hit the winning shot in the 2013 Champions Trophy Final?",
+        "a": "Ravindra Jadeja",
+        "v": [
+          "jadeja",
+          "ravindra jadeja"
+        ]
+      }
+    ],
+    "Football": [
+      {
+        "q": "Who has won the most Ballon d'Or awards?",
+        "a": "Lionel Messi",
+        "v": [
+          "messi",
+          "lionel messi",
+          "leo messi"
+        ]
+      },
+      {
+        "q": "Which country has won the most FIFA World Cups?",
+        "a": "Brazil",
+        "v": [
+          "brazil",
+          "bra"
+        ]
+      },
+      {
+        "q": "Who is the all-time top scorer in the UEFA Champions League?",
+        "a": "Cristiano Ronaldo",
+        "v": [
+          "ronaldo",
+          "cristiano",
+          "cr7",
+          "cristiano ronaldo"
+        ]
+      },
+      {
+        "q": "Which club has won the most Champions League titles?",
+        "a": "Real Madrid",
+        "v": [
+          "real madrid",
+          "madrid",
+          "real"
+        ]
+      },
+      {
+        "q": "Who was known as 'The King' (O Rei) of football?",
+        "a": "Pele",
+        "v": [
+          "pele",
+          "edson arantes do nascimento"
+        ]
+      },
+      {
+        "q": "Which country won the 2022 FIFA World Cup?",
+        "a": "Argentina",
+        "v": [
+          "argentina",
+          "arg"
+        ]
+      },
+      {
+        "q": "Who is the all-time top scorer for the England national team?",
+        "a": "Harry Kane",
+        "v": [
+          "kane",
+          "harry kane"
+        ]
+      },
+      {
+        "q": "Which stadium is known as 'The Theatre of Dreams'?",
+        "a": "Old Trafford",
+        "v": [
+          "old trafford",
+          "manchester united"
+        ]
+      },
+      {
+        "q": "In which city is the club FC Barcelona based?",
+        "a": "Barcelona",
+        "v": [
+          "barcelona",
+          "barca"
+        ]
+      },
+      {
+        "q": "Who won the 2023 Women's World Cup?",
+        "a": "Spain",
+        "v": [
+          "spain",
+          "espana"
+        ]
+      },
+      {
+        "q": "Which player is famous for the 'Hand of God' goal?",
+        "a": "Diego Maradona",
+        "v": [
+          "maradona",
+          "diego maradona"
+        ]
+      },
+      {
+        "q": "What is the maximum number of players on a football pitch for one team?",
+        "a": "11",
+        "v": [
+          "11",
+          "eleven"
+        ]
+      },
+      {
+        "q": "Which league is known as the 'EPL'?",
+        "a": "English Premier League",
+        "v": [
+          "premier league",
+          "epl",
+          "english premier league"
+        ]
+      },
+      {
+        "q": "Who is the current manager of Manchester City (2024)?",
+        "a": "Pep Guardiola",
+        "v": [
+          "pep",
+          "guardiola",
+          "pep guardiola"
+        ]
+      },
+      {
+        "q": "Which country hosted the first ever FIFA World Cup in 1930?",
+        "a": "Uruguay",
+        "v": [
+          "uruguay"
+        ]
+      },
+      {
+        "q": "What is the standard length of a professional football match (excluding extra time)?",
+        "a": "90 minutes",
+        "v": [
+          "90",
+          "90 minutes"
+        ]
+      },
+      {
+        "q": "Who is nicknamed 'The Egyptian King' at Liverpool?",
+        "a": "Mohamed Salah",
+        "v": [
+          "salah",
+          "mo salah",
+          "mohamed salah"
+        ]
+      },
+      {
+        "q": "Which club does Erling Haaland play for (as of 2024)?",
+        "a": "Manchester City",
+        "v": [
+          "man city",
+          "city",
+          "manchester city"
+        ]
+      },
+      {
+        "q": "Who won the 2023 Ballon d'Or Feminin?",
+        "a": "Aitana Bonmati",
+        "v": [
+          "bonmati",
+          "aitana bonmati"
+        ]
+      },
+      {
+        "q": "Which country won the Euro 2020 (played in 2021)?",
+        "a": "Italy",
+        "v": [
+          "italy",
+          "ita"
+        ]
+      },
+      {
+        "q": "What is the nickname of the French national team?",
+        "a": "Les Bleus",
+        "v": [
+          "les bleus",
+          "france"
+        ]
+      },
+      {
+        "q": "Which player is known for his 'Siu' celebration?",
+        "a": "Cristiano Ronaldo",
+        "v": [
+          "ronaldo",
+          "cr7"
+        ]
+      },
+      {
+        "q": "Which German club is known as 'Die Bayern'?",
+        "a": "Bayern Munich",
+        "v": [
+          "bayern",
+          "bayern munich",
+          "fc bayern"
+        ]
+      },
+      {
+        "q": "Who is the youngest player to score in a World Cup final?",
+        "a": "Pele",
+        "v": [
+          "pele"
+        ]
+      },
+      {
+        "q": "Which city is home to both AC Milan and Inter Milan?",
+        "a": "Milan",
+        "v": [
+          "milan",
+          "milano"
+        ]
+      },
+      {
+        "q": "Who won the Premier League title in the 2015-16 season in a huge upset?",
+        "a": "Leicester City",
+        "v": [
+          "leicester",
+          "leicester city"
+        ]
+      },
+      {
+        "q": "Which country is nicknamed 'The Oranje'?",
+        "a": "Netherlands",
+        "v": [
+          "netherlands",
+          "holland"
+        ]
+      },
+      {
+        "q": "Who is the top scorer in FIFA World Cup history?",
+        "a": "Miroslav Klose",
+        "v": [
+          "klose",
+          "miroslav klose"
+        ]
+      },
+      {
+        "q": "Which stadium hosted the 2022 World Cup final?",
+        "a": "Lusail Stadium",
+        "v": [
+          "lusail"
+        ]
+      },
+      {
+        "q": "What color card is shown to a player for a direct sending off?",
+        "a": "Red",
+        "v": [
+          "red",
+          "red card"
+        ]
+      },
+      {
+        "q": "Who is the most expensive football player ever (as of 2024 transfer fee)?",
+        "a": "Neymar",
+        "v": [
+          "neymar",
+          "neymar jr"
+        ]
+      },
+      {
+        "q": "Which manager is famous for the 'Tiki-taka' style?",
+        "a": "Pep Guardiola",
+        "v": [
+          "pep",
+          "guardiola"
+        ]
+      },
+      {
+        "q": "Which club is known as 'The Red Devils'?",
+        "a": "Manchester United",
+        "v": [
+          "man utd",
+          "united",
+          "manchester united"
+        ]
+      },
+      {
+        "q": "Who won the first ever Ballon d'Or in 1956?",
+        "a": "Stanley Matthews",
+        "v": [
+          "stanley matthews",
+          "matthews"
+        ]
+      },
+      {
+        "q": "Which African country was the first to reach a World Cup semi-final?",
+        "a": "Morocco",
+        "v": [
+          "morocco"
+        ]
+      },
+      {
+        "q": "What does VAR stand for?",
+        "a": "Video Assistant Referee",
+        "v": [
+          "var",
+          "video assistant referee"
+        ]
+      },
+      {
+        "q": "Which club plays at the Anfield stadium?",
+        "a": "Liverpool",
+        "v": [
+          "liverpool",
+          "lfc"
+        ]
+      },
+      {
+        "q": "Who is the all-time top scorer for Brazil (passing Pele)?",
+        "a": "Neymar",
+        "v": [
+          "neymar",
+          "neymar jr"
+        ]
+      },
+      {
+        "q": "Which country won the 2010 FIFA World Cup?",
+        "a": "Spain",
+        "v": [
+          "spain",
+          "espana"
+        ]
+      },
+      {
+        "q": "Who was the first goalkeeper to win the Ballon d'Or?",
+        "a": "Lev Yashin",
+        "v": [
+          "lev yashin",
+          "yashin",
+          "the black spider"
+        ]
+      },
+      {
+        "q": "Which club is nicknamed 'The Gunners'?",
+        "a": "Arsenal",
+        "v": [
+          "arsenal"
+        ]
+      },
+      {
+        "q": "In which country was Zlatan Ibrahimovic born?",
+        "a": "Sweden",
+        "v": [
+          "sweden"
+        ]
+      },
+      {
+        "q": "Who is the current captain of the France national team (2024)?",
+        "a": "Kylian Mbappe",
+        "v": [
+          "mbappe",
+          "kylian mbappe"
+        ]
+      },
+      {
+        "q": "Which team won the treble (PL, FA Cup, CL) in 1999?",
+        "a": "Manchester United",
+        "v": [
+          "man utd",
+          "manchester united"
+        ]
+      },
+      {
+        "q": "Which country is famous for 'Total Football'?",
+        "a": "Netherlands",
+        "v": [
+          "netherlands",
+          "holland"
+        ]
+      },
+      {
+        "q": "Who is nicknamed 'The Special One'?",
+        "a": "Jose Mourinho",
+        "alias": [
+          "mourinho",
+          "jose mourinho"
+        ]
+      },
+      {
+        "q": "Which club has the motto 'Mes que un club'?",
+        "a": "FC Barcelona",
+        "v": [
+          "barca",
+          "barcelona",
+          "fc barcelona"
+        ]
+      },
+      {
+        "q": "Who scored the winning goal in the 2014 World Cup final?",
+        "a": "Mario Gotze",
+        "v": [
+          "gotze",
+          "mario gotze"
+        ]
+      },
+      {
+        "q": "Which country won the first Euro title in 1960?",
+        "a": "Soviet Union",
+        "v": [
+          "soviet union",
+          "ussr"
+        ]
+      },
+      {
+        "q": "Which player is known as 'Zizou'?",
+        "a": "Zinedine Zidane",
+        "v": [
+          "zidane",
+          "zizou",
+          "zinedine zidane"
+        ]
+      }
+      ],
+      "Anime": [
+        { "q": "Who is the protagonist of 'Black Clover'?", "a": "Asta", "v": ["asta"] },
+        { "q": "What is the name of the captain of the Black Bulls?", "a": "Yami Sukehiro", "v": ["yami", "yami sukehiro"] },
+        { "q": "In 'Spy x Family', what is Anya's secret ability?", "a": "Telepathy", "v": ["telepathy", "mind reading", "read minds"] },
+        { "q": "Which anime features a 'Humanoid Typhoon' named Vash?", "a": "Trigun", "v": ["trigun"] },
+        { "q": "What is the name of the main character in 'Tokyo Ghoul'?", "a": "Ken Kaneki", "v": ["kaneki", "ken kaneki"] },
+        { "q": "In 'My Hero Academia', what is All Might's real name?", "a": "Toshinori Yagi", "v": ["toshinori", "toshinori yagi", "yagi"] },
+        { "q": "Which anime is about a high school boy who finds a death god's notebook?", "a": "Death Note", "v": ["death note"] },
+        { "q": "Who is the main character of 'Sword Art Online'?", "a": "Kirito", "v": ["kirito", "kazuto kirigaya"] },
+        { "q": "What is the name of the virtual world in 'Sword Art Online'?", "a": "Aincrad", "v": ["aincrad"] },
+        { "q": "In 'One Piece', what is the name of Luffy's first ship?", "a": "Going Merry", "v": ["going merry", "merry"] },
+        { "q": "What is the name of the ninja village where Naruto lives?", "a": "Konoha", "v": ["konoha", "hidden leaf", "hidden leaf village"] },
+        { "q": "Who is the 'Symbol of Peace' in 'My Hero Academia'?", "a": "All Might", "v": ["all might"] },
+        { "q": "What is the name of the alchemy equivalent exchange law?", "a": "Law of Equivalent Exchange", "v": ["equivalent exchange", "law of equivalent exchange"] },
+        { "q": "In 'Bleach', what is the name of Ichigo's sword?", "a": "Zangetsu", "v": ["zangetsu"] },
+        { "q": "Who is the 'Prince of all Saiyans'?", "a": "Vegeta", "v": ["vegeta"] },
+        { "q": "What is the name of the dragon that grants wishes in 'Dragon Ball'?", "a": "Shenron", "v": ["shenron"] },
+        { "q": "In 'Hunter x Hunter', what is the power system called?", "a": "Nen", "v": ["nen"] },
+        { "q": "What is the name of the guild in 'Fairy Tail'?", "a": "Fairy Tail", "v": ["fairy tail"] },
+        { "q": "Who is the 'Fullmetal Alchemist'?", "a": "Edward Elric", "v": ["edward elric", "edward", "ed"] },
+        { "q": "What is the name of the titan that broke Wall Maria?", "a": "Colossal Titan", "v": ["colossal titan"] },
+        { "q": "In 'Demon Slayer', what is the name of Tanjiro's sword style?", "a": "Water Breathing", "v": ["water breathing", "sun breathing", "hinokami kagura"] },
+        { "q": "Who is the protagonist of 'Jojo's Bizarre Adventure' Part 3?", "a": "Jotaro Kujo", "v": ["jotaro", "jotaro kujo"] },
+        { "q": "What is the name of the spirit inside the Death Note?", "a": "Ryuk", "v": ["ryuk"] },
+        { "q": "In 'One Piece', who is the cook of the Straw Hat Pirates?", "a": "Sanji", "v": ["sanji", "vinsmoke sanji"] },
+        { "q": "What is the name of the giant robot in 'Neon Genesis Evangelion'?", "a": "Eva Unit 01", "v": ["eva", "unit 01", "eva unit 01"] },
+        { "q": "Who is the main character of 'Cowboy Bebop'?", "a": "Spike Spiegel", "v": ["spike", "spike spiegel"] },
+        { "q": "In 'Naruto', who is the fourth Hokage?", "a": "Minato Namikaze", "v": ["minato", "minato namikaze"] },
+        { "q": "What is the name of the protagonist in 'Tokyo Revengers'?", "a": "Takemichi Hanagaki", "v": ["takemichi", "takemichi hanagaki"] },
+        { "q": "Who is the 'King of Curses' in 'Jujutsu Kaisen'?", "a": "Sukuna", "v": ["sukuna", "ryomen sukuna"] },
+        { "q": "What is the name of the wizard king in 'Black Clover'?", "a": "Julius Novachrono", "v": ["julius", "julius novachrono"] },
+        { "q": "In 'Haikyuu', what position does Hinata play?", "a": "Middle Blocker", "v": ["middle blocker", "mb"] },
+        { "q": "Who is the 'Number 1 Hero' after All Might?", "a": "Endeavor", "v": ["endeavor", "enji todoroki"] },
+        { "q": "What is the name of the cursed spirit that Yuji eats?", "a": "Sukuna's Finger", "v": ["finger", "sukuna finger", "sukunas finger"] },
+        { "q": "In 'Attack on Titan', what is Levi's last name?", "a": "Ackerman", "v": ["ackerman"] },
+        { "q": "Who is the protagonist of 'Re:Zero'?", "a": "Subaru Natsuki", "v": ["subaru", "subaru natsuki"] },
+        { "q": "What is the name of the cat in 'Sailor Moon'?", "a": "Luna", "v": ["luna"] },
+        { "q": "In 'One Piece', who is the archaeologist of the crew?", "a": "Nico Robin", "v": ["robin", "nico robin"] },
+        { "q": "Who is the main character of 'Mob Psycho 100'?", "a": "Shigeo Kageyama", "v": ["mob", "shigeo kageyama", "shigeo"] },
+        { "q": "What is the name of the basketball team in 'Slam Dunk'?", "a": "Shohoku", "v": ["shohoku"] },
+        { "q": "In 'Dragon Ball Z', who killed Frieza on Earth?", "a": "Future Trunks", "v": ["trunks", "future trunks"] },
+        { "q": "Who is the protagonist of 'Dr. Stone'?", "a": "Senku Ishigami", "v": ["senku", "senku ishigami"] },
+        { "q": "What is the name of the girl who lives in the well in 'Inuyasha'?", "a": "Kagome Higurashi", "v": ["kagome", "kagome higurashi"] },
+        { "q": "In 'Naruto', what is the name of the group of rogue ninjas?", "a": "Akatsuki", "v": ["akatsuki"] },
+        { "q": "Who is the main character of 'Soul Eater'?", "a": "Maka Albarn", "v": ["maka", "maka albarn"] },
+        { "q": "What is the name of the school in 'Assassination Classroom'?", "a": "Kunugigaoka", "v": ["kunugigaoka", "class 3-e"] },
+        { "q": "In 'One Piece', what is Zoro's ultimate goal?", "a": "World's Greatest Swordsman", "v": ["worlds greatest swordsman", "greatest swordsman"] },
+        { "q": "Who is the main character of 'Your Lie in April'?", "a": "Kosei Arima", "v": ["kosei", "kosei arima"] },
+        { "q": "What is the name of the robot in 'Doraemon'?", "a": "Doraemon", "v": ["doraemon"] },
+        { "q": "In 'Death Note', what is L's real name?", "a": "L Lawliet", "v": ["l lawliet", "lawliet"] },
+        { "q": "Who is the protagonist of 'Chainsaw Man'?", "a": "Denji", "v": ["denji"] },
+        { "q": "What is the name of the devil in 'Chainsaw Man' that Denji merges with?", "a": "Pochita", "v": ["pochita"] },
+        { "q": "In 'My Hero Academia', what is the name of Deku's quirk?", "a": "One For All", "v": ["one for all", "ofa"] },
+        { "q": "Who is the 'Ghost of the Uchiha'?", "a": "Madara Uchiha", "v": ["madara", "madara uchiha"] },
+        { "q": "What is the name of the dragon slayer in 'Fairy Tail' who uses fire?", "a": "Natsu Dragneel", "v": ["natsu", "natsu dragneel"] },
+        { "q": "In 'Bleach', what is the name of the afterlife?", "a": "Soul Society", "v": ["soul society"] },
+        { "q": "Who is the main character of 'Blue Exorcist'?", "a": "Rin Okumura", "v": ["rin", "rin okumura"] },
+        { "q": "What is the name of the organization in 'Hellsing'?", "a": "Hellsing Organization", "v": ["hellsing"] },
+        { "q": "In 'One Piece', who is the musician of the Straw Hat Pirates?", "a": "Brook", "v": ["brook"] },
+        { "q": "Who is the 'Strongest Sorcerer' in 'Jujutsu Kaisen'?", "a": "Satoru Gojo", "v": ["gojo", "satoru gojo"] },
+        { "q": "What is the name of the protagonist in 'Vinland Saga'?", "a": "Thorfinn", "v": ["thorfinn"] },
+        { "q": "In 'Naruto', what is the name of the technique used to summon the Reaper?", "a": "Reaper Death Seal", "v": ["reaper death seal", "shiki fujin"] },
+        { "q": "Who is the main character of 'Fire Force'?", "a": "Shinra Kusakabe", "v": ["shinra", "shinra kusakabe"] },
+        { "q": "What is the name of the planet in 'Dragon Ball' where Piccolo is from?", "a": "Namek", "v": ["namek"] },
+        { "q": "In 'Hunter x Hunter', what is Killua's family known for?", "a": "Assassination", "v": ["assassins", "assassination"] },
+        { "q": "Who is the 'Hero Hunter' in 'One Punch Man'?", "a": "Garou", "v": ["garou"] },
+        { "q": "What is the name of the girl in 'The Rising of the Shield Hero' who is a demi-human?", "a": "Raphtalia", "v": ["raphtalia"] },
+        { "q": "In 'Sword Art Online', what is the name of the weapon Kirito uses in Alfheim Online?", "a": "Excalibur", "v": ["excalibur"] },
+        { "q": "Who is the protagonist of 'Overlord'?", "a": "Ainz Ooal Gown", "v": ["ainz", "ainz ooal gown", "momonga"] },
+        { "q": "What is the name of the island where 'Hunter x Hunter' begins?", "a": "Whale Island", "v": ["whale island"] },
+        { "q": "In 'One Piece', who is the 'Sniper King'?", "a": "Sogeking", "v": ["sogeking", "usopp"] },
+        { "q": "Who is the main character of 'Food Wars!'?", "a": "Soma Yukihira", "v": ["soma", "soma yukihira"] },
+        { "q": "What is the name of the school in 'Haikyuu'?", "a": "Karasuno High", "v": ["karasuno", "karasuno high"] },
+        { "q": "In 'Naruto', who is the 'Yellow Flash'?", "a": "Minato Namikaze", "v": ["minato", "minato namikaze"] },
+        { "q": "Who is the 'King of Games' in 'Yu-Gi-Oh!'?", "a": "Yugi Muto", "v": ["yugi", "yugi muto", "atem"] },
+        { "q": "What is the name of the card game in 'Yu-Gi-Oh!'?", "a": "Duel Monsters", "v": ["duel monsters"] },
+        { "q": "In 'Attack on Titan', what is inside the walls?", "a": "Titans", "v": ["titans", "colossal titans"] },
+        { "q": "Who is the protagonist of 'Parasyte'?", "a": "Shinichi Izumi", "v": ["shinichi", "shinichi izumi"] },
+        { "q": "What is the name of the parasyte that lives in Shinichi's hand?", "a": "Migi", "v": ["migi"] },
+        { "q": "In 'My Hero Academia', what is the name of the hero academy?", "a": "UA", "v": ["ua", "ua high"] },
+        { "q": "Who is the 'Flame Hashira' in 'Demon Slayer'?", "a": "Kyojuro Rengoku", "v": ["rengoku", "kyojuro rengoku"] },
+        { "q": "What is the name of the demon in 'Black Clover' that lives in Asta's grimoire?", "a": "Liebe", "v": ["liebe"] },
+        { "q": "In 'One Piece', what is the name of the sea where Luffy is from?", "a": "East Blue", "v": ["east blue"] },
+        { "q": "Who is the main character of 'Guilty Crown'?", "a": "Shu Ouma", "v": ["shu", "shu ouma"] },
+        { "q": "What is the name of the mecha in 'Code Geass'?", "a": "Knightmare Frame", "v": ["knightmare", "knightmare frame"] },
+        { "q": "In 'Death Note', what does Light use to kill his first victim?", "a": "Heart Attack", "v": ["heart attack"] },
+        { "q": "Who is the protagonist of 'Bungo Stray Dogs'?", "a": "Atsushi Nakajima", "v": ["atsushi", "atsushi nakajima"] },
+        { "q": "What is the name of the agency in 'Bungo Stray Dogs'?", "a": "Armed Detective Agency", "v": ["armed detective agency"] },
+        { "q": "In 'Naruto', what is the name of the nine-tailed fox?", "a": "Kurama", "v": ["kurama"] },
+        { "q": "Who is the 'God of Shinobi'?", "a": "Hashirama Senju", "v": ["hashirama", "hashirama senju"] },
+        { "q": "What is the name of the main character in 'No Game No Life'?", "a": "Sora", "v": ["sora"] },
+        { "q": "In 'One Piece', who is the 'Pirate Hunter'?", "a": "Zoro", "v": ["zoro", "roronoa zoro"] },
+        { "q": "Who is the protagonist of 'The Seven Deadly Sins'?", "a": "Meliodas", "v": ["meliodas"] },
+        { "q": "What is the name of the kingdom in 'The Seven Deadly Sins'?", "a": "Liones", "v": ["liones"] },
+        { "q": "In 'Fairy Tail', what is Erza's magic?", "a": "Requip", "v": ["requip", "the knight"] },
+        { "q": "Who is the main character of 'Gurren Lagann'?", "a": "Simon", "v": ["simon"] },
+        { "q": "What is the name of the drill-shaped mecha in 'Gurren Lagann'?", "a": "Gurren Lagann", "v": ["gurren lagann"] },
+        { "q": "In 'Bleach', what is the name of the final form of a Zanpakuto?", "a": "Bankai", "v": ["bankai"] },
+        { "q": "Who is the protagonist of 'Noragami'?", "a": "Yato", "v": ["yato"] },
+        { "q": "What is the name of the girl who follows Yato in 'Noragami'?", "a": "Hiyori Iki", "v": ["hiyori", "hiyori iki"] },
+        { "q": "In 'Jujutsu Kaisen', who is the principal of Tokyo Jujutsu High?", "a": "Masamichi Yaga", "v": ["yaga", "masamichi yaga"] }
+      ]
+    }
+  }
