@@ -89,10 +89,28 @@ ACTIVE_MATCH_STATUSES = (
 )
 
 
+def _expire_stale_pending_matches(session):
+    """Expire invitations whose timer elapsed while no expiry job was running.
+
+    Scheduled expiry jobs are best-effort: they can be missed when the bot is
+    restarted or temporarily unavailable.  Lazily cleaning stale invitations
+    before active-match lookups prevents those old rows from blocking new
+    matches indefinitely.
+    """
+    expired = (session.query(Match)
+               .filter(Match.status == "pending",
+                       Match.expires_at.isnot(None),
+                       Match.expires_at < datetime.utcnow())
+               .update({Match.status: "expired"}, synchronize_session=False))
+    if expired:
+        session.commit()
+
+
 def _active_match_in_chat(session, chat_id):
     """Return the newest unfinished match in a chat, if one exists."""
     if not chat_id:
         return None
+    _expire_stale_pending_matches(session)
     return (session.query(Match)
             .filter(Match.chat_id == chat_id,
                     Match.status.in_(ACTIVE_MATCH_STATUSES))
@@ -102,6 +120,7 @@ def _active_match_in_chat(session, chat_id):
 
 def _active_match_for_user(session, user_id):
     """Return an unfinished match involving ``user_id``, if one exists."""
+    _expire_stale_pending_matches(session)
     return (session.query(Match)
             .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
                     Match.status.in_(ACTIVE_MATCH_STATUSES))
