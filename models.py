@@ -821,6 +821,7 @@ class GameConfig(Base):
     # Global gameplay style for all newly started matches: original Telegram
     # callback buttons (default) or the optional Mini App live board.
     match_style = Column(String(20), default="telegram", nullable=False)
+    challenge_max_overs = Column(Integer, default=2, nullable=False)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

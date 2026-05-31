@@ -64,6 +64,8 @@ from handlers.bowlout import (
     bowlout_pick_callback,
 )
 from handlers.catch import bal_handler, catch_handler
+from handlers.challenge import challenge_handler, challenge_accept_callback, challenge_deny_callback, challenge_toss_callback, challenge_pick_callback
+from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
@@ -216,8 +218,9 @@ BOT_MENU_COMMANDS = (
     ("ewm", "Enable welcome messages for this chat"),
     ("dwm", "Disable welcome messages for this chat"),
     ("pbo", "Start a player bowl-out"),
-    ("catch", "Catch a cric reward"),
-    ("bal", "Check your cric balance"),
+    ("catch", "Catch coins using your purse"),
+    ("cm", "Start a two-wicket challenge match"),
+    ("unscramble", "Create an Unscramble Player lobby"),
     ("traits", "View your traits and inventory"),
     ("traitshop", "Browse the daily trait shop"),
     ("traitapply", "Apply a trait to a player"),
@@ -360,8 +363,9 @@ async def start_handler(update, context):
         "/setcaptain /cap [name] - Set captain\n"
         "/teamname /tn [name] - Set team name\n"
         "/purse /p - Check balance\n"
-        "/bal cric - Check /catch CRIC balance\n"
-        "/catch [bet] [height] - Play the CRIC catching game\n"
+        "/catch [bet] [height] - Risk purse coins in the catching game\n"
+        "/cm @user - Two-wicket challenge mode\n"
+        "/unscramble - Create an Unscramble Player lobby\n"
         "/release /rel [name|pos] - Release for coins\n"
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
@@ -509,15 +513,8 @@ def main():
                .build())
 
         def _is_storage_only_command(update):
-            """Keep /catch and /bal cric independent from Neon-backed middleware."""
-            message = update.effective_message
-            text = (message.text or "").strip().lower() if message else ""
-            tokens = text.split()
-            if not tokens:
-                return False
-            command, *args = tokens
-            command = command.split("@", 1)[0]
-            return command == "/catch" or (command == "/bal" and args == ["cric"])
+            """Compatibility hook: all current commands use normal middleware."""
+            return False
 
         # ── Chat-tracker middleware (group=-3, runs FIRST) ──
         async def _track_chat(update, context):
@@ -660,6 +657,18 @@ def main():
         app.add_handler(CommandHandler(["pbo", "bowlout"], pbo_handler))
         app.add_handler(CommandHandler("catch", catch_handler))
         app.add_handler(CommandHandler("bal", bal_handler))
+        app.add_handler(CommandHandler("cm", challenge_handler))
+        app.add_handler(CallbackQueryHandler(challenge_accept_callback, pattern=r"^cm_accept_"))
+        app.add_handler(CallbackQueryHandler(challenge_deny_callback, pattern=r"^cm_deny_"))
+        app.add_handler(CallbackQueryHandler(challenge_toss_callback, pattern=r"^cm_toss_"))
+        app.add_handler(CallbackQueryHandler(challenge_pick_callback, pattern=r"^cm_pick_"))
+        app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
+        app.add_handler(CommandHandler("ju", unscramble_join_handler))
+        app.add_handler(CommandHandler("eu", unscramble_exit_handler))
+        app.add_handler(CommandHandler("su", unscramble_start_handler))
+        app.add_handler(CommandHandler("cu", unscramble_cancel_handler))
+        app.add_handler(CallbackQueryHandler(unscramble_join_handler, pattern=r"^us_join$"))
+        app.add_handler(CallbackQueryHandler(unscramble_answer_callback, pattern=r"^us_ans_"))
 
         # ── Trait system ─────────────────────────────────────────────
         app.add_handler(CommandHandler(["traits", "tt"], traits_handler))

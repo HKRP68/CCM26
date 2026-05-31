@@ -2004,6 +2004,9 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             s["bat_team_name"] = bt; s["bowl_team_name"] = bwt
             s["bat_username"] = bu.username; s["bowl_username"] = bwu.username
             s["pitch_type"] = m.pitch_type
+            if context.bot_data.get(f"challenge_{mid}"):
+                s["wicket_limit"] = 2
+                s["is_challenge"] = True
             # Persist initial state with PICK_DELIVERY action
             _ss(context, mid, s, next_action=A_PICK_DELIVERY)
 
@@ -2644,7 +2647,7 @@ async def _process_shot_core(context, mid, si, *, q=None):
             # Determine canonical next_action
             if is_innings_over(s):
                 next_act = A_INNINGS_BREAK
-            elif need_new_bat and s["total_wickets"] < 10:
+            elif need_new_bat and s["total_wickets"] < s.get("wicket_limit", 10):
                 next_act = A_PICK_NEW_BATSMAN
             elif eoo:
                 next_act = A_PICK_NEW_BOWLER

@@ -7979,11 +7979,16 @@ def admin_match_settings():
             if match_style not in MATCH_STYLES:
                 flash("Invalid match style.", "error")
                 return redirect(url_for("admin_match_settings"))
-            save_config(db, {"match_style": match_style},
+            try:
+                challenge_max_overs = max(1, min(20, int(request.form.get("challenge_max_overs", 2))))
+            except ValueError:
+                flash("Challenge max overs must be a whole number from 1 to 20.", "error")
+                return redirect(url_for("admin_match_settings"))
+            save_config(db, {"match_style": match_style, "challenge_max_overs": challenge_max_overs},
                         updated_by=session.get("admin_user", "admin"))
             db.commit()
             log_admin(db, "match_style_save", "config", 0, "matches",
-                      f"match_style={match_style}")
+                      f"match_style={match_style} challenge_max_overs={challenge_max_overs}")
             db.commit()
             flash("✅ Match gameplay style saved for all new matches.", "info")
             return redirect(url_for("admin_match_settings"))
