@@ -255,3 +255,12 @@ TRAIT_REROLL_COST = TRAIT_MARKET_REROLL_COST
 TRAIT_DAILY_DISCOUNT_MIN = TRAIT_DISCOUNT_RANGE[0]
 TRAIT_DAILY_DISCOUNT_MAX = TRAIT_DISCOUNT_RANGE[1]
 
+# ── Match rewards (static fallbacks; real values live in GameConfig DB row) ───
+WINNER_REWARD_PER_OVER = 300   # coins per over for match winner
+LOSER_REWARD_PER_OVER = 150    # coins per over for match loser
+
+
+def get_max_overs_per_bowler(total_overs: int) -> int:
+    """Max overs a single bowler may bowl. Standard rule: total_overs // 5."""
+    return max(1, total_overs // 5) if total_overs >= 5 else 1
+
