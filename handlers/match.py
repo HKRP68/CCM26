@@ -1,6 +1,6 @@
 """Handler for /playmatch — full match with endmatch, timeouts, rewards."""
 
-import io, random, logging
+import asyncio, io, random, logging
 from datetime import datetime, timedelta
 from sqlalchemy import or_
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -2154,6 +2154,43 @@ async def _show_length_picker(ctx, cid, mid):
         _start_action_timer(ctx, mid, s["bowl_user_tg"], "select length")
     except Exception:
         logger.exception(f"_show_length_picker failed for match {mid}")
+        _schedule_recovery(ctx, mid, "length picker")
+
+
+def _schedule_recovery(ctx, mid, where, delay=1.0):
+    """Retry a failed match prompt automatically without requiring `/r`."""
+    key = f"match_recovery_{mid}"
+    existing = ctx.bot_data.get(key)
+    if existing and not existing.done():
+        return existing
+
+    async def _runner():
+        await asyncio.sleep(delay)
+        for attempt in range(3):
+            if await _safe_show_next(ctx, mid):
+                return
+            await asyncio.sleep(1.0 + attempt)
+        state = _gs(ctx, mid)
+        if state:
+            try:
+                await ctx.bot.send_message(
+                    state["chat_id"],
+                    "⚠️ Still reconnecting the match automatically. Please wait a moment; "
+                    "your current turn is saved.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    task = asyncio.create_task(_runner(), name=key)
+    ctx.bot_data[key] = task
+
+    def _cleanup(done_task):
+        if ctx.bot_data.get(key) is done_task:
+            ctx.bot_data.pop(key, None)
+
+    task.add_done_callback(_cleanup)
+    return task
 
 
 async def _recover_stuck(ctx, mid, where):
@@ -2169,10 +2206,11 @@ async def _recover_stuck(ctx, mid, where):
 
     success = await _safe_show_next(ctx, mid)
     if not success:
+        _schedule_recovery(ctx, mid, where)
         try:
             await ctx.bot.send_message(
                 s["chat_id"],
-                f"⚠️ Match hit a hiccup ({where}). Type <code>/r</code> or <code>/resume</code> to continue.",
+                f"⚠️ Match hit a hiccup ({where}). Reconnecting automatically…",
                 parse_mode="HTML")
         except Exception:
             pass
@@ -2201,8 +2239,8 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success = await _safe_show_next(context, found_mid)
     if not success:
         await update.message.reply_text(
-            "⚠️ Could not auto-resume. The match state may be corrupted.\n"
-            "Type /endmatch to end (fine applies) or wait and try /resume again.")
+            "⚠️ Could not reconnect immediately. Automatic recovery is still active.\n"
+            "Please wait a moment, or use /endmatch to end the match (fine applies).")
 
 
 # ═══════════════════════════ DELIVERY ════════════════════════════════
@@ -2250,8 +2288,9 @@ async def _show_delivery(ctx, cid, mid):
         try:
             await ctx.bot.send_message(
                 cid,
-                "⚠️ Couldn't show delivery buttons. Type /resume to retry.",
+                "⚠️ Couldn't show delivery buttons. Retrying automatically…",
                 parse_mode="HTML")
+            _schedule_recovery(ctx, mid, "delivery prompt")
         except Exception:
             pass
 
@@ -2333,11 +2372,7 @@ async def length_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Outside lock — route to next step
     try:
-        if s.get("is_vsbot") and s.get("bat_user_tg") == BOT_TG_ID_:
-            from handlers.vsbot import _bot_play_shot
-            await _bot_play_shot(context, mid)
-        else:
-            await render_screen(context, mid)
+        await render_screen(context, mid)
     except Exception:
         logger.exception(f"length_callback routing failed mid={mid}")
         await _recover_stuck(context, mid, "length-route")
@@ -2380,13 +2415,10 @@ async def spinner_delivery_callback(update: Update, context: ContextTypes.DEFAUL
 
     # Outside lock — route
     try:
-        if s.get("is_vsbot") and s.get("bat_user_tg") == BOT_TG_ID_:
-            from handlers.vsbot import _bot_play_shot
-            await _bot_play_shot(context, mid)
-        else:
-            await render_screen(context, mid)
+        await render_screen(context, mid)
     except Exception:
         logger.exception(f"spinner_delivery routing failed mid={mid}")
+        await _recover_stuck(context, mid, "spinner-delivery-route")
 
 
 # ═══════════════════════════ SHOT ════════════════════════════════════
@@ -2428,8 +2460,9 @@ async def _show_shot(ctx, cid, mid):
         try:
             await ctx.bot.send_message(
                 cid,
-                f"⚠️ Couldn't show shot buttons. Type /resume to retry.",
+                "⚠️ Couldn't show shot buttons. Retrying automatically…",
                 parse_mode="HTML")
+            _schedule_recovery(ctx, mid, "shot prompt")
         except Exception:
             pass
 
@@ -2936,8 +2969,9 @@ async def _show_new_batsman(ctx, mid):
         try:
             await ctx.bot.send_message(
                 s["chat_id"],
-                "⚠️ Couldn't show batsman picker. Type /resume to retry.",
+                "⚠️ Couldn't show batsman picker. Retrying automatically…",
                 parse_mode="HTML")
+            _schedule_recovery(ctx, mid, "batsman picker")
         except Exception:
             pass
 
@@ -2974,8 +3008,9 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(
                 s["chat_id"],
-                "⚠️ Hit a hiccup. Type <code>/resume</code> to continue.",
+                "⚠️ Hit a hiccup. Reconnecting automatically…",
                 parse_mode="HTML")
+            _schedule_recovery(context, mid, "new batsman")
         except Exception:
             pass
 
@@ -3010,8 +3045,9 @@ async def _show_new_over_bowler(ctx, mid):
         try:
             await ctx.bot.send_message(
                 s["chat_id"],
-                "⚠️ Couldn't show bowler picker. Type /resume to retry.",
+                "⚠️ Couldn't show bowler picker. Retrying automatically…",
                 parse_mode="HTML")
+            _schedule_recovery(ctx, mid, "bowler picker")
         except Exception:
             pass
 

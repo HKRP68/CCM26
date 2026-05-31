@@ -10,6 +10,7 @@ Flow:
   6. Match begins using existing engine. AI controls bot decisions.
 """
 
+import asyncio
 import logging
 import random
 from datetime import datetime, timedelta
@@ -24,6 +25,42 @@ from services.bot_ai import BOT_TG_ID
 from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
+
+
+def _queue_bot_action(context, mid, action_name, action):
+    """Queue one AI action without blocking Telegram callback handling.
+
+    Bot-vs-bot matches can run for hundreds of deliveries.  Running every AI
+    choice by recursively awaiting the next one grows a deep coroutine chain
+    and leaves the originating callback open for the whole match.  A small
+    per-action task guard keeps the UI responsive and also prevents duplicate
+    heartbeat renders from scheduling the same AI choice twice.
+    """
+    key = f"vsbot_task_{action_name}_{mid}"
+    existing = context.bot_data.get(key)
+    if existing and not existing.done():
+        return existing
+
+    async def _runner():
+        try:
+            await action(context, mid)
+        except Exception:
+            logger.exception("Queued vsbot %s action failed for match %s", action_name, mid)
+            # Retry after this failed task has unwound. Rendering immediately
+            # would see the still-running guard and incorrectly treat the bot
+            # action as already queued.
+            from handlers.match import _schedule_recovery
+            _schedule_recovery(context, mid, f"bot {action_name}")
+
+    task = asyncio.create_task(_runner(), name=key)
+    context.bot_data[key] = task
+
+    def _cleanup(done_task):
+        if context.bot_data.get(key) is done_task:
+            context.bot_data.pop(key, None)
+
+    task.add_done_callback(_cleanup)
+    return task
 
 
 def _pitch_hint_vsbot(pitch_type):
@@ -899,13 +936,10 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
             except Exception:
                 pass
 
-        # First delivery prompt
-        if state["bowl_user_tg"] == BOT_TG_ID:
-            # Bot bowls — auto-pick delivery
-            await _bot_bowl_delivery(context, mid)
-        else:
-            # User bowls — show normal delivery picker
-            await _show_delivery(context, chat_id, mid)
+        # First delivery prompt. Route through the dispatcher so bot actions
+        # use the same responsive queue as every later delivery.
+        from handlers.match import render_screen
+        await render_screen(context, mid)
 
     except Exception:
         session.rollback()
@@ -933,7 +967,7 @@ async def _bot_bowl_delivery(context, mid):
     import asyncio
     await asyncio.sleep(1.5)  # Pacing
 
-    from handlers.match import _gs, _ss, _show_shot
+    from handlers.match import _gs, _ss, render_screen, _show_shot
     from services.bot_ai import pick_bot_delivery
 
     s = _gs(context, mid)
@@ -947,7 +981,10 @@ async def _bot_bowl_delivery(context, mid):
     pick = pick_bot_delivery(bowler, over, total_overs, difficulty)
     s["current_delivery"] = pick["delivery"]
     s["selected_variation"] = None
-    _ss(context, mid, s)
+    # Persist the shot step before rendering it.  Recovery must never replay
+    # a bot delivery after the AI has already selected one.
+    from services.match_state_store import A_PICK_SHOT
+    _ss(context, mid, s, next_action=A_PICK_SHOT)
 
     # Announce
     try:
@@ -961,8 +998,9 @@ async def _bot_bowl_delivery(context, mid):
 
     # Now show user the shot picker (since user is batting if bot is bowling)
     if s.get("bat_user_tg") == BOT_TG_ID:
-        # Bot is also batting (shouldn't happen in vsbot) — auto-shot
-        await _bot_play_shot(context, mid)
+        # Spectator bot-vs-bot mode: dispatch the next AI choice separately
+        # instead of recursively awaiting the entire match.
+        await render_screen(context, mid)
     else:
         await _show_shot(context, s["chat_id"], mid)
 
@@ -1047,7 +1085,12 @@ async def vsbot_auto_continue(context, mid):
             )
             if p:
                 s["striker_idx"] = idx
-                _ss(context, mid, s, next_action=A_PICK_DELIVERY)
+                # A wicket on the last ball of an over still needs a bowler
+                # selection after the replacement batsman is chosen.
+                next_action = (A_PICK_NEW_BOWLER
+                               if s["current_ball"] == 0 and s["current_over"] > 1
+                               else A_PICK_DELIVERY)
+                _ss(context, mid, s, next_action=next_action)
                 try:
                     await context.bot.send_message(
                         s["chat_id"],
@@ -1056,19 +1099,11 @@ async def vsbot_auto_continue(context, mid):
                     )
                 except Exception:
                     pass
-                # We handled the batsman selection. Now try to continue:
-                # if bot is also bowling, recurse to fire the next ball; otherwise
-                # let the user's UI take over for the bowling step.
-                # CRITICAL: Always return True here — we handled the batsman pick.
-                # If we returned the recursive result, a False (= "user must act now")
-                # would cause render_screen to re-show the batsman picker and override
-                # our pick.
-                if bowl_is_bot:
-                    await vsbot_auto_continue(context, mid)
-                else:
-                    # User must bowl — show them the delivery picker
-                    from handlers.match import render_screen
-                    await render_screen(context, mid)
+                # We handled the batsman selection. Always route the next
+                # state through the dispatcher: it may be a fresh delivery or,
+                # after a last-ball wicket, the next-over bowler picker.
+                from handlers.match import render_screen
+                await render_screen(context, mid)
                 return True
             return False
         else:
@@ -1095,14 +1130,10 @@ async def vsbot_auto_continue(context, mid):
                 )
             except Exception:
                 pass
-            # Same fix: always return True after we handled the bowler pick.
-            if bat_is_bot:
-                # Bot also bats — bowl the next delivery automatically
-                await vsbot_auto_continue(context, mid)
-            else:
-                # User bats — they'll wait for the bot's delivery
-                from handlers.match import render_screen
-                await render_screen(context, mid)
+            # Continue through the dispatcher.  AI work is queued below so
+            # a full spectator match does not become one recursive await chain.
+            from handlers.match import render_screen
+            await render_screen(context, mid)
             return True
         else:
             # User bowling — let UI handle
@@ -1111,7 +1142,7 @@ async def vsbot_auto_continue(context, mid):
     # ── Fresh delivery to be picked
     if next_act == A_PICK_DELIVERY:
         if bowl_is_bot:
-            await _bot_bowl_delivery(context, mid)
+            _queue_bot_action(context, mid, "delivery", _bot_bowl_delivery)
             return True
         else:
             return False
@@ -1126,7 +1157,7 @@ async def vsbot_auto_continue(context, mid):
     # ── Shot awaiting
     if next_act == A_PICK_SHOT:
         if bat_is_bot:
-            await _bot_play_shot(context, mid)
+            _queue_bot_action(context, mid, "shot", _bot_play_shot)
             return True
         else:
             return False
