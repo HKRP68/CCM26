@@ -6000,6 +6000,20 @@ def cricket_arena_asset(filename):
     return send_from_directory(_CRICKET_DIR, filename)
 
 
+# ── Lucky Spin standalone Mini App (UnderCover-style wheel) ──────────────
+# Self-contained page wired to the existing POST /api/webapp/spin (+ ad-gating
+# via /api/webapp/ad-completed). Open it with a Telegram Web App button so the
+# page receives initData for auth.
+_SPIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "static", "spin")
+
+
+@app.route("/spin")
+def spin_wheel_index():
+    from flask import send_from_directory
+    return send_from_directory(_SPIN_DIR, "index.html")
+
+
 @app.route("/api/match", methods=["GET"])
 @csrf_exempt
 def match_rest_poll():
