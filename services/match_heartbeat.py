@@ -254,7 +254,13 @@ def start_heartbeat(application):
 
     # Fallback: register a post_init handler that creates an asyncio loop task.
     # This works even when python-telegram-bot[job-queue] is not installed.
+    # Preserve any existing startup hook, such as bot-menu registration.
+    previous_post_init = application.post_init
+
     async def _post_init(app):
+        if previous_post_init:
+            await previous_post_init(app)
+
         import asyncio
         async def _loop():
             class _FakeContext:

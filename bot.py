@@ -13,7 +13,7 @@ from telegram.ext import (
     TypeHandler,
     filters,
 )
-from telegram import Update as _TGUpdate
+from telegram import BotCommand, Update as _TGUpdate
 
 from config import BOT_TOKEN
 from database import init_db
@@ -176,6 +176,76 @@ from handlers.botmatch import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Keep this list aligned with the canonical command names registered in main().
+# Aliases remain supported by CommandHandler, but publishing only canonical names
+# keeps Telegram's slash-command menu complete without filling it with duplicates.
+BOT_MENU_COMMANDS = (
+    ("start", "Show the welcome message and command overview"),
+    ("debut", "Create your account and receive a starting squad"),
+    ("claim", "Claim your hourly player and coin reward"),
+    ("gspin", "Spin the reward wheel"),
+    ("daily", "Claim your daily reward"),
+    ("myroster", "View your player roster"),
+    ("playerinfo", "View details for a player"),
+    ("releasepl", "Release one player from your roster"),
+    ("releasemultiple", "Release multiple roster players"),
+    ("trade", "Trade players with another user"),
+    ("playingxi", "View or manage your playing XI"),
+    ("autobuild", "Build your best available playing XI"),
+    ("swapplayers", "Swap two players in your lineup"),
+    ("setcaptain", "Set your team captain"),
+    ("searchpl", "Search for a player by name"),
+    ("searchovr", "Search players by overall rating"),
+    ("buypl", "Buy a player"),
+    ("teamname", "Set your team name"),
+    ("purse", "Check your balance"),
+    ("stats", "View player game statistics"),
+    ("cmuleaderboard", "View the leaderboard"),
+    ("myprofile", "View your profile"),
+    ("playmatch", "Challenge another user to a match"),
+    ("endmatch", "Request to end your active match"),
+    ("resume", "Resume your active match"),
+    ("lastmatch", "View your last match"),
+    ("recentmatches", "View your recent matches"),
+    ("matchinfo", "View active match information"),
+    ("report", "Send feedback or report an issue"),
+    ("cmuundo", "Undo your latest eligible action"),
+    ("app", "Open the Cricket Simulator Mini App"),
+    ("ewm", "Enable welcome messages for this chat"),
+    ("dwm", "Disable welcome messages for this chat"),
+    ("pbo", "Start a player bowl-out"),
+    ("catch", "Catch a cric reward"),
+    ("bal", "Check your cric balance"),
+    ("traits", "View your traits and inventory"),
+    ("traitshop", "Browse the daily trait shop"),
+    ("traitapply", "Apply a trait to a player"),
+    ("traitupgrade", "Upgrade a player trait"),
+    ("traitreplace", "Replace a player trait"),
+    ("playermarket", "Browse the player market"),
+    ("buypack", "Browse and buy card packs"),
+    ("openpack", "Open a pack from your inventory"),
+    ("cmtours", "Create a tournament"),
+    ("mytours", "View your tournaments"),
+    ("vsbot", "Play a match against a bot"),
+    ("myquest", "View and claim quest rewards"),
+    ("achievements", "View your achievements"),
+    ("howto", "Open the help guide"),
+    ("invite", "Invite friends and view referrals"),
+    ("redeem", "Redeem a reward code"),
+    ("botvsbot", "Configure a bot-versus-bot match"),
+    ("botmatch", "Spectate a bot-versus-bot match"),
+)
+
+
+async def register_bot_menu(application):
+    """Publish every canonical bot command to Telegram's slash-command menu."""
+    await application.bot.set_my_commands([
+        BotCommand(command, description)
+        for command, description in BOT_MENU_COMMANDS
+    ])
+    logger.info("Registered %s Telegram bot-menu commands", len(BOT_MENU_COMMANDS))
 
 
 async def start_handler(update, context):
@@ -433,7 +503,10 @@ def main():
     try:
         print(f"  Telegram bot: ✅ starting...")
         logger.info("Starting bot...")
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        app = (ApplicationBuilder()
+               .token(BOT_TOKEN)
+               .post_init(register_bot_menu)
+               .build())
 
         def _is_storage_only_command(update):
             """Keep /catch and /bal cric independent from Neon-backed middleware."""
