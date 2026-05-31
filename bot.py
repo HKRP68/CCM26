@@ -63,7 +63,7 @@ from handlers.bowlout import (
     pbo_handler, pbo_accept_callback, pbo_decline_callback,
     bowlout_pick_callback,
 )
-from handlers.catch import catch_handler
+from handlers.catch import bal_handler, catch_handler
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
@@ -290,6 +290,8 @@ async def start_handler(update, context):
         "/setcaptain /cap [name] - Set captain\n"
         "/teamname /tn [name] - Set team name\n"
         "/purse /p - Check balance\n"
+        "/bal cric - Check /catch CRIC balance\n"
+        "/catch [bet] [height] - Play the CRIC catching game\n"
         "/release /rel [name|pos] - Release for coins\n"
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
@@ -433,8 +435,21 @@ def main():
         logger.info("Starting bot...")
         app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+        def _is_storage_only_command(update):
+            """Keep /catch and /bal cric independent from Neon-backed middleware."""
+            message = update.effective_message
+            text = (message.text or "").strip().lower() if message else ""
+            tokens = text.split()
+            if not tokens:
+                return False
+            command, *args = tokens
+            command = command.split("@", 1)[0]
+            return command == "/catch" or (command == "/bal" and args == ["cric"])
+
         # ── Chat-tracker middleware (group=-3, runs FIRST) ──
         async def _track_chat(update, context):
+            if _is_storage_only_command(update):
+                return
             try:
                 from services.chat_tracker import record_chat
                 record_chat(update)
@@ -444,6 +459,8 @@ def main():
 
         # ── Maintenance middleware (group=-2, runs FIRST) ──
         async def _maintenance_check(update, context):
+            if _is_storage_only_command(update):
+                return
             try:
                 from services.maintenance_service import (
                     should_block_update, get_maintenance_message
@@ -470,6 +487,8 @@ def main():
 
         # ── Ban-guard middleware (group=-1, runs before all handlers) ──
         async def _ban_check(update, context):
+            if _is_storage_only_command(update):
+                return
             user = update.effective_user
             if not user:
                 return
@@ -567,6 +586,7 @@ def main():
         # ── Bowl-out command ─────────────────────────────────────────
         app.add_handler(CommandHandler(["pbo", "bowlout"], pbo_handler))
         app.add_handler(CommandHandler("catch", catch_handler))
+        app.add_handler(CommandHandler("bal", bal_handler))
 
         # ── Trait system ─────────────────────────────────────────────
         app.add_handler(CommandHandler(["traits", "tt"], traits_handler))
