@@ -72,19 +72,15 @@ from handlers.app import app_handler
 
 # Match handlers
 from handlers.match import (
-    playmatch_handler, match_accept_callback, match_deny_callback,
+    playmatch_handler, cric_handler, cric_join_callback,
+    cric_cancel_lobby_callback, cric_decision_callback,
+    match_accept_callback, match_deny_callback,
     overs_text_handler, toss_decision_callback,
     opener1_callback, opener2_callback, select_bowler_callback,
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
-)
-
-# Open-lobby cricket match (/cric → WebApp board)
-from handlers.cric import (
-    cric_handler, cric_join_callback, cric_cancel_callback,
-    cric_decision_callback,
 )
 
 # Trait handlers
@@ -654,7 +650,7 @@ def main():
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
-        app.add_handler(CommandHandler(["cric"], cric_handler))
+        app.add_handler(CommandHandler("cric", cric_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
@@ -849,12 +845,11 @@ def main():
         app.add_handler(CallbackQueryHandler(player_page_noop_callback, pattern=r"^plpgnoop_"))
 
         # ── Match callbacks ──────────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
+        app.add_handler(CallbackQueryHandler(cric_cancel_lobby_callback, pattern=r"^cric_cancel_lobby$"))
+        app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cric_decision:"))
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
         app.add_handler(CallbackQueryHandler(match_deny_callback, pattern=r"^matchdeny_"))
-        # ── Open /cric lobby callbacks ───────────────────────────────
-        app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
-        app.add_handler(CallbackQueryHandler(cric_cancel_callback, pattern=r"^cric_cancel$"))
-        app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cricdec_"))
         app.add_handler(CallbackQueryHandler(toss_decision_callback, pattern=r"^toss_"))
         app.add_handler(CallbackQueryHandler(opener1_callback, pattern=r"^op1_"))
         app.add_handler(CallbackQueryHandler(opener2_callback, pattern=r"^op2_"))
