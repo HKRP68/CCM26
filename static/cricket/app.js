@@ -928,9 +928,12 @@ function renderControlsSection() {
     promptText.innerText = "🏏 CHOOSE YOUR SHOT";
     
     if (matchState.currentDelivery) {
-      const delName = matchState.currentDelivery.replace(/_/g, ' ').toUpperCase();
-      const speedName = matchState.currentSpeed ? matchState.currentSpeed.toUpperCase() : 'NORMAL';
-      const displayText = `${speedName} ${delName}`;
+      const delName = String(matchState.currentDelivery).replace(/_/g, ' ').toUpperCase();
+      const speedName = matchState.currentSpeed ? String(matchState.currentSpeed).toUpperCase() : 'NORMAL';
+      const speedKmh = Number.isFinite(Number(matchState.currentSpeedKmh))
+        ? ` • ${Number(matchState.currentSpeedKmh)} KM/H`
+        : '';
+      const displayText = `${speedName} ${delName}${speedKmh}`;
 
       promptSubtitle.innerHTML = `<span class="glow-text" style="color:var(--warning-accent); font-weight:800; font-size:12px; letter-spacing:0.5px;">INCOMING: ${displayText}</span>`;
       incomingCard.classList.remove('hidden');

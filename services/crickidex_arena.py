@@ -476,7 +476,11 @@ def serialize_match_state(session, match, viewer_user):
         "innings2Stats": _merge_stats(state, innings_filter=2),
         "commentary": commentary,
         "currentDelivery": state.get("current_delivery"),
-        "currentSpeed": state.get("last_speed") or state.get("current_speed"),
+        # Keep the qualitative speed label and numeric km/h value separate.
+        # The batting controls render the label with string operations, while
+        # last_speed is the simulation-generated numeric speed.
+        "currentSpeed": state.get("current_speed"),
+        "currentSpeedKmh": state.get("last_speed"),
         "lastBall": last_ball,
         "partnership": {
             "runs": state.get("partnership_runs", 0),
