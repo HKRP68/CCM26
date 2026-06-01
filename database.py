@@ -282,6 +282,9 @@ def _migrate_add_columns():
     _try_add("users", "last_club_leave", "TIMESTAMP")
     # Welcome message toggle per group
     _try_add("bot_chats", "welcome_enabled", "BOOLEAN DEFAULT TRUE")
+    # Optional image/document metadata for admin broadcasts
+    _try_add("broadcasts", "attachment_type", "VARCHAR(20)")
+    _try_add("broadcasts", "attachment_name", "VARCHAR(255)")
     # Official group restriction for buying
     _try_add("game_config", "official_group_id", "BIGINT")
     _try_add("game_config", "official_group_link", "VARCHAR(200)")
