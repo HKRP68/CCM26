@@ -878,7 +878,8 @@ function renderControlsSection() {
   // per-ball signature means we expand once per turn but still let the user
   // manually minimize within the same turn.
   const turnSig = `${matchState.turnState}|${matchState.score.overs}.${matchState.score.balls}|${matchState.score.wickets}`;
-  if (lastActionableSig !== turnSig) {
+  const isNewActionableTurn = lastActionableSig !== turnSig;
+  if (isNewActionableTurn) {
     if (activeBlock.classList.contains('minimized')) {
       activeBlock.classList.remove('minimized');
       const iconSvg = document.getElementById('toggle-controls-icon');
@@ -921,6 +922,10 @@ function renderControlsSection() {
     }
     document.getElementById('batting-controls').classList.remove('hidden');
     renderBattingShots();
+    if (isNewActionableTurn) {
+      const sheetBody = document.querySelector('.sheet-body');
+      if (sheetBody) sheetBody.scrollTop = 0;
+    }
   } 
   else if (matchState.turnState === 'selecting_wicket_batsman') {
     promptText.innerText = "⚠️ WICKET! SELECT REPLACEMENT";
