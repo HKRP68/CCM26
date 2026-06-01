@@ -14,7 +14,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20260601-6">
+  <link rel="stylesheet" href="style.css?v=20260601-7">
 </head>
 <body>
   <div id="app-container">
@@ -295,7 +295,6 @@
           <div class="sheet-header-text">
             <h2 id="controls-prompt-text">CHOOSE YOUR SHOT</h2>
             <p id="controls-prompt-subtitle">Pick the best shot for this ball</p>
-            <div id="controls-match-status-bar" class="match-status-bar-inline"></div>
           </div>
           <button class="sheet-toggle-btn" id="toggle-controls-btn" title="Toggle Controls View">
             <svg id="toggle-controls-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -385,6 +384,9 @@
               <p id="waiting-status-text">Waiting for opponent...</p>
             </div>
           </div>
+
+          <!-- MATCH SUMMARY (kept below actionable controls so it cannot hide them) -->
+          <div id="controls-match-status-bar" class="match-status-bar-inline"></div>
         </div>
       </div>
     </div>
@@ -429,6 +431,6 @@
 
   </div>
   
-  <script src="app.js?v=20260601-6"></script>
+  <script src="app.js?v=20260601-7"></script>
 </body>
 </html>
