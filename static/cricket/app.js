@@ -11,8 +11,6 @@ let chatId = null;
 let userId = null;
 let matchState = null;
 let pollingInterval = null;
-let fetchInFlight = false;
-let identitySelectionRequired = false;
 
 // Selected actions
 let selectedDelivery = null;
@@ -57,15 +55,9 @@ async function init() {
     }
   }
 
-  // 3. Direct/browser launches do not receive Telegram identity. Reuse an
-  // explicitly chosen local identity when possible; otherwise poll once as a
-  // spectator so the identity picker can render the current room participants.
-  if (!userId) {
-    userId = cleanParam(localStorage.getItem('crickidex_user_id'));
-  }
+  // 3. Fallback to spectator if userId is still unresolved
   if (!userId) {
     userId = 'spectator';
-    identitySelectionRequired = true;
   }
 
   // Bind exit handlers
@@ -96,7 +88,7 @@ function setupEventListeners() {
   const submitWicketBatsmanBtn = document.getElementById('submit-wicket-batsman-btn');
   if (submitWicketBatsmanBtn) {
     submitWicketBatsmanBtn.addEventListener('click', () => {
-      const selectedEl = document.querySelector('#wicket-batsman-list .selection-item.selected');
+      const selectedEl = document.querySelector('#wicket-batsman-list .dropdown-item.selected');
       if (selectedEl) {
         document.getElementById('controls-sheet').classList.add('minimized');
         selectNextBatsman(parseInt(selectedEl.dataset.index));
@@ -110,7 +102,7 @@ function setupEventListeners() {
   const submitOverBowlerBtn = document.getElementById('submit-over-bowler-btn');
   if (submitOverBowlerBtn) {
     submitOverBowlerBtn.addEventListener('click', () => {
-      const selectedEl = document.querySelector('#over-bowler-list .selection-item.selected');
+      const selectedEl = document.querySelector('#over-bowler-list .dropdown-item.selected');
       if (selectedEl) {
         document.getElementById('controls-sheet').classList.add('minimized');
         selectNextBowler(parseInt(selectedEl.dataset.index));
@@ -221,9 +213,6 @@ function setupEventListeners() {
     tabHost.classList.add('active');
     tabGuest.classList.remove('active');
     renderScorecardPanel();
-    renderPartnershipHistory();
-    renderManhattanChart();
-    renderOverByOver();
   });
 
   tabGuest.addEventListener('click', () => {
@@ -231,9 +220,6 @@ function setupEventListeners() {
     tabGuest.classList.add('active');
     tabHost.classList.remove('active');
     renderScorecardPanel();
-    renderPartnershipHistory();
-    renderManhattanChart();
-    renderOverByOver();
   });
 }
 
@@ -309,20 +295,16 @@ function showIdentitySelection(match) {
 
 function selectIdentity(selectedId) {
   userId = selectedId.toString();
-  identitySelectionRequired = false;
   localStorage.setItem('crickidex_user_id', userId);
-
-  // Refresh immediately. startPolling() is idempotent, so switching identity
-  // cannot leak a second interval that races the existing room poller.
+  
+  // Start the regular polling
   startPolling();
 }
 
 // Polling Loop
 function startPolling() {
   fetchState();
-  if (!pollingInterval) {
-    pollingInterval = setInterval(fetchState, 300);
-  }
+  pollingInterval = setInterval(fetchState, 1500);
 }
 
 function stopPolling() {
@@ -334,8 +316,6 @@ function stopPolling() {
 
 // API Call - GET state
 async function fetchState() {
-  if (fetchInFlight) return;
-  fetchInFlight = true;
   try {
     // Build query safely without sending stringified "null" or "undefined"
     const params = new URLSearchParams();
@@ -355,14 +335,6 @@ async function fetchState() {
 
     const data = await response.json();
     matchState = data;
-
-    // Direct browser links have no trusted Telegram user context. Show the
-    // intended room identity picker after the first spectator snapshot; an
-    // explicit spectator choice continues into the live board normally.
-    if (identitySelectionRequired) {
-      showIdentitySelection(matchState);
-      return;
-    }
 
     // Check for new ball events to trigger premium alerts & haptic feedback
     if (matchState.commentary && matchState.commentary.length > 0) {
@@ -393,11 +365,9 @@ async function fetchState() {
     }
 
     // Trigger autoplay evaluation after state update
-    setTimeout(runAutoplayAction, 150);
+    setTimeout(runAutoplayAction, 1000);
   } catch (err) {
     console.error("Polling error:", err);
-  } finally {
-    fetchInFlight = false;
   }
 }
 
@@ -718,9 +688,6 @@ function renderGameplayScreen() {
 
   // Render Scorecard & Squads panels (so they are fresh if user switches tabs)
   renderScorecardPanel();
-  renderManhattanChart();
-  renderPartnershipHistory();
-  renderOverByOver();
   renderSquadsPanel();
 }
 
@@ -879,9 +846,14 @@ function renderControlsSection() {
     
     const incomingCard = document.getElementById('incoming-delivery-container');
     if (matchState.currentDelivery) {
-      const delName = matchState.currentDelivery.replace(/_/g, ' ').toUpperCase();
-      const speedName = matchState.currentSpeed ? matchState.currentSpeed.toUpperCase() : 'NORMAL';
-      const displayText = `${speedName} ${delName}`;
+      let displayText = '';
+      if (matchState.currentDelivery === 'mystery_ball') {
+        displayText = '🔮 MYSTERY BALL';
+      } else {
+        const delName = matchState.currentDelivery.replace(/_/g, ' ').toUpperCase();
+        const speedName = matchState.currentSpeed ? matchState.currentSpeed.toUpperCase() : 'NORMAL';
+        displayText = `${speedName} ${delName}`;
+      }
 
       promptSubtitle.innerHTML = `<span class="glow-text" style="color:var(--warning-accent); font-weight:800; font-size:12px; letter-spacing:0.5px;">INCOMING: ${displayText}</span>`;
       incomingCard.classList.remove('hidden');
@@ -912,16 +884,14 @@ function renderControlsSection() {
 // Render dynamic bowler variations grid based on bowler type
 function renderBowlerVariations() {
   const deliveryGrid = document.getElementById('bowler-delivery-grid');
-  const bowlerType = matchState.bowler?.bowler_type || matchState.bowler?.bowl_style || 'fast';
-  const bowlerName = matchState.bowler?.name || '';
-  const isOffSpin = bowlerType === 'off_spin' || bowlerType.toLowerCase().includes('off spin') || bowlerType.toLowerCase().includes('off-spin');
-  const isLegSpin = bowlerType === 'leg_spin' || bowlerType.toLowerCase().includes('leg spin') || bowlerType.toLowerCase().includes('leg-spin');
+  const bowlerType = matchState.bowler?.bowler_type || 'fast';
+  const isOffSpin = bowlerType === 'off_spin';
+  const isLegSpin = bowlerType === 'leg_spin';
   const isSpin = isOffSpin || isLegSpin || bowlerType.toLowerCase().includes('spin');
 
-  const cacheKey = `${isOffSpin ? 'off_spin' : (isLegSpin ? 'leg_spin' : 'fast')}_${bowlerName}`;
+  const cacheKey = isOffSpin ? 'off_spin' : (isLegSpin ? 'leg_spin' : 'fast');
   if (deliveryGrid.dataset.rendered === cacheKey) return;
   deliveryGrid.dataset.rendered = cacheKey;
-  selectedDelivery = null;
 
   let deliveries = [];
   if (isOffSpin) {
@@ -984,6 +954,9 @@ function renderBowlerVariations() {
     btn.className = "btn-variation";
     btn.innerText = del.name;
     btn.dataset.delivery = del.id;
+    if (del.id === 'mystery_ball' && matchState.mysteryBallBowledThisOver) {
+      btn.disabled = true;
+    }
     btn.addEventListener('click', (e) => {
       const allActionBtns = deliveryGrid.querySelectorAll('.btn-variation');
       allActionBtns.forEach(b => b.classList.remove('active'));
@@ -1040,6 +1013,8 @@ async function submitDelivery() {
   // Minimize sheet immediately
   document.getElementById('controls-sheet').classList.add('minimized');
 
+  const isMysteryBall = selectedDelivery === 'mystery_ball';
+
   try {
     const res = await fetch('/api/match/action', {
       method: 'POST',
@@ -1049,10 +1024,12 @@ async function submitDelivery() {
         type: 'delivery',
         action: {
           delivery: selectedDelivery,
-          speed: selectedSpeed
+          speed: selectedSpeed,
+          isMysteryBall
         }
       })
     });
+    
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit delivery");
     fetchState();
@@ -1064,7 +1041,19 @@ async function submitDelivery() {
 // Selection list for incoming batsman
 function renderWicketBatsmanSelectionSheet() {
   const container = document.getElementById('wicket-batsman-list');
-  if (!container) return;
+  const dropdown = document.getElementById('batsman-dropdown');
+  const trigger = document.getElementById('batsman-dropdown-trigger');
+  if (!container || !dropdown || !trigger) return;
+
+  // Set up dropdown toggle
+  trigger.onclick = (e) => {
+    e.stopPropagation();
+    // Close other dropdowns
+    document.querySelectorAll('.custom-dropdown').forEach(d => {
+      if (d !== dropdown) d.classList.remove('open');
+    });
+    dropdown.classList.toggle('open');
+  };
 
   const getBatRating = (p) => p.batting_ovr || p.batting_rating || p.rating || p.ovr || 0;
 
@@ -1084,30 +1073,44 @@ function renderWicketBatsmanSelectionSheet() {
 
   if (bench.length === 0) {
     container.innerHTML = '<div class="no-options">No batsmen remaining</div>';
+    trigger.querySelector('.selected-value').innerText = "No batsmen remaining";
     return;
   }
 
-  let currentSel = container.querySelector('.selection-item.selected')?.dataset.index;
+  let currentSel = container.dataset.selectedIndex;
   if (currentSel === undefined && bench.length > 0) {
     currentSel = bench[0].index.toString();
+    container.dataset.selectedIndex = currentSel;
+  }
+
+  const selectedItem = bench.find(item => item.index.toString() === currentSel);
+  if (selectedItem) {
+    trigger.querySelector('.selected-value').innerText = `${selectedItem.player.name} (${getBatRating(selectedItem.player)} OVR)`;
   }
 
   const build = (selectedIdx) => {
     container.innerHTML = '';
     bench.forEach(item => {
       const div = document.createElement('div');
-      div.className = 'selection-item';
+      div.className = 'dropdown-item';
       div.dataset.index = item.index;
       
       const isSelected = selectedIdx === item.index.toString();
       if (isSelected) div.classList.add('selected');
       
       div.innerHTML = `
-        <span class="selection-item-name">${item.player.name}</span>
-        <span class="selection-item-meta">${getBatRating(item.player)} OVR - ${item.player.role || 'Batsman'}</span>
+        <div class="dropdown-item-info">
+          <span class="dropdown-item-name">${item.player.name}</span>
+          <span class="dropdown-item-meta">${item.player.role || 'Batsman'}</span>
+        </div>
+        <span class="dropdown-item-stat">${getBatRating(item.player)} OVR</span>
       `;
       
-      div.onclick = () => {
+      div.onclick = (e) => {
+        e.stopPropagation();
+        container.dataset.selectedIndex = item.index.toString();
+        trigger.querySelector('.selected-value').innerText = `${item.player.name} (${getBatRating(item.player)} OVR)`;
+        dropdown.classList.remove('open');
         build(item.index.toString());
       };
       container.appendChild(div);
@@ -1137,10 +1140,21 @@ async function selectNextBatsman(index) {
 }
 
 // Selection list for selecting next bowler
-// Selection list for selecting next bowler
 function renderOverBowlerSelectionSheet() {
   const container = document.getElementById('over-bowler-list');
-  if (!container) return;
+  const dropdown = document.getElementById('bowler-dropdown');
+  const trigger = document.getElementById('bowler-dropdown-trigger');
+  if (!container || !dropdown || !trigger) return;
+
+  // Set up dropdown toggle
+  trigger.onclick = (e) => {
+    e.stopPropagation();
+    // Close other dropdowns
+    document.querySelectorAll('.custom-dropdown').forEach(d => {
+      if (d !== dropdown) d.classList.remove('open');
+    });
+    dropdown.classList.toggle('open');
+  };
 
   const getBowlRating = (p) => p.bowling_ovr || p.bowling_rating || p.rating || p.ovr || 0;
   const currentBowlIdx = matchState.bowler ? matchState.bowlingXI.findIndex(p => p.id.toString() === matchState.bowler.id.toString()) : null;
@@ -1165,7 +1179,7 @@ function renderOverBowlerSelectionSheet() {
     } else if (stats.overs >= maxOvers) {
       if (otherEligible) {
         eligible = false;
-        reason = `Max limit reached (${stats.overs}/${maxOvers} ov)`;
+        reason = `Max limit (${stats.overs}/${maxOvers} ov)`;
       } else {
         reason = `Quota full (Fallback allowed)`;
       }
@@ -1177,24 +1191,30 @@ function renderOverBowlerSelectionSheet() {
     return getBowlRating(b.player) - getBowlRating(a.player);
   });
 
-  let currentSel = container.querySelector('.selection-item.selected')?.dataset.index;
+  let currentSel = container.dataset.selectedIndex;
   const firstEligible = bench.find(item => item.eligible);
   if (currentSel === undefined && firstEligible) {
     currentSel = firstEligible.index.toString();
+    container.dataset.selectedIndex = currentSel;
+  }
+
+  const selectedItem = bench.find(item => item.index.toString() === currentSel);
+  if (selectedItem) {
+    trigger.querySelector('.selected-value').innerText = `${selectedItem.player.name} (${getBowlRating(selectedItem.player)} OVR)`;
   }
 
   const build = (selectedIdx) => {
     container.innerHTML = '';
     bench.forEach(item => {
       const div = document.createElement('div');
-      div.className = 'selection-item';
+      div.className = 'dropdown-item';
+      if (!item.eligible) div.classList.add('disabled');
       div.dataset.index = item.index;
       
       const isSelected = selectedIdx === item.index.toString();
       if (isSelected) div.classList.add('selected');
-      if (!item.eligible) div.classList.add('disabled');
       
-      let metaText = `${getBowlRating(item.player)} OVR - ${item.player.bowler_type || 'Bowler'}`;
+      let metaText = item.player.bowler_type || 'Bowler';
       const cleanOvers = item.overs || 0;
       if (cleanOvers > 0) {
         metaText += ` • ${cleanOvers} ov`;
@@ -1204,12 +1224,19 @@ function renderOverBowlerSelectionSheet() {
       }
       
       div.innerHTML = `
-        <span class="selection-item-name">${item.player.name}</span>
-        <span class="selection-item-meta">${metaText}</span>
+        <div class="dropdown-item-info">
+          <span class="dropdown-item-name">${item.player.name}</span>
+          <span class="dropdown-item-meta">${metaText}</span>
+        </div>
+        <span class="dropdown-item-stat">${getBowlRating(item.player)} OVR</span>
       `;
       
       if (item.eligible) {
-        div.onclick = () => {
+        div.onclick = (e) => {
+          e.stopPropagation();
+          container.dataset.selectedIndex = item.index.toString();
+          trigger.querySelector('.selected-value').innerText = `${item.player.name} (${getBowlRating(item.player)} OVR)`;
+          dropdown.classList.remove('open');
           build(item.index.toString());
         };
       }
@@ -1239,92 +1266,6 @@ async function selectNextBowler(index) {
   }
 }
 
-// Vivid commentary fallback templates used when DB commentary is not available
-const COMM_TEMPLATES = {
-  six: [
-    "{bat} launches it into orbit! MAXIMUM — {bowler} is stunned!",
-    "That's HUGE! {bat} clears the ropes with absolute authority! SIX!",
-    "BOOM! {bat} hits it out of the ground! {bowler} can only watch!",
-    "Muscle power! {bat} deposits it into the stands for SIX!",
-    "What a shot! {bat} smashes {bowler} over the boundary for a MAXIMUM!",
-    "Incredible! {bat} sends it sailing into the crowd! SIX runs!",
-    "{bowler} tries hard but {bat} is in the zone — that's a SIX!",
-  ],
-  four: [
-    "CRACKING shot! {bat} finds the gap and races away for FOUR!",
-    "Beautiful timing from {bat} — it races to the boundary!",
-    "{bat} punishes the loose delivery from {bowler} — FOUR!",
-    "Exquisite placement! {bat} threads through the covers for FOUR!",
-    "Sweetly timed by {bat} — the fielder had no chance!",
-    "The ball races away! {bat} finds the boundary with a perfect drive!",
-    "Well played {bat}! That's four runs to the fence!",
-  ],
-  wicket: [
-    "BOWLED 'EM! {bowler} has {bat} completely deceived!",
-    "OUT! {bat} walks back — brilliant delivery from {bowler}!",
-    "WICKET! {bowler} strikes — {bat} is on his way back to the pavilion!",
-    "CAUGHT! {bat} mistimes the shot and walks off — {bowler} is pumped!",
-    "Huge breakthrough! {bowler} removes {bat} — this changes everything!",
-    "What a delivery! {bowler} foxes {bat} completely — OUT!",
-    "Clean bowled! {bowler} finds the gap and {bat} has to walk!",
-  ],
-  dot: [
-    "Tight line from {bowler} — {bat} can't score off that one. Dot ball.",
-    "Good length delivery — {bat} plays it back cautiously.",
-    "Defended solidly by {bat}. {bowler} keeps it tight.",
-    "{bat} has a look but leaves it — well bowled by {bowler}.",
-    "No run. {bowler} generates good movement — {bat} watches it go.",
-    "Excellent discipline from {bowler}! Dot ball.",
-    "{bat} gets a good look but cannot score — tight bowling.",
-  ],
-  one: [
-    "Quick single — {bat} rotates the strike smartly.",
-    "Pushed into the gap, {bat} calls for one.",
-    "Good running by {bat} — worked away for a single.",
-    "Clever cricket from {bat} — finds a gap for one.",
-    "{bat} nudges it into the leg side and takes the single.",
-    "Strike rotation! {bat} tucks it away for a quick one.",
-  ],
-  two: [
-    "Good running between the wickets — two for {bat}!",
-    "{bat} places it well and they come back for two.",
-    "Two runs — quick feet from {bat}!",
-    "Driven into the outfield — they scamper back for two.",
-    "Excellent running! {bat} and his partner grab a quick two.",
-  ],
-  three: [
-    "Three runs! Excellent running between the wickets from {bat}!",
-    "{bat} finds the gap and they run hard for three!",
-    "Superb running — {bat} picks up three with sharp footwork!",
-  ],
-};
-
-function _randomComm(pool, bat, bowler) {
-  const t = pool[Math.floor(Math.random() * pool.length)];
-  return t.replace(/{bat}/g, bat || 'Batsman').replace(/{bowler}/g, bowler || 'Bowler');
-}
-
-function _enrichCommentaryText(comm) {
-  const bat = comm.batsmanName || '';
-  const bowler = comm.bowlerName || '';
-  // If DB commentary exists (>15 chars), use it — but still inject names if placeholders exist
-  if (comm.text && comm.text.length > 15) {
-    let t = comm.text;
-    // Replace any {bat}/{bowler} style placeholders if they exist in DB commentary
-    if (bat) t = t.replace(/\{bat\}/g, bat).replace(/\{batsman\}/gi, bat);
-    if (bowler) t = t.replace(/\{bowler\}/g, bowler);
-    return t;
-  }
-  if (comm.isWicket) return _randomComm(COMM_TEMPLATES.wicket, bat, bowler);
-  if (comm.runs === 6) return _randomComm(COMM_TEMPLATES.six, bat, bowler);
-  if (comm.runs === 4) return _randomComm(COMM_TEMPLATES.four, bat, bowler);
-  if (comm.runs === 3) return _randomComm(COMM_TEMPLATES.three, bat, bowler);
-  if (comm.runs === 0) return _randomComm(COMM_TEMPLATES.dot, bat, bowler);
-  if (comm.runs === 1) return _randomComm(COMM_TEMPLATES.one, bat, bowler);
-  if (comm.runs === 2) return _randomComm(COMM_TEMPLATES.two, bat, bowler);
-  return comm.text || `${comm.runs} run${comm.runs !== 1 ? 's' : ''}`;
-}
-
 // Render Commentary feed in Cricbuzz style
 function renderCommentaryFeed() {
   const list = document.getElementById('commentary-list');
@@ -1334,26 +1275,26 @@ function renderCommentaryFeed() {
   }
 
   list.innerHTML = '';
-
+  
   matchState.commentary.forEach(comm => {
     const item = document.createElement('div');
-
+    
     if (comm.type === 'end_of_over') {
       item.className = "cricbuzz-over-end";
       item.innerHTML = `
         <div class="over-end-header">
           <span class="over-num-title">END OF OVER ${comm.overNumber}</span>
           <span class="over-runs-badge">${comm.runsScored} Runs</span>
-          <span class="over-total-score">${comm.totalRuns}/${comm.totalWickets}</span>
+          <span class="over-total-score">Score: ${comm.totalRuns}/${comm.totalWickets}</span>
         </div>
         <div class="over-end-stats">
           <div class="stats-row">
             <div class="stat-batsmen">
-              ${comm.striker ? `<span>${comm.striker.name}: <b>${comm.striker.runs}</b>(${comm.striker.balls}b)</span>` : ''}
-              ${comm.nonStriker ? `<span>${comm.nonStriker.name}: <b>${comm.nonStriker.runs}</b>(${comm.nonStriker.balls}b)</span>` : ''}
+              ${comm.striker ? `<span>${comm.striker.name}: <b>${comm.striker.runs}</b> (${comm.striker.balls}b)</span>` : ''}
+              ${comm.nonStriker ? `<span>${comm.nonStriker.name}: <b>${comm.nonStriker.runs}</b> (${comm.nonStriker.balls}b)</span>` : ''}
             </div>
             <div class="stat-bowler">
-              ${comm.bowler ? `<span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${comm.bowler.overs}ov)</span>` : ''}
+              <span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${comm.bowler.overs} ov)</span>
             </div>
           </div>
         </div>
@@ -1362,29 +1303,27 @@ function renderCommentaryFeed() {
       item.className = "cricbuzz-innings-end";
       item.innerHTML = `
         <div class="innings-end-header">
-          🎯 INNINGS ${comm.inningsIdx + 1} COMPLETE
+          🎯 Innings ${comm.inningsIdx + 1} Completed
         </div>
         <div class="innings-end-body">
           <div class="total-score">Total: <b>${comm.runs}/${comm.wickets}</b> in ${comm.overs} ov</div>
-          ${comm.target ? `<div class="target-needed">🏹 Target: <b>${comm.target} runs</b></div>` : ''}
-          ${comm.winner ? `<div class="match-winner">🏆 <b>${comm.winner} WIN!</b></div>` : ''}
-          ${comm.motm ? `<div class="match-motm">⭐ MOTM: <b>${comm.motm.name}</b> — ${comm.motm.runs}R ${comm.motm.wickets}W</div>` : ''}
+          ${comm.target ? `<div class="target-needed">Target: <b>${comm.target} runs</b></div>` : ''}
+          ${comm.winner ? `<div class="match-winner">🏆 Winner: <b>${comm.winner}</b></div>` : ''}
+          ${comm.motm ? `<div class="match-motm">🌟 Man of the Match: <b>${comm.motm.name}</b> (${comm.motm.runs} runs, ${comm.motm.wickets} wkts)</div>` : ''}
         </div>
       `;
     } else {
       item.className = "cricbuzz-ball-row";
+      
+      // Clean text highlights
+      let highlightedText = comm.text
+        .replace(/([A-Z][a-zA-Z\s0-9]+(?=\s+to\s+|\s+bowls\s+))/g, "<span class='hl-player'>$1</span>")
+        .replace(/(OUT!|WICKET!|FOUR|SIX|runs|runs conceded)/gi, "<b>$1</b>");
 
-      const richText = _enrichCommentaryText(comm);
-      let highlightedText = richText
-        .replace(/\b([A-Z][a-z]+ [A-Z][a-z]+)\b/g, "<span class='hl-player'>$1</span>")
-        .replace(/\b(WICKET!?|OUT!?|FOUR!?|SIX!?|MAXIMUM|BOUNDARY|BOWLED|CAUGHT|LBW|STUMPED)/gi,
-                 "<b class='hl-event'>$1</b>");
-
-      const outcomeClass = comm.isWicket ? 'outcome-wicket' :
-                           (comm.runs === 4 ? 'outcome-four' :
-                           (comm.runs === 6 ? 'outcome-six' :
-                           (comm.runs === 0 ? 'outcome-dot' :
-                           (comm.runs >= 3 ? 'outcome-boundary' : 'outcome-normal'))));
+      const outcomeClass = comm.isWicket ? 'outcome-wicket' : 
+                           (comm.runs === 4 ? 'outcome-four' : 
+                           (comm.runs === 6 ? 'outcome-six' : 
+                           (comm.runs === 0 ? 'outcome-dot' : 'outcome-normal')));
 
       const outcomeText = comm.isWicket ? 'W' : comm.runs.toString();
 
@@ -1394,7 +1333,7 @@ function renderCommentaryFeed() {
         <div class="ball-comm-text">${highlightedText}</div>
       `;
     }
-
+    
     list.appendChild(item);
   });
 }
@@ -1464,45 +1403,35 @@ function renderScorecardPanel() {
   const opposingTeam = activeScorecardTab === 'innings1' ? secondTeam : firstTeam;
   const activeInnings = activeScorecardTab === 'innings1' ? firstInn : secondInn;
 
-  // Use innings-specific stats pool (backend sends innings1Stats / innings2Stats)
-  const statsPool = activeScorecardTab === 'innings1'
-    ? (matchState.innings1Stats || matchState.stats)
-    : (matchState.innings2Stats || matchState.stats);
-
   // Set titles
-  const battingTitle = (activeTeam.teamName || 'BATTING').toUpperCase();
-  const bowlingTitle = (opposingTeam.teamName || 'BOWLING').toUpperCase();
-  document.getElementById('scorecard-batting-title').innerText = `${battingTitle} BATTING`;
-  document.getElementById('scorecard-bowling-title').innerText = `${bowlingTitle} BOWLING`;
+  document.getElementById('scorecard-batting-title').innerText = `${activeTeam.teamName.toUpperCase()} BATTING`;
+  document.getElementById('scorecard-bowling-title').innerText = `${opposingTeam.teamName.toUpperCase()} BOWLING`;
 
-  // Render batting rows — always show striker/non-striker even with 0 balls
-  let anyBatRow = false;
+  // Render batting rows
   activeTeam.xi.forEach((player) => {
-    const pid = player.id ? player.id.toString() : '';
-    const pStat = (pid && statsPool[pid]) ? statsPool[pid] : { runs: 0, balls: 0, fours: 0, sixes: 0 };
+    // Check stats
+    const pStat = matchState.stats[player.id.toString()] || { runs: 0, balls: 0, fours: 0, sixes: 0 };
+    const isActive = (matchState.striker && matchState.striker.id.toString() === player.id.toString()) || 
+                     (matchState.nonStriker && matchState.nonStriker.id.toString() === player.id.toString());
 
-    const isStriker = matchState.striker && matchState.striker.id && matchState.striker.id.toString() === pid;
-    const isNonStriker = matchState.nonStriker && matchState.nonStriker.id && matchState.nonStriker.id.toString() === pid;
-    const isActive = isStriker || isNonStriker;
+    if (!isActive && (!pStat || !pStat.balls || pStat.balls === 0)) return;
 
-    if (!isActive && (!pStat || pStat.balls === 0)) return;
-
-    anyBatRow = true;
-    const runs = pStat.runs || 0;
-    const balls = pStat.balls || 0;
+    const runs = pStat.runs;
+    const balls = pStat.balls;
     const fours = pStat.fours || 0;
     const sixes = pStat.sixes || 0;
     const sr = balls > 0 ? ((runs / balls) * 100).toFixed(1) : '0.0';
 
+    // Status label
     let statusText = '';
     let statusClass = 'out';
     if (isActive) {
-      statusText = isStriker ? 'batting*' : 'not out';
+      statusText = 'not out*';
       statusClass = 'active';
     } else if (pStat.isOut) {
-      statusText = pStat.how_out || pStat.outDetail || 'out';
+      statusText = pStat.outDetail || 'out';
       statusClass = 'out';
-    } else if (balls > 0) {
+    } else if (pStat.balls > 0) {
       statusText = 'not out';
       statusClass = 'active';
     }
@@ -1523,61 +1452,49 @@ function renderScorecardPanel() {
     container.appendChild(row);
   });
 
-  if (!anyBatRow) {
-    container.innerHTML = '<div class="sc-empty-msg">Innings not started yet</div>';
-  }
-
-  // Extras & total
-  document.getElementById('scorecard-extras').innerText = `Extras ${activeInnings.extras || 0} (w 0, nb 0, lb 0, b 0)`;
-  document.getElementById('scorecard-total').innerText =
+  // Extras
+  document.getElementById('scorecard-extras').innerText = `Extras ${activeInnings.extras || 0} (w 0, nb 0, lb 0, b 0, p 0)`;
+  document.getElementById('scorecard-total').innerText = 
     `TOTAL ${activeInnings.runs}/${activeInnings.wickets} (${activeInnings.overs}.${activeInnings.balls} Ov)`;
 
   // Yet to bat
-  const activeIds = [
-    matchState.striker?.id?.toString(),
-    matchState.nonStriker?.id?.toString()
-  ].filter(Boolean);
+  const dismissedNames = matchState.commentary.filter(c => c.isWicket).map(c => {
+    // try to match any name from xi
+    const matched = activeTeam.xi.find(p => c.text.includes(p.name));
+    return matched ? matched.id : null;
+  }).filter(Boolean);
 
-  const ytbPlayers = (activeScorecardTab === activeScorecardTab) && activeTeam.xi.filter(p => {
-    if (!p.id) return false;
-    const pid = p.id.toString();
-    const st = statsPool[pid] || {};
-    const isOut = st.isOut;
-    const hasBatted = (st.balls || 0) > 0;
-    const isAtCrease = activeIds.includes(pid);
-    return !isAtCrease && !isOut && !hasBatted;
-  });
-  document.getElementById('scorecard-yet-to-bat').innerText =
-    (ytbPlayers && ytbPlayers.length > 0) ? ytbPlayers.map(p => p.name).join(', ') : 'None';
+  const activeIds = [matchState.striker?.id?.toString(), matchState.nonStriker?.id?.toString()].filter(Boolean);
+  const dismissedNamesString = dismissedNames.map(id => id ? id.toString() : '');
+  const ytbPlayers = activeTeam.xi.filter(p => p.id && !activeIds.includes(p.id.toString()) && !dismissedNamesString.includes(p.id.toString()));
+  document.getElementById('scorecard-yet-to-bat').innerText = ytbPlayers.map(p => p.name).join(', ') || 'None';
 
   // Render bowling rows
   const bowlContainer = document.getElementById('scorecard-bowling-rows');
   bowlContainer.innerHTML = '';
 
   opposingTeam.xi.forEach((player) => {
-    const pid = player.id ? player.id.toString() : '';
-    const isCurrent = matchState.bowler && matchState.bowler.id && matchState.bowler.id.toString() === pid;
-    const pStat = (pid && statsPool[pid]) ? statsPool[pid] : null;
+    const isCurrent = matchState.bowler && matchState.bowler.id.toString() === player.id.toString();
+    const pStat = matchState.stats[player.id.toString()] || (isCurrent ? matchState.bowler.stats : null);
+    if (!isCurrent && (!pStat || (parseFloat(pStat.overs) === 0 && pStat.runsConceded === 0 && pStat.wickets === 0))) return;
 
-    const overs = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.overs : (pStat ? pStat.overs : 0);
-    const runsC = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.runsConceded : (pStat ? pStat.runsConceded : 0);
-    const wkts = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.wickets : (pStat ? pStat.wickets : 0);
-
-    if (!isCurrent && (parseFloat(overs) === 0 && runsC === 0 && wkts === 0)) return;
-
-    const er = parseFloat(overs) > 0 ? (runsC / parseFloat(overs)).toFixed(2) : '0.00';
+    const overs = pStat ? (pStat.overs || '0.0') : '0.0';
+    const maidens = 0;
+    const runs = pStat ? (pStat.runsConceded || 0) : 0;
+    const wickets = pStat ? (pStat.wickets || 0) : 0;
+    const er = pStat && parseFloat(overs) > 0 ? (runs / parseFloat(overs)).toFixed(2) : '0.00';
 
     const row = document.createElement('div');
     row.className = 'tb-row';
     row.innerHTML = `
       <span class="tb-row-name">
         <span class="tb-row-name-text">${player.name}</span>
-        ${isCurrent ? '<span class="tb-row-status active">bowling*</span>' : ''}
+        ${isCurrent ? '<span class="tb-row-status active">bowling</span>' : ''}
       </span>
-      <span class="tb-num-val">${overs || '0'}</span>
-      <span class="tb-num-val">0</span>
-      <span class="tb-num-val">${runsC}</span>
-      <span class="tb-num-val">${wkts}</span>
+      <span class="tb-num-val">${overs}</span>
+      <span class="tb-num-val">${maidens}</span>
+      <span class="tb-num-val">${runs}</span>
+      <span class="tb-num-val">${wickets}</span>
       <span class="tb-num-val">${er}</span>
     `;
     bowlContainer.appendChild(row);
@@ -1699,174 +1616,51 @@ function runAutoplayAction() {
       if (buttons.length > 0) {
         const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
         randBtn.click();
-
+        
         const speedButtons = document.querySelectorAll('.btn-speed');
         if (speedButtons.length > 0 && !document.getElementById('bowling-speed-section').classList.contains('hidden')) {
           const randSpeedBtn = speedButtons[Math.floor(Math.random() * speedButtons.length)];
           randSpeedBtn.click();
         }
 
-        setTimeout(submitDelivery, 200);
+        console.log("[Autoplay] Auto-submitting Bowling Delivery: " + selectedDelivery + ", Speed: " + selectedSpeed);
+        setTimeout(submitDelivery, 500);
       }
-    }
+    } 
     else if (matchState.turnState === 'batting_shot') {
       const shotSection = document.getElementById('batting-controls');
       const buttons = shotSection.querySelectorAll('.btn-action-card');
       if (buttons.length > 0) {
         const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
-        setTimeout(() => randBtn.click(), 200);
+        console.log("[Autoplay] Auto-clicking Batting Shot: " + randBtn.dataset.shot);
+        setTimeout(() => randBtn.click(), 500);
       }
-    }
+    } 
     else if (matchState.turnState === 'selecting_wicket_batsman') {
       const item = document.querySelector('#wicket-batsman-list .selection-item:not(.disabled)');
       if (item) {
         item.click();
         const index = parseInt(item.dataset.index);
+        console.log("[Autoplay] Auto-selecting Replacement Batsman...");
         setTimeout(() => {
           document.getElementById('controls-sheet').classList.add('minimized');
           selectNextBatsman(index);
-        }, 200);
+        }, 500);
       }
-    }
+    } 
     else if (matchState.turnState === 'selecting_over_bowler') {
       const item = document.querySelector('#over-bowler-list .selection-item:not(.disabled)');
       if (item) {
         item.click();
         const index = parseInt(item.dataset.index);
+        console.log("[Autoplay] Auto-selecting Over Bowler...");
         setTimeout(() => {
           document.getElementById('controls-sheet').classList.add('minimized');
           selectNextBowler(index);
-        }, 200);
+        }, 500);
       }
     }
   }
-}
-
-// Manhattan Bar Chart (over-by-over runs)
-function renderManhattanChart() {
-  const container = document.getElementById('manhattan-chart-container');
-  if (!container || !matchState) return;
-
-  const inn1 = matchState.inn1OverRuns || [];
-  const inn2 = matchState.inn2OverRuns || [];
-  const totalOvers = matchState.totalOvers || 20;
-
-  if (inn1.length === 0 && inn2.length === 0) {
-    container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
-    return;
-  }
-
-  const maxRuns = Math.max(...inn1, ...inn2, 1);
-  const chartHeight = 80;
-
-  let bars = '';
-  const numOvers = Math.max(inn1.length, inn2.length, 1);
-  for (let i = 0; i < numOvers; i++) {
-    const r1 = inn1[i] !== undefined ? inn1[i] : null;
-    const r2 = inn2[i] !== undefined ? inn2[i] : null;
-    const h1 = r1 !== null ? Math.max(4, Math.round((r1 / maxRuns) * chartHeight)) : 0;
-    const h2 = r2 !== null ? Math.max(4, Math.round((r2 / maxRuns) * chartHeight)) : 0;
-    const overLabel = i + 1;
-
-    bars += `<div class="mh-bar-group">
-      <div class="mh-bars">
-        ${r1 !== null ? `<div class="mh-bar inn1" style="height:${h1}px" title="Inn1 Over ${overLabel}: ${r1}"></div>` : '<div class="mh-bar empty"></div>'}
-        ${r2 !== null ? `<div class="mh-bar inn2" style="height:${h2}px" title="Inn2 Over ${overLabel}: ${r2}"></div>` : '<div class="mh-bar empty"></div>'}
-      </div>
-      <div class="mh-over-num">${overLabel}</div>
-    </div>`;
-  }
-
-  // Legend
-  const hostName = matchState.host ? (matchState.host.teamName || 'Host') : 'Inn 1';
-  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest') : 'Inn 2';
-
-  container.innerHTML = `
-    <div class="mh-legend">
-      <span class="mh-leg-dot inn1-dot"></span><span>${hostName.substring(0,8)}</span>
-      <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${guestName.substring(0,8)}</span>
-    </div>
-    <div class="mh-chart">${bars}</div>
-  `;
-}
-
-// Over-by-over breakdown table
-function renderOverByOver() {
-  const container = document.getElementById('over-by-over-container');
-  if (!container || !matchState) return;
-
-  const inn1 = matchState.inn1OverRuns || [];
-  const inn2 = matchState.inn2OverRuns || [];
-
-  if (inn1.length === 0 && inn2.length === 0) {
-    container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
-    return;
-  }
-
-  const hostName = matchState.host ? (matchState.host.teamName || 'Host').substring(0, 6) : 'Inn 1';
-  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest').substring(0, 6) : 'Inn 2';
-
-  const numOvers = Math.max(inn1.length, inn2.length);
-  let rows = `<div class="ovo-header-row">
-    <span class="ovo-ov">OV</span>
-    <span class="ovo-val">${hostName}</span>
-    <span class="ovo-val">${guestName}</span>
-  </div>`;
-
-  for (let i = 0; i < numOvers; i++) {
-    const r1 = inn1[i] !== undefined ? inn1[i] : null;
-    const r2 = inn2[i] !== undefined ? inn2[i] : null;
-    const cls1 = r1 !== null ? (r1 >= 15 ? 'ovo-high' : (r1 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
-    const cls2 = r2 !== null ? (r2 >= 15 ? 'ovo-high' : (r2 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
-    rows += `<div class="ovo-row">
-      <span class="ovo-ov">${i + 1}</span>
-      <span class="ovo-val ${cls1}">${r1 !== null ? r1 : '-'}</span>
-      <span class="ovo-val ${cls2}">${r2 !== null ? r2 : '-'}</span>
-    </div>`;
-  }
-
-  container.innerHTML = rows;
-}
-
-// Partnership history
-function renderPartnershipHistory() {
-  const container = document.getElementById('partnership-history-container');
-  if (!container || !matchState) return;
-
-  const isInn1 = activeScorecardTab === 'innings1';
-  const history = isInn1
-    ? (matchState.inn1PartnershipHistory || [])
-    : (matchState.inn2PartnershipHistory || []);
-
-  const curPart = matchState.partnership || { runs: 0, balls: 0 };
-  const isCurrentInnings = (isInn1 && matchState.currentInningsIdx === 0) ||
-                           (!isInn1 && matchState.currentInningsIdx === 1);
-
-  if (history.length === 0 && (!isCurrentInnings || curPart.runs === 0)) {
-    container.innerHTML = '<div class="sc-empty-msg">No partnership data yet</div>';
-    return;
-  }
-
-  let rows = '';
-  history.forEach((p, i) => {
-    const wkt = p.wicket || (i + 1);
-    rows += `<div class="part-row">
-      <span class="part-wkt">${wkt}W</span>
-      <span class="part-names">${p.batsman1 || ''} & ${p.batsman2 || ''}</span>
-      <span class="part-score">${p.runs}(${p.balls})</span>
-    </div>`;
-  });
-
-  // Current ongoing partnership (only for the active innings)
-  if (isCurrentInnings && matchState.striker && matchState.nonStriker) {
-    rows += `<div class="part-row active-part">
-      <span class="part-wkt">NOW</span>
-      <span class="part-names">${matchState.striker.name} & ${matchState.nonStriker.name}</span>
-      <span class="part-score">${curPart.runs}(${curPart.balls})</span>
-    </div>`;
-  }
-
-  container.innerHTML = rows || '<div class="sc-empty-msg">No partnership data yet</div>';
 }
 
 function showError(msg) {
@@ -1967,6 +1761,11 @@ function createParticles(container, color) {
     container.appendChild(p);
   }
 }
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', () => {
+  document.querySelectorAll('.custom-dropdown').forEach(d => d.classList.remove('open'));
+});
 
 // Start execution
 init();

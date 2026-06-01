@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Crickidex Arena</title>
   <!-- Relative assets (style.css / app.js) resolve under /cricket/ regardless
        of the ?match_id=... query string the page is opened with. -->
   <base href="/cricket/">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Crickidex Arena</title>
   <!-- Google Fonts: Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -39,8 +39,7 @@
     <section id="loading-screen" class="screen active">
       <div class="spinner-container">
         <div class="cricket-ball-spinner"></div>
-        <p class="loading-text">Loading match...</p>
-        <p class="loading-sub">Setting up the arena</p>
+        <p class="loading-text">Connecting to the match room...</p>
       </div>
     </section>
 
@@ -246,30 +245,6 @@
             </div>
           </div>
         </div>
-
-        <!-- PARTNERSHIP HISTORY -->
-        <div class="scorecard-wrapper" style="margin-top: 10px;">
-          <div class="scorecard-section-title">PARTNERSHIPS</div>
-          <div id="partnership-history-container">
-            <div class="sc-empty-msg">Loading...</div>
-          </div>
-        </div>
-
-        <!-- MANHATTAN CHART -->
-        <div class="scorecard-wrapper" style="margin-top: 10px;">
-          <div class="scorecard-section-title">MANHATTAN CHART</div>
-          <div id="manhattan-chart-container">
-            <div class="sc-empty-msg">Loading...</div>
-          </div>
-        </div>
-
-        <!-- OVER BY OVER -->
-        <div class="scorecard-wrapper" style="margin-top: 10px; margin-bottom: 16px;">
-          <div class="scorecard-section-title">OVER BY OVER</div>
-          <div id="over-by-over-container">
-            <div class="sc-empty-msg">Loading...</div>
-          </div>
-        </div>
       </div>
 
       <!-- SQUADS PANEL -->
@@ -359,20 +334,34 @@
               </div>
             </div>
 
+
+
             <button id="submit-delivery-btn" class="btn btn-primary btn-block btn-green mt-3">Bowl Ball</button>
           </div>
 
           <!-- INCOMING BATSMAN SELECTION -->
           <div id="wicket-batsman-controls" class="controls-section hidden">
             <p class="warning-text">Striker got out! Select your next batsman:</p>
-            <div id="wicket-batsman-list" class="selection-list mb-3"></div>
+            <div class="custom-dropdown" id="batsman-dropdown">
+              <div class="dropdown-trigger" id="batsman-dropdown-trigger">
+                <span class="selected-value">Select Batsman</span>
+                <span class="dropdown-arrow">▼</span>
+              </div>
+              <div class="dropdown-menu" id="wicket-batsman-list"></div>
+            </div>
             <button id="submit-wicket-batsman-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Batsman</button>
           </div>
 
           <!-- INCOMING BOWLER SELECTION -->
           <div id="over-bowler-controls" class="controls-section hidden">
             <p class="info-text">Bowler for the next over:</p>
-            <div id="over-bowler-list" class="selection-list mb-3"></div>
+            <div class="custom-dropdown" id="bowler-dropdown">
+              <div class="dropdown-trigger" id="bowler-dropdown-trigger">
+                <span class="selected-value">Select Bowler</span>
+                <span class="dropdown-arrow">▼</span>
+              </div>
+              <div class="dropdown-menu" id="over-bowler-list"></div>
+            </div>
             <button id="submit-over-bowler-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Bowler</button>
           </div>
 
