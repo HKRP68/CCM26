@@ -21,7 +21,6 @@ let autoplayActive = false;
 let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
 let wasMyTurn = false;
-let lastActionableSig = null; // tracks the current actionable turn for auto-expand
 
 // Initial Setup
 async function init() {
@@ -850,13 +849,8 @@ function renderControlsSection() {
   // It IS my turn!
   waitingBlock.classList.add('hidden');
 
-  // Auto-expand the sheet on each NEW actionable turn (new ball / phase) so the
-  // controls are never stranded behind a collapsed sheet — a collapsed sheet on
-  // the batsman's turn would soft-lock the over (the bowler waits forever). A
-  // per-ball signature means we expand once per turn but still let the user
-  // manually minimize within the same turn.
-  const turnSig = `${matchState.turnState}|${matchState.score.overs}.${matchState.score.balls}|${matchState.score.wickets}`;
-  if (lastActionableSig !== turnSig) {
+  // Auto-expand sheet when it becomes the user's turn
+  if (!wasMyTurn) {
     if (activeBlock.classList.contains('minimized')) {
       activeBlock.classList.remove('minimized');
       const iconSvg = document.getElementById('toggle-controls-icon');
@@ -864,9 +858,8 @@ function renderControlsSection() {
         iconSvg.innerHTML = '<polyline points="6 9 12 15 18 9"></polyline>';
       }
     }
-    lastActionableSig = turnSig;
+    wasMyTurn = true;
   }
-  wasMyTurn = true;
 
   // Hide all sections initially
   document.getElementById('batting-controls').classList.add('hidden');
@@ -1003,55 +996,37 @@ function renderBowlerVariations() {
   selectedDelivery = null;
 }
 
-// Render batting shot buttons. Build the grid from a fixed shot list rather
-// than relying on the static DOM, so the batsman always gets a usable grid
-// (a missing/empty grid would soft-lock the over — the bowler waits forever).
-const BATTING_SHOTS = [
-  { shot: 'defend', label: 'Defend' },
-  { shot: 'straight_drive', label: 'Drive' },
-  { shot: 'cut', label: 'Cut' },
-  { shot: 'pull', label: 'Pull' },
-  { shot: 'sweep', label: 'Sweep' },
-  { shot: 'loft', label: 'Loft' },
-  { shot: 'flick', label: 'Flick' },
-  { shot: 'leave', label: 'Leave' },
-];
-
-async function submitShot(shot) {
-  // Minimize sheet immediately for snappy feedback
-  document.getElementById('controls-sheet').classList.add('minimized');
-  try {
-    const res = await fetch('/api/match/action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, type: 'shot', action: { shot } })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to submit shot");
-    fetchState();
-  } catch (err) {
-    alert(err.message);
-  }
-}
-
+// Render batting shot event listeners
 function renderBattingShots() {
   const shotSection = document.getElementById('batting-controls');
-  if (!shotSection) return;
-  let grid = shotSection.querySelector('.button-grid');
-  if (!grid) {
-    grid = document.createElement('div');
-    grid.className = 'button-grid premium-grid';
-    shotSection.insertBefore(grid, shotSection.firstChild);
-  }
-
-  grid.innerHTML = '';
-  BATTING_SHOTS.forEach(s => {
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-action-card';
-    btn.dataset.shot = s.shot;
-    btn.innerHTML = `<span class="label">${s.label}</span>`;
-    btn.addEventListener('click', (e) => submitShot(e.currentTarget.dataset.shot));
-    grid.appendChild(btn);
+  const actionBtns = shotSection.querySelectorAll('.btn-action-card');
+  
+  actionBtns.forEach(btn => {
+    const newBtn = btn.cloneNode(true);
+    btn.parentNode.replaceChild(newBtn, btn);
+    
+    newBtn.addEventListener('click', async (e) => {
+      const shot = e.currentTarget.dataset.shot;
+      // Minimize sheet immediately
+      document.getElementById('controls-sheet').classList.add('minimized');
+      
+      try {
+        const res = await fetch('/api/match/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            type: 'shot',
+            action: { shot }
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to submit shot");
+        fetchState();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
   });
 }
 
