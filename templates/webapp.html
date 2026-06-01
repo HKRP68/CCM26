@@ -5853,6 +5853,24 @@ function lmResetBowlingOptions() {
 }
 
 function openLiveMatch(matchId, chatId) {
+  // Route live matches into the redesigned Crickidex Arena (static/cricket),
+  // so both private-chat Web App buttons and group deep links share one UI
+  // (with Partnerships / Manhattan / Over-by-over panels). The legacy inline
+  // renderer below is kept for reference but no longer used for live play.
+  let url = `/cricket?match_id=${encodeURIComponent(matchId)}`;
+  if (chatId !== undefined && chatId !== null && chatId !== '') {
+    url += `&chat_id=${encodeURIComponent(chatId)}`;
+  }
+  // Pass the Telegram user id explicitly so identity resolves even if the
+  // launch params don't survive the same-origin navigation.
+  try {
+    const uid = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+    if (uid) url += `&userId=${encodeURIComponent(uid)}`;
+  } catch (e) {}
+  window.location.href = url;
+}
+
+function _legacyOpenLiveMatchInline(matchId, chatId) {
   lmMatchId = matchId;
   lmChatId = (chatId !== undefined && chatId !== null) ? chatId : null;
   lmLastBallSeq = -1;
