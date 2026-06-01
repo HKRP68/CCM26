@@ -6005,9 +6005,13 @@ def cricket_arena_index():
 def cricket_arena_asset(filename):
     from flask import send_from_directory
     resp = send_from_directory(_CRICKET_DIR, filename)
-    # Assets are cache-busted via ?v= query strings, but force revalidation too
-    # so a stale style.css/app.js can never linger in the Telegram WebView cache.
-    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    # Assets are cache-busted via ?v= query strings. Telegram's in-app WebView
+    # can still reuse a stored response without reliably revalidating it, so do
+    # not let the live-match CSS or JavaScript be stored at all. This is small
+    # enough to refetch and prevents an old app.js from hiding the batsman grid.
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
     return resp
 
 
