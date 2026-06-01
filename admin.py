@@ -9135,14 +9135,48 @@ def admin_broadcast():
         from models import BotChat, Broadcast
         if request.method == "POST":
             try:
+                from werkzeug.utils import secure_filename
+
                 message = (request.form.get("message") or "").strip()
                 target = (request.form.get("target") or "all").strip()
-                if not message:
-                    flash("Message cannot be empty", "error")
+                image = request.files.get("image_file")
+                document = request.files.get("document_file")
+                image = image if image and image.filename else None
+                document = document if document and document.filename else None
+
+                if image and document:
+                    flash("Choose either one image or one file, not both.", "error")
+                    return redirect(url_for("admin_broadcast"))
+                if not message and not image and not document:
+                    flash("Add a message, image, or file before sending.", "error")
                     return redirect(url_for("admin_broadcast"))
                 if len(message) > 4000:
                     flash("Message too long (max 4000 chars)", "error")
                     return redirect(url_for("admin_broadcast"))
+
+                attachment = None
+                uploaded = image or document
+                if uploaded:
+                    attachment_type = "image" if image else "document"
+                    if image and not (uploaded.mimetype or "").startswith("image/"):
+                        flash("The image upload must be an image file.", "error")
+                        return redirect(url_for("admin_broadcast"))
+                    file_bytes = uploaded.read()
+                    if not file_bytes:
+                        flash("Uploaded attachment is empty.", "error")
+                        return redirect(url_for("admin_broadcast"))
+                    if len(file_bytes) > 50 * 1024 * 1024:
+                        flash(f"Attachment too large ({len(file_bytes) / 1024 / 1024:.1f}MB). "
+                              "Telegram limit is 50MB.", "error")
+                        return redirect(url_for("admin_broadcast"))
+                    filename = secure_filename(uploaded.filename) or (
+                        "broadcast-image" if image else "broadcast-file"
+                    )
+                    attachment = {
+                        "type": attachment_type,
+                        "name": filename[:255],
+                        "bytes": file_bytes,
+                    }
 
                 query = db.query(BotChat).filter(BotChat.is_active == True)
                 if target == "groups":
@@ -9160,19 +9194,23 @@ def admin_broadcast():
                     message=message, target_type=target,
                     sent_by=session.get("admin", "admin"),
                     status="pending",
+                    attachment_type=attachment["type"] if attachment else None,
+                    attachment_name=attachment["name"] if attachment else None,
                 )
                 db.add(bc); db.commit()
                 bc_id = bc.id
 
                 log_admin(db, "broadcast_create", target_type="broadcast",
                           target_id=bc.id, target_name=target,
-                          detail=f"To {len(chat_ids)} chats")
+                          detail=f"To {len(chat_ids)} chats"
+                                 + (f" with {attachment['type']} {attachment['name']}"
+                                    if attachment else ""))
                 db.commit()
 
                 import threading
                 t = threading.Thread(
                     target=_run_broadcast_worker,
-                    args=(bc_id, list(chat_ids), message),
+                    args=(bc_id, list(chat_ids), message, attachment),
                     daemon=True,
                 )
                 t.start()
@@ -9209,15 +9247,15 @@ def admin_broadcast():
         db.close()
 
 
-def _run_broadcast_worker(bc_id, chat_ids, message):
-    """Background worker — sends broadcast at ~20 msgs/sec."""
+def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None):
+    """Background worker — sends a text, image, or file broadcast at ~20 chats/sec."""
     import time
     import logging as _lg
     log = _lg.getLogger("broadcast")
     sent = 0
     failed = 0
 
-    from telegram import Bot
+    from telegram import Bot, InputFile
     from config import BOT_TOKEN
     bot_instance = Bot(token=BOT_TOKEN)
 
@@ -9240,10 +9278,18 @@ def _run_broadcast_worker(bc_id, chat_ids, message):
 
     async def _send_one(cid):
         try:
-            await bot_instance.send_message(
-                chat_id=cid, text=message, parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
+            if attachment:
+                upload = InputFile(io.BytesIO(attachment["bytes"]),
+                                   filename=attachment["name"])
+                if attachment["type"] == "image":
+                    await bot_instance.send_photo(chat_id=cid, photo=upload)
+                else:
+                    await bot_instance.send_document(chat_id=cid, document=upload)
+            if message:
+                await bot_instance.send_message(
+                    chat_id=cid, text=message, parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
             return True
         except Exception as e:
             log.warning(f"Broadcast send to {cid} failed: {e}")

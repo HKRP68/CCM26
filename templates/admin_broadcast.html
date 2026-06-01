@@ -49,6 +49,27 @@
     resize: vertical;
   }
   .composer textarea:focus { border-color: var(--accent); outline: none; }
+  .attachment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: .65rem;
+    margin-top: .75rem;
+  }
+  .attachment-field {
+    background: rgba(0,0,0,.18);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: .65rem .75rem;
+  }
+  .attachment-field label {
+    display: block;
+    color: var(--muted);
+    font-size: .82rem;
+    font-weight: 600;
+    margin-bottom: .35rem;
+  }
+  .attachment-field input { width: 100%; color: var(--muted); font-size: .78rem; }
+  .attachment-help { color: var(--muted); font-size: .75rem; margin-top: .45rem; }
 
   .bc-row {
     background: var(--card);
@@ -106,13 +127,25 @@
 
 <div class="composer">
   <h3 style="margin-top:0;">Compose Broadcast</h3>
-  <form method="POST" action="{{ url_for('admin_broadcast') }}">
+  <form method="POST" action="{{ url_for('admin_broadcast') }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <label style="color:var(--muted);font-size:.85rem;font-weight:600;display:block;margin-bottom:.3rem;">
       Message (HTML allowed: &lt;b&gt;, &lt;i&gt;, &lt;a href=""&gt;, &lt;code&gt;)
     </label>
-    <textarea name="message" required maxlength="4000" placeholder="📢 Important announcement!&#10;&#10;Maintenance starts at 6 PM IST. We'll be back in 30 min."></textarea>
+    <textarea name="message" maxlength="4000" placeholder="📢 Important announcement!&#10;&#10;Maintenance starts at 6 PM IST. We'll be back in 30 min."></textarea>
+
+    <div class="attachment-grid">
+      <div class="attachment-field">
+        <label for="image_file">🖼️ Add image (optional)</label>
+        <input id="image_file" name="image_file" type="file" accept="image/*">
+      </div>
+      <div class="attachment-field">
+        <label for="document_file">📎 Add file (optional)</label>
+        <input id="document_file" name="document_file" type="file">
+      </div>
+    </div>
+    <div class="attachment-help">Send a message, one image, or one file. Attachments can be up to 50MB. Choose only one attachment per broadcast.</div>
 
     <div style="display:flex;align-items:center;gap:1rem;margin-top:.75rem;flex-wrap:wrap;">
       <div>
@@ -157,7 +190,12 @@
       {% if bc.sent_by %} · {{ bc.sent_by }}{% endif %}
     </div>
   </div>
-  <div class="bc-msg">{{ bc.message }}</div>
+  {% if bc.message %}<div class="bc-msg">{{ bc.message }}</div>{% endif %}
+  {% if bc.attachment_name %}
+  <div style="margin-top:.45rem;color:var(--muted);font-size:.8rem;">
+    {{ '🖼️ Image' if bc.attachment_type == 'image' else '📎 File' }}: {{ bc.attachment_name }}
+  </div>
+  {% endif %}
   <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;font-size:.82rem;color:var(--muted);">
     <span>✅ Sent: <strong style="color:#4ade80;">{{ bc.sent_count }}</strong></span>
     {% if bc.failed_count %}

@@ -1306,6 +1306,8 @@ class Broadcast(Base):
     sent_count = Column(Integer, default=0)
     failed_count = Column(Integer, default=0)
     status = Column(String(20), default="pending")
+    attachment_type = Column(String(20), nullable=True)
+    attachment_name = Column(String(255), nullable=True)
 
 
 class PendingUndo(Base):
