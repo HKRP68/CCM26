@@ -72,7 +72,7 @@ from handlers.app import app_handler
 
 # Match handlers
 from handlers.match import (
-    playmatch_handler, cric_handler, cric_join_callback,
+    playmatch_handler, wpm_handler, cric_join_callback,
     cric_cancel_lobby_callback, cric_decision_callback,
     match_accept_callback, match_deny_callback,
     overs_text_handler, toss_decision_callback,
@@ -236,7 +236,7 @@ BOT_MENU_COMMANDS = (
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
-    ("cric", "Open a match lobby anyone can join (Mini App)"),
+    ("wpm", "Open a match lobby anyone can join (Mini App)"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
     ("lastmatch", "View your last match"),
@@ -437,7 +437,7 @@ async def start_handler(update, context):
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
-        "/cric [overs] - Open a match lobby anyone can join (Mini App)\n"
+        "/wpm [overs] - Open a match lobby anyone can join (Mini App)\n"
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
@@ -687,7 +687,7 @@ def main():
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
-        app.add_handler(CommandHandler("cric", cric_handler))
+        app.add_handler(CommandHandler("wpm", wpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
