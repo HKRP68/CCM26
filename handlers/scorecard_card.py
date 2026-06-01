@@ -107,6 +107,44 @@ def _draw_horizontal_gradient(draw, x, y, w, h, c1, c2):
         draw.line([(x + i, y), (x + i, y + h - 1)], fill=(r, g, b))
 
 
+def _overs_to_balls(overs):
+    """Convert cricket over notation (for example ``15.2``) to legal balls."""
+    try:
+        whole, _, partial = str(overs or "0").partition(".")
+        return max(0, int(whole)) * 6 + max(0, int(partial or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _draw_section_title(draw, x, y, w, title, subtitle, accent):
+    """Add a compact section banner between the hero and the score table."""
+    h = 42
+    draw.rectangle([x, y, x + w, y + h], fill=EXTRA_BG)
+    draw.rectangle([x, y, x + 5, y + h], fill=accent)
+    draw.text((x + 18, y + 9), title, fill=TEXT, font=_font(16, bold=True))
+    subtitle_font = _font(11, bold=True)
+    subtitle_w = _tw(draw, subtitle, subtitle_font)
+    draw.text((x + w - subtitle_w - 18, y + 13), subtitle,
+              fill=accent, font=subtitle_font)
+    return h
+
+
+def _draw_metric_strip(draw, x, y, w, metrics, accent):
+    """Render an evenly spaced row of match-summary metrics."""
+    h = 68
+    gap = 10
+    metric_w = int((w - gap * (len(metrics) - 1)) / max(1, len(metrics)))
+    for i, (label, value) in enumerate(metrics):
+        bx = x + i * (metric_w + gap)
+        draw.rounded_rectangle([bx, y, bx + metric_w, y + h], radius=8,
+                               fill=EXTRA_BG, outline=SEP, width=1)
+        draw.text((bx + 14, y + 11), label, fill=accent,
+                  font=_font(10, bold=True))
+        draw.text((bx + 14, y + 27), str(value), fill=TEXT,
+                  font=_font(24, bold=True))
+    return h
+
+
 def _draw_logo_block(img, draw, x, y, size=60):
     """Render the bot logo in the header. Falls back to a dark square + text
     if assets/logo.png is missing."""
@@ -330,7 +368,7 @@ def _draw_table_row(draw, x, y, w, columns, values, accent, *,
         text_str = str(val)
 
         is_rtg = label == "RTG"
-        is_name = label in ("BATSMAN", "BOWLER")
+        is_name = label in ("BATSMAN", "BATTER", "BOWLER")
         is_dismissal = label == "DISMISSAL"
         is_runs = label == "R" and not is_name and not is_dismissal
 
@@ -405,14 +443,18 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
     try:
         default_accent = PRIMARY_DEFAULT if is_first_innings else SECONDARY_DEFAULT
         accent = _hex_to_rgb(accent_hex, default_accent)
-        label = "BAT 1 SCORECARD" if is_first_innings else "BAT 2 SCORECARD"
+        innings_label = "1ST INNINGS" if is_first_innings else "2ND INNINGS"
+        label = f"{innings_label} · BATTING"
 
         W = 1400
         row_h = 44
         header_h = 170
+        section_h = 42
         table_header_h = 38
+        summary_h = 68
         bottom_h = 160
-        H = header_h + table_header_h + (len(batsmen_rows) * row_h) + bottom_h + 30
+        H = (header_h + section_h + table_header_h + (len(batsmen_rows) * row_h)
+             + summary_h + bottom_h + 50)
 
         img = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img, "RGBA")
@@ -432,11 +474,14 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
 
         table_x = card_x
         table_w = card_w
-        table_y = card_y + header_h
+        section_y = card_y + header_h
+        _draw_section_title(draw, table_x, section_y, table_w,
+                            "BATTING CARD", f"{team_name.upper()} INNINGS", accent)
+        table_y = section_y + section_h
 
         cols = [
             ("RTG", 0.07, "c"),
-            ("BATSMAN", 0.22, "l"),
+            ("BATTER", 0.22, "l"),
             ("DISMISSAL", 0.30, "l"),
             ("R", 0.07, "r"),
             ("B", 0.07, "r"),
@@ -480,8 +525,17 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                              accent, status=status)
             row_y += row_h
 
-        # Bottom section: EXTRAS + FALL OF WICKETS
-        bottom_y = row_y + 12
+        # Summary strip + bottom section: EXTRAS + FALL OF WICKETS
+        summary_x = card_x + 20
+        summary_w = card_w - 40
+        legal_balls = _overs_to_balls(overs_str)
+        run_rate = (total_runs * 6 / legal_balls) if legal_balls else 0
+        _draw_metric_strip(draw, summary_x, row_y + 12, summary_w, [
+            ("TOTAL", f"{total_runs}/{total_wickets}"),
+            ("OVERS", overs_str),
+            ("RUN RATE", f"{run_rate:.2f}"),
+        ], accent)
+        bottom_y = row_y + 12 + summary_h + 12
         bottom_padding = 20
 
         extras_w = 240
@@ -600,15 +654,19 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
     try:
         default_accent = PRIMARY_DEFAULT if is_first_innings else SECONDARY_DEFAULT
         accent = _hex_to_rgb(accent_hex, default_accent)
-        label = "BOWL 1 SCORECARD" if is_first_innings else "BOWL 2 SCORECARD"
+        innings_label = "1ST INNINGS" if is_first_innings else "2ND INNINGS"
+        label = f"{innings_label} · BOWLING"
 
         W = 1400
         row_h = 44
         header_h = 170
+        section_h = 42
         table_header_h = 38
+        summary_h = 68
         bottom_h = 120
         footer_h = 40
-        H = header_h + table_header_h + (len(bowlers_rows) * row_h) + bottom_h + footer_h + 30
+        H = (header_h + section_h + table_header_h + (len(bowlers_rows) * row_h)
+             + summary_h + bottom_h + footer_h + 50)
 
         img = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img, "RGBA")
@@ -630,7 +688,10 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
 
         table_x = card_x
         table_w = card_w
-        table_y = card_y + header_h
+        section_y = card_y + header_h
+        _draw_section_title(draw, table_x, section_y, table_w,
+                            "BOWLING CARD", f"{team_name.upper()} ATTACK", accent)
+        table_y = section_y + section_h
 
         cols = [
             ("BOWLER", 0.40, "l"),
@@ -703,8 +764,18 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
 
             row_y += row_h
 
-        # RUN SCORED BY OPPONENTS panel
-        opp_y = row_y + 12
+        # Bowling summary + opponent innings panel
+        summary_x = card_x + 20
+        summary_w = card_w - 40
+        bowling_balls = sum(_overs_to_balls(b.get("overs", "0")) for b in bowlers_rows)
+        conceded = sum(b.get("runs_conceded", 0) for b in bowlers_rows)
+        team_economy = (conceded * 6 / bowling_balls) if bowling_balls else 0
+        _draw_metric_strip(draw, summary_x, row_y + 12, summary_w, [
+            ("WICKETS", sum(b.get("wickets", 0) for b in bowlers_rows)),
+            ("MAIDENS", sum(b.get("maidens", 0) for b in bowlers_rows)),
+            ("TEAM ECONOMY", f"{team_economy:.2f}"),
+        ], accent)
+        opp_y = row_y + 12 + summary_h + 12
         opp_x = card_x + 20
         opp_w = card_w - 40
         opp_h = 80
