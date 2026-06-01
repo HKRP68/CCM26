@@ -52,9 +52,9 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         player_amt = get_player_count(session, "daily", 2)
 
         # Redirect to Mini App when configured. WebApp buttons only work in
-        # PRIVATE chats — in groups, use a `url=` deep link to bounce the
-        # user into a DM with the bot (or directly launch the Mini App from
-        # the group when BOT_USERNAME + MINIAPP_NAME are set).
+        # PRIVATE chats — in groups, use a `url=` deep link that launches the
+        # Mini App DIRECTLY (?startapp=daily) — never `?start=`, which would
+        # bounce the user into a DM chat instead.
         import os as _os
         webapp_url = _os.getenv("WEBAPP_URL", "").strip()
         chat_type = (update.effective_chat.type
@@ -75,18 +75,22 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     web_app=WebAppInfo(url=webapp_url + "#daily"),
                 )
             else:
+                # Group chat — both deep-link forms below open the Mini App
+                # directly (no DM bounce).
                 bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
                 miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
                 if bot_username and miniapp_name:
+                    # Named Mini App — opens straight into the daily tab
                     deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp=daily"
                 elif bot_username:
-                    deep_link = f"https://t.me/{bot_username}?start=daily"
+                    # Bot's main Mini App (BotFather) — `startapp` (not `start`)
+                    # launches the app directly instead of opening a DM chat
+                    deep_link = f"https://t.me/{bot_username}?startapp=daily"
                 else:
                     deep_link = None
 
                 if deep_link:
                     btn = InlineKeyboardButton("📅 Open Mini App to Claim", url=deep_link)
-                    text += "\n\n<i>Group chat detected — tap will open in a DM with the bot.</i>"
                 else:
                     btn = None
 

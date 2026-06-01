@@ -78,9 +78,9 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Redirect to Mini App when configured.
         # WebApp buttons only work in PRIVATE chats — Telegram rejects them in
-        # groups. In groups, fall back to a `url=` button that links to the
-        # bot in DM (via t.me/<bot>?start=spin or t.me/<bot>/<app>?startapp=spin
-        # if BOT_USERNAME and MINIAPP_NAME are set).
+        # groups. In groups, use a `url=` button with a t.me deep link that
+        # launches the Mini App DIRECTLY (?startapp=spin) — never `?start=`,
+        # which would bounce the user into a DM chat instead.
         import os as _os
         webapp_url = _os.getenv("WEBAPP_URL", "").strip()
         chat_type = (update.effective_chat.type
@@ -102,22 +102,23 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     web_app=WebAppInfo(url=webapp_url + "#spin"),
                 )
             else:
-                # Group chat — must use url= button (WebApp not allowed here)
+                # Group chat — must use url= button (WebApp not allowed here).
+                # Both forms below open the Mini App directly (no DM bounce).
                 bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
                 miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
                 if bot_username and miniapp_name:
-                    # Best: direct link launches Mini App from the group's chat
+                    # Named Mini App — opens straight into the spin tab
                     deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp=spin"
                 elif bot_username:
-                    # Fallback: bounce user to DM with start=spin
-                    deep_link = f"https://t.me/{bot_username}?start=spin"
+                    # Bot's main Mini App (BotFather) — `startapp` (not `start`)
+                    # launches the app directly instead of opening a DM chat
+                    deep_link = f"https://t.me/{bot_username}?startapp=spin"
                 else:
                     # No bot username configured — fall through to legacy callback
                     deep_link = None
 
                 if deep_link:
                     btn = InlineKeyboardButton("🎡 Open Mini App to Spin", url=deep_link)
-                    text += "\n\n<i>Group chat detected — tap will open in a DM with the bot.</i>"
                 else:
                     btn = None  # falls through to legacy below
 

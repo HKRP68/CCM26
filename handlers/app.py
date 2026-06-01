@@ -49,13 +49,17 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             web_app=WebAppInfo(url=webapp_url),
         )
     else:
-        # Group chat — must use url= button
+        # Group chat — must use url= button. Both deep-link forms below open
+        # the Mini App directly (no DM bounce); `/app` just opens it on home.
         bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
         miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
         if bot_username and miniapp_name:
+            # Named Mini App — t.me/<bot>/<app> launches it straight away
             deep_link = f"https://t.me/{bot_username}/{miniapp_name}"
         elif bot_username:
-            deep_link = f"https://t.me/{bot_username}"
+            # Bot's main Mini App (BotFather) — `?startapp` launches the app
+            # directly instead of opening a DM chat
+            deep_link = f"https://t.me/{bot_username}?startapp=home"
         else:
             await update.message.reply_text(
                 "⚠️ Mini App buttons don't work in groups. Open this in a "
@@ -65,7 +69,6 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return
         button = InlineKeyboardButton("🏏 Open CricMaster", url=deep_link)
-        text += "\n\n<i>Tap will open in a DM with the bot.</i>"
 
     kb = InlineKeyboardMarkup([[button]])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
