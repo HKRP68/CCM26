@@ -2932,9 +2932,14 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 bws["overs_done"] += 1
                 bws["this_over_balls"] = 0
                 # Maiden over: 0 runs conceded across all 6 legal balls
-                if bws.get("this_over_runs", 0) == 0:
+                over_runs_scored = bws.get("this_over_runs", 0)
+                if over_runs_scored == 0:
                     bws["maidens"] = bws.get("maidens", 0) + 1
                     is_maiden = True
+                # Track over-by-over runs for Manhattan chart
+                if "over_runs" not in s:
+                    s["over_runs"] = []
+                s["over_runs"].append(over_runs_scored)
                 bws["this_over_runs"] = 0  # reset for next over
                 s["current_over"] += 1
                 s["current_ball"] = 0

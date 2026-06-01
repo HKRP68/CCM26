@@ -35,10 +35,18 @@ logger = logging.getLogger(__name__)
 # ── tiny helpers ─────────────────────────────────────────────────────
 
 def _stat(d, rid):
-    """Stat lookup tolerant of int/str keys (state is JSON round-tripped)."""
+    """Stat lookup tolerant of int/str keys. Always prefers str key (used by
+    _apply_outcome) over int key (used by create_match_state initial zeros)."""
     if not d:
         return {}
-    return d.get(rid) or d.get(str(rid)) or {}
+    str_rid = str(rid)
+    v = d.get(str_rid)
+    if v is not None:
+        return v
+    v = d.get(rid)
+    if v is not None:
+        return v
+    return {}
 
 
 def _p(pd):
@@ -91,7 +99,10 @@ def _merge_stats(state, innings_filter=None):
 
     # Which stats pools to use based on innings_filter
     if innings_filter == 1:
-        bat_pool, bowl_pool = inn1_bat, inn1_bowl
+        # During innings 1, inn1_bat/inn1_bowl are empty (saved only at innings end).
+        # Fall back to the live bat/bowl stats so the scorecard shows live data.
+        bat_pool = inn1_bat if inn1_bat else bat
+        bowl_pool = inn1_bowl if inn1_bowl else bowl
     elif innings_filter == 2:
         bat_pool, bowl_pool = bat, bowl
     else:
@@ -421,6 +432,13 @@ def serialize_match_state(session, match, viewer_user):
                     if ev.get("motm") is None:
                         ev["motm"] = result.get("motm")
 
+    # Build over-by-over run data for Manhattan chart
+    inn1_over_runs = list(state.get("inn1_over_runs") or [])
+    inn2_over_runs = list(state.get("over_runs") or [])
+    if innings_no == 1:
+        inn1_over_runs = inn2_over_runs
+        inn2_over_runs = []
+
     return {
         "id": str(match_id),
         "type": "pve" if state.get("is_vsbot") else "pvp",
@@ -457,6 +475,9 @@ def serialize_match_state(session, match, viewer_user):
             "runs": state.get("partnership_runs", 0),
             "balls": state.get("partnership_balls", 0),
         },
+        "inn1OverRuns": inn1_over_runs,
+        "inn2OverRuns": inn2_over_runs,
+        "partnershipHistory": state.get("partnership_history") or [],
     }
 
 

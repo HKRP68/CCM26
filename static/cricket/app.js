@@ -221,6 +221,9 @@ function setupEventListeners() {
     tabHost.classList.add('active');
     tabGuest.classList.remove('active');
     renderScorecardPanel();
+    renderPartnershipHistory();
+    renderManhattanChart();
+    renderOverByOver();
   });
 
   tabGuest.addEventListener('click', () => {
@@ -228,6 +231,9 @@ function setupEventListeners() {
     tabGuest.classList.add('active');
     tabHost.classList.remove('active');
     renderScorecardPanel();
+    renderPartnershipHistory();
+    renderManhattanChart();
+    renderOverByOver();
   });
 }
 
@@ -315,7 +321,7 @@ function selectIdentity(selectedId) {
 function startPolling() {
   fetchState();
   if (!pollingInterval) {
-    pollingInterval = setInterval(fetchState, 600);
+    pollingInterval = setInterval(fetchState, 300);
   }
 }
 
@@ -387,7 +393,7 @@ async function fetchState() {
     }
 
     // Trigger autoplay evaluation after state update
-    setTimeout(runAutoplayAction, 400);
+    setTimeout(runAutoplayAction, 150);
   } catch (err) {
     console.error("Polling error:", err);
   } finally {
@@ -712,6 +718,9 @@ function renderGameplayScreen() {
 
   // Render Scorecard & Squads panels (so they are fresh if user switches tabs)
   renderScorecardPanel();
+  renderManhattanChart();
+  renderPartnershipHistory();
+  renderOverByOver();
   renderSquadsPanel();
 }
 
@@ -1235,7 +1244,9 @@ const COMM_TEMPLATES = {
     "That's HUGE! {bat} clears the ropes with absolute authority! SIX!",
     "BOOM! {bat} hits it out of the ground! {bowler} can only watch!",
     "Muscle power! {bat} deposits it into the stands for SIX!",
-    "What a shot! {bat} smashes {bowler} over the boundary!",
+    "What a shot! {bat} smashes {bowler} over the boundary for a MAXIMUM!",
+    "Incredible! {bat} sends it sailing into the crowd! SIX runs!",
+    "{bowler} tries hard but {bat} is in the zone — that's a SIX!",
   ],
   four: [
     "CRACKING shot! {bat} finds the gap and races away for FOUR!",
@@ -1243,6 +1254,8 @@ const COMM_TEMPLATES = {
     "{bat} punishes the loose delivery from {bowler} — FOUR!",
     "Exquisite placement! {bat} threads through the covers for FOUR!",
     "Sweetly timed by {bat} — the fielder had no chance!",
+    "The ball races away! {bat} finds the boundary with a perfect drive!",
+    "Well played {bat}! That's four runs to the fence!",
   ],
   wicket: [
     "BOWLED 'EM! {bowler} has {bat} completely deceived!",
@@ -1250,6 +1263,8 @@ const COMM_TEMPLATES = {
     "WICKET! {bowler} strikes — {bat} is on his way back to the pavilion!",
     "CAUGHT! {bat} mistimes the shot and walks off — {bowler} is pumped!",
     "Huge breakthrough! {bowler} removes {bat} — this changes everything!",
+    "What a delivery! {bowler} foxes {bat} completely — OUT!",
+    "Clean bowled! {bowler} finds the gap and {bat} has to walk!",
   ],
   dot: [
     "Tight line from {bowler} — {bat} can't score off that one. Dot ball.",
@@ -1257,6 +1272,8 @@ const COMM_TEMPLATES = {
     "Defended solidly by {bat}. {bowler} keeps it tight.",
     "{bat} has a look but leaves it — well bowled by {bowler}.",
     "No run. {bowler} generates good movement — {bat} watches it go.",
+    "Excellent discipline from {bowler}! Dot ball.",
+    "{bat} gets a good look but cannot score — tight bowling.",
   ],
   one: [
     "Quick single — {bat} rotates the strike smartly.",
@@ -1264,12 +1281,19 @@ const COMM_TEMPLATES = {
     "Good running by {bat} — worked away for a single.",
     "Clever cricket from {bat} — finds a gap for one.",
     "{bat} nudges it into the leg side and takes the single.",
+    "Strike rotation! {bat} tucks it away for a quick one.",
   ],
   two: [
     "Good running between the wickets — two for {bat}!",
     "{bat} places it well and they come back for two.",
     "Two runs — quick feet from {bat}!",
     "Driven into the outfield — they scamper back for two.",
+    "Excellent running! {bat} and his partner grab a quick two.",
+  ],
+  three: [
+    "Three runs! Excellent running between the wickets from {bat}!",
+    "{bat} finds the gap and they run hard for three!",
+    "Superb running — {bat} picks up three with sharp footwork!",
   ],
 };
 
@@ -1279,12 +1303,20 @@ function _randomComm(pool, bat, bowler) {
 }
 
 function _enrichCommentaryText(comm) {
-  if (comm.text && comm.text.length > 20) return comm.text; // Already has good text
   const bat = comm.batsmanName || '';
   const bowler = comm.bowlerName || '';
+  // If DB commentary exists (>15 chars), use it — but still inject names if placeholders exist
+  if (comm.text && comm.text.length > 15) {
+    let t = comm.text;
+    // Replace any {bat}/{bowler} style placeholders if they exist in DB commentary
+    if (bat) t = t.replace(/\{bat\}/g, bat).replace(/\{batsman\}/gi, bat);
+    if (bowler) t = t.replace(/\{bowler\}/g, bowler);
+    return t;
+  }
   if (comm.isWicket) return _randomComm(COMM_TEMPLATES.wicket, bat, bowler);
   if (comm.runs === 6) return _randomComm(COMM_TEMPLATES.six, bat, bowler);
   if (comm.runs === 4) return _randomComm(COMM_TEMPLATES.four, bat, bowler);
+  if (comm.runs === 3) return _randomComm(COMM_TEMPLATES.three, bat, bowler);
   if (comm.runs === 0) return _randomComm(COMM_TEMPLATES.dot, bat, bowler);
   if (comm.runs === 1) return _randomComm(COMM_TEMPLATES.one, bat, bowler);
   if (comm.runs === 2) return _randomComm(COMM_TEMPLATES.two, bat, bowler);
@@ -1709,6 +1741,134 @@ function runAutoplayAction() {
       }
     }
   }
+}
+
+// Manhattan Bar Chart (over-by-over runs)
+function renderManhattanChart() {
+  const container = document.getElementById('manhattan-chart-container');
+  if (!container || !matchState) return;
+
+  const inn1 = matchState.inn1OverRuns || [];
+  const inn2 = matchState.inn2OverRuns || [];
+  const totalOvers = matchState.totalOvers || 20;
+
+  if (inn1.length === 0 && inn2.length === 0) {
+    container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
+    return;
+  }
+
+  const maxRuns = Math.max(...inn1, ...inn2, 1);
+  const chartHeight = 80;
+
+  let bars = '';
+  const numOvers = Math.max(inn1.length, inn2.length, 1);
+  for (let i = 0; i < numOvers; i++) {
+    const r1 = inn1[i] !== undefined ? inn1[i] : null;
+    const r2 = inn2[i] !== undefined ? inn2[i] : null;
+    const h1 = r1 !== null ? Math.max(4, Math.round((r1 / maxRuns) * chartHeight)) : 0;
+    const h2 = r2 !== null ? Math.max(4, Math.round((r2 / maxRuns) * chartHeight)) : 0;
+    const overLabel = i + 1;
+
+    bars += `<div class="mh-bar-group">
+      <div class="mh-bars">
+        ${r1 !== null ? `<div class="mh-bar inn1" style="height:${h1}px" title="Inn1 Over ${overLabel}: ${r1}"></div>` : '<div class="mh-bar empty"></div>'}
+        ${r2 !== null ? `<div class="mh-bar inn2" style="height:${h2}px" title="Inn2 Over ${overLabel}: ${r2}"></div>` : '<div class="mh-bar empty"></div>'}
+      </div>
+      <div class="mh-over-num">${overLabel}</div>
+    </div>`;
+  }
+
+  // Legend
+  const hostName = matchState.host ? (matchState.host.teamName || 'Host') : 'Inn 1';
+  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest') : 'Inn 2';
+
+  container.innerHTML = `
+    <div class="mh-legend">
+      <span class="mh-leg-dot inn1-dot"></span><span>${hostName.substring(0,8)}</span>
+      <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${guestName.substring(0,8)}</span>
+    </div>
+    <div class="mh-chart">${bars}</div>
+  `;
+}
+
+// Over-by-over breakdown table
+function renderOverByOver() {
+  const container = document.getElementById('over-by-over-container');
+  if (!container || !matchState) return;
+
+  const inn1 = matchState.inn1OverRuns || [];
+  const inn2 = matchState.inn2OverRuns || [];
+
+  if (inn1.length === 0 && inn2.length === 0) {
+    container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
+    return;
+  }
+
+  const numOvers = Math.max(inn1.length, inn2.length);
+  let rows = `<div class="ovo-header-row">
+    <span class="ovo-ov">OV</span>
+    <span class="ovo-val">Inn 1</span>
+    <span class="ovo-val">Inn 2</span>
+  </div>`;
+
+  let cum1 = 0, cum2 = 0;
+  for (let i = 0; i < numOvers; i++) {
+    const r1 = inn1[i] !== undefined ? inn1[i] : null;
+    const r2 = inn2[i] !== undefined ? inn2[i] : null;
+    if (r1 !== null) cum1 += r1;
+    if (r2 !== null) cum2 += r2;
+    const cls1 = r1 !== null ? (r1 >= 15 ? 'ovo-high' : (r1 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
+    const cls2 = r2 !== null ? (r2 >= 15 ? 'ovo-high' : (r2 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
+    rows += `<div class="ovo-row">
+      <span class="ovo-ov">${i + 1}</span>
+      <span class="ovo-val ${cls1}">${r1 !== null ? r1 : '-'}</span>
+      <span class="ovo-val ${cls2}">${r2 !== null ? r2 : '-'}</span>
+    </div>`;
+  }
+
+  container.innerHTML = rows;
+}
+
+// Partnership history
+function renderPartnershipHistory() {
+  const container = document.getElementById('partnership-history-container');
+  if (!container || !matchState) return;
+
+  const statsPool = activeScorecardTab === 'innings1'
+    ? (matchState.innings1Stats || matchState.stats)
+    : (matchState.innings2Stats || matchState.stats);
+
+  // Show current partnership always
+  const curPart = matchState.partnership || { runs: 0, balls: 0 };
+
+  // Historical partnerships from state
+  const history = matchState.partnershipHistory || [];
+
+  if (history.length === 0 && curPart.runs === 0) {
+    container.innerHTML = '<div class="sc-empty-msg">No partnership data yet</div>';
+    return;
+  }
+
+  let rows = '';
+  history.forEach((p, i) => {
+    const wkt = p.wicket || (i + 1);
+    rows += `<div class="part-row">
+      <span class="part-wkt">${wkt}W</span>
+      <span class="part-names">${p.batsman1 || ''} & ${p.batsman2 || ''}</span>
+      <span class="part-score">${p.runs}(${p.balls})</span>
+    </div>`;
+  });
+
+  // Current ongoing partnership
+  if (matchState.striker && matchState.nonStriker) {
+    rows += `<div class="part-row active-part">
+      <span class="part-wkt">NOW</span>
+      <span class="part-names">${matchState.striker.name} & ${matchState.nonStriker.name}</span>
+      <span class="part-score">${curPart.runs}(${curPart.balls})</span>
+    </div>`;
+  }
+
+  container.innerHTML = rows || '<div class="sc-empty-msg">No partnership data yet</div>';
 }
 
 function showError(msg) {
