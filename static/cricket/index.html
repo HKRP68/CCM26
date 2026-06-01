@@ -39,7 +39,8 @@
     <section id="loading-screen" class="screen active">
       <div class="spinner-container">
         <div class="cricket-ball-spinner"></div>
-        <p class="loading-text">Connecting to the match room...</p>
+        <p class="loading-text">Loading match...</p>
+        <p class="loading-sub">Setting up the arena</p>
       </div>
     </section>
 
@@ -243,6 +244,30 @@
             <div class="tb-rows" id="scorecard-bowling-rows">
               <!-- Dynamically populated -->
             </div>
+          </div>
+        </div>
+
+        <!-- PARTNERSHIP HISTORY -->
+        <div class="scorecard-wrapper" style="margin-top: 10px;">
+          <div class="scorecard-section-title">PARTNERSHIPS</div>
+          <div id="partnership-history-container">
+            <div class="sc-empty-msg">Loading...</div>
+          </div>
+        </div>
+
+        <!-- MANHATTAN CHART -->
+        <div class="scorecard-wrapper" style="margin-top: 10px;">
+          <div class="scorecard-section-title">MANHATTAN CHART</div>
+          <div id="manhattan-chart-container">
+            <div class="sc-empty-msg">Loading...</div>
+          </div>
+        </div>
+
+        <!-- OVER BY OVER -->
+        <div class="scorecard-wrapper" style="margin-top: 10px; margin-bottom: 16px;">
+          <div class="scorecard-section-title">OVER BY OVER</div>
+          <div id="over-by-over-container">
+            <div class="sc-empty-msg">Loading...</div>
           </div>
         </div>
       </div>

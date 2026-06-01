@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 # Expected runs/ball ≈ 0.30(1) + 0.18(2) + 0.06(3) + 0.56(4) + 0.48(6) = 1.58 → 9.5 RPO
 
 BASE = {
-    "dot":    28.0,   # 0 — reduced for more active gameplay
-    "1":      30.0,   # singles — increased for better strike rotation
+    "dot":    24.0,   # 0 — reduced for more active gameplay
+    "1":      31.0,   # singles — strong strike rotation
     "2":       8.5,
-    "3":       1.5,
-    "4":      15.5,   # slightly more fours
-    "6":       8.5,   # more sixes for excitement
+    "3":       2.5,   # more 3s for aggressive running
+    "4":      16.0,   # more fours
+    "6":       9.5,   # more sixes for excitement
     "W":       4.0,   # wicket
     "wide":    1.5,
     "noball":  0.5,

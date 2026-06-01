@@ -13,17 +13,17 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
                        bat_xi, bowl_xi, opener1, opener2, bowler):
     bat_stats = {}
     for p in bat_xi:
-        bat_stats[p["roster_id"]] = {
+        bat_stats[str(p["roster_id"])] = {
             "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
             "out": False, "how_out": "", "bowled_by": "",
         }
     bowl_stats = {}
     for p in bowl_xi:
-        bowl_stats[p["roster_id"]] = {
+        bowl_stats[str(p["roster_id"])] = {
             "balls": 0, "runs": 0, "wickets": 0,
             "overs_done": 0, "this_over_balls": 0,
-            "maidens": 0,            # NEW: count of overs with 0 runs conceded
-            "this_over_runs": 0,     # NEW: runs in current over (reset every over)
+            "maidens": 0,
+            "this_over_runs": 0,
         }
 
     order = [opener1, opener2]
@@ -46,12 +46,15 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
         "selected_variation": None,
         "bat_stats": bat_stats, "bowl_stats": bowl_stats,
         "over_balls": [],
-        "timeline": [],  # last N ball symbols for display
+        "timeline": [],
+        "over_runs": [],        # list of runs scored each completed over
         "partnership_runs": 0, "partnership_balls": 0,
+        "partnership_history": [],  # [{runs, balls, batsman1, batsman2}]
         "chat_id": None,
         # 1st innings result (saved after innings 1 ends)
         "inn1_runs": 0, "inn1_wickets": 0, "inn1_overs": "",
         "inn1_team": "",
+        "inn1_over_runs": [],
     }
 
 
@@ -118,7 +121,8 @@ def format_timeline(s):
 
 def bowler_figures(s):
     """Return string like '1.3 • 13 • 1' for current bowler."""
-    bw = s["bowl_stats"].get(s["current_bowler"]["roster_id"], {})
+    rid = s["current_bowler"]["roster_id"]
+    bw = s["bowl_stats"].get(str(rid)) or s["bowl_stats"].get(rid) or {}
     done = bw.get("overs_done", 0)
     extra = bw.get("this_over_balls", 0)
     ov_str = f"{done}.{extra}" if extra else f"{done}"
@@ -142,8 +146,8 @@ def build_live_scorecard(s):
     striker = get_striker(s)
     non_striker = get_non_striker(s)
     bowler = get_bowler(s)
-    bs_strike = s["bat_stats"][striker["roster_id"]]
-    bs_non = s["bat_stats"][non_striker["roster_id"]]
+    bs_strike = s["bat_stats"].get(str(striker["roster_id"])) or s["bat_stats"].get(striker["roster_id"]) or {}
+    bs_non = s["bat_stats"].get(str(non_striker["roster_id"])) or s["bat_stats"].get(non_striker["roster_id"]) or {}
 
     bat_name = s["bat_team_name"]
     bowl_name = s["bowl_team_name"]
@@ -228,9 +232,9 @@ def transition_to_second_innings(s):
     s["inn1_team"] = s["bat_team_name"]
     target = s["total_runs"] + 1
 
-    # Snapshot 1st innings for the scorecard
-    s["inn1_bat_stats"] = dict(s["bat_stats"])
-    s["inn1_bowl_stats"] = dict(s["bowl_stats"])
+    # Snapshot 1st innings for the scorecard (preserve string keys)
+    s["inn1_bat_stats"] = {str(k): v for k, v in s["bat_stats"].items()}
+    s["inn1_bowl_stats"] = {str(k): v for k, v in s["bowl_stats"].items()}
     s["inn1_bat_team_id"] = s.get("bat_team_id")
     s["inn1_bowl_team_id"] = s.get("bowl_team_id")
     s["inn1_bat_xi"] = list(s["bat_xi"])
@@ -263,13 +267,18 @@ def transition_to_second_innings(s):
     s["prev_bowler_rid"] = None
     s["selected_variation"] = None
     s["current_bowler"] = None
-    s["bat_stats"] = {p["roster_id"]: {"runs": 0, "balls": 0, "fours": 0,
-                                       "sixes": 0, "out": False, "how_out": "",
-                                       "bowled_by": ""} for p in s["bat_xi"]}
-    s["bowl_stats"] = {p["roster_id"]: {"balls": 0, "runs": 0, "wickets": 0,
-                                        "overs_done": 0, "this_over_balls": 0,
-                                        "maidens": 0, "this_over_runs": 0}
+    s["bat_stats"] = {str(p["roster_id"]): {"runs": 0, "balls": 0, "fours": 0,
+                                             "sixes": 0, "out": False, "how_out": "",
+                                             "bowled_by": ""} for p in s["bat_xi"]}
+    s["bowl_stats"] = {str(p["roster_id"]): {"balls": 0, "runs": 0, "wickets": 0,
+                                              "overs_done": 0, "this_over_balls": 0,
+                                              "maidens": 0, "this_over_runs": 0}
                        for p in s["bowl_xi"]}
+    # Save innings 1 over-by-over data and partnerships before resetting
+    s["inn1_over_runs"] = list(s.get("over_runs", []))
+    s["over_runs"] = []
+    s["inn1_partnership_history"] = list(s.get("partnership_history", []))
+    s["partnership_history"] = []
     s["fow"] = []
     return target
 

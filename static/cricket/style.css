@@ -205,10 +205,19 @@ body {
 }
 
 .loading-text {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
   letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+
+.loading-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 /* ── Identity Screen ───────────────────────────────────────────── */
@@ -1469,6 +1478,12 @@ body {
   color: var(--text-primary);
 }
 
+.ball-outcome-badge.outcome-boundary {
+  background: rgba(77, 166, 255, 0.12);
+  color: var(--blue-accent);
+  border: 1px solid rgba(77, 166, 255, 0.3);
+}
+
 .ball-comm-text {
   color: var(--text-primary);
   flex: 1;
@@ -1745,4 +1760,199 @@ body {
 .bottom-actions-bar {
   margin-top: auto;
   padding-top: 16px;
+}
+
+/* ── Manhattan Chart ────────────────────────────────────────────── */
+.mh-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.mh-leg-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.mh-leg-dot.inn1-dot { background: var(--primary-accent); }
+.mh-leg-dot.inn2-dot { background: var(--warning-accent); }
+
+.mh-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  min-height: 90px;
+}
+
+.mh-bar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 20px;
+  flex: 1;
+}
+
+.mh-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.mh-bar {
+  width: 7px;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.3s ease;
+  min-height: 2px;
+}
+
+.mh-bar.inn1 {
+  background: linear-gradient(to top, var(--primary-accent), rgba(0, 212, 255, 0.6));
+  box-shadow: 0 0 4px rgba(0, 212, 255, 0.3);
+}
+
+.mh-bar.inn2 {
+  background: linear-gradient(to top, var(--warning-accent), rgba(255, 140, 0, 0.6));
+  box-shadow: 0 0 4px rgba(255, 140, 0, 0.3);
+}
+
+.mh-bar.empty { background: transparent; width: 7px; }
+
+.mh-over-num {
+  font-size: 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ── Over by Over Table ─────────────────────────────────────────── */
+.ovo-header-row, .ovo-row {
+  display: flex;
+  padding: 6px 0;
+  font-size: 11px;
+  gap: 4px;
+}
+
+.ovo-header-row {
+  font-weight: 800;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--card-border);
+  margin-bottom: 2px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+.ovo-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  align-items: center;
+}
+
+.ovo-ov {
+  width: 32px;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.ovo-val {
+  flex: 1;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.ovo-val.ovo-high {
+  color: var(--danger-accent);
+  text-shadow: 0 0 6px rgba(255, 56, 96, 0.3);
+}
+
+.ovo-val.ovo-low {
+  color: var(--text-muted);
+}
+
+.ovo-val.ovo-na { color: var(--text-muted); }
+
+/* ── Partnership History ─────────────────────────────────────────── */
+.part-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+
+.part-row.active-part {
+  background: rgba(0, 212, 255, 0.03);
+  border-left: 2px solid var(--primary-accent);
+  padding-left: 8px;
+  border-radius: 0 4px 4px 0;
+}
+
+.part-wkt {
+  width: 30px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--primary-accent);
+  flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+
+.active-part .part-wkt {
+  color: var(--success-accent);
+  text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+}
+
+.part-names {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.active-part .part-names { color: var(--text-primary); }
+
+.part-score {
+  font-weight: 800;
+  color: var(--warning-accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.active-part .part-score {
+  color: var(--success-accent);
+  text-shadow: 0 0 8px rgba(0, 255, 136, 0.3);
+}
+
+/* ── Neon Accent Improvements ───────────────────────────────────── */
+.scoreboard-section::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.15), transparent);
+}
+
+.live-runs {
+  background: linear-gradient(135deg, #00d4ff 0%, #4da6ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Enhanced tab bar glow */
+.tab-btn.active {
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }

@@ -859,6 +859,21 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
         bs["how_out"] = oc.get("how", "Bowled"); bs["bowled_by"] = bowler["name"]
         add_to_timeline(state, SYM["W"])
+        # Record partnership before resetting
+        if "partnership_history" not in state:
+            state["partnership_history"] = []
+        ns_idx = state.get("non_striker_idx")
+        ns_player = None
+        order = state.get("batting_order", [])
+        if ns_idx is not None and 0 <= ns_idx < len(order):
+            ns_player = order[ns_idx]
+        state["partnership_history"].append({
+            "runs": state.get("partnership_runs", 0),
+            "balls": state.get("partnership_balls", 0),
+            "batsman1": striker.get("name", ""),
+            "batsman2": ns_player.get("name", "") if ns_player else "",
+            "wicket": state["total_wickets"],
+        })
         state["partnership_runs"] = 0; state["partnership_balls"] = 0
         need_new_bat = True
         rtxt = f"WICKET! {striker['name']} — {oc.get('how','OUT')}"
@@ -883,11 +898,16 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     if state["current_ball"] >= 6:
         bws["overs_done"] += 1
         bws["this_over_balls"] = 0
-        if bws.get("this_over_runs", 0) == 0:
+        over_runs_scored = bws.get("this_over_runs", 0)
+        if over_runs_scored == 0:
             bws["maidens"] = bws.get("maidens", 0) + 1
         # Preserve the just-bowled over's runs for the end-of-over card.
-        bws["last_over_runs"] = bws.get("this_over_runs", 0)
+        bws["last_over_runs"] = over_runs_scored
         bws["this_over_runs"] = 0
+        # Track over-by-over runs for Manhattan chart
+        if "over_runs" not in state:
+            state["over_runs"] = []
+        state["over_runs"].append(over_runs_scored)
         state["current_over"] += 1
         state["current_ball"] = 0
         state["striker_idx"], state["non_striker_idx"] = state["non_striker_idx"], state["striker_idx"]
@@ -933,6 +953,8 @@ def _append_commentary_log(state, res, striker, bowler, text):
         "runs": runs,
         "isWicket": is_wkt,
         "text": text or res.get("rtxt") or "",
+        "batsmanName": (striker.get("name") if striker else ""),
+        "bowlerName": (bowler.get("name") if bowler else ""),
     })
 
     def _bat_card(player):
