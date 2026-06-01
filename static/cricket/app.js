@@ -796,6 +796,17 @@ function renderControlsSection() {
 
   const promptText = document.getElementById('controls-prompt-text');
   const promptSubtitle = document.getElementById('controls-prompt-subtitle');
+  const incomingCard = document.getElementById('incoming-delivery-container');
+  const battingControls = document.getElementById('batting-controls');
+  const bowlingControls = document.getElementById('bowling-controls');
+  const wicketBatsmanControls = document.getElementById('wicket-batsman-controls');
+  const overBowlerControls = document.getElementById('over-bowler-controls');
+  const hideActionSections = () => {
+    battingControls.classList.add('hidden');
+    bowlingControls.classList.add('hidden');
+    wicketBatsmanControls.classList.add('hidden');
+    overBowlerControls.classList.add('hidden');
+  };
 
   // Render the inline status badges
   renderInlineMatchStatusBar();
@@ -808,10 +819,8 @@ function renderControlsSection() {
     promptText.innerText = "⚡ MATCH IN PROGRESS";
     promptSubtitle.innerText = "Simulating delivery...";
 
-    document.getElementById('batting-controls').classList.add('hidden');
-    document.getElementById('bowling-controls').classList.add('hidden');
-    document.getElementById('wicket-batsman-controls').classList.add('hidden');
-    document.getElementById('over-bowler-controls').classList.add('hidden');
+    hideActionSections();
+    incomingCard.classList.add('hidden');
     return;
   }
 
@@ -835,10 +844,26 @@ function renderControlsSection() {
     promptText.innerText = "👁️ SPECTATOR MODE";
     promptSubtitle.innerText = waitMsg;
 
-    document.getElementById('batting-controls').classList.add('hidden');
-    document.getElementById('bowling-controls').classList.add('hidden');
-    document.getElementById('wicket-batsman-controls').classList.add('hidden');
-    document.getElementById('over-bowler-controls').classList.add('hidden');
+    hideActionSections();
+    incomingCard.classList.add('hidden');
+    return;
+  }
+
+  // Show the batsman's shot sheet before the bowler has delivered. Presentation
+  // is independent from authorization: these cards preview the available shots,
+  // but remain disabled until the batting_shot phase becomes actionable.
+  const isBatsmanWaitingForDelivery = matchState.myRole === 'batting'
+    && matchState.turnState === 'bowling_delivery'
+    && matchState.isMyTurn === false;
+  if (isBatsmanWaitingForDelivery) {
+    wasMyTurn = false;
+    waitingBlock.classList.add('hidden');
+    promptText.innerText = "🏏 CHOOSE YOUR SHOT";
+    promptSubtitle.innerText = "Opponent bowler is preparing delivery...";
+    hideActionSections();
+    incomingCard.classList.add('hidden');
+    battingControls.classList.remove('hidden');
+    renderBattingShots({ disabled: true });
     return;
   }
 
@@ -862,10 +887,8 @@ function renderControlsSection() {
     promptText.innerText = "⏳ OPPONENT'S TURN";
     promptSubtitle.innerText = waitMsg;
 
-    document.getElementById('batting-controls').classList.add('hidden');
-    document.getElementById('bowling-controls').classList.add('hidden');
-    document.getElementById('wicket-batsman-controls').classList.add('hidden');
-    document.getElementById('over-bowler-controls').classList.add('hidden');
+    hideActionSections();
+    incomingCard.classList.add('hidden');
     return;
   }
 
@@ -892,10 +915,7 @@ function renderControlsSection() {
   wasMyTurn = true;
 
   // Hide all sections initially
-  document.getElementById('batting-controls').classList.add('hidden');
-  document.getElementById('bowling-controls').classList.add('hidden');
-  document.getElementById('wicket-batsman-controls').classList.add('hidden');
-  document.getElementById('over-bowler-controls').classList.add('hidden');
+  hideActionSections();
 
   if (matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLER CONTROLS";
@@ -907,7 +927,6 @@ function renderControlsSection() {
   else if (matchState.turnState === 'batting_shot') {
     promptText.innerText = "🏏 CHOOSE YOUR SHOT";
     
-    const incomingCard = document.getElementById('incoming-delivery-container');
     if (matchState.currentDelivery) {
       const delName = matchState.currentDelivery.replace(/_/g, ' ').toUpperCase();
       const speedName = matchState.currentSpeed ? matchState.currentSpeed.toUpperCase() : 'NORMAL';
@@ -921,7 +940,7 @@ function renderControlsSection() {
       incomingCard.classList.add('hidden');
     }
     document.getElementById('batting-controls').classList.remove('hidden');
-    renderBattingShots();
+    renderBattingShots({ disabled: false });
     if (isNewActionableTurn) {
       const sheetBody = document.querySelector('.sheet-body');
       if (sheetBody) sheetBody.scrollTop = 0;
@@ -1062,7 +1081,7 @@ async function submitShot(shot) {
 // Build the shot grid from a fixed list rather than cloning static DOM, so the
 // batsman always gets a usable grid. A missing/empty grid soft-locks the over
 // (the bowler waits forever for a shot that can never be played).
-function renderBattingShots() {
+function renderBattingShots({ disabled = false } = {}) {
   const shotSection = document.getElementById('batting-controls');
   if (!shotSection) return;
   let grid = shotSection.querySelector('.button-grid');
@@ -1078,7 +1097,12 @@ function renderBattingShots() {
     btn.className = 'btn btn-action-card';
     btn.dataset.shot = s.shot;
     btn.innerHTML = `<span class="label">${s.label}</span>`;
-    btn.addEventListener('click', (e) => submitShot(e.currentTarget.dataset.shot));
+    if (disabled) {
+      btn.disabled = true;
+      btn.classList.add('is-waiting-for-delivery');
+    } else {
+      btn.addEventListener('click', (e) => submitShot(e.currentTarget.dataset.shot));
+    }
     grid.appendChild(btn);
   });
 }
