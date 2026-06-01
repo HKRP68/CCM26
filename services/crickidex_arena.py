@@ -270,10 +270,21 @@ def serialize_match_state(session, match, viewer_user):
 
     match_id = match.id
     state = mwa.get_state(match_id)
+    completed_snapshot = False
+    if not state and match.status == "completed":
+        # Live state is intentionally cleaned up at the end of a match. Restore
+        # the persisted read-only Arena snapshot so Play Match can reopen the
+        # result summary and scorecard later.
+        try:
+            from services.match_webapp_service import load_final_scorecard
+            state = (load_final_scorecard(session, match_id) or {}).get("arena_state")
+            completed_snapshot = bool(state)
+        except Exception:
+            logger.exception("completed arena snapshot load failed")
     if not state:
         return None
 
-    next_action = mwa.get_next_action(match_id)
+    next_action = "COMPLETED" if completed_snapshot else mwa.get_next_action(match_id)
     status = phase_status(state, match.status)           # xi_selection/innings1/innings2/completed
     turn_state = turn_state_name(next_action)            # bowling_delivery/batting_shot/...
     viewer_uid = viewer_user.id if viewer_user else None
@@ -413,6 +424,19 @@ def serialize_match_state(session, match, viewer_user):
     if isinstance(full_log, list) and full_log:
         commentary = list(reversed(full_log))
 
+    # ── /playmatch-compatible delivery vocabulary ──
+    # Source these from the same service used by the Telegram /playmatch flow,
+    # replacing the premium UI's hard-coded UnderCover-only variations.
+    delivery_options = None
+    current_bowler = state.get("current_bowler") or {}
+    if current_bowler:
+        try:
+            from services.bowling_service import get_delivery_options
+            delivery_options = get_delivery_options(
+                current_bowler.get("bowl_style"), current_bowler.get("bowl_hand"))
+        except Exception:
+            logger.exception("arena delivery options failed (non-fatal)")
+
     # ── toss ──
     toss_winner_tg = tg_of.get(match.toss_winner_id) if match.toss_winner_id else None
 
@@ -460,6 +484,7 @@ def serialize_match_state(session, match, viewer_user):
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
         "result": result,
+        "deliveryOptions": delivery_options,
         "host": host,
         "guest": guest,
         "currentInningsIdx": current_innings_idx,
@@ -521,16 +546,21 @@ def _build_result(session, state, match, tg_of, host, guest):
 
     win_block = _block_for_uid(winner_uid)
 
-    # Rewards (coins) for the overlay — same config the real payout uses.
-    winner_reward = loser_reward = 0
-    try:
-        from services.config_service import get_config
-        cfg = get_config(session)
-        overs = state.get("overs") or 0
-        winner_reward = int(overs * cfg["match_win_coins_per_over"])
-        loser_reward = int(overs * cfg["match_loss_coins_per_over"])
-    except Exception:
-        logger.exception("crickidex result reward calc failed (non-fatal)")
+    # Rewards (coins) for the overlay. Prefer the amounts actually awarded at
+    # finalization (including event multipliers), with a config fallback for
+    # older persisted matches.
+    awarded = state.get("_completed_rewards") or {}
+    winner_reward = awarded.get("winner_coins", 0)
+    loser_reward = awarded.get("loser_coins", 0)
+    if not awarded:
+        try:
+            from services.config_service import get_config
+            cfg = get_config(session)
+            overs = state.get("overs") or 0
+            winner_reward = int(overs * cfg["match_win_coins_per_over"])
+            loser_reward = int(overs * cfg["match_loss_coins_per_over"])
+        except Exception:
+            logger.exception("crickidex result reward calc failed (non-fatal)")
 
     # Man of the match — best (runs + 25*wickets) across both XIs.
     stats = _merge_stats(state)
@@ -544,20 +574,24 @@ def _build_result(session, state, match, tg_of, host, guest):
         if sc > best_score:
             best_score, best_rid = sc, rid
     motm = None
+    persisted_motm = state.get("_player_of_match") or {}
     if best_rid is not None and best_score > 0:
         st = stats[best_rid]
         motm = {
-            "name": name_by_rid.get(best_rid, "Player"),
+            "name": persisted_motm.get("name") or name_by_rid.get(best_rid, "Player"),
             "runs": st.get("runs", 0),
             "balls": st.get("balls", 0),
             "wickets": st.get("wickets", 0),
             "overs": st.get("overs", 0),
+            "impactPoints": persisted_motm.get("impact_points", best_score),
         }
 
     return {
-        "winner": ({"username": win_block.get("username"),
+        "winner": ({"telegramId": win_block.get("telegramId"),
+                    "username": win_block.get("username"),
                     "teamName": win_block.get("teamName")} if win_block else None),
         "winnerReward": winner_reward,
         "loserReward": loser_reward,
+        "resultText": (state.get("match_result") or {}).get("text"),
         "motm": motm,
     }
