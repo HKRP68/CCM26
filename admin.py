@@ -5991,13 +5991,24 @@ _CRICKET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 @app.route("/cricket")
 def cricket_arena_index():
     from flask import send_from_directory
-    return send_from_directory(_CRICKET_DIR, "index.html")
+    resp = send_from_directory(_CRICKET_DIR, "index.html")
+    # Never cache the entry HTML: Telegram's in-app WebView caches aggressively,
+    # which otherwise pins an old index.html (and its old style.css/app.js),
+    # making redeploys invisible to users. The HTML is tiny; refetch every time.
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/cricket/<path:filename>")
 def cricket_arena_asset(filename):
     from flask import send_from_directory
-    return send_from_directory(_CRICKET_DIR, filename)
+    resp = send_from_directory(_CRICKET_DIR, filename)
+    # Assets are cache-busted via ?v= query strings, but force revalidation too
+    # so a stale style.css/app.js can never linger in the Telegram WebView cache.
+    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
 
 
 # ── Player photos (migrated from UnderCover assets/players/) ─────────────
