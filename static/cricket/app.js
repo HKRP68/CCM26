@@ -912,14 +912,16 @@ function renderControlsSection() {
 // Render dynamic bowler variations grid based on bowler type
 function renderBowlerVariations() {
   const deliveryGrid = document.getElementById('bowler-delivery-grid');
-  const bowlerType = matchState.bowler?.bowler_type || 'fast';
-  const isOffSpin = bowlerType === 'off_spin';
-  const isLegSpin = bowlerType === 'leg_spin';
+  const bowlerType = matchState.bowler?.bowler_type || matchState.bowler?.bowl_style || 'fast';
+  const bowlerName = matchState.bowler?.name || '';
+  const isOffSpin = bowlerType === 'off_spin' || bowlerType.toLowerCase().includes('off spin') || bowlerType.toLowerCase().includes('off-spin');
+  const isLegSpin = bowlerType === 'leg_spin' || bowlerType.toLowerCase().includes('leg spin') || bowlerType.toLowerCase().includes('leg-spin');
   const isSpin = isOffSpin || isLegSpin || bowlerType.toLowerCase().includes('spin');
 
-  const cacheKey = isOffSpin ? 'off_spin' : (isLegSpin ? 'leg_spin' : 'fast');
+  const cacheKey = `${isOffSpin ? 'off_spin' : (isLegSpin ? 'leg_spin' : 'fast')}_${bowlerName}`;
   if (deliveryGrid.dataset.rendered === cacheKey) return;
   deliveryGrid.dataset.rendered = cacheKey;
+  selectedDelivery = null;
 
   let deliveries = [];
   if (isOffSpin) {
@@ -1381,7 +1383,8 @@ function renderCommentaryFeed() {
       const outcomeClass = comm.isWicket ? 'outcome-wicket' :
                            (comm.runs === 4 ? 'outcome-four' :
                            (comm.runs === 6 ? 'outcome-six' :
-                           (comm.runs === 0 ? 'outcome-dot' : 'outcome-normal')));
+                           (comm.runs === 0 ? 'outcome-dot' :
+                           (comm.runs >= 3 ? 'outcome-boundary' : 'outcome-normal'))));
 
       const outcomeText = comm.isWicket ? 'W' : comm.runs.toString();
 
@@ -1696,48 +1699,44 @@ function runAutoplayAction() {
       if (buttons.length > 0) {
         const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
         randBtn.click();
-        
+
         const speedButtons = document.querySelectorAll('.btn-speed');
         if (speedButtons.length > 0 && !document.getElementById('bowling-speed-section').classList.contains('hidden')) {
           const randSpeedBtn = speedButtons[Math.floor(Math.random() * speedButtons.length)];
           randSpeedBtn.click();
         }
 
-        console.log("[Autoplay] Auto-submitting Bowling Delivery: " + selectedDelivery + ", Speed: " + selectedSpeed);
-        setTimeout(submitDelivery, 500);
+        setTimeout(submitDelivery, 200);
       }
-    } 
+    }
     else if (matchState.turnState === 'batting_shot') {
       const shotSection = document.getElementById('batting-controls');
       const buttons = shotSection.querySelectorAll('.btn-action-card');
       if (buttons.length > 0) {
         const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
-        console.log("[Autoplay] Auto-clicking Batting Shot: " + randBtn.dataset.shot);
-        setTimeout(() => randBtn.click(), 500);
+        setTimeout(() => randBtn.click(), 200);
       }
-    } 
+    }
     else if (matchState.turnState === 'selecting_wicket_batsman') {
       const item = document.querySelector('#wicket-batsman-list .selection-item:not(.disabled)');
       if (item) {
         item.click();
         const index = parseInt(item.dataset.index);
-        console.log("[Autoplay] Auto-selecting Replacement Batsman...");
         setTimeout(() => {
           document.getElementById('controls-sheet').classList.add('minimized');
           selectNextBatsman(index);
-        }, 500);
+        }, 200);
       }
-    } 
+    }
     else if (matchState.turnState === 'selecting_over_bowler') {
       const item = document.querySelector('#over-bowler-list .selection-item:not(.disabled)');
       if (item) {
         item.click();
         const index = parseInt(item.dataset.index);
-        console.log("[Autoplay] Auto-selecting Over Bowler...");
         setTimeout(() => {
           document.getElementById('controls-sheet').classList.add('minimized');
           selectNextBowler(index);
-        }, 500);
+        }, 200);
       }
     }
   }
@@ -1804,19 +1803,19 @@ function renderOverByOver() {
     return;
   }
 
+  const hostName = matchState.host ? (matchState.host.teamName || 'Host').substring(0, 6) : 'Inn 1';
+  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest').substring(0, 6) : 'Inn 2';
+
   const numOvers = Math.max(inn1.length, inn2.length);
   let rows = `<div class="ovo-header-row">
     <span class="ovo-ov">OV</span>
-    <span class="ovo-val">Inn 1</span>
-    <span class="ovo-val">Inn 2</span>
+    <span class="ovo-val">${hostName}</span>
+    <span class="ovo-val">${guestName}</span>
   </div>`;
 
-  let cum1 = 0, cum2 = 0;
   for (let i = 0; i < numOvers; i++) {
     const r1 = inn1[i] !== undefined ? inn1[i] : null;
     const r2 = inn2[i] !== undefined ? inn2[i] : null;
-    if (r1 !== null) cum1 += r1;
-    if (r2 !== null) cum2 += r2;
     const cls1 = r1 !== null ? (r1 >= 15 ? 'ovo-high' : (r1 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
     const cls2 = r2 !== null ? (r2 >= 15 ? 'ovo-high' : (r2 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
     rows += `<div class="ovo-row">
@@ -1834,17 +1833,16 @@ function renderPartnershipHistory() {
   const container = document.getElementById('partnership-history-container');
   if (!container || !matchState) return;
 
-  const statsPool = activeScorecardTab === 'innings1'
-    ? (matchState.innings1Stats || matchState.stats)
-    : (matchState.innings2Stats || matchState.stats);
+  const isInn1 = activeScorecardTab === 'innings1';
+  const history = isInn1
+    ? (matchState.inn1PartnershipHistory || [])
+    : (matchState.inn2PartnershipHistory || []);
 
-  // Show current partnership always
   const curPart = matchState.partnership || { runs: 0, balls: 0 };
+  const isCurrentInnings = (isInn1 && matchState.currentInningsIdx === 0) ||
+                           (!isInn1 && matchState.currentInningsIdx === 1);
 
-  // Historical partnerships from state
-  const history = matchState.partnershipHistory || [];
-
-  if (history.length === 0 && curPart.runs === 0) {
+  if (history.length === 0 && (!isCurrentInnings || curPart.runs === 0)) {
     container.innerHTML = '<div class="sc-empty-msg">No partnership data yet</div>';
     return;
   }
@@ -1859,8 +1857,8 @@ function renderPartnershipHistory() {
     </div>`;
   });
 
-  // Current ongoing partnership
-  if (matchState.striker && matchState.nonStriker) {
+  // Current ongoing partnership (only for the active innings)
+  if (isCurrentInnings && matchState.striker && matchState.nonStriker) {
     rows += `<div class="part-row active-part">
       <span class="part-wkt">NOW</span>
       <span class="part-names">${matchState.striker.name} & ${matchState.nonStriker.name}</span>

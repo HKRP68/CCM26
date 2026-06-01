@@ -205,10 +205,19 @@ body {
 }
 
 .loading-text {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
   letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+
+.loading-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 /* ── Identity Screen ───────────────────────────────────────────── */
@@ -1467,6 +1476,12 @@ body {
 .ball-outcome-badge.outcome-normal {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
+}
+
+.ball-outcome-badge.outcome-boundary {
+  background: rgba(77, 166, 255, 0.12);
+  color: var(--blue-accent);
+  border: 1px solid rgba(77, 166, 255, 0.3);
 }
 
 .ball-comm-text {

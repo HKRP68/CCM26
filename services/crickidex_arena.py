@@ -439,6 +439,13 @@ def serialize_match_state(session, match, viewer_user):
         inn1_over_runs = inn2_over_runs
         inn2_over_runs = []
 
+    # Partnership history per innings
+    inn1_partnerships = list(state.get("inn1_partnership_history") or [])
+    inn2_partnerships = list(state.get("partnership_history") or [])
+    if innings_no == 1:
+        inn1_partnerships = inn2_partnerships
+        inn2_partnerships = []
+
     return {
         "id": str(match_id),
         "type": "pve" if state.get("is_vsbot") else "pvp",
@@ -477,7 +484,8 @@ def serialize_match_state(session, match, viewer_user):
         },
         "inn1OverRuns": inn1_over_runs,
         "inn2OverRuns": inn2_over_runs,
-        "partnershipHistory": state.get("partnership_history") or [],
+        "inn1PartnershipHistory": inn1_partnerships,
+        "inn2PartnershipHistory": inn2_partnerships,
     }
 
 

@@ -274,9 +274,11 @@ def transition_to_second_innings(s):
                                               "overs_done": 0, "this_over_balls": 0,
                                               "maidens": 0, "this_over_runs": 0}
                        for p in s["bowl_xi"]}
-    # Save innings 1 over-by-over data before resetting
+    # Save innings 1 over-by-over data and partnerships before resetting
     s["inn1_over_runs"] = list(s.get("over_runs", []))
     s["over_runs"] = []
+    s["inn1_partnership_history"] = list(s.get("partnership_history", []))
+    s["partnership_history"] = []
     s["fow"] = []
     return target
 
