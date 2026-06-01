@@ -909,14 +909,19 @@ body {
   text-align: center;
 }
 
-.btn-action-card:active, .btn-action-card.active {
+.btn-action-card:not(:disabled):active, .btn-action-card.active {
   background: rgba(0, 212, 255, 0.12);
   border-color: var(--primary-accent);
   box-shadow: 0 0 12px rgba(0, 212, 255, 0.2);
 }
 
-.btn-action-card:active .label, .btn-action-card.active .label {
+.btn-action-card:not(:disabled):active .label, .btn-action-card.active .label {
   color: var(--primary-accent);
+}
+
+.btn-action-card.is-waiting-for-delivery:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .controls-hint {
