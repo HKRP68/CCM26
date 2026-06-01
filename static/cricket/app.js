@@ -213,6 +213,9 @@ function setupEventListeners() {
     tabHost.classList.add('active');
     tabGuest.classList.remove('active');
     renderScorecardPanel();
+    renderPartnershipHistory();
+    renderManhattanChart();
+    renderOverByOver();
   });
 
   tabGuest.addEventListener('click', () => {
@@ -220,6 +223,9 @@ function setupEventListeners() {
     tabGuest.classList.add('active');
     tabHost.classList.remove('active');
     renderScorecardPanel();
+    renderPartnershipHistory();
+    renderManhattanChart();
+    renderOverByOver();
   });
 }
 
@@ -689,6 +695,11 @@ function renderGameplayScreen() {
   // Render Scorecard & Squads panels (so they are fresh if user switches tabs)
   renderScorecardPanel();
   renderSquadsPanel();
+
+  // Render the analytics panels under the scorecard tab
+  renderPartnershipHistory();
+  renderManhattanChart();
+  renderOverByOver();
 }
 
 // Render inline match status bar inside the controls sheet header
@@ -1661,6 +1672,132 @@ function runAutoplayAction() {
       }
     }
   }
+}
+
+// Manhattan Bar Chart (over-by-over runs)
+function renderManhattanChart() {
+  const container = document.getElementById('manhattan-chart-container');
+  if (!container || !matchState) return;
+
+  const inn1 = matchState.inn1OverRuns || [];
+  const inn2 = matchState.inn2OverRuns || [];
+
+  if (inn1.length === 0 && inn2.length === 0) {
+    container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
+    return;
+  }
+
+  const maxRuns = Math.max(...inn1, ...inn2, 1);
+  const chartHeight = 80;
+
+  let bars = '';
+  const numOvers = Math.max(inn1.length, inn2.length, 1);
+  for (let i = 0; i < numOvers; i++) {
+    const r1 = inn1[i] !== undefined ? inn1[i] : null;
+    const r2 = inn2[i] !== undefined ? inn2[i] : null;
+    const h1 = r1 !== null ? Math.max(4, Math.round((r1 / maxRuns) * chartHeight)) : 0;
+    const h2 = r2 !== null ? Math.max(4, Math.round((r2 / maxRuns) * chartHeight)) : 0;
+    const overLabel = i + 1;
+
+    bars += `<div class="mh-bar-group">
+      <div class="mh-bars">
+        ${r1 !== null ? `<div class="mh-bar inn1" style="height:${h1}px" title="Inn1 Over ${overLabel}: ${r1}"></div>` : '<div class="mh-bar empty"></div>'}
+        ${r2 !== null ? `<div class="mh-bar inn2" style="height:${h2}px" title="Inn2 Over ${overLabel}: ${r2}"></div>` : '<div class="mh-bar empty"></div>'}
+      </div>
+      <div class="mh-over-num">${overLabel}</div>
+    </div>`;
+  }
+
+  // Legend
+  const hostName = matchState.host ? (matchState.host.teamName || 'Host') : 'Inn 1';
+  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest') : 'Inn 2';
+
+  container.innerHTML = `
+    <div class="mh-legend">
+      <span class="mh-leg-dot inn1-dot"></span><span>${hostName.substring(0,8)}</span>
+      <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${guestName.substring(0,8)}</span>
+    </div>
+    <div class="mh-chart">${bars}</div>
+  `;
+}
+
+// Over-by-over breakdown table
+function renderOverByOver() {
+  const container = document.getElementById('over-by-over-container');
+  if (!container || !matchState) return;
+
+  const inn1 = matchState.inn1OverRuns || [];
+  const inn2 = matchState.inn2OverRuns || [];
+
+  if (inn1.length === 0 && inn2.length === 0) {
+    container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
+    return;
+  }
+
+  const hostName = matchState.host ? (matchState.host.teamName || 'Host').substring(0, 6) : 'Inn 1';
+  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest').substring(0, 6) : 'Inn 2';
+
+  const numOvers = Math.max(inn1.length, inn2.length);
+  let rows = `<div class="ovo-header-row">
+    <span class="ovo-ov">OV</span>
+    <span class="ovo-val">${hostName}</span>
+    <span class="ovo-val">${guestName}</span>
+  </div>`;
+
+  for (let i = 0; i < numOvers; i++) {
+    const r1 = inn1[i] !== undefined ? inn1[i] : null;
+    const r2 = inn2[i] !== undefined ? inn2[i] : null;
+    const cls1 = r1 !== null ? (r1 >= 15 ? 'ovo-high' : (r1 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
+    const cls2 = r2 !== null ? (r2 >= 15 ? 'ovo-high' : (r2 <= 4 ? 'ovo-low' : '')) : 'ovo-na';
+    rows += `<div class="ovo-row">
+      <span class="ovo-ov">${i + 1}</span>
+      <span class="ovo-val ${cls1}">${r1 !== null ? r1 : '-'}</span>
+      <span class="ovo-val ${cls2}">${r2 !== null ? r2 : '-'}</span>
+    </div>`;
+  }
+
+  container.innerHTML = rows;
+}
+
+// Partnership history
+function renderPartnershipHistory() {
+  const container = document.getElementById('partnership-history-container');
+  if (!container || !matchState) return;
+
+  const isInn1 = activeScorecardTab === 'innings1';
+  const history = isInn1
+    ? (matchState.inn1PartnershipHistory || [])
+    : (matchState.inn2PartnershipHistory || []);
+
+  const curPart = matchState.partnership || { runs: 0, balls: 0 };
+  const isCurrentInnings = (isInn1 && matchState.currentInningsIdx === 0) ||
+                           (!isInn1 && matchState.currentInningsIdx === 1);
+
+  if (history.length === 0 && (!isCurrentInnings || curPart.runs === 0)) {
+    container.innerHTML = '<div class="sc-empty-msg">No partnership data yet</div>';
+    return;
+  }
+
+  let rows = '';
+  history.forEach((p, i) => {
+    const wkt = p.wicket || (i + 1);
+    rows += `<div class="part-row">
+      <span class="part-wkt">${wkt}W</span>
+      <span class="part-names">${p.batsman1 || ''} & ${p.batsman2 || ''}</span>
+      <span class="part-score">${p.runs}(${p.balls})</span>
+    </div>`;
+  });
+
+  // Current ongoing partnership (only for the active innings)
+  if (isCurrentInnings && matchState.striker && matchState.nonStriker) {
+    rows += `<div class="part-row active-part">
+      <span class="part-wkt">NOW</span>
+      <span class="part-names">${matchState.striker.name} & ${matchState.nonStriker.name}</span>
+      <span class="part-score">${curPart.runs}(${curPart.balls})</span>
+    </div>`;
+  }
+
+  container.innerHTML = rows || '<div class="sc-empty-msg">No partnership data yet</div>';
 }
 
 function showError(msg) {
