@@ -6433,10 +6433,24 @@ def _broadcast_match_result(match_id, result):
                 f"({inn.get('overs', '0')})")
         score_block = "\n".join(score_lines) if score_lines else "Match completed."
         result_text = result.get('text') or sc.get('result_text') or 'Match finished.'
+        arena = sc.get("arena_state") or {}
+        rewards = arena.get("_completed_rewards") or {}
+        pom = arena.get("_player_of_match") or result.get("player_of_match") or {}
+        reward_lines = []
+        if rewards:
+            reward_lines.append(f"🏆 Winner reward: <b>+{rewards.get('winner_coins', 0):,} coins</b>")
+            reward_lines.append(f"📉 Losing reward: <b>+{rewards.get('loser_coins', 0):,} coins</b>")
+        pom_line = ""
+        if pom:
+            pom_line = (f"\n🌟 <b>Man of the Match:</b> {pom.get('name', 'Player')} "
+                        f"(<b>{pom.get('impact_points', 0)} Impact Points</b>)\n")
+        reward_block = ("\n".join(reward_lines) + "\n") if reward_lines else ""
         text = (
-            "━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULTS</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH SUMMARY</b>\n\n"
             f"{score_block}\n\n"
-            f"🏆 <b>{result_text}</b>\n\n"
+            f"🏆 <b>{result_text}</b>\n"
+            f"{pom_line}"
+            f"{reward_block}\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             "Tap below to view the full scorecard."
         )

@@ -14,7 +14,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20260601-8">
+  <link rel="stylesheet" href="style.css?v=20260601-9">
 </head>
 <body>
   <div id="app-container">
@@ -395,14 +395,16 @@
     <div id="result-overlay" class="overlay hidden">
       <div class="result-card glass-card">
         <div class="trophy-emoji">🏆</div>
+        <div class="result-kicker">MATCH SUMMARY</div>
         <h2 id="result-winner-title">Match Finished!</h2>
+        <p class="result-outcome-detail" id="result-outcome-detail"></p>
         
         <div class="reward-section">
           <div class="coin-badge">
             <span class="coin-icon">🪙</span>
             <span id="result-reward-amount">+1,500</span>
           </div>
-          <p class="reward-sub">added to your balance</p>
+          <p class="reward-sub" id="result-reward-label">coins earned</p>
         </div>
 
         <div class="scoreboard-summary">
@@ -423,7 +425,7 @@
         </div>
 
         <div class="result-buttons" style="display: flex; gap: 10px; width: 100%;">
-          <button id="view-match-btn" class="btn btn-secondary btn-block" style="margin-top: 0; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);">View Match</button>
+          <button id="view-match-btn" class="btn btn-secondary btn-block" style="margin-top: 0; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);">Toggle Scorecard</button>
           <button id="close-app-btn" class="btn btn-primary btn-block btn-green" style="margin-top: 0;">Back to Telegram</button>
         </div>
       </div>
@@ -431,6 +433,6 @@
 
   </div>
   
-  <script src="app.js?v=20260601-9"></script>
+  <script src="app.js?v=20260601-10"></script>
 </body>
 </html>

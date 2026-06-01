@@ -1265,7 +1265,12 @@ def save_final_scorecard(session, match_id, result_text=None):
         match_id=match_id,
         scorecard_json=_json.dumps({"innings": sc["innings"],
                                     "current_innings": sc.get("current_innings"),
-                                    "target": sc.get("target")}),
+                                    "target": sc.get("target"),
+                                    # Keep the completed Arena board queryable
+                                    # after live match_state cleanup. This lets
+                                    # /wpm Play Match reopen as a read-only
+                                    # result screen instead of a dead room.
+                                    "arena_state": mwa.get_state(match_id)}),
         result_text=(result_text or "")[:300] or None,
     )
     session.add(row)
@@ -1350,7 +1355,9 @@ def _pick_player_of_match(state, result):
                 rid_i = rid
             p = by_rid.get(rid_i) or by_rid.get(rid)
             name = p["name"] if p else str(rid)
-            c = candidates.setdefault(rid_i, {"name": name, "runs": 0, "wkts": 0,
+            c = candidates.setdefault(rid_i, {"name": name,
+                                              "player_id": p.get("player_id") if p else None,
+                                              "runs": 0, "wkts": 0,
                                               "fours": 0, "sixes": 0,
                                               "winner": team_uid == winner_uid})
             c["runs"] += st.get("runs", 0)
@@ -1363,29 +1370,34 @@ def _pick_player_of_match(state, result):
                 rid_i = rid
             p = by_rid.get(rid_i) or by_rid.get(rid)
             name = p["name"] if p else str(rid)
-            c = candidates.setdefault(rid_i, {"name": name, "runs": 0, "wkts": 0,
+            c = candidates.setdefault(rid_i, {"name": name,
+                                              "player_id": p.get("player_id") if p else None,
+                                              "runs": 0, "wkts": 0,
                                               "fours": 0, "sixes": 0,
                                               "winner": team_uid == winner_uid})
             c["wkts"] += st.get("wickets", 0)
 
-    # Innings 1 (snapshotted) + innings 2 (current)
-    _ingest(state.get("inn1_bat_stats"), state.get("inn1_bowl_stats"),
-            state.get("inn1_bat_xi"), state.get("inn1_bat_team_id"))
-    # innings-1 bowlers belong to innings-1 bowling team
+    # Innings 1 (snapshotted) + innings 2 (current). Ingest batting and
+    # bowling separately so wickets are counted exactly once and the player's
+    # XI supplies the correct display name.
+    _ingest(state.get("inn1_bat_stats"), {}, state.get("inn1_bat_xi"),
+            state.get("inn1_bat_team_id"))
     _ingest({}, state.get("inn1_bowl_stats"), state.get("inn1_bowl_xi"),
             state.get("inn1_bowl_team_id"))
-    _ingest(state.get("bat_stats"), state.get("bowl_stats"),
-            state.get("bat_xi"), state.get("bat_team_id"))
+    _ingest(state.get("bat_stats"), {}, state.get("bat_xi"),
+            state.get("bat_team_id"))
     _ingest({}, state.get("bowl_stats"), state.get("bowl_xi"),
             state.get("bowl_team_id"))
 
     if not candidates:
         return None
     def score(c):
-        return c["runs"] + 20 * c["wkts"] + c["fours"] * 1 + c["sixes"] * 2 + (5 if c["winner"] else 0)
+        return c["runs"] + 20 * c["wkts"] + c["fours"] + c["sixes"] * 2 + (5 if c["winner"] else 0)
     best_rid = max(candidates, key=lambda r: score(candidates[r]))
     b = candidates[best_rid]
-    return {"name": b["name"], "runs": b["runs"], "wickets": b["wkts"]}
+    return {"roster_id": best_rid, "player_id": b.get("player_id"),
+            "name": b["name"], "runs": b["runs"], "wickets": b["wkts"],
+            "impact_points": score(b)}
 
 
 def finalize_webapp_match(session, match_id):
@@ -1420,12 +1432,6 @@ def finalize_webapp_match(session, match_id):
         m.inn2_runs = state.get("total_runs")
         m.inn2_wickets = state.get("total_wickets")
 
-    # Persist the full scorecard BEFORE cleaning up live state
-    try:
-        save_final_scorecard(session, match_id, result_text=result.get("text"))
-    except Exception:
-        logger.exception("save_final_scorecard failed")
-
     # Full rewards via the shared reward core (coins/gems/season points/W-L).
     # Map winner/loser team ids → user ids (they ARE user ids in our state).
     rewards = None
@@ -1455,8 +1461,22 @@ def finalize_webapp_match(session, match_id):
         pom = _pick_player_of_match(state, result)
         if pom:
             result["player_of_match"] = pom
+            m.potm_impact = pom.get("impact_points")
+            m.potm_player_id = pom.get("player_id")
     except Exception:
         logger.exception("player-of-match selection failed (non-fatal)")
+
+    # Persist the full read-only Arena snapshot only after rewards and POTM are
+    # known, but still before cleanup removes live match_state.
+    if state is not None:
+        state["_completed_rewards"] = rewards or {}
+        state["_player_of_match"] = pom
+        state["match_result"] = result
+        mwa.save_state(match_id, state, next_action=A_COMPLETED)
+    try:
+        save_final_scorecard(session, match_id, result_text=result.get("text"))
+    except Exception:
+        logger.exception("save_final_scorecard failed")
 
     session.commit()
 

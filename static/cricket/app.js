@@ -134,9 +134,11 @@ function setupEventListeners() {
     }
   });
 
-  // View match button
+  // Completed-match scorecard toggle. Keep the finished board read-only,
+  // but let players jump straight into the full scorecard and back.
   document.getElementById('view-match-btn').addEventListener('click', () => {
     document.getElementById('result-overlay').classList.add('hidden');
+    switchGameplayTab('scorecard');
   });
 
   // Autoplay Pill Switch Toggle
@@ -206,14 +208,7 @@ function setupEventListeners() {
   // Tab switching
   const tabs = ['match', 'scorecard', 'squads'];
   tabs.forEach(tab => {
-    document.getElementById(`tab-${tab}`).addEventListener('click', () => {
-      tabs.forEach(t => {
-        document.getElementById(`tab-${t}`).classList.remove('active');
-        document.getElementById(`panel-${t}`).classList.remove('active');
-      });
-      document.getElementById(`tab-${tab}`).classList.add('active');
-      document.getElementById(`panel-${tab}`).classList.add('active');
-    });
+    document.getElementById(`tab-${tab}`).addEventListener('click', () => switchGameplayTab(tab));
   });
 
   // Scorecard Team Switch tabs
@@ -238,6 +233,13 @@ function setupEventListeners() {
     renderPartnershipHistory();
     renderManhattanChart();
     renderOverByOver();
+  });
+}
+
+function switchGameplayTab(tab) {
+  ['match', 'scorecard', 'squads'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
+    document.getElementById(`panel-${t}`).classList.toggle('active', t === tab);
   });
 }
 
@@ -979,61 +981,41 @@ function renderBowlerVariations() {
   deliveryGrid.dataset.rendered = cacheKey;
   selectedDelivery = null;
 
+  // Reuse the Telegram /playmatch vocabulary supplied by the backend. Keep a
+  // defensive fallback for older servers so a cached client never soft-locks.
+  const shared = matchState.deliveryOptions || {};
   let deliveries = [];
-  if (isOffSpin) {
-    deliveries = [
-      { id: 'off_break', name: 'Off Break' },
-      { id: 'carrom_ball', name: 'Carrom Ball' },
-      { id: 'arm_ball', name: 'Arm Ball' },
-      { id: 'doosra', name: 'Doosra' },
-      { id: 'top_spinner_off', name: 'Top Spinner' },
-      { id: 'mystery_ball', name: 'Mystery Ball' }
-    ];
+  if (Array.isArray(shared.deliveries) && shared.deliveries.length) {
+    deliveries = shared.deliveries.map(name => ({ id: name, name }));
     document.getElementById('bowling-speed-section').classList.add('hidden');
     selectedSpeed = 'normal';
-  } else if (isSpin) {
-    deliveries = [
-      { id: 'leg_break', name: 'Leg Break' },
-      { id: 'googly', name: 'Googly' },
-      { id: 'flipper', name: 'Flipper' },
-      { id: 'top_spinner_leg', name: 'Top Spinner' },
-      { id: 'slider', name: 'Slider' },
-      { id: 'mystery_ball', name: 'Mystery Ball' }
-    ];
-    document.getElementById('bowling-speed-section').classList.add('hidden');
-    selectedSpeed = 'normal';
-  } else {
-    deliveries = [
-      { id: 'yorker', name: 'Yorker' },
-      { id: 'full_length', name: 'Full Length' },
-      { id: 'good_length', name: 'Good Length' },
-      { id: 'short', name: 'Short Ball' },
-      { id: 'bouncer', name: 'Bouncer' }
-    ];
+  } else if (Array.isArray(shared.variations) && shared.variations.length) {
+    deliveries = shared.variations.map(name => ({ id: name, name }));
     document.getElementById('bowling-speed-section').classList.remove('hidden');
-    
-    // Dynamically render speed variations for fast bowlers only
+  } else {
+    deliveries = isSpin
+      ? [{ id: 'Leg Break', name: 'Leg Break' }, { id: 'Googly', name: 'Googly' }]
+      : [{ id: 'Seam Up', name: 'Seam Up' }, { id: 'Outswing', name: 'Outswing' }];
+    document.getElementById('bowling-speed-section').classList.toggle('hidden', isSpin);
+  }
+
+  // Dynamically render speed variations for pacers only.
+  if (!isSpin) {
     const speedGroup = document.querySelector('.speed-button-group');
     if (speedGroup) {
       speedGroup.innerHTML = `
         <button class="btn btn-speed${selectedSpeed === 'fast' ? ' active' : ''}" data-speed="fast">Fast</button>
         <button class="btn btn-speed${selectedSpeed === 'normal' ? ' active' : ''}" data-speed="normal">Normal</button>
-        <button class="btn btn-speed${selectedSpeed === 'slow' ? ' active' : ''}" data-speed="slow">Slow</button>
-        <button class="btn btn-speed${selectedSpeed === 'inswinger' ? ' active' : ''}" data-speed="inswinger">Inswing</button>
-        <button class="btn btn-speed${selectedSpeed === 'outswinger' ? ' active' : ''}" data-speed="outswinger">Outswing</button>
-      `;
-      // Re-bind listeners for speed buttons
-      const speedButtons = speedGroup.querySelectorAll('.btn-speed');
-      speedButtons.forEach(btn => {
+        <button class="btn btn-speed${selectedSpeed === 'slow' ? ' active' : ''}" data-speed="slow">Slow</button>`;
+      speedGroup.querySelectorAll('.btn-speed').forEach(btn => {
         btn.addEventListener('click', (e) => {
-          speedButtons.forEach(b => b.classList.remove('active'));
+          speedGroup.querySelectorAll('.btn-speed').forEach(b => b.classList.remove('active'));
           e.currentTarget.classList.add('active');
           selectedSpeed = e.currentTarget.dataset.speed;
         });
       });
     }
   }
-
   deliveryGrid.innerHTML = '';
   deliveries.forEach(del => {
     const btn = document.createElement('button');
@@ -1053,16 +1035,11 @@ function renderBowlerVariations() {
 }
 
 // Render batting shot event listeners
+// Same shot vocabulary as Telegram /playmatch (services.bowling_service).
 const BATTING_SHOTS = [
-  { shot: 'defend', label: 'Defend' },
-  { shot: 'straight_drive', label: 'Drive' },
-  { shot: 'cut', label: 'Cut' },
-  { shot: 'pull', label: 'Pull' },
-  { shot: 'sweep', label: 'Sweep' },
-  { shot: 'loft', label: 'Loft' },
-  { shot: 'flick', label: 'Flick' },
-  { shot: 'leave', label: 'Leave' },
-];
+  'Drive', 'Cut', 'Pull', 'Leg Glance', 'Flick', 'Sweep',
+  'Switch Hit', 'Slog', 'Loft', 'Defend', 'Leave',
+].map(shot => ({ shot, label: shot }));
 
 async function submitShot(shot) {
   // Minimize sheet immediately for snappy feedback
@@ -1071,7 +1048,7 @@ async function submitShot(shot) {
     const res = await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, type: 'shot', action: { shot } })
+      body: JSON.stringify({ userId, matchId, type: 'shot', action: { shot } })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit shot");
@@ -1126,6 +1103,7 @@ async function submitDelivery() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId,
+        matchId,
         type: 'delivery',
         action: {
           delivery: selectedDelivery,
@@ -1204,6 +1182,7 @@ async function selectNextBatsman(index) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId,
+        matchId,
         type: 'wicket_batsman',
         action: { index }
       })
@@ -1307,6 +1286,7 @@ async function selectNextBowler(index) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId,
+        matchId,
         type: 'over_bowler',
         action: { index }
       })
@@ -1705,31 +1685,21 @@ function renderResultScreen() {
     document.getElementById('result-winner-title').innerText = "TIE MATCH!";
   }
 
-  // Calculate my coins based on role and outcome
-  const isHost = matchState.host.telegramId.toString() === userId.toString();
-  const isGuest = matchState.guest && matchState.guest.telegramId && (matchState.guest.telegramId.toString() === userId.toString());
-  
-  let myCoins = 0;
-  if (result) {
-    const iAmWinner = result.winner && (
-      (isHost && result.winner.username === matchState.host.username) ||
-      (isGuest && result.winner.username === matchState.guest.username)
-    );
-    myCoins = iAmWinner ? result.winnerReward : result.loserReward;
-  } else {
-    myCoins = matchState.myRole === 'batting' ? 1500 : 500;
-  }
+  // Calculate my exact awarded coins based on Telegram identity and outcome.
+  const iAmWinner = Boolean(result && result.winner && result.winner.telegramId &&
+    result.winner.telegramId.toString() === userId.toString());
+  const myCoins = result ? (iAmWinner ? result.winnerReward : result.loserReward) : 0;
   document.getElementById('result-reward-amount').innerText = `+${myCoins.toLocaleString()}`;
-  
-  const hostId = matchState.host.telegramId;
-  const guestId = matchState.guest ? matchState.guest.telegramId : 'ai';
-  const hostInn = matchState.innings.find(i => i.battingId.toString() === hostId.toString()) || { runs: 0, wickets: 0, overs: 0, balls: 0 };
-  const guestInn = matchState.innings.find(i => i.battingId.toString() === guestId.toString()) || { runs: 0, wickets: 0, overs: 0, balls: 0 };
+  document.getElementById('result-reward-label').innerText = iAmWinner ? 'coins won' : 'coins earned after loss';
+  document.getElementById('result-outcome-detail').innerText = result?.resultText || (iAmWinner ? 'You won the match.' : 'Match completed.');
 
-  document.getElementById('result-inn1-score').innerText = 
-    `${hostInn.runs}/${hostInn.wickets} (${hostInn.overs}.${hostInn.balls} ov)`;
-  document.getElementById('result-inn2-score').innerText = 
-    `${guestInn.runs}/${guestInn.wickets} (${guestInn.overs}.${guestInn.balls} ov)`;
+  const inn1 = matchState.innings[0] || { runs: 0, wickets: 0, overs: 0, balls: 0 };
+  const inn2 = matchState.innings[1] || { runs: 0, wickets: 0, overs: 0, balls: 0 };
+
+  document.getElementById('result-inn1-score').innerText =
+    `${inn1.runs}/${inn1.wickets} (${inn1.overs}.${inn1.balls} ov)`;
+  document.getElementById('result-inn2-score').innerText =
+    `${inn2.runs}/${inn2.wickets} (${inn2.overs}.${inn2.balls} ov)`;
 
   // Render MOTM
   const motmSection = document.getElementById('result-motm-section');
@@ -1737,7 +1707,7 @@ function renderResultScreen() {
     motmSection.classList.remove('hidden');
     document.getElementById('result-motm-name').innerText = result.motm.name;
     document.getElementById('result-motm-stats').innerText = 
-      `${result.motm.runs} runs (${result.motm.balls}b) & ${result.motm.wickets} wickets (${result.motm.overs} ov)`;
+      `${result.motm.impactPoints || 0} Impact Points · ${result.motm.runs} runs (${result.motm.balls}b) & ${result.motm.wickets} wickets (${result.motm.overs} ov)`;
   } else {
     motmSection.classList.add('hidden');
   }
