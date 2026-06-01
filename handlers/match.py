@@ -133,12 +133,12 @@ def _cric_lobby_key(chat_id):
 
 
 def _active_cric_match_in_chat(session, chat_id):
-    """Return a launched /cric-style Mini App match in ``chat_id``.
+    """Return a launched /wpm-style Mini App match in ``chat_id``.
 
     UnderCover does not treat an abandoned pre-match lobby as an active match:
     its match manager only receives a match after the toss decision.  Keep the
     same boundary here so old ``pending``/``toss`` rows from callback matches
-    cannot make a fresh ``/cric`` lobby look busy.
+    cannot make a fresh ``/wpm`` lobby look busy.
     """
     if not chat_id:
         return None
@@ -150,7 +150,7 @@ def _active_cric_match_in_chat(session, chat_id):
 
 
 def _active_cric_match_for_user(session, user_id):
-    """Return a launched /cric-style Mini App match involving ``user_id``."""
+    """Return a launched /wpm-style Mini App match involving ``user_id``."""
     return (session.query(Match)
             .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
                     Match.status.in_(("playing", "active")))
@@ -159,7 +159,7 @@ def _active_cric_match_for_user(session, user_id):
 
 
 def _cric_lobby_for_user(bot_data, user_id):
-    """Find an in-memory /cric lobby containing ``user_id``."""
+    """Find an in-memory /wpm lobby containing ``user_id``."""
     return next((lobby for key, lobby in bot_data.items()
                  if key.startswith("cric_lobby_")
                  and user_id in (lobby.get("host_user_id"),
@@ -1661,9 +1661,9 @@ async def endmatch_no_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.edit_message_text("🔄 Match continues!")
 
 
-# ════════════════════════ /cric Mini-App lobby ════════════════════════
+# ════════════════════════ /wpm Mini-App lobby ════════════════════════
 
-async def cric_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Create an UnderCover-style chat lobby that launches the cricket Mini App."""
     tg = update.effective_user
     cid = update.effective_chat.id
@@ -1673,7 +1673,7 @@ async def cric_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         overs = 0
     if overs < 1 or overs > 5:
         await update.message.reply_text(
-            "ℹ️ <b>Usage:</b> <code>/cric &lt;overs (1-5)&gt;</code> to start a match lobby.",
+            "ℹ️ <b>Usage:</b> <code>/wpm &lt;overs (1-5)&gt;</code> to start a match lobby.",
             parse_mode="HTML")
         return
 
@@ -1722,7 +1722,7 @@ async def cric_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("❌ Cancel Lobby", callback_data="cric_cancel_lobby"),
             ]]))
     except Exception:
-        logger.exception("/cric lobby creation failed")
+        logger.exception("/wpm lobby creation failed")
         await update.message.reply_text("❌ Failed to create cricket lobby.")
     finally:
         session.close()
@@ -1818,14 +1818,14 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ]]))
     except Exception:
         session.rollback()
-        logger.exception("/cric lobby join failed")
+        logger.exception("/wpm lobby join failed")
         await q.answer("Failed to join lobby.", show_alert=True)
     finally:
         session.close()
 
 
 async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Launch a joined /cric lobby after its toss winner chooses bat or bowl.
+    """Launch a joined /wpm lobby after its toss winner chooses bat or bowl.
 
     This mirrors UnderCover's lifecycle: the lobby remains in memory through
     the toss and only becomes a persisted, active Mini App match here.
@@ -1904,7 +1904,7 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
             _mention(bat_user), _mention(bowl_user))
     except Exception:
         session.rollback()
-        logger.exception("/cric toss decision failed")
+        logger.exception("/wpm toss decision failed")
         await q.answer("Failed to launch cricket match.", show_alert=True)
     finally:
         session.close()

@@ -13,6 +13,9 @@ let matchState = null;
 let pollingInterval = null;
 let fetchInFlight = false;
 let identitySelectionRequired = false;
+let pollFailureCount = 0;
+const POLL_REQUEST_TIMEOUT_MS = 5000;
+const MAX_POLL_FAILURES = 2;
 
 // Selected actions
 let selectedDelivery = null;
@@ -334,6 +337,16 @@ function stopPolling() {
 }
 
 // API Call - GET state
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), POLL_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function fetchState() {
   if (fetchInFlight) return;
   fetchInFlight = true;
@@ -343,7 +356,7 @@ async function fetchState() {
     if (userId) params.append('userId', userId);
     if (matchId) params.append('matchId', matchId);
 
-    const response = await fetch(`/api/match?${params.toString()}`);
+    const response = await fetchWithTimeout(`/api/match?${params.toString()}`);
     if (!response.ok) {
       if (response.status === 404) {
         const urlDebug = window.location.search || 'None';
@@ -356,6 +369,7 @@ async function fetchState() {
 
     const data = await response.json();
     matchState = data;
+    pollFailureCount = 0;
 
     // Direct browser links have no trusted Telegram user context. Show the
     // intended room identity picker after the first spectator snapshot; an
@@ -397,6 +411,14 @@ async function fetchState() {
     setTimeout(runAutoplayAction, 150);
   } catch (err) {
     console.error("Polling error:", err);
+    pollFailureCount += 1;
+    if (pollFailureCount >= MAX_POLL_FAILURES) {
+      const timedOut = err.name === 'AbortError';
+      showError(timedOut
+        ? 'The match is taking too long to load. Please close this window and tap Play Match again.'
+        : 'Unable to load the match. Please close this window and tap Play Match again.');
+      stopPolling();
+    }
   } finally {
     fetchInFlight = false;
   }
