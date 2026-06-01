@@ -13,7 +13,8 @@ Usage:
   2. When uploading an image, call `upload_photo(image_path)`. Returns
      the file_id string. Cache it in DB.
   3. When sending the image later, use the cached file_id directly with
-     `InputFile` / `send_photo(photo=file_id)`. No file system access.
+     `send_photo(photo=file_id)`, or call `download_file_bytes_sync(file_id)`
+     when a renderer needs the bytes after an ephemeral filesystem reset.
 
 If `STORAGE_CHAT_ID` isn't configured, upload_photo() returns None — the
 caller should fall back to local disk path. This makes the feature
@@ -40,6 +41,61 @@ def _chat_id():
         return int(raw)
     except ValueError:
         return raw  # could be @channelname (str)
+
+
+def _has_bot_token() -> bool:
+    """Return whether Telegram API reads can be performed.
+
+    Downloads only need the bot token. They intentionally do not require the
+    storage chat ID so existing durable images still restore if that optional
+    setting is renamed or temporarily absent after a redeploy.
+    """
+    return bool(os.getenv("BOT_TOKEN", "").strip())
+
+
+async def download_file_bytes_async(file_id: str) -> bytes | None:
+    """Download a Telegram file by ID and return its bytes.
+
+    A stored ``file_id`` is durable across ephemeral filesystem resets. Return
+    ``None`` on configuration or Telegram errors so callers can gracefully
+    fall back without breaking card generation.
+    """
+    if not file_id or not _has_bot_token():
+        return None
+    try:
+        bot = Bot(token=os.getenv("BOT_TOKEN", "").strip())
+        tg_file = await bot.get_file(file_id=file_id)
+        return bytes(await tg_file.download_as_bytearray())
+    except Exception:
+        logger.exception("download_file_bytes failed")
+        return None
+
+
+def download_file_bytes_sync(file_id: str) -> bytes | None:
+    """Sync wrapper for restoring Telegram files from Flask/card render paths.
+
+    Card renderers can be invoked by async bot handlers. If this function is
+    called while their event loop is running, perform the download in a short-
+    lived worker thread rather than attempting to nest asyncio event loops.
+    """
+    if not file_id or not _has_bot_token():
+        return None
+    import asyncio
+
+    def _download():
+        return asyncio.run(download_file_bytes_async(file_id))
+
+    try:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return _download()
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_download).result()
+    except Exception:
+        logger.exception("download_file_bytes_sync failed")
+        return None
 
 
 async def upload_photo_async(image_path: str, caption: str = None) -> str | None:
