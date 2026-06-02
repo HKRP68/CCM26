@@ -50,15 +50,22 @@
   </div>
   <h3 style="margin:1rem 0 .65rem;font-size:1rem;">✍️ Text position fine-tuning</h3>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;margin-bottom:1.5rem;">
-    {{ number_input('name_x', 'Name X') }}{{ number_input('name_y', 'Name Y') }}
-    {{ number_input('ovr_x', 'OVR X') }}{{ number_input('ovr_y', 'OVR Y') }}
-    {{ number_input('bat_x', 'Batting X') }}{{ number_input('bat_y', 'Batting Y') }}
-    {{ number_input('bowl_x', 'Bowling X') }}{{ number_input('bowl_y', 'Bowling Y') }}
+    {{ number_input('name_x', 'Player Name X') }}{{ number_input('name_y', 'Player Name Y') }}
+    {{ number_input('name_font_size', 'Player Name Font Size') }}{{ number_input('name_letter_gap', 'Player Name Letter Gap') }}
     {{ number_input('cat_x', 'Category X') }}{{ number_input('cat_y', 'Category Y') }}
     {{ number_input('cat_font_size', 'Category Font Size') }}{{ number_input('cat_letter_gap', 'Category Letter Gap') }}
+    {{ number_input('ovr_x', 'OVR X') }}{{ number_input('ovr_y', 'OVR Y') }}
+    {{ number_input('ovr_font_size', 'OVR Font Size') }}{{ number_input('ovr_letter_gap', 'OVR Letter Gap') }}
+    {{ number_input('bat_x', 'Batting Rating X') }}{{ number_input('bat_y', 'Batting Rating Y') }}
+    {{ number_input('bat_font_size', 'Batting Rating Font Size') }}{{ number_input('bat_letter_gap', 'Batting Rating Letter Gap') }}
+    {{ number_input('bowl_x', 'Bowling Rating X') }}{{ number_input('bowl_y', 'Bowling Rating Y') }}
+    {{ number_input('bowl_font_size', 'Bowling Rating Font Size') }}{{ number_input('bowl_letter_gap', 'Bowling Rating Letter Gap') }}
+    {{ number_input('country_font_size', 'Country Font Size') }}{{ number_input('country_letter_gap', 'Country Letter Gap') }}
     {{ number_input('bat_style_x', 'Batting Style X') }}{{ number_input('bat_style_y', 'Batting Style Y') }}
+    {{ number_input('bat_style_font_size', 'Batting Style Font Size') }}{{ number_input('bat_style_letter_gap', 'Batting Style Letter Gap') }}
     {{ number_input('bowl_style_x', 'Bowling Style X') }}{{ number_input('bowl_style_y', 'Bowling Style Y') }}
-    {{ number_input('style_font_size', 'Style Font Size') }}{{ number_input('style_max_width', 'Style Max Width') }}
+    {{ number_input('bowl_style_font_size', 'Bowling Style Font Size') }}{{ number_input('bowl_style_letter_gap', 'Bowling Style Letter Gap') }}
+    {{ number_input('style_max_width', 'Style Max Width') }}
   </div>
   <button type="submit" class="btn btn-primary">💾 Save card generator settings</button>
 </form>
@@ -108,6 +115,7 @@
     <select id="previewPlayer" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);min-width:220px;">
       {% for p in players %}<option value="{{ p.id }}">{{ p.name }} ({{ p.rating }})</option>{% endfor %}
     </select>
+    <label style="font-size:.82rem;"><input type="checkbox" id="previewGlobalPlayer" {{ 'checked' if has_global_portrait else 'disabled' }}> Show global player PNG</label>
     <button type="button" class="btn btn-ghost btn-sm" onclick="refreshPreview()">↻ Refresh preview</button>
   </div>
   <div style="text-align:center;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;min-height:180px;">
@@ -124,7 +132,8 @@ function refreshPreview() {
   hint.textContent = 'Rendering…'; image.style.display = 'none';
   image.onload = () => { image.style.display = 'block'; hint.textContent = ''; };
   image.onerror = () => { hint.textContent = 'Preview unavailable. Upload and save a blank card template first.'; };
-  image.src = `/card-template/preview/${id}?t=${Date.now()}`;
+  const globalPlayer = document.getElementById('previewGlobalPlayer').checked ? '1' : '0';
+  image.src = `/card-template/preview/${id}?global_player=${globalPlayer}&t=${Date.now()}`;
 }
 </script>
 {% endblock %}

@@ -10670,11 +10670,15 @@ def admin_card_template_save():
             key: request.form.get(key) for key in (
                 "player_x", "player_y", "player_w", "player_h",
                 "player_scale", "player_opacity", "flag_scale",
-                "flag_y_offset", "name_x", "name_y", "ovr_x", "ovr_y",
-                "bat_x", "bat_y", "bowl_x", "bowl_y",
-                "cat_x", "cat_y", "cat_font_size", "cat_letter_gap",
-                "bat_style_x", "bat_style_y", "bowl_style_x", "bowl_style_y",
-                "style_font_size", "style_max_width",
+                "flag_y_offset", "name_x", "name_y", "name_font_size",
+                "name_letter_gap", "ovr_x", "ovr_y", "ovr_font_size",
+                "ovr_letter_gap", "bat_x", "bat_y", "bat_font_size",
+                "bat_letter_gap", "bowl_x", "bowl_y", "bowl_font_size",
+                "bowl_letter_gap", "cat_x", "cat_y", "cat_font_size",
+                "cat_letter_gap", "country_font_size", "country_letter_gap",
+                "bat_style_x", "bat_style_y", "bat_style_font_size",
+                "bat_style_letter_gap", "bowl_style_x", "bowl_style_y",
+                "bowl_style_font_size", "bowl_style_letter_gap", "style_max_width",
             )
         }
         raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
@@ -10808,7 +10812,8 @@ def admin_card_template_preview(player_id):
                                               invalidate_template_card_cache)
         # Always render fresh so edits show without waiting on the cache.
         invalidate_template_card_cache(player_id)
-        image_bytes = generate_template_card(player)
+        image_bytes = generate_template_card(
+            player, force_global_portrait=request.args.get("global_player") == "1")
         if not image_bytes:
             return ("No template configured. Upload a template image and save "
                     "first."), 400

@@ -29,12 +29,17 @@ DEFAULT_TEMPLATE_SETTINGS = {
     "player_x": 675, "player_y": 25, "player_w": 780, "player_h": 1000,
     "player_scale": 100, "player_opacity": 100, "trim_transparent": True,
     "protect_bottom_box": True, "flag_scale": 100, "flag_y_offset": 0,
-    "name_x": 52, "name_y": 195, "ovr_x": 1366, "ovr_y": 166,
-    "bat_x": 173, "bat_y": 686, "bowl_x": 531, "bowl_y": 686,
+    "name_x": 52, "name_y": 195, "name_font_size": 140, "name_letter_gap": 0,
+    "ovr_x": 1366, "ovr_y": 166, "ovr_font_size": 128, "ovr_letter_gap": 0,
+    "bat_x": 173, "bat_y": 686, "bat_font_size": 92, "bat_letter_gap": 0,
+    "bowl_x": 531, "bowl_y": 686, "bowl_font_size": 92, "bowl_letter_gap": 0,
     "cat_x": 58, "cat_y": 590, "cat_font_size": 42, "cat_letter_gap": 22,
+    "country_font_size": 58, "country_letter_gap": 0,
     "bat_style_x": 1110, "bat_style_y": 895,
+    "bat_style_font_size": 38, "bat_style_letter_gap": 0,
     "bowl_style_x": 1110, "bowl_style_y": 988,
-    "style_font_size": 38, "style_max_width": 335,
+    "bowl_style_font_size": 38, "bowl_style_letter_gap": 0,
+    "style_max_width": 335,
 }
 SETTING_LIMITS = {
     "player_x": (-1536, 3072), "player_y": (-1024, 2048),
@@ -42,14 +47,21 @@ SETTING_LIMITS = {
     "player_scale": (1, 400), "player_opacity": (1, 100),
     "flag_scale": (10, 300), "flag_y_offset": (-1024, 1024),
     "name_x": (-1536, 3072), "name_y": (-1024, 2048),
+    "name_font_size": (8, 200), "name_letter_gap": (0, 200),
     "ovr_x": (-1536, 3072), "ovr_y": (-1024, 2048),
+    "ovr_font_size": (8, 200), "ovr_letter_gap": (0, 200),
     "bat_x": (-1536, 3072), "bat_y": (-1024, 2048),
+    "bat_font_size": (8, 200), "bat_letter_gap": (0, 200),
     "bowl_x": (-1536, 3072), "bowl_y": (-1024, 2048),
+    "bowl_font_size": (8, 200), "bowl_letter_gap": (0, 200),
     "cat_x": (-1536, 3072), "cat_y": (-1024, 2048),
     "cat_font_size": (8, 200), "cat_letter_gap": (0, 200),
+    "country_font_size": (8, 200), "country_letter_gap": (0, 200),
     "bat_style_x": (-1536, 3072), "bat_style_y": (-1024, 2048),
+    "bat_style_font_size": (8, 200), "bat_style_letter_gap": (0, 200),
     "bowl_style_x": (-1536, 3072), "bowl_style_y": (-1024, 2048),
-    "style_font_size": (8, 200), "style_max_width": (1, 1536),
+    "bowl_style_font_size": (8, 200), "bowl_style_letter_gap": (0, 200),
+    "style_max_width": (1, 1536),
 }
 
 
@@ -183,6 +195,12 @@ def normalise_template_settings(raw=None):
         except (TypeError, ValueError):
             raw = {}
     raw = raw if isinstance(raw, dict) else {}
+    # Preserve the former shared style size when loading settings saved before
+    # batting and bowling style controls became independently configurable.
+    if "style_font_size" in raw:
+        raw = dict(raw)
+        raw.setdefault("bat_style_font_size", raw["style_font_size"])
+        raw.setdefault("bowl_style_font_size", raw["style_font_size"])
     result = dict(DEFAULT_TEMPLATE_SETTINGS)
     for key, (minimum, maximum) in SETTING_LIMITS.items():
         try:

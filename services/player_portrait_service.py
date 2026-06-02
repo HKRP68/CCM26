@@ -111,12 +111,17 @@ def _load_portrait(path):
     return None
 
 
+def get_global_player_portrait():
+    """Return the admin-uploaded global fallback PNG as an RGBA image."""
+    return _load_portrait(GLOBAL_PORTRAIT_PATH)
+
+
 def get_player_portrait(player, include_global=True):
     """Return the player's RGBA portrait, falling back to the global PNG."""
     portrait = _load_portrait((getattr(player, "image_url", None) or "").strip())
     if portrait is not None or not include_global:
         return portrait
-    return _load_portrait(GLOBAL_PORTRAIT_PATH)
+    return get_global_player_portrait()
 
 
 def has_player_portrait(player, include_global=False):
@@ -153,4 +158,4 @@ def remove_global_player_portrait():
 
 def has_global_player_portrait():
     """Return whether a readable global fallback PNG is configured."""
-    return _load_portrait(GLOBAL_PORTRAIT_PATH) is not None
+    return get_global_player_portrait() is not None
