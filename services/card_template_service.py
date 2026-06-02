@@ -1,6 +1,6 @@
 """Website-managed cricket card template assets and layout controls.
 
-The settings mirror ``cricket_card_generator_website_v5.html``: an admin can
+The settings mirror ``cricket_card_generator_website_v7-1.html``: an admin can
 upload the global blank template and optional font, then tune cutout, flag, and
 text placement from the website without a redeploy. The legacy image-map parser
 is retained for compatibility with previously stored configuration.
@@ -23,23 +23,28 @@ ALLOWED_FONT_EXT = {"ttf", "otf"}
 MAX_BYTES = 5 * 1024 * 1024     # 5 MB
 MIN_DIM = 200                    # min width/height in pixels
 
-# Defaults mirror cricket_card_generator_website_v5.html so the website
+# Defaults mirror cricket_card_generator_website_v7-1.html so the website
 # produces the same layout while allowing admins to tune each value.
 DEFAULT_TEMPLATE_SETTINGS = {
     "player_x": 675, "player_y": 25, "player_w": 780, "player_h": 1000,
     "player_scale": 100, "player_opacity": 100, "trim_transparent": True,
     "protect_bottom_box": True, "flag_scale": 100, "flag_y_offset": 0,
     "name_x": 52, "name_y": 195, "name_font_size": 140, "name_letter_gap": 0,
+    "name_max_width": 650, "name_line_gap": 150,
     "ovr_x": 1366, "ovr_y": 166, "ovr_font_size": 128, "ovr_letter_gap": 0,
+    "ovr_max_width": 240,
     "bat_x": 173, "bat_y": 686, "bat_font_size": 92, "bat_letter_gap": 0,
+    "bat_max_width": 150,
     "bowl_x": 531, "bowl_y": 686, "bowl_font_size": 92, "bowl_letter_gap": 0,
+    "bowl_max_width": 150,
     "cat_x": 58, "cat_y": 590, "cat_font_size": 42, "cat_letter_gap": 22,
-    "country_font_size": 58, "country_letter_gap": 0,
+    "cat_max_width": 650,
+    "country_x": 405, "country_y": 925, "country_font_size": 58,
+    "country_letter_gap": 0, "country_max_width": 280,
     "bat_style_x": 1110, "bat_style_y": 895,
-    "bat_style_font_size": 38, "bat_style_letter_gap": 0,
+    "bat_style_font_size": 38, "bat_style_letter_gap": 0, "bat_style_max_width": 335,
     "bowl_style_x": 1110, "bowl_style_y": 988,
-    "bowl_style_font_size": 38, "bowl_style_letter_gap": 0,
-    "style_max_width": 335,
+    "bowl_style_font_size": 38, "bowl_style_letter_gap": 0, "bowl_style_max_width": 335,
 }
 SETTING_LIMITS = {
     "player_x": (-1536, 3072), "player_y": (-1024, 2048),
@@ -48,20 +53,21 @@ SETTING_LIMITS = {
     "flag_scale": (10, 300), "flag_y_offset": (-1024, 1024),
     "name_x": (-1536, 3072), "name_y": (-1024, 2048),
     "name_font_size": (8, 200), "name_letter_gap": (0, 200),
+    "name_max_width": (1, 1536), "name_line_gap": (1, 1024),
     "ovr_x": (-1536, 3072), "ovr_y": (-1024, 2048),
-    "ovr_font_size": (8, 200), "ovr_letter_gap": (0, 200),
+    "ovr_font_size": (8, 200), "ovr_letter_gap": (0, 200), "ovr_max_width": (1, 1536),
     "bat_x": (-1536, 3072), "bat_y": (-1024, 2048),
-    "bat_font_size": (8, 200), "bat_letter_gap": (0, 200),
+    "bat_font_size": (8, 200), "bat_letter_gap": (0, 200), "bat_max_width": (1, 1536),
     "bowl_x": (-1536, 3072), "bowl_y": (-1024, 2048),
-    "bowl_font_size": (8, 200), "bowl_letter_gap": (0, 200),
+    "bowl_font_size": (8, 200), "bowl_letter_gap": (0, 200), "bowl_max_width": (1, 1536),
     "cat_x": (-1536, 3072), "cat_y": (-1024, 2048),
-    "cat_font_size": (8, 200), "cat_letter_gap": (0, 200),
-    "country_font_size": (8, 200), "country_letter_gap": (0, 200),
+    "cat_font_size": (8, 200), "cat_letter_gap": (0, 200), "cat_max_width": (1, 1536),
+    "country_x": (-1536, 3072), "country_y": (-1024, 2048),
+    "country_font_size": (8, 200), "country_letter_gap": (0, 200), "country_max_width": (1, 1536),
     "bat_style_x": (-1536, 3072), "bat_style_y": (-1024, 2048),
-    "bat_style_font_size": (8, 200), "bat_style_letter_gap": (0, 200),
+    "bat_style_font_size": (8, 200), "bat_style_letter_gap": (0, 200), "bat_style_max_width": (1, 1536),
     "bowl_style_x": (-1536, 3072), "bowl_style_y": (-1024, 2048),
-    "bowl_style_font_size": (8, 200), "bowl_style_letter_gap": (0, 200),
-    "style_max_width": (1, 1536),
+    "bowl_style_font_size": (8, 200), "bowl_style_letter_gap": (0, 200), "bowl_style_max_width": (1, 1536),
 }
 
 
@@ -105,7 +111,8 @@ def _ext_from_filename(filename):
     return (filename.rsplit(".", 1)[-1] or "").lower() if "." in (filename or "") else ""
 
 
-def save_template_image(file_bytes, original_filename):
+def save_template_image(file_bytes, original_filename, variant="base"):
+    variant = normalise_template_variant(variant)
     """Validate and store an uploaded template background image.
 
     Returns (success, message, path). Validates extension, size and that it's a
@@ -135,16 +142,17 @@ def save_template_image(file_bytes, original_filename):
         return False, f"Not a valid image file: {e}", None
 
     _ensure_dir()
-    # Drop any previous template.* so only one remains.
+    # Drop the previous file for this rarity so each tab has one blank template.
+    stem = "template" if variant == "base" else f"template_{variant}"
     for old in ALLOWED_EXT:
-        p = os.path.join(TEMPLATES_ROOT, f"template.{old}")
+        p = os.path.join(TEMPLATES_ROOT, f"{stem}.{old}")
         if os.path.isfile(p):
             try:
                 os.remove(p)
             except OSError:
                 pass
 
-    path = os.path.join(TEMPLATES_ROOT, f"template.{ext}")
+    path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
     try:
         with open(path, "wb") as f:
             f.write(file_bytes)
@@ -197,10 +205,14 @@ def normalise_template_settings(raw=None):
     raw = raw if isinstance(raw, dict) else {}
     # Preserve the former shared style size when loading settings saved before
     # batting and bowling style controls became independently configurable.
-    if "style_font_size" in raw:
+    if "style_font_size" in raw or "style_max_width" in raw:
         raw = dict(raw)
-        raw.setdefault("bat_style_font_size", raw["style_font_size"])
-        raw.setdefault("bowl_style_font_size", raw["style_font_size"])
+        if "style_font_size" in raw:
+            raw.setdefault("bat_style_font_size", raw["style_font_size"])
+            raw.setdefault("bowl_style_font_size", raw["style_font_size"])
+        if "style_max_width" in raw:
+            raw.setdefault("bat_style_max_width", raw["style_max_width"])
+            raw.setdefault("bowl_style_max_width", raw["style_max_width"])
     result = dict(DEFAULT_TEMPLATE_SETTINGS)
     for key, (minimum, maximum) in SETTING_LIMITS.items():
         try:
@@ -283,22 +295,65 @@ def template_asset_path(stored):
     return path if os.path.isfile(path) else None
 
 
-def template_image_path(session=None):
-    """Return the configured template image path if it exists on disk, else None."""
+CARD_TEMPLATE_VARIANTS = ("base", "star", "legend")
+
+
+def normalise_template_variant(variant):
+    """Return one of the three website-managed blank-card template tabs."""
+    value = str(variant or "base").strip().lower()
+    return value if value in CARD_TEMPLATE_VARIANTS else "base"
+
+
+def player_template_variant(player):
+    """Select a blank template from the player's version label."""
+    version = str(getattr(player, "version", "") or "").lower()
+    if "legend" in version:
+        return "legend"
+    if "star" in version:
+        return "star"
+    return "base"
+
+
+def template_image_path(session=None, variant="base"):
+    """Return a rarity template path, falling back to Base when not uploaded."""
+    variant = normalise_template_variant(variant)
     from services.config_service import get_config
-    return template_asset_path(get_config(session).get("card_template_image_path"))
+    base_path = template_asset_path(get_config(session).get("card_template_image_path"))
+    if variant == "base":
+        return base_path
+    for ext in ALLOWED_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}")
+        if os.path.isfile(path):
+            return path
+    return base_path
 
 
-def get_template_config(session=None):
+def list_template_variants(session=None):
+    """Describe each selectable rarity tab and whether it has its own upload."""
+    from services.config_service import get_config
+    base_path = template_asset_path(get_config(session).get("card_template_image_path"))
+    result = {}
+    for variant in CARD_TEMPLATE_VARIANTS:
+        own_path = base_path if variant == "base" else next((
+            os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}")
+            for ext in ALLOWED_EXT
+            if os.path.isfile(os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}"))
+        ), None)
+        result[variant] = {"uploaded": bool(own_path), "uses_base_fallback": variant != "base" and not own_path and bool(base_path)}
+    return result
+
+
+def get_template_config(session=None, variant="base"):
     """Return the active template-card configuration as a dict.
 
-    Includes the resolved template/font paths and safe v5 layout settings.
+    Includes the resolved template/font paths and safe v7.1 layout settings.
     """
     from services.config_service import get_config
     cfg = get_config(session)
     return {
         "style": (cfg.get("card_style") or "tier"),
-        "image_path": template_image_path(session),
+        "variant": normalise_template_variant(variant),
+        "image_path": template_image_path(session, variant),
         "area_code": cfg.get("card_template_area_code") or "",
         "regions": parse_area_code(cfg.get("card_template_area_code") or ""),
         "show_portrait": bool(cfg.get("card_template_show_portrait", True)),

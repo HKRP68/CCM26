@@ -6,27 +6,37 @@
   <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
 </div>
 <p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;line-height:1.6;">
-  This page manages the server-side Base-player version of <code>cricket_card_generator_website_v5.html</code>.
-  Upload the blank card template and optional font, then tune the cutout, flag, and text positions.
-  The cutout is the same image uploaded on each player's edit page. Star and Legend templates can be added later without changing this Base setup.
+  This page manages the server-side version of <code>cricket_card_generator_website_v7-1.html</code>.
+  Upload a blank card template for each rarity tab, then tune the shared font, cutout, flag, and text layout.
+  Every card reuses the cutout uploaded on that player's edit page. Star and Legend cards only need a different blank template.
 </p>
+<style>
+.card-tabs{display:flex;gap:.55rem;flex-wrap:wrap;margin:.65rem 0 1rem}.card-tab{border:1px solid var(--border);border-radius:999px;background:var(--input-bg);color:var(--text);padding:.55rem .9rem;cursor:pointer;font-weight:700}.card-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}.template-panel{display:none;border:1px solid var(--border);border-radius:9px;padding:1rem;background:var(--input-bg)}.template-panel.active{display:block}.status-pill{font-size:.72rem;border-radius:999px;padding:.18rem .45rem;margin-left:.3rem;background:rgba(0,201,167,.13);color:var(--ok,#00c9a7)}
+</style>
 <form method="POST" action="{{ url_for('admin_card_template_save') }}" enctype="multipart/form-data"
       style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <h3 style="margin:0 0 .8rem;font-size:1rem;">🎨 Automatic card priority</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0 0 1.5rem;line-height:1.5;">Cards are selected automatically in this order: <strong>custom full card</strong> → <strong>website card with player image</strong> → <strong>original auto-generated card</strong>.</p>
   <input type="hidden" name="card_style" value="template">
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem;">
-    <div>
-      <label style="display:block;margin-bottom:.35rem;font-weight:600;">🖼️ Blank Card Template</label>
-      <input type="file" name="template_file" accept=".png,.jpg,.jpeg,.webp" style="width:100%;">
-      <small style="color:var(--muted);">PNG/JPG/WebP, max 5 MB. Rendered at 1536×1024. {% if has_template %}<span style="color:var(--ok,#00c9a7);">✓ Current template uploaded</span>{% endif %}</small>
-    </div>
-    <div>
-      <label style="display:block;margin-bottom:.35rem;font-weight:600;">🔤 Optional Font File</label>
-      <input type="file" name="font_file" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
-      <small style="color:var(--muted);">TTF/OTF, max 5 MB. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
-    </div>
+  <h3 style="margin:0 0 .4rem;font-size:1rem;">🖼️ Blank card templates</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0;line-height:1.5;">Choose a rarity tab and upload its blank 1536×1024 template. Star and Legend fall back to Base until you upload their own design.</p>
+  <div class="card-tabs" role="tablist" aria-label="Card rarity templates">
+    {% for variant, label in [('base','Base Card'),('star','Star Card'),('legend','Legend Card')] %}
+    <button type="button" class="card-tab {{ 'active' if variant == 'base' else '' }}" data-template-tab="{{ variant }}" onclick="selectTemplateTab('{{ variant }}')">{{ label }}{% if template_variants[variant].uploaded %}<span class="status-pill">✓ Uploaded</span>{% elif template_variants[variant].uses_base_fallback %}<span class="status-pill">Base fallback</span>{% endif %}</button>
+    {% endfor %}
+  </div>
+  {% for variant, label in [('base','Base Card'),('star','Star Card'),('legend','Legend Card')] %}
+  <div id="templatePanel-{{ variant }}" class="template-panel {{ 'active' if variant == 'base' else '' }}">
+    <label style="display:block;margin-bottom:.35rem;font-weight:600;">{{ label }} blank template</label>
+    <input type="file" name="template_file_{{ variant }}" accept=".png,.jpg,.jpeg,.webp" style="width:100%;">
+    <small style="color:var(--muted);">PNG/JPG/WebP, max 5 MB. {% if template_variants[variant].uploaded %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} template uploaded</span>{% elif variant != 'base' and template_variants[variant].uses_base_fallback %}Currently uses the Base blank template.{% else %}Upload a template to enable website-generated cards.{% endif %}</small>
+  </div>
+  {% endfor %}
+  <div style="margin:1rem 0 1.5rem;">
+    <label style="display:block;margin-bottom:.35rem;font-weight:600;">🔤 Optional Shared Font File</label>
+    <input type="file" name="font_file" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
+    <small style="color:var(--muted);">TTF/OTF, max 5 MB. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
   </div>
   {% macro number_input(name, label) -%}
   <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="number" name="{{ name }}" value="{{ settings[name] }}" style="width:100%;"></div>
@@ -44,7 +54,7 @@
     <label><input type="checkbox" name="protect_bottom_box" {{ 'checked' if settings.protect_bottom_box else '' }}> Redraw bottom-right box above player</label>
   </div>
   <h3 style="margin:1rem 0 .65rem;font-size:1rem;">🏳️ Flag controls</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin-top:0;">Uploaded country PNGs are drawn inside the v5 flag box using this exact scale and offset.</p>
+  <p style="color:var(--muted);font-size:.8rem;margin-top:0;">Uploaded country PNGs are drawn inside the v7.1 flag box using this exact scale and offset.</p>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;margin-bottom:1.5rem;">
     {{ number_input('flag_scale', 'Flag Scale %') }}{{ number_input('flag_y_offset', 'Flag Y Offset') }}
   </div>
@@ -52,20 +62,21 @@
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;margin-bottom:1.5rem;">
     {{ number_input('name_x', 'Player Name X') }}{{ number_input('name_y', 'Player Name Y') }}
     {{ number_input('name_font_size', 'Player Name Font Size') }}{{ number_input('name_letter_gap', 'Player Name Letter Gap') }}
+    {{ number_input('name_max_width', 'Player Name Max Width') }}{{ number_input('name_line_gap', 'Player Name Line Gap') }}
     {{ number_input('cat_x', 'Category X') }}{{ number_input('cat_y', 'Category Y') }}
-    {{ number_input('cat_font_size', 'Category Font Size') }}{{ number_input('cat_letter_gap', 'Category Letter Gap') }}
+    {{ number_input('cat_font_size', 'Category Font Size') }}{{ number_input('cat_letter_gap', 'Category Letter Gap') }}{{ number_input('cat_max_width', 'Category Max Width') }}
     {{ number_input('ovr_x', 'OVR X') }}{{ number_input('ovr_y', 'OVR Y') }}
-    {{ number_input('ovr_font_size', 'OVR Font Size') }}{{ number_input('ovr_letter_gap', 'OVR Letter Gap') }}
+    {{ number_input('ovr_font_size', 'OVR Font Size') }}{{ number_input('ovr_letter_gap', 'OVR Letter Gap') }}{{ number_input('ovr_max_width', 'OVR Max Width') }}
     {{ number_input('bat_x', 'Batting Rating X') }}{{ number_input('bat_y', 'Batting Rating Y') }}
-    {{ number_input('bat_font_size', 'Batting Rating Font Size') }}{{ number_input('bat_letter_gap', 'Batting Rating Letter Gap') }}
+    {{ number_input('bat_font_size', 'Batting Rating Font Size') }}{{ number_input('bat_letter_gap', 'Batting Rating Letter Gap') }}{{ number_input('bat_max_width', 'Batting Max Width') }}
     {{ number_input('bowl_x', 'Bowling Rating X') }}{{ number_input('bowl_y', 'Bowling Rating Y') }}
-    {{ number_input('bowl_font_size', 'Bowling Rating Font Size') }}{{ number_input('bowl_letter_gap', 'Bowling Rating Letter Gap') }}
-    {{ number_input('country_font_size', 'Country Font Size') }}{{ number_input('country_letter_gap', 'Country Letter Gap') }}
+    {{ number_input('bowl_font_size', 'Bowling Rating Font Size') }}{{ number_input('bowl_letter_gap', 'Bowling Rating Letter Gap') }}{{ number_input('bowl_max_width', 'Bowling Max Width') }}
+    {{ number_input('country_x', 'Country X') }}{{ number_input('country_y', 'Country Y') }}
+    {{ number_input('country_font_size', 'Country Font Size') }}{{ number_input('country_letter_gap', 'Country Letter Gap') }}{{ number_input('country_max_width', 'Country Max Width') }}
     {{ number_input('bat_style_x', 'Batting Style X') }}{{ number_input('bat_style_y', 'Batting Style Y') }}
-    {{ number_input('bat_style_font_size', 'Batting Style Font Size') }}{{ number_input('bat_style_letter_gap', 'Batting Style Letter Gap') }}
+    {{ number_input('bat_style_font_size', 'Batting Style Font Size') }}{{ number_input('bat_style_letter_gap', 'Batting Style Letter Gap') }}{{ number_input('bat_style_max_width', 'Batting Style Max Width') }}
     {{ number_input('bowl_style_x', 'Bowling Style X') }}{{ number_input('bowl_style_y', 'Bowling Style Y') }}
-    {{ number_input('bowl_style_font_size', 'Bowling Style Font Size') }}{{ number_input('bowl_style_letter_gap', 'Bowling Style Letter Gap') }}
-    {{ number_input('style_max_width', 'Style Max Width') }}
+    {{ number_input('bowl_style_font_size', 'Bowling Style Font Size') }}{{ number_input('bowl_style_letter_gap', 'Bowling Style Letter Gap') }}{{ number_input('bowl_style_max_width', 'Bowling Style Max Width') }}
   </div>
   <button type="submit" class="btn btn-primary">💾 Save card generator settings</button>
 </form>
@@ -89,7 +100,7 @@
 
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .5rem;font-size:1rem;">🏳️ Country flag PNG library</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">Upload one PNG per country. When a Base player's country matches the name below, the PNG is automatically placed into the card flag box at the configured flag size.</p>
+  <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">Upload one PNG per country. When a player's country matches the name below, the PNG is automatically placed into the card flag box at the configured flag size.</p>
   <form method="POST" action="{{ url_for('admin_card_template_flag_upload') }}" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(160px,1fr) minmax(180px,1fr) auto;gap:.65rem;align-items:end;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Country name</label><input type="text" name="flag_country" placeholder="e.g. India" required style="width:100%;"></div>
@@ -115,6 +126,9 @@
     <select id="previewPlayer" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);min-width:220px;">
       {% for p in players %}<option value="{{ p.id }}">{{ p.name }} ({{ p.rating }})</option>{% endfor %}
     </select>
+    <select id="previewVariant" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <option value="base">Base Card</option><option value="star">Star Card</option><option value="legend">Legend Card</option>
+    </select>
     <label style="font-size:.82rem;"><input type="checkbox" id="previewGlobalPlayer" {{ 'checked' if has_global_portrait else 'disabled' }}> Show global player PNG</label>
     <button type="button" class="btn btn-ghost btn-sm" onclick="refreshPreview()">↻ Refresh preview</button>
   </div>
@@ -124,6 +138,12 @@
   </div>
 </div>
 <script>
+function selectTemplateTab(variant) {
+  document.querySelectorAll('[data-template-tab]').forEach(el => el.classList.toggle('active', el.dataset.templateTab === variant));
+  document.querySelectorAll('.template-panel').forEach(el => el.classList.toggle('active', el.id === `templatePanel-${variant}`));
+  const preview = document.getElementById('previewVariant');
+  if (preview) preview.value = variant;
+}
 function refreshPreview() {
   const id = document.getElementById('previewPlayer').value;
   const image = document.getElementById('previewImage');
@@ -133,7 +153,8 @@ function refreshPreview() {
   image.onload = () => { image.style.display = 'block'; hint.textContent = ''; };
   image.onerror = () => { hint.textContent = 'Preview unavailable. Upload and save a blank card template first.'; };
   const globalPlayer = document.getElementById('previewGlobalPlayer').checked ? '1' : '0';
-  image.src = `/card-template/preview/${id}?global_player=${globalPlayer}&t=${Date.now()}`;
+  const variant = document.getElementById('previewVariant').value;
+  image.src = `/card-template/preview/${id}?variant=${variant}&global_player=${globalPlayer}&t=${Date.now()}`;
 }
 </script>
 {% endblock %}

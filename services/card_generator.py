@@ -144,7 +144,7 @@ def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
     return tmp, (x, y)
 
 
-# ── Website-managed Base card (ported from v5 HTML generator) ─────────────
+# ── Website-managed cards (ported from v7.1 HTML generator) ───────────────
 
 _TEMPLATE_W, _TEMPLATE_H = 1536, 1024
 _DARK_GREEN = (0, 86, 50, 255)
@@ -256,7 +256,7 @@ def _composite_template_portrait(base, player, settings, force_global_portrait=F
 
 
 def _restore_bottom_box(base, clean_template):
-    """Redraw the v5 bottom-right details polygon above the cutout."""
+    """Redraw the v7.1 bottom-right details polygon above the cutout."""
     mask = Image.new("L", (_TEMPLATE_W, _TEMPLATE_H), 0)
     ImageDraw.Draw(mask).polygon([(1032, 833), (1536, 833), (1536, 1024),
                                   (845, 1024)], fill=255)
@@ -275,7 +275,7 @@ def _draw_india_flag(draw, bbox):
 
 
 def _draw_template_flag(base, draw, tcfg, country, settings):
-    """Draw a website-uploaded country PNG at the same flag size as v5."""
+    """Draw a website-uploaded country PNG at the same configurable flag size as v7.1."""
     frame_x, frame_y, frame_w, frame_h = 66, 846, 280, 122
     scale = settings["flag_scale"] / 100
     width, height = max(1, int(frame_w * scale)), max(1, int(frame_h * scale))
@@ -307,19 +307,18 @@ def _template_bowling_style(player):
     return f"{hand} ARM {style}".strip()
 
 
-def generate_template_card(player, force_global_portrait=False) -> bytes | None:
-    """Render a Base card using the website-managed v5 HTML layer order."""
-    if getattr(player, "parent_player_id", None):
-        return None
+def generate_template_card(player, force_global_portrait=False, template_variant=None) -> bytes | None:
+    """Render a card using the website-managed v7.1 HTML layer order."""
     try:
-        from services.card_template_service import get_template_config
-        tcfg = get_template_config()
+        from services.card_template_service import get_template_config, player_template_variant
+        variant = template_variant or player_template_variant(player)
+        tcfg = get_template_config(variant=variant)
     except Exception:
         logger.exception("template config load failed")
         return None
     if not tcfg.get("image_path"):
         return None
-    cache_key = (player.id, bool(force_global_portrait))
+    cache_key = (player.id, bool(force_global_portrait), tcfg["variant"])
     cached = _TEMPLATE_CARD_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -336,36 +335,36 @@ def generate_template_card(player, force_global_portrait=False) -> bytes | None:
         draw = ImageDraw.Draw(base)
         first_name, last_name = _split_template_name(player.name)
         _draw_fit(draw, tcfg, first_name, (settings["name_x"], settings["name_y"] + 110),
-                  650, settings["name_font_size"], 20, _DARK_GREEN,
+                  settings["name_max_width"], settings["name_font_size"], 20, _DARK_GREEN,
                   letter_gap=settings["name_letter_gap"])
         if last_name:
-            _draw_fit(draw, tcfg, last_name, (settings["name_x"], settings["name_y"] + 260),
-                      650, settings["name_font_size"], 20, _DARK_GREEN,
+            _draw_fit(draw, tcfg, last_name, (settings["name_x"], settings["name_y"] + 110 + settings["name_line_gap"]),
+                      settings["name_max_width"], settings["name_font_size"], 20, _DARK_GREEN,
                       letter_gap=settings["name_letter_gap"])
-        category_font = _template_font(tcfg, settings["cat_font_size"])
-        _draw_tracked_text(draw, (settings["cat_x"], settings["cat_y"]),
-                           str(player.category).upper(), category_font, _LIGHT_GREEN,
-                           settings["cat_letter_gap"])
+        _draw_fit(draw, tcfg, str(player.category).upper(),
+                  (settings["cat_x"], settings["cat_y"]), settings["cat_max_width"],
+                  settings["cat_font_size"], 18, _LIGHT_GREEN,
+                  letter_gap=settings["cat_letter_gap"])
         _draw_fit(draw, tcfg, int(player.rating), (settings["ovr_x"], settings["ovr_y"]),
-                  240, settings["ovr_font_size"], 20, _RED, anchor="mm",
+                  settings["ovr_max_width"], settings["ovr_font_size"], 20, _RED, anchor="mm",
                   letter_gap=settings["ovr_letter_gap"])
         _draw_fit(draw, tcfg, int(player.bat_rating), (settings["bat_x"], settings["bat_y"]),
-                  150, settings["bat_font_size"], 20, _RED, anchor="mm",
+                  settings["bat_max_width"], settings["bat_font_size"], 20, _RED, anchor="mm",
                   letter_gap=settings["bat_letter_gap"])
         _draw_fit(draw, tcfg, int(player.bowl_rating), (settings["bowl_x"], settings["bowl_y"]),
-                  150, settings["bowl_font_size"], 20, _RED, anchor="mm",
+                  settings["bowl_max_width"], settings["bowl_font_size"], 20, _RED, anchor="mm",
                   letter_gap=settings["bowl_letter_gap"])
         _draw_template_flag(base, draw, tcfg, player.country, settings)
-        _draw_fit(draw, tcfg, str(player.country).upper(), (405, 925), 280,
+        _draw_fit(draw, tcfg, str(player.country).upper(), (settings["country_x"], settings["country_y"]), settings["country_max_width"],
                   settings["country_font_size"], 20, _DARK_GREEN,
                   letter_gap=settings["country_letter_gap"])
         _draw_fit(draw, tcfg, _template_batting_style(player),
                   (settings["bat_style_x"], settings["bat_style_y"]),
-                  settings["style_max_width"], settings["bat_style_font_size"], 20,
+                  settings["bat_style_max_width"], settings["bat_style_font_size"], 20,
                   _DARK_GREEN, letter_gap=settings["bat_style_letter_gap"])
         _draw_fit(draw, tcfg, _template_bowling_style(player),
                   (settings["bowl_style_x"], settings["bowl_style_y"]),
-                  settings["style_max_width"], settings["bowl_style_font_size"], 20,
+                  settings["bowl_style_max_width"], settings["bowl_style_font_size"], 20,
                   _DARK_GREEN, letter_gap=settings["bowl_style_letter_gap"])
         draw.line((1030, 939, 1442, 939), fill=_LINE_GREEN, width=2)
 
@@ -387,9 +386,9 @@ def generate_card(player) -> bytes | None:
     active, returns those bytes instead. Falls back to the auto-generated
     card otherwise.
 
-    For Base players with an uploaded portrait (or the global fallback PNG),
-    renders onto the admin-uploaded website template before falling back to the
-    procedural tier card.
+    For players with an uploaded portrait (or the global fallback PNG), renders
+    onto the matching Base, Star, or Legend website template before falling back
+    to the procedural tier card.
 
     Generated cards are cached in memory by player_id — a player's card art
     doesn't change at runtime, so re-generating it is wasted CPU + memory.
@@ -405,12 +404,11 @@ def generate_card(player) -> bytes | None:
         pass  # Fall through to auto-generation
 
     # Player-image website card — use it automatically before the procedural
-    # fallback whenever this Base player has an uploaded portrait or the admin
+    # fallback whenever this player has an uploaded portrait or the admin
     # configured a global fallback PNG. Custom full-card art remains first.
     try:
         from services.player_portrait_service import has_player_portrait
-        if (not getattr(player, "parent_player_id", None)
-                and has_player_portrait(player, include_global=True)):
+        if has_player_portrait(player, include_global=True):
             tpl = generate_template_card(player)
             if tpl is not None:
                 return tpl
