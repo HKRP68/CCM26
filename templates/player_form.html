@@ -7,7 +7,7 @@
 </div>
 
 <div class="form-card">
-  <form method="POST">
+  <form method="POST" enctype="multipart/form-data">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <div class="form-group">
@@ -54,6 +54,27 @@
           <option value="1" {{ 'selected' if player and player.restricted_from_buypl }}>🚫 Blocked from /buypl</option>
         </select>
       </div>
+    </div>
+
+    <h3 style="margin:1.25rem 0 .75rem;font-size:.9rem;color:var(--accent);text-transform:uppercase;">Player Image</h3>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Upload Player Image</label>
+        <input type="file" name="player_image" accept="image/png,image/jpeg,image/webp">
+        <small style="display:block;color:var(--muted);margin-top:.35rem;line-height:1.45;">
+          Used inside the generated card in place of the default player shadow. Transparent PNG or WebP works best. Max 5 MB.
+        </small>
+      </div>
+      {% if player and has_player_portrait %}
+      <div class="form-group">
+        <label>Current Player Image</label>
+        <div style="color:var(--accent);font-size:.9rem;margin:.45rem 0;">✓ Uploaded image will replace the shadow.</div>
+        <label style="display:flex;align-items:center;gap:.45rem;color:var(--muted);font-size:.85rem;">
+          <input type="checkbox" name="remove_player_image" value="1" style="width:auto;">
+          Remove image and use shadow again
+        </label>
+      </div>
+      {% endif %}
     </div>
 
     <h3 style="margin:1.25rem 0 .75rem;font-size:.9rem;color:var(--accent);text-transform:uppercase;">Batting</h3>
@@ -144,8 +165,8 @@
 <div class="form-card" style="margin-top:1.5rem;">
   <h3 style="margin:0 0 .8rem;">🎨 Custom Card Image</h3>
   <p style="color:var(--muted); font-size:.9rem; margin-bottom:1rem;">
-    Upload a custom image to override the auto-generated card. The bot will use this image
-    everywhere (claim, market, in-match, etc) instead of generating a card.
+    Upload a complete custom card to override everything else. This always has first priority: the bot
+    will use it everywhere (claim, market, in-match, etc.) instead of the generated card or player image.
     Recommended size: <strong>600×800 (3:4 ratio)</strong>. Max 5 MB.
     Supported: PNG, JPG, WebP. Min 200×200.
   </p>

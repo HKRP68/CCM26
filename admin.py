@@ -993,6 +993,12 @@ def player_add():
             )
             db.add(player)
             db.flush()
+            portrait_file = request.files.get("player_image")
+            if portrait_file and portrait_file.filename:
+                from services.player_portrait_service import save_player_portrait
+                ok, msg = save_player_portrait(player, portrait_file.read(), portrait_file.filename)
+                if not ok:
+                    raise ValueError(msg)
             log_admin(db, "player_add", target_type="player", target_id=player.id,
                       target_name=name, detail=f"Rating {player.rating}, {player.category}, {player.country}")
             db.commit()
@@ -1046,6 +1052,17 @@ def player_edit(player_id):
                 request.form.get("restricted_from_buypl") == "1"
             )
 
+            from services.player_portrait_service import (
+                remove_player_portrait, save_player_portrait,
+            )
+            if request.form.get("remove_player_image") == "1":
+                remove_player_portrait(player)
+            portrait_file = request.files.get("player_image")
+            if portrait_file and portrait_file.filename:
+                ok, msg = save_player_portrait(player, portrait_file.read(), portrait_file.filename)
+                if not ok:
+                    raise ValueError(msg)
+
             changes = []
             if old_name != player.name:
                 changes.append(f"name: {old_name} → {player.name}")
@@ -1072,8 +1089,10 @@ def player_edit(player_id):
         from services.version_service import get_all_versions
         base_id = player.parent_player_id or player.id
         versions = get_all_versions(db, base_id)
+        from services.player_portrait_service import has_player_portrait
         return render_template("player_form.html", player=player,
-                               image_meta=image_meta, versions=versions, base_id=base_id)
+                               image_meta=image_meta, versions=versions, base_id=base_id,
+                               has_player_portrait=has_player_portrait(player))
     except Exception as e:
         db.rollback()
         flash(f"Error: {e}", "error")
