@@ -822,6 +822,16 @@ class GameConfig(Base):
     # callback buttons (default) or the optional Mini App live board.
     match_style = Column(String(20), default="telegram", nullable=False)
     challenge_max_overs = Column(Integer, default=2, nullable=False)
+    # ── Player card rendering (admin-editable from /card-template page) ──
+    # Which card design is active for all players: the built-in procedural
+    # tier card ("tier") or the admin-uploaded template card ("template").
+    card_style = Column(String(20), default="tier", nullable=False)
+    # Path (under data/card_templates/) to the uploaded template background image.
+    card_template_image_path = Column(String(300), nullable=True)
+    # Raw HTML image-map <area> code defining where each player field is drawn.
+    card_template_area_code = Column(Text, nullable=True)
+    # Whether to composite the player's portrait into the template card.
+    card_template_show_portrait = Column(Boolean, default=True, nullable=False)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

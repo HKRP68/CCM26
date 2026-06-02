@@ -144,12 +144,160 @@ def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
     return tmp, (x, y)
 
 
+# ── Template card (admin-uploaded background + image-map layout) ─────────────
+
+# Default text colour for the template card — dark green to suit the cream/green
+# reference template. Reads well on light backgrounds.
+_TEMPLATE_TEXT_COLOR = (20, 75, 55)
+
+
+def _player_field_text(player, field):
+    """Resolve the display string for a template-card field key."""
+    if field == "name":
+        return str(player.name).upper()
+    if field == "rating":
+        return str(int(player.rating))
+    if field == "country":
+        return str(player.country)
+    if field == "bat_style":
+        return f"{player.bat_hand}-hand Bat"
+    if field == "bowl_style":
+        hand = str(getattr(player, "bowl_hand", "") or "").strip()
+        style = str(getattr(player, "bowl_style", "") or "").strip()
+        return f"{hand}-arm {style}".strip(" -") if hand else style
+    if field == "bat_rating":
+        return str(int(player.bat_rating))
+    if field == "bowl_rating":
+        return str(int(player.bowl_rating))
+    return ""
+
+
+def _fit_font(text, max_w, max_h, bold=True):
+    """Pick the largest DejaVu font whose rendered text fits within max_w/max_h."""
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lo, hi, best = 6, max(8, int(max_h)), None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        font = _font(mid, bold=bold)
+        bbox = measure.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if tw <= max_w and th <= max_h:
+            best = font
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best or _font(6, bold=bold)
+
+
+def _draw_text_in_box(draw, bbox, text, color, bold=True):
+    """Draw text centred within bbox, auto-sized to fit."""
+    if not text:
+        return
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0, y1 - y0
+    # Pad each axis by a small fraction of *that* axis so a wide-but-short box
+    # (e.g. a country strip) keeps usable height instead of being crushed.
+    pad_x = max(2, int(bw * 0.04))
+    pad_y = max(2, int(bh * 0.06))
+    max_w, max_h = bw - 2 * pad_x, bh - 2 * pad_y
+    if max_w <= 0 or max_h <= 0:
+        return
+    font = _fit_font(text, max_w, max_h, bold=bold)
+    tb = draw.textbbox((0, 0), text, font=font)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    tx = x0 + (x1 - x0 - tw) // 2 - tb[0]
+    ty = y0 + (y1 - y0 - th) // 2 - tb[1]
+    draw.text((tx, ty), text, fill=color, font=font)
+
+
+def _composite_portrait(base, bbox, player):
+    """Cover-fit the player's portrait into bbox on the base RGBA image."""
+    try:
+        from services.player_portrait_service import get_player_portrait
+        portrait = get_player_portrait(player)
+    except Exception:
+        portrait = None
+    if portrait is None:
+        return
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0, y1 - y0
+    if bw <= 0 or bh <= 0:
+        return
+    pw, ph = portrait.size
+    scale = max(bw / pw, bh / ph)
+    nw, nh = max(1, int(pw * scale)), max(1, int(ph * scale))
+    resized = portrait.resize((nw, nh), Image.LANCZOS)
+    # Centre-crop to the box
+    left = (nw - bw) // 2
+    top = (nh - bh) // 2
+    cropped = resized.crop((left, top, left + bw, top + bh))
+    base.paste(cropped, (x0, y0), cropped)
+
+
+def generate_template_card(player) -> bytes | None:
+    """Render a card onto the admin-uploaded template at image-map regions.
+
+    Returns None when no usable template image is configured (the caller then
+    falls back to the procedural tier card). Cached by player_id; cache is
+    cleared via invalidate_template_card_cache() when the admin edits the
+    template config.
+    """
+    try:
+        from services.card_template_service import get_template_config
+        tcfg = get_template_config()
+    except Exception:
+        logger.exception("template config load failed")
+        return None
+
+    image_path = tcfg.get("image_path")
+    if not image_path:
+        return None  # No template uploaded — fall back to tier card
+
+    cached = _TEMPLATE_CARD_CACHE.get(player.id)
+    if cached is not None:
+        return cached
+
+    try:
+        base = Image.open(image_path).convert("RGBA")
+        regions = tcfg.get("regions") or []
+        show_portrait = tcfg.get("show_portrait", True)
+
+        # Composite portrait first so text draws on top.
+        if show_portrait:
+            for r in regions:
+                if r["field"] == "__photo__":
+                    _composite_portrait(base, r["bbox"], player)
+
+        draw = ImageDraw.Draw(base)
+        for r in regions:
+            field = r["field"]
+            if field == "__photo__":
+                continue
+            text = _player_field_text(player, field)
+            _draw_text_in_box(draw, r["bbox"], text, _TEMPLATE_TEXT_COLOR, bold=True)
+
+        buf = io.BytesIO()
+        base.convert("RGB").save(buf, format="PNG", quality=95)
+        result = buf.getvalue()
+        if len(_TEMPLATE_CARD_CACHE) > 500:
+            _TEMPLATE_CARD_CACHE.clear()
+        _TEMPLATE_CARD_CACHE[player.id] = result
+        return result
+    except Exception:
+        logger.exception("Template card generation failed")
+        return None
+
+
 def generate_card(player) -> bytes | None:
     """Generate a premium card PNG matching the reference design.
 
     If the admin has uploaded a custom card image for this player and it's
     active, returns those bytes instead. Falls back to the auto-generated
     card otherwise.
+
+    When the global card style is set to "template", renders onto the
+    admin-uploaded template image; if no template is configured the procedural
+    tier card is used instead.
 
     Generated cards are cached in memory by player_id — a player's card art
     doesn't change at runtime, so re-generating it is wasted CPU + memory.
@@ -163,6 +311,17 @@ def generate_card(player) -> bytes | None:
             return custom
     except Exception:
         pass  # Fall through to auto-generation
+
+    # Template card style — render on admin-uploaded template if active.
+    try:
+        from services.config_service import get_card_style
+        if get_card_style() == "template":
+            tpl = generate_template_card(player)
+            if tpl is not None:
+                return tpl
+            # else: no template configured → fall through to tier card
+    except Exception:
+        logger.exception("template card dispatch failed; using tier card")
 
     # Generated-card cache check
     cached = _CARD_CACHE.get(player.id)
@@ -312,6 +471,10 @@ def generate_card(player) -> bytes | None:
 # the underlying Player row.
 _CARD_CACHE = {}
 
+# Separate cache for template-rendered cards. Invalidated when the admin changes
+# the template image or image-map code (in addition to per-player edits).
+_TEMPLATE_CARD_CACHE = {}
+
 
 def invalidate_card_cache(player_id=None):
     """Drop cached generated cards. Call after admin edits a player.
@@ -320,3 +483,12 @@ def invalidate_card_cache(player_id=None):
         _CARD_CACHE.clear()
     else:
         _CARD_CACHE.pop(player_id, None)
+
+
+def invalidate_template_card_cache(player_id=None):
+    """Drop cached template-rendered cards. Call after admin edits the template
+    image, image-map code, or card style. If player_id is None, drops all."""
+    if player_id is None:
+        _TEMPLATE_CARD_CACHE.clear()
+    else:
+        _TEMPLATE_CARD_CACHE.pop(player_id, None)
