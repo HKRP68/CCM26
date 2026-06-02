@@ -349,9 +349,9 @@ def generate_card(player) -> bytes | None:
     active, returns those bytes instead. Falls back to the auto-generated
     card otherwise.
 
-    When the global card style is set to "template", renders onto the
-    admin-uploaded template image; if no template is configured the procedural
-    tier card is used instead.
+    For Base players with an uploaded portrait (or the global fallback PNG),
+    renders onto the admin-uploaded website template before falling back to the
+    procedural tier card.
 
     Generated cards are cached in memory by player_id — a player's card art
     doesn't change at runtime, so re-generating it is wasted CPU + memory.
@@ -366,18 +366,19 @@ def generate_card(player) -> bytes | None:
     except Exception:
         pass  # Fall through to auto-generation
 
-    # Template card style — render on admin-uploaded template if active.
+    # Player-image website card — use it automatically before the procedural
+    # fallback whenever this Base player has an uploaded portrait or the admin
+    # configured a global fallback PNG. Custom full-card art remains first.
     try:
-        from services.config_service import get_card_style
-        # The website template currently defines the Base edition only. Star
-        # and Legend rows remain free to use their own custom or future styles.
-        if get_card_style() == "template" and not getattr(player, "parent_player_id", None):
+        from services.player_portrait_service import has_player_portrait
+        if (not getattr(player, "parent_player_id", None)
+                and has_player_portrait(player, include_global=True)):
             tpl = generate_template_card(player)
             if tpl is not None:
                 return tpl
-            # else: no template configured → fall through to tier card
+            # No blank website template configured → fall through to tier card.
     except Exception:
-        logger.exception("template card dispatch failed; using tier card")
+        logger.exception("player-image card dispatch failed; using tier card")
 
     # Generated-card cache check
     cached = _CARD_CACHE.get(player.id)

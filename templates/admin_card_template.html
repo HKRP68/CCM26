@@ -13,11 +13,9 @@
 <form method="POST" action="{{ url_for('admin_card_template_save') }}" enctype="multipart/form-data"
       style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <h3 style="margin:0 0 .8rem;font-size:1rem;">🎨 Active card style</h3>
-  <div style="display:flex;gap:1.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
-    <label><input type="radio" name="card_style" value="tier" {{ 'checked' if cfg.card_style != 'template' else '' }}> Tier (original built-in cards)</label>
-    <label><input type="radio" name="card_style" value="template" {{ 'checked' if cfg.card_style == 'template' else '' }}> Website generator template</label>
-  </div>
+  <h3 style="margin:0 0 .8rem;font-size:1rem;">🎨 Automatic card priority</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0 0 1.5rem;line-height:1.5;">Cards are selected automatically in this order: <strong>custom full card</strong> → <strong>website card with player image</strong> → <strong>original auto-generated card</strong>.</p>
+  <input type="hidden" name="card_style" value="template">
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem;">
     <div>
       <label style="display:block;margin-bottom:.35rem;font-weight:600;">🖼️ Blank Card Template</label>
@@ -66,6 +64,23 @@
 </form>
 
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
+  <h3 style="margin:0 0 .5rem;font-size:1rem;">🏏 Global player fallback PNG</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">Upload one transparent PNG to use in website cards whenever a player does not have an image on the player edit page. An individual player image always takes priority over this fallback.</p>
+  <form method="POST" action="{{ url_for('admin_card_template_global_player_upload') }}" enctype="multipart/form-data" style="display:flex;gap:.65rem;align-items:end;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Global player PNG</label><input type="file" name="global_player_file" accept="image/png,.png" required></div>
+    <button type="submit" class="btn btn-primary">Upload fallback PNG</button>
+  </form>
+  {% if has_global_portrait %}
+  <form method="POST" action="{{ url_for('admin_card_template_global_player_remove') }}" style="margin-top:.75rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-ghost btn-sm">Remove current fallback PNG</button>
+    <span style="color:var(--ok,#00c9a7);font-size:.8rem;margin-left:.5rem;">✓ Current fallback PNG uploaded</span>
+  </form>
+  {% endif %}
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .5rem;font-size:1rem;">🏳️ Country flag PNG library</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">Upload one PNG per country. When a Base player's country matches the name below, the PNG is automatically placed into the card flag box at the configured flag size.</p>
   <form method="POST" action="{{ url_for('admin_card_template_flag_upload') }}" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(160px,1fr) minmax(180px,1fr) auto;gap:.65rem;align-items:end;">
@@ -88,7 +103,7 @@
 
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .8rem;font-size:1rem;">🔍 Live preview</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin:0 0 .8rem;">Save first, then preview any player using that player's uploaded cutout.</p>
+  <p style="color:var(--muted);font-size:.8rem;margin:0 0 .8rem;">Save first, then preview any player using that player's uploaded cutout or the global fallback PNG.</p>
   <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem;">
     <select id="previewPlayer" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);min-width:220px;">
       {% for p in players %}<option value="{{ p.id }}">{{ p.name }} ({{ p.rating }})</option>{% endfor %}
