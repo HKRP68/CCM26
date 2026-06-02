@@ -307,8 +307,13 @@ def _template_bowling_style(player):
     return f"{hand} ARM {style}".strip()
 
 
-def generate_template_card(player, force_global_portrait=False, template_variant=None) -> bytes | None:
-    """Render a card using the website-managed v7.1 HTML layer order."""
+def generate_template_card(player, force_global_portrait=False, template_variant=None,
+                           preview_settings=None, preview_show_portrait=None) -> bytes | None:
+    """Render a card using the website-managed v7.1 HTML layer order.
+
+    Preview-only overrides let the admin page display unsaved layout changes
+    without changing the settings used by normal bot card generation.
+    """
     try:
         from services.card_template_service import get_template_config, player_template_variant
         variant = template_variant or player_template_variant(player)
@@ -318,8 +323,14 @@ def generate_template_card(player, force_global_portrait=False, template_variant
         return None
     if not tcfg.get("image_path"):
         return None
+    is_live_preview = preview_settings is not None or preview_show_portrait is not None
+    if preview_settings is not None:
+        from services.card_template_service import normalise_template_settings
+        tcfg["settings"] = normalise_template_settings(preview_settings)
+    if preview_show_portrait is not None:
+        tcfg["show_portrait"] = bool(preview_show_portrait)
     cache_key = (player.id, bool(force_global_portrait), tcfg["variant"])
-    cached = _TEMPLATE_CARD_CACHE.get(cache_key)
+    cached = None if is_live_preview else _TEMPLATE_CARD_CACHE.get(cache_key)
     if cached is not None:
         return cached
     try:
@@ -373,7 +384,8 @@ def generate_template_card(player, force_global_portrait=False, template_variant
         result = buf.getvalue()
         if len(_TEMPLATE_CARD_CACHE) > 500:
             _TEMPLATE_CARD_CACHE.clear()
-        _TEMPLATE_CARD_CACHE[cache_key] = result
+        if not is_live_preview:
+            _TEMPLATE_CARD_CACHE[cache_key] = result
         return result
     except Exception:
         logger.exception("Template card generation failed")

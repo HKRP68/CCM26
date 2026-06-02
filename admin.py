@@ -10637,7 +10637,7 @@ def admin_card_template_save():
             db.add(cfg); db.flush()
 
         # Optional blank-template uploads. Base retains the legacy config path;
-        # Star and Legend use deterministic files and fall back to Base until set.
+        # Star and Legend use deterministic files and only apply when uploaded.
         from services.card_template_service import save_template_image
         root = os.path.dirname(os.path.abspath(__file__))
         for variant in ("base", "star", "legend"):
@@ -10723,6 +10723,72 @@ def admin_card_template_save():
         return redirect(url_for("admin_card_template"))
     finally:
         db.close()
+
+
+@app.route("/card-template/template/remove", methods=["POST"])
+@login_required
+def admin_card_template_remove_image():
+    """Remove one rarity's blank template without affecting other variants."""
+    variant = (request.form.get("variant") or "base").strip().lower()
+    from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
+                                                 remove_template_image)
+    if variant not in CARD_TEMPLATE_VARIANTS:
+        flash("❌ Unknown card-template variant.", "error")
+        return redirect(url_for("admin_card_template"))
+    if not remove_template_image(variant):
+        flash(f"❌ No {variant.title()} Card template is uploaded.", "error")
+        return redirect(url_for("admin_card_template"))
+    if variant == "base":
+        db = get_session()
+        try:
+            from models import GameConfig
+            cfg = db.query(GameConfig).first()
+            if cfg:
+                cfg.card_template_image_path = None
+                db.commit()
+        finally:
+            db.close()
+    try:
+        from services import config_service as _cs
+        _cs._CACHE["data"] = None
+        from services.card_generator import (invalidate_card_cache,
+                                              invalidate_template_card_cache)
+        invalidate_card_cache()
+        invalidate_template_card_cache()
+    except Exception:
+        pass
+    flash(f"✅ Removed the {variant.title()} Card template.", "info")
+    return redirect(url_for("admin_card_template"))
+
+
+@app.route("/card-template/font/remove", methods=["POST"])
+@login_required
+def admin_card_template_remove_font():
+    """Remove the shared font file and restore the condensed fallback font."""
+    from services.card_template_service import remove_template_font
+    if not remove_template_font():
+        flash("❌ No shared font file is uploaded.", "error")
+        return redirect(url_for("admin_card_template"))
+    db = get_session()
+    try:
+        from models import GameConfig
+        cfg = db.query(GameConfig).first()
+        if cfg:
+            cfg.card_template_font_path = None
+            db.commit()
+    finally:
+        db.close()
+    try:
+        from services import config_service as _cs
+        _cs._CACHE["data"] = None
+        from services.card_generator import (invalidate_card_cache,
+                                              invalidate_template_card_cache)
+        invalidate_card_cache()
+        invalidate_template_card_cache()
+    except Exception:
+        pass
+    flash("✅ Removed the shared font file. Cards now use the fallback font.", "info")
+    return redirect(url_for("admin_card_template"))
 
 
 @app.route("/card-template/global-player/upload", methods=["POST"])
@@ -10819,9 +10885,20 @@ def admin_card_template_preview(player_id):
                                               invalidate_template_card_cache)
         # Always render fresh so edits show without waiting on the cache.
         invalidate_template_card_cache(player_id)
+        from services.card_template_service import DEFAULT_TEMPLATE_SETTINGS
+        preview_settings = {
+            key: request.args.get(key) for key in DEFAULT_TEMPLATE_SETTINGS
+            if key in request.args
+        }
+        for key in ("trim_transparent", "protect_bottom_box"):
+            if key in preview_settings:
+                preview_settings[key] = preview_settings[key] == "1"
+        show_portrait = request.args.get("show_portrait")
         image_bytes = generate_template_card(
             player, force_global_portrait=request.args.get("global_player") == "1",
-            template_variant=request.args.get("variant"))
+            template_variant=request.args.get("variant"),
+            preview_settings=preview_settings or None,
+            preview_show_portrait=None if show_portrait is None else show_portrait == "1")
         if not image_bytes:
             return ("No template configured. Upload a template image and save "
                     "first."), 400
