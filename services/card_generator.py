@@ -3,7 +3,7 @@
 import io
 import logging
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 logger = logging.getLogger(__name__)
 
@@ -65,21 +65,39 @@ def _draw_background(draw):
     draw.line(inset + [inset[0]], fill=(121, 193, 132), width=2, joint="curve")
 
 
+def _draw_halo(layer):
+    """Paint the soft green-and-gold glow used behind portrait artwork."""
+    halo = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(halo)
+    draw.ellipse((570, 34, 1028, 660), fill=(111, 191, 78, 64))
+    draw.ellipse((634, 82, 988, 626), fill=(255, 213, 72, 44))
+    halo = halo.filter(ImageFilter.GaussianBlur(34))
+    layer.alpha_composite(halo)
+
+
 def _draw_silhouette(layer):
-    """Draw a player shadow where an uploaded player portrait will appear."""
+    """Draw the bowler shadow from the supplied HTML when no portrait exists."""
+    _draw_halo(layer)
     draw = ImageDraw.Draw(layer)
-    shadow = (0, 55, 40, 205)
-    shadow_dark = (0, 43, 31, 225)
-    # Head, neck, shoulders, torso and arms form a strong cricket-player shadow.
-    draw.ellipse((690, 85, 835, 230), fill=shadow_dark)
-    draw.rounded_rectangle((733, 200, 795, 285), radius=18, fill=shadow_dark)
-    draw.polygon([(625, 270), (740, 220), (825, 225), (910, 300),
-                  (880, 625), (630, 625)], fill=shadow)
-    draw.polygon([(650, 285), (588, 390), (545, 560), (622, 582), (702, 370)], fill=shadow)
-    draw.polygon([(888, 295), (955, 410), (987, 570), (910, 590), (835, 370)], fill=shadow_dark)
-    # Soft green rim gives the fallback intentional card-art depth.
-    draw.line([(622, 580), (645, 302), (742, 235), (824, 238), (906, 306), (916, 586)],
-              fill=(102, 184, 121, 190), width=8, joint="curve")
+    shadow = (30, 58, 33, 220)
+    shadow_soft = (42, 74, 46, 205)
+    # Full-height bowler in a raised-arm action, adapted from the HTML SVG.
+    draw.ellipse((735, 82, 837, 190), fill=shadow)
+    draw.rounded_rectangle((774, 176, 806, 224), radius=8, fill=shadow)
+    draw.polygon([(650, 216), (625, 354), (670, 358), (686, 278),
+                  (692, 340), (842, 340), (842, 278), (862, 358),
+                  (907, 354), (883, 216), (824, 198), (768, 195), (708, 200)], fill=shadow_soft)
+    draw.polygon([(662, 229), (606, 185), (542, 112), (516, 124),
+                  (582, 208), (646, 254)], fill=shadow)
+    draw.polygon([(864, 232), (913, 285), (958, 380), (932, 398),
+                  (890, 310), (842, 252)], fill=shadow)
+    draw.polygon([(692, 336), (677, 432), (652, 604), (689, 610),
+                  (728, 440), (742, 342)], fill=shadow_soft)
+    draw.polygon([(796, 338), (816, 442), (866, 602), (903, 594),
+                  (862, 434), (842, 338)], fill=shadow)
+    draw.ellipse((638, 594, 700, 620), fill=(30, 58, 33, 175))
+    draw.ellipse((854, 584, 916, 612), fill=(30, 58, 33, 175))
+    draw.ellipse((622, 612, 930, 638), fill=(0, 0, 0, 42))
 
 
 def _player_layer(player):
@@ -96,6 +114,7 @@ def _player_layer(player):
         _draw_silhouette(layer)
         return layer
 
+    _draw_halo(layer)
     # Keep the entire portrait visible while anchoring it to the bottom-right.
     max_w, max_h = 510, 585
     portrait.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
@@ -134,22 +153,8 @@ def _split_name(draw, name):
     return lines[:2]
 
 
-def generate_card(player) -> bytes | None:
-    """Return custom full-card art first, otherwise create the standard card.
-
-    The standard card uses an uploaded player portrait when available. Without
-    one it intentionally renders a player shadow so the card still looks
-    complete and the replacement area is obvious to admins.
-    """
-    # Highest priority: a complete custom card upload replaces every generated layer.
-    try:
-        from services.player_image_service import get_custom_image_bytes
-        custom = get_custom_image_bytes(player.id)
-        if custom:
-            return custom
-    except Exception:
-        logger.exception("Could not load custom card image; generating fallback")
-
+def generate_standard_card(player) -> bytes | None:
+    """Create the standard card using an uploaded portrait or bowler shadow."""
     cached = _CARD_CACHE.get(player.id)
     if cached is not None:
         return cached
@@ -173,7 +178,9 @@ def generate_card(player) -> bytes | None:
         banner = [(88, 48), (432, 48), (454, 70), (454, 94), (432, 116),
                   (88, 116), (70, 98), (70, 66)]
         _outlined_polygon(draw, banner, (250, 248, 239), GREEN_2, 3)
-        draw.text((102, 65), "ACTIVE PLAYER", font=_font(34, True), fill=INK)
+        version = str(getattr(player, "version", "") or "Base card").upper()
+        version_font = _fit_font(draw, version, 310, 34, 22)
+        draw.text((102, 65), version, font=version_font, fill=INK)
 
         # Name, role and dividing accent line.
         lines = _split_name(draw, name)
@@ -224,6 +231,23 @@ def generate_card(player) -> bytes | None:
     except Exception:
         logger.exception("Card generation failed")
         return None
+
+
+def generate_card(player) -> bytes | None:
+    """Return custom full-card art first, otherwise create the standard card.
+
+    Standard cards deliberately keep portrait uploads separate from complete
+    custom-card uploads: the former replaces only the bowler shadow while the
+    latter remains the highest-priority override for every card layer.
+    """
+    try:
+        from services.player_image_service import get_custom_image_bytes
+        custom = get_custom_image_bytes(player.id)
+        if custom:
+            return custom
+    except Exception:
+        logger.exception("Could not load custom card image; generating fallback")
+    return generate_standard_card(player)
 
 
 _CARD_CACHE = {}

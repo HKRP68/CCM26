@@ -1101,6 +1101,25 @@ def player_edit(player_id):
         db.close()
 
 
+@app.route("/players/<int:player_id>/card-preview")
+@login_required
+def admin_player_card_preview(player_id):
+    """Serve the generated card preview, including portrait-or-shadow artwork."""
+    db = get_session()
+    try:
+        player = db.query(Player).get(player_id)
+        if not player:
+            return "Player not found", 404
+        from services.card_generator import generate_standard_card
+        image_bytes = generate_standard_card(player)
+        if not image_bytes:
+            return "Could not generate card preview", 500
+        return send_file(io.BytesIO(image_bytes), mimetype="image/png",
+                         download_name=f"player-card-{player_id}.png")
+    finally:
+        db.close()
+
+
 @app.route("/players/<int:player_id>/image/upload", methods=["POST"])
 @login_required
 def admin_player_image_upload(player_id):
