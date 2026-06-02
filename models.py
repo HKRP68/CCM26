@@ -832,6 +832,10 @@ class GameConfig(Base):
     card_template_area_code = Column(Text, nullable=True)
     # Whether to composite the player's portrait into the template card.
     card_template_show_portrait = Column(Boolean, default=True, nullable=False)
+    # Optional uploaded TTF/OTF font and JSON layout controls copied from the
+    # standalone cricket_card_generator_website_v4-3.html editor.
+    card_template_font_path = Column(String(300), nullable=True)
+    card_template_settings = Column(Text, nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

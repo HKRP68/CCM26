@@ -1,20 +1,15 @@
-"""Card template service — admin-uploaded card background + image-map layout.
+"""Website-managed cricket card template assets and layout controls.
 
-The admin can upload a card *template* background image and paste the HTML
-image-map ``<area>`` code that describes where each player field is drawn. This
-module stores the uploaded image, parses the area code into clean bounding
-boxes, and resolves which player attribute each region maps to.
-
-Storage layout:
-  data/card_templates/template.<ext>   (single global template image)
-
-The image-map coordinates are interpreted in the template image's native pixel
-space, so the renderer draws at the template's real resolution (no scaling).
+The settings mirror ``cricket_card_generator_website_v4-3.html``: an admin can
+upload the global blank template and optional font, then tune cutout, flag, and
+text placement from the website without a redeploy. The legacy image-map parser
+is retained for compatibility with previously stored configuration.
 """
 
 import os
 import re
 import logging
+import json
 from html.parser import HTMLParser
 
 logger = logging.getLogger(__name__)
@@ -24,8 +19,29 @@ logger = logging.getLogger(__name__)
 TEMPLATES_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               "data", "card_templates")
 ALLOWED_EXT = {"png", "jpg", "jpeg", "webp"}
+ALLOWED_FONT_EXT = {"ttf", "otf"}
 MAX_BYTES = 5 * 1024 * 1024     # 5 MB
 MIN_DIM = 200                    # min width/height in pixels
+
+# Defaults mirror cricket_card_generator_website_v4-3.html so the website
+# produces the same layout while allowing admins to tune each value.
+DEFAULT_TEMPLATE_SETTINGS = {
+    "player_x": 675, "player_y": 25, "player_w": 780, "player_h": 1000,
+    "player_scale": 100, "player_opacity": 100, "trim_transparent": True,
+    "protect_bottom_box": True, "flag_scale": 100, "flag_y_offset": 0,
+    "name_x": 52, "name_y": 195, "ovr_x": 1366, "ovr_y": 166,
+    "bat_x": 173, "bat_y": 686, "bowl_x": 531, "bowl_y": 686,
+}
+SETTING_LIMITS = {
+    "player_x": (-1536, 3072), "player_y": (-1024, 2048),
+    "player_w": (1, 3072), "player_h": (1, 2048),
+    "player_scale": (1, 400), "player_opacity": (1, 100),
+    "flag_scale": (10, 300), "flag_y_offset": (-1024, 1024),
+    "name_x": (-1536, 3072), "name_y": (-1024, 2048),
+    "ovr_x": (-1536, 3072), "ovr_y": (-1024, 2048),
+    "bat_x": (-1536, 3072), "bat_y": (-1024, 2048),
+    "bowl_x": (-1536, 3072), "bowl_y": (-1024, 2048),
+}
 
 
 # ── Field aliases ───────────────────────────────────────────────────────────
@@ -118,6 +134,58 @@ def save_template_image(file_bytes, original_filename):
     return True, "Template image saved.", path
 
 
+def save_template_font(file_bytes, original_filename):
+    """Validate and store the optional global card font (TTF or OTF)."""
+    ext = _ext_from_filename(original_filename)
+    if ext not in ALLOWED_FONT_EXT:
+        return False, "Unsupported font type. Allowed: otf, ttf", None
+    if not file_bytes:
+        return False, "Please choose a font file to upload.", None
+    if len(file_bytes) > MAX_BYTES:
+        return False, f"Font too large. Max is {MAX_BYTES / 1024 / 1024:.0f} MB.", None
+    _ensure_dir()
+    for old in ALLOWED_FONT_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"font.{old}")
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+    try:
+        with open(path, "wb") as handle:
+            handle.write(file_bytes)
+        from PIL import ImageFont
+        ImageFont.truetype(path, 24)
+    except Exception as exc:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return False, f"Not a valid font file: {exc}", None
+    return True, "Font file saved.", path
+
+
+def normalise_template_settings(raw=None):
+    """Return safe numeric/boolean layout settings merged with HTML defaults."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    result = dict(DEFAULT_TEMPLATE_SETTINGS)
+    for key, (minimum, maximum) in SETTING_LIMITS.items():
+        try:
+            result[key] = max(minimum, min(maximum, int(float(raw.get(key, result[key])))))
+        except (TypeError, ValueError):
+            pass
+    for key in ("trim_transparent", "protect_bottom_box"):
+        if key in raw:
+            result[key] = bool(raw[key])
+    return result
+
+
 class _AreaParser(HTMLParser):
     """Collect <area> tag attributes from an image-map snippet."""
 
@@ -177,11 +245,9 @@ def parse_area_code(html):
     return regions
 
 
-def template_image_path(session=None):
-    """Return the configured template image path if it exists on disk, else None."""
-    from services.config_service import get_config
-    cfg = get_config(session)
-    path = (cfg.get("card_template_image_path") or "").strip()
+def template_asset_path(stored):
+    """Resolve a stored template/font path relative to the project root."""
+    path = (stored or "").strip()
     if not path:
         return None
     if not os.path.isabs(path):
@@ -190,11 +256,16 @@ def template_image_path(session=None):
     return path if os.path.isfile(path) else None
 
 
+def template_image_path(session=None):
+    """Return the configured template image path if it exists on disk, else None."""
+    from services.config_service import get_config
+    return template_asset_path(get_config(session).get("card_template_image_path"))
+
+
 def get_template_config(session=None):
     """Return the active template-card configuration as a dict.
 
-    Keys: style, image_path (absolute or None), regions (parsed list),
-    show_portrait (bool), area_code (raw string).
+    Includes the resolved template/font paths and safe v4-3 layout settings.
     """
     from services.config_service import get_config
     cfg = get_config(session)
@@ -204,4 +275,6 @@ def get_template_config(session=None):
         "area_code": cfg.get("card_template_area_code") or "",
         "regions": parse_area_code(cfg.get("card_template_area_code") or ""),
         "show_portrait": bool(cfg.get("card_template_show_portrait", True)),
+        "font_path": template_asset_path(cfg.get("card_template_font_path")),
+        "settings": normalise_template_settings(cfg.get("card_template_settings")),
     }

@@ -10591,14 +10591,12 @@ def admin_branding_save():
         db.close()
 
 
-# ─── Card Template (admin-uploaded card design + image-map layout) ────
+# ─── Card Generator (website-managed v4-3 template + layout) ──────────
 
 @app.route("/card-template", methods=["GET"])
 @login_required
 def admin_card_template():
-    """Edit the global player-card design: upload a template background image,
-    paste the HTML image-map <area> code, choose the active card style, and
-    preview the result on a sample player."""
+    """Manage the v4-3 blank template, font, layout controls, and preview."""
     db = get_session()
     try:
         from models import GameConfig
@@ -10610,11 +10608,13 @@ def admin_card_template():
         players = (db.query(Player)
                    .order_by(Player.rating.desc(), Player.name.asc())
                    .limit(200).all())
-        from services.card_template_service import parse_area_code
-        regions = parse_area_code(cfg.card_template_area_code or "")
+        from services.card_template_service import normalise_template_settings
+        settings = normalise_template_settings(cfg.card_template_settings)
         has_template = bool(cfg.card_template_image_path)
+        has_font = bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
-                               regions=regions, has_template=has_template)
+                               settings=settings, has_template=has_template,
+                               has_font=has_font)
     finally:
         db.close()
 
@@ -10644,11 +10644,36 @@ def admin_card_template_save():
             root = os.path.dirname(os.path.abspath(__file__))
             cfg.card_template_image_path = os.path.relpath(path, root)
 
-        # Style, area code, portrait toggle
+        # Optional font upload. This is the font used for every generated card.
+        font_file = request.files.get("font_file")
+        if font_file and font_file.filename:
+            from services.card_template_service import save_template_font
+            ok, msg, path = save_template_font(font_file.read(), font_file.filename)
+            if not ok:
+                db.rollback()
+                flash(f"❌ {msg}", "error")
+                return redirect(url_for("admin_card_template"))
+            root = os.path.dirname(os.path.abspath(__file__))
+            cfg.card_template_font_path = os.path.relpath(path, root)
+
+        # Style and concrete v4-3 HTML generator controls.
+        import json as _json
+        from services.card_template_service import normalise_template_settings
         style = (request.form.get("card_style") or "tier").strip().lower()
         cfg.card_style = style if style in ("tier", "template") else "tier"
-        cfg.card_template_area_code = (request.form.get("area_code") or "").strip() or None
         cfg.card_template_show_portrait = bool(request.form.get("show_portrait"))
+        raw_settings = {
+            key: request.form.get(key) for key in (
+                "player_x", "player_y", "player_w", "player_h",
+                "player_scale", "player_opacity", "flag_scale",
+                "flag_y_offset", "name_x", "name_y", "ovr_x", "ovr_y",
+                "bat_x", "bat_y", "bowl_x", "bowl_y",
+            )
+        }
+        raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
+        raw_settings["protect_bottom_box"] = bool(request.form.get("protect_bottom_box"))
+        cfg.card_template_settings = _json.dumps(normalise_template_settings(raw_settings),
+                                                  sort_keys=True)
 
         db.commit()
 
