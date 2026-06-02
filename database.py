@@ -247,6 +247,8 @@ def _migrate_add_columns():
     _try_add("game_config", "card_template_image_path", "VARCHAR(300)")
     _try_add("game_config", "card_template_area_code", "TEXT")
     _try_add("game_config", "card_template_show_portrait", "BOOLEAN DEFAULT TRUE")
+    _try_add("game_config", "card_template_font_path", "VARCHAR(300)")
+    _try_add("game_config", "card_template_settings", "TEXT")
     # Telegram channel storage — cache file_ids for player images
     _try_add("player_images", "tg_file_id", "VARCHAR(200)")
     # Referral code + branding (per the invite + branding feature)

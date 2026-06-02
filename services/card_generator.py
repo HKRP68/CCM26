@@ -144,74 +144,65 @@ def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
     return tmp, (x, y)
 
 
-# ── Template card (admin-uploaded background + image-map layout) ─────────────
+# ── Website-managed template card (ported from v4-3 HTML generator) ──────────
 
-# Default text colour for the template card — dark green to suit the cream/green
-# reference template. Reads well on light backgrounds.
-_TEMPLATE_TEXT_COLOR = (20, 75, 55)
-
-
-def _player_field_text(player, field):
-    """Resolve the display string for a template-card field key."""
-    if field == "name":
-        return str(player.name).upper()
-    if field == "rating":
-        return str(int(player.rating))
-    if field == "country":
-        return str(player.country)
-    if field == "bat_style":
-        return f"{player.bat_hand}-hand Bat"
-    if field == "bowl_style":
-        hand = str(getattr(player, "bowl_hand", "") or "").strip()
-        style = str(getattr(player, "bowl_style", "") or "").strip()
-        return f"{hand}-arm {style}".strip(" -") if hand else style
-    if field == "bat_rating":
-        return str(int(player.bat_rating))
-    if field == "bowl_rating":
-        return str(int(player.bowl_rating))
-    return ""
+_TEMPLATE_W, _TEMPLATE_H = 1536, 1024
+_DARK_GREEN = (0, 86, 50, 255)
+_LIGHT_GREEN = (92, 174, 88, 255)
+_RED = (237, 37, 67, 255)
+_LINE_GREEN = (124, 178, 145, 255)
 
 
-def _fit_font(text, max_w, max_h, bold=True):
-    """Pick the largest DejaVu font whose rendered text fits within max_w/max_h."""
-    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    lo, hi, best = 6, max(8, int(max_h)), None
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        font = _font(mid, bold=bold)
-        bbox = measure.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        if tw <= max_w and th <= max_h:
-            best = font
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return best or _font(6, bold=bold)
+def _template_font(tcfg, size):
+    """Use the admin-uploaded font, with a condensed bold fallback."""
+    paths = [
+        tcfg.get("font_path"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-BoldOblique.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for path in paths:
+        if not path:
+            continue
+        try:
+            return ImageFont.truetype(path, max(1, int(size)))
+        except (OSError, IOError):
+            continue
+    return ImageFont.load_default()
 
 
-def _draw_text_in_box(draw, bbox, text, color, bold=True):
-    """Draw text centred within bbox, auto-sized to fit."""
-    if not text:
-        return
-    x0, y0, x1, y1 = bbox
-    bw, bh = x1 - x0, y1 - y0
-    # Pad each axis by a small fraction of *that* axis so a wide-but-short box
-    # (e.g. a country strip) keeps usable height instead of being crushed.
-    pad_x = max(2, int(bw * 0.04))
-    pad_y = max(2, int(bh * 0.06))
-    max_w, max_h = bw - 2 * pad_x, bh - 2 * pad_y
-    if max_w <= 0 or max_h <= 0:
-        return
-    font = _fit_font(text, max_w, max_h, bold=bold)
-    tb = draw.textbbox((0, 0), text, font=font)
-    tw, th = tb[2] - tb[0], tb[3] - tb[1]
-    tx = x0 + (x1 - x0 - tw) // 2 - tb[0]
-    ty = y0 + (y1 - y0 - th) // 2 - tb[1]
-    draw.text((tx, ty), text, fill=color, font=font)
+def _fit_template_font(draw, tcfg, text, max_width, start_size, min_size):
+    size = int(start_size)
+    while size > int(min_size):
+        font = _template_font(tcfg, size)
+        if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+            return font
+        size -= 2
+    return _template_font(tcfg, min_size)
 
 
-def _composite_portrait(base, bbox, player):
-    """Cover-fit the player's portrait into bbox on the base RGBA image."""
+def _draw_fit(draw, tcfg, text, xy, max_width, start_size, min_size, color,
+              anchor="la"):
+    text = str(text or "")
+    font = _fit_template_font(draw, tcfg, text, max_width, start_size, min_size)
+    draw.text(xy, text, font=font, fill=color, anchor=anchor)
+
+
+def _split_template_name(name):
+    parts = str(name or "").strip().upper().split()
+    if not parts:
+        return "", ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _trim_transparent(portrait):
+    """Match the HTML auto-trim control by dropping transparent PNG padding."""
+    alpha = portrait.getchannel("A")
+    bbox = alpha.getbbox()
+    return portrait.crop(bbox) if bbox else portrait
+
+
+def _composite_template_portrait(base, player, settings):
+    """Draw the same player-page cutout used by the HTML generator."""
     try:
         from services.player_portrait_service import get_player_portrait
         portrait = get_player_portrait(player)
@@ -219,62 +210,112 @@ def _composite_portrait(base, bbox, player):
         portrait = None
     if portrait is None:
         return
-    x0, y0, x1, y1 = bbox
-    bw, bh = x1 - x0, y1 - y0
-    if bw <= 0 or bh <= 0:
-        return
-    pw, ph = portrait.size
-    scale = max(bw / pw, bh / ph)
-    nw, nh = max(1, int(pw * scale)), max(1, int(ph * scale))
-    resized = portrait.resize((nw, nh), Image.LANCZOS)
-    # Centre-crop to the box
-    left = (nw - bw) // 2
-    top = (nh - bh) // 2
-    cropped = resized.crop((left, top, left + bw, top + bh))
-    base.paste(cropped, (x0, y0), cropped)
+    if settings["trim_transparent"]:
+        portrait = _trim_transparent(portrait)
+    box_w, box_h = settings["player_w"], settings["player_h"]
+    scale = min(box_w / portrait.width, box_h / portrait.height)
+    scale *= settings["player_scale"] / 100
+    width, height = max(1, int(portrait.width * scale)), max(1, int(portrait.height * scale))
+    portrait = portrait.resize((width, height), Image.LANCZOS)
+    if settings["player_opacity"] < 100:
+        alpha = portrait.getchannel("A").point(
+            lambda value: int(value * settings["player_opacity"] / 100))
+        portrait.putalpha(alpha)
+    x = int(settings["player_x"] + (box_w - width) / 2)
+    y = int(settings["player_y"] + box_h - height)
+    base.alpha_composite(portrait, (x, y))
+
+
+def _restore_bottom_box(base, clean_template):
+    """Redraw the v4-3 bottom-right details polygon above the cutout."""
+    mask = Image.new("L", (_TEMPLATE_W, _TEMPLATE_H), 0)
+    ImageDraw.Draw(mask).polygon([(1032, 833), (1536, 833), (1536, 1024),
+                                  (845, 1024)], fill=255)
+    base.paste(clean_template, (0, 0), mask)
+
+
+def _draw_india_flag(draw, bbox):
+    x, y, width, height = bbox
+    stripe = height / 3
+    draw.rectangle((x, y, x + width, y + stripe), fill=(255, 153, 51, 255))
+    draw.rectangle((x, y + stripe, x + width, y + 2 * stripe), fill=(255, 255, 255, 255))
+    draw.rectangle((x, y + 2 * stripe, x + width, y + height), fill=(19, 136, 8, 255))
+    cx, cy, radius = x + width / 2, y + height / 2, max(8, height / 8)
+    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius),
+                 outline=(16, 47, 90, 255), width=3)
+
+
+def _draw_template_flag(draw, tcfg, country, settings):
+    frame_x, frame_y, frame_w, frame_h = 66, 846, 280, 122
+    scale = settings["flag_scale"] / 100
+    width, height = frame_w * scale, frame_h * scale
+    x = frame_x + (frame_w - width) / 2
+    y = frame_y + (frame_h - height) / 2 + settings["flag_y_offset"]
+    bbox = (x, y, x + width, y + height)
+    if str(country).strip().lower() == "india":
+        _draw_india_flag(draw, (x, y, width, height))
+    else:
+        draw.rectangle(bbox, outline=_DARK_GREEN, width=3)
+        _draw_fit(draw, tcfg, str(country).upper(),
+                  (x + width / 2, y + height / 2), width - 20, 30, 16,
+                  _DARK_GREEN, anchor="mm")
+
+
+def _template_batting_style(player):
+    return f"{str(getattr(player, 'bat_hand', '') or '').upper()}-HANDED"
+
+
+def _template_bowling_style(player):
+    hand = str(getattr(player, "bowl_hand", "") or "").upper()
+    style = str(getattr(player, "bowl_style", "") or "").upper()
+    return f"{hand} ARM {style}".strip()
 
 
 def generate_template_card(player) -> bytes | None:
-    """Render a card onto the admin-uploaded template at image-map regions.
-
-    Returns None when no usable template image is configured (the caller then
-    falls back to the procedural tier card). Cached by player_id; cache is
-    cleared via invalidate_template_card_cache() when the admin edits the
-    template config.
-    """
+    """Render the website-managed card using the v4-3 HTML layer order."""
     try:
         from services.card_template_service import get_template_config
         tcfg = get_template_config()
     except Exception:
         logger.exception("template config load failed")
         return None
-
-    image_path = tcfg.get("image_path")
-    if not image_path:
-        return None  # No template uploaded — fall back to tier card
-
+    if not tcfg.get("image_path"):
+        return None
     cached = _TEMPLATE_CARD_CACHE.get(player.id)
     if cached is not None:
         return cached
-
     try:
-        base = Image.open(image_path).convert("RGBA")
-        regions = tcfg.get("regions") or []
-        show_portrait = tcfg.get("show_portrait", True)
-
-        # Composite portrait first so text draws on top.
-        if show_portrait:
-            for r in regions:
-                if r["field"] == "__photo__":
-                    _composite_portrait(base, r["bbox"], player)
+        clean_template = Image.open(tcfg["image_path"]).convert("RGBA")
+        clean_template = clean_template.resize((_TEMPLATE_W, _TEMPLATE_H), Image.LANCZOS)
+        base = clean_template.copy()
+        settings = tcfg["settings"]
+        if tcfg.get("show_portrait", True):
+            _composite_template_portrait(base, player, settings)
+        if settings["protect_bottom_box"]:
+            _restore_bottom_box(base, clean_template)
 
         draw = ImageDraw.Draw(base)
-        for r in regions:
-            field = r["field"]
-            if field == "__photo__":
-                continue
-            text = _player_field_text(player, field)
-            _draw_text_in_box(draw, r["bbox"], text, _TEMPLATE_TEXT_COLOR, bold=True)
+        first_name, last_name = _split_template_name(player.name)
+        _draw_fit(draw, tcfg, first_name, (settings["name_x"], settings["name_y"] + 110),
+                  650, 140, 72, _DARK_GREEN)
+        if last_name:
+            _draw_fit(draw, tcfg, last_name, (settings["name_x"], settings["name_y"] + 260),
+                      650, 140, 72, _DARK_GREEN)
+        category_x = 58
+        for character in str(player.category).upper():
+            draw.text((category_x, 590), character, font=_template_font(tcfg, 42), fill=_LIGHT_GREEN)
+            category_x += draw.textlength(character, font=_template_font(tcfg, 42)) + 22
+        _draw_fit(draw, tcfg, int(player.rating), (settings["ovr_x"], settings["ovr_y"]),
+                  240, 128, 72, _RED, anchor="mm")
+        _draw_fit(draw, tcfg, int(player.bat_rating), (settings["bat_x"], settings["bat_y"]),
+                  150, 92, 48, _RED, anchor="mm")
+        _draw_fit(draw, tcfg, int(player.bowl_rating), (settings["bowl_x"], settings["bowl_y"]),
+                  150, 92, 48, _RED, anchor="mm")
+        _draw_template_flag(draw, tcfg, player.country, settings)
+        _draw_fit(draw, tcfg, str(player.country).upper(), (405, 925), 280, 58, 30, _DARK_GREEN)
+        _draw_fit(draw, tcfg, _template_batting_style(player), (1110, 895), 335, 38, 20, _DARK_GREEN)
+        _draw_fit(draw, tcfg, _template_bowling_style(player), (1110, 988), 335, 38, 20, _DARK_GREEN)
+        draw.line((1030, 939, 1442, 939), fill=_LINE_GREEN, width=2)
 
         buf = io.BytesIO()
         base.convert("RGB").save(buf, format="PNG", quality=95)
@@ -286,7 +327,6 @@ def generate_template_card(player) -> bytes | None:
     except Exception:
         logger.exception("Template card generation failed")
         return None
-
 
 def generate_card(player) -> bytes | None:
     """Generate a premium card PNG matching the reference design.
@@ -472,22 +512,22 @@ def generate_card(player) -> bytes | None:
 _CARD_CACHE = {}
 
 # Separate cache for template-rendered cards. Invalidated when the admin changes
-# the template image or image-map code (in addition to per-player edits).
+# the template image, font, layout controls, or the underlying player.
 _TEMPLATE_CARD_CACHE = {}
 
 
 def invalidate_card_cache(player_id=None):
-    """Drop cached generated cards. Call after admin edits a player.
-    If player_id is None, drops all."""
+    """Drop procedural and website-template cards after a player edit."""
     if player_id is None:
         _CARD_CACHE.clear()
+        _TEMPLATE_CARD_CACHE.clear()
     else:
         _CARD_CACHE.pop(player_id, None)
+        _TEMPLATE_CARD_CACHE.pop(player_id, None)
 
 
 def invalidate_template_card_cache(player_id=None):
-    """Drop cached template-rendered cards. Call after admin edits the template
-    image, image-map code, or card style. If player_id is None, drops all."""
+    """Drop cached template cards after editing an image, font, or layout."""
     if player_id is None:
         _TEMPLATE_CARD_CACHE.clear()
     else:

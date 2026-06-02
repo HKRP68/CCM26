@@ -60,6 +60,8 @@ DEFAULTS = {
     "card_template_image_path": None,
     "card_template_area_code": None,
     "card_template_show_portrait": True,
+    "card_template_font_path": None,
+    "card_template_settings": None,
 }
 
 
