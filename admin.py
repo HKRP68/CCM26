@@ -10591,12 +10591,12 @@ def admin_branding_save():
         db.close()
 
 
-# ─── Card Generator (website-managed v4-3 template + layout) ──────────
+# ─── Card Generator (website-managed v5 Base template + layout) ─────────
 
 @app.route("/card-template", methods=["GET"])
 @login_required
 def admin_card_template():
-    """Manage the v4-3 blank template, font, layout controls, and preview."""
+    """Manage the v5 Base-card template, font, flags, layout, and preview."""
     db = get_session()
     try:
         from models import GameConfig
@@ -10606,15 +10606,17 @@ def admin_card_template():
             db.add(cfg); db.commit()
         # A small player list for the live-preview dropdown (highest rated first).
         players = (db.query(Player)
+                   .filter(Player.parent_player_id.is_(None))
                    .order_by(Player.rating.desc(), Player.name.asc())
                    .limit(200).all())
         from services.card_template_service import normalise_template_settings
+        from services.country_flag_service import list_country_flags
         settings = normalise_template_settings(cfg.card_template_settings)
         has_template = bool(cfg.card_template_image_path)
         has_font = bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, has_template=has_template,
-                               has_font=has_font)
+                               has_font=has_font, country_flags=list_country_flags())
     finally:
         db.close()
 
@@ -10656,7 +10658,7 @@ def admin_card_template_save():
             root = os.path.dirname(os.path.abspath(__file__))
             cfg.card_template_font_path = os.path.relpath(path, root)
 
-        # Style and concrete v4-3 HTML generator controls.
+        # Style and concrete v5 HTML generator controls.
         import json as _json
         from services.card_template_service import normalise_template_settings
         style = (request.form.get("card_style") or "tier").strip().lower()
@@ -10668,6 +10670,9 @@ def admin_card_template_save():
                 "player_scale", "player_opacity", "flag_scale",
                 "flag_y_offset", "name_x", "name_y", "ovr_x", "ovr_y",
                 "bat_x", "bat_y", "bowl_x", "bowl_y",
+                "cat_x", "cat_y", "cat_font_size", "cat_letter_gap",
+                "bat_style_x", "bat_style_y", "bowl_style_x", "bowl_style_y",
+                "style_font_size", "style_max_width",
             )
         }
         raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
@@ -10705,6 +10710,47 @@ def admin_card_template_save():
         return redirect(url_for("admin_card_template"))
     finally:
         db.close()
+
+
+@app.route("/card-template/flags/upload", methods=["POST"])
+@login_required
+def admin_card_template_flag_upload():
+    """Upload or replace the PNG used for one country in Base template cards."""
+    country = (request.form.get("flag_country") or "").strip()
+    file = request.files.get("flag_file")
+    if not file or not file.filename:
+        flash("❌ Choose a country flag PNG to upload.", "error")
+        return redirect(url_for("admin_card_template"))
+    from services.country_flag_service import save_country_flag
+    ok, msg = save_country_flag(country, file.read(), file.filename)
+    if not ok:
+        flash(f"❌ {msg}", "error")
+        return redirect(url_for("admin_card_template"))
+    try:
+        from services.card_generator import invalidate_template_card_cache
+        invalidate_template_card_cache()
+    except Exception:
+        pass
+    flash(f"✅ {msg}", "info")
+    return redirect(url_for("admin_card_template"))
+
+
+@app.route("/card-template/flags/remove", methods=["POST"])
+@login_required
+def admin_card_template_flag_remove():
+    """Remove an uploaded country flag and restore the renderer fallback."""
+    country = (request.form.get("flag_country") or "").strip()
+    from services.country_flag_service import remove_country_flag
+    if remove_country_flag(country):
+        try:
+            from services.card_generator import invalidate_template_card_cache
+            invalidate_template_card_cache()
+        except Exception:
+            pass
+        flash(f"✅ Removed the uploaded flag for {country}.", "info")
+    else:
+        flash(f"❌ No uploaded flag found for {country or 'that country'}.", "error")
+    return redirect(url_for("admin_card_template"))
 
 
 @app.route("/card-template/preview/<int:player_id>")

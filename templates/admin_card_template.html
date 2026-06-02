@@ -6,9 +6,9 @@
   <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
 </div>
 <p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;line-height:1.6;">
-  This page manages the server-side version of <code>cricket_card_generator_website_v4-3.html</code>.
-  Upload the blank card template and optional font, then tune the player cutout and text positions.
-  The cutout is the same image uploaded on each player's edit page. Changes apply to generated cards immediately.
+  This page manages the server-side Base-player version of <code>cricket_card_generator_website_v5.html</code>.
+  Upload the blank card template and optional font, then tune the cutout, flag, and text positions.
+  The cutout is the same image uploaded on each player's edit page. Star and Legend templates can be added later without changing this Base setup.
 </p>
 <form method="POST" action="{{ url_for('admin_card_template_save') }}" enctype="multipart/form-data"
       style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;">
@@ -46,6 +46,7 @@
     <label><input type="checkbox" name="protect_bottom_box" {{ 'checked' if settings.protect_bottom_box else '' }}> Redraw bottom-right box above player</label>
   </div>
   <h3 style="margin:1rem 0 .65rem;font-size:1rem;">🏳️ Flag controls</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin-top:0;">Uploaded country PNGs are drawn inside the v5 flag box using this exact scale and offset.</p>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;margin-bottom:1.5rem;">
     {{ number_input('flag_scale', 'Flag Scale %') }}{{ number_input('flag_y_offset', 'Flag Y Offset') }}
   </div>
@@ -55,9 +56,36 @@
     {{ number_input('ovr_x', 'OVR X') }}{{ number_input('ovr_y', 'OVR Y') }}
     {{ number_input('bat_x', 'Batting X') }}{{ number_input('bat_y', 'Batting Y') }}
     {{ number_input('bowl_x', 'Bowling X') }}{{ number_input('bowl_y', 'Bowling Y') }}
+    {{ number_input('cat_x', 'Category X') }}{{ number_input('cat_y', 'Category Y') }}
+    {{ number_input('cat_font_size', 'Category Font Size') }}{{ number_input('cat_letter_gap', 'Category Letter Gap') }}
+    {{ number_input('bat_style_x', 'Batting Style X') }}{{ number_input('bat_style_y', 'Batting Style Y') }}
+    {{ number_input('bowl_style_x', 'Bowling Style X') }}{{ number_input('bowl_style_y', 'Bowling Style Y') }}
+    {{ number_input('style_font_size', 'Style Font Size') }}{{ number_input('style_max_width', 'Style Max Width') }}
   </div>
   <button type="submit" class="btn btn-primary">💾 Save card generator settings</button>
 </form>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
+  <h3 style="margin:0 0 .5rem;font-size:1rem;">🏳️ Country flag PNG library</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">Upload one PNG per country. When a Base player's country matches the name below, the PNG is automatically placed into the card flag box at the configured flag size.</p>
+  <form method="POST" action="{{ url_for('admin_card_template_flag_upload') }}" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(160px,1fr) minmax(180px,1fr) auto;gap:.65rem;align-items:end;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Country name</label><input type="text" name="flag_country" placeholder="e.g. India" required style="width:100%;"></div>
+    <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Country flag PNG</label><input type="file" name="flag_file" accept="image/png,.png" required style="width:100%;"></div>
+    <button type="submit" class="btn btn-primary">Upload flag</button>
+  </form>
+  {% if country_flags %}
+  <div style="display:flex;gap:.55rem;flex-wrap:wrap;margin-top:1rem;">
+    {% for country in country_flags %}
+    <form method="POST" action="{{ url_for('admin_card_template_flag_remove') }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="flag_country" value="{{ country }}">
+      <button type="submit" class="btn btn-ghost btn-sm" title="Remove uploaded PNG">{{ country }} ×</button>
+    </form>
+    {% endfor %}
+  </div>
+  {% else %}<p style="color:var(--muted);font-size:.8rem;margin:1rem 0 0;">No country PNGs uploaded yet. India keeps the built-in fallback until you upload one.</p>{% endif %}
+</div>
+
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .8rem;font-size:1rem;">🔍 Live preview</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0 0 .8rem;">Save first, then preview any player using that player's uploaded cutout.</p>
