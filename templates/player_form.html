@@ -161,6 +161,21 @@
 </div>
 
 {% if player %}
+<!-- ───── GENERATED CARD PREVIEW ───── -->
+<div class="form-card" style="margin-top:1.5rem;">
+  <h3 style="margin:0 0 .8rem;">🏏 Generated Player Card</h3>
+  <p style="color:var(--muted); font-size:.9rem; margin-bottom:1rem;">
+    This is the standard card used when no complete custom card override is active.
+    Upload a <strong>Player Image</strong> above to replace the bowler shadow while keeping
+    the generated layout, stats, country, and playing styles.
+  </p>
+  <div style="max-width:720px; background:#17231c; border-radius:10px; padding:.75rem;">
+    <img src="{{ url_for('admin_player_card_preview', player_id=player.id) }}?t={{ range(1, 1000000) | random }}"
+         style="width:100%; border-radius:7px; display:block;"
+         alt="Generated player card preview">
+  </div>
+</div>
+
 <!-- ───── CUSTOM CARD IMAGE ───── -->
 <div class="form-card" style="margin-top:1.5rem;">
   <h3 style="margin:0 0 .8rem;">🎨 Custom Card Image</h3>
