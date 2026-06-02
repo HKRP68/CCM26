@@ -33,6 +33,12 @@ ACTION_TIMEOUT = 90
 FINE_COINS = 2000   # reduced from 10000 — the forfeit itself is the bigger penalty
 FINE_GEMS = 5       # reduced from 20
 
+# Setup-phase expiries so a half-started match never blocks a chat forever.
+#   LOBBY_EXPIRE: an unjoined /wpm lobby auto-cancels after this long
+#   OVERS_EXPIRE: an accepted /playmatch match auto-expires if no overs are chosen
+LOBBY_EXPIRE = 120
+OVERS_EXPIRE = 60
+
 # Sentinel telegram ID for the AI bot opponent in /vsbot
 BOT_TG_ID_ = -1
 
@@ -1634,7 +1640,10 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"🛑 <b>MATCH ENDED</b>\n\n{u_mention} ended the match.\n"
             f"⚠️ Fine: -{FINE_COINS:,} Coins 💰 -{FINE_GEMS} Gems 💎\n"
             f"📊 Player stats saved.", parse_mode="HTML")
-    except Exception: session.rollback()
+    except Exception:
+        session.rollback(); logger.exception("endmatch_yes_callback failed")
+        try: await q.answer("⚠️ Something went wrong, try again.", show_alert=True)
+        except Exception: pass
     finally: session.close()
 
     # Scorecards for visual record (best-effort, non-fatal)
@@ -1711,21 +1720,68 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "host_label": _user_label(host),
             "overs": overs,
         }
-        await update.message.reply_text(
+        lobby_msg = await update.message.reply_text(
             "🏏 <b>CRICKET MATCH LOBBY CREATED!</b> 🏏\n"
             "═════════════════════════════\n"
             f"• <b>Host:</b> {_user_label(host)}\n"
             f"• <b>Length:</b> {overs} Over(s)\n\n"
-            "Click the button below to join the match!",
+            "Click the button below to join the match!\n"
+            f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if no one joins.</i>",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🤝 Join Match", callback_data="cric_join"),
                 InlineKeyboardButton("❌ Cancel Lobby", callback_data="cric_cancel_lobby"),
             ]]))
+        # Remember the message id so we can edit it on expiry, and schedule the
+        # auto-cancel job (mirrors /playmatch's _auto_expire).
+        context.bot_data[_cric_lobby_key(cid)]["lobby_msg_id"] = lobby_msg.message_id
+        try:
+            if context.job_queue:
+                context.job_queue.run_once(
+                    _expire_lobby, LOBBY_EXPIRE, name=f"lobby_{cid}",
+                    data={"chat_id": cid, "lobby_msg_id": lobby_msg.message_id})
+        except Exception:
+            logger.exception("Failed to schedule /wpm lobby expiry")
     except Exception:
         logger.exception("/wpm lobby creation failed")
         await update.message.reply_text("❌ Failed to create cricket lobby.")
     finally:
         session.close()
+
+
+async def _expire_lobby(ctx):
+    """Auto-cancel a /wpm lobby that nobody joined.
+
+    Only fires for a still-open lobby (no guest). If the lobby was joined or
+    already cancelled, this is a no-op.
+    """
+    d = ctx.job.data
+    cid = d["chat_id"]
+    key = _cric_lobby_key(cid)
+    lobby = ctx.bot_data.get(key)
+    if not lobby or lobby.get("guest_user_id"):
+        return  # joined or already gone
+    ctx.bot_data.pop(key, None)
+    try:
+        msg_id = d.get("lobby_msg_id") or lobby.get("lobby_msg_id")
+        if msg_id:
+            await ctx.bot.edit_message_text(
+                "⏰ <b>Lobby expired</b> — no one joined.\nStart again with /wpm.",
+                chat_id=cid, message_id=msg_id, parse_mode="HTML")
+        else:
+            await ctx.bot.send_message(
+                cid, "⏰ Match lobby expired — no one joined. Start again with /wpm.")
+    except Exception:
+        logger.exception("Lobby expiry message failed")
+
+
+def _cancel_lobby_timer(ctx, cid):
+    """Remove the pending /wpm lobby auto-expiry job for a chat."""
+    try:
+        if ctx.job_queue:
+            for j in ctx.job_queue.get_jobs_by_name(f"lobby_{cid}"):
+                j.schedule_removal()
+    except Exception:
+        logger.exception("Failed to cancel lobby timer")
 
 
 async def cric_cancel_lobby_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1746,6 +1802,7 @@ async def cric_cancel_lobby_callback(update: Update, context: ContextTypes.DEFAU
         await q.answer("Only the host or a chat admin can cancel this lobby.", show_alert=True)
         return
     context.bot_data.pop(key, None)
+    _cancel_lobby_timer(context, cid)
     await q.answer("Lobby cancelled.")
     await q.edit_message_text("❌ Match lobby has been cancelled.")
 
@@ -1804,6 +1861,8 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "toss_winner_user_id": winner.id,
             "toss_winner_tg_id": winner.telegram_id,
         })
+        # Lobby is now joined — stop the auto-expiry job.
+        _cancel_lobby_timer(context, cid)
         await q.answer("Joined match lobby!")
         await q.edit_message_text(
             "🪙 <b>TOSS COMPLETED!</b> 🪙\n"
@@ -1916,6 +1975,7 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user; cid = update.effective_chat.id
     if not context.args: await update.message.reply_text("Usage: /playmatch @username"); return
     t = context.args[0].lstrip("@").strip()
+    if not t: await update.message.reply_text("Usage: /playmatch @username"); return
     session = get_session()
     try:
         # One match per chat
@@ -1927,9 +1987,16 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         u1 = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u1: await update.message.reply_text("❌ /debut first!"); return
-        if t.lower() == (u1.username or "").lower(): await update.message.reply_text("❌ Can't play yourself"); return
         u2 = session.query(User).filter(User.username.ilike(t)).first()
-        if not u2: await update.message.reply_text(f"❌ @{t} not found."); return
+        if not u2:
+            await update.message.reply_text(
+                f"❌ Couldn't find @{t}. They need to have set a Telegram @username "
+                f"and used /debut to be challenged.")
+            return
+        # Block self-play by user id (robust even if usernames are missing/changed)
+        if u2.id == u1.id:
+            await update.message.reply_text("❌ Can't play yourself")
+            return
         r1 = session.query(UserRoster).filter(UserRoster.user_id == u1.id).count()
         r2 = session.query(UserRoster).filter(UserRoster.user_id == u2.id).count()
         if r1 < 11: await update.message.reply_text(f"❌ You need 11+ ({r1})."); return
@@ -1976,12 +2043,47 @@ async def _auto_expire(ctx):
     d = ctx.job.data; session = get_session()
     try:
         m = session.query(Match).get(d["match_id"])
-        if m and m.status == "pending": m.status = "expired"; session.commit(); await ctx.bot.send_message(d["chat_id"], "⏰ Match expired.")
-    except Exception: session.rollback()
+        # Expire invites that were never accepted, and (defensively) any match
+        # left "accepted" without overs being chosen — both block the chat.
+        if m and m.status in ("pending", "accepted"):
+            if m.status == "accepted" and m.user2_id:
+                u2 = session.query(User).get(m.user2_id)
+                if u2:
+                    ctx.bot_data.pop(f"awaiting_overs_{u2.telegram_id}", None)
+            m.status = "expired"; session.commit()
+            await ctx.bot.send_message(d["chat_id"], "⏰ Match expired.")
+    except Exception:
+        session.rollback(); logger.exception("_auto_expire failed")
     finally: session.close()
 
+
+async def _expire_overs(ctx):
+    """Auto-expire a /playmatch match that was accepted but never got overs."""
+    d = ctx.job.data; session = get_session()
+    try:
+        ctx.bot_data.pop(f"awaiting_overs_{d.get('guest_tg')}", None)
+        m = session.query(Match).get(d["match_id"])
+        if m and m.status == "accepted":
+            m.status = "expired"; session.commit()
+            await ctx.bot.send_message(
+                d["chat_id"], "⏰ Match setup expired — no overs were chosen.")
+    except Exception:
+        session.rollback(); logger.exception("_expire_overs failed")
+    finally: session.close()
+
+
+def _cancel_overs_timer(ctx, mid):
+    """Remove the pending overs-selection expiry job for a match."""
+    try:
+        if ctx.job_queue:
+            for j in ctx.job_queue.get_jobs_by_name(f"overs_{mid}"):
+                j.schedule_removal()
+    except Exception:
+        logger.exception("Failed to cancel overs timer")
+
 async def match_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; tg = q.from_user; parts = q.data.split("_"); mid, auid = int(parts[1]), int(parts[2])
+    q = update.callback_query; tg = q.from_user; cid = q.message.chat_id
+    parts = q.data.split("_"); mid, auid = int(parts[1]), int(parts[2])
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == tg.id).first()
@@ -1994,9 +2096,32 @@ async def match_accept_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception: pass
         u1 = session.query(User).get(m.user1_id); u2 = session.query(User).get(m.user2_id)
         t1 = u1.team_name or f"@{u1.username}'s XI"; t2 = u2.team_name or f"@{u2.username}'s XI"
-        await q.edit_message_text(f"✅ <b>MATCH ACCEPTED!</b>\n\n🏟️ {t1} vs {t2}\n\n@{u2.username}, select overs (1-20):\n📝 Reply: <code>20</code>", parse_mode="HTML")
+        # Inline overs picker — far more reliable than a free-text reply in busy
+        # groups. "✍️ Custom" falls back to the typed-number path below.
+        overs_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("1", callback_data=f"oversset_{mid}_{u2.id}_1"),
+             InlineKeyboardButton("2", callback_data=f"oversset_{mid}_{u2.id}_2"),
+             InlineKeyboardButton("5", callback_data=f"oversset_{mid}_{u2.id}_5")],
+            [InlineKeyboardButton("10", callback_data=f"oversset_{mid}_{u2.id}_10"),
+             InlineKeyboardButton("20", callback_data=f"oversset_{mid}_{u2.id}_20")],
+            [InlineKeyboardButton("✍️ Custom (1-20)", callback_data=f"overscustom_{mid}_{u2.id}")],
+        ])
+        await q.edit_message_text(
+            f"✅ <b>MATCH ACCEPTED!</b>\n\n🏟️ {t1} vs {t2}\n\n"
+            f"{_mention(u2)}, choose the match length:",
+            parse_mode="HTML", reply_markup=overs_kb)
         context.bot_data[f"awaiting_overs_{u2.telegram_id}"] = mid
-    except Exception: session.rollback()
+        try:
+            if context.job_queue:
+                context.job_queue.run_once(
+                    _expire_overs, OVERS_EXPIRE, name=f"overs_{mid}",
+                    data={"match_id": mid, "chat_id": cid, "guest_tg": u2.telegram_id})
+        except Exception:
+            logger.exception("Failed to schedule overs expiry")
+    except Exception:
+        session.rollback(); logger.exception("match_accept_callback failed")
+        try: await q.answer("⚠️ Something went wrong, try again.", show_alert=True)
+        except Exception: pass
     finally: session.close()
 
 async def match_deny_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2008,10 +2133,14 @@ async def match_deny_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.answer(); m = session.query(Match).get(mid)
         if m and m.status == "pending": m.status = "expired"; session.commit()
         await q.edit_message_text("❌ Match denied.")
-    except Exception: session.rollback()
+    except Exception:
+        session.rollback(); logger.exception("match_deny_callback failed")
+        try: await q.answer("⚠️ Something went wrong, try again.", show_alert=True)
+        except Exception: pass
     finally: session.close()
 
 async def overs_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Custom-overs fallback: the invited user types a number (1-20)."""
     tg = update.effective_user; cid = update.effective_chat.id
     key = f"awaiting_overs_{tg.id}"; mid = context.bot_data.get(key)
     if not mid: return
@@ -2020,6 +2149,51 @@ async def overs_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except ValueError: await update.message.reply_text("❌ Enter 1-20"); return
     if overs < 1 or overs > 20: await update.message.reply_text("❌ 1-20"); return
     del context.bot_data[key]
+    await _confirm_overs(context, cid, mid, overs)
+
+
+async def overs_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Invited user tapped a preset overs button (oversset_{mid}_{auid}_{n})."""
+    q = update.callback_query; cid = q.message.chat_id
+    parts = q.data.split("_"); mid, auid, overs = int(parts[1]), int(parts[2]), int(parts[3])
+    session = get_session()
+    try:
+        u = session.query(User).filter(User.telegram_id == q.from_user.id).first()
+        if not u or u.id != auid: await q.answer("Only the invited player can choose!"); return
+    finally:
+        session.close()
+    await q.answer()
+    context.bot_data.pop(f"awaiting_overs_{q.from_user.id}", None)
+    try: await q.edit_message_reply_markup(reply_markup=None)
+    except Exception: pass
+    await _confirm_overs(context, cid, mid, overs)
+
+
+async def overs_custom_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Invited user tapped "Custom" — prompt them to type a number (1-20)."""
+    q = update.callback_query
+    parts = q.data.split("_"); mid, auid = int(parts[1]), int(parts[2])
+    session = get_session()
+    try:
+        u = session.query(User).filter(User.telegram_id == q.from_user.id).first()
+        if not u or u.id != auid: await q.answer("Only the invited player can choose!"); return
+    finally:
+        session.close()
+    await q.answer()
+    context.bot_data[f"awaiting_overs_{q.from_user.id}"] = mid
+    try:
+        await q.edit_message_text(
+            f"✍️ {_mention(q.from_user.id, fallback_name=(q.from_user.username or 'Player'))}, "
+            f"reply with the number of overs (1-20):\n📝 e.g. <code>12</code>",
+            parse_mode="HTML")
+    except Exception:
+        logger.exception("overs_custom_callback prompt failed")
+
+
+async def _confirm_overs(context, cid, mid, overs):
+    """Lock in the chosen overs, run the toss animation, and prompt the toss
+    winner for a bat/bowl decision. Shared by the button and text-entry paths."""
+    _cancel_overs_timer(context, mid)
     session = get_session()
     try:
         m = session.query(Match).get(mid)
@@ -2029,7 +2203,7 @@ async def overs_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         t1 = u1.team_name or f"@{u1.username}'s XI"; t2 = u2.team_name or f"@{u2.username}'s XI"
 
         w_coins = overs * 300; l_coins = overs * 150
-        await update.message.reply_text(
+        await context.bot.send_message(cid,
             f"✅ <b>MATCH CONFIRMED!</b>\n\n🏏 {t1} vs {t2}\n📍 {overs} Overs | {m.stadium}\n"
             f"📍 {m.pitch_type} | {m.weather} {m.temperature}°C\n🎩 {m.umpire1} | {m.umpire2}\n\n"
             f"🎁 <b>Rewards:</b>\n🏆 Winner: {w_coins:,} Coins + {overs} Gems\n"
