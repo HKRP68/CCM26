@@ -11,9 +11,8 @@
   Upload a card background image and paste the HTML image-map <code>&lt;area&gt;</code> code
   (e.g. from <a href="https://www.image-map.net/" target="_blank">image-map.net</a>) to control
   where each player field is drawn. Coordinates are read in the uploaded image's native pixel size.
-  Set the style to <strong>Template</strong> to use it for all players, <strong>Tier</strong> for the
-  built-in design, or <strong>Standard</strong> for the previous card design. Changes apply
-  immediately — no restart needed.
+  Set the style to <strong>Template</strong> to use it for all players; <strong>Tier</strong> keeps the
+  built-in design. Changes apply immediately — no restart needed.
 </p>
 
 <form method="POST" action="{{ url_for('admin_card_template_save') }}" enctype="multipart/form-data"
@@ -23,16 +22,12 @@
   <h3 style="margin:0 0 .8rem;font-size:1rem;">🎨 Active card style</h3>
   <div style="display:flex;gap:1.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
     <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;">
-      <input type="radio" name="card_style" value="tier" {{ 'checked' if cfg.card_style not in ('template','standard') else '' }} onchange="refreshPreview()">
+      <input type="radio" name="card_style" value="tier" {{ 'checked' if cfg.card_style != 'template' else '' }}>
       <span>Tier (built-in procedural design)</span>
     </label>
     <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;">
-      <input type="radio" name="card_style" value="template" {{ 'checked' if cfg.card_style == 'template' else '' }} onchange="refreshPreview()">
+      <input type="radio" name="card_style" value="template" {{ 'checked' if cfg.card_style == 'template' else '' }}>
       <span>Template (uploaded background below)</span>
-    </label>
-    <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;">
-      <input type="radio" name="card_style" value="standard" {{ 'checked' if cfg.card_style == 'standard' else '' }} onchange="refreshPreview()">
-      <span>Standard (previous design)</span>
     </label>
   </div>
 
@@ -89,7 +84,7 @@
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .8rem;font-size:1rem;">🔍 Live preview</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0 0 .8rem;">
-    Renders a sample player in the <strong>currently selected style</strong> above. Save first to persist your changes.
+    Renders the template card for a sample player (forced, regardless of the active style). Save first to see your latest changes.
   </p>
   <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem;">
     <select id="previewPlayer"
@@ -111,18 +106,13 @@
 </div>
 
 <script>
-function selectedStyle() {
-  var r = document.querySelector('input[name="card_style"]:checked');
-  return r ? r.value : 'template';
-}
 function refreshPreview() {
   var sel = document.getElementById('previewPlayer');
   if (!sel || !sel.value) return;
   var img = document.getElementById('previewImg');
   document.getElementById('previewErr').style.display = 'none';
   img.style.display = 'inline-block';
-  img.src = "{{ url_for('admin_card_template_preview', player_id=0) }}".replace('/0', '/' + sel.value)
-            + '?style=' + selectedStyle() + '&t=' + Date.now();
+  img.src = "{{ url_for('admin_card_template_preview', player_id=0) }}".replace('/0', '/' + sel.value) + '?t=' + Date.now();
 }
 document.addEventListener('DOMContentLoaded', refreshPreview);
 </script>

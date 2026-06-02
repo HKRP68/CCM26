@@ -295,10 +295,9 @@ def generate_card(player) -> bytes | None:
     active, returns those bytes instead. Falls back to the auto-generated
     card otherwise.
 
-    The global card style selects the design: "template" renders onto the
-    admin-uploaded template image, "standard" uses the previous reference
-    design, and "tier" (default) uses the procedural tier card. Template/standard
-    fall back to the tier card if they can't render.
+    When the global card style is set to "template", renders onto the
+    admin-uploaded template image; if no template is configured the procedural
+    tier card is used instead.
 
     Generated cards are cached in memory by player_id — a player's card art
     doesn't change at runtime, so re-generating it is wasted CPU + memory.
@@ -313,30 +312,17 @@ def generate_card(player) -> bytes | None:
     except Exception:
         pass  # Fall through to auto-generation
 
-    # Card-style dispatch — template (admin-uploaded art) or standard (the
-    # previous reference design). Anything else uses the tier card below.
+    # Template card style — render on admin-uploaded template if active.
     try:
         from services.config_service import get_card_style
-        style = get_card_style()
-        if style == "template":
+        if get_card_style() == "template":
             tpl = generate_template_card(player)
             if tpl is not None:
                 return tpl
             # else: no template configured → fall through to tier card
-        elif style == "standard":
-            from services.legacy_card_generator import generate_standard_card
-            std = generate_standard_card(player)
-            if std is not None:
-                return std
-            # else: fall through to tier card
     except Exception:
-        logger.exception("card style dispatch failed; using tier card")
+        logger.exception("template card dispatch failed; using tier card")
 
-    return generate_tier_card(player)
-
-
-def generate_tier_card(player) -> bytes | None:
-    """Render the procedural tier card (the default design)."""
     # Generated-card cache check
     cached = _CARD_CACHE.get(player.id)
     if cached is not None:
