@@ -55,10 +55,17 @@ DEFAULTS = {
     # webapp opts every newly started match into the Mini App board.
     "match_style": "telegram",
     "challenge_max_overs": 2,
+    # Player card rendering style + admin-uploaded template settings
+    "card_style": "tier",
+    "card_template_image_path": None,
+    "card_template_area_code": None,
+    "card_template_show_portrait": True,
 }
 
 
 MATCH_STYLES = {"telegram", "webapp"}
+
+CARD_STYLES = {"tier", "template"}
 
 
 def get_challenge_max_overs(session=None):
@@ -67,6 +74,17 @@ def get_challenge_max_overs(session=None):
         return max(1, min(20, int(_refresh(session).get("challenge_max_overs", 2))))
     except (TypeError, ValueError):
         return 2
+
+
+def get_card_style(session=None):
+    """Return the global player-card design for all generated cards.
+
+    Reads fresh (like get_match_style) so a website change is picked up by a
+    separate bot process without a restart. Unknown/missing values fall back to
+    the built-in tier card.
+    """
+    style = str(_refresh(session).get("card_style") or "tier").lower()
+    return style if style in CARD_STYLES else "tier"
 
 
 def get_match_style(session=None):
