@@ -1,62 +1,19 @@
-"""Premium player card generator matching reference design."""
+"""Reference-inspired cricket player-card generator."""
 
 import io
 import logging
+
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
 
-W, H = 700, 420
-
-# ── Tier definitions from reference images ──────────────────────────
-TIERS = {
-    "ultimate": {  # 95-100: Gold/dark olive
-        "bg": (35, 35, 18), "bg2": (22, 22, 8),
-        "border": (184, 150, 11), "accent": (255, 215, 0),
-        "cat_col": (200, 170, 50),
-    },
-    "legend": {  # 90-94: Dark navy/indigo
-        "bg": (15, 23, 42), "bg2": (30, 27, 75),
-        "border": (67, 56, 202), "accent": (129, 140, 248),
-        "cat_col": (129, 140, 248),
-    },
-    "epic": {  # 85-89: Purple
-        "bg": (75, 30, 150), "bg2": (55, 20, 120),
-        "border": (124, 58, 237), "accent": (167, 139, 250),
-        "cat_col": (190, 170, 240),
-    },
-    "rare": {  # 80-84: Chocolate/amber
-        "bg": (72, 40, 12), "bg2": (50, 26, 8),
-        "border": (184, 134, 11), "accent": (218, 165, 32),
-        "cat_col": (218, 165, 32),
-    },
-    "super": {  # 75-79: Dark brown/orange
-        "bg": (62, 33, 10), "bg2": (42, 22, 6),
-        "border": (160, 100, 30), "accent": (184, 115, 51),
-        "cat_col": (200, 150, 60),
-    },
-    "silver": {  # 60-74: Steel/slate
-        "bg": (55, 65, 81), "bg2": (31, 41, 55),
-        "border": (107, 114, 128), "accent": (148, 163, 184),
-        "cat_col": (148, 163, 184),
-    },
-    "bronze": {  # 50-59: Bronze/dark brown
-        "bg": (52, 28, 8), "bg2": (35, 18, 4),
-        "border": (120, 85, 20), "accent": (139, 105, 20),
-        "cat_col": (160, 120, 40),
-    },
-}
-
-
-def _get_tier(rating):
-    if rating >= 95: return TIERS["ultimate"]
-    if rating >= 90: return TIERS["legend"]
-    if rating >= 85: return TIERS["epic"]
-    if rating >= 80: return TIERS["rare"]
-    if rating >= 75: return TIERS["super"]
-    if rating >= 60: return TIERS["silver"]
-    return TIERS["bronze"]
-
+W, H = 1024, 640
+GREEN = (0, 82, 53)
+GREEN_2 = (57, 154, 86)
+PALE_GREEN = (215, 238, 205)
+CREAM = (250, 247, 238)
+RED = (239, 37, 66)
+INK = (3, 74, 48)
 
 COUNTRY_CODES = {
     "India": "IND", "Australia": "AUS", "England": "ENG", "Pakistan": "PAK",
@@ -69,253 +26,216 @@ COUNTRY_CODES = {
 
 
 def _font(size, bold=False):
-    paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except (OSError, IOError):
-            continue
-    return ImageFont.load_default()
+    path = ("/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"
+            if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf")
+    try:
+        return ImageFont.truetype(path, size)
+    except OSError:
+        return ImageFont.load_default()
 
 
-def _draw_corner_brackets(draw, w, h, color, dot_color):
-    """Draw L-shaped corner brackets with dots like the reference."""
-    blen = 35  # bracket arm length
-    bw = 2     # bracket line width
-    m = 18     # margin from edge
-    dc = 4     # dot circle radius
-
-    # Top-left
-    draw.line([(m, m), (m + blen, m)], fill=color, width=bw)
-    draw.line([(m, m), (m, m + blen)], fill=color, width=bw)
-    draw.ellipse([m - dc, m - dc, m + dc, m + dc], fill=dot_color)
-
-    # Top-right
-    draw.line([(w - m, m), (w - m - blen, m)], fill=color, width=bw)
-    draw.line([(w - m, m), (w - m, m + blen)], fill=color, width=bw)
-    draw.ellipse([w - m - dc, m - dc, w - m + dc, m + dc], fill=dot_color)
-
-    # Bottom-left
-    draw.line([(m, h - m), (m + blen, h - m)], fill=color, width=bw)
-    draw.line([(m, h - m), (m, h - m - blen)], fill=color, width=bw)
-    draw.ellipse([m - dc, h - m - dc, m + dc, h - m + dc], fill=dot_color)
-
-    # Bottom-right
-    draw.line([(w - m, h - m), (w - m - blen, h - m)], fill=color, width=bw)
-    draw.line([(w - m, h - m), (w - m, h - m - blen)], fill=color, width=bw)
-    draw.ellipse([w - m - dc, h - m - dc, w - m + dc, h - m + dc], fill=dot_color)
+def _fit_font(draw, text, max_width, start_size, min_size=18):
+    for size in range(start_size, min_size - 1, -2):
+        font = _font(size, bold=True)
+        if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+            return font
+    return _font(min_size, bold=True)
 
 
-def _hex_shape(w, h, cut_x=28, cut_y=50):
-    """Card outline polygon — slightly clipped corners."""
-    return [
-        (cut_x, 0), (w - cut_x, 0),
-        (w, cut_y), (w, h - cut_y),
-        (w - cut_x, h), (cut_x, h),
-        (0, h - cut_y), (0, cut_y),
-    ]
+def _outlined_polygon(draw, points, fill, outline=GREEN_2, width=3):
+    draw.polygon(points, fill=fill)
+    draw.line(points + [points[0]], fill=outline, width=width, joint="curve")
 
 
-def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
-    """Draw text with a top-to-bottom color gradient."""
-    x, y = pos
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_h = bbox[3] - bbox[1]
+def _draw_background(draw):
+    draw.rectangle((0, 0, W, H), fill=CREAM)
+    # Diagonal bands and subtle field-like stripes on the right.
+    for offset in range(-120, 650, 44):
+        draw.polygon([(560 + offset, H), (610 + offset, H), (W, 140 + offset), (W, 95 + offset)],
+                     fill=(238, 243, 221))
+    for offset in range(0, 650, 72):
+        draw.polygon([(710 + offset, H), (742 + offset, H), (W, 380 + offset), (W, 348 + offset)],
+                     fill=PALE_GREEN)
+    # Reference-style clipped frame.
+    frame = [(26, 8), (W - 34, 8), (W - 8, 34), (W - 8, H - 42),
+             (W - 34, H - 10), (30, H - 10), (8, H - 34), (8, 34)]
+    draw.line(frame + [frame[0]], fill=GREEN_2, width=5, joint="curve")
+    inset = [(34, 18), (W - 42, 18), (W - 18, 42), (W - 18, H - 50),
+             (W - 42, H - 20), (38, H - 20), (18, H - 42), (18, 42)]
+    draw.line(inset + [inset[0]], fill=(121, 193, 132), width=2, joint="curve")
 
-    # Create a temporary image for gradient text
-    tmp = Image.new("RGBA", (bbox[2] - bbox[0] + 10, text_h + 10), (0, 0, 0, 0))
-    tmp_draw = ImageDraw.Draw(tmp)
-    tmp_draw.text((0, 0), text, fill=top_color, font=font)
 
-    # Simple gradient: blend top and bottom colors
-    for row in range(text_h):
-        t = row / max(text_h - 1, 1)
-        r = int(top_color[0] * (1 - t) + bottom_color[0] * t)
-        g = int(top_color[1] * (1 - t) + bottom_color[1] * t)
-        b = int(top_color[2] * (1 - t) + bottom_color[2] * t)
-        for col in range(tmp.width):
-            px = tmp.getpixel((col, row))
-            if px[3] > 0:
-                tmp.putpixel((col, row), (r, g, b, px[3]))
+def _draw_silhouette(layer):
+    """Draw a player shadow where an uploaded player portrait will appear."""
+    draw = ImageDraw.Draw(layer)
+    shadow = (0, 55, 40, 205)
+    shadow_dark = (0, 43, 31, 225)
+    # Head, neck, shoulders, torso and arms form a strong cricket-player shadow.
+    draw.ellipse((690, 85, 835, 230), fill=shadow_dark)
+    draw.rounded_rectangle((733, 200, 795, 285), radius=18, fill=shadow_dark)
+    draw.polygon([(625, 270), (740, 220), (825, 225), (910, 300),
+                  (880, 625), (630, 625)], fill=shadow)
+    draw.polygon([(650, 285), (588, 390), (545, 560), (622, 582), (702, 370)], fill=shadow)
+    draw.polygon([(888, 295), (955, 410), (987, 570), (910, 590), (835, 370)], fill=shadow_dark)
+    # Soft green rim gives the fallback intentional card-art depth.
+    draw.line([(622, 580), (645, 302), (742, 235), (824, 238), (906, 306), (916, 586)],
+              fill=(102, 184, 121, 190), width=8, joint="curve")
 
-    return tmp, (x, y)
+
+def _player_layer(player):
+    """Return a full-card portrait layer or the silhouette fallback."""
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    try:
+        from services.player_portrait_service import get_player_portrait
+        portrait = get_player_portrait(player)
+    except Exception:
+        logger.exception("Could not load player portrait")
+        portrait = None
+
+    if portrait is None:
+        _draw_silhouette(layer)
+        return layer
+
+    # Keep the entire portrait visible while anchoring it to the bottom-right.
+    max_w, max_h = 510, 585
+    portrait.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+    x = W - portrait.width - 42
+    y = H - portrait.height - 14
+    # Light shadow makes transparent cut-outs read cleanly on the pale backdrop.
+    alpha = portrait.getchannel("A")
+    shadow = Image.new("RGBA", portrait.size, (0, 48, 34, 0))
+    shadow.putalpha(alpha.point(lambda value: int(value * 0.35)))
+    layer.alpha_composite(shadow, (x + 10, y + 8))
+    layer.alpha_composite(portrait, (x, y))
+    return layer
+
+
+def _draw_label_box(draw, xy, value, label, icon):
+    x, y, width, height = xy
+    points = [(x + 18, y), (x + width - 14, y), (x + width, y + 16),
+              (x + width, y + height - 16), (x + width - 16, y + height),
+              (x + 16, y + height), (x, y + height - 16), (x, y + 16)]
+    _outlined_polygon(draw, points, (255, 253, 246, 245), (87, 168, 102), 3)
+    draw.text((x + 25, y + 12), str(value), font=_font(58, True), fill=RED)
+    draw.text((x + width - 58, y + 25), icon, font=_font(30, True), fill=INK)
+    draw.text((x + 24, y + height - 36), label, font=_font(20, True), fill=INK)
+
+
+def _split_name(draw, name):
+    words = name.upper().split()
+    if not words:
+        return ["PLAYER"]
+    lines = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        font = _fit_font(draw, candidate, 540, 76, 42)
+        if draw.textbbox((0, 0), candidate, font=font)[2] > 540 or len(candidate) > 17:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    lines.append(current)
+    return lines[:2]
 
 
 def generate_card(player) -> bytes | None:
-    """Generate a premium card PNG matching the reference design.
+    """Return custom full-card art first, otherwise create the standard card.
 
-    If the admin has uploaded a custom card image for this player and it's
-    active, returns those bytes instead. Falls back to the auto-generated
-    card otherwise.
-
-    Generated cards are cached in memory by player_id — a player's card art
-    doesn't change at runtime, so re-generating it is wasted CPU + memory.
-    Cache is invalidated when admin edits a player.
+    The standard card uses an uploaded player portrait when available. Without
+    one it intentionally renders a player shadow so the card still looks
+    complete and the replacement area is obvious to admins.
     """
-    # Custom image override — short-circuit if admin uploaded one
+    # Highest priority: a complete custom card upload replaces every generated layer.
     try:
         from services.player_image_service import get_custom_image_bytes
         custom = get_custom_image_bytes(player.id)
         if custom:
             return custom
     except Exception:
-        pass  # Fall through to auto-generation
+        logger.exception("Could not load custom card image; generating fallback")
 
-    # Generated-card cache check
     cached = _CARD_CACHE.get(player.id)
     if cached is not None:
         return cached
 
     try:
-        # Read all attributes
         name = str(player.name)
         rating = int(player.rating)
         category = str(player.category)
         country = str(player.country)
         bat_hand = str(player.bat_hand)
+        bowl_hand = str(player.bowl_hand)
         bowl_style = str(player.bowl_style)
         bat_rating = int(player.bat_rating)
         bowl_rating = int(player.bowl_rating)
 
-        tier = _get_tier(rating)
+        img = Image.new("RGBA", (W, H), CREAM + (255,))
+        draw = ImageDraw.Draw(img)
+        _draw_background(draw)
 
-        # ── Canvas ──────────────────────────────────────────────────
-        img = Image.new("RGB", (W, H), (5, 5, 5))
+        # Status banner.
+        banner = [(88, 48), (432, 48), (454, 70), (454, 94), (432, 116),
+                  (88, 116), (70, 98), (70, 66)]
+        _outlined_polygon(draw, banner, (250, 248, 239), GREEN_2, 3)
+        draw.text((102, 65), "ACTIVE PLAYER", font=_font(34, True), fill=INK)
+
+        # Name, role and dividing accent line.
+        lines = _split_name(draw, name)
+        y = 142
+        for line in lines:
+            font = _fit_font(draw, line, 560, 78, 40)
+            draw.text((48, y), line, font=font, fill=INK, stroke_width=1)
+            y += font.size - 4
+        role_y = min(y + 8, 324)
+        draw.line((48, role_y - 10, 430, role_y - 10), fill=GREEN_2, width=3)
+        draw.line((430, role_y - 10, 520, role_y - 10), fill=(255, 164, 40), width=3)
+        draw.text((48, role_y), "  ".join(category.upper()), font=_font(25, True), fill=GREEN_2)
+
+        # OVR block.
+        draw.text((866, 54), "OVR", font=_font(25, True), fill=INK)
+        rating_font = _fit_font(draw, str(rating), 150, 94, 62)
+        draw.text((844, 84), str(rating), font=rating_font, fill=RED)
+        draw.line((850, 190, 895, 190), fill=INK, width=2)
+        draw.text((905, 172), "★", font=_font(30, True), fill=INK)
+        draw.line((943, 190, 986, 190), fill=INK, width=2)
+
+        # Portrait or shadow lives above the background but beneath information panels.
+        img.alpha_composite(_player_layer(player))
         draw = ImageDraw.Draw(img)
 
-        # Background shape with gradient
-        shape = _hex_shape(W, H)
-        # Draw outer border shape
-        draw.polygon(shape, fill=tier["border"])
-        # Inner shape (3px inset)
-        inner = _hex_shape(W - 6, H - 6, cut_x=26, cut_y=48)
-        inner = [(x + 3, y + 3) for x, y in inner]
+        _draw_label_box(draw, (44, 376, 210, 118), bat_rating, "BATTING POWER", "◆")
+        _draw_label_box(draw, (272, 376, 210, 118), bowl_rating, "BOWLING SPECS", "●")
 
-        # Fill inner with gradient (top to bottom)
-        bg1, bg2 = tier["bg"], tier["bg2"]
-        for y in range(H):
-            t = y / H
-            r = int(bg1[0] * (1 - t) + bg2[0] * t)
-            g = int(bg1[1] * (1 - t) + bg2[1] * t)
-            b = int(bg1[2] * (1 - t) + bg2[2] * t)
-            draw.line([(4, y), (W - 4, y)], fill=(r, g, b))
-
-        # Re-draw outer border lines only
-        draw.polygon(shape, outline=tier["border"], fill=None)
-
-        # Corner brackets
-        _draw_corner_brackets(draw, W, H, tier["border"], tier["accent"])
-
-        # ── LEFT: OVR number (metallic gradient) ────────────────────
-        f_ovr = _font(110, bold=True)
-        ovr_text = str(rating)
-
-        gradient_top = (220, 220, 220)
-        gradient_bot = (140, 140, 140)
-        ovr_img, _ = _draw_gradient_text(draw, (0, 0), ovr_text, f_ovr, gradient_top, gradient_bot)
-        img.paste(ovr_img, (50, 50), ovr_img)
-
-        # "OVR" label
-        f_ovr_label = _font(14, bold=True)
-        draw.text((55, 175), "O V R", fill=(255, 255, 255, 140), font=f_ovr_label)
-
-        # Country code badge
         cc = COUNTRY_CODES.get(country, country[:3].upper())
-        f_cc = _font(18, bold=True)
-        badge_x, badge_y = 50, 220
-        draw.rounded_rectangle([badge_x, badge_y, badge_x + 80, badge_y + 45],
-                               radius=6, fill=(30, 50, 80))
-        draw.rounded_rectangle([badge_x + 1, badge_y + 1, badge_x + 79, badge_y + 44],
-                               radius=5, fill=(40, 60, 100))
-        bbox = draw.textbbox((0, 0), cc, font=f_cc)
-        tw = bbox[2] - bbox[0]
-        draw.text((badge_x + (80 - tw) // 2, badge_y + 10), cc, fill=(255, 255, 255), font=f_cc)
+        draw.text((54, 540), country.upper(), font=_font(35, True), fill=INK)
+        draw.line((54, 590, 182, 590), fill=GREEN_2, width=2)
+        draw.text((192, 569), f"★  {cc}", font=_font(20, True), fill=INK)
 
-        # ── RIGHT: Player name (large, bold, uppercase) ─────────────
-        rx = 230
-        f_name = _font(52, bold=True)
+        # Bottom-right style panel overlays portrait like the supplied reference.
+        panel = [(670, 520), (W - 20, 520), (W - 20, H - 22), (610, H - 22)]
+        _outlined_polygon(draw, panel, (252, 250, 242, 238), (87, 168, 102), 4)
+        draw.text((706, 542), f"{bat_hand.upper()}-HANDED", font=_font(23, True), fill=INK)
+        draw.line((686, 579, 982, 579), fill=(87, 168, 102), width=2)
+        draw.text((706, 592), f"{bowl_hand.upper()} ARM {bowl_style.upper()}", font=_font(19, True), fill=INK)
 
-        # Split name into lines if too long
-        words = name.upper().split()
-        lines = []
-        current = ""
-        for w in words:
-            test = (current + " " + w).strip()
-            bbox = draw.textbbox((0, 0), test, font=f_name)
-            if bbox[2] - bbox[0] > 430:
-                if current:
-                    lines.append(current)
-                current = w
-            else:
-                current = test
-        if current:
-            lines.append(current)
-
-        name_y = 30
-        for line in lines[:2]:  # max 2 lines
-            draw.text((rx, name_y), line, fill=(255, 255, 255), font=f_name)
-            name_y += 58
-
-        # Category (spaced uppercase)
-        cat_spaced = "  ".join(category.upper())
-        f_cat = _font(12, bold=True)
-        draw.text((rx, name_y + 5), cat_spaced, fill=tier["cat_col"], font=f_cat)
-
-        # ── Batting / Bowling ratings ───────────────────────────────
-        rating_y = name_y + 45
-        f_rat = _font(50, bold=True)
-        f_rat_label = _font(11, bold=True)
-
-        draw.text((rx, rating_y), str(bat_rating), fill=(255, 255, 255), font=f_rat)
-        draw.text((rx, rating_y + 56), "B A T T I N G", fill=(255, 255, 255, 120), font=f_rat_label)
-
-        draw.text((rx + 200, rating_y), str(bowl_rating), fill=(255, 255, 255), font=f_rat)
-        draw.text((rx + 200, rating_y + 56), "B O W L I N G", fill=(255, 255, 255, 120), font=f_rat_label)
-
-        # ── Divider ─────────────────────────────────────────────────
-        div_y = rating_y + 90
-        draw.line([(rx, div_y), (W - 45, div_y)], fill=(255, 255, 255, 50), width=1)
-
-        # ── Style info ──────────────────────────────────────────────
-        f_label = _font(11, bold=True)
-        f_val = _font(13, bold=True)
-
-        row_y = div_y + 18
-        draw.text((rx, row_y), "B A T T I N G   S T Y L E", fill=(255, 255, 255, 90), font=f_label)
-        draw.text((rx + 300, row_y), f"{bat_hand}-hand bat", fill=(255, 255, 255), font=f_val)
-
-        row_y += 32
-        draw.text((rx, row_y), "B O W L I N G   S T Y L E", fill=(255, 255, 255, 90), font=f_label)
-        draw.text((rx + 300, row_y), bowl_style, fill=(255, 255, 255), font=f_val)
-
-        # ── Export ──────────────────────────────────────────────────
         buf = io.BytesIO()
-        img.save(buf, format="PNG", quality=95)
-        buf.seek(0)
+        img.convert("RGB").save(buf, format="PNG", optimize=True)
         result = buf.getvalue()
-        # Cache so we don't regenerate this card. Cap to avoid runaway memory.
         if len(_CARD_CACHE) > 500:
             _CARD_CACHE.clear()
         _CARD_CACHE[player.id] = result
         return result
-
     except Exception:
         logger.exception("Card generation failed")
         return None
 
 
-# Module-level cache for generated cards. Player art doesn't change at runtime,
-# so we keep up to 500 generated cards in memory. Invalidated when admin edits
-# the underlying Player row.
 _CARD_CACHE = {}
 
 
 def invalidate_card_cache(player_id=None):
-    """Drop cached generated cards. Call after admin edits a player.
-    If player_id is None, drops all."""
+    """Drop cached generated cards after player details or portrait changes."""
     if player_id is None:
         _CARD_CACHE.clear()
     else:
