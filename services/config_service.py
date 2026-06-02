@@ -65,7 +65,7 @@ DEFAULTS = {
 
 MATCH_STYLES = {"telegram", "webapp"}
 
-CARD_STYLES = {"tier", "template"}
+CARD_STYLES = {"tier", "template", "standard"}
 
 
 def get_challenge_max_overs(session=None):

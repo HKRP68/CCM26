@@ -10646,7 +10646,7 @@ def admin_card_template_save():
 
         # Style, area code, portrait toggle
         style = (request.form.get("card_style") or "tier").strip().lower()
-        cfg.card_style = style if style in ("tier", "template") else "tier"
+        cfg.card_style = style if style in ("tier", "template", "standard") else "tier"
         cfg.card_template_area_code = (request.form.get("area_code") or "").strip() or None
         cfg.card_template_show_portrait = bool(request.form.get("show_portrait"))
 
@@ -10663,6 +10663,8 @@ def admin_card_template_save():
                                                   invalidate_template_card_cache)
             invalidate_card_cache()
             invalidate_template_card_cache()
+            from services.legacy_card_generator import invalidate_legacy_card_cache
+            invalidate_legacy_card_cache()
         except Exception:
             pass
 
@@ -10685,23 +10687,38 @@ def admin_card_template_save():
 @app.route("/card-template/preview/<int:player_id>")
 @login_required
 def admin_card_template_preview(player_id):
-    """Force-render the template card for a player (regardless of active style)
-    so the admin can preview before activating it."""
+    """Render a player's card in a chosen style (?style=tier|template|standard)
+    so the admin can preview any design before activating it. Defaults to the
+    template card."""
     db = get_session()
     try:
         player = db.query(Player).get(player_id)
         if not player:
             return "Player not found", 404
+        style = (request.args.get("style") or "template").strip().lower()
         from services.card_generator import (generate_template_card,
-                                              invalidate_template_card_cache)
+                                              generate_tier_card,
+                                              invalidate_template_card_cache,
+                                              invalidate_card_cache)
         # Always render fresh so edits show without waiting on the cache.
-        invalidate_template_card_cache(player_id)
-        image_bytes = generate_template_card(player)
+        if style == "standard":
+            from services.legacy_card_generator import (generate_standard_card,
+                                                        invalidate_legacy_card_cache)
+            invalidate_legacy_card_cache(player_id)
+            image_bytes = generate_standard_card(player)
+        elif style == "tier":
+            invalidate_card_cache(player_id)
+            image_bytes = generate_tier_card(player)
+        else:
+            invalidate_template_card_cache(player_id)
+            image_bytes = generate_template_card(player)
+            if not image_bytes:
+                return ("No template configured. Upload a template image and save "
+                        "first."), 400
         if not image_bytes:
-            return ("No template configured. Upload a template image and save "
-                    "first."), 400
+            return "Could not generate preview.", 500
         return send_file(io.BytesIO(image_bytes), mimetype="image/png",
-                         download_name=f"template-card-{player_id}.png")
+                         download_name=f"{style}-card-{player_id}.png")
     finally:
         db.close()
 
