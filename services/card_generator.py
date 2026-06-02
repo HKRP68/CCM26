@@ -101,11 +101,6 @@ def _player_layer(player):
     portrait.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
     x = W - portrait.width - 42
     y = H - portrait.height - 14
-    # Light shadow makes transparent cut-outs read cleanly on the pale backdrop.
-    alpha = portrait.getchannel("A")
-    shadow = Image.new("RGBA", portrait.size, (0, 48, 34, 0))
-    shadow.putalpha(alpha.point(lambda value: int(value * 0.35)))
-    layer.alpha_composite(shadow, (x + 10, y + 8))
     layer.alpha_composite(portrait, (x, y))
     return layer
 
