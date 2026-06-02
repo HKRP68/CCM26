@@ -10591,12 +10591,12 @@ def admin_branding_save():
         db.close()
 
 
-# ─── Card Generator (website-managed v5 Base template + layout) ─────────
+# ─── Card Generator (website-managed v7.1 templates + layout) ─────────
 
 @app.route("/card-template", methods=["GET"])
 @login_required
 def admin_card_template():
-    """Manage the v5 Base-card template, font, flags, layout, and preview."""
+    """Manage v7.1 Base, Star, and Legend templates, font, flags, layout, and preview."""
     db = get_session()
     try:
         from models import GameConfig
@@ -10609,15 +10609,17 @@ def admin_card_template():
                    .filter(Player.parent_player_id.is_(None))
                    .order_by(Player.rating.desc(), Player.name.asc())
                    .limit(200).all())
-        from services.card_template_service import normalise_template_settings
+        from services.card_template_service import (list_template_variants,
+                                                    normalise_template_settings)
         from services.country_flag_service import list_country_flags
         from services.player_portrait_service import has_global_player_portrait
         settings = normalise_template_settings(cfg.card_template_settings)
-        has_template = bool(cfg.card_template_image_path)
+        template_variants = list_template_variants(db)
+        has_template = template_variants["base"]["uploaded"]
         has_font = bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, has_template=has_template,
-                               has_font=has_font, country_flags=list_country_flags(),
+                               template_variants=template_variants, has_font=has_font, country_flags=list_country_flags(),
                                has_global_portrait=has_global_player_portrait())
     finally:
         db.close()
@@ -10634,19 +10636,22 @@ def admin_card_template_save():
             cfg = GameConfig()
             db.add(cfg); db.flush()
 
-        # Optional template image upload
-        file = request.files.get("template_file")
-        if file and file.filename:
-            from services.card_template_service import save_template_image
-            file_bytes = file.read()
-            ok, msg, path = save_template_image(file_bytes, file.filename)
-            if not ok:
-                db.rollback()
-                flash(f"❌ {msg}", "error")
-                return redirect(url_for("admin_card_template"))
-            # Store a repo-relative path for portability across deploys.
-            root = os.path.dirname(os.path.abspath(__file__))
-            cfg.card_template_image_path = os.path.relpath(path, root)
+        # Optional blank-template uploads. Base retains the legacy config path;
+        # Star and Legend use deterministic files and fall back to Base until set.
+        from services.card_template_service import save_template_image
+        root = os.path.dirname(os.path.abspath(__file__))
+        for variant in ("base", "star", "legend"):
+            template_file = request.files.get(f"template_file_{variant}")
+            if template_file and template_file.filename:
+                ok, msg, path = save_template_image(
+                    template_file.read(), template_file.filename, variant=variant)
+                if not ok:
+                    db.rollback()
+                    flash(f"❌ {variant.title()} template: {msg}", "error")
+                    return redirect(url_for("admin_card_template"))
+                if variant == "base":
+                    # Store relative to project root so deploy paths remain portable.
+                    cfg.card_template_image_path = os.path.relpath(path, root)
 
         # Optional font upload. This is the font used for every generated card.
         font_file = request.files.get("font_file")
@@ -10660,7 +10665,7 @@ def admin_card_template_save():
             root = os.path.dirname(os.path.abspath(__file__))
             cfg.card_template_font_path = os.path.relpath(path, root)
 
-        # Style and concrete v5 HTML generator controls.
+        # Style and concrete v7.1 HTML generator controls.
         import json as _json
         from services.card_template_service import normalise_template_settings
         style = (request.form.get("card_style") or "tier").strip().lower()
@@ -10671,14 +10676,16 @@ def admin_card_template_save():
                 "player_x", "player_y", "player_w", "player_h",
                 "player_scale", "player_opacity", "flag_scale",
                 "flag_y_offset", "name_x", "name_y", "name_font_size",
-                "name_letter_gap", "ovr_x", "ovr_y", "ovr_font_size",
-                "ovr_letter_gap", "bat_x", "bat_y", "bat_font_size",
-                "bat_letter_gap", "bowl_x", "bowl_y", "bowl_font_size",
-                "bowl_letter_gap", "cat_x", "cat_y", "cat_font_size",
-                "cat_letter_gap", "country_font_size", "country_letter_gap",
+                "name_letter_gap", "name_max_width", "name_line_gap",
+                "ovr_x", "ovr_y", "ovr_font_size", "ovr_letter_gap", "ovr_max_width",
+                "bat_x", "bat_y", "bat_font_size", "bat_letter_gap", "bat_max_width",
+                "bowl_x", "bowl_y", "bowl_font_size", "bowl_letter_gap", "bowl_max_width",
+                "cat_x", "cat_y", "cat_font_size", "cat_letter_gap", "cat_max_width",
+                "country_x", "country_y", "country_font_size", "country_letter_gap", "country_max_width",
                 "bat_style_x", "bat_style_y", "bat_style_font_size",
-                "bat_style_letter_gap", "bowl_style_x", "bowl_style_y",
-                "bowl_style_font_size", "bowl_style_letter_gap", "style_max_width",
+                "bat_style_letter_gap", "bat_style_max_width",
+                "bowl_style_x", "bowl_style_y", "bowl_style_font_size",
+                "bowl_style_letter_gap", "bowl_style_max_width",
             )
         }
         raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
@@ -10760,7 +10767,7 @@ def admin_card_template_global_player_remove():
 @app.route("/card-template/flags/upload", methods=["POST"])
 @login_required
 def admin_card_template_flag_upload():
-    """Upload or replace the PNG used for one country in Base template cards."""
+    """Upload or replace the PNG used for one country in website template cards."""
     country = (request.form.get("flag_country") or "").strip()
     file = request.files.get("flag_file")
     if not file or not file.filename:
@@ -10813,7 +10820,8 @@ def admin_card_template_preview(player_id):
         # Always render fresh so edits show without waiting on the cache.
         invalidate_template_card_cache(player_id)
         image_bytes = generate_template_card(
-            player, force_global_portrait=request.args.get("global_player") == "1")
+            player, force_global_portrait=request.args.get("global_player") == "1",
+            template_variant=request.args.get("variant"))
         if not image_bytes:
             return ("No template configured. Upload a template image and save "
                     "first."), 400

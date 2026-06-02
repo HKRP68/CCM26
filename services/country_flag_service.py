@@ -1,4 +1,4 @@
-"""Website-managed PNG country flags for Base player template cards."""
+"""Website-managed PNG country flags for website-managed player template cards."""
 
 import io
 import logging
