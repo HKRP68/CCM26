@@ -75,7 +75,8 @@ from handlers.match import (
     playmatch_handler, wpm_handler, cric_join_callback,
     cric_cancel_lobby_callback, cric_decision_callback,
     match_accept_callback, match_deny_callback,
-    overs_text_handler, toss_decision_callback,
+    overs_text_handler, overs_button_callback, overs_custom_callback,
+    toss_decision_callback,
     opener1_callback, opener2_callback, select_bowler_callback,
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
@@ -887,6 +888,8 @@ def main():
         app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cric_decision:"))
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
         app.add_handler(CallbackQueryHandler(match_deny_callback, pattern=r"^matchdeny_"))
+        app.add_handler(CallbackQueryHandler(overs_button_callback, pattern=r"^oversset_"))
+        app.add_handler(CallbackQueryHandler(overs_custom_callback, pattern=r"^overscustom_"))
         app.add_handler(CallbackQueryHandler(toss_decision_callback, pattern=r"^toss_"))
         app.add_handler(CallbackQueryHandler(opener1_callback, pattern=r"^op1_"))
         app.add_handler(CallbackQueryHandler(opener2_callback, pattern=r"^op2_"))
