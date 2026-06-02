@@ -41,6 +41,14 @@
         <input type="datetime-local" name="end_date"
                style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
       </div>
+      <div style="grid-column:1 / -1;">
+        <label style="font-size:.8rem;color:var(--muted);">🔒 Auto-Lock Time — IST (optional)</label>
+        <input type="datetime-local" name="lock_at"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem;">
+          After this time (Indian Standard Time) no one can create or edit a fantasy squad. Leave blank to lock manually.
+        </div>
+      </div>
     </div>
     <button type="submit" class="btn btn-primary">Create League</button>
     <a href="{{ url_for('admin_fantasy_list') }}" class="btn btn-ghost" style="margin-left:.5rem;">Cancel</a>

@@ -1146,6 +1146,36 @@ def main():
         except Exception:
             logger.exception("Failed to schedule season rollover")
 
+        # ── Fantasy auto-lock ──
+        # Locks any open fantasy league whose admin-set lock time (IST) has
+        # passed, then broadcasts the lock notice to active groups.
+        try:
+            async def _fantasy_autolock_job(context):
+                try:
+                    from database import get_session
+                    from services import fantasy_service
+                    s = get_session()
+                    try:
+                        locked = fantasy_service.apply_auto_locks(s)
+                        s.commit()
+                    finally:
+                        s.close()
+                    for _name, chat_ids, msg in locked:
+                        for cid in chat_ids:
+                            try:
+                                await context.bot.send_message(
+                                    cid, msg, parse_mode="Markdown")
+                            except Exception:
+                                pass
+                except Exception:
+                    logger.exception("Fantasy auto-lock job failed")
+            if app.job_queue:
+                app.job_queue.run_repeating(_fantasy_autolock_job, interval=60,
+                                             first=45, name="fantasy_autolock")
+                logger.info("Fantasy auto-lock job scheduled (every 60s)")
+        except Exception:
+            logger.exception("Failed to schedule fantasy auto-lock")
+
         # Wire up cross-thread bot ref for admin Send-Now button
         try:
             import asyncio as _asyncio

@@ -1594,6 +1594,10 @@ class FantasyLeague(Base):
     status = Column(String(20), default="open", nullable=False)  # open | locked | scored
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
+    # Auto-lock: when set (stored UTC), squads can no longer be created or
+    # edited once this moment passes. Admin enters the time in IST on the
+    # website; the background job locks the league when it elapses.
+    lock_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

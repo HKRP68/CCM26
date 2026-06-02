@@ -6617,6 +6617,25 @@ function resolveMatchLaunch() {
   return null;
 }
 
+// Fantasy deep link: ?startapp=fantasy or fantasy_<leagueId> (and #fantasy…).
+// Redirects to the dedicated squad picker page. initData is preserved by the
+// Telegram client across this same-origin navigation. Returns true if it
+// redirected (caller should stop further routing).
+function maybeFantasyRedirect() {
+  let p = '';
+  try { p = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').trim(); } catch (e) {}
+  if (!p) p = (window.location.hash || '').replace('#', '').trim();
+  const lower = p.toLowerCase();
+  if (lower !== 'fantasy' && lower.indexOf('fantasy_') !== 0) return false;
+  const parts = p.split('_');
+  const lid = (parts[1] && /^\d+$/.test(parts[1])) ? parts[1] : '';
+  // Preserve the Telegram launch hash (#tgWebAppData=…) so the picker page
+  // still has valid initData after this same-origin navigation.
+  var hash = window.location.hash || '';
+  window.location.href = '/fantasy-picker' + (lid ? ('?league_id=' + lid) : '') + hash;
+  return true;
+}
+
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
   const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch'];
@@ -6633,6 +6652,8 @@ function handleHashDeepLink() {
     else openLiveMatch(ml.matchId, ml.chatId);
     return;
   }
+  // Fantasy deep link (?startapp=fantasy or fantasy_<leagueId>) → squad picker.
+  if (maybeFantasyRedirect()) return;
   let target = (window.location.hash || '').replace('#', '').toLowerCase();
   if (!target) {
     try {
@@ -6649,6 +6670,8 @@ function handleHashDeepLink() {
 // Open directly into a match if launched via a match/scorecard link,
 // WITHOUT first showing the dashboard (no home-screen flash).
 (function bootstrap() {
+  // Fantasy deep link → jump straight to the picker (no dashboard flash).
+  if (maybeFantasyRedirect()) return;
   const ml = resolveMatchLaunch();
   if (ml) {
     handleHashDeepLink();   // opens the match screen immediately

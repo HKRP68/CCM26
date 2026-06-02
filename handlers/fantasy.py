@@ -51,12 +51,17 @@ async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         team_info = fantasy_service.get_user_team_info(session, user.id, league.id)
-        locked = league.status == "locked"
+        locked = fantasy_service.is_locked(league)
+        # Web App inline buttons only work in private chats. In groups we must
+        # use a t.me deep link instead (otherwise Telegram rejects the message
+        # with "Button_type_invalid" → the old generic "something went wrong").
+        is_private = update.effective_chat.type == "private"
 
-        status_emoji = "🟢" if league.status == "open" else "🔒" if locked else "✅"
+        status_label = "LOCKED" if locked else league.status.upper()
+        status_emoji = "🔒" if locked else ("🟢" if league.status == "open" else "✅")
         text = (
             f"🏏 <b>{league.name}</b>\n"
-            f"Week {league.week_number}, {league.year} · {status_emoji} {league.status.upper()}\n\n"
+            f"Week {league.week_number}, {league.year} · {status_emoji} {status_label}\n\n"
         )
 
         if team_info:
@@ -70,20 +75,31 @@ async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text += "You haven't picked your squad yet.\n\n"
 
+        def _squad_button(label):
+            """Pick the right button type for the chat: a Web App button in
+            private chats, a t.me deep link everywhere else."""
+            if is_private and WEBAPP_URL:
+                url = f"{WEBAPP_URL}/fantasy-picker?league_id={league.id}&user_id={user.id}"
+                return InlineKeyboardButton(label, web_app=WebAppInfo(url=url))
+            link = fantasy_service.fantasy_deep_link(league.id)
+            if link:
+                return InlineKeyboardButton(label, url=link)
+            return None
+
         buttons = []
         if locked:
             text += "🔒 Squads are locked. No more changes."
-            if team_info and WEBAPP_URL:
-                url = f"{WEBAPP_URL}/fantasy-picker?league_id={league.id}&user_id={user.id}"
-                buttons.append([InlineKeyboardButton(
-                    "👁 View My Squad", web_app=WebAppInfo(url=url))])
+            if team_info:
+                btn = _squad_button("👁 View My Squad")
+                if btn:
+                    buttons.append([btn])
         else:
-            if WEBAPP_URL:
-                url = f"{WEBAPP_URL}/fantasy-picker?league_id={league.id}&user_id={user.id}"
-                label = "✏️ Change Squad" if team_info else "🏏 Pick My Squad"
-                buttons.append([InlineKeyboardButton(label, web_app=WebAppInfo(url=url))])
-            buttons.append([InlineKeyboardButton(
-                "🏆 Leaderboard", callback_data=f"fant_lb_{league.id}_1")])
+            label = "✏️ Change Squad" if team_info else "🏏 Pick My Squad"
+            btn = _squad_button(label)
+            if btn:
+                buttons.append([btn])
+        buttons.append([InlineKeyboardButton(
+            "🏆 Leaderboard", callback_data=f"fant_lb_{league.id}_1")])
 
         markup = InlineKeyboardMarkup(buttons) if buttons else None
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
@@ -296,7 +312,7 @@ async def fantasy_webapp_handler(update: Update, context: ContextTypes.DEFAULT_T
         if not league or (league_id and league.id != int(league_id)):
             await update.message.reply_text("❌ No active league found.")
             return
-        if league.status == "locked":
+        if fantasy_service.is_locked(league):
             await update.message.reply_text("🔒 Squads are locked. No changes allowed.")
             return
 
