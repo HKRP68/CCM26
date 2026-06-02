@@ -604,7 +604,6 @@ hr.pitch-line {
     <div class="section-label">Game Settings</div>
     <a href="{{ url_for('admin_match_settings') }}" class="{{ 'active' if request.endpoint == 'admin_match_settings' }}">🏏 Match Gameplay</a>
     <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint == 'admin_scorecard_settings' }}">📊 Scorecard</a>
-    <a href="{{ url_for('admin_card_template') }}" class="{{ 'active' if 'card_template' in (request.endpoint or '') }}">🎴 Card Template</a>
     <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">🎲 Simulation</a>
     <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">🎬 Media</a>
     <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">📢 Notifications</a>

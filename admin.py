@@ -1110,8 +1110,8 @@ def admin_player_card_preview(player_id):
         player = db.query(Player).get(player_id)
         if not player:
             return "Player not found", 404
-        from services.card_generator import generate_card
-        image_bytes = generate_card(player)
+        from services.card_generator import generate_standard_card
+        image_bytes = generate_standard_card(player)
         if not image_bytes:
             return "Could not generate card preview", 500
         return send_file(io.BytesIO(image_bytes), mimetype="image/png",
@@ -10587,121 +10587,6 @@ def admin_branding_save():
         db.rollback()
         flash(f"❌ {e}", "error")
         return redirect(url_for("admin_branding"))
-    finally:
-        db.close()
-
-
-# ─── Card Template (admin-uploaded card design + image-map layout) ────
-
-@app.route("/card-template", methods=["GET"])
-@login_required
-def admin_card_template():
-    """Edit the global player-card design: upload a template background image,
-    paste the HTML image-map <area> code, choose the active card style, and
-    preview the result on a sample player."""
-    db = get_session()
-    try:
-        from models import GameConfig
-        cfg = db.query(GameConfig).first()
-        if not cfg:
-            cfg = GameConfig()
-            db.add(cfg); db.commit()
-        # A small player list for the live-preview dropdown (highest rated first).
-        players = (db.query(Player)
-                   .order_by(Player.rating.desc(), Player.name.asc())
-                   .limit(200).all())
-        from services.card_template_service import parse_area_code
-        regions = parse_area_code(cfg.card_template_area_code or "")
-        has_template = bool(cfg.card_template_image_path)
-        return render_template("admin_card_template.html", cfg=cfg, players=players,
-                               regions=regions, has_template=has_template)
-    finally:
-        db.close()
-
-
-@app.route("/card-template/save", methods=["POST"])
-@login_required
-def admin_card_template_save():
-    db = get_session()
-    try:
-        from models import GameConfig
-        cfg = db.query(GameConfig).first()
-        if not cfg:
-            cfg = GameConfig()
-            db.add(cfg); db.flush()
-
-        # Optional template image upload
-        file = request.files.get("template_file")
-        if file and file.filename:
-            from services.card_template_service import save_template_image
-            file_bytes = file.read()
-            ok, msg, path = save_template_image(file_bytes, file.filename)
-            if not ok:
-                db.rollback()
-                flash(f"❌ {msg}", "error")
-                return redirect(url_for("admin_card_template"))
-            # Store a repo-relative path for portability across deploys.
-            root = os.path.dirname(os.path.abspath(__file__))
-            cfg.card_template_image_path = os.path.relpath(path, root)
-
-        # Style, area code, portrait toggle
-        style = (request.form.get("card_style") or "tier").strip().lower()
-        cfg.card_style = style if style in ("tier", "template") else "tier"
-        cfg.card_template_area_code = (request.form.get("area_code") or "").strip() or None
-        cfg.card_template_show_portrait = bool(request.form.get("show_portrait"))
-
-        db.commit()
-
-        # Invalidate caches so the change shows immediately everywhere.
-        try:
-            from services import config_service as _cs
-            _cs._CACHE["data"] = None
-        except Exception:
-            pass
-        try:
-            from services.card_generator import (invalidate_card_cache,
-                                                  invalidate_template_card_cache)
-            invalidate_card_cache()
-            invalidate_template_card_cache()
-        except Exception:
-            pass
-
-        flash("✅ Card template updated. Will appear immediately everywhere.", "info")
-        try:
-            log_admin(db, "update_card_template", "game_config", cfg.id, "system",
-                      f"style={cfg.card_style} template={'yes' if cfg.card_template_image_path else 'no'}")
-            db.commit()
-        except Exception:
-            pass
-        return redirect(url_for("admin_card_template"))
-    except Exception as e:
-        db.rollback()
-        flash(f"❌ {e}", "error")
-        return redirect(url_for("admin_card_template"))
-    finally:
-        db.close()
-
-
-@app.route("/card-template/preview/<int:player_id>")
-@login_required
-def admin_card_template_preview(player_id):
-    """Force-render the template card for a player (regardless of active style)
-    so the admin can preview before activating it."""
-    db = get_session()
-    try:
-        player = db.query(Player).get(player_id)
-        if not player:
-            return "Player not found", 404
-        from services.card_generator import (generate_template_card,
-                                              invalidate_template_card_cache)
-        # Always render fresh so edits show without waiting on the cache.
-        invalidate_template_card_cache(player_id)
-        image_bytes = generate_template_card(player)
-        if not image_bytes:
-            return ("No template configured. Upload a template image and save "
-                    "first."), 400
-        return send_file(io.BytesIO(image_bytes), mimetype="image/png",
-                         download_name=f"template-card-{player_id}.png")
     finally:
         db.close()
 
