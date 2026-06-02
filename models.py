@@ -1577,3 +1577,80 @@ class MatchScorecard(Base):
     scorecard_json = Column(Text, nullable=False)  # full innings data as JSON
     result_text = Column(String(300), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# FANTASY LEAGUE — admin-controlled weekly fantasy cricket competition
+# ══════════════════════════════════════════════════════════════════════
+
+class FantasyLeague(Base):
+    """A weekly fantasy cricket league. Admin creates it; users pick squads."""
+    __tablename__ = "fantasy_leagues"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    week_number = Column(Integer, nullable=False, default=1)
+    year = Column(Integer, nullable=False, default=2025)
+    status = Column(String(20), default="open", nullable=False)  # open | locked | scored
+    start_date = Column(DateTime, nullable=True)
+    end_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FantasyMatch(Base):
+    """A real-world cricket match added by admin within a fantasy league week."""
+    __tablename__ = "fantasy_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    league_id = Column(Integer, ForeignKey("fantasy_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
+    match_name = Column(String(200), nullable=False)  # e.g. "India vs Australia"
+    match_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FantasyPlayerScore(Base):
+    """Admin-entered fantasy points for a player in one real-world match."""
+    __tablename__ = "fantasy_player_scores"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fantasy_match_id = Column(Integer, ForeignKey("fantasy_matches.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False, index=True)
+    points = Column(Float, default=0.0, nullable=False)
+    notes = Column(String(300), nullable=True)  # e.g. "50 runs + 1 wicket"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_fps_match_player", "fantasy_match_id", "player_id", unique=True),
+    )
+
+
+class FantasyEntry(Base):
+    """One user's fantasy squad for a specific league."""
+    __tablename__ = "fantasy_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    league_id = Column(Integer, ForeignKey("fantasy_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
+    total_points = Column(Float, default=0.0, nullable=False)
+    rank = Column(Integer, nullable=True)
+    locked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_fe_user_league", "user_id", "league_id", unique=True),
+    )
+
+
+class FantasyPick(Base):
+    """An individual player in a user's fantasy squad."""
+    __tablename__ = "fantasy_picks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entry_id = Column(Integer, ForeignKey("fantasy_entries.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False, index=True)
+    role = Column(String(10), default="player", nullable=False)  # captain | vc | player
+    total_points = Column(Float, default=0.0, nullable=False)
+
+    __table_args__ = (
+        Index("ix_fp_entry_player", "entry_id", "player_id", unique=True),
+    )

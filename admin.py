@@ -9262,17 +9262,18 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None):
     import asyncio
     loop = asyncio.new_event_loop()
 
-    try:
-        from database import get_session as _gs
-        from models import Broadcast as _BC
-        s = _gs()
-        bc = s.query(_BC).get(bc_id)
-        if bc:
-            bc.status = "running"
-            s.commit()
-        s.close()
-    except Exception:
-        pass
+    if bc_id is not None:
+        try:
+            from database import get_session as _gs
+            from models import Broadcast as _BC
+            s = _gs()
+            bc = s.query(_BC).get(bc_id)
+            if bc:
+                bc.status = "running"
+                s.commit()
+            s.close()
+        except Exception:
+            pass
 
     DELAY = 0.05
 
@@ -9305,7 +9306,7 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None):
             failed += 1
         time.sleep(DELAY)
 
-        if (sent + failed) % 50 == 0:
+        if bc_id is not None and (sent + failed) % 50 == 0:
             try:
                 s = _gs()
                 bc = s.query(_BC).get(bc_id)
@@ -9317,17 +9318,18 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None):
             except Exception:
                 pass
 
-    try:
-        s = _gs()
-        bc = s.query(_BC).get(bc_id)
-        if bc:
-            bc.sent_count = sent
-            bc.failed_count = failed
-            bc.status = "done"
-            s.commit()
-        s.close()
-    except Exception:
-        pass
+    if bc_id is not None:
+        try:
+            s = _gs()
+            bc = s.query(_BC).get(bc_id)
+            if bc:
+                bc.sent_count = sent
+                bc.failed_count = failed
+                bc.status = "done"
+                s.commit()
+            s.close()
+        except Exception:
+            pass
 
     try:
         loop.close()
@@ -10714,6 +10716,444 @@ def admin_clubs_disband(club_id):
     finally:
         db.close()
     return redirect(url_for("admin_clubs"))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# FANTASY LEAGUE — admin management routes
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/fantasy")
+@login_required
+def admin_fantasy_list():
+    db = get_session()
+    try:
+        from models import FantasyLeague, FantasyEntry, FantasyMatch
+        from sqlalchemy import func
+        leagues = (db.query(FantasyLeague)
+                   .order_by(FantasyLeague.id.desc()).all())
+        stats = {}
+        for lg in leagues:
+            entries = db.query(func.count(FantasyEntry.id)).filter_by(league_id=lg.id).scalar() or 0
+            matches = db.query(func.count(FantasyMatch.id)).filter_by(league_id=lg.id).scalar() or 0
+            stats[lg.id] = {"entries": entries, "matches": matches}
+        return render_template("fantasy_list.html", leagues=leagues, stats=stats)
+    finally:
+        db.close()
+
+
+@app.route("/fantasy/new", methods=["GET", "POST"])
+@login_required
+def admin_fantasy_new():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            try:
+                from models import FantasyLeague
+                from datetime import datetime as _dt
+                name = request.form.get("name", "").strip()
+                if not name:
+                    flash("League name is required.", "error")
+                    return redirect(url_for("admin_fantasy_new"))
+                week = int(request.form.get("week_number", 1) or 1)
+                year = int(request.form.get("year", _dt.utcnow().year) or _dt.utcnow().year)
+                start_raw = request.form.get("start_date", "").strip()
+                end_raw = request.form.get("end_date", "").strip()
+                start_date = _dt.fromisoformat(start_raw) if start_raw else None
+                end_date = _dt.fromisoformat(end_raw) if end_raw else None
+                league = FantasyLeague(
+                    name=name, week_number=week, year=year,
+                    start_date=start_date, end_date=end_date, status="open",
+                )
+                db.add(league)
+                db.commit()
+                flash(f"✅ Fantasy league '{name}' created.", "success")
+                return redirect(url_for("admin_fantasy_detail", league_id=league.id))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        return render_template("fantasy_list.html",
+                               leagues=[], stats={}, show_new_form=True)
+    finally:
+        db.close()
+
+
+@app.route("/fantasy/<int:league_id>")
+@login_required
+def admin_fantasy_detail(league_id):
+    db = get_session()
+    try:
+        from models import FantasyLeague, FantasyEntry, FantasyMatch, User
+        from services import fantasy_service
+        league = db.query(FantasyLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+        matches = (db.query(FantasyMatch).filter_by(league_id=league_id)
+                   .order_by(FantasyMatch.match_date).all())
+        entries, total = fantasy_service.get_leaderboard(db, league_id, page=1, per_page=50)
+        ownership = fantasy_service.get_player_ownership(db, league_id)
+        top_scorers = fantasy_service.get_top_scorers(db, league_id)
+        return render_template("fantasy_detail.html",
+                               league=league, matches=matches,
+                               entries=entries, total_entries=total,
+                               ownership=ownership, top_scorers=top_scorers)
+    finally:
+        db.close()
+
+
+@app.route("/fantasy/<int:league_id>/lock", methods=["POST"])
+@login_required
+def admin_fantasy_lock(league_id):
+    db = get_session()
+    try:
+        from services import fantasy_service
+        chat_ids, msg = fantasy_service.lock_league(db, league_id)
+        db.commit()
+        if chat_ids:
+            import threading
+            threading.Thread(
+                target=_run_broadcast_worker,
+                args=(None, list(chat_ids), msg, None),
+                daemon=True,
+            ).start()
+            flash(f"🔒 League locked. Broadcast sent to {len(chat_ids)} groups.", "success")
+        else:
+            flash("🔒 League locked (no active groups to notify).", "success")
+        log_admin(db, "fantasy_lock", target_type="fantasy_league", target_id=league_id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_detail", league_id=league_id))
+
+
+@app.route("/fantasy/<int:league_id>/score", methods=["POST"])
+@login_required
+def admin_fantasy_score(league_id):
+    db = get_session()
+    try:
+        from services import fantasy_service
+        ok, msg = fantasy_service.score_league(db, league_id)
+        db.commit()
+        flash(f"✅ {msg}", "success")
+        log_admin(db, "fantasy_score", target_type="fantasy_league", target_id=league_id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_detail", league_id=league_id))
+
+
+@app.route("/fantasy/<int:league_id>/delete", methods=["POST"])
+@login_required
+def admin_fantasy_delete(league_id):
+    db = get_session()
+    try:
+        from models import FantasyLeague, FantasyMatch, FantasyEntry
+        db.query(FantasyMatch).filter_by(league_id=league_id).delete()
+        db.query(FantasyEntry).filter_by(league_id=league_id).delete()
+        lg = db.query(FantasyLeague).get(league_id)
+        if lg:
+            db.delete(lg)
+        db.commit()
+        flash("League deleted.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_list"))
+
+
+@app.route("/fantasy/<int:league_id>/match/new", methods=["GET", "POST"])
+@login_required
+def admin_fantasy_match_new(league_id):
+    db = get_session()
+    try:
+        from models import FantasyLeague, FantasyMatch
+        league = db.query(FantasyLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+        if request.method == "POST":
+            try:
+                from datetime import datetime as _dt
+                name = request.form.get("match_name", "").strip()
+                if not name:
+                    flash("Match name required.", "error")
+                    return redirect(url_for("admin_fantasy_match_new", league_id=league_id))
+                date_raw = request.form.get("match_date", "").strip()
+                match_date = _dt.fromisoformat(date_raw) if date_raw else None
+                fm = FantasyMatch(league_id=league_id, match_name=name, match_date=match_date)
+                db.add(fm)
+                db.commit()
+                flash(f"✅ Match '{name}' added.", "success")
+                return redirect(url_for("admin_fantasy_match_scores", league_id=league_id, match_id=fm.id))
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+        return render_template("fantasy_match_new.html", league=league)
+    finally:
+        db.close()
+
+
+@app.route("/fantasy/<int:league_id>/match/<int:match_id>/scores", methods=["GET", "POST"])
+@login_required
+def admin_fantasy_match_scores(league_id, match_id):
+    db = get_session()
+    try:
+        from models import FantasyLeague, FantasyMatch, FantasyPlayerScore, Player
+        league = db.query(FantasyLeague).get(league_id)
+        fmatch = db.query(FantasyMatch).get(match_id)
+        if not league or not fmatch or fmatch.league_id != league_id:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+
+        if request.method == "POST":
+            try:
+                from services import fantasy_service
+                scores = []
+                for key, val in request.form.items():
+                    if key.startswith("pts_"):
+                        pid = int(key[4:])
+                        pts = float(val or 0)
+                        notes = request.form.get(f"notes_{pid}", "")
+                        if pts != 0 or notes:
+                            scores.append({"player_id": pid, "points": pts, "notes": notes})
+                ok, msg = fantasy_service.save_player_scores(db, match_id, scores)
+                db.commit()
+                flash(f"✅ {msg}", "success")
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_fantasy_match_scores",
+                                    league_id=league_id, match_id=match_id))
+
+        # Load existing scores
+        existing = {s.player_id: s for s in
+                    db.query(FantasyPlayerScore).filter_by(fantasy_match_id=match_id).all()}
+        # Load players who were picked in this league (union with existing scored)
+        from models import FantasyPick, FantasyEntry
+        from sqlalchemy import func
+        picked_ids = (db.query(FantasyPick.player_id)
+                      .join(FantasyEntry, FantasyPick.entry_id == FantasyEntry.id)
+                      .filter(FantasyEntry.league_id == league_id)
+                      .distinct().all())
+        picked_ids = {r[0] for r in picked_ids} | set(existing.keys())
+        players = (db.query(Player).filter(Player.id.in_(picked_ids))
+                   .order_by(Player.name).all() if picked_ids else [])
+        return render_template("fantasy_match_scores.html",
+                               league=league, fmatch=fmatch,
+                               players=players, existing=existing)
+    finally:
+        db.close()
+
+
+@app.route("/fantasy/<int:league_id>/match/<int:match_id>/delete", methods=["POST"])
+@login_required
+def admin_fantasy_match_delete(league_id, match_id):
+    db = get_session()
+    try:
+        from models import FantasyMatch, FantasyPlayerScore
+        db.query(FantasyPlayerScore).filter_by(fantasy_match_id=match_id).delete()
+        fm = db.query(FantasyMatch).get(match_id)
+        if fm and fm.league_id == league_id:
+            db.delete(fm)
+        db.commit()
+        flash("Match deleted.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_detail", league_id=league_id))
+
+
+@app.route("/fantasy/<int:league_id>/entry/<int:entry_id>", methods=["GET", "POST"])
+@login_required
+def admin_fantasy_entry_edit(league_id, entry_id):
+    db = get_session()
+    try:
+        from models import FantasyLeague, FantasyEntry, FantasyPick, Player, User
+        from services import fantasy_service
+        league = db.query(FantasyLeague).get(league_id)
+        entry = db.query(FantasyEntry).get(entry_id)
+        if not league or not entry or entry.league_id != league_id:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+        user = db.query(User).get(entry.user_id)
+
+        if request.method == "POST":
+            try:
+                import json
+                picks_json = request.form.get("picks_json", "[]")
+                picks = json.loads(picks_json)
+                ok, msg = fantasy_service.set_picks(db, entry_id, picks, bypass_lock=True)
+                if ok:
+                    db.commit()
+                    flash(f"✅ {msg}", "success")
+                else:
+                    flash(f"❌ {msg}", "error")
+            except Exception as e:
+                db.rollback()
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_fantasy_entry_edit",
+                                    league_id=league_id, entry_id=entry_id))
+
+        picks = (db.query(FantasyPick, Player)
+                 .join(Player, FantasyPick.player_id == Player.id)
+                 .filter(FantasyPick.entry_id == entry_id).all())
+        all_players = db.query(Player).filter(Player.is_active == True).order_by(Player.name).all()
+        return render_template("fantasy_entry_edit.html",
+                               league=league, entry=entry, user=user,
+                               picks=picks, all_players=all_players)
+    finally:
+        db.close()
+
+
+# ── Fantasy Mini App ─────────────────────────────────────────────────
+
+@app.route("/fantasy-picker")
+def fantasy_picker():
+    """Serve the fantasy squad selection Mini App HTML."""
+    return render_template("fantasy_picker.html")
+
+
+@app.route("/api/fantasy/players")
+@csrf_exempt
+def api_fantasy_players():
+    """Paginated player list for fantasy picker Mini App."""
+    db = get_session()
+    try:
+        from models import Player
+        q_str = request.args.get("q", "").strip()
+        role = request.args.get("role", "").strip().lower()
+        page = max(1, int(request.args.get("page", 1) or 1))
+        per_page = 30
+
+        q = db.query(Player).filter(Player.is_active == True)
+        if q_str:
+            q = q.filter(Player.name.ilike(f"%{q_str}%"))
+        if role and role != "all":
+            role_map = {"bat": "BAT", "bowl": "BOWL", "wk": "WK", "ar": "AR", "all-rounder": "AR"}
+            cat = role_map.get(role, role.upper())
+            q = q.filter(Player.category.ilike(f"%{cat}%"))
+        total = q.count()
+        players = q.order_by(Player.rating.desc(), Player.name).offset((page - 1) * per_page).limit(per_page).all()
+        return {
+            "ok": True,
+            "total": total,
+            "page": page,
+            "players": [
+                {"id": p.id, "name": p.name, "country": p.country,
+                 "category": p.category, "rating": p.rating,
+                 "version": p.version or "Base"}
+                for p in players
+            ],
+        }
+    except Exception:
+        logger.exception("api_fantasy_players failed")
+        return {"ok": False, "error": "server_error"}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/fantasy/entry")
+@csrf_exempt
+def api_fantasy_entry():
+    """Return current picks for a user in the active league (for pre-loading Mini App)."""
+    db = get_session()
+    try:
+        league_id = request.args.get("league_id")
+        user_id = request.args.get("user_id")
+        if not league_id or not user_id:
+            return {"ok": True, "squad": []}
+        from services import fantasy_service
+        info = fantasy_service.get_user_team_info(db, int(user_id), int(league_id))
+        if not info:
+            return {"ok": True, "squad": []}
+        return {"ok": True, "entry_id": info["entry_id"],
+                "locked": info["locked"], "squad": info["squad"]}
+    except Exception:
+        logger.exception("api_fantasy_entry failed")
+        return {"ok": False, "error": "server_error"}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/fantasy/save", methods=["POST"])
+@csrf_exempt
+def api_fantasy_save():
+    """Save a user's fantasy squad (called by Mini App via Telegram initData)."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        import json
+        data = request.get_json(force=True) or {}
+        league_id = data.get("league_id")
+        picks = data.get("picks", [])
+        if not league_id:
+            return {"ok": False, "error": "missing league_id"}, 400
+
+        from services import fantasy_service
+        league = fantasy_service.get_active_league(db)
+        if not league or league.id != int(league_id):
+            return {"ok": False, "error": "league_not_active"}, 400
+        if league.status == "locked":
+            return {"ok": False, "error": "league_locked"}, 403
+
+        entry = fantasy_service.get_or_create_entry(db, user.id, league.id)
+        ok, msg = fantasy_service.set_picks(db, entry.id, picks)
+        if ok:
+            db.commit()
+            return {"ok": True, "message": msg}
+        return {"ok": False, "error": msg}, 400
+    except Exception:
+        logger.exception("api_fantasy_save failed")
+        db.rollback()
+        return {"ok": False, "error": "server_error"}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/fantasy/league")
+@csrf_exempt
+def api_fantasy_league():
+    """Return current active league info for the Mini App."""
+    auth, tg_id, err = _webapp_auth(allow_not_debuted=True)
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import fantasy_service
+        league = fantasy_service.get_active_league(db)
+        if not league:
+            return {"ok": True, "league": None}
+        team_info = None
+        if user:
+            team_info = fantasy_service.get_user_team_info(db, user.id, league.id)
+        return {
+            "ok": True,
+            "league": {
+                "id": league.id,
+                "name": league.name,
+                "status": league.status,
+                "week_number": league.week_number,
+                "year": league.year,
+            },
+            "team": team_info,
+        }
+    except Exception:
+        logger.exception("api_fantasy_league failed")
+        return {"ok": False, "error": "server_error"}, 500
+    finally:
+        db.close()
 
 
 # ── Run ──────────────────────────────────────────────────────────────

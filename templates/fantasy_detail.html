@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}{{ league.name }}{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏏 {{ league.name }}</h2>
+  <a href="{{ url_for('admin_fantasy_list') }}" class="btn btn-ghost btn-sm">← Leagues</a>
+</div>
+
+<!-- Status bar -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;">
+  <div style="display:flex;align-items:center;gap:1rem;">
+    <span class="badge {% if league.status == 'open' %}badge-green{% elif league.status == 'locked' %}badge-yellow{% else %}badge-muted{% endif %}" style="font-size:.9rem;padding:.3rem .75rem;">
+      {{ league.status | upper }}
+    </span>
+    <span style="color:var(--muted);font-size:.85rem;">Week {{ league.week_number }}, {{ league.year }}</span>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    {% if league.status == 'open' %}
+    <form method="POST" action="{{ url_for('admin_fantasy_lock', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Lock this league and broadcast to all groups?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm" style="background:var(--accent);color:#000;">🔒 Lock & Broadcast</button>
+    </form>
+    {% endif %}
+    {% if league.status in ['locked', 'open'] %}
+    <form method="POST" action="{{ url_for('admin_fantasy_score', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Recalculate all scores and finalize ranks?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-ghost btn-sm">📊 Recalculate Scores</button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('admin_fantasy_match_new', league_id=league.id) }}" class="btn btn-primary btn-sm">+ Add Match</a>
+    <form method="POST" action="{{ url_for('admin_fantasy_delete', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Delete this entire league? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red);">🗑 Delete</button>
+    </form>
+  </div>
+</div>
+
+<!-- Matches -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .75rem;">Real-World Matches</h3>
+  {% if not matches %}
+  <p style="color:var(--muted);font-size:.85rem;">No matches added yet. <a href="{{ url_for('admin_fantasy_match_new', league_id=league.id) }}" style="color:var(--accent);">Add one →</a></p>
+  {% else %}
+  <table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+    <thead>
+      <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);">
+        <th style="padding:.5rem 0;">#</th><th>Match</th><th>Date</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for fm in matches %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.5rem 0;color:var(--muted);">{{ loop.index }}</td>
+      <td style="padding:.5rem 0 .5rem .5rem;">{{ fm.match_name }}</td>
+      <td style="padding:.5rem 0 .5rem .5rem;color:var(--muted);">{{ fm.match_date.strftime('%b %d, %Y') if fm.match_date else '—' }}</td>
+      <td style="padding:.5rem 0 .5rem .5rem;">
+        <a href="{{ url_for('admin_fantasy_match_scores', league_id=league.id, match_id=fm.id) }}" class="btn btn-ghost btn-xs">Enter Points</a>
+        <form method="POST" action="{{ url_for('admin_fantasy_match_delete', league_id=league.id, match_id=fm.id) }}" style="display:inline;" onsubmit="return confirm('Delete this match?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-ghost btn-xs" style="color:var(--red);">✕</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<!-- Leaderboard -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .75rem;">Leaderboard ({{ total_entries }} entries)</h3>
+  {% if not entries %}
+  <p style="color:var(--muted);font-size:.85rem;">No entries yet.</p>
+  {% else %}
+  <table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+    <thead>
+      <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);">
+        <th style="padding:.4rem 0;">#</th><th>User</th><th>Team</th><th>Points</th><th>Edit</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in entries %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.4rem 0;">
+        {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}{% endif %}
+      </td>
+      <td style="padding:.4rem 0 .4rem .5rem;">{{ row.username }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--muted);">{{ row.team_name or '—' }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;font-weight:600;color:var(--accent);">{{ row.total_points }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;">
+        <a href="{{ url_for('admin_fantasy_entry_edit', league_id=league.id, entry_id=row.entry_id) }}" class="btn btn-ghost btn-xs">Edit Squad</a>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<!-- Player Ownership -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .75rem;">Player Ownership</h3>
+  {% if not ownership %}
+  <p style="color:var(--muted);font-size:.85rem;">No picks yet.</p>
+  {% else %}
+  <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
+    <thead>
+      <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);">
+        <th style="padding:.4rem 0;">Player</th><th>Country</th><th>Role</th><th>Owned By</th><th>Pts Earned</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in ownership %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.4rem 0;font-weight:500;">{{ row.name }} <span style="color:var(--muted);">({{ row.owned_by }})</span></td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--muted);">{{ row.country }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--muted);">{{ row.category }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;">{{ row.owned_by }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--accent);">{{ row.total_pts }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<!-- Top Fantasy Scorers -->
+{% if top_scorers %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .75rem;">Top Fantasy Scorers This Week</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
+    <thead>
+      <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);">
+        <th style="padding:.4rem 0;">#</th><th>Player</th><th>Country</th><th>Points</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in top_scorers %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.4rem 0;color:var(--muted);">{{ loop.index }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;font-weight:500;">{{ row.name }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--muted);">{{ row.country }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;font-weight:600;color:var(--accent);">{{ row.total_points }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

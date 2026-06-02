@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Enter Points — {{ fmatch.match_name }}{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📝 {{ fmatch.match_name }}</h2>
+  <a href="{{ url_for('admin_fantasy_detail', league_id=league.id) }}" class="btn btn-ghost btn-sm">← Back to {{ league.name }}</a>
+</div>
+
+<p style="color:var(--muted);font-size:.85rem;margin-bottom:1.25rem;">
+  Enter fantasy points for each player below. Leave blank (or 0) for players with no score.
+  Saving will automatically cascade points to all users who picked that player (×2 for captain, ×1.5 for vice-captain).
+</p>
+
+{% if not players %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2rem;text-align:center;color:var(--muted);">
+  No players have been picked in this league yet. Points can still be entered once users pick their squads.
+</div>
+{% else %}
+<form method="POST">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div style="margin-bottom:1rem;">
+    <input type="text" id="player-search" placeholder="🔍 Search player..."
+           oninput="filterRows(this.value)"
+           style="padding:.5rem .75rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);width:100%;max-width:300px;">
+  </div>
+
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+    <table style="width:100%;border-collapse:collapse;font-size:.85rem;" id="scores-table">
+      <thead>
+        <tr style="background:var(--bg-soft);color:var(--muted);text-align:left;">
+          <th style="padding:.6rem 1rem;">Player</th>
+          <th style="padding:.6rem;">Country</th>
+          <th style="padding:.6rem;">Role</th>
+          <th style="padding:.6rem;">Points</th>
+          <th style="padding:.6rem;">Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for player in players %}
+      {% set score = existing.get(player.id) %}
+      <tr class="player-row" data-name="{{ player.name.lower() }}" style="border-top:1px solid var(--border);">
+        <td style="padding:.6rem 1rem;font-weight:500;">{{ player.name }}</td>
+        <td style="padding:.6rem;color:var(--muted);">{{ player.country }}</td>
+        <td style="padding:.6rem;color:var(--muted);">{{ player.category }}</td>
+        <td style="padding:.6rem;">
+          <input type="number" name="pts_{{ player.id }}" step="0.5" min="-100" max="500"
+                 value="{{ score.points if score else '' }}" placeholder="0"
+                 style="width:80px;padding:.3rem .5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </td>
+        <td style="padding:.6rem;">
+          <input type="text" name="notes_{{ player.id }}" maxlength="200"
+                 value="{{ score.notes if score else '' }}" placeholder="e.g. 50 runs"
+                 style="width:180px;padding:.3rem .5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:1rem;display:flex;gap:.75rem;">
+    <button type="submit" class="btn btn-primary">💾 Save All Points</button>
+    <a href="{{ url_for('admin_fantasy_detail', league_id=league.id) }}" class="btn btn-ghost">Cancel</a>
+  </div>
+</form>
+{% endif %}
+
+<script>
+function filterRows(val) {
+  val = val.toLowerCase();
+  document.querySelectorAll('.player-row').forEach(function(row) {
+    row.style.display = row.dataset.name.includes(val) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

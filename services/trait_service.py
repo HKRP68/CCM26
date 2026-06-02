@@ -175,6 +175,9 @@ def buy_trait_from_shop(session, user, slot_index):
     session.flush()
 
     trait = session.query(Trait).get(row.trait_id)
+    if not trait:
+        session.rollback()
+        return False, "Trait data is missing — please contact support.", None
     return True, f"Bought {trait.emoji} {trait.name} Lv.1 for {row.final_price} 💎!", inv
 
 
@@ -235,7 +238,8 @@ def apply_trait_to_player(session, user, inventory_id, roster_id):
     session.flush()
 
     player = session.query(Player).get(roster.player_id)
-    return True, f"✨ Applied {trait.emoji} {trait.name} Lv.{pt.level} to {player.name}!"
+    player_name = player.name if player else f"Player #{roster.player_id}"
+    return True, f"✨ Applied {trait.emoji} {trait.name} Lv.{pt.level} to {player_name}!"
 
 
 def replace_trait_on_player(session, user, player_trait_id, inventory_id):

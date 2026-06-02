@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Pick Fantasy Squad</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  --bg: #0c1410;
+  --card: #14201a;
+  --border: #1f3429;
+  --accent: #d4a82a;
+  --accent2: #4cae5e;
+  --text: #f0e9d8;
+  --muted: #87937f;
+  --input-bg: #0e1813;
+  --captain-color: #d4a82a;
+  --vc-color: #4cae5e;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 14px;
+}
+
+/* Header */
+.header {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: .75rem 1rem;
+}
+.header h1 { font-size: 1rem; font-weight: 700; margin-bottom: .5rem; }
+.search-row { display: flex; gap: .5rem; }
+#search-input {
+  flex: 1; padding: .5rem .75rem;
+  background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font-size: .9rem;
+  outline: none;
+}
+.filters { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
+.filter-btn {
+  padding: .25rem .65rem; border-radius: 20px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); font-size: .78rem; cursor: pointer;
+  transition: background .15s;
+}
+.filter-btn.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+
+/* Sticky footer */
+.footer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--card); border-top: 1px solid var(--border);
+  padding: .75rem 1rem; z-index: 100;
+}
+.footer-info { display: flex; justify-content: space-between; margin-bottom: .5rem; font-size: .82rem; color: var(--muted); }
+.footer-info strong { color: var(--text); }
+#confirm-btn {
+  width: 100%; padding: .75rem; border-radius: 10px; border: none;
+  background: var(--accent); color: #000; font-size: .95rem; font-weight: 700;
+  cursor: pointer; transition: opacity .2s;
+}
+#confirm-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Player list */
+.player-list { padding: .75rem 1rem 120px; }
+.player-card {
+  display: flex; align-items: center; gap: .75rem;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; padding: .65rem .85rem; margin-bottom: .5rem;
+  cursor: pointer; transition: border-color .15s, background .15s;
+  position: relative;
+}
+.player-card.selected {
+  border-color: var(--accent2); background: rgba(76,174,94,.07);
+}
+.player-card.captain { border-color: var(--captain-color); background: rgba(212,168,42,.07); }
+.player-card.vc { border-color: var(--vc-color); background: rgba(76,174,94,.1); }
+
+.player-avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--border); display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; flex-shrink: 0;
+}
+.player-info { flex: 1; min-width: 0; }
+.player-name { font-weight: 600; font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player-meta { color: var(--muted); font-size: .78rem; margin-top: .15rem; }
+
+.role-badge {
+  font-size: .7rem; font-weight: 700; padding: .15rem .45rem; border-radius: 12px;
+  flex-shrink: 0;
+}
+.badge-captain { background: var(--captain-color); color: #000; }
+.badge-vc { background: var(--vc-color); color: #000; }
+.badge-selected { background: var(--border); color: var(--muted); }
+
+.rating-pill {
+  font-size: .75rem; font-weight: 600; padding: .15rem .45rem;
+  background: var(--input-bg); border-radius: 6px; flex-shrink: 0;
+}
+
+/* Role picker popup */
+.role-popup {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+  background: var(--card); border-top: 2px solid var(--border);
+  padding: 1rem; display: none; flex-direction: column; gap: .5rem;
+}
+.role-popup h4 { font-size: .9rem; margin-bottom: .25rem; color: var(--muted); }
+.role-option {
+  padding: .75rem 1rem; border-radius: 10px; background: var(--input-bg);
+  border: 1px solid var(--border); cursor: pointer; font-size: .9rem; font-weight: 500;
+}
+.role-option:hover { border-color: var(--accent); }
+.role-cancel {
+  padding: .65rem; border-radius: 10px; background: transparent;
+  border: 1px solid var(--border); cursor: pointer; color: var(--muted); font-size: .85rem;
+}
+
+.loading { text-align: center; color: var(--muted); padding: 2rem; }
+.locked-banner {
+  background: rgba(212,168,42,.12); border: 1px solid var(--captain-color);
+  border-radius: 10px; padding: .75rem 1rem; margin-bottom: .75rem;
+  color: var(--captain-color); font-size: .85rem; text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1 id="league-title">🏏 Pick Your Fantasy Squad</h1>
+  <div class="search-row">
+    <input type="text" id="search-input" placeholder="Search players..." oninput="onSearch()">
+  </div>
+  <div class="filters">
+    <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
+    <button class="filter-btn" onclick="setFilter('bat', this)">Batters</button>
+    <button class="filter-btn" onclick="setFilter('bowl', this)">Bowlers</button>
+    <button class="filter-btn" onclick="setFilter('wk', this)">WK</button>
+    <button class="filter-btn" onclick="setFilter('ar', this)">All-Rounders</button>
+  </div>
+</div>
+
+<div class="player-list" id="player-list">
+  <div class="loading">Loading players…</div>
+</div>
+
+<div class="footer">
+  <div class="footer-info">
+    <span>Selected: <strong id="count-text">0/11</strong></span>
+    <span>Captain: <strong id="cap-text">✗</strong> &nbsp; VC: <strong id="vc-text">✗</strong></span>
+    <span>Pts so far: <strong id="pts-text">0</strong></span>
+  </div>
+  <button id="confirm-btn" disabled onclick="confirmSquad()">Confirm Squad</button>
+</div>
+
+<!-- Role picker popup -->
+<div class="role-popup" id="role-popup">
+  <h4 id="role-popup-name">Set Role</h4>
+  <div class="role-option" onclick="setRole('captain')">👑 Captain <small style="color:var(--muted);">(×2 points)</small></div>
+  <div class="role-option" onclick="setRole('vc')">⭐ Vice-Captain <small style="color:var(--muted);">(×1.5 points)</small></div>
+  <div class="role-option" onclick="setRole('player')">🏏 Regular Player</div>
+  <button class="role-cancel" onclick="closeRolePopup()">Cancel</button>
+</div>
+
+<script src="{{ url_for('static', filename='js/fantasy_picker.js') }}"></script>
+</body>
+</html>
