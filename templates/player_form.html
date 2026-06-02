@@ -62,16 +62,16 @@
         <label>Upload Player Image</label>
         <input type="file" name="player_image" accept="image/png,image/jpeg,image/webp">
         <small style="display:block;color:var(--muted);margin-top:.35rem;line-height:1.45;">
-          Used inside the generated card in place of the default player shadow. Transparent PNG or WebP works best. Max 5 MB.
+          Used inside the website-generated card. It overrides the global player fallback PNG. Transparent PNG or WebP works best. Max 5 MB.
         </small>
       </div>
       {% if player and has_player_portrait %}
       <div class="form-group">
         <label>Current Player Image</label>
-        <div style="color:var(--accent);font-size:.9rem;margin:.45rem 0;">✓ Uploaded image will replace the shadow.</div>
+        <div style="color:var(--accent);font-size:.9rem;margin:.45rem 0;">✓ Uploaded image takes priority over the global fallback PNG.</div>
         <label style="display:flex;align-items:center;gap:.45rem;color:var(--muted);font-size:.85rem;">
           <input type="checkbox" name="remove_player_image" value="1" style="width:auto;">
-          Remove image and use shadow again
+          Remove image and use the global fallback or original auto-generated card
         </label>
       </div>
       {% endif %}

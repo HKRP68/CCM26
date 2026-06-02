@@ -10611,12 +10611,14 @@ def admin_card_template():
                    .limit(200).all())
         from services.card_template_service import normalise_template_settings
         from services.country_flag_service import list_country_flags
+        from services.player_portrait_service import has_global_player_portrait
         settings = normalise_template_settings(cfg.card_template_settings)
         has_template = bool(cfg.card_template_image_path)
         has_font = bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, has_template=has_template,
-                               has_font=has_font, country_flags=list_country_flags())
+                               has_font=has_font, country_flags=list_country_flags(),
+                               has_global_portrait=has_global_player_portrait())
     finally:
         db.close()
 
@@ -10710,6 +10712,45 @@ def admin_card_template_save():
         return redirect(url_for("admin_card_template"))
     finally:
         db.close()
+
+
+@app.route("/card-template/global-player/upload", methods=["POST"])
+@login_required
+def admin_card_template_global_player_upload():
+    """Upload or replace the PNG used when a player has no individual cutout."""
+    file = request.files.get("global_player_file")
+    if not file or not file.filename:
+        flash("❌ Choose a global player PNG to upload.", "error")
+        return redirect(url_for("admin_card_template"))
+    from services.player_portrait_service import save_global_player_portrait
+    ok, msg = save_global_player_portrait(file.read(), file.filename)
+    if not ok:
+        flash(f"❌ {msg}", "error")
+        return redirect(url_for("admin_card_template"))
+    try:
+        from services.card_generator import invalidate_card_cache
+        invalidate_card_cache()
+    except Exception:
+        pass
+    flash(f"✅ {msg}", "info")
+    return redirect(url_for("admin_card_template"))
+
+
+@app.route("/card-template/global-player/remove", methods=["POST"])
+@login_required
+def admin_card_template_global_player_remove():
+    """Remove the global player cutout and restore procedural fallback cards."""
+    from services.player_portrait_service import remove_global_player_portrait
+    if not remove_global_player_portrait():
+        flash("❌ No global player fallback PNG is uploaded.", "error")
+        return redirect(url_for("admin_card_template"))
+    try:
+        from services.card_generator import invalidate_card_cache
+        invalidate_card_cache()
+    except Exception:
+        pass
+    flash("✅ Removed the global player fallback PNG.", "info")
+    return redirect(url_for("admin_card_template"))
 
 
 @app.route("/card-template/flags/upload", methods=["POST"])
