@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Add Match — {{ league.name }}{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>➕ Add Match to {{ league.name }}</h2>
+  <a href="{{ url_for('admin_fantasy_detail', league_id=league.id) }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;max-width:500px;">
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="margin-bottom:1rem;">
+      <label style="font-size:.85rem;color:var(--muted);display:block;margin-bottom:.25rem;">Match Name *</label>
+      <input type="text" name="match_name" required placeholder="India vs Australia"
+             style="width:100%;padding:.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+    <div style="margin-bottom:1.5rem;">
+      <label style="font-size:.85rem;color:var(--muted);display:block;margin-bottom:.25rem;">Match Date (optional)</label>
+      <input type="datetime-local" name="match_date"
+             style="width:100%;padding:.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+    <button type="submit" class="btn btn-primary">Add Match & Enter Points →</button>
+  </form>
+</div>
+{% endblock %}

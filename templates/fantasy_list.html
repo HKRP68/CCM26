@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Fantasy Leagues{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏏 Fantasy Leagues</h2>
+  <div style="display:flex;gap:.5rem;">
+    <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+    <a href="{{ url_for('admin_fantasy_new') }}" class="btn btn-primary btn-sm">+ New League</a>
+  </div>
+</div>
+
+{% if show_new_form %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 1rem;font-size:1rem;">Create New League</h3>
+  <form method="POST" action="{{ url_for('admin_fantasy_new') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">League Name *</label>
+        <input type="text" name="name" required placeholder="IPL Week 3 Fantasy"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Week Number</label>
+        <input type="number" name="week_number" value="1" min="1"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Year</label>
+        <input type="number" name="year" value="2026"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div></div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Start Date (optional)</label>
+        <input type="datetime-local" name="start_date"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">End Date (optional)</label>
+        <input type="datetime-local" name="end_date"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Create League</button>
+    <a href="{{ url_for('admin_fantasy_list') }}" class="btn btn-ghost" style="margin-left:.5rem;">Cancel</a>
+  </form>
+</div>
+{% endif %}
+
+{% if not leagues %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2rem;text-align:center;color:var(--muted);">
+  No fantasy leagues yet. <a href="{{ url_for('admin_fantasy_new') }}" style="color:var(--accent);">Create one →</a>
+</div>
+{% else %}
+<div style="display:grid;gap:1rem;">
+  {% for league in leagues %}
+  {% set s = stats.get(league.id, {}) %}
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+      <div style="font-weight:600;font-size:1.05rem;">{{ league.name }}</div>
+      <div style="font-size:.8rem;color:var(--muted);margin-top:.25rem;">
+        Week {{ league.week_number }}, {{ league.year }} ·
+        {{ s.entries }} entries · {{ s.matches }} matches
+        {% if league.start_date %} · {{ league.start_date.strftime('%b %d') }}{% endif %}
+        {% if league.end_date %} – {{ league.end_date.strftime('%b %d') }}{% endif %}
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+      <span class="badge {% if league.status == 'open' %}badge-green{% elif league.status == 'locked' %}badge-yellow{% else %}badge-muted{% endif %}">
+        {{ league.status }}
+      </span>
+      <a href="{{ url_for('admin_fantasy_detail', league_id=league.id) }}" class="btn btn-ghost btn-sm">Manage →</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

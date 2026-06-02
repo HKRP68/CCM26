@@ -206,6 +206,13 @@ from handlers.cartel import (
 )
 from handlers.feedback import feedback_handler
 
+# Fantasy League handlers
+from handlers.fantasy import (
+    fantasy_handler, myfantasy_handler,
+    fantasyleaderboard_handler, fantasystats_handler,
+    fantasy_lb_callback, fantasy_webapp_handler,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -279,6 +286,10 @@ BOT_MENU_COMMANDS = (
     ("mole", "Start a Mole Hunt social deduction game (group)"),
     ("cartel", "Start a Cricket Cartel multi-role deduction game (group)"),
     ("feedback", "Send feedback or a bug report"),
+    ("fantasy", "Open the weekly fantasy cricket league"),
+    ("myfantasy", "View your fantasy squad and points"),
+    ("fantasyleaderboard", "Fantasy league leaderboard"),
+    ("fantasystats", "Top fantasy scorers this week"),
 )
 
 
@@ -510,15 +521,15 @@ def _send_admin_reply_blocking(chat_id, text):
 
 def main():
     setup_logging()
-    print("=" * 50)
-    print("🏏 CRICKET BOT STARTING...")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("CRICKET BOT STARTING...")
+    logger.info("=" * 50)
 
     # Show env status
-    print(f"  BOT_TOKEN: {'✅ set' if BOT_TOKEN else '❌ NOT SET'}")
-    print(f"  DATABASE_URL: {os.getenv('DATABASE_URL', 'sqlite:///cricket_bot.db')}")
-    print(f"  ADMIN_PASSWORD: {'✅ set' if os.getenv('ADMIN_PASSWORD') else '⚠️ using default'}")
-    print(f"  PORT: {os.getenv('PORT', os.getenv('ADMIN_PORT', '5000'))}")
+    logger.info("  BOT_TOKEN: %s", "set" if BOT_TOKEN else "NOT SET")
+    logger.info("  DATABASE_URL: %s", os.getenv('DATABASE_URL', 'sqlite:///cricket_bot.db'))
+    logger.info("  ADMIN_PASSWORD: %s", "set" if os.getenv('ADMIN_PASSWORD') else "using default")
+    logger.info("  PORT: %s", os.getenv('PORT', os.getenv('ADMIN_PORT', '5000')))
 
     logger.info("Initialising database...")
     try:
@@ -536,44 +547,40 @@ def main():
         session = get_session()
         count = session.query(Player).count()
         session.close()
-        print(f"  Players in DB: {count}")
+        logger.info("  Players in DB: %s", count)
         if count == 0:
-            print("  Seeding 3,165 players...")
+            logger.info("  Seeding 3,165 players...")
             from seed_players import seed
             seed()
             session = get_session()
             count = session.query(Player).count()
             session.close()
-            print(f"  After seed: {count} players")
+            logger.info("  After seed: %s players", count)
     except Exception:
         logger.exception("Seed failed")
-        print("  Seed: ❌ FAILED (you can seed from admin panel)")
+        logger.warning("  Seed FAILED (you can seed from admin panel)")
 
     # Check data file exists
     data_path = os.path.join(os.path.dirname(__file__), "data", "players.json")
-    print(f"  data/players.json: {'✅ found' if os.path.exists(data_path) else '❌ NOT FOUND'}")
+    logger.info("  data/players.json: %s", "found" if os.path.exists(data_path) else "NOT FOUND")
 
     # ── Start admin panel FIRST (Render health check needs this) ─────
     admin_thread = threading.Thread(target=start_admin_panel, daemon=True)
     admin_thread.start()
     admin_port = os.getenv("ADMIN_PORT", os.getenv("PORT", 5000))
-    print(f"  Admin panel: ✅ starting on port {admin_port}")
+    logger.info("  Admin panel: starting on port %s", admin_port)
 
     import time
     time.sleep(2)  # give Flask a moment to bind the port
 
     # ── Start Telegram bot ───────────────────────────────────────────
     if not BOT_TOKEN:
-        print("=" * 50)
-        print("⚠️  BOT_TOKEN not set — bot will NOT run")
-        print("   Admin panel is still running at your Render URL")
-        print("   Set BOT_TOKEN in Render env vars to enable the bot")
-        print("=" * 50)
+        logger.warning("BOT_TOKEN not set — bot will NOT run. Admin panel is still running.")
         admin_thread.join()
         return
 
     try:
-        print(f"  Telegram bot: ✅ starting...")
+        logger.info("  Telegram bot: starting...")
         logger.info("Starting bot...")
         app = (ApplicationBuilder()
                .token(BOT_TOKEN)
@@ -957,6 +964,16 @@ def main():
 
         app.add_handler(CommandHandler(["feedback", "fb"], feedback_handler))
 
+        # ── Fantasy League ───────────────────────────────────────────
+        app.add_handler(CommandHandler(["fantasy", "fl"], fantasy_handler))
+        app.add_handler(CommandHandler(["myfantasy", "mfl"], myfantasy_handler))
+        app.add_handler(CommandHandler(["fantasyleaderboard", "flb"], fantasyleaderboard_handler))
+        app.add_handler(CommandHandler(["fantasystats", "fstats"], fantasystats_handler))
+        app.add_handler(CallbackQueryHandler(fantasy_lb_callback, pattern=r"^fant_lb_"))
+        app.add_handler(MessageHandler(
+            filters.StatusUpdate.WEB_APP_DATA, fantasy_webapp_handler,
+        ), group=5)
+
         # Social game group message handlers run alongside overs_text_handler
         # (separate groups so each processes independently)
         app.add_handler(MessageHandler(
@@ -981,11 +998,9 @@ def main():
             filters.TEXT & ~filters.COMMAND, overs_text_handler))
 
         logger.info("Bot is running. Press Ctrl+C to stop.")
-        print("=" * 50)
-        print("✅ EVERYTHING RUNNING!")
-        print(f"   Admin: http://0.0.0.0:{admin_port}")
-        print(f"   Bot: polling for Telegram updates")
-        print("=" * 50)
+        logger.info("=" * 50)
+        logger.info("EVERYTHING RUNNING! Admin: port %s | Bot: polling", admin_port)
+        logger.info("=" * 50)
 
         # Start the match heartbeat (keeps in-progress matches from getting stuck)
         try:

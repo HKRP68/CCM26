@@ -404,6 +404,20 @@ def _migrate_add_columns():
         import logging
         logging.getLogger(__name__).warning("Ad quest seed skipped (non-fatal)")
 
+    # Create fantasy league tables (idempotent via CREATE TABLE IF NOT EXISTS)
+    try:
+        from models import FantasyLeague, FantasyMatch, FantasyPlayerScore, FantasyEntry, FantasyPick  # noqa: F401
+        Base.metadata.create_all(bind=engine, tables=[
+            FantasyLeague.__table__,
+            FantasyMatch.__table__,
+            FantasyPlayerScore.__table__,
+            FantasyEntry.__table__,
+            FantasyPick.__table__,
+        ])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Fantasy table creation skipped (non-fatal)")
+
     # Seed default GSpin rewards (idempotent — only if table is empty)
     try:
         from models import GSpinReward

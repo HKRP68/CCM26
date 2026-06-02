@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Edit Squad — {{ user.username or user.first_name }}{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>✏️ Edit Squad — {{ user.username or user.first_name or 'User' }}</h2>
+  <a href="{{ url_for('admin_fantasy_detail', league_id=league.id) }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p style="color:var(--muted);font-size:.85rem;margin-bottom:1.25rem;">
+  Admin override — you can change this user's squad even if the league is locked.
+  Current total: <strong style="color:var(--accent);">{{ entry.total_points }} pts</strong>
+  {% if entry.rank %} · Rank: <strong>#{{ entry.rank }}</strong>{% endif %}
+</p>
+
+<!-- Current squad -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1.25rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .75rem;">Current Squad ({{ picks|length }}/11)</h3>
+  {% if not picks %}
+  <p style="color:var(--muted);font-size:.85rem;">No picks yet.</p>
+  {% else %}
+  <table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+    <thead>
+      <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);">
+        <th style="padding:.4rem 0;">Player</th><th>Country</th><th>Role</th><th>Points</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for fp, player in picks %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.4rem 0;font-weight:500;">
+        {{ player.name }}
+        {% if fp.role == 'captain' %}<span style="color:var(--accent);margin-left:.25rem;">©</span>{% endif %}
+        {% if fp.role == 'vc' %}<span style="color:var(--muted);margin-left:.25rem;">VC</span>{% endif %}
+      </td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--muted);">{{ player.country }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--muted);">{{ fp.role }}</td>
+      <td style="padding:.4rem 0 .4rem .5rem;color:var(--accent);">{{ fp.total_points }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<!-- Squad editor form -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .75rem;">Replace Squad</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin-bottom:1rem;">Select exactly 11 players, mark 1 as Captain and 1 as Vice-Captain.</p>
+
+  <div style="margin-bottom:.75rem;">
+    <input type="text" id="admin-search" placeholder="🔍 Search player..."
+           oninput="filterAdminPlayers(this.value)"
+           style="padding:.5rem .75rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);width:100%;max-width:300px;">
+  </div>
+
+  <div id="selected-count" style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem;">Selected: 0/11 · Captain: ✗ · VC: ✗</div>
+
+  <div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">
+    <table style="width:100%;border-collapse:collapse;font-size:.83rem;" id="admin-player-table">
+      <thead style="position:sticky;top:0;background:var(--bg-soft);">
+        <tr style="color:var(--muted);text-align:left;">
+          <th style="padding:.5rem;">Pick</th><th style="padding:.5rem;">Player</th>
+          <th style="padding:.5rem;">Country</th><th style="padding:.5rem;">Rating</th><th style="padding:.5rem;">Role</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for player in all_players %}
+      <tr class="admin-player-row" data-name="{{ player.name.lower() }}" data-pid="{{ player.id }}"
+          style="border-top:1px solid var(--border);cursor:pointer;" onclick="togglePlayer({{ player.id }}, '{{ player.name | e }}', '{{ player.country | e }}', '{{ player.category | e }}')">
+        <td style="padding:.5rem;"><input type="checkbox" id="chk_{{ player.id }}" onclick="event.stopPropagation();togglePlayer({{ player.id }}, '{{ player.name | e }}', '{{ player.country | e }}', '{{ player.category | e }}')"></td>
+        <td style="padding:.5rem;font-weight:500;">{{ player.name }}</td>
+        <td style="padding:.5rem;color:var(--muted);">{{ player.country }}</td>
+        <td style="padding:.5rem;color:var(--muted);">{{ player.rating }}</td>
+        <td style="padding:.5rem;">
+          <select id="role_{{ player.id }}" onchange="event.stopPropagation();updateCount()" disabled
+                  style="padding:.25rem;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:.8rem;">
+            <option value="player">Player</option>
+            <option value="captain">Captain (×2)</option>
+            <option value="vc">Vice-Captain (×1.5)</option>
+          </select>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="POST" id="squad-form" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="picks_json" id="picks-json-input" value="[]">
+    <button type="button" class="btn btn-primary" onclick="submitSquad()">💾 Save New Squad</button>
+    <a href="{{ url_for('admin_fantasy_detail', league_id=league.id) }}" class="btn btn-ghost" style="margin-left:.5rem;">Cancel</a>
+  </form>
+</div>
+
+<script>
+var selected = {};
+
+function togglePlayer(pid, name, country, category) {
+  var chk = document.getElementById('chk_' + pid);
+  var roleEl = document.getElementById('role_' + pid);
+  if (selected[pid]) {
+    delete selected[pid];
+    chk.checked = false;
+    roleEl.disabled = true;
+    roleEl.value = 'player';
+  } else {
+    if (Object.keys(selected).length >= 11) {
+      alert('You can only select 11 players.');
+      return;
+    }
+    selected[pid] = {player_id: pid, name: name, country: country, category: category, role: 'player'};
+    chk.checked = true;
+    roleEl.disabled = false;
+  }
+  updateCount();
+}
+
+function updateCount() {
+  var captain = 0, vc = 0;
+  for (var pid in selected) {
+    var role = document.getElementById('role_' + pid);
+    selected[pid].role = role ? role.value : 'player';
+    if (selected[pid].role === 'captain') captain++;
+    if (selected[pid].role === 'vc') vc++;
+  }
+  var n = Object.keys(selected).length;
+  document.getElementById('selected-count').textContent =
+    'Selected: ' + n + '/11 · Captain: ' + (captain ? '✓' : '✗') + ' · VC: ' + (vc ? '✓' : '✗');
+}
+
+function submitSquad() {
+  var picks = Object.values(selected);
+  if (picks.length !== 11) { alert('Select exactly 11 players.'); return; }
+  var caps = picks.filter(function(p){ return p.role === 'captain'; });
+  var vcs = picks.filter(function(p){ return p.role === 'vc'; });
+  if (caps.length !== 1) { alert('Select exactly 1 captain.'); return; }
+  if (vcs.length !== 1) { alert('Select exactly 1 vice-captain.'); return; }
+  document.getElementById('picks-json-input').value = JSON.stringify(picks);
+  document.getElementById('squad-form').submit();
+}
+
+function filterAdminPlayers(val) {
+  val = val.toLowerCase();
+  document.querySelectorAll('.admin-player-row').forEach(function(row) {
+    row.style.display = row.dataset.name.includes(val) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}
