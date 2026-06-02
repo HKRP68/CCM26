@@ -51,6 +51,8 @@ def init_db():
         MessageTemplate, Bowlout, BowloutBall,
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
+        FantasyLeague, FantasyMatch, FantasyPlayerScore,
+        FantasyEntry, FantasyPick,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -295,6 +297,9 @@ def _migrate_add_columns():
     _try_add("packs", "main_versions_json", "VARCHAR(500)")
     _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT TRUE")
     _try_add("users", "pack_pity_counter", "INTEGER DEFAULT 0")
+
+    # Fantasy league auto-lock time (stored UTC; admin enters IST)
+    _try_add("fantasy_leagues", "lock_at", "TIMESTAMP")
 
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by default
     for sql in (

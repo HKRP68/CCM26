@@ -13,6 +13,9 @@
       {{ league.status | upper }}
     </span>
     <span style="color:var(--muted);font-size:.85rem;">Week {{ league.week_number }}, {{ league.year }}</span>
+    {% if league.lock_at %}
+    <span style="color:var(--accent);font-size:.82rem;">🔒 Auto-locks: {{ league.lock_at | ist('%d %b %Y, %I:%M %p') }}</span>
+    {% endif %}
   </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
     {% if league.status == 'open' %}
@@ -33,6 +36,24 @@
       <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red);">🗑 Delete</button>
     </form>
   </div>
+</div>
+
+<!-- Auto-lock settings -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .5rem;">🔒 Auto-Lock Time</h3>
+  <p style="color:var(--muted);font-size:.82rem;margin:0 0 .75rem;">
+    After this time (Indian Standard Time) no one can create or edit a fantasy squad, and the league is locked automatically. Leave blank to lock manually.
+  </p>
+  <form method="POST" action="{{ url_for('admin_fantasy_settings', league_id=league.id) }}"
+        style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="datetime-local" name="lock_at" value="{{ league.lock_at | ist_input }}"
+           style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    <button type="submit" class="btn btn-primary btn-sm">Save Lock Time</button>
+    {% if league.lock_at %}
+    <span style="color:var(--muted);font-size:.8rem;">Currently: {{ league.lock_at | ist('%d %b %Y, %I:%M %p') }}</span>
+    {% endif %}
+  </form>
 </div>
 
 <!-- Matches -->

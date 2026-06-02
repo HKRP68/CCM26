@@ -183,6 +183,17 @@ def _ist_short_filter(dt):
         return str(dt)
 
 
+@app.template_filter("ist_input")
+def _ist_input_filter(dt):
+    """UTC datetime → IST value for a <input type=datetime-local> (no suffix)."""
+    if not dt:
+        return ""
+    try:
+        return (dt + _IST_OFFSET).strftime("%Y-%m-%dT%H:%M")
+    except Exception:
+        return ""
+
+
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def _handle_internal_error(e):
@@ -9178,6 +9189,18 @@ def admin_broadcast():
                         "bytes": file_bytes,
                     }
 
+                # Optional "Join Fantasy" button — opens the squad picker Mini App.
+                fantasy_btn = None
+                if request.form.get("add_fantasy_button") == "on":
+                    from services import fantasy_service
+                    league = fantasy_service.get_active_league(db)
+                    link = fantasy_service.fantasy_deep_link(league.id if league else None)
+                    if not link:
+                        flash("Set BOT_USERNAME (and MINIAPP_NAME) to use the "
+                              "Join Fantasy button.", "error")
+                        return redirect(url_for("admin_broadcast"))
+                    fantasy_btn = {"text": "🏏 Join Fantasy", "url": link}
+
                 query = db.query(BotChat).filter(BotChat.is_active == True)
                 if target == "groups":
                     query = query.filter(BotChat.chat_type.in_(["group", "supergroup"]))
@@ -9210,7 +9233,7 @@ def admin_broadcast():
                 import threading
                 t = threading.Thread(
                     target=_run_broadcast_worker,
-                    args=(bc_id, list(chat_ids), message, attachment),
+                    args=(bc_id, list(chat_ids), message, attachment, fantasy_btn),
                     daemon=True,
                 )
                 t.start()
@@ -9247,17 +9270,27 @@ def admin_broadcast():
         db.close()
 
 
-def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None):
-    """Background worker — sends a text, image, or file broadcast at ~20 chats/sec."""
+def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None):
+    """Background worker — sends a text, image, or file broadcast at ~20 chats/sec.
+
+    ``button`` (optional) is a {"text": str, "url": str} dict rendered as an
+    inline keyboard button beneath the broadcast (e.g. "🏏 Join Fantasy").
+    """
     import time
     import logging as _lg
     log = _lg.getLogger("broadcast")
     sent = 0
     failed = 0
 
-    from telegram import Bot, InputFile
+    from telegram import Bot, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
     from config import BOT_TOKEN
     bot_instance = Bot(token=BOT_TOKEN)
+
+    reply_markup = None
+    if button and button.get("url") and button.get("text"):
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(button["text"], url=button["url"])
+        ]])
 
     import asyncio
     loop = asyncio.new_event_loop()
@@ -9279,17 +9312,23 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None):
 
     async def _send_one(cid):
         try:
+            # Attach the inline button to the text message when there is one,
+            # otherwise to the attachment itself (so a button always shows).
+            attach_markup = reply_markup if not message else None
             if attachment:
                 upload = InputFile(io.BytesIO(attachment["bytes"]),
                                    filename=attachment["name"])
                 if attachment["type"] == "image":
-                    await bot_instance.send_photo(chat_id=cid, photo=upload)
+                    await bot_instance.send_photo(chat_id=cid, photo=upload,
+                                                  reply_markup=attach_markup)
                 else:
-                    await bot_instance.send_document(chat_id=cid, document=upload)
+                    await bot_instance.send_document(chat_id=cid, document=upload,
+                                                     reply_markup=attach_markup)
             if message:
                 await bot_instance.send_message(
                     chat_id=cid, text=message, parse_mode="HTML",
                     disable_web_page_preview=True,
+                    reply_markup=reply_markup,
                 )
             return True
         except Exception as e:
@@ -10760,9 +10799,13 @@ def admin_fantasy_new():
                 end_raw = request.form.get("end_date", "").strip()
                 start_date = _dt.fromisoformat(start_raw) if start_raw else None
                 end_date = _dt.fromisoformat(end_raw) if end_raw else None
+                # Auto-lock time is entered in IST → store as UTC.
+                lock_raw = request.form.get("lock_at", "").strip()
+                lock_at = (_dt.fromisoformat(lock_raw) - _timedelta(hours=5, minutes=30)) if lock_raw else None
                 league = FantasyLeague(
                     name=name, week_number=week, year=year,
                     start_date=start_date, end_date=end_date, status="open",
+                    lock_at=lock_at,
                 )
                 db.add(league)
                 db.commit()
@@ -10820,6 +10863,37 @@ def admin_fantasy_lock(league_id):
         else:
             flash("🔒 League locked (no active groups to notify).", "success")
         log_admin(db, "fantasy_lock", target_type="fantasy_league", target_id=league_id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_detail", league_id=league_id))
+
+
+@app.route("/fantasy/<int:league_id>/settings", methods=["POST"])
+@login_required
+def admin_fantasy_settings(league_id):
+    """Update the auto-lock time (entered in IST) for a league."""
+    db = get_session()
+    try:
+        from models import FantasyLeague
+        from datetime import datetime as _dt
+        league = db.query(FantasyLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+        lock_raw = request.form.get("lock_at", "").strip()
+        if lock_raw:
+            # datetime-local input is treated as IST → store UTC.
+            league.lock_at = _dt.fromisoformat(lock_raw) - _timedelta(hours=5, minutes=30)
+            flash("🔒 Auto-lock time updated.", "success")
+        else:
+            league.lock_at = None
+            flash("Auto-lock time cleared.", "info")
+        db.commit()
+        log_admin(db, "fantasy_settings", target_type="fantasy_league", target_id=league_id)
         db.commit()
     except Exception as e:
         db.rollback()
@@ -11105,7 +11179,7 @@ def api_fantasy_save():
         league = fantasy_service.get_active_league(db)
         if not league or league.id != int(league_id):
             return {"ok": False, "error": "league_not_active"}, 400
-        if league.status == "locked":
+        if fantasy_service.is_locked(league):
             return {"ok": False, "error": "league_locked"}, 403
 
         entry = fantasy_service.get_or_create_entry(db, user.id, league.id)
@@ -11144,6 +11218,7 @@ def api_fantasy_league():
                 "id": league.id,
                 "name": league.name,
                 "status": league.status,
+                "locked": fantasy_service.is_locked(league),
                 "week_number": league.week_number,
                 "year": league.year,
             },

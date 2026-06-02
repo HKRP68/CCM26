@@ -1,6 +1,7 @@
 """Fantasy league service — admin-controlled weekly fantasy cricket competition."""
 
 import logging
+import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,64 @@ def get_active_league(session):
             .filter(FantasyLeague.status.in_(["open", "locked"]))
             .order_by(FantasyLeague.id.desc())
             .first())
+
+
+def is_locked(league):
+    """True if squads for this league can no longer be created or edited.
+
+    A league is locked when its status is locked/scored, OR when an auto-lock
+    time (``lock_at``, stored UTC) has been set and has now passed. This makes
+    the lock effective immediately at request time even if the background
+    auto-lock job has not run yet.
+    """
+    if league is None:
+        return True
+    if league.status in ("locked", "scored"):
+        return True
+    lock_at = getattr(league, "lock_at", None)
+    if lock_at and datetime.utcnow() >= lock_at:
+        return True
+    return False
+
+
+def fantasy_deep_link(league_id=None):
+    """Build a t.me deep link that opens the Mini App into the fantasy picker.
+
+    Web App inline buttons only work in private chats, so groups, DMs and
+    broadcasts must use a t.me deep link instead. The Mini App reads the
+    ``startapp`` start_param (``fantasy`` or ``fantasy_<leagueId>``) and routes
+    to the squad picker. Returns None when BOT_USERNAME is not configured.
+    """
+    bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+    miniapp_name = (os.getenv("MINIAPP_NAME", "") or "").strip()
+    if not bot_username:
+        return None
+    param = f"fantasy_{league_id}" if league_id else "fantasy"
+    if miniapp_name:
+        return f"https://t.me/{bot_username}/{miniapp_name}?startapp={param}"
+    return f"https://t.me/{bot_username}?startapp={param}"
+
+
+def apply_auto_locks(session):
+    """Lock any open leagues whose ``lock_at`` time has passed.
+
+    Returns a list of ``(league_name, chat_ids, broadcast_message)`` for each
+    league that was newly locked, so the caller can broadcast the lock notice.
+    The session is flushed but NOT committed here — the caller commits.
+    """
+    from models import FantasyLeague
+    now = datetime.utcnow()
+    due = (session.query(FantasyLeague)
+           .filter(FantasyLeague.status == "open",
+                   FantasyLeague.lock_at.isnot(None),
+                   FantasyLeague.lock_at <= now)
+           .all())
+    results = []
+    for lg in due:
+        name = lg.name
+        chat_ids, msg = lock_league(session, lg.id)
+        results.append((name, chat_ids, msg))
+    return results
 
 
 def get_league(session, league_id):
@@ -54,7 +113,7 @@ def set_picks(session, entry_id, picks, bypass_lock=False):
     league = session.query(FantasyLeague).get(entry.league_id)
     if not league:
         return False, "League not found."
-    if not bypass_lock and league.status == "locked":
+    if not bypass_lock and is_locked(league):
         return False, "This league is locked. No changes allowed."
 
     if len(picks) != SQUAD_SIZE:

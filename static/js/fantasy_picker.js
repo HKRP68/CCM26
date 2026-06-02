@@ -19,46 +19,52 @@ var state = {
 };
 
 /* ── Init ─────────────────────────────────────────────── */
+function preloadSquad(squad) {
+  (squad || []).forEach(function(pick) {
+    state.selected[pick.player_id] = {
+      player_id: pick.player_id, name: pick.name,
+      country: pick.country, category: pick.category,
+      role: pick.role, points: pick.points || 0,
+    };
+  });
+}
+
 (function init() {
   var params = new URLSearchParams(window.location.search);
-  state.leagueId = params.get('league_id');
+  state.leagueId = params.get('league_id');   // may be null on deep-link launch
   state.userId = params.get('user_id');
 
-  // Load league info & existing picks
-  if (state.leagueId && state.userId) {
-    fetch('/api/fantasy/entry?league_id=' + state.leagueId + '&user_id=' + state.userId)
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (d.ok && d.squad) {
-          d.squad.forEach(function(pick) {
-            state.selected[pick.player_id] = {
-              player_id: pick.player_id, name: pick.name,
-              country: pick.country, category: pick.category,
-              role: pick.role, points: pick.points || 0,
-            };
-          });
+  // Resolve the active league + this user's existing squad via initData.
+  // This path works for every launch type: the private-chat Web App button,
+  // and the t.me deep link used in groups / DMs / broadcasts (no user_id).
+  var initData = (tg && tg.initData) || '';
+  fetch('/api/fantasy/league', {
+    headers: { 'Authorization': 'tma ' + initData }
+  }).then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok && d.league) {
+        if (!state.leagueId) state.leagueId = d.league.id;
+        document.getElementById('league-title').textContent = '🏏 ' + d.league.name;
+        if (d.league.locked || d.league.status === 'locked') {
+          state.locked = true;
+          showLockedBanner();
         }
-        state.locked = d.locked || false;
-        updateFooter();
-      }).catch(function() {});
-  }
-
-  // Fetch league name
-  if (state.leagueId) {
-    var initData = (tg && tg.initData) || '';
-    fetch('/api/fantasy/league', {
-      headers: { 'Authorization': 'tma ' + initData }
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (d.ok && d.league) {
-          document.getElementById('league-title').textContent = '🏏 ' + d.league.name;
-          if (d.league.status === 'locked') {
-            state.locked = true;
-            showLockedBanner();
-          }
-        }
-      }).catch(function() {});
-  }
+        if (d.team && d.team.squad) preloadSquad(d.team.squad);
+      }
+      updateFooter();
+      renderPlayers();
+    }).catch(function() {
+      // Fallback for non-Telegram/dev contexts where initData is unavailable.
+      if (state.leagueId && state.userId) {
+        fetch('/api/fantasy/entry?league_id=' + state.leagueId + '&user_id=' + state.userId)
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d.ok) { preloadSquad(d.squad); state.locked = d.locked || false; }
+            updateFooter();
+            renderPlayers();
+          }).catch(function() {});
+      }
+    });
 
   loadPlayers();
 })();
@@ -235,24 +241,44 @@ function confirmSquad() {
     return { player_id: p.player_id, role: p.role };
   });
   if (picks.length !== 11) return;
-
-  var payload = JSON.stringify({ type: 'fantasy_picks', league_id: state.leagueId, picks: picks });
-
-  if (tg && tg.sendData) {
-    tg.sendData(payload);
-  } else {
-    // Fallback: POST directly (e.g. dev mode)
-    var initData = (tg && tg.initData) || '';
-    fetch('/api/fantasy/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData },
-      body: JSON.stringify({ league_id: parseInt(state.leagueId), picks: picks }),
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (d.ok) { alert('Squad saved!'); }
-        else { alert('Error: ' + (d.error || 'Unknown')); }
-      });
+  if (!state.leagueId) {
+    if (tg) tg.showAlert('No active fantasy league found.');
+    else alert('No active fantasy league found.');
+    return;
   }
+
+  var btn = document.getElementById('confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  // Save via the API using Telegram initData. This works for every launch
+  // type (private Web App button AND group/broadcast t.me deep links);
+  // tg.sendData only delivers for keyboard-button Web Apps, which this is not.
+  var initData = (tg && tg.initData) || '';
+  fetch('/api/fantasy/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData },
+    body: JSON.stringify({ league_id: parseInt(state.leagueId, 10), picks: picks }),
+  }).then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) {
+        if (tg && tg.showAlert) {
+          tg.showAlert('✅ Squad saved! Good luck.', function() { if (tg.close) tg.close(); });
+        } else {
+          alert('Squad saved!');
+        }
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Confirm Squad';
+        var msg = d.message || d.error || 'Could not save squad.';
+        if (tg && tg.showAlert) tg.showAlert('❌ ' + msg); else alert('Error: ' + msg);
+      }
+    }).catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Confirm Squad';
+      if (tg && tg.showAlert) tg.showAlert('❌ Network error. Try again.');
+      else alert('Network error. Try again.');
+    });
 }
 
 function showLockedBanner() {
