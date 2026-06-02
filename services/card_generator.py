@@ -144,7 +144,7 @@ def _draw_gradient_text(draw, pos, text, font, top_color, bottom_color):
     return tmp, (x, y)
 
 
-# ── Website-managed template card (ported from v4-3 HTML generator) ──────────
+# ── Website-managed Base card (ported from v5 HTML generator) ─────────────
 
 _TEMPLATE_W, _TEMPLATE_H = 1536, 1024
 _DARK_GREEN = (0, 86, 50, 255)
@@ -227,7 +227,7 @@ def _composite_template_portrait(base, player, settings):
 
 
 def _restore_bottom_box(base, clean_template):
-    """Redraw the v4-3 bottom-right details polygon above the cutout."""
+    """Redraw the v5 bottom-right details polygon above the cutout."""
     mask = Image.new("L", (_TEMPLATE_W, _TEMPLATE_H), 0)
     ImageDraw.Draw(mask).polygon([(1032, 833), (1536, 833), (1536, 1024),
                                   (845, 1024)], fill=255)
@@ -245,17 +245,24 @@ def _draw_india_flag(draw, bbox):
                  outline=(16, 47, 90, 255), width=3)
 
 
-def _draw_template_flag(draw, tcfg, country, settings):
+def _draw_template_flag(base, draw, tcfg, country, settings):
+    """Draw a website-uploaded country PNG at the same flag size as v5."""
     frame_x, frame_y, frame_w, frame_h = 66, 846, 280, 122
     scale = settings["flag_scale"] / 100
-    width, height = frame_w * scale, frame_h * scale
-    x = frame_x + (frame_w - width) / 2
-    y = frame_y + (frame_h - height) / 2 + settings["flag_y_offset"]
-    bbox = (x, y, x + width, y + height)
-    if str(country).strip().lower() == "india":
+    width, height = max(1, int(frame_w * scale)), max(1, int(frame_h * scale))
+    x = int(frame_x + (frame_w - width) / 2)
+    y = int(frame_y + (frame_h - height) / 2 + settings["flag_y_offset"])
+    try:
+        from services.country_flag_service import get_country_flag
+        flag = get_country_flag(country)
+    except Exception:
+        flag = None
+    if flag is not None:
+        base.alpha_composite(flag.resize((width, height), Image.LANCZOS), (x, y))
+    elif str(country).strip().lower() == "india":
         _draw_india_flag(draw, (x, y, width, height))
     else:
-        draw.rectangle(bbox, outline=_DARK_GREEN, width=3)
+        draw.rectangle((x, y, x + width, y + height), outline=_DARK_GREEN, width=3)
         _draw_fit(draw, tcfg, str(country).upper(),
                   (x + width / 2, y + height / 2), width - 20, 30, 16,
                   _DARK_GREEN, anchor="mm")
@@ -272,7 +279,9 @@ def _template_bowling_style(player):
 
 
 def generate_template_card(player) -> bytes | None:
-    """Render the website-managed card using the v4-3 HTML layer order."""
+    """Render a Base card using the website-managed v5 HTML layer order."""
+    if getattr(player, "parent_player_id", None):
+        return None
     try:
         from services.card_template_service import get_template_config
         tcfg = get_template_config()
@@ -301,20 +310,25 @@ def generate_template_card(player) -> bytes | None:
         if last_name:
             _draw_fit(draw, tcfg, last_name, (settings["name_x"], settings["name_y"] + 260),
                       650, 140, 72, _DARK_GREEN)
-        category_x = 58
+        category_x = settings["cat_x"]
+        category_font = _template_font(tcfg, settings["cat_font_size"])
         for character in str(player.category).upper():
-            draw.text((category_x, 590), character, font=_template_font(tcfg, 42), fill=_LIGHT_GREEN)
-            category_x += draw.textlength(character, font=_template_font(tcfg, 42)) + 22
+            draw.text((category_x, settings["cat_y"]), character, font=category_font, fill=_LIGHT_GREEN)
+            category_x += draw.textlength(character, font=category_font) + settings["cat_letter_gap"]
         _draw_fit(draw, tcfg, int(player.rating), (settings["ovr_x"], settings["ovr_y"]),
                   240, 128, 72, _RED, anchor="mm")
         _draw_fit(draw, tcfg, int(player.bat_rating), (settings["bat_x"], settings["bat_y"]),
                   150, 92, 48, _RED, anchor="mm")
         _draw_fit(draw, tcfg, int(player.bowl_rating), (settings["bowl_x"], settings["bowl_y"]),
                   150, 92, 48, _RED, anchor="mm")
-        _draw_template_flag(draw, tcfg, player.country, settings)
+        _draw_template_flag(base, draw, tcfg, player.country, settings)
         _draw_fit(draw, tcfg, str(player.country).upper(), (405, 925), 280, 58, 30, _DARK_GREEN)
-        _draw_fit(draw, tcfg, _template_batting_style(player), (1110, 895), 335, 38, 20, _DARK_GREEN)
-        _draw_fit(draw, tcfg, _template_bowling_style(player), (1110, 988), 335, 38, 20, _DARK_GREEN)
+        _draw_fit(draw, tcfg, _template_batting_style(player),
+                  (settings["bat_style_x"], settings["bat_style_y"]),
+                  settings["style_max_width"], settings["style_font_size"], 20, _DARK_GREEN)
+        _draw_fit(draw, tcfg, _template_bowling_style(player),
+                  (settings["bowl_style_x"], settings["bowl_style_y"]),
+                  settings["style_max_width"], settings["style_font_size"], 20, _DARK_GREEN)
         draw.line((1030, 939, 1442, 939), fill=_LINE_GREEN, width=2)
 
         buf = io.BytesIO()
@@ -355,7 +369,9 @@ def generate_card(player) -> bytes | None:
     # Template card style — render on admin-uploaded template if active.
     try:
         from services.config_service import get_card_style
-        if get_card_style() == "template":
+        # The website template currently defines the Base edition only. Star
+        # and Legend rows remain free to use their own custom or future styles.
+        if get_card_style() == "template" and not getattr(player, "parent_player_id", None):
             tpl = generate_template_card(player)
             if tpl is not None:
                 return tpl

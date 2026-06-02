@@ -1,6 +1,6 @@
 """Website-managed cricket card template assets and layout controls.
 
-The settings mirror ``cricket_card_generator_website_v4-3.html``: an admin can
+The settings mirror ``cricket_card_generator_website_v5.html``: an admin can
 upload the global blank template and optional font, then tune cutout, flag, and
 text placement from the website without a redeploy. The legacy image-map parser
 is retained for compatibility with previously stored configuration.
@@ -23,7 +23,7 @@ ALLOWED_FONT_EXT = {"ttf", "otf"}
 MAX_BYTES = 5 * 1024 * 1024     # 5 MB
 MIN_DIM = 200                    # min width/height in pixels
 
-# Defaults mirror cricket_card_generator_website_v4-3.html so the website
+# Defaults mirror cricket_card_generator_website_v5.html so the website
 # produces the same layout while allowing admins to tune each value.
 DEFAULT_TEMPLATE_SETTINGS = {
     "player_x": 675, "player_y": 25, "player_w": 780, "player_h": 1000,
@@ -31,6 +31,10 @@ DEFAULT_TEMPLATE_SETTINGS = {
     "protect_bottom_box": True, "flag_scale": 100, "flag_y_offset": 0,
     "name_x": 52, "name_y": 195, "ovr_x": 1366, "ovr_y": 166,
     "bat_x": 173, "bat_y": 686, "bowl_x": 531, "bowl_y": 686,
+    "cat_x": 58, "cat_y": 590, "cat_font_size": 42, "cat_letter_gap": 22,
+    "bat_style_x": 1110, "bat_style_y": 895,
+    "bowl_style_x": 1110, "bowl_style_y": 988,
+    "style_font_size": 38, "style_max_width": 335,
 }
 SETTING_LIMITS = {
     "player_x": (-1536, 3072), "player_y": (-1024, 2048),
@@ -41,6 +45,11 @@ SETTING_LIMITS = {
     "ovr_x": (-1536, 3072), "ovr_y": (-1024, 2048),
     "bat_x": (-1536, 3072), "bat_y": (-1024, 2048),
     "bowl_x": (-1536, 3072), "bowl_y": (-1024, 2048),
+    "cat_x": (-1536, 3072), "cat_y": (-1024, 2048),
+    "cat_font_size": (8, 200), "cat_letter_gap": (0, 200),
+    "bat_style_x": (-1536, 3072), "bat_style_y": (-1024, 2048),
+    "bowl_style_x": (-1536, 3072), "bowl_style_y": (-1024, 2048),
+    "style_font_size": (8, 200), "style_max_width": (1, 1536),
 }
 
 
@@ -265,7 +274,7 @@ def template_image_path(session=None):
 def get_template_config(session=None):
     """Return the active template-card configuration as a dict.
 
-    Includes the resolved template/font paths and safe v4-3 layout settings.
+    Includes the resolved template/font paths and safe v5 layout settings.
     """
     from services.config_service import get_config
     cfg = get_config(session)
