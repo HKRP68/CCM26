@@ -163,6 +163,22 @@ def save_template_image(file_bytes, original_filename, variant="base"):
     return True, "Template image saved.", path
 
 
+def remove_template_image(variant="base"):
+    """Remove the uploaded blank-card image for exactly one rarity variant."""
+    variant = normalise_template_variant(variant)
+    stem = "template" if variant == "base" else f"template_{variant}"
+    removed = False
+    for ext in ALLOWED_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                removed = True
+            except OSError:
+                logger.exception("Failed to remove template image %s", path)
+    return removed
+
+
 def save_template_font(file_bytes, original_filename):
     """Validate and store the optional global card font (TTF or OTF)."""
     ext = _ext_from_filename(original_filename)
@@ -193,6 +209,20 @@ def save_template_font(file_bytes, original_filename):
             pass
         return False, f"Not a valid font file: {exc}", None
     return True, "Font file saved.", path
+
+
+def remove_template_font():
+    """Remove the optional shared font file and restore the renderer fallback."""
+    removed = False
+    for ext in ALLOWED_FONT_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                removed = True
+            except OSError:
+                logger.exception("Failed to remove template font %s", path)
+    return removed
 
 
 def normalise_template_settings(raw=None):
@@ -315,17 +345,16 @@ def player_template_variant(player):
 
 
 def template_image_path(session=None, variant="base"):
-    """Return a rarity template path, falling back to Base when not uploaded."""
+    """Return the uploaded image for exactly one rarity template, if present."""
     variant = normalise_template_variant(variant)
-    from services.config_service import get_config
-    base_path = template_asset_path(get_config(session).get("card_template_image_path"))
     if variant == "base":
-        return base_path
+        from services.config_service import get_config
+        return template_asset_path(get_config(session).get("card_template_image_path"))
     for ext in ALLOWED_EXT:
         path = os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}")
         if os.path.isfile(path):
             return path
-    return base_path
+    return None
 
 
 def list_template_variants(session=None):
@@ -339,7 +368,7 @@ def list_template_variants(session=None):
             for ext in ALLOWED_EXT
             if os.path.isfile(os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}"))
         ), None)
-        result[variant] = {"uploaded": bool(own_path), "uses_base_fallback": variant != "base" and not own_path and bool(base_path)}
+        result[variant] = {"uploaded": bool(own_path)}
     return result
 
 
