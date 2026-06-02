@@ -337,6 +337,47 @@
     box-shadow: 0 0 16px rgba(96, 220, 160, 0.08) inset;
   }
 
+  /* ════ Home mission hub ════ */
+  .mission-hub {
+    margin: 0.95rem 0 0.85rem;
+    border: 1px solid rgba(232,184,75,0.28);
+    background:
+      radial-gradient(circle at top right, rgba(232,184,75,0.13), transparent 42%),
+      linear-gradient(145deg, rgba(22,32,50,0.98), rgba(12,21,32,0.98));
+    border-radius: 20px; overflow: hidden;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .mission-hub-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.7rem; padding: 0.95rem 0.95rem 0.65rem; }
+  .mission-kicker { color: var(--accent); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 0.25rem; }
+  .mission-hub-title { margin: 0; color: var(--text); font-size: 1.12rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em; }
+  .mission-hub-sub { color: var(--muted); font-size: 0.73rem; margin-top: 0.2rem; }
+  .mission-toggle { display: flex; gap: 0.2rem; flex-shrink: 0; padding: 0.2rem; border-radius: 12px; border: 1px solid rgba(232,184,75,0.14); background: rgba(8,13,24,0.65); }
+  .mission-toggle-btn { border: 0; border-radius: 9px; padding: 0.42rem 0.52rem; background: transparent; color: var(--muted); font-family: inherit; font-size: 0.68rem; font-weight: 800; cursor: pointer; }
+  .mission-toggle-btn.active { background: var(--accent); color: #151005; box-shadow: 0 4px 12px rgba(232,184,75,0.22); }
+  .mission-list { padding: 0 0.75rem 0.5rem; }
+  .home-quest { width: 100%; display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: 0.55rem; padding: 0.62rem 0.18rem; border: 0; border-top: 1px solid rgba(107,122,150,0.14); background: transparent; color: var(--text); text-align: left; font-family: inherit; cursor: pointer; }
+  .home-quest-icon { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 10px; background: rgba(232,184,75,0.09); font-size: 1rem; }
+  .home-quest-title { font-size: 0.79rem; font-weight: 700; line-height: 1.2; }
+  .home-quest-progress { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.35rem; }
+  .home-quest-progress-track { height: 4px; flex: 1; overflow: hidden; border-radius: 9px; background: rgba(107,122,150,0.2); }
+  .home-quest-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg,var(--accent),var(--accent-2)); }
+  .home-quest-progress-fill.done { background: linear-gradient(90deg,var(--green),#00f5c4); }
+  .home-quest-count { color: var(--muted); font-size: 0.66rem; font-weight: 700; white-space: nowrap; }
+  .home-quest-reward { color: var(--accent); font-size: 0.69rem; font-weight: 800; white-space: nowrap; }
+  .mission-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.7rem 0.85rem; border-top: 1px solid rgba(232,184,75,0.12); background: rgba(8,13,24,0.34); }
+  .mission-footer-copy { color: var(--muted); font-size: 0.7rem; }
+  .mission-link { border: 0; background: transparent; color: var(--accent); padding: 0.2rem; font-family: inherit; font-size: 0.74rem; font-weight: 800; cursor: pointer; }
+  .mission-loading { padding: 1.1rem; text-align: center; color: var(--muted); font-size: 0.78rem; }
+  .tile.freepack.ready { animation: freePackTilePulse 1.8s ease-in-out infinite; border-color: rgba(167,139,250,0.9); }
+  .tile-badge { position: absolute; top: 0.55rem; right: 0.55rem; padding: 0.2rem 0.38rem; border-radius: 99px; background: var(--purple); color: #130c27; font-size: 0.56rem; font-weight: 900; letter-spacing: 0.08em; }
+  @keyframes freePackTilePulse { 0%,100% { box-shadow: 0 0 14px rgba(167,139,250,0.16) inset, 0 0 0 rgba(167,139,250,0); } 50% { box-shadow: 0 0 18px rgba(167,139,250,0.28) inset, 0 0 22px rgba(167,139,250,0.22); } }
+  .freepack-pop-panel { width: min(92vw, 390px); padding: 1.15rem; text-align: center; border: 1px solid rgba(167,139,250,0.72); background: radial-gradient(circle at 50% 0%, rgba(167,139,250,0.3), transparent 42%), var(--card); box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 38px rgba(167,139,250,0.2); }
+  .freepack-pop-gift { font-size: 4rem; filter: drop-shadow(0 10px 20px rgba(167,139,250,0.48)); animation: giftFloat 2s ease-in-out infinite; }
+  .freepack-pop-kicker { color: var(--purple); text-transform: uppercase; font-size: 0.65rem; font-weight: 900; letter-spacing: 0.2em; }
+  .freepack-pop-title { margin: 0.35rem 0 0.25rem; font-family: var(--font-display); font-size: 1.45rem; }
+  .freepack-pop-copy { margin: 0 0 1rem; color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+  @keyframes giftFloat { 0%,100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-8px) rotate(3deg); } }
+
   /* Clubs */
   .club-card {
     background: var(--card); border: 1px solid var(--border);
@@ -2021,6 +2062,26 @@
   <!-- Active event banner -->
   <div class="event-banner" id="event-banner" style="display:none;"></div>
 
+  <!-- Mission hub: quests are the first actionable content on every visit. -->
+  <section class="mission-hub" aria-labelledby="mission-hub-title">
+    <div class="mission-hub-head">
+      <div>
+        <div class="mission-kicker">Your game plan</div>
+        <h2 class="mission-hub-title" id="mission-hub-title">Today's quests</h2>
+        <div class="mission-hub-sub" id="mission-hub-sub">Complete quests to grow your squad.</div>
+      </div>
+      <div class="mission-toggle" aria-label="Quest period">
+        <button class="mission-toggle-btn active" data-home-qtab="daily" onclick="switchHomeQuestTab('daily')">Today</button>
+        <button class="mission-toggle-btn" data-home-qtab="monthly" onclick="switchHomeQuestTab('monthly')">Monthly</button>
+      </div>
+    </div>
+    <div class="mission-list" id="home-quest-list"><div class="mission-loading">Loading your game plan…</div></div>
+    <div class="mission-footer">
+      <span class="mission-footer-copy" id="home-quest-footer">Every quest moves you forward.</span>
+      <button class="mission-link" onclick="navigate('quests')">View all <span aria-hidden="true">→</span></button>
+    </div>
+  </section>
+
   <div class="tile-grid">
     <button class="tile match" onclick="navigate('match')">
       <div class="tile-icon">🏏</div>
@@ -2057,7 +2118,8 @@
       <div class="tile-label">Quests</div>
       <div class="tile-sub" id="quests-tile-sub">Daily challenges</div>
     </button>
-    <button class="tile freepack" onclick="navigate('freepack')">
+    <button class="tile freepack" id="home-freepack-tile" onclick="navigate('freepack')">
+      <span class="tile-badge" id="freepack-ready-badge" style="display:none;">READY</span>
       <div class="tile-icon">📦</div>
       <div class="tile-label">Free Pack</div>
       <div class="tile-sub" id="freepack-tile-sub">Watch &amp; win</div>
@@ -2960,7 +3022,53 @@ async function refreshDashboard() {
     if (sub && data.season.me.rank) sub.textContent = `Rank #${data.season.me.rank}`;
   }
   window._seasonInfo = data.season || null;
+
+  // Keep the first screen useful: surface missions and the free reward state.
+  refreshHomeHighlights();
 }
+
+async function refreshHomeHighlights() {
+  const [questsResult, freePackResult] = await Promise.all([
+    api('/api/webapp/quests', { type: 'all' }),
+    api('/api/webapp/freepack/status', {}),
+  ]);
+  if (questsResult.ok) { cachedQuests = questsResult.data.groups || {}; renderHomeQuests(); }
+  if (freePackResult.ok) updateHomeFreePack(freePackResult.data);
+}
+
+function updateHomeFreePack(data) {
+  const tile = document.getElementById('home-freepack-tile');
+  const badge = document.getElementById('freepack-ready-badge');
+  const sub = document.getElementById('freepack-tile-sub');
+  if (!tile || !badge || !sub || !data) return;
+  const ready = Boolean(data.ready && !data.roster_full);
+  tile.classList.toggle('ready', ready);
+  badge.style.display = ready ? '' : 'none';
+  sub.textContent = data.roster_full ? 'Roster is full' : (ready ? '🎁 Ready to open' : `⏱️ ${formatCountdown(data.remaining_seconds || 0)}`);
+  const isHomeOpen = document.getElementById('screen-home')?.classList.contains('active');
+  if (ready && isHomeOpen && !sessionStorage.getItem('freepack_ready_seen')) {
+    sessionStorage.setItem('freepack_ready_seen', '1');
+    showFreePackReadyPopup();
+  }
+}
+
+function showFreePackReadyPopup() {
+  if (document.getElementById('freepack-ready-popup')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'swap-overlay'; overlay.id = 'freepack-ready-popup';
+  overlay.innerHTML = `
+    <div class="swap-panel freepack-pop-panel">
+      <div class="freepack-pop-kicker">Free reward unlocked</div>
+      <div class="freepack-pop-gift">🎁</div>
+      <h2 class="freepack-pop-title">Your free pack is ready!</h2>
+      <p class="freepack-pop-copy">Open it now for a new player card and keep building your dream XI.</p>
+      <button class="spin-button" onclick="openFreePackFromPopup()" style="width:100%;">📦 Open free pack</button>
+      <button class="mission-link" onclick="closeFreePackReadyPopup()" style="margin-top:0.75rem;color:var(--muted);">Maybe later</button>
+    </div>`;
+  document.body.appendChild(overlay); hapticNotif('success');
+}
+function closeFreePackReadyPopup() { document.getElementById('freepack-ready-popup')?.remove(); }
+function openFreePackFromPopup() { closeFreePackReadyPopup(); navigate('freepack'); }
 
 function renderResumeBanner(lm) {
   const el = document.getElementById('resume-match-banner');
@@ -4937,7 +5045,53 @@ function shareInviteLink(link) {
 
 // ════════════════ Quests ════════════════
 let currentQuestTab = 'daily';
+let currentHomeQuestTab = 'daily';
 let cachedQuests = null;  // {daily: [], weekly: [], monthly: []}
+
+function switchHomeQuestTab(qtype) {
+  haptic('light');
+  currentHomeQuestTab = qtype;
+  document.querySelectorAll('[data-home-qtab]').forEach(el => el.classList.toggle('active', el.dataset.homeQtab === qtype));
+  renderHomeQuests();
+}
+
+function questRewardLabel(q) {
+  if (q.reward_coins) return `+${q.reward_coins.toLocaleString()} 🪙`;
+  if (q.reward_gems) return `+${q.reward_gems} 💎`;
+  if (q.reward_points) return `+${q.reward_points} QP`;
+  return 'Reward';
+}
+
+function renderHomeQuests() {
+  const el = document.getElementById('home-quest-list');
+  if (!el || !cachedQuests) return;
+  const list = cachedQuests[currentHomeQuestTab] || [];
+  const title = document.getElementById('mission-hub-title');
+  const sub = document.getElementById('mission-hub-sub');
+  const footer = document.getElementById('home-quest-footer');
+  title.textContent = currentHomeQuestTab === 'daily' ? "Today's quests" : 'Monthly quests';
+  sub.textContent = currentHomeQuestTab === 'daily' ? 'Finish today’s missions before they refresh.' : 'Bigger goals. Bigger rewards. All month long.';
+  if (!list.length) {
+    el.innerHTML = `<div class="mission-loading">🎯 No ${currentHomeQuestTab} quests right now.</div>`;
+    footer.textContent = 'Check back soon for new missions.';
+    return;
+  }
+  const done = list.filter(q => q.completed).length;
+  footer.textContent = `${done}/${list.length} complete · Tap a quest to see details.`;
+  el.innerHTML = list.map(q => `
+    <button class="home-quest" onclick="navigate('quests')">
+      <div class="home-quest-icon">${escapeHtml(q.emoji)}</div>
+      <div>
+        <div class="home-quest-title">${escapeHtml(q.title)}</div>
+        <div class="home-quest-progress">
+          <div class="home-quest-progress-track"><div class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%;"></div></div>
+          <span class="home-quest-count">${q.progress}/${q.target}</span>
+        </div>
+      </div>
+      <div class="home-quest-reward">${questRewardLabel(q)}</div>
+    </button>
+  `).join('');
+}
 
 function switchQuestTab(qtype) {
   currentQuestTab = qtype;
@@ -4964,6 +5118,7 @@ async function loadQuests() {
     }
   }
   renderQuestList();
+  renderHomeQuests();
 }
 
 function renderQuestList() {
