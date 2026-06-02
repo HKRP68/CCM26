@@ -170,21 +170,48 @@ def _template_font(tcfg, size):
     return ImageFont.load_default()
 
 
-def _fit_template_font(draw, tcfg, text, max_width, start_size, min_size):
+def _tracked_text_width(draw, text, font, letter_gap=0):
+    """Return rendered width for text with an extra gap between characters."""
+    text = str(text or "")
+    if not text:
+        return 0
+    character_width = sum(draw.textlength(character, font=font) for character in text)
+    return character_width + letter_gap * (len(text) - 1)
+
+
+def _fit_template_font(draw, tcfg, text, max_width, start_size, min_size, letter_gap=0):
     size = int(start_size)
     while size > int(min_size):
         font = _template_font(tcfg, size)
-        if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+        if _tracked_text_width(draw, text, font, letter_gap) <= max_width:
             return font
         size -= 2
     return _template_font(tcfg, min_size)
 
 
-def _draw_fit(draw, tcfg, text, xy, max_width, start_size, min_size, color,
-              anchor="la"):
+def _draw_tracked_text(draw, xy, text, font, color, letter_gap=0, anchor="la"):
+    """Draw text with CSS-like letter spacing while preserving its anchor."""
     text = str(text or "")
-    font = _fit_template_font(draw, tcfg, text, max_width, start_size, min_size)
-    draw.text(xy, text, font=font, fill=color, anchor=anchor)
+    if not text:
+        return
+    width = _tracked_text_width(draw, text, font, letter_gap)
+    x, y = xy
+    if anchor.startswith("m"):
+        x -= width / 2
+    elif anchor.startswith("r"):
+        x -= width
+    character_anchor = f"l{anchor[1:]}" if len(anchor) > 1 else "la"
+    for character in text:
+        draw.text((x, y), character, font=font, fill=color, anchor=character_anchor)
+        x += draw.textlength(character, font=font) + letter_gap
+
+
+def _draw_fit(draw, tcfg, text, xy, max_width, start_size, min_size, color,
+              anchor="la", letter_gap=0):
+    text = str(text or "")
+    font = _fit_template_font(draw, tcfg, text, max_width, start_size, min_size,
+                              letter_gap)
+    _draw_tracked_text(draw, xy, text, font, color, letter_gap, anchor)
 
 
 def _split_template_name(name):
@@ -201,11 +228,13 @@ def _trim_transparent(portrait):
     return portrait.crop(bbox) if bbox else portrait
 
 
-def _composite_template_portrait(base, player, settings):
-    """Draw the same player-page cutout used by the HTML generator."""
+def _composite_template_portrait(base, player, settings, force_global_portrait=False):
+    """Draw the player-page cutout, or the global PNG when previewing it."""
     try:
-        from services.player_portrait_service import get_player_portrait
-        portrait = get_player_portrait(player)
+        from services.player_portrait_service import (get_global_player_portrait,
+                                                      get_player_portrait)
+        portrait = (get_global_player_portrait() if force_global_portrait
+                    else get_player_portrait(player))
     except Exception:
         portrait = None
     if portrait is None:
@@ -278,7 +307,7 @@ def _template_bowling_style(player):
     return f"{hand} ARM {style}".strip()
 
 
-def generate_template_card(player) -> bytes | None:
+def generate_template_card(player, force_global_portrait=False) -> bytes | None:
     """Render a Base card using the website-managed v5 HTML layer order."""
     if getattr(player, "parent_player_id", None):
         return None
@@ -290,7 +319,8 @@ def generate_template_card(player) -> bytes | None:
         return None
     if not tcfg.get("image_path"):
         return None
-    cached = _TEMPLATE_CARD_CACHE.get(player.id)
+    cache_key = (player.id, bool(force_global_portrait))
+    cached = _TEMPLATE_CARD_CACHE.get(cache_key)
     if cached is not None:
         return cached
     try:
@@ -299,36 +329,44 @@ def generate_template_card(player) -> bytes | None:
         base = clean_template.copy()
         settings = tcfg["settings"]
         if tcfg.get("show_portrait", True):
-            _composite_template_portrait(base, player, settings)
+            _composite_template_portrait(base, player, settings, force_global_portrait)
         if settings["protect_bottom_box"]:
             _restore_bottom_box(base, clean_template)
 
         draw = ImageDraw.Draw(base)
         first_name, last_name = _split_template_name(player.name)
         _draw_fit(draw, tcfg, first_name, (settings["name_x"], settings["name_y"] + 110),
-                  650, 140, 72, _DARK_GREEN)
+                  650, settings["name_font_size"], 20, _DARK_GREEN,
+                  letter_gap=settings["name_letter_gap"])
         if last_name:
             _draw_fit(draw, tcfg, last_name, (settings["name_x"], settings["name_y"] + 260),
-                      650, 140, 72, _DARK_GREEN)
-        category_x = settings["cat_x"]
+                      650, settings["name_font_size"], 20, _DARK_GREEN,
+                      letter_gap=settings["name_letter_gap"])
         category_font = _template_font(tcfg, settings["cat_font_size"])
-        for character in str(player.category).upper():
-            draw.text((category_x, settings["cat_y"]), character, font=category_font, fill=_LIGHT_GREEN)
-            category_x += draw.textlength(character, font=category_font) + settings["cat_letter_gap"]
+        _draw_tracked_text(draw, (settings["cat_x"], settings["cat_y"]),
+                           str(player.category).upper(), category_font, _LIGHT_GREEN,
+                           settings["cat_letter_gap"])
         _draw_fit(draw, tcfg, int(player.rating), (settings["ovr_x"], settings["ovr_y"]),
-                  240, 128, 72, _RED, anchor="mm")
+                  240, settings["ovr_font_size"], 20, _RED, anchor="mm",
+                  letter_gap=settings["ovr_letter_gap"])
         _draw_fit(draw, tcfg, int(player.bat_rating), (settings["bat_x"], settings["bat_y"]),
-                  150, 92, 48, _RED, anchor="mm")
+                  150, settings["bat_font_size"], 20, _RED, anchor="mm",
+                  letter_gap=settings["bat_letter_gap"])
         _draw_fit(draw, tcfg, int(player.bowl_rating), (settings["bowl_x"], settings["bowl_y"]),
-                  150, 92, 48, _RED, anchor="mm")
+                  150, settings["bowl_font_size"], 20, _RED, anchor="mm",
+                  letter_gap=settings["bowl_letter_gap"])
         _draw_template_flag(base, draw, tcfg, player.country, settings)
-        _draw_fit(draw, tcfg, str(player.country).upper(), (405, 925), 280, 58, 30, _DARK_GREEN)
+        _draw_fit(draw, tcfg, str(player.country).upper(), (405, 925), 280,
+                  settings["country_font_size"], 20, _DARK_GREEN,
+                  letter_gap=settings["country_letter_gap"])
         _draw_fit(draw, tcfg, _template_batting_style(player),
                   (settings["bat_style_x"], settings["bat_style_y"]),
-                  settings["style_max_width"], settings["style_font_size"], 20, _DARK_GREEN)
+                  settings["style_max_width"], settings["bat_style_font_size"], 20,
+                  _DARK_GREEN, letter_gap=settings["bat_style_letter_gap"])
         _draw_fit(draw, tcfg, _template_bowling_style(player),
                   (settings["bowl_style_x"], settings["bowl_style_y"]),
-                  settings["style_max_width"], settings["style_font_size"], 20, _DARK_GREEN)
+                  settings["style_max_width"], settings["bowl_style_font_size"], 20,
+                  _DARK_GREEN, letter_gap=settings["bowl_style_letter_gap"])
         draw.line((1030, 939, 1442, 939), fill=_LINE_GREEN, width=2)
 
         buf = io.BytesIO()
@@ -336,7 +374,7 @@ def generate_template_card(player) -> bytes | None:
         result = buf.getvalue()
         if len(_TEMPLATE_CARD_CACHE) > 500:
             _TEMPLATE_CARD_CACHE.clear()
-        _TEMPLATE_CARD_CACHE[player.id] = result
+        _TEMPLATE_CARD_CACHE[cache_key] = result
         return result
     except Exception:
         logger.exception("Template card generation failed")
@@ -540,7 +578,9 @@ def invalidate_card_cache(player_id=None):
         _TEMPLATE_CARD_CACHE.clear()
     else:
         _CARD_CACHE.pop(player_id, None)
-        _TEMPLATE_CARD_CACHE.pop(player_id, None)
+        for key in tuple(_TEMPLATE_CARD_CACHE):
+            if key[0] == player_id:
+                _TEMPLATE_CARD_CACHE.pop(key, None)
 
 
 def invalidate_template_card_cache(player_id=None):
@@ -548,4 +588,6 @@ def invalidate_template_card_cache(player_id=None):
     if player_id is None:
         _TEMPLATE_CARD_CACHE.clear()
     else:
-        _TEMPLATE_CARD_CACHE.pop(player_id, None)
+        for key in tuple(_TEMPLATE_CARD_CACHE):
+            if key[0] == player_id:
+                _TEMPLATE_CARD_CACHE.pop(key, None)
