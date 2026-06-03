@@ -8378,7 +8378,7 @@ def admin_scorecard_settings():
     db = get_session()
     try:
         from services.config_service import get_config, save_config
-        from services.scorecard_card import normalize_scorecard_text_settings
+        from services.scorecard_card import SCORECARD_TEXT_FIELDS, normalize_scorecard_text_settings
         import re as _re
         import json as _json
 
@@ -8403,6 +8403,7 @@ def admin_scorecard_settings():
                     prefix = f"{card_type}_"
                     for key in request.form.getlist(f"{card_type}_field_keys"):
                         raw_text_settings[card_type][key] = {
+                            "text": request.form.get(f"{prefix}{key}_text"),
                             "font": request.form.get(f"{prefix}{key}_font"),
                             "size": request.form.get(f"{prefix}{key}_size"),
                             "x": request.form.get(f"{prefix}{key}_x"),
@@ -8427,7 +8428,8 @@ def admin_scorecard_settings():
         cfg = get_config(db)
         return render_template("admin_scorecard_settings.html",
                                cfg=cfg, presets=SCORECARD_COLOR_PRESETS,
-                               text_settings=normalize_scorecard_text_settings(cfg.get("scorecard_text_settings")))
+                               text_settings=normalize_scorecard_text_settings(cfg.get("scorecard_text_settings")),
+                               text_fields=SCORECARD_TEXT_FIELDS)
     finally:
         db.close()
 
@@ -8444,6 +8446,7 @@ def admin_scorecard_preview():
     try:
         from services.config_service import get_config
         from services.scorecard_card import (
+            SCORECARD_TEXT_FIELDS,
             generate_batting_scorecard, generate_bowling_scorecard,
             normalize_scorecard_text_settings,
         )
@@ -8456,11 +8459,13 @@ def admin_scorecard_preview():
         has_live_text_controls = False
         for ct in ("batting", "bowling"):
             raw_text_settings[ct] = {}
-            for key in ("team", "tag", "venue", "table_header", "table_body", "fow_title", "fow_body", "stat_label", "stat_value", "target"):
+            for field in SCORECARD_TEXT_FIELDS.get(ct, []):
+                key = field[0]
                 prefix = f"{ct}_{key}_"
-                if any((prefix + suffix) in request.args for suffix in ("font", "size", "x", "y")):
+                if any((prefix + suffix) in request.args for suffix in ("text", "font", "size", "x", "y")):
                     has_live_text_controls = True
                     raw_text_settings[ct][key] = {
+                        "text": request.args.get(prefix + "text"),
                         "font": request.args.get(prefix + "font"),
                         "size": request.args.get(prefix + "size"),
                         "x": request.args.get(prefix + "x"),
