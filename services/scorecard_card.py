@@ -210,6 +210,21 @@ SCORECARD_TEXT_FIELDS = {
         ("stat_label", "Bottom stat labels", ""),
         ("stat_value", "Bottom stat values", ""),
     ],
+    "summary": [
+        ("header_title", "SUMMARY header", "SUMMARY"),
+        ("match_no", "MATCH # header", ""),
+        ("stadium", "Stadium bar", ""),
+        ("innings_team", "Innings team names", ""),
+        ("innings_meta", "Overs text", ""),
+        ("innings_score", "Score text", ""),
+        ("row_name", "Batter/Bowler names", ""),
+        ("row_number", "Runs/Balls/Wickets/Overs values", ""),
+        ("result", "Result bar", ""),
+        ("potm_badge", "POTM badge", "POTM"),
+        ("potm_name", "POTM name", ""),
+        ("potm_label", "Performance label", "PERFORMANCE:"),
+        ("potm_value", "Performance value", ""),
+    ],
 }
 
 
@@ -221,9 +236,14 @@ def default_scorecard_text_settings():
         for field in fields:
             key, _label = field[:2]
             default_text = field[2] if len(field) > 2 else ""
+            summary_display = {
+                "header_title", "match_no", "stadium", "innings_team",
+                "innings_meta", "innings_score", "result", "potm_badge",
+                "potm_name", "potm_label", "potm_value",
+            }
             settings[card_type][key] = {
                 "text": default_text,
-                "font": "display" if key in {"team", "stat_value"} else "body",
+                "font": "display" if key in {"team", "stat_value"} or (card_type == "summary" and key in summary_display) else "body",
                 "size": 0,
                 "x": 0,
                 "y": 0,

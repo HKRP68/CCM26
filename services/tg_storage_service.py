@@ -165,3 +165,33 @@ async def upload_document_async(file_path: str, caption: str = None) -> str | No
     except Exception:
         logger.exception("upload_document failed")
         return None
+
+async def upload_json_async(payload: dict, filename: str, caption: str = None) -> str | None:
+    """Upload an in-memory JSON payload to the Telegram storage channel.
+
+    This is used for durable scorecard/match-summary data snapshots. It returns
+    the Telegram document ``file_id`` or ``None`` when storage is not configured
+    or Telegram rejects the upload.
+    """
+    if not is_configured():
+        return None
+    try:
+        import io
+        import json
+        token = os.getenv("BOT_TOKEN", "").strip()
+        bot = Bot(token=token)
+        chat_id = _chat_id()
+        data = json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+        bio = io.BytesIO(data)
+        bio.name = filename
+        msg = await bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(bio, filename=filename),
+            caption=caption[:1024] if caption else None,
+        )
+        if msg.document:
+            return msg.document.file_id
+        return None
+    except Exception:
+        logger.exception("upload_json_async failed")
+        return None
