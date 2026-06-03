@@ -22,7 +22,7 @@ from handlers.match import (
 
 logger = logging.getLogger(__name__)
 
-CM_LOBBY_EXPIRE = 90
+CM_LOBBY_EXPIRE = 75
 
 
 def _max_overs(session=None):
@@ -139,13 +139,16 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "═════════════════════════════\n"
             f"• <b>Challenger:</b> {_user_label(challenger)}\n"
             f"• <b>Invited:</b> {_user_label(target)}\n"
-            f"• <b>Rules:</b> 2 wickets per innings · up to {min(_max_overs(session), 2)} over(s)\n\n"
-            "The invited player must accept. After the toss, the match opens in the same Mini App board as /wpm.\n"
+            f"• <b>Rules:</b> 2 wickets per innings · up to {min(_max_overs(session), 2)} over(s)\n"
+            "• <b>Flow:</b> fast /wpm-style Mini App gameplay with live spectating\n\n"
+            "The invited player accepts, toss winner chooses, then everyone opens the same live board.\n"
             f"⏳ <i>Expires in {CM_LOBBY_EXPIRE} seconds if unanswered.</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Accept", callback_data=f"cm_accept_{lobby_id}_{target.id}"),
                 InlineKeyboardButton("❌ Deny", callback_data=f"cm_deny_{lobby_id}_{target.id}"),
+            ], [
+                InlineKeyboardButton("❌ Cancel Lobby", callback_data=f"cm_cancel_{lobby_id}_{challenger.id}"),
             ]]),
         )
         context.bot_data[_cm_lobby_key(lobby_id)]["lobby_msg_id"] = msg.message_id
@@ -190,14 +193,24 @@ async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAUL
         if not user or user.id != int(invited_id) or user.id != lobby.get("target_user_id"):
             await query.answer("Only the invited player can accept.", show_alert=True)
             return
+        if lobby.get("accepted"):
+            await query.answer("Challenge already accepted — toss winner must choose.", show_alert=True)
+            return
         valid, errors, count = _validate_user_xi(session, user.id)
         if not valid:
             await query.answer(_xi_error(errors if errors else count), show_alert=True)
             return
+        challenger = session.query(User).get(lobby["challenger_user_id"])
+        if not challenger:
+            _pop_lobby(context, lobby_id)
+            await query.answer("The challenger no longer exists.", show_alert=True)
+            return
         if (_active_cric_match_for_user(session, user.id)
+                or _active_cric_match_for_user(session, challenger.id)
                 or _cric_lobby_for_user(context.bot_data, user.id)
+                or _cric_lobby_for_user(context.bot_data, challenger.id)
                 or (_cm_user_lobby(context.bot_data, user.id) not in (None, lobby))):
-            await query.answer("You already have an active match or lobby!", show_alert=True)
+            await query.answer("A challenge player already has an active match or lobby!", show_alert=True)
             return
         lobby["accepted"] = True
         winner_id = random.choice([lobby["challenger_user_id"], lobby["target_user_id"]])
@@ -216,6 +229,33 @@ async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAUL
             ]]))
     finally:
         session.close()
+
+
+async def challenge_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow the /cm challenger or a chat admin to cancel a waiting lobby."""
+    query = update.callback_query
+    _, _, lobby_id, _challenger_id = query.data.split("_")
+    lobby_id = int(lobby_id)
+    lobby = context.bot_data.get(_cm_lobby_key(lobby_id))
+    if not lobby:
+        await query.answer("This challenge is no longer active.", show_alert=True)
+        return
+    if lobby.get("accepted"):
+        await query.answer("This challenge has already reached the toss.", show_alert=True)
+        return
+    is_admin = False
+    try:
+        member = await context.bot.get_chat_member(lobby["chat_id"], query.from_user.id)
+        is_admin = member.status in ("administrator", "creator")
+    except Exception:
+        pass
+    if query.from_user.id != lobby.get("challenger_tg_id") and not is_admin:
+        await query.answer("Only the challenger or a chat admin can cancel this lobby.", show_alert=True)
+        return
+    _pop_lobby(context, lobby_id)
+    _cancel_cm_timer(context, lobby_id)
+    await query.answer("Challenge cancelled.")
+    await query.edit_message_text("❌ /cm challenge lobby has been cancelled.")
 
 
 async def challenge_deny_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,6 +305,15 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
 
         challenger = session.query(User).get(lobby["challenger_user_id"])
         target = session.query(User).get(lobby["target_user_id"])
+        if not challenger or not target:
+            _pop_lobby(context, lobby_id)
+            await query.answer("Challenge players no longer exist.", show_alert=True)
+            return
+        if (_active_cric_match_for_user(session, challenger.id)
+                or _active_cric_match_for_user(session, target.id)):
+            _pop_lobby(context, lobby_id)
+            await query.answer("A challenge player is already in another active match.", show_alert=True)
+            return
         opponent_id = target.id if winner_id == challenger.id else challenger.id
         settings = random_match_settings()
         match = Match(

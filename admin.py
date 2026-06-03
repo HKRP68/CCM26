@@ -5958,8 +5958,14 @@ def match_rest_action():
                     from services.match_webapp_service import finalize_webapp_match
                     fin = finalize_webapp_match(db, match.id)
                     _broadcast_match_result(match.id, (fin or {}).get("result") or {})
-                elif _should_refresh_live_scorecard(res, action_type):
-                    _broadcast_match_scorecard(match.id)
+                else:
+                    from services.match_state_store import A_PICK_DELIVERY as _DELIVERY
+                    if (action_type == "shot" and isinstance(res, dict)
+                            and res.get("need_new_bat")
+                            and get_next_action(match.id) == _DELIVERY):
+                        _broadcast_wpm_current_batter_card(match.id)
+                    if _should_refresh_live_scorecard(res, action_type):
+                        _broadcast_match_scorecard(match.id)
             except Exception:
                 logger.exception("match_rest_action broadcast/finalize failed")
             return {"ok": True, "success": True, "result": res}
@@ -5998,6 +6004,10 @@ def match_rest_action():
                 return {"ok": False, "error": f"Unknown action type '{env_type}'."}, 400
             if not ok:
                 return {"ok": False, "error": res, "message": res}, 400
+            if env_type == "wicket_batsman":
+                _broadcast_wpm_current_batter_card(match.id)
+            elif env_type == "over_bowler":
+                _broadcast_wpm_current_bowler_card(match.id)
             return _finalize_and_respond(res, env_type)
 
         if role == "bowler":
@@ -6534,7 +6544,7 @@ def _playmatch_spectate_markup(match_id, chat_id):
             return None
         return {
             "inline_keyboard": [[{
-                "text": "Playmatch - Spectate",
+                "text": "👁 Spectate / Play Match",
                 "url": url,
             }]]
         }
@@ -6916,9 +6926,13 @@ def webapp_match_play_shot():
                 logger.exception("match finalize/broadcast failed")
         else:
             try:
+                from services.match_state_store import A_PICK_DELIVERY as _DELIVERY
+                if (isinstance(res, dict) and res.get("need_new_bat")
+                        and _gna(match_id) == _DELIVERY):
+                    _broadcast_wpm_current_batter_card(match_id)
                 _broadcast_match_scorecard(match_id)
             except Exception:
-                logger.exception("scorecard broadcast failed (non-fatal)")
+                logger.exception("scorecard/player-card broadcast failed (non-fatal)")
         snap = build_snapshot(db, match_id, user.id)
         return {"ok": True, "result": res, "snapshot": snap}
     except Exception as e:

@@ -64,7 +64,7 @@ from handlers.bowlout import (
     bowlout_pick_callback,
 )
 from handlers.catch import bal_handler, catch_handler
-from handlers.challenge import challenge_handler, challenge_accept_callback, challenge_deny_callback, challenge_toss_callback, challenge_pick_callback
+from handlers.challenge import challenge_handler, challenge_accept_callback, challenge_cancel_callback, challenge_deny_callback, challenge_toss_callback, challenge_pick_callback
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
@@ -763,6 +763,7 @@ def main():
         app.add_handler(CommandHandler("cm", challenge_handler))
         app.add_handler(CallbackQueryHandler(challenge_accept_callback, pattern=r"^cm_accept_"))
         app.add_handler(CallbackQueryHandler(challenge_deny_callback, pattern=r"^cm_deny_"))
+        app.add_handler(CallbackQueryHandler(challenge_cancel_callback, pattern=r"^cm_cancel_"))
         app.add_handler(CallbackQueryHandler(challenge_toss_callback, pattern=r"^cm_toss_"))
         app.add_handler(CallbackQueryHandler(challenge_pick_callback, pattern=r"^cm_pick_"))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
