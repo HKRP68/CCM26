@@ -634,7 +634,7 @@ def set_delivery(match_id, user_id, variation, length=None):
 
 # ── Processing lock: stops a double-tap from firing two actions ───────
 import time as _time
-_ACTION_LOCK_SECONDS = 8  # auto-expires so a crashed action can't wedge a match
+_ACTION_LOCK_SECONDS = 4  # auto-expires so a crashed action can't wedge a match
 
 
 def _is_processing(state):
