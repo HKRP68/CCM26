@@ -1,5 +1,6 @@
-"""Two-player /cm challenge mode built on the regular match engine."""
+"""Two-player /cm challenge mode using the Mini App match flow."""
 
+import logging
 import random
 from datetime import datetime, timedelta
 
@@ -7,9 +8,21 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import Match, Player, User, UserRoster
+from models import Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
-from handlers.match import _active_match_in_chat, _gxi, _mention
+from handlers.match import (
+    _active_cric_match_for_user,
+    _active_cric_match_in_chat,
+    _active_match_in_chat,
+    _chat_busy_message,
+    _cric_lobby_for_user,
+    _mention,
+    _user_label,
+)
+
+logger = logging.getLogger(__name__)
+
+CM_LOBBY_EXPIRE = 90
 
 
 def _max_overs(session=None):
@@ -18,35 +31,63 @@ def _max_overs(session=None):
     return get_challenge_max_overs(session)
 
 
-def _state(context, match_id):
-    return context.bot_data.setdefault(f"challenge_{match_id}", {"bat": [], "bowl": []})
+def _cm_lobby_key(lobby_id):
+    return f"cm_lobby_{lobby_id}"
 
 
-def _picker(match_id, user, players, kind, chosen):
-    title = "BATSMAN" if kind == "bat" else "BOWLER"
-    rows = []
-    for player in players:
-        picked = player["roster_id"] in chosen
-        label = f"{'✅ ' if picked else ''}{player['name']} — {player['rating']}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"cm_pick_{kind}_{match_id}_{user.id}_{player['roster_id']}")])
-    return (
-        f"{'🏏' if kind == 'bat' else '🎳'} <b>CHALLENGE MODE — SELECT 2 {title}S</b>\n\n"
-        f"{_mention(user)}, choose {2 - len(chosen)} more. A player cannot be selected twice.",
-        InlineKeyboardMarkup(rows),
-    )
+def _cm_chat_key(chat_id):
+    return f"cm_lobby_chat_{chat_id}"
 
 
-def _xi_error(count):
-    if count == 0:
+def _cm_user_lobby(bot_data, user_id):
+    return next((lobby for key, lobby in bot_data.items()
+                 if key.startswith("cm_lobby_")
+                 and isinstance(lobby, dict)
+                 and user_id in (lobby.get("challenger_user_id"),
+                                 lobby.get("target_user_id"))), None)
+
+
+def _pop_lobby(context, lobby_id):
+    key = _cm_lobby_key(lobby_id)
+    lobby = context.bot_data.pop(key, None)
+    if lobby:
+        context.bot_data.pop(_cm_chat_key(lobby.get("chat_id")), None)
+    return lobby
+
+
+def _cancel_cm_timer(context, lobby_id):
+    try:
+        if context.job_queue:
+            for job in context.job_queue.get_jobs_by_name(f"cm_lobby_{lobby_id}"):
+                job.schedule_removal()
+    except Exception:
+        logger.exception("Failed to cancel /cm lobby timer")
+
+
+def _xi_error(errors_or_count):
+    if isinstance(errors_or_count, (list, tuple)):
+        return "❌ Your playing XI is invalid. Use /xi to fix it:\n" + "\n".join(
+            f"• {error}" for error in errors_or_count)
+    if errors_or_count == 0:
         return "❌ You do not have a squad yet. Use /debut first, then accept the challenge again."
-    return f"❌ You need a playing XI before accepting challenge mode. You currently have {count}/11 players. Use /autobuild after completing your squad."
+    return ("❌ You need a valid playing XI before accepting challenge mode. "
+            f"You currently have {errors_or_count}/11 players. Use /autobuild or /xi after completing your squad.")
+
+
+def _validate_user_xi(session, user_id):
+    from handlers.lineup import validate_xi, _get_ordered_roster
+    roster = _get_ordered_roster(session, user_id)
+    valid, errors = validate_xi(roster)
+    return valid, errors, len(roster)
 
 
 async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create a targeted /cm lobby, mirroring /wpm until launch."""
     if not context.args:
         await update.message.reply_text("Usage: <code>/cm @username</code>", parse_mode="HTML")
         return
     target_name = context.args[0].lstrip("@").strip()
+    cid = update.effective_chat.id
     session = get_session()
     try:
         challenger = session.query(User).filter(User.telegram_id == update.effective_user.id).first()
@@ -60,62 +101,118 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target.id == challenger.id:
             await update.message.reply_text("❌ You cannot challenge yourself.")
             return
-        count = session.query(UserRoster).filter(UserRoster.user_id == challenger.id).count()
-        if count < 11:
-            await update.message.reply_text(_xi_error(count))
+
+        valid, errors, count = _validate_user_xi(session, challenger.id)
+        if not valid:
+            await update.message.reply_text(_xi_error(errors if errors else count), parse_mode="HTML")
             return
-        existing = _active_match_in_chat(session, update.effective_chat.id)
+
+        existing = _active_match_in_chat(session, cid) or _active_cric_match_in_chat(session, cid)
         if existing:
-            await update.message.reply_text("❌ This chat already has an active match invitation or match.")
+            await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
             return
-        settings = random_match_settings()
-        now = datetime.utcnow()
-        match = Match(
-            user1_id=challenger.id, user2_id=target.id, status="pending",
-            stadium=settings["stadium"], pitch_type=settings["pitch_type"], weather=settings["weather"],
-            temperature=settings["temperature"], umpire1=settings["umpire1"], umpire2=settings["umpire2"],
-            chat_id=update.effective_chat.id, created_at=now, expires_at=now + timedelta(seconds=MATCH_EXPIRE),
-        )
-        session.add(match); session.commit()
-        _state(context, match.id)["mode"] = "challenge"
-        await update.message.reply_text(
-            f"⚔️ <b>CHALLENGE MODE</b>\n\n{_mention(challenger)} challenged {_mention(target)}.\n"
-            f"🏏 2 batsmen vs 2 bowlers\n🎯 2 wickets per innings\n⏱ Maximum {_max_overs(session)} overs\n\n"
-            "The invited player needs a completed XI. If they have no squad yet, they should use /debut first.",
+        if (_active_cric_match_for_user(session, challenger.id)
+                or _cric_lobby_for_user(context.bot_data, challenger.id)
+                or _cm_user_lobby(context.bot_data, challenger.id)):
+            await update.message.reply_text("⚠️ You already have an active match or lobby!")
+            return
+        if context.bot_data.get(_cm_chat_key(cid)):
+            await update.message.reply_text("⚠️ There is already a /cm challenge waiting in this chat!")
+            return
+
+        lobby_id = random.randint(100000, 999999)
+        while context.bot_data.get(_cm_lobby_key(lobby_id)):
+            lobby_id = random.randint(100000, 999999)
+        context.bot_data[_cm_lobby_key(lobby_id)] = {
+            "lobby_id": lobby_id,
+            "chat_id": cid,
+            "challenger_user_id": challenger.id,
+            "challenger_tg_id": challenger.telegram_id,
+            "target_user_id": target.id,
+            "target_tg_id": target.telegram_id,
+            "overs": min(_max_overs(session), 2),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        context.bot_data[_cm_chat_key(cid)] = lobby_id
+        msg = await update.message.reply_text(
+            f"⚔️ <b>CHALLENGE MODE LOBBY</b>\n"
+            "═════════════════════════════\n"
+            f"• <b>Challenger:</b> {_user_label(challenger)}\n"
+            f"• <b>Invited:</b> {_user_label(target)}\n"
+            f"• <b>Rules:</b> 2 wickets per innings · up to {min(_max_overs(session), 2)} over(s)\n\n"
+            "The invited player must accept. After the toss, the match opens in the same Mini App board as /wpm.\n"
+            f"⏳ <i>Expires in {CM_LOBBY_EXPIRE} seconds if unanswered.</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Accept", callback_data=f"cm_accept_{match.id}_{target.id}"),
-                InlineKeyboardButton("❌ Deny", callback_data=f"cm_deny_{match.id}_{target.id}"),
+                InlineKeyboardButton("✅ Accept", callback_data=f"cm_accept_{lobby_id}_{target.id}"),
+                InlineKeyboardButton("❌ Deny", callback_data=f"cm_deny_{lobby_id}_{target.id}"),
             ]]),
         )
+        context.bot_data[_cm_lobby_key(lobby_id)]["lobby_msg_id"] = msg.message_id
+        try:
+            if context.job_queue:
+                context.job_queue.run_once(
+                    _expire_cm_lobby, CM_LOBBY_EXPIRE,
+                    name=f"cm_lobby_{lobby_id}",
+                    data={"lobby_id": lobby_id, "chat_id": cid, "message_id": msg.message_id},
+                )
+        except Exception:
+            logger.exception("Failed to schedule /cm lobby expiry")
     finally:
         session.close()
 
 
+async def _expire_cm_lobby(ctx):
+    lobby_id = ctx.job.data["lobby_id"]
+    lobby = _pop_lobby(ctx, lobby_id)
+    if not lobby or lobby.get("accepted"):
+        return
+    try:
+        await ctx.bot.edit_message_text(
+            "⏰ <b>Challenge expired</b> — no response.\nStart again with /cm @username.",
+            chat_id=ctx.job.data["chat_id"], message_id=ctx.job.data["message_id"],
+            parse_mode="HTML")
+    except Exception:
+        logger.exception("/cm lobby expiry message failed")
+
+
 async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    _, _, match_id, invited_id = query.data.split("_")
+    _, _, lobby_id, invited_id = query.data.split("_")
+    lobby_id = int(lobby_id)
+    lobby = context.bot_data.get(_cm_lobby_key(lobby_id))
+    if not lobby:
+        await query.answer("This challenge is no longer active.", show_alert=True)
+        return
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == query.from_user.id).first()
-        if not user or user.id != int(invited_id):
-            await query.answer("Only the invited player can accept.", show_alert=True); return
-        match = session.query(Match).get(int(match_id))
-        if not match or match.status != "pending":
-            await query.answer("This invitation is no longer active.", show_alert=True); return
-        count = session.query(UserRoster).filter(UserRoster.user_id == user.id).count()
-        if count < 11:
-            await query.answer(_xi_error(count), show_alert=True); return
-        match.status = "toss"; match.overs = _max_overs(session)
-        winner_id = random.choice([match.user1_id, match.user2_id]); match.toss_winner_id = winner_id
-        session.commit()
+        if not user or user.id != int(invited_id) or user.id != lobby.get("target_user_id"):
+            await query.answer("Only the invited player can accept.", show_alert=True)
+            return
+        valid, errors, count = _validate_user_xi(session, user.id)
+        if not valid:
+            await query.answer(_xi_error(errors if errors else count), show_alert=True)
+            return
+        if (_active_cric_match_for_user(session, user.id)
+                or _cric_lobby_for_user(context.bot_data, user.id)
+                or (_cm_user_lobby(context.bot_data, user.id) not in (None, lobby))):
+            await query.answer("You already have an active match or lobby!", show_alert=True)
+            return
+        lobby["accepted"] = True
+        winner_id = random.choice([lobby["challenger_user_id"], lobby["target_user_id"]])
         winner = session.query(User).get(winner_id)
+        lobby["toss_winner_id"] = winner_id
+        lobby["toss_winner_tg_id"] = winner.telegram_id
+        _cancel_cm_timer(context, lobby_id)
         await query.answer("Challenge accepted!")
         await query.edit_message_text(
-            f"🪙 <b>CHALLENGE TOSS</b>\n\n{_mention(winner)} won the toss. Choose your call:",
+            "🪙 <b>CHALLENGE TOSS</b>\n"
+            "═════════════════════════════\n"
+            f"{_mention(winner)} won the toss. Choose your decision:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏏 Bat First", callback_data=f"cm_toss_bat_{match.id}_{winner_id}"),
-                InlineKeyboardButton("🎳 Bowl First", callback_data=f"cm_toss_bowl_{match.id}_{winner_id}"),
+                InlineKeyboardButton("🏏 Bat First", callback_data=f"cm_toss_bat_{lobby_id}_{winner_id}"),
+                InlineKeyboardButton("🎳 Bowl First", callback_data=f"cm_toss_bowl_{lobby_id}_{winner_id}"),
             ]]))
     finally:
         session.close()
@@ -123,76 +220,100 @@ async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAUL
 
 async def challenge_deny_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    _, _, match_id, invited_id = query.data.split("_")
+    _, _, lobby_id, invited_id = query.data.split("_")
+    lobby_id = int(lobby_id)
+    lobby = context.bot_data.get(_cm_lobby_key(lobby_id))
+    if not lobby:
+        await query.answer("This challenge is no longer active.", show_alert=True)
+        return
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == query.from_user.id).first()
-        if not user or user.id != int(invited_id):
-            await query.answer("Only the invited player can deny.", show_alert=True); return
-        match = session.query(Match).get(int(match_id))
-        if match and match.status == "pending": match.status = "expired"; session.commit()
-        await query.answer(); await query.edit_message_text("❌ Challenge denied.")
+        if not user or user.id != int(invited_id) or user.id != lobby.get("target_user_id"):
+            await query.answer("Only the invited player can deny.", show_alert=True)
+            return
+        _pop_lobby(context, lobby_id)
+        _cancel_cm_timer(context, lobby_id)
+        await query.answer()
+        await query.edit_message_text("❌ Challenge denied.")
     finally:
         session.close()
 
 
 async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    _, _, decision, match_id, winner_id = query.data.split("_")
+    _, _, decision, lobby_id, winner_id = query.data.split("_")
+    lobby_id = int(lobby_id)
+    winner_id = int(winner_id)
+    lobby = context.bot_data.get(_cm_lobby_key(lobby_id))
+    if not lobby or not lobby.get("accepted"):
+        await query.answer("This toss is no longer active.", show_alert=True)
+        return
+    if decision not in ("bat", "bowl"):
+        await query.answer("Invalid toss decision.", show_alert=True)
+        return
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == query.from_user.id).first()
-        if not user or user.id != int(winner_id):
-            await query.answer("Toss winner only.", show_alert=True); return
-        match = session.query(Match).get(int(match_id))
-        if not match or match.status != "toss":
-            await query.answer("This toss is no longer active.", show_alert=True); return
-        other = match.user2_id if user.id == match.user1_id else match.user1_id
-        match.toss_decision = decision
-        match.batting_first_id, match.bowling_first_id = ((user.id, other) if decision == "bat" else (other, user.id))
-        match.status = "selecting"; session.commit()
-        batting = session.query(User).get(match.batting_first_id)
-        state = _state(context, match.id); state.update({"bat_uid": batting.id, "bowl_uid": match.bowling_first_id, "bat": [], "bowl": []})
-        text, keyboard = _picker(match.id, batting, _gxi(session, batting.id), "bat", [])
-        await query.answer(); await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
-    finally:
-        session.close()
+        if not user or user.id != winner_id or winner_id != lobby.get("toss_winner_id"):
+            await query.answer("Toss winner only.", show_alert=True)
+            return
+        if _active_cric_match_in_chat(session, lobby["chat_id"]):
+            _pop_lobby(context, lobby_id)
+            await query.answer("A match is already active in this chat.", show_alert=True)
+            return
 
+        challenger = session.query(User).get(lobby["challenger_user_id"])
+        target = session.query(User).get(lobby["target_user_id"])
+        opponent_id = target.id if winner_id == challenger.id else challenger.id
+        settings = random_match_settings()
+        match = Match(
+            user1_id=challenger.id, user2_id=target.id, status="toss",
+            overs=lobby["overs"], toss_winner_id=winner_id,
+            toss_decision=decision,
+            batting_first_id=winner_id if decision == "bat" else opponent_id,
+            bowling_first_id=opponent_id if decision == "bat" else winner_id,
+            stadium=settings["stadium"], pitch_type=settings["pitch_type"],
+            weather=settings["weather"], temperature=settings["temperature"],
+            umpire1=settings["umpire1"], umpire2=settings["umpire2"],
+            chat_id=lobby["chat_id"], created_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
+        )
+        session.add(match)
+        session.commit()
 
-async def challenge_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    _, _, kind, match_id, owner_id, roster_id = query.data.split("_")
-    match_id, owner_id, roster_id = int(match_id), int(owner_id), int(roster_id)
-    session = get_session()
-    try:
-        owner = session.query(User).filter(User.telegram_id == query.from_user.id).first()
-        if not owner or owner.id != owner_id:
-            await query.answer("That picker belongs to the other captain.", show_alert=True); return
-        state = _state(context, match_id); key = "bat" if kind == "bat" else "bowl"
-        xi = _gxi(session, owner.id)
-        if roster_id not in {p["roster_id"] for p in xi}:
-            await query.answer("That player is not in your XI.", show_alert=True); return
-        if roster_id in state[key]:
-            await query.answer("You already picked that player.", show_alert=True); return
-        state[key].append(roster_id)
-        await query.answer("Player selected.")
-        if len(state[key]) < 2:
-            text, keyboard = _picker(match_id, owner, xi, kind, state[key])
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard); return
-        if kind == "bat":
-            bowler = session.query(User).get(state["bowl_uid"])
-            text, keyboard = _picker(match_id, bowler, _gxi(session, bowler.id), "bowl", [])
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard); return
-        batting = session.query(User).get(state["bat_uid"]); bowling = session.query(User).get(state["bowl_uid"])
-        batsmen = [p for p in _gxi(session, batting.id) if p["roster_id"] in state["bat"]]
-        bowlers = [p for p in _gxi(session, bowling.id) if p["roster_id"] in state["bowl"]]
-        context.bot_data[f"bat_xi_{match_id}"] = batsmen; context.bot_data[f"bowl_xi_{match_id}"] = bowlers
-        context.bot_data[f"bat_uid_{match_id}"] = batting.id; context.bot_data[f"bowl_uid_{match_id}"] = bowling.id
-        context.bot_data[f"bat_uname_{match_id}"] = batting.username; context.bot_data[f"bowl_uname_{match_id}"] = bowling.username
-        rows = [[InlineKeyboardButton(p["name"], callback_data=f"op1_{match_id}_{batting.id}_{p['roster_id']}")] for p in batsmen]
+        from services.match_webapp_service import init_match_for_webapp
+        ok, message = init_match_for_webapp(session, match.id, challenge_rules=True)
+        if not ok:
+            session.delete(match)
+            session.commit()
+            await query.answer(f"Failed to launch challenge: {message}", show_alert=True)
+            return
+
+        _pop_lobby(context, lobby_id)
+        await query.answer()
         await query.edit_message_text(
-            f"✅ <b>CHALLENGE SQUADS LOCKED</b>\n\n🏏 {_mention(batting)} selected 2 batsmen.\n"
-            f"🎳 {_mention(bowling)} selected 2 bowlers.\n\n{_mention(batting)}, choose the striker:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+            f"✅ {_user_label(user)} elected to {'BAT' if decision == 'bat' else 'BOWL'} FIRST.\n"
+            "Opening the Challenge Mode Mini App…")
+        bat_user = session.query(User).get(match.batting_first_id)
+        bowl_user = session.query(User).get(match.bowling_first_id)
+        bat_team = bat_user.team_name or f"@{bat_user.username}'s XI"
+        bowl_team = bowl_user.team_name or f"@{bowl_user.username}'s XI"
+        from services.match_broadcast import send_match_ready_message
+        await send_match_ready_message(
+            context, lobby["chat_id"], match, bat_team, bowl_team,
+            _mention(bat_user), _mention(bowl_user),
+            rules_note="Challenge Mode · 2 wickets per innings")
+    except Exception:
+        session.rollback()
+        logger.exception("/cm toss decision failed")
+        await query.answer("Failed to launch challenge match.", show_alert=True)
     finally:
         session.close()
+
+
+# Legacy callback kept for safety if old inline buttons are still delivered.
+async def challenge_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer(
+        "This /cm challenge now opens in the Mini App after the toss. Start a fresh /cm if needed.",
+        show_alert=True)
