@@ -605,6 +605,92 @@ def get_bowling_options(match_id, user_id):
                        "bowl_rating": bowler.get("bowl_rating")}}
 
 
+def _ci_lookup(options, value):
+    """Case-insensitive option lookup that returns the canonical option text."""
+    raw = str(value or "").strip()
+    for opt in options or []:
+        if str(opt).strip().lower() == raw.lower():
+            return opt
+    return None
+
+
+def _normalise_delivery_choice(state, delivery, length=None):
+    """Validate and canonicalize a Mini-App delivery using /playmatch options.
+
+    The Mini App sends one button label such as ``Leg Cutter Good Length`` while
+    the older bot flow sends ``variation`` and ``length`` separately.  This
+    helper accepts either shape, resolves the canonical variation/length from
+    ``services.bowling_service.get_delivery_options`` (the same vocabulary used
+    by /playmatch and /vsbot), and returns a full delivery string that the shared
+    probability engine can parse correctly.
+    """
+    bowler = state.get("current_bowler") or {}
+    opts = _get_delivery_options(bowler.get("bowl_style", "Medium Pacer"),
+                                 bowler.get("bowl_hand", "Right"))
+    raw = str(delivery or "").strip()
+    if not raw:
+        return False, "Pick a delivery.", None
+
+    if opts.get("is_spinner"):
+        spin_delivery = _ci_lookup(opts.get("deliveries", []), raw)
+        if not spin_delivery:
+            allowed = ", ".join(opts.get("deliveries", []))
+            return False, f"Pick a valid spin delivery: {allowed}", None
+        return True, "", {
+            "delivery": spin_delivery,
+            "variation": spin_delivery,
+            "length": None,
+            "is_spinner": True,
+            "options": opts,
+        }
+
+    variations = opts.get("variations", [])
+    lengths = opts.get("lengths", [])
+    if length:
+        variation = _ci_lookup(variations, raw)
+        canonical_length = _ci_lookup(lengths, length)
+        if variation and canonical_length:
+            return True, "", {
+                "delivery": f"{variation} {canonical_length}",
+                "variation": variation,
+                "length": canonical_length,
+                "is_spinner": False,
+                "options": opts,
+            }
+
+    # One-button Mini App shape: split by the longest valid length suffix first.
+    for candidate_length in sorted(lengths, key=len, reverse=True):
+        if raw.lower().endswith(candidate_length.lower()):
+            prefix = raw[:len(raw) - len(candidate_length)].strip()
+            variation = _ci_lookup(variations, prefix)
+            if variation:
+                return True, "", {
+                    "delivery": f"{variation} {candidate_length}",
+                    "variation": variation,
+                    "length": candidate_length,
+                    "is_spinner": False,
+                    "options": opts,
+                }
+
+    # A variation-only pacer delivery is allowed for backward compatibility; use
+    # Good/Good Length when available, matching the old /playmatch fallback.
+    variation = _ci_lookup(variations, raw)
+    if variation:
+        default_length = (_ci_lookup(lengths, "Good")
+                          or _ci_lookup(lengths, "Good Length")
+                          or (lengths[0] if lengths else "Good"))
+        return True, "", {
+            "delivery": f"{variation} {default_length}".strip(),
+            "variation": variation,
+            "length": default_length,
+            "is_spinner": False,
+            "options": opts,
+        }
+
+    combos = [f"{v} {l}" for v in variations for l in lengths] or variations
+    return False, "Pick a valid delivery: " + ", ".join(combos[:12]), None
+
+
 def set_delivery(match_id, user_id, variation, length=None):
     """Bowler locks in the delivery (variation + optional length). The batsman
     then sees 'delivery coming' and picks a shot. Returns (ok, msg)."""
@@ -619,15 +705,30 @@ def set_delivery(match_id, user_id, variation, length=None):
 
     bowler = state.get("current_bowler") or {}
     spinner = _is_spinner(bowler.get("bowl_style", ""))
-    if spinner:
-        delivery = variation  # spinners pick a single delivery
-    else:
-        if not length:
-            # store the variation, wait for length selection
-            state["selected_variation"] = variation
+    if not spinner and not length:
+        opts = _get_delivery_options(bowler.get("bowl_style", "Medium Pacer"),
+                                     bowler.get("bowl_hand", "Right"))
+        variation_only = _ci_lookup(opts.get("variations", []), variation)
+        if variation_only:
+            # Older two-step flow: variation first, length second. Keep this
+            # behaviour for Telegram /playmatch-style callers.
+            state["selected_variation"] = variation_only
             mwa.save_state(match_id, state, next_action=A_PICK_LENGTH)
             return True, "Variation set — now pick a length."
-        delivery = f"{variation} {length}".strip()
+        # Mini-App/REST callers may send the full pacer combo as `variation`.
+        ok_norm, msg_norm, info = _normalise_delivery_choice(state, variation)
+        if not ok_norm:
+            return False, msg_norm
+        delivery = info["delivery"]
+        variation = info["variation"]
+        length = info.get("length")
+    else:
+        ok_norm, msg_norm, info = _normalise_delivery_choice(state, variation, length=length)
+        if not ok_norm:
+            return False, msg_norm
+        delivery = info["delivery"]
+        variation = info["variation"]
+        length = info.get("length")
 
     state["current_delivery"] = delivery
     state["selected_variation"] = variation
@@ -699,18 +800,27 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
     if not delivery:
         return False, "Pick a delivery.", None
 
+    ok_norm, msg_norm, info = _normalise_delivery_choice(state, delivery)
+    if not ok_norm:
+        return False, msg_norm, None
+
     _set_processing(state, True)
     bowler = state.get("current_bowler") or {}
     kmh = _speed_to_kmh(speed, bowler)
 
-    state["current_delivery"] = str(delivery)
+    state["current_delivery"] = info["delivery"]
     state["current_speed"] = (speed or "medium")
     state["last_speed"] = kmh          # km/h, surfaced to clients
-    state["selected_variation"] = str(delivery)
+    state["selected_variation"] = info["variation"]
+    state["selected_length"] = info.get("length")
     _set_processing(state, False)
     mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
     return True, "Delivery on its way — batsman to play.", {
-        "delivery": str(delivery), "speed": speed or "medium", "kmh": kmh}
+        "delivery": info["delivery"],
+        "variation": info["variation"],
+        "length": info.get("length"),
+        "speed": speed or "medium",
+        "kmh": kmh}
 
 
 def _resolve_shot_index(shot):

@@ -53,6 +53,16 @@ def _cricket_deep_link(match_id, chat_id):
     return f"https://t.me/{bot_username}?startapp={param}"
 
 
+def play_match_url(match_id, chat_id=None):
+    """Public group-style launch URL for opening/spectating a live match.
+
+    Uses the cricket_<matchId>_<chatId> deep-link scheme when the originating
+    chat id is known, so Telegram users land on the same live board as the
+    original /wpm or /cm match.
+    """
+    return _launch_url(match_id, chat_id)
+
+
 def _launch_url(match_id, chat_id=None):
     """Group-style deep link (kept for the scorecard/result broadcasts, which
     always post to a group chat). Uses the new cricket_ scheme when chat_id is
@@ -70,7 +80,7 @@ def _launch_url(match_id, chat_id=None):
     return f"https://t.me/{bot_username}?startapp=cricket_{match_id}"
 
 
-def play_match_keyboard(match_id, chat_id=None, is_private=False):
+def play_match_keyboard(match_id, chat_id=None, is_private=False, label=None):
     """'Play Match' button.
 
     • Private chat → Telegram Web App button → /cricket?match_id&chat_id
@@ -84,7 +94,7 @@ def play_match_keyboard(match_id, chat_id=None, is_private=False):
         wa_url = _cricket_webapp_url(match_id, chat_id if chat_id is not None else 0)
         if wa_url:
             return InlineKeyboardMarkup([[
-                InlineKeyboardButton("🎮 Play Match",
+                InlineKeyboardButton(label or "🎮 Play Match",
                                      web_app=WebAppInfo(url=wa_url))
             ]])
         # Fall through to deep link if no host configured
@@ -92,7 +102,7 @@ def play_match_keyboard(match_id, chat_id=None, is_private=False):
     if not url:
         return None
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎮 Play Match (Mini App)", url=url)
+        InlineKeyboardButton(label or "🎮 Play Match (Mini App)", url=url)
     ]])
 
 

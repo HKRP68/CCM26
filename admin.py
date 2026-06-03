@@ -6493,12 +6493,49 @@ def _build_player_stat_card_bytes(player, owner_user_id, card_type):
         db.close()
 
 
-def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
-    """Send one /wpm career stat card to the match chat, best-effort."""
+def _match_origin_chat_id(match_id, state=None):
+    """Return the Telegram chat where a Mini-App match was created."""
+    state = state or {}
+    chat_id = state.get("chat_id")
+    if chat_id:
+        return chat_id
+    db = get_session()
     try:
+        from models import Match
+        match = db.query(Match).get(match_id)
+        return match.chat_id if match else None
+    except Exception:
+        logger.exception("failed to resolve match origin chat")
+        return None
+    finally:
+        db.close()
+
+
+def _playmatch_spectate_markup(match_id, chat_id):
+    """Inline keyboard for player-card broadcasts in /wpm and /cm chats."""
+    try:
+        from services.match_broadcast import play_match_url
+        url = play_match_url(match_id, chat_id)
+        if not url:
+            return None
+        return {
+            "inline_keyboard": [[{
+                "text": "Playmatch - Spectate",
+                "url": url,
+            }]]
+        }
+    except Exception:
+        logger.exception("failed to build Playmatch spectate button")
+        return None
+
+
+def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
+    """Send one /wpm or /cm career stat card to the match's origin chat."""
+    try:
+        import json as _json
         from services.match_webapp_access import get_state
         state = get_state(match_id) or {}
-        chat_id = state.get("chat_id")
+        chat_id = _match_origin_chat_id(match_id, state)
         if not chat_id or not player:
             return
         photo = _build_player_stat_card_bytes(player, owner_user_id, card_type)
@@ -6510,11 +6547,17 @@ def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
         else:
             caption = f"🏏 <b>{player.get('name', 'Player')}</b> comes to the crease"
             filename = "wpm_batter_card.png"
-        _tg_send_photo_async({
+        payload = {
             "chat_id": chat_id,
             "caption": caption,
             "parse_mode": "HTML",
-        }, photo, filename=filename)
+        }
+        markup = _playmatch_spectate_markup(match_id, chat_id)
+        if markup:
+            # Telegram's multipart sendPhoto endpoint expects reply_markup as a
+            # JSON-encoded form field, not a nested object.
+            payload["reply_markup"] = _json.dumps(markup)
+        _tg_send_photo_async(payload, photo, filename=filename)
     except Exception:
         logger.exception("failed to broadcast /wpm player stat card")
 
