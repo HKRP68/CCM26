@@ -210,11 +210,11 @@ def _migrate_add_columns():
 
     # GameConfig: new simulation-tuning columns
     new_gameconfig_cols = {
-        "sim_dot_adjust": "FLOAT DEFAULT -8.0",
-        "sim_one_adjust": "FLOAT DEFAULT 5.0",
-        "sim_two_adjust": "FLOAT DEFAULT 2.0",
-        "sim_four_adjust": "FLOAT DEFAULT 0.0",
-        "sim_six_adjust": "FLOAT DEFAULT 0.0",
+        "sim_dot_adjust": "FLOAT DEFAULT -10.0",
+        "sim_one_adjust": "FLOAT DEFAULT 6.0",
+        "sim_two_adjust": "FLOAT DEFAULT 3.0",
+        "sim_four_adjust": "FLOAT DEFAULT 0.5",
+        "sim_six_adjust": "FLOAT DEFAULT 0.3",
         "sim_wicket_adjust": "FLOAT DEFAULT 0.0",
         "sim_extras_adjust": "FLOAT DEFAULT 0.0",
         "market_min_rating": "INTEGER DEFAULT 87",
