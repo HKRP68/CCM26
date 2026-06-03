@@ -5880,6 +5880,8 @@ def match_rest_select_players():
                 bowler_idx=_i(data.get("bowlerIdx")))
             if not ok:
                 return {"ok": False, "error": msg, "message": msg}, 400
+            if st:
+                _broadcast_wpm_start_player_cards(match.id)
             return {"ok": True, "success": True, "started": st, "message": msg}
 
         if role == "batsman":
@@ -5897,6 +5899,8 @@ def match_rest_select_players():
             started = started or st; messages.append(msg)
         else:
             return {"ok": False, "error": "spectator", "message": "Spectators cannot select players."}, 403
+        if started:
+            _broadcast_wpm_start_player_cards(match.id)
         return {"ok": True, "started": started, "message": " ".join(messages),
                 "match": _match_rest_full_state(db, match.id, user.id)}
     except Exception as e:
@@ -5967,11 +5971,15 @@ def match_rest_action():
                 if boi is None:
                     return {"ok": False, "error": "Invalid batsman selection."}, 400
                 ok, res, _info = select_wicket_batsman(match.id, user.id, boi)
+                if ok:
+                    _broadcast_wpm_current_batter_card(match.id)
             elif env_type == "over_bowler":
                 rid = xi_index_to_bowler_rid(state, act.get("index"))
                 if rid is None:
                     return {"ok": False, "error": "Invalid bowler selection."}, 400
                 ok, res = select_new_bowler(match.id, user.id, rid)
+                if ok:
+                    _broadcast_wpm_current_bowler_card(match.id)
             else:
                 return {"ok": False, "error": f"Unknown action type '{env_type}'."}, 400
             if not ok:
@@ -6163,6 +6171,8 @@ def webapp_match_select_openers():
         if not ok:
             return {"ok": False, "message": msg}, 400
         if started:
+            _broadcast_wpm_start_player_cards(match_id)
+        if started:
             try:
                 from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
                 if get_state_is_vsbot(match_id):
@@ -6194,6 +6204,8 @@ def webapp_match_select_bowler():
         ok, started, msg = select_bowler(match_id, user.id, bowler_rid)
         if not ok:
             return {"ok": False, "message": msg}, 400
+        if started:
+            _broadcast_wpm_start_player_cards(match_id)
         if started:
             try:
                 from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
@@ -6389,6 +6401,159 @@ def _tg_api_post(method, payload, timeout=8):
         logger.exception("telegram %s failed", method)
         return None
 
+
+
+def _player_stat_defaults(card_type):
+    """Default career stat payloads used when a player has no saved stats."""
+    if card_type == "bowling":
+        return {
+            "bowl_inns": 0, "wickets_taken": 0, "runs_conceded": 0,
+            "balls_bowled": 0, "bowl_avg": 0, "bowl_sr": 0, "econ": 0,
+            "hat_tricks": 0, "five_fers": 0, "three_fers": 0, "bbf_str": "-",
+        }
+    return {
+        "bat_inns": 0, "runs": 0, "fifties": 0, "hundreds": 0,
+        "fours": 0, "sixes": 0, "bat_avg": 0, "bat_sr": 0,
+        "ducks": 0, "hs_str": "-",
+    }
+
+
+def _build_player_stat_card_bytes(player, owner_user_id, card_type):
+    """Render a batting/bowling career card for Mini-App match broadcasts.
+
+    PlayerGameStats is shared by /wpm, /cm, /vsbot, and /playmatch, so querying
+    this row gives a combined career card. Missing rows deliberately render the
+    zero/default payload instead of failing the match request.
+    """
+    if not player or not owner_user_id:
+        return None
+    db = get_session()
+    try:
+        from models import PlayerGameStats
+        if card_type == "bowling":
+            from services.bowler_card import generate_bowler_card
+            stats = _player_stat_defaults("bowling")
+            gs = (db.query(PlayerGameStats)
+                  .filter(PlayerGameStats.user_id == owner_user_id,
+                          PlayerGameStats.player_id == player.get("player_id"))
+                  .first())
+            if gs:
+                stats.update({
+                    "bowl_inns": gs.bowl_inns or 0,
+                    "wickets_taken": gs.wickets_taken or 0,
+                    "runs_conceded": gs.runs_conceded or 0,
+                    "balls_bowled": gs.balls_bowled or 0,
+                    "bowl_avg": gs.bowl_avg or 0,
+                    "bowl_sr": gs.bowl_sr or 0,
+                    "econ": gs.bowl_economy or 0,
+                    "hat_tricks": getattr(gs, "hat_tricks", 0) or 0,
+                    "five_fers": gs.five_fers or 0,
+                    "three_fers": gs.three_fers or 0,
+                    "bbf_str": (f"{gs.best_bowl_wickets}/{gs.best_bowl_runs}"
+                                if (gs.best_bowl_wickets or 0) > 0 else "-"),
+                })
+            return generate_bowler_card(
+                player.get("name", "Player"), player.get("rating", 0),
+                player.get("bowl_rating", 0), stats,
+                bat_hand=player.get("bat_hand", "Right"),
+                bowl_hand=player.get("bowl_hand", "Right"),
+                bowl_style=player.get("bowl_style", "Medium Pacer"),
+            )
+
+        from services.batsman_card import generate_batsman_card
+        stats = _player_stat_defaults("batting")
+        gs = (db.query(PlayerGameStats)
+              .filter(PlayerGameStats.user_id == owner_user_id,
+                      PlayerGameStats.player_id == player.get("player_id"))
+              .first())
+        if gs:
+            stats.update({
+                "bat_inns": gs.bat_inns or 0,
+                "runs": gs.runs or 0,
+                "fifties": gs.fifties or 0,
+                "hundreds": gs.hundreds or 0,
+                "fours": gs.fours or 0,
+                "sixes": gs.sixes or 0,
+                "bat_avg": gs.bat_avg or 0,
+                "bat_sr": gs.bat_sr or 0,
+                "ducks": gs.ducks or 0,
+                "hs_str": gs.hs_str or "-",
+            })
+        return generate_batsman_card(
+            player.get("name", "Player"), player.get("rating", 0),
+            player.get("bat_rating", 0), stats,
+            bat_hand=player.get("bat_hand", "Right"),
+            bowl_hand=player.get("bowl_hand", "Right"),
+            bowl_style=player.get("bowl_style", "Medium Pacer"),
+        )
+    except Exception:
+        logger.exception("failed to build %s stat card for %s", card_type, player.get("name"))
+        return None
+    finally:
+        db.close()
+
+
+def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
+    """Send one /wpm career stat card to the match chat, best-effort."""
+    try:
+        from services.match_webapp_access import get_state
+        state = get_state(match_id) or {}
+        chat_id = state.get("chat_id")
+        if not chat_id or not player:
+            return
+        photo = _build_player_stat_card_bytes(player, owner_user_id, card_type)
+        if not photo:
+            return
+        if card_type == "bowling":
+            caption = f"🎳 <b>{player.get('name', 'Player')}</b> starts bowling"
+            filename = "wpm_bowler_card.png"
+        else:
+            caption = f"🏏 <b>{player.get('name', 'Player')}</b> comes to the crease"
+            filename = "wpm_batter_card.png"
+        _tg_send_photo_async({
+            "chat_id": chat_id,
+            "caption": caption,
+            "parse_mode": "HTML",
+        }, photo, filename=filename)
+    except Exception:
+        logger.exception("failed to broadcast /wpm player stat card")
+
+
+def _broadcast_wpm_start_player_cards(match_id):
+    """Send opener and opening-bowler cards once a /wpm match actually starts."""
+    try:
+        from services.match_webapp_access import get_state
+        state = get_state(match_id) or {}
+        order = state.get("batting_order") or []
+        for idx in (state.get("striker_idx"), state.get("non_striker_idx")):
+            if isinstance(idx, int) and 0 <= idx < len(order):
+                _broadcast_wpm_player_stat_card(match_id, order[idx], state.get("bat_team_id"), "batting")
+        _broadcast_wpm_player_stat_card(match_id, state.get("current_bowler"),
+                                        state.get("bowl_team_id"), "bowling")
+    except Exception:
+        logger.exception("failed to broadcast /wpm start player cards")
+
+
+def _broadcast_wpm_current_batter_card(match_id):
+    try:
+        from services.match_webapp_access import get_state
+        state = get_state(match_id) or {}
+        order = state.get("batting_order") or []
+        idx = state.get("striker_idx")
+        if isinstance(idx, int) and 0 <= idx < len(order):
+            _broadcast_wpm_player_stat_card(match_id, order[idx], state.get("bat_team_id"), "batting")
+    except Exception:
+        logger.exception("failed to broadcast /wpm batter card")
+
+
+def _broadcast_wpm_current_bowler_card(match_id):
+    try:
+        from services.match_webapp_access import get_state
+        state = get_state(match_id) or {}
+        _broadcast_wpm_player_stat_card(match_id, state.get("current_bowler"),
+                                        state.get("bowl_team_id"), "bowling")
+    except Exception:
+        logger.exception("failed to broadcast /wpm bowler card")
 
 def _broadcast_match_scorecard(match_id):
     """Update the pinned live scorecard message in the match chat.
@@ -6742,6 +6907,7 @@ def webapp_match_new_bowler():
         ok, msg = select_new_bowler(match_id, user.id, bowler_rid)
         if not ok:
             return {"ok": False, "message": msg}, 400
+        _broadcast_wpm_current_bowler_card(match_id)
         try:
             from services.match_webapp_service import auto_play_bot_turns
             auto_play_bot_turns(db, match_id)
