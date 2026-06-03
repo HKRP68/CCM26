@@ -5932,15 +5932,33 @@ def match_rest_action():
             return {"ok": False, "error": "no_match"}, 404
         role = role_for(state, user.id)
 
-        def _finalize_and_respond(res):
-            """Shared post-action broadcast/finalize + success response."""
+        def _should_refresh_live_scorecard(res, action_type):
+            """Keep chat updates lightweight while preserving key moments.
+
+            The Mini App already polls the full ball-by-ball state, so the
+            Telegram chat card only needs refreshing for visible highlights:
+            boundaries, wickets, over/innings transitions, and the result.
+            """
+            if action_type != "shot" or not isinstance(res, dict):
+                return False
+            if res.get("match_over") or res.get("innings_break") or res.get("eoo"):
+                return True
+            if res.get("need_new_bat") or res.get("type") == "wicket":
+                return True
+            try:
+                return int(res.get("runs") or 0) >= 4
+            except (TypeError, ValueError):
+                return False
+
+        def _finalize_and_respond(res, action_type=None):
+            """Shared post-action finalize + throttled live-score refresh."""
             try:
                 from services.match_state_store import A_COMPLETED as _DONE
                 if get_next_action(match.id) == _DONE:
                     from services.match_webapp_service import finalize_webapp_match
                     fin = finalize_webapp_match(db, match.id)
                     _broadcast_match_result(match.id, (fin or {}).get("result") or {})
-                else:
+                elif _should_refresh_live_scorecard(res, action_type):
                     _broadcast_match_scorecard(match.id)
             except Exception:
                 logger.exception("match_rest_action broadcast/finalize failed")
@@ -5971,20 +5989,16 @@ def match_rest_action():
                 if boi is None:
                     return {"ok": False, "error": "Invalid batsman selection."}, 400
                 ok, res, _info = select_wicket_batsman(match.id, user.id, boi)
-                if ok:
-                    _broadcast_wpm_current_batter_card(match.id)
             elif env_type == "over_bowler":
                 rid = xi_index_to_bowler_rid(state, act.get("index"))
                 if rid is None:
                     return {"ok": False, "error": "Invalid bowler selection."}, 400
                 ok, res = select_new_bowler(match.id, user.id, rid)
-                if ok:
-                    _broadcast_wpm_current_bowler_card(match.id)
             else:
                 return {"ok": False, "error": f"Unknown action type '{env_type}'."}, 400
             if not ok:
                 return {"ok": False, "error": res, "message": res}, 400
-            return _finalize_and_respond(res)
+            return _finalize_and_respond(res, env_type)
 
         if role == "bowler":
             variation = (data.get("delivery_type") or data.get("variation") or data.get("delivery") or "").strip()

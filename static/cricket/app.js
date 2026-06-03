@@ -14,8 +14,10 @@ let pollingInterval = null;
 let fetchInFlight = false;
 let identitySelectionRequired = false;
 let pollFailureCount = 0;
-const POLL_REQUEST_TIMEOUT_MS = 3500;
+const POLL_REQUEST_TIMEOUT_MS = 3000;
 const MAX_POLL_FAILURES = 2;
+const MATCH_POLL_INTERVAL_MS = 150;
+const AUTOPLAY_ACTION_DELAY_MS = 0;
 
 // Selected actions
 let selectedDelivery = null;
@@ -25,6 +27,7 @@ let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
 let wasMyTurn = false;
 let lastActionableSig = null; // tracks the current actionable turn for auto-expand
+let selectionSubmitInFlight = false;
 
 // Initial Setup
 async function init() {
@@ -327,7 +330,7 @@ function selectIdentity(selectedId) {
 function startPolling() {
   fetchState();
   if (!pollingInterval) {
-    pollingInterval = setInterval(fetchState, 200);
+    pollingInterval = setInterval(fetchState, MATCH_POLL_INTERVAL_MS);
   }
 }
 
@@ -410,7 +413,7 @@ async function fetchState() {
     }
 
     // Trigger autoplay evaluation after state update
-    setTimeout(runAutoplayAction, 75);
+    setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
   } catch (err) {
     console.error("Polling error:", err);
     pollFailureCount += 1;
@@ -921,7 +924,7 @@ function renderControlsSection() {
 
   if (matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLER CONTROLS";
-    promptSubtitle.innerText = "Deliver a variation to fool the batsman";
+    promptSubtitle.innerText = "Pick a delivery, then bowl immediately";
     document.getElementById('bowling-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderBowlerVariations();
@@ -953,14 +956,14 @@ function renderControlsSection() {
   } 
   else if (matchState.turnState === 'selecting_wicket_batsman') {
     promptText.innerText = "⚠️ WICKET! SELECT REPLACEMENT";
-    promptSubtitle.innerText = "Choose the next batsman to walk out";
+    promptSubtitle.innerText = "Tap a batsman to continue";
     document.getElementById('wicket-batsman-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderWicketBatsmanSelectionSheet();
   } 
   else if (matchState.turnState === 'selecting_over_bowler') {
     promptText.innerText = "🎳 SELECT BOWLER FOR NEXT OVER";
-    promptSubtitle.innerText = "Choose who bowls the next over";
+    promptSubtitle.innerText = "Tap a bowler to continue";
     document.getElementById('over-bowler-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderOverBowlerSelectionSheet();
@@ -1176,7 +1179,11 @@ function renderWicketBatsmanSelectionSheet() {
       `;
       
       div.onclick = () => {
+        if (selectionSubmitInFlight) return;
         build(item.index.toString());
+        selectionSubmitInFlight = true;
+        document.getElementById('controls-sheet').classList.add('minimized');
+        selectNextBatsman(item.index).finally(() => { selectionSubmitInFlight = false; });
       };
       container.appendChild(div);
     });
@@ -1279,7 +1286,11 @@ function renderOverBowlerSelectionSheet() {
       
       if (item.eligible) {
         div.onclick = () => {
+          if (selectionSubmitInFlight) return;
           build(item.index.toString());
+          selectionSubmitInFlight = true;
+          document.getElementById('controls-sheet').classList.add('minimized');
+          selectNextBowler(item.index).finally(() => { selectionSubmitInFlight = false; });
         };
       }
       container.appendChild(div);

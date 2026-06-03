@@ -30,11 +30,11 @@ DEFAULTS = {
     "debut_gems": 20,
     # Simulation tuning — applied as additive % points after all modifiers.
     # The default values fix the "too many dots, not enough singles" feedback.
-    "sim_dot_adjust": -8.0,
-    "sim_one_adjust": 5.0,
-    "sim_two_adjust": 2.0,
-    "sim_four_adjust": 0.0,
-    "sim_six_adjust": 0.0,
+    "sim_dot_adjust": -10.0,
+    "sim_one_adjust": 6.0,
+    "sim_two_adjust": 3.0,
+    "sim_four_adjust": 0.5,
+    "sim_six_adjust": 0.3,
     "sim_wicket_adjust": 0.0,
     "sim_extras_adjust": 0.0,
     # Player market

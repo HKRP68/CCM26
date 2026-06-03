@@ -785,11 +785,11 @@ class GameConfig(Base):
     # These nudge final probabilities to fix systemic biases (e.g. too many dots).
     # Applied AFTER all per-ball modifiers but BEFORE normalization.
     # Default 0 = no adjustment (matches old behavior).
-    sim_dot_adjust = Column(Float, default=-8.0)        # -8 = fewer dot balls
-    sim_one_adjust = Column(Float, default=+5.0)        # +5 = more singles
-    sim_two_adjust = Column(Float, default=+2.0)        # +2 = more twos
-    sim_four_adjust = Column(Float, default=0.0)
-    sim_six_adjust = Column(Float, default=0.0)
+    sim_dot_adjust = Column(Float, default=-10.0)       # -10 = fewer dot balls
+    sim_one_adjust = Column(Float, default=+6.0)        # +6 = more singles
+    sim_two_adjust = Column(Float, default=+3.0)        # +3 = more twos
+    sim_four_adjust = Column(Float, default=0.5)
+    sim_six_adjust = Column(Float, default=0.3)
     sim_wicket_adjust = Column(Float, default=0.0)
     sim_extras_adjust = Column(Float, default=0.0)
     # ── Player market settings ──

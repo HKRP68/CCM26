@@ -26,16 +26,16 @@ logger = logging.getLogger(__name__)
 # Expected runs/ball ≈ 0.30(1) + 0.18(2) + 0.06(3) + 0.56(4) + 0.48(6) = 1.58 → 9.5 RPO
 
 BASE = {
-    "dot":    24.0,   # 0 — reduced for more active gameplay
-    "1":      31.0,   # singles — strong strike rotation
-    "2":       8.5,
-    "3":       2.5,   # more 3s for aggressive running
-    "4":      16.0,   # more fours
-    "6":       9.5,   # more sixes for excitement
+    "dot":    20.0,   # fewer dots keeps /wpm and /cm moving
+    "1":      33.0,   # more singles for constant strike rotation
+    "2":      10.5,   # extra twos make running between wickets matter
+    "3":       3.5,   # more threes for aggressive running and strike changes
+    "4":      16.8,   # slight boundary lift for excitement
+    "6":      10.0,   # slight six-hitting lift without turning arcade-only
     "W":       4.0,   # wicket
-    "wide":    1.5,
-    "noball":  0.5,
-    "legbye":  2.0,
+    "wide":    1.3,
+    "noball":  0.4,
+    "legbye":  1.5,
 }
 
 
@@ -213,16 +213,16 @@ PITCH_BOWLER_SYNERGY = {
 
 PHASE_MODS = {
     "powerplay": {
-        # Boundaries are easier (fielding restrictions); wickets a bit higher (attacking)
-        "4": +1.5, "6": +0.5, "W": +0.5, "dot": -1, "1": -1.5,
+        # Boundaries are easier (fielding restrictions); keep singles flowing.
+        "4": +1.7, "6": +0.7, "W": +0.5, "dot": -2.0, "1": +0.5, "2": +0.5,
     },
     "middle": {
-        # Stable run-rate, tighter fields
-        "1": +2, "dot": +1, "4": -1, "6": -0.5, "W": -0.5,
+        # Middle overs should rotate strike instead of stalling on dots.
+        "1": +3.0, "2": +1.0, "3": +0.4, "dot": -1.0, "4": -0.4, "6": -0.2, "W": -0.5,
     },
     "death": {
-        # Big hits OR big wickets — high variance
-        "6": +3.5, "4": +2, "W": +1.0, "1": -1, "dot": -3,
+        # Big hits OR big wickets — high variance with fewer dead balls.
+        "6": +3.8, "4": +2.3, "W": +1.0, "1": +0.5, "2": +0.5, "dot": -4.0,
     },
 }
 
@@ -334,12 +334,15 @@ def _apply_rating_diff(probs: dict, bat_rating: int, bowl_rating: int):
     wicket_shift = -3.5 * factor     # at factor=1.0 → -3.5% to wickets
     dot_shift = -5.0 * factor        # at factor=1.0 → -5% to dots
     one_shift = 1.5 * factor
+    running_shift = 1.2 * factor
 
     probs["4"] = max(0.5, probs["4"] + boundary_shift * 0.6)
     probs["6"] = max(0.3, probs["6"] + boundary_shift * 0.4)
     probs["W"] = max(0.5, probs["W"] + wicket_shift)
-    probs["dot"] = max(5.0, probs["dot"] + dot_shift)
+    probs["dot"] = max(4.0, probs["dot"] + dot_shift)
     probs["1"] = max(5.0, probs["1"] + one_shift)
+    probs["2"] = max(1.0, probs["2"] + running_shift * 0.8)
+    probs["3"] = max(0.5, probs["3"] + running_shift * 0.2)
 
     # Extra wickets when bowler dominates a lot
     if diff < -15:
