@@ -14,7 +14,7 @@ let pollingInterval = null;
 let fetchInFlight = false;
 let identitySelectionRequired = false;
 let pollFailureCount = 0;
-const POLL_REQUEST_TIMEOUT_MS = 5000;
+const POLL_REQUEST_TIMEOUT_MS = 3500;
 const MAX_POLL_FAILURES = 2;
 
 // Selected actions
@@ -327,7 +327,7 @@ function selectIdentity(selectedId) {
 function startPolling() {
   fetchState();
   if (!pollingInterval) {
-    pollingInterval = setInterval(fetchState, 300);
+    pollingInterval = setInterval(fetchState, 200);
   }
 }
 
@@ -410,7 +410,7 @@ async function fetchState() {
     }
 
     // Trigger autoplay evaluation after state update
-    setTimeout(runAutoplayAction, 150);
+    setTimeout(runAutoplayAction, 75);
   } catch (err) {
     console.error("Polling error:", err);
     pollFailureCount += 1;
@@ -990,7 +990,17 @@ function renderBowlerVariations() {
     document.getElementById('bowling-speed-section').classList.add('hidden');
     selectedSpeed = 'normal';
   } else if (Array.isArray(shared.variations) && shared.variations.length) {
-    deliveries = shared.variations.map(name => ({ id: name, name }));
+    const lengths = Array.isArray(shared.lengths) ? shared.lengths : [];
+    if (lengths.length) {
+      deliveries = shared.variations.flatMap(variation => (
+        lengths.map(length => ({
+          id: `${variation} ${length}`.trim(),
+          name: `${variation} ${length}`.trim(),
+        }))
+      ));
+    } else {
+      deliveries = shared.variations.map(name => ({ id: name, name }));
+    }
     document.getElementById('bowling-speed-section').classList.remove('hidden');
   } else {
     deliveries = isSpin
@@ -1756,7 +1766,7 @@ function runAutoplayAction() {
           randSpeedBtn.click();
         }
 
-        setTimeout(submitDelivery, 200);
+        setTimeout(submitDelivery, 75);
       }
     }
     else if (matchState.turnState === 'batting_shot') {
@@ -1764,7 +1774,7 @@ function runAutoplayAction() {
       const buttons = shotSection.querySelectorAll('.btn-action-card');
       if (buttons.length > 0) {
         const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
-        setTimeout(() => randBtn.click(), 200);
+        setTimeout(() => randBtn.click(), 75);
       }
     }
     else if (matchState.turnState === 'selecting_wicket_batsman') {
@@ -1775,7 +1785,7 @@ function runAutoplayAction() {
         setTimeout(() => {
           document.getElementById('controls-sheet').classList.add('minimized');
           selectNextBatsman(index);
-        }, 200);
+        }, 75);
       }
     }
     else if (matchState.turnState === 'selecting_over_bowler') {
@@ -1786,7 +1796,7 @@ function runAutoplayAction() {
         setTimeout(() => {
           document.getElementById('controls-sheet').classList.add('minimized');
           selectNextBowler(index);
-        }, 200);
+        }, 75);
       }
     }
   }
@@ -1990,7 +2000,7 @@ function triggerMatchFlashAnimation(comm) {
   overlay.style.display = 'flex';
   setTimeout(() => {
     overlay.style.display = 'none';
-  }, 1800);
+  }, 1200);
 }
 
 function createParticles(container, color) {

@@ -6355,6 +6355,31 @@ def _tg_send_async(payload):
 
 
 
+def _tg_send_photo_async(payload, photo_bytes, filename="match_summary.png"):
+    """Fire a Telegram sendPhoto in a daemon thread so result cards do not
+    block Mini App requests."""
+    import os as _os
+    import threading
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token or not photo_bytes:
+        return
+
+    def _send():
+        try:
+            import requests as _rq
+            files = {"photo": (filename, photo_bytes, "image/png")}
+            _rq.post(f"https://api.telegram.org/bot{token}/sendPhoto",
+                     data=payload, files=files, timeout=12)
+        except Exception:
+            logger.exception("async tg sendPhoto failed")
+
+    try:
+        threading.Thread(target=_send, daemon=True).start()
+    except Exception:
+        logger.exception("could not spawn tg sendPhoto thread")
+
+
+
 def _tg_api_post(method, payload, timeout=8):
     """Synchronous Telegram API helper for already-background workers."""
     import os as _os
@@ -6406,7 +6431,7 @@ def _broadcast_match_scorecard(match_id):
             text = build_live_scorecard_text(state, waiting_for_mention=waiting)
 
             reply_markup = None
-            url = _launch_url(match_id)
+            url = _launch_url(match_id, chat_id)
             if url:
                 reply_markup = {"inline_keyboard": [[
                     {"text": "▶️ Play Match", "url": url}]]}
@@ -6454,9 +6479,123 @@ def _broadcast_match_scorecard(match_id):
         logger.exception("could not spawn scorecard broadcast thread")
 
 
+def _top_performers_for_summary(arena_state):
+    """Small, dependency-light performer summary for the final image card."""
+    if not arena_state:
+        return None, None, None
+
+    def _stat(stats, rid):
+        if not stats:
+            return {}
+        return stats.get(str(rid)) or stats.get(rid) or {}
+
+    teams = [
+        (arena_state.get("inn1_team") or "Team 1",
+         arena_state.get("inn1_bat_xi") or [],
+         arena_state.get("inn1_bat_stats") or {},
+         arena_state.get("inn1_bowl_xi") or [],
+         arena_state.get("inn1_bowl_stats") or {}),
+        (arena_state.get("bat_team_name") or "Team 2",
+         arena_state.get("bat_xi") or [],
+         arena_state.get("bat_stats") or {},
+         arena_state.get("bowl_xi") or [],
+         arena_state.get("bowl_stats") or {}),
+    ]
+    top_scorer = None
+    top_wicket = None
+    top_per_team = {}
+
+    for team_name, bat_xi, bat_stats, bowl_xi, bowl_stats in teams:
+        rows = []
+        for p in bat_xi:
+            st = _stat(bat_stats, p.get("roster_id"))
+            row = {
+                "name": p.get("name", "Player"),
+                "runs": st.get("runs", 0),
+                "balls": st.get("balls", 0),
+                "wickets": 0,
+                "impact": st.get("runs", 0),
+            }
+            rows.append(row)
+            if top_scorer is None or row["runs"] > top_scorer.get("runs", 0):
+                top_scorer = row
+        for p in bowl_xi:
+            st = _stat(bowl_stats, p.get("roster_id"))
+            balls = st.get("balls", 0)
+            runs = st.get("runs", 0)
+            wickets = st.get("wickets", 0)
+            econ = (runs / balls * 6) if balls else 0
+            row = {
+                "name": p.get("name", "Player"),
+                "runs": 0,
+                "balls": balls,
+                "wickets": wickets,
+                "impact": wickets * 25 - runs,
+                "econ": round(econ, 2),
+            }
+            rows.append(row)
+            if (top_wicket is None
+                    or wickets > top_wicket.get("wickets", 0)
+                    or (wickets == top_wicket.get("wickets", 0)
+                        and runs < top_wicket.get("runs_conceded", 10**9))):
+                top_wicket = {
+                    "name": row["name"],
+                    "wickets": wickets,
+                    "runs_conceded": runs,
+                    "overs": f"{balls // 6}.{balls % 6}" if balls % 6 else f"{balls // 6}",
+                    "econ": row["econ"],
+                }
+        top_per_team[team_name] = sorted(rows, key=lambda r: r.get("impact", 0), reverse=True)[:4]
+
+    return top_scorer, top_wicket, top_per_team
+
+
+def _build_match_summary_image(match, sc, result_text, arena, pom):
+    """Render the same post-match summary card used by /playmatch when possible."""
+    try:
+        from datetime import datetime as _dt
+        from services.match_summary_card import generate_match_summary
+        innings = sc.get("innings") or []
+        if len(innings) < 2:
+            return None
+        inn1, inn2 = innings[0], innings[1]
+        top_scorer, top_wicket, top_per_team = _top_performers_for_summary(arena)
+        pom_name = pom.get("name") if isinstance(pom, dict) else None
+        return generate_match_summary(
+            inn1_team=inn1.get("bat_team", "Team 1"),
+            inn1_runs=inn1.get("runs", 0),
+            inn1_wickets=inn1.get("wickets", 0),
+            inn1_overs=inn1.get("overs", "0"),
+            inn2_team=inn2.get("bat_team", "Team 2"),
+            inn2_runs=inn2.get("runs", 0),
+            inn2_wickets=inn2.get("wickets", 0),
+            inn2_overs=inn2.get("overs", "0"),
+            winner_name=(result_text.split(" won ", 1)[0]
+                         if " won " in result_text else result_text),
+            win_margin_text=(result_text.split(" won ", 1)[1]
+                             if " won " in result_text else ""),
+            overs_total=match.overs or arena.get("overs") or 0,
+            potm_name=pom_name,
+            potm_rating=pom.get("rating") if isinstance(pom, dict) else None,
+            potm_team=pom.get("team") if isinstance(pom, dict) else None,
+            potm_stats=pom.get("stats") if isinstance(pom, dict) else None,
+            potm_impact=pom.get("impact_points") if isinstance(pom, dict) else None,
+            top_scorer=top_scorer,
+            top_wicket=top_wicket,
+            top_per_team=top_per_team,
+            stadium=match.stadium or arena.get("stadium"),
+            match_date=getattr(match, "completed_at", None) or _dt.utcnow(),
+            is_spectator=bool(arena.get("is_spectator")),
+        )
+    except Exception:
+        logger.exception("wpm match summary image render failed")
+        return None
+
+
 def _broadcast_match_result(match_id, result):
-    """Announce the final result to the match chat + a scorecard button.
-    Non-blocking network send."""
+    """Announce the final /wpm result to the original lobby chat with the
+    same text recap used by the Telegram match flows, a summary image, and a
+    PlayMatch spectate button."""
     from services.match_broadcast import _launch_url
     from models import Match
 
@@ -6495,27 +6634,36 @@ def _broadcast_match_result(match_id, result):
                         f"(<b>{pom.get('impact_points', 0)} Impact Points</b>)\n")
         reward_block = ("\n".join(reward_lines) + "\n") if reward_lines else ""
         text = (
-            "━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH SUMMARY</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
             f"{score_block}\n\n"
             f"🏆 <b>{result_text}</b>\n"
             f"{pom_line}"
-            f"{reward_block}\n"
+            f"{reward_block}"
             "━━━━━━━━━━━━━━━━━━━\n"
-            "Tap below to view the full scorecard."
+            "Tap below to spectate the full scorecard."
         )
+        summary_bytes = _build_match_summary_image(m, sc, result_text, arena, pom)
     finally:
         db.close()
 
-    url = _launch_url(match_id)
+    url = _launch_url(match_id, chat_id)
     reply_markup = None
     if url:
         reply_markup = {"inline_keyboard": [[
-            {"text": "📋 View Scorecard", "url": url}]]}
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-               "disable_web_page_preview": True}
+            {"text": "▶️ PlayMatch (Spectate)", "url": url}]]}
+
+    payload = {"chat_id": chat_id, "parse_mode": "HTML"}
     if reply_markup:
-        payload["reply_markup"] = reply_markup
-    _tg_send_async(payload)
+        payload["reply_markup"] = __import__("json").dumps(reply_markup)
+    if summary_bytes:
+        payload["caption"] = text
+        _tg_send_photo_async(payload, summary_bytes)
+    else:
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                   "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        _tg_send_async(payload)
 
 
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
