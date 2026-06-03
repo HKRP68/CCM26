@@ -65,6 +65,7 @@ _BRICOLAGE_FONT_CANDIDATES = (
     os.path.join(_FONT_DIR, "BricolageGrotesque-SemiBold.ttf"),
     os.path.join(_FONT_DIR, "BricolageGrotesque-Bold.ttf"),
     os.path.join(_FONT_DIR, "BricolageGrotesque-ExtraBold.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque.ttf"),
 )
 
 
@@ -113,6 +114,25 @@ def _font(size, bold=False, italic=False, family="body"):
 def _tw(draw, text, font):
     bb = draw.textbbox((0, 0), text, font=font)
     return bb[2] - bb[0]
+
+
+
+def _draw_text_with_tracking(draw, xy, text, *, fill, font, tracking=0):
+    """Draw text with CSS-like letter spacing for mockup fidelity."""
+    if not tracking:
+        draw.text(xy, text, fill=fill, font=font)
+        return
+    x, y = xy
+    for char in str(text):
+        draw.text((x, y), char, fill=fill, font=font)
+        x += _tw(draw, char, font) + tracking
+
+
+def _tracked_width(draw, text, font, tracking=0):
+    text = str(text)
+    if not text:
+        return 0
+    return sum(_tw(draw, char, font) for char in text) + tracking * max(0, len(text) - 1)
 
 
 def _load_logo(target=60):
@@ -517,14 +537,16 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         # while body cells use a heavy Bricolage-style weight.  Dismissals are
         # intentionally bold (not regular italic) so they do not shrink/fade in
         # the rendered PNG compared with the browser mockup.
-        f_th = _font(24, bold=True, italic=True)
-        f_name = _font(24, bold=True)
-        f_dism = _font(21, bold=True)
-        f_dism_notout = _font(21, bold=True, italic=True)
-        f_cell = _font(24, bold=True)
+        f_th = _font(26, bold=True, italic=True)
+        f_name = _font(25, bold=True)
+        f_dism = _font(22, bold=True)
+        f_dism_notout = _font(22, bold=True, italic=True)
+        f_cell = _font(25, bold=True)
         f_stat_sub = _font(14, bold=True)
         f_stat_label = _font(22, bold=True)
         f_stat_note = _font(14)
+        table_header_tracking = 2
+        table_body_tracking = 1
 
         def fit_text(text, font, max_w):
             text = str(text or "—").upper()
@@ -615,10 +637,12 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             cw = int(inner_w * ratio / total_ratio)
             th_y = text_vcenter_y(header_y, header_y + header_h, f_th)
             if align == "l":
-                draw.text((cx + 22, th_y), label, fill=gold, font=f_th)
+                _draw_text_with_tracking(draw, (cx + 22, th_y), label,
+                                         fill=gold, font=f_th, tracking=table_header_tracking)
             else:
-                lw = _tw(draw, label, f_th)
-                draw.text((cx + (cw - lw) // 2, th_y), label, fill=gold, font=f_th)
+                lw = _tracked_width(draw, label, f_th, table_header_tracking)
+                _draw_text_with_tracking(draw, (cx + (cw - lw) // 2, th_y), label,
+                                         fill=gold, font=f_th, tracking=table_header_tracking)
             if idx < len(cols) - 1:
                 draw.line([(cx + cw, header_y), (cx + cw, header_y + header_h)],
                           fill=(255, 255, 255, 18), width=1)
@@ -696,11 +720,14 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                     font_use = f_cell
                     color = sr_color if label == "SR" else (TEXT_DIM if status == "dnb" else TEXT)
                 ty = text_vcenter_y(row_y, row_y + row_h, font_use)
+                tracking = table_body_tracking if idx in (0, 1) else 0
                 if align == "l":
-                    draw.text((cx + 22, ty), str(value), fill=color, font=font_use)
+                    _draw_text_with_tracking(draw, (cx + 22, ty), str(value),
+                                             fill=color, font=font_use, tracking=tracking)
                 else:
-                    vw = _tw(draw, str(value), font_use)
-                    draw.text((cx + (cw - vw) // 2, ty), str(value), fill=color, font=font_use)
+                    vw = _tracked_width(draw, str(value), font_use, tracking)
+                    _draw_text_with_tracking(draw, (cx + (cw - vw) // 2, ty), str(value),
+                                             fill=color, font=font_use, tracking=tracking)
                 cx += cw
             row_y += row_h
 
@@ -716,13 +743,13 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         legal_balls = _overs_to_balls(overs_str)
         run_rate = (total_runs * 6 / legal_balls) if legal_balls else 0
         stats = [
-            ("⏱", "SCORING PACE", f"{run_rate:.1f}", "RUN RATE", "runs per over", out_red, False),
-            ("✦", "ADDITIONAL RUNS", str(extras_dict.get("total", 0)), "EXTRAS", "wides, no-balls, byes", gold, False),
-            ("◎", "PROGRESS", str(overs_str), "OVERS", "innings completed", notout_blue, False),
-            ("🏏", "INNINGS SCORE", f"{total_runs}/{total_wickets}", "TOTAL", f"after {overs_str} overs", gold, True),
+            ("SCORING PACE", f"{run_rate:.1f}", "RUN RATE", "runs per over", out_red, False),
+            ("ADDITIONAL RUNS", str(extras_dict.get("total", 0)), "EXTRAS", "wides, no-balls, byes", gold, False),
+            ("PROGRESS", str(overs_str), "OVERS", "innings completed", notout_blue, False),
+            ("INNINGS SCORE", f"{total_runs}/{total_wickets}", "TOTAL", f"after {overs_str} overs", gold, True),
         ]
         sx = card_x
-        for i, (icon, subtitle, value, label_txt, note, color, is_total) in enumerate(stats):
+        for i, (subtitle, value, label_txt, note, color, is_total) in enumerate(stats):
             sy = bottom_y
             sw = stat_widths[i]
             tile_fill = (10, 14, 20, 222)
@@ -737,14 +764,10 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             else:
                 draw.rectangle([sx + 1, sy, sx + sw - 1, sy + 4], fill=color)
 
-            icon_size = 58 if is_total else 54
-            icon_x = sx + 24
-            icon_y = sy + 24
-            draw.ellipse([icon_x, icon_y, icon_x + icon_size, icon_y + icon_size], outline=color, width=2)
-            icon_font = _font(30 if is_total else 27, bold=True)
-            draw.text((icon_x + icon_size / 2 - _tw(draw, icon, icon_font) / 2, icon_y + 11),
-                      icon, fill=color, font=icon_font)
-            draw.text((sx + 94, sy + 31), subtitle, fill=(158, 168, 184), font=f_stat_sub)
+            # Do not draw the decorative stat icon/emoji elements in the PNG
+            # scorecard.  They render as missing-glyph boxes in some runtime
+            # fonts, so the tiles use only the accent rule plus text content.
+            draw.text((sx + 24, sy + 31), subtitle, fill=(158, 168, 184), font=f_stat_sub)
 
             value_font = _font(88 if is_total else 68, family="display")
             value_color = gold if is_total else TEXT
