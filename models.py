@@ -807,6 +807,7 @@ class GameConfig(Base):
     # scorecard. Defaults match the original PRIMARY (red) / SECONDARY (teal).
     scorecard_color_inn1 = Column(String(9), default="#c41e3a")
     scorecard_color_inn2 = Column(String(9), default="#00c9a7")
+    scorecard_text_settings = Column(Text, nullable=True)
     # ── Maintenance mode ──
     # When is_maintenance is True, all bot commands except those from a
     # bypass user return maintenance_message instead of running. Matches

@@ -45,6 +45,7 @@ DEFAULTS = {
     # Scorecard accent colors (hex strings)
     "scorecard_color_inn1": "#c41e3a",
     "scorecard_color_inn2": "#00c9a7",
+    "scorecard_text_settings": None,
     # Maintenance mode
     "is_maintenance": False,
     "maintenance_message": None,

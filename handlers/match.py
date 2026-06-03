@@ -3728,6 +3728,7 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
         _cfg = _get_cfg()
         accent_hex = (_cfg.get("scorecard_color_inn1") if is_first
                       else _cfg.get("scorecard_color_inn2"))
+        text_settings = _cfg.get("scorecard_text_settings")
 
         # Generate batting scorecard
         bat_card_bytes = generate_batting_scorecard(
@@ -3737,6 +3738,7 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             is_first_innings=is_first, match_title=match_title,
             target=target, chase_outcome=chase_outcome,
             stadium=s.get("stadium"), match_no=mid, accent_hex=accent_hex,
+            text_settings=text_settings,
         )
 
         # Generate bowling scorecard — team name is the bowling team
@@ -3749,6 +3751,7 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             opp_score=total_runs, opp_wickets=total_wickets, opp_overs=overs_str,
             stadium=s.get("stadium"),
             match_no=mid, accent_hex=accent_hex,
+            text_settings=text_settings,
         )
 
         # Send in the order specified by the user: Batting first, then Bowling

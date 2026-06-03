@@ -8378,7 +8378,9 @@ def admin_scorecard_settings():
     db = get_session()
     try:
         from services.config_service import get_config, save_config
+        from services.scorecard_card import normalize_scorecard_text_settings
         import re as _re
+        import json as _json
 
         def _validate_hex(s, fallback):
             """Accept #rrggbb (7 chars) only."""
@@ -8395,15 +8397,28 @@ def admin_scorecard_settings():
                     request.form.get("scorecard_color_inn1"), "#c41e3a")
                 c2 = _validate_hex(
                     request.form.get("scorecard_color_inn2"), "#00c9a7")
+                raw_text_settings = {}
+                for card_type in ("batting", "bowling"):
+                    raw_text_settings[card_type] = {}
+                    prefix = f"{card_type}_"
+                    for key in request.form.getlist(f"{card_type}_field_keys"):
+                        raw_text_settings[card_type][key] = {
+                            "font": request.form.get(f"{prefix}{key}_font"),
+                            "size": request.form.get(f"{prefix}{key}_size"),
+                            "x": request.form.get(f"{prefix}{key}_x"),
+                            "y": request.form.get(f"{prefix}{key}_y"),
+                        }
+                text_settings = normalize_scorecard_text_settings(raw_text_settings)
                 save_config(db, {
                     "scorecard_color_inn1": c1,
                     "scorecard_color_inn2": c2,
+                    "scorecard_text_settings": _json.dumps(text_settings, separators=(",", ":")),
                 }, updated_by=session.get("admin_user", "admin"))
                 db.commit()
-                log_admin(db, "scorecard_colors_save", "config", 0,
+                log_admin(db, "scorecard_settings_save", "config", 0,
                           "scorecard", f"inn1={c1} inn2={c2}")
                 db.commit()
-                flash("✅ Scorecard colors saved.", "info")
+                flash("✅ Scorecard settings saved.", "info")
                 return redirect(url_for("admin_scorecard_settings"))
             except Exception as e:
                 db.rollback()
@@ -8411,7 +8426,8 @@ def admin_scorecard_settings():
 
         cfg = get_config(db)
         return render_template("admin_scorecard_settings.html",
-                               cfg=cfg, presets=SCORECARD_COLOR_PRESETS)
+                               cfg=cfg, presets=SCORECARD_COLOR_PRESETS,
+                               text_settings=normalize_scorecard_text_settings(cfg.get("scorecard_text_settings")))
     finally:
         db.close()
 
@@ -8427,11 +8443,31 @@ def admin_scorecard_preview():
     db = get_session()
     try:
         from services.config_service import get_config
-        from services.scorecard_card import generate_batting_scorecard
+        from services.scorecard_card import (
+            generate_batting_scorecard, generate_bowling_scorecard,
+            normalize_scorecard_text_settings,
+        )
         import re as _re
         cfg = get_config(db)
         innings = request.args.get("innings", "1")
         is_first = (innings == "1")
+        card_type = (request.args.get("card_type") or "batting").lower()
+        raw_text_settings = {}
+        has_live_text_controls = False
+        for ct in ("batting", "bowling"):
+            raw_text_settings[ct] = {}
+            for key in ("team", "tag", "venue", "table_header", "table_body", "fow_title", "fow_body", "stat_label", "stat_value", "target"):
+                prefix = f"{ct}_{key}_"
+                if any((prefix + suffix) in request.args for suffix in ("font", "size", "x", "y")):
+                    has_live_text_controls = True
+                    raw_text_settings[ct][key] = {
+                        "font": request.args.get(prefix + "font"),
+                        "size": request.args.get(prefix + "size"),
+                        "x": request.args.get(prefix + "x"),
+                        "y": request.args.get(prefix + "y"),
+                    }
+        text_settings = (normalize_scorecard_text_settings(raw_text_settings)
+                         if has_live_text_controls else cfg.get("scorecard_text_settings"))
 
         # Sample data — 5 batsmen with each status type
         sample_rows = [
@@ -8455,15 +8491,36 @@ def admin_scorecard_preview():
         saved_color = (cfg.get("scorecard_color_inn1") if is_first
                        else cfg.get("scorecard_color_inn2"))
         preview_color = requested_color if _re.fullmatch(r"#[0-9a-fA-F]{6}", requested_color or "") else saved_color
-        png = generate_batting_scorecard(
-            "Sample Team A", "Sample Team B", 156, 3, "15.2",
-            sample_rows, [(1, 12, "1.3"), (2, 78, "9.1"), (3, 134, "13.5")],
-            {"wd": 4, "nb": 1, "b": 0, "lb": 2, "total": 7},
-            is_first_innings=is_first,
-            match_title="WANDERERS STADIUM",
-            match_no=42,
-            accent_hex=preview_color,
-        )
+        if card_type == "bowling":
+            png = generate_bowling_scorecard(
+                "Sample Team A",
+                [
+                    {"name": "Glenn McGrath", "overs": "2.5", "dots": 1, "runs_conceded": 34, "wickets": 1, "economy": 12.0},
+                    {"name": "Mitchell Starc", "overs": "3.0", "dots": 5, "runs_conceded": 37, "wickets": 0, "economy": 12.33},
+                    {"name": "Jay Dijkstra", "overs": "4.0", "dots": 5, "runs_conceded": 42, "wickets": 1, "economy": 10.5},
+                    {"name": "Amelia Kerr", "overs": "3.0", "dots": 6, "runs_conceded": 38, "wickets": 1, "economy": 12.67},
+                    {"name": "Shane Warne", "overs": "4.0", "dots": 5, "runs_conceded": 31, "wickets": 1, "economy": 7.75},
+                ],
+                [(1, 9, "1.3"), (2, 85, "9.1"), (3, 125, "13.5"), (4, 137, "14.2")],
+                is_first_innings=is_first,
+                match_title="WANDERERS STADIUM",
+                opponent_name="Sample Team B",
+                opp_score=156, opp_wickets=3, opp_overs="15.2",
+                match_no=42,
+                accent_hex=preview_color,
+                text_settings=text_settings,
+            )
+        else:
+            png = generate_batting_scorecard(
+                "Sample Team A", "Sample Team B", 156, 3, "15.2",
+                sample_rows, [(1, 12, "1.3"), (2, 78, "9.1"), (3, 134, "13.5")],
+                {"wd": 4, "nb": 1, "b": 0, "lb": 2, "total": 7},
+                is_first_innings=is_first,
+                match_title="WANDERERS STADIUM",
+                match_no=42,
+                accent_hex=preview_color,
+                text_settings=text_settings,
+            )
         if not png:
             return "Preview render failed", 500
         from flask import Response

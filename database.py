@@ -225,6 +225,7 @@ def _migrate_add_columns():
         "trait_market_last_refresh_at": "TIMESTAMP",
         "scorecard_color_inn1": "VARCHAR(9) DEFAULT '#c41e3a'",
         "scorecard_color_inn2": "VARCHAR(9) DEFAULT '#00c9a7'",
+        "scorecard_text_settings": "TEXT",
         # Maintenance mode
         "is_maintenance": "BOOLEAN DEFAULT FALSE",
         "maintenance_message": "TEXT",
