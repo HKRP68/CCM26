@@ -177,6 +177,16 @@ def _asset_paths():
         if os.path.isfile(path):
             assets["font"] = {"path": path, "filename": f"font.{ext}"}
             break
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cmu_assets = {
+        "cmu_text_font": os.path.join(root, "assets", "fonts", "BricolageGrotesque-Regular.ttf"),
+        "cmu_display_font": os.path.join(root, "assets", "fonts", "RussoOne-Regular.ttf"),
+        "cmu_logo": os.path.join(root, "assets", "logo.png"),
+    }
+    for key, path in cmu_assets.items():
+        if os.path.isfile(path):
+            filename = "cmu_logo.png" if key == "cmu_logo" else os.path.basename(path)
+            assets[key] = {"path": path, "filename": filename}
     return assets
 
 

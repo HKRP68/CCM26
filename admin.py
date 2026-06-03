@@ -11074,6 +11074,7 @@ def admin_card_template():
                    .limit(200).all())
         from services.card_template_service import (list_template_variants,
                                                     normalise_template_settings)
+        from services.cmu_stats_card_service import normalise_stats_card_settings
         from services.country_flag_service import list_country_flags
         from services.player_portrait_service import has_global_player_portrait
         from services.card_template_storage_service import get_state
@@ -11083,6 +11084,7 @@ def admin_card_template():
             "show_portrait", cfg.card_template_show_portrait)
         settings = normalise_template_settings(
             state.get("settings", cfg.card_template_settings))
+        stats_settings = normalise_stats_card_settings(state.get("stats_settings"))
         template_variants = list_template_variants(db)
         has_template = template_variants["base"]["uploaded"]
         from services.card_template_service import TEMPLATES_ROOT, ALLOWED_FONT_EXT
@@ -11091,7 +11093,8 @@ def admin_card_template():
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, has_template=has_template,
                                template_variants=template_variants, has_font=has_font, country_flags=list_country_flags(),
-                               has_global_portrait=has_global_player_portrait())
+                               has_global_portrait=has_global_player_portrait(),
+                               stats_settings=stats_settings)
     finally:
         db.close()
 
@@ -11128,6 +11131,7 @@ def admin_card_template_save():
 
         # Style and concrete v7.1 HTML generator controls.
         from services.card_template_service import normalise_template_settings
+        from services.cmu_stats_card_service import normalise_stats_card_settings
         style = (request.form.get("card_style") or "tier").strip().lower()
         card_style = style if style in ("tier", "template") else "tier"
         show_portrait = bool(request.form.get("show_portrait"))
@@ -11151,6 +11155,25 @@ def admin_card_template_save():
         raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
         raw_settings["protect_bottom_box"] = bool(request.form.get("protect_bottom_box"))
         settings = normalise_template_settings(raw_settings)
+        stats_label_keys = {
+            "batting_labels": ("inns", "runs", "hs", "avg", "sr", "hundreds", "fifties", "fours", "sixes", "ducks"),
+            "bowling_labels": ("inns", "wickets", "bbf", "avg", "econ", "sr", "hat_tricks", "five_fers", "three_fers"),
+        }
+        raw_stats_settings = {
+            key: request.form.get(f"stats_{key}") for key in (
+                "title_batting", "title_bowling", "badge_batting", "badge_bowling",
+                "ovr_label", "bat_rating_label", "bowl_rating_label", "bat_meta_suffix",
+                "name_font_size", "rating_label_font_size", "rating_num_font_size",
+                "badge_font_size", "meta_font_size", "title_font_size",
+                "stat_label_font_size", "stat_value_font_size", "stat_value_second_font_size",
+            )
+        }
+        for group, keys in stats_label_keys.items():
+            raw_stats_settings[group] = {
+                key: request.form.get(f"stats_{group}_{key}") for key in keys
+            }
+        raw_stats_settings["stats_enabled"] = True
+        stats_settings = normalise_stats_card_settings(raw_stats_settings)
         from services.card_template_storage_service import (
             save_local_state, pin_state_sync, upload_assets_sync,
             is_configured as template_storage_configured,
@@ -11160,6 +11183,7 @@ def admin_card_template_save():
             "card_style": card_style,
             "show_portrait": show_portrait,
             "settings": settings,
+            "stats_settings": stats_settings,
             "assets": uploaded_assets,
         })
         storage_saved = pin_state_sync(state, audit_text=f"style={card_style}")
