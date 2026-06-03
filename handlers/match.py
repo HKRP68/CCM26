@@ -1126,97 +1126,11 @@ async def _save_match_stats(s):
         inn2_bat_stats = s.get("bat_stats", {})
         inn2_bowl_stats = s.get("bowl_stats", {})
 
-        def _update_bat(pid, uid, bs):
-            """Update batting stats for a player."""
-            if not bs or bs.get("balls", 0) == 0:
-                return
-            gs = session.query(PlayerGameStats).filter(
-                PlayerGameStats.user_id == uid, PlayerGameStats.player_id == pid).first()
-            if not gs:
-                gs = PlayerGameStats(user_id=uid, player_id=pid)
-                session.add(gs)
-                session.flush()
-
-            gs.bat_inns += 1
-            gs.runs += bs.get("runs", 0)
-            gs.balls_faced += bs.get("balls", 0)
-            gs.fours += bs.get("fours", 0)
-            gs.sixes += bs.get("sixes", 0)
-
-            r = bs.get("runs", 0)
-            if r >= 100:
-                gs.hundreds += 1
-            elif r >= 50:
-                gs.fifties += 1
-            if bs.get("out", False):
-                gs.times_out += 1
-                if r == 0:
-                    gs.ducks += 1
-            if r > gs.highest_score:
-                gs.highest_score = r
-                gs.highest_score_not_out = not bs.get("out", True)
-            elif r == gs.highest_score and not bs.get("out", True):
-                gs.highest_score_not_out = True
-
-        def _update_bowl(pid, uid, bws):
-            """Update bowling stats for a player."""
-            if not bws:
-                return
-            balls = bws.get("balls", 0)
-            wickets = bws.get("wickets", 0)
-            runs = bws.get("runs", 0)
-            # Skip only if truly nothing happened
-            if balls == 0 and wickets == 0 and runs == 0:
-                return
-            gs = session.query(PlayerGameStats).filter(
-                PlayerGameStats.user_id == uid, PlayerGameStats.player_id == pid).first()
-            if not gs:
-                gs = PlayerGameStats(user_id=uid, player_id=pid)
-                session.add(gs)
-                session.flush()
-
-            gs.bowl_inns += 1
-            gs.wickets_taken += wickets
-            gs.runs_conceded += runs
-            gs.balls_bowled += balls
-            gs.overs_bowled = round(gs.balls_bowled / 6, 1)
-
-            if wickets >= 5:
-                gs.five_fers += 1
-            elif wickets >= 3:
-                gs.three_fers += 1
-
-            if wickets > gs.best_bowl_wickets or (wickets == gs.best_bowl_wickets and runs < gs.best_bowl_runs):
-                gs.best_bowl_wickets = wickets
-                gs.best_bowl_runs = runs
-
-        # Process 1st innings batting
-        for rid, bs in inn1_bat_stats.items():
-            rid_int = int(rid) if isinstance(rid, str) else rid
-            if rid_int in bat_lookup_1:
-                pid, uid = bat_lookup_1[rid_int]
-                _update_bat(pid, uid, bs)
-
-        # Process 1st innings bowling
-        for rid, bws in inn1_bowl_stats.items():
-            rid_int = int(rid) if isinstance(rid, str) else rid
-            if rid_int in bowl_lookup_1:
-                pid, uid = bowl_lookup_1[rid_int]
-                _update_bowl(pid, uid, bws)
-
-        # Process 2nd innings batting
-        for rid, bs in inn2_bat_stats.items():
-            rid_int = int(rid) if isinstance(rid, str) else rid
-            if rid_int in bat_lookup_2:
-                pid, uid = bat_lookup_2[rid_int]
-                _update_bat(pid, uid, bs)
-
-        # Process 2nd innings bowling
-        for rid, bws in inn2_bowl_stats.items():
-            rid_int = int(rid) if isinstance(rid, str) else rid
-            if rid_int in bowl_lookup_2:
-                pid, uid = bowl_lookup_2[rid_int]
-                _update_bowl(pid, uid, bws)
+        # Persist career batting + bowling stats through the shared service used
+        # by /playmatch, /vsbot, /cm, and /wpm.
+        from services.player_stats_service import persist_player_game_stats
+        saved_counts = persist_player_game_stats(session, s)
+        logger.info("Saved player career stats for match %s: %s", s.get("match_id"), saved_counts)
 
         # ── Record form history per player (last-5 window) ──
         try:
