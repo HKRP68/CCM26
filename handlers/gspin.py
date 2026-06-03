@@ -15,6 +15,8 @@ from database import get_session
 from models import User, UserRoster, UserStats
 from services.player_service import get_random_player_by_rating_range
 from services.cooldown_service import check_cooldown, format_remaining
+from services.miniapp_buttons import has_miniapp_url, miniapp_button
+from services.quota_service import get_quota_status
 from services.card_text import format_player_card
 from services.activity_service import log_activity
 from services.gspin_reward_service import pick_reward
@@ -68,64 +70,45 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        ready, remaining = check_cooldown(stats, "last_gspin", GSPIN_COOLDOWN)
+
+        # When the Mini App is configured, use the same quota availability that
+        # /api/webapp/spin uses (1 free slot + ad-gated slots per cycle) so the
+        # bot command and Mini App never disagree about readiness.
+        chat_type = (update.effective_chat.type
+                     if update.effective_chat else "private")
+        is_private = (chat_type == "private")
+        if has_miniapp_url():
+            quota = get_quota_status(stats, "spin", session=session)
+            if quota["all_used"]:
+                await update.message.reply_text(
+                    "⏳ All spins are used. New spins in "
+                    f"{format_remaining(quota['cycle_reset_in'])}.",
+                    parse_mode="HTML")
+                return
+
+            btn = miniapp_button("🎡 Open Mini App to Spin", "spin",
+                                 is_private=is_private)
+            if btn is not None:
+                text = (
+                    "🎡 <b>Your spin is ready!</b>\n\n"
+                    "Use your free spin or watch a quick ad in the Mini App "
+                    "to spin the wheel and win coins, gems, players, or packs.\n\n"
+                    "<i>Tap below to open Spin.</i>"
+                )
+                await update.message.reply_text(
+                    text, parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[btn]]))
+                return
+
+        from services.command_config_service import get_cooldown
+        effective_cooldown = get_cooldown(session, "gspin", GSPIN_COOLDOWN)
+        ready, remaining = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
             from services.message_service import get_msg
             await update.message.reply_text(
                 get_msg("gspin_cooldown", remaining=format_remaining(remaining)),
                 parse_mode="HTML")
             return
-
-        # Redirect to Mini App when configured.
-        # WebApp buttons only work in PRIVATE chats — Telegram rejects them in
-        # groups. In groups, use a `url=` button with a t.me deep link that
-        # launches the Mini App DIRECTLY (?startapp=spin) — never `?start=`,
-        # which would bounce the user into a DM chat instead.
-        import os as _os
-        webapp_url = _os.getenv("WEBAPP_URL", "").strip()
-        chat_type = (update.effective_chat.type
-                     if update.effective_chat else "private")
-        is_private = (chat_type == "private")
-
-        if webapp_url and webapp_url.startswith("https://"):
-            from telegram import WebAppInfo
-            text = (
-                "🎡 <b>GSPIN Wheel</b>\n\n"
-                "📺 <b>Watch a quick ad to spin the wheel</b> and win coins, "
-                "gems, players, or packs!\n\n"
-                "<i>Tap below to open the Mini App and claim your spin.</i>"
-            )
-            if is_private:
-                # WebApp button — full Mini App experience inline
-                btn = InlineKeyboardButton(
-                    "🎡 Open Mini App to Spin",
-                    web_app=WebAppInfo(url=webapp_url + "#spin"),
-                )
-            else:
-                # Group chat — must use url= button (WebApp not allowed here).
-                # Both forms below open the Mini App directly (no DM bounce).
-                bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-                miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
-                if bot_username and miniapp_name:
-                    # Named Mini App — opens straight into the spin tab
-                    deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp=spin"
-                elif bot_username:
-                    # Bot's main Mini App (BotFather) — `startapp` (not `start`)
-                    # launches the app directly instead of opening a DM chat
-                    deep_link = f"https://t.me/{bot_username}?startapp=spin"
-                else:
-                    # No bot username configured — fall through to legacy callback
-                    deep_link = None
-
-                if deep_link:
-                    btn = InlineKeyboardButton("🎡 Open Mini App to Spin", url=deep_link)
-                else:
-                    btn = None  # falls through to legacy below
-
-            if btn is not None:
-                keyboard = InlineKeyboardMarkup([[btn]])
-                await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-                return
 
         # Legacy fallback (no Mini App URL OR group chat with no bot username)
         text = (
@@ -159,7 +142,9 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        ready, _ = check_cooldown(stats, "last_gspin", GSPIN_COOLDOWN)
+        from services.command_config_service import get_cooldown
+        effective_cooldown = get_cooldown(session, "gspin", GSPIN_COOLDOWN)
+        ready, _ = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
             await query.edit_message_text("⏳ Already spun!")
             return

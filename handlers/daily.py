@@ -10,6 +10,8 @@ from database import get_session
 from models import User, Player, UserRoster, UserStats
 from services.player_service import get_random_player_by_rarity, get_random_player_by_rating_range
 from services.cooldown_service import check_cooldown, format_remaining
+from services.miniapp_buttons import has_miniapp_url, miniapp_button
+from services.quota_service import get_quota_status
 from services.streak_service import update_streak
 from services.card_text import format_player_card
 from services.activity_service import log_activity
@@ -38,6 +40,40 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
+
+        # Preview the actual amounts
+        coin_amt = get_coin_amount(session, "daily", DAILY_COINS)
+        player_amt = get_player_count(session, "daily", 2)
+
+        # When the Mini App is configured, use the same quota availability that
+        # /api/webapp/daily uses (1 free slot + ad-gated slots per cycle).
+        chat_type = (update.effective_chat.type
+                     if update.effective_chat else "private")
+        is_private = (chat_type == "private")
+        if has_miniapp_url():
+            quota = get_quota_status(stats, "daily", session=session)
+            if quota["all_used"]:
+                await update.message.reply_text(
+                    "⏳ All daily claims are used. New claims in "
+                    f"{format_remaining(quota['cycle_reset_in'])}.",
+                    parse_mode="HTML")
+                return
+
+            btn = miniapp_button("📅 Open Mini App to Claim", "daily",
+                                 is_private=is_private)
+            if btn is not None:
+                text = (
+                    "📅 <b>Your daily reward is ready!</b>\n\n"
+                    f"💰 +{coin_amt:,} coins, {player_amt} player card(s), "
+                    "and streak rewards await. Use your free claim or watch "
+                    "a quick ad in the Mini App.\n\n"
+                    "<i>Tap below to open Daily.</i>"
+                )
+                await update.message.reply_text(
+                    text, parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[btn]]))
+                return
+
         effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
         ready, remaining = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
@@ -46,58 +82,6 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 get_msg("daily_cooldown", remaining=format_remaining(remaining)),
                 parse_mode="HTML")
             return
-
-        # Preview the actual amounts
-        coin_amt = get_coin_amount(session, "daily", DAILY_COINS)
-        player_amt = get_player_count(session, "daily", 2)
-
-        # Redirect to Mini App when configured. WebApp buttons only work in
-        # PRIVATE chats — in groups, use a `url=` deep link that launches the
-        # Mini App DIRECTLY (?startapp=daily) — never `?start=`, which would
-        # bounce the user into a DM chat instead.
-        import os as _os
-        webapp_url = _os.getenv("WEBAPP_URL", "").strip()
-        chat_type = (update.effective_chat.type
-                     if update.effective_chat else "private")
-        is_private = (chat_type == "private")
-
-        if webapp_url and webapp_url.startswith("https://"):
-            from telegram import WebAppInfo
-            text = (
-                "📅 <b>Daily Reward Ready!</b>\n\n"
-                f"💰 +{coin_amt:,} coins, players, and more await.\n"
-                "📺 <b>Watch a quick ad</b> to claim your daily.\n\n"
-                "<i>Tap below to open the Mini App.</i>"
-            )
-            if is_private:
-                btn = InlineKeyboardButton(
-                    "📅 Open Mini App to Claim",
-                    web_app=WebAppInfo(url=webapp_url + "#daily"),
-                )
-            else:
-                # Group chat — both deep-link forms below open the Mini App
-                # directly (no DM bounce).
-                bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-                miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
-                if bot_username and miniapp_name:
-                    # Named Mini App — opens straight into the daily tab
-                    deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp=daily"
-                elif bot_username:
-                    # Bot's main Mini App (BotFather) — `startapp` (not `start`)
-                    # launches the app directly instead of opening a DM chat
-                    deep_link = f"https://t.me/{bot_username}?startapp=daily"
-                else:
-                    deep_link = None
-
-                if deep_link:
-                    btn = InlineKeyboardButton("📅 Open Mini App to Claim", url=deep_link)
-                else:
-                    btn = None
-
-            if btn is not None:
-                keyboard = InlineKeyboardMarkup([[btn]])
-                await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-                return
 
         # Legacy fallback when no Mini App URL configured (or group with no bot username)
         keyboard = InlineKeyboardMarkup([[
@@ -131,7 +115,9 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        ready, _ = check_cooldown(stats, "last_daily", DAILY_COOLDOWN)
+        from services.command_config_service import get_cooldown
+        effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
+        ready, _ = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
             await query.edit_message_text("⏳ Already claimed today!")
             return
