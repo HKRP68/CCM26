@@ -3754,6 +3754,40 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             text_settings=text_settings,
         )
 
+        # Best-effort durable value snapshot in the Telegram storage channel.
+        # Images are still sent to the match chat; the JSON file keeps all values
+        # needed to regenerate batting/bowling cards after ephemeral storage resets.
+        try:
+            from services import tg_storage_service
+            await tg_storage_service.upload_json_async({
+                "type": "innings_scorecards",
+                "match_id": mid,
+                "innings": innings_num,
+                "batting_scorecard": {
+                    "team": bat_team, "opponent": bowl_team,
+                    "score": total_runs, "wickets": total_wickets,
+                    "overs": overs_str, "rows": batsmen_rows,
+                    "fall_of_wickets": fow, "extras": extras,
+                    "target": target, "chase_outcome": chase_outcome,
+                },
+                "bowling_scorecard": {
+                    "team": bowl_team, "opponent": bat_team,
+                    "opponent_score": total_runs,
+                    "opponent_wickets": total_wickets,
+                    "opponent_overs": overs_str,
+                    "rows": bowlers_rows, "fall_of_wickets": fow,
+                },
+                "style": {
+                    "accent_hex": accent_hex,
+                    "text_settings": text_settings,
+                    "match_title": match_title,
+                    "stadium": s.get("stadium"),
+                },
+            }, f"match-{mid}-innings-{innings_num}-scorecards.json",
+               caption=f"Scorecard values · Match {mid} · Innings {innings_num}")
+        except Exception:
+            logger.exception("scorecard storage snapshot failed (non-fatal)")
+
         # Send in the order specified by the user: Batting first, then Bowling
         if bat_card_bytes:
             await ctx.bot.send_photo(
@@ -4247,6 +4281,8 @@ async def _end_innings(ctx, mid):
         # ── Match summary card (NEW design: team-sections + result bar)
         try:
             from services.match_summary_card import generate_match_summary
+            from services.config_service import get_config as _get_summary_cfg
+            _summary_cfg = _get_summary_cfg()
             top_scorer, top_wicket = _gather_top_performers(s)
             top_per_team = _gather_top_per_team(s, top_n=4)
             # Determine POTM team (which side they were on)
@@ -4295,8 +4331,35 @@ async def _end_innings(ctx, mid):
                 stadium=s.get("stadium"),
                 match_date=datetime.utcnow(),
                 is_spectator=bool(s.get("is_spectator")),
+                match_no=mid,
+                text_settings=_summary_cfg.get("scorecard_text_settings"),
             )
             if summary_bytes:
+                try:
+                    from services import tg_storage_service
+                    await tg_storage_service.upload_json_async({
+                        "type": "match_summary_scorecard",
+                        "match_id": mid,
+                        "teams": {
+                            "innings_1": s.get("inn1_team", "Team 1"),
+                            "innings_2": s.get("bat_team_name", "Team 2"),
+                        },
+                        "scores": {
+                            "innings_1": {"runs": s.get("inn1_runs", 0), "wickets": s.get("inn1_wickets", 0), "overs": s.get("inn1_overs", "0")},
+                            "innings_2": {"runs": s.get("total_runs", 0), "wickets": s.get("total_wickets", 0), "overs": format_overs(s)},
+                        },
+                        "result": {"winner": winner_name, "margin": margin},
+                        "potm": {
+                            "name": potm_name, "rating": potm_rating, "team": potm_team,
+                            "stats": potm_stats, "impact": potm_impact,
+                        },
+                        "top_per_team": top_per_team,
+                        "stadium": s.get("stadium"),
+                        "style": {"text_settings": _summary_cfg.get("scorecard_text_settings")},
+                    }, f"match-{mid}-summary-scorecard.json",
+                       caption=f"Match summary values · Match {mid}")
+                except Exception:
+                    logger.exception("match summary storage snapshot failed (non-fatal)")
                 await ctx.bot.send_photo(
                     chat_id=cid, photo=io.BytesIO(summary_bytes),
                     caption=f"🏆 <b>Match Summary</b> — {winner_name} wins {margin}!",

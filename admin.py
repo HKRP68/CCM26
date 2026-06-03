@@ -8398,7 +8398,7 @@ def admin_scorecard_settings():
                 c2 = _validate_hex(
                     request.form.get("scorecard_color_inn2"), "#00c9a7")
                 raw_text_settings = {}
-                for card_type in ("batting", "bowling"):
+                for card_type in ("batting", "bowling", "summary"):
                     raw_text_settings[card_type] = {}
                     prefix = f"{card_type}_"
                     for key in request.form.getlist(f"{card_type}_field_keys"):
@@ -8457,7 +8457,7 @@ def admin_scorecard_preview():
         card_type = (request.args.get("card_type") or "batting").lower()
         raw_text_settings = {}
         has_live_text_controls = False
-        for ct in ("batting", "bowling"):
+        for ct in ("batting", "bowling", "summary"):
             raw_text_settings[ct] = {}
             for field in SCORECARD_TEXT_FIELDS.get(ct, []):
                 key = field[0]
@@ -8496,7 +8496,42 @@ def admin_scorecard_preview():
         saved_color = (cfg.get("scorecard_color_inn1") if is_first
                        else cfg.get("scorecard_color_inn2"))
         preview_color = requested_color if _re.fullmatch(r"#[0-9a-fA-F]{6}", requested_color or "") else saved_color
-        if card_type == "bowling":
+        if card_type == "summary":
+            from services.match_summary_card import generate_match_summary
+            png = generate_match_summary(
+                inn1_team="Very Touchables", inn1_runs=184, inn1_wickets=8, inn1_overs="20.0",
+                inn2_team="DaddyAlec", inn2_runs=185, inn2_wickets=4, inn2_overs="16.5",
+                winner_name="DaddyAlec", win_margin_text="by 6 wickets",
+                overs_total=20,
+                potm_name="Balla Steyn", potm_stats="4/25 (4 OVERS)",
+                top_per_team={
+                    "inn1": {"team": "Very Touchables", "batters": [
+                        {"name": "Kusal Mendis", "runs": 68, "balls": 38, "out": True},
+                        {"name": "Gaby Lewis", "runs": 27, "balls": 18, "out": False},
+                        {"name": "Harmanpreet Kaur", "runs": 19, "balls": 15, "out": True},
+                        {"name": "Shubman Gill", "runs": 18, "balls": 7, "out": True},
+                    ], "bowlers": [
+                        {"name": "Balla Steyn", "wickets": 4, "runs": 25, "overs": "4"},
+                        {"name": "Josh Hazlewood", "wickets": 2, "runs": 30, "overs": "4"},
+                        {"name": "Mitchell Starc", "wickets": 1, "runs": 42, "overs": "4"},
+                        {"name": "Amelia Kerr", "wickets": 1, "runs": 44, "overs": "4"},
+                    ]},
+                    "inn2": {"team": "DaddyAlec", "batters": [
+                        {"name": "Virat Kohli", "runs": 79, "balls": 41, "out": True},
+                        {"name": "Shreyas Iyer", "runs": 27, "balls": 15, "out": True},
+                        {"name": "Sai Sudharsan", "runs": 25, "balls": 21, "out": True},
+                        {"name": "Sachin Tendulkar", "runs": 24, "balls": 10, "out": False},
+                    ], "bowlers": [
+                        {"name": "Shane Warne", "wickets": 1, "runs": 31, "overs": "4"},
+                        {"name": "Glenn McGrath", "wickets": 1, "runs": 34, "overs": "2.5"},
+                        {"name": "Amelia Kerr", "wickets": 1, "runs": 38, "overs": "3"},
+                        {"name": "Jay Dijkstra", "wickets": 1, "runs": 42, "overs": "4"},
+                    ]},
+                },
+                stadium="Wanderers Stadium", match_no=118722,
+                text_settings=text_settings,
+            )
+        elif card_type == "bowling":
             png = generate_bowling_scorecard(
                 "Sample Team A",
                 [

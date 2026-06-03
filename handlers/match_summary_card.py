@@ -1,44 +1,67 @@
-"""Match summary card — sent after the match ends.
+"""Match summary card renderer.
 
-Design follows the user-uploaded match_summary.html layout:
-  - Header: brand + "MATCH SUMMARY" + team names
-  - Two team sections (one per innings), each with:
-      - Team name + total score + overs (right-aligned)
-      - Top Batters table (4 rows)
-      - Top Bowlers table (4 rows from opposing team)
-  - Result bar: 🏆 RESULT text + POTM block
-  - Footer: date + stadium
-
-Color scheme: dark navy bg (#0d1117), red accents on innings 1 (lava red),
-teal accents on innings 2 (lagoon teal), gold for trophy/winner.
+The layout intentionally mirrors ``Match summary.html``: a 1600px dark metal
+card, split header, stadium strip, two innings blocks with top batters/bowlers,
+a result bar, and a POTM bar.  Text objects are admin-editable through the
+Scorecard Designer by sharing the same ``scorecard_text_settings`` JSON used by
+batting/bowling scorecards.
 """
 
 import io
-import os
 import logging
+import os
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+try:
+    from services.scorecard_card import normalize_scorecard_text_settings
+except Exception:  # pragma: no cover - defensive import fallback for legacy paths
+    normalize_scorecard_text_settings = None
 
 logger = logging.getLogger(__name__)
 
-# Color palette
-PRIMARY    = (196, 30, 58)       # Lava Red (innings 1)
-SECONDARY  = (0, 201, 167)       # Lagoon Teal (innings 2)
-GOLD       = (251, 191, 36)      # Trophy gold
-BG         = (13, 17, 23)        # GitHub-dark / page bg
-BG_DARK    = (8, 12, 20)
-CARD_BG    = (20, 27, 39)
-HEADER_BG  = (26, 10, 10)        # dark wine for innings-1 headers
-TEXT       = (241, 245, 249)
-DIM        = (148, 158, 178)
-MUTED      = (95, 105, 125)
-SEP        = (40, 50, 70)
+RED = (255, 70, 50)
+BLUE = (0, 170, 255)
+GOLD = (255, 207, 76)
+TEXT = (242, 243, 246)
+CARD_BG = (7, 11, 18)
+PANEL_BG = (8, 12, 18)
+BORDER = (255, 255, 255, 35)
 
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "assets", "logo.png")
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGO_PATH = os.path.join(_ROOT_DIR, "assets", "logo.png")
+_FONT_DIR = os.path.join(_ROOT_DIR, "assets", "fonts")
+_BEBAS_FONT_CANDIDATES = (
+    os.path.join(_FONT_DIR, "BebasNeue-Regular.ttf"),
+    "/usr/share/fonts/truetype/bebas-neue/BebasNeue-Regular.ttf",
+    "/usr/share/fonts/opentype/bebas-neue/BebasNeue-Regular.otf",
+)
+_BRICOLAGE_FONT_CANDIDATES = (
+    os.path.join(_FONT_DIR, "BricolageGrotesque-SemiBold.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-Bold.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-ExtraBold.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque.ttf"),
+)
 
 
-def _font(size, bold=False, italic=False):
+def _first_existing(paths):
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def _font(size, bold=False, italic=False, family="body"):
+    candidate = None
+    if family == "display":
+        candidate = _first_existing(_BEBAS_FONT_CANDIDATES)
+    elif family == "body":
+        candidate = _first_existing(_BRICOLAGE_FONT_CANDIDATES)
+    if candidate:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except (OSError, IOError):
+            pass
     if bold and italic:
         path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
     elif bold:
@@ -53,178 +76,242 @@ def _font(size, bold=False, italic=False):
         return ImageFont.load_default()
 
 
-def _gradient(img, top, bottom):
-    w, h = img.size
-    pixels = img.load()
-    for y in range(h):
-        t = y / h
-        r = int(top[0] * (1 - t) + bottom[0] * t)
-        g = int(top[1] * (1 - t) + bottom[1] * t)
-        b = int(top[2] * (1 - t) + bottom[2] * t)
-        for x in range(w):
-            pixels[x, y] = (r, g, b)
+def _settings(text_settings):
+    if normalize_scorecard_text_settings:
+        return normalize_scorecard_text_settings(text_settings).get("summary", {})
+    return {}
+
+
+def _setting(text_settings, key):
+    return _settings(text_settings).get(key, {"text": "", "font": "body", "size": 0, "x": 0, "y": 0})
+
+
+def _font_for(text_settings, key, size, *, bold=True, italic=False, family="body"):
+    s = _setting(text_settings, key)
+    fam = s.get("font") or family
+    if fam == "fallback":
+        fam = "fallback"
+    elif fam not in {"display", "body"}:
+        fam = family
+    return _font(max(6, size + int(s.get("size", 0) or 0)), bold=bold, italic=italic, family=fam)
+
+
+def _xy(text_settings, key, x, y):
+    s = _setting(text_settings, key)
+    return x + int(s.get("x", 0) or 0), y + int(s.get("y", 0) or 0)
+
+
+def _text(text_settings, key, default):
+    s = _setting(text_settings, key)
+    return str(s.get("text") or default)
 
 
 def _tw(draw, text, font):
-    bb = draw.textbbox((0, 0), text, font=font)
+    bb = draw.textbbox((0, 0), str(text), font=font)
     return bb[2] - bb[0]
 
 
-def _load_logo(target=80):
+def _fit_text(draw, text, font, max_width, min_len=4):
+    text = str(text)
+    while _tw(draw, text, font) > max_width and len(text) > min_len:
+        text = text[:-2] + "…"
+    return text
+
+
+def _draw_tracked(draw, xy, text, font, fill, tracking=0):
+    if not tracking:
+        draw.text(xy, str(text), font=font, fill=fill)
+        return
+    x, y = xy
+    for ch in str(text):
+        draw.text((x, y), ch, font=font, fill=fill)
+        x += _tw(draw, ch, font) + tracking
+
+
+def _tracked_width(draw, text, font, tracking=0):
+    return sum(_tw(draw, ch, font) for ch in str(text)) + max(0, len(str(text)) - 1) * tracking
+
+
+def _rounded(draw, box, radius, fill, outline=None, width=1):
+    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
+
+
+def _load_logo(target=(165, 110)):
     try:
         if not os.path.exists(_LOGO_PATH):
             return None
         img = Image.open(_LOGO_PATH).convert("RGBA")
-        img.thumbnail((target, target), Image.LANCZOS)
+        img.thumbnail(target, Image.LANCZOS)
         return img
     except Exception:
         return None
 
 
-def _draw_team_header(draw, x, y, w, team_name, score, wickets, overs,
-                      accent, fonts):
-    """Draw a team-section header row: [accent strip] TEAM NAME ... OVERS  R/W."""
+def _draw_shadowed_text(draw, xy, text, font, fill=TEXT, tracking=0):
+    x, y = xy
+    _draw_tracked(draw, (x, y + 4), text, font, (0, 0, 0, 150), tracking)
+    _draw_tracked(draw, (x, y), text, font, fill, tracking)
+
+
+def _draw_bg(img):
+    draw = ImageDraw.Draw(img, "RGBA")
+    w, h = img.size
+    for y in range(h):
+        t = y / max(1, h - 1)
+        base = int(5 * (1 - t) + 3 * t), int(6 * (1 - t) + 4 * t), int(8 * (1 - t) + 6 * t)
+        draw.line([(0, y), (w, y)], fill=base)
+    glow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow, "RGBA")
+    gd.ellipse((-180, -160, 520, 380), fill=(255, 60, 40, 55))
+    gd.ellipse((w - 520, -160, w + 180, 380), fill=(0, 170, 255, 55))
+    glow = glow.filter(ImageFilter.GaussianBlur(80))
+    img.alpha_composite(glow)
+
+
+def _draw_header(draw, img, text_settings, match_no):
+    x, y, w, h = 10, 10, 1580, 128
+    _rounded(draw, [x, y, x + w, y + h], 20, (8, 12, 18, 245), BORDER, 1)
+    draw.rectangle([x + (w - 180) // 2, y, x + (w + 180) // 2, y + h], fill=(255, 255, 255, 8))
+    draw.line([(x + (w - 180) // 2, y), (x + (w - 180) // 2, y + h)], fill=(255, 255, 255, 22))
+    draw.line([(x + (w + 180) // 2, y), (x + (w + 180) // 2, y + h)], fill=(255, 255, 255, 22))
+    draw.polygon([(x, y + h), (x + 140, y + h), (x + 140, y + h - 72)], fill=(255, 70, 40, 215))
+    draw.polygon([(x + w, y + h), (x + w - 140, y + h), (x + w - 140, y + h - 72)], fill=(0, 170, 255, 215))
+
+    f = _font_for(text_settings, "header_title", 72, family="display")
+    left = _text(text_settings, "header_title", "SUMMARY").upper()
+    _draw_shadowed_text(draw, _xy(text_settings, "header_title", x + 85, y + 30), left, f, tracking=3)
+    right = _text(text_settings, "match_no", f"MATCH #{match_no or '—'}").upper()
+    rw = _tracked_width(draw, right, f, 3)
+    rx, ry = _xy(text_settings, "match_no", x + w - 85 - rw, y + 30)
+    _draw_shadowed_text(draw, (rx, ry), right, f, tracking=3)
+
+    logo = _load_logo()
+    if logo:
+        lx = x + (w - logo.width) // 2
+        ly = y + (h - logo.height) // 2
+        img.alpha_composite(logo, (lx, ly))
+
+
+def _draw_stadium(draw, text_settings, stadium):
+    x, y, w, h = 10, 144, 1580, 42
+    _rounded(draw, [x, y, x + w, y + h], 18, (10, 14, 20, 235), (255, 190, 80, 55), 1)
+    draw.polygon([(x + int(w * .35), y), (x + int(w * .35) + 140, y), (x + int(w * .35) + 110, y + h)], fill=(255, 190, 80, 65))
+    draw.polygon([(x + int(w * .65), y), (x + int(w * .65) - 140, y), (x + int(w * .65) - 110, y + h)], fill=(255, 190, 80, 65))
+    f = _font_for(text_settings, "stadium", 24, family="display")
+    txt = _text(text_settings, "stadium", (stadium or "MATCH")).upper()
+    tw = _tracked_width(draw, txt, f, 4)
+    sx, sy = _xy(text_settings, "stadium", x + (w - tw) // 2, y + 7)
+    _draw_shadowed_text(draw, (sx, sy), txt, f, tracking=4)
+
+
+def _normalise_batters(rows):
+    out = []
+    for b in (rows or [])[:4]:
+        runs = b.get("runs", 0)
+        star = "*" if not b.get("out", False) else ""
+        out.append((b.get("name", "—"), f"{runs}{star}", str(b.get("balls", 0))))
+    while len(out) < 4:
+        out.append(("—", "—", "—"))
+    return out
+
+
+def _normalise_bowlers(rows):
+    out = []
+    for b in (rows or [])[:4]:
+        out.append((b.get("name", "—"), f"{b.get('wickets', 0)}-{b.get('runs', 0)}", str(b.get("overs", "0"))))
+    while len(out) < 4:
+        out.append(("—", "—", "—"))
+    return out
+
+
+def _draw_rows(draw, x, y, w, rows, *, color, right_accent, text_settings, potm_name=None):
+    row_h = 54
+    name_f = _font_for(text_settings, "row_name", 28, italic=True, family="body")
+    num_f = _font_for(text_settings, "row_number", 28, family="body")
+    mini_f = _font_for(text_settings, "potm_badge", 16, family="body")
+    for i, (name, val1, val2) in enumerate(rows):
+        ry = y + i * row_h
+        tint = (color[0], color[1], color[2], 38)
+        draw.rectangle([x, ry, x + w, ry + row_h], fill=tint)
+        if right_accent:
+            draw.rectangle([x + w - 4, ry, x + w, ry + row_h], fill=(*color, 235))
+        else:
+            draw.rectangle([x, ry, x + 4, ry + row_h], fill=(*color, 235))
+        draw.line([(x, ry + row_h), (x + w, ry + row_h)], fill=(255, 255, 255, 25))
+        name_txt = _fit_text(draw, str(name).upper(), name_f, w - 245)
+        nx, ny = _xy(text_settings, "row_name", x + 18, ry + 12)
+        _draw_shadowed_text(draw, (nx, ny), name_txt, name_f)
+        if potm_name and str(name).lower() == str(potm_name).lower():
+            bw = _tw(draw, name_txt, name_f)
+            bx = min(x + w - 250, nx + bw + 10)
+            _rounded(draw, [bx, ry + 16, bx + 62, ry + 38], 6, (255, 190, 40, 245))
+            draw.text((bx + 7, ry + 17), "POTM", font=mini_f, fill=(29, 18, 0))
+        for idx, val in enumerate((val1, val2)):
+            cx = x + w - 200 + idx * 100
+            txt = str(val).upper()
+            tw = _tw(draw, txt, num_f)
+            px, py = _xy(text_settings, "row_number", cx + (90 - tw) // 2, ry + 12)
+            _draw_shadowed_text(draw, (px, py), txt, num_f)
+
+
+def _draw_innings(draw, x, y, w, text_settings, *, team, runs, wickets, overs, overs_total, batters, bowlers, bat_color, bowl_color, potm_name):
+    block_h = 74 + 216
+    _rounded(draw, [x, y, x + w, y + block_h], 18, (6, 12, 20, 240), BORDER, 1)
+    draw.rectangle([x, y, x + w, y + 74], fill=(0, 0, 0, 35))
+    draw.line([(x, y + 74), (x + w, y + 74)], fill=(255, 255, 255, 28))
+    f_team = _font_for(text_settings, "innings_team", 62, family="display")
+    f_meta = _font_for(text_settings, "innings_meta", 30, family="display")
+    f_score = _font_for(text_settings, "innings_score", 66, family="display")
+    team_txt = _fit_text(draw, str(team).upper(), f_team, w - 520, 6)
+    _draw_shadowed_text(draw, _xy(text_settings, "innings_team", x + 18, y + 12), team_txt, f_team, tracking=3)
+    meta_txt = _text(text_settings, "innings_meta", f"OVERS {overs}/{overs_total}.0").upper()
+    score_txt = _text(text_settings, "innings_score", f"{runs}/{wickets}").upper()
+    score_w = _tracked_width(draw, score_txt, f_score, 3)
+    meta_w = _tracked_width(draw, meta_txt, f_meta, 2)
+    sx, sy = _xy(text_settings, "innings_score", x + w - 18 - score_w, y + 7)
+    mx, my = _xy(text_settings, "innings_meta", sx - 24 - meta_w, y + 23)
+    _draw_shadowed_text(draw, (mx, my), meta_txt, f_meta, tracking=2)
+    _draw_shadowed_text(draw, (sx, sy), score_txt, f_score, tracking=3)
+    grid_y = y + 74
+    half = w // 2
+    _draw_rows(draw, x, grid_y, half, _normalise_batters(batters), color=bat_color, right_accent=False, text_settings=text_settings, potm_name=potm_name)
+    _draw_rows(draw, x + half, grid_y, half, _normalise_bowlers(bowlers), color=bowl_color, right_accent=True, text_settings=text_settings, potm_name=potm_name)
+    draw.line([(x + half, grid_y), (x + half, y + block_h)], fill=(255, 255, 255, 28))
+
+
+def _draw_result(draw, x, y, w, text_settings, winner_name, win_margin_text):
     h = 70
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=10,
-                            fill=CARD_BG, outline=SEP, width=1)
-    draw.rounded_rectangle([x, y, x + 6, y + h], radius=3, fill=accent)
-
-    text_x = x + 24
-    text_y = y + h // 2 - 14
-    # Truncate team name if absurdly long
-    name_disp = team_name.upper()
-    while _tw(draw, name_disp, fonts["team"]) > w // 2 and len(name_disp) > 6:
-        name_disp = name_disp[:-2] + "…"
-    draw.text((text_x, text_y), name_disp,
-              fill=TEXT, font=fonts["team"])
-
-    overs_text = f"{overs} OVERS"
-    runs_text = str(score)
-    sep_text = "/"
-    wkts_text = str(wickets)
-
-    score_font = fonts["score"]
-    overs_font = fonts["overs"]
-
-    runs_w = _tw(draw, runs_text, score_font)
-    slash_w = _tw(draw, sep_text, score_font)
-    wkts_w = _tw(draw, wkts_text, score_font)
-    overs_w = _tw(draw, overs_text, overs_font)
-
-    pad = 14
-    right_x = x + w - 24
-    wx = right_x - wkts_w
-    sx = wx - pad - slash_w
-    rx = sx - pad - runs_w
-    ox = rx - 20 - overs_w
-    sy = y + h // 2 - score_font.size // 2 - 2
-    oy = y + h // 2 - overs_font.size // 2
-
-    draw.text((ox, oy), overs_text, fill=DIM, font=overs_font)
-    draw.text((rx, sy), runs_text, fill=TEXT, font=score_font)
-    draw.text((sx, sy), sep_text, fill=accent, font=score_font)
-    draw.text((wx, sy), wkts_text, fill=TEXT, font=score_font)
-
-    return h
+    _rounded(draw, [x, y, x + w, y + h], 18, (8, 12, 18, 242), (255, 190, 80, 55), 1)
+    draw.polygon([(x, y + h), (x + 110, y + h), (x + 110, y)], fill=(255, 70, 50, 90))
+    draw.polygon([(x + w, y + h), (x + w - 110, y + h), (x + w - 110, y)], fill=(0, 170, 255, 90))
+    f = _font_for(text_settings, "result", 52, family="display")
+    txt = _text(text_settings, "result", f"{(winner_name or '—').upper()} WON {str(win_margin_text or '').upper()} 🏆").upper()
+    txt = _fit_text(draw, txt, f, w - 80, 10)
+    tw = _tracked_width(draw, txt, f, 3)
+    rx, ry = _xy(text_settings, "result", x + (w - tw) // 2, y + 8)
+    _draw_shadowed_text(draw, (rx, ry), txt, f, tracking=3)
 
 
-def _draw_top_table(draw, x, y, w, title, rows, accent, fonts,
-                     numeric_cols=None):
-    numeric_cols = numeric_cols or set()
-    title_h = 30
-    row_h = 30
-    pad = 12
-    table_h = title_h + (max(len(rows), 1) * row_h) + 8
-
-    draw.rounded_rectangle([x, y, x + w, y + title_h], radius=8,
-                            fill=accent)
-    draw.text((x + pad, y + 6), title, fill=BG, font=fonts["table_title"])
-
-    row_y = y + title_h + 6
-    if not rows:
-        draw.text((x + pad, row_y + 4),
-                  "— no data —", fill=DIM, font=fonts["row"])
-        return table_h
-
-    cols = len(rows[0])
-    if cols == 3:
-        col_widths = [w - 130, 60, 60]
-    elif cols == 5:
-        col_widths = [w - 240, 55, 55, 55, 75]
-    else:
-        col_widths = [w // cols] * cols
-
-    for r_idx, row in enumerate(rows):
-        cx = x
-        ry = row_y + r_idx * row_h
-        for c_idx, cell in enumerate(row):
-            cw = col_widths[c_idx]
-            text = str(cell)
-            if c_idx in numeric_cols:
-                tw_v = _tw(draw, text, fonts["row"])
-                draw.text((cx + cw - tw_v - pad, ry + 4),
-                          text, fill=TEXT, font=fonts["row"])
-            else:
-                display = text
-                while _tw(draw, display, fonts["row"]) > cw - pad * 2 and len(display) > 4:
-                    display = display[:-2] + "…"
-                draw.text((cx + pad, ry + 4),
-                          display, fill=TEXT, font=fonts["row"])
-            cx += cw
-
-    return table_h
-
-
-def _draw_result_bar(draw, x, y, w, *, winner_name, win_margin_text,
-                     potm_name, potm_stats, fonts):
-    h = 100
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=12,
-                            fill=CARD_BG, outline=GOLD, width=2)
-
-    trophy_size = 60
-    trophy_x = x + 18
-    trophy_y = y + (h - trophy_size) // 2
-    draw.ellipse([trophy_x, trophy_y,
-                  trophy_x + trophy_size, trophy_y + trophy_size],
-                  fill=GOLD)
-    trophy_txt = "🏆"
-    tt_w = _tw(draw, trophy_txt, fonts["trophy"])
-    draw.text((trophy_x + (trophy_size - tt_w) // 2,
-               trophy_y + 8),
-              trophy_txt, fill=BG, font=fonts["trophy"])
-
-    text_x = trophy_x + trophy_size + 20
-    label_y = y + 18
-    draw.text((text_x, label_y), "RESULT",
-              fill=DIM, font=fonts["res_label"])
-    result_txt = f"{(winner_name or '—').upper()} WON {(win_margin_text or '').upper()}".strip()
-    avail_w = w // 2 - 40
-    while _tw(draw, result_txt, fonts["res_text"]) > avail_w and len(result_txt) > 10:
-        result_txt = result_txt[:-2] + "…"
-    draw.text((text_x, label_y + 20), result_txt,
-              fill=TEXT, font=fonts["res_text"])
-
-    div_x = x + w // 2 + 30
-    draw.line([(div_x, y + 18), (div_x, y + h - 18)],
-              fill=SEP, width=2)
-
-    potm_x = div_x + 20
-    draw.text((potm_x, label_y), "PLAYER OF THE MATCH",
-              fill=DIM, font=fonts["res_label"])
-    potm_display = (potm_name or "—").upper()
-    avail_potm = w - (potm_x - x) - 200
-    while _tw(draw, potm_display, fonts["potm_name"]) > avail_potm and len(potm_display) > 6:
-        potm_display = potm_display[:-2] + "…"
-    draw.text((potm_x, label_y + 20),
-              potm_display, fill=TEXT, font=fonts["potm_name"])
-
-    if potm_stats:
-        stats_text = potm_stats
-        sw = _tw(draw, stats_text, fonts["potm_stats"])
-        draw.text((x + w - 20 - sw, y + h // 2 - 11),
-                  stats_text, fill=GOLD, font=fonts["potm_stats"])
-
-    return h
+def _draw_potm(draw, x, y, w, text_settings, potm_name, potm_stats):
+    h = 96
+    _rounded(draw, [x, y, x + w, y + h], 18, (10, 10, 10, 244), (255, 180, 50, 70), 1)
+    draw.rectangle([x, y, x + 170, y + h], fill=(255, 120, 20, 48))
+    draw.line([(x + 170, y), (x + 170, y + h)], fill=(255, 255, 255, 30))
+    draw.line([(x + 760, y), (x + 760, y + h)], fill=(255, 255, 255, 30))
+    f_badge = _font_for(text_settings, "potm_badge", 44, family="display")
+    f_name = _font_for(text_settings, "potm_name", 58, family="display")
+    f_label = _font_for(text_settings, "potm_label", 40, family="display")
+    f_value = _font_for(text_settings, "potm_value", 62, family="display")
+    badge = _text(text_settings, "potm_badge", "POTM").upper()
+    bw = _tracked_width(draw, badge, f_badge, 2)
+    _draw_shadowed_text(draw, _xy(text_settings, "potm_badge", x + (170 - bw) // 2, y + 24), badge, f_badge, fill=(255, 242, 197), tracking=2)
+    name = _fit_text(draw, _text(text_settings, "potm_name", potm_name or "—").upper(), f_name, 525, 5)
+    _draw_shadowed_text(draw, _xy(text_settings, "potm_name", x + 194, y + 20), name, f_name, fill=GOLD, tracking=3)
+    label = _text(text_settings, "potm_label", "PERFORMANCE:").upper()
+    _draw_shadowed_text(draw, _xy(text_settings, "potm_label", x + 784, y + 28), label, f_label, fill=GOLD, tracking=2)
+    value = _fit_text(draw, _text(text_settings, "potm_value", potm_stats or "—").upper(), f_value, 430, 3)
+    _draw_shadowed_text(draw, _xy(text_settings, "potm_value", x + 1080, y + 16), value, f_value, tracking=2)
+    draw.text((x + w - 86, y + 22), "⭐", font=_font(54, family="fallback"), fill=(255, 216, 77))
 
 
 def generate_match_summary(*,
@@ -240,163 +327,47 @@ def generate_match_summary(*,
     stadium=None,
     match_date=None,
     is_spectator=False,
+    match_no=None,
+    text_settings=None,
 ) -> bytes | None:
-    """Render the match summary card. Returns PNG bytes or None on failure."""
+    """Render the match summary card. Returns PNG bytes or ``None`` on failure."""
     try:
-        W = 1400
-        H = 1300
-
-        img = Image.new("RGB", (W, H), BG)
-        _gradient(img, BG, BG_DARK)
+        W, H = 1600, 900
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        _draw_bg(img)
         draw = ImageDraw.Draw(img, "RGBA")
+        _rounded(draw, [0, 0, W - 1, H - 1], 24, (*CARD_BG, 246), (255, 255, 255, 42), 1)
+        draw.rounded_rectangle([8, 8, W - 9, H - 9], radius=18, outline=(255, 255, 255, 25), width=1)
 
-        f_brand = _font(26, bold=True, italic=True)
-        f_title = _font(56, bold=True, italic=True)
-        f_subtitle = _font(38, bold=True, italic=True)
-        f_team = _font(44, bold=True, italic=True)
-        f_score = _font(62, bold=True)
-        f_overs = _font(22, bold=True)
-        f_table_title = _font(18, bold=True)
-        f_row = _font(22, bold=True)
-        f_res_label = _font(14, bold=True)
-        f_res_text = _font(24, bold=True, italic=True)
-        f_potm_name = _font(22, bold=True)
-        f_potm_stats = _font(28, bold=True)
-        f_footer = _font(16)
-        f_trophy = _font(36)
+        _draw_header(draw, img, text_settings, match_no)
+        _draw_stadium(draw, text_settings, stadium or (match_date.strftime("%d %b %Y") if isinstance(match_date, datetime) else "MATCH"))
 
-        # Header
-        logo = _load_logo(target=100)
-        header_y = 30
-        if logo:
-            img.paste(logo, (50, header_y), logo)
-            brand_x = 170
-        else:
-            brand_x = 50
+        top_per_team = top_per_team or {}
+        inn1_data = top_per_team.get("inn1", {})
+        inn2_data = top_per_team.get("inn2", {})
+        x, w = 10, 1580
+        _draw_innings(draw, x, 200, w, text_settings,
+                      team=inn1_data.get("team") or inn1_team,
+                      runs=inn1_runs, wickets=inn1_wickets, overs=inn1_overs,
+                      overs_total=overs_total,
+                      batters=inn1_data.get("batters", []),
+                      bowlers=inn1_data.get("bowlers", []),
+                      bat_color=BLUE, bowl_color=RED, potm_name=potm_name)
+        _draw_innings(draw, x, 430, w, text_settings,
+                      team=inn2_data.get("team") or inn2_team,
+                      runs=inn2_runs, wickets=inn2_wickets, overs=inn2_overs,
+                      overs_total=overs_total,
+                      batters=inn2_data.get("batters", []),
+                      bowlers=inn2_data.get("bowlers", []),
+                      bat_color=RED, bowl_color=BLUE, potm_name=potm_name)
+        _draw_result(draw, x, 660, w, text_settings, winner_name, win_margin_text)
+        _draw_potm(draw, x, 742, w, text_settings, potm_name, potm_stats)
 
-        draw.text((brand_x, header_y + 8), "CRICMASTERULTRA",
-                  fill=GOLD, font=f_brand)
-        draw.text((brand_x, header_y + 44), "MATCH SUMMARY",
-                  fill=TEXT, font=f_title)
-
-        right_y = header_y + 16
-        if match_date:
-            date_text = match_date.strftime("%d %b %Y").upper()
-            dw = _tw(draw, date_text, f_overs)
-            draw.text((W - 50 - dw, right_y),
-                      date_text, fill=DIM, font=f_overs)
-        if is_spectator:
-            spec_text = "SPECTATOR MATCH"
-            sw = _tw(draw, spec_text, f_overs)
-            draw.text((W - 50 - sw, right_y + 36),
-                      spec_text, fill=SECONDARY, font=f_overs)
-
-        subtitle_y = header_y + 116
-        sub_text = f"{inn1_team.upper()}  vs  {inn2_team.upper()}"
-        sub_w = _tw(draw, sub_text, f_subtitle)
-        draw.text(((W - sub_w) // 2, subtitle_y),
-                  sub_text, fill=TEXT, font=f_subtitle)
-
-        line_y = subtitle_y + 60
-        draw.line([(W // 2 - 240, line_y), (W // 2 + 240, line_y)],
-                  fill=GOLD, width=3)
-
-        # Sections
-        section_x = 50
-        section_w = W - 100
-        section_y = line_y + 30
-
-        if not top_per_team:
-            top_per_team = {
-                "inn1": {"team": inn1_team, "bowl_team": inn2_team,
-                         "batters": [], "bowlers": []},
-                "inn2": {"team": inn2_team, "bowl_team": inn1_team,
-                         "batters": [], "bowlers": []},
-            }
-
-        fonts = {
-            "team": f_team, "score": f_score, "overs": f_overs,
-            "table_title": f_table_title, "row": f_row,
-            "res_label": f_res_label, "res_text": f_res_text,
-            "potm_name": f_potm_name, "potm_stats": f_potm_stats,
-            "trophy": f_trophy,
-        }
-
-        for inn_key, (runs, wkts, overs_s, accent) in (
-            ("inn1", (inn1_runs, inn1_wickets, inn1_overs, PRIMARY)),
-            ("inn2", (inn2_runs, inn2_wickets, inn2_overs, SECONDARY)),
-        ):
-            data = top_per_team.get(inn_key, {})
-            team_n = data.get("team") or (
-                inn1_team if inn_key == "inn1" else inn2_team)
-
-            th_h = _draw_team_header(draw, section_x, section_y, section_w,
-                                       team_n, runs, wkts, overs_s,
-                                       accent, fonts)
-
-            tables_y = section_y + th_h + 12
-            gap = 20
-            table_w = (section_w - gap) // 2
-
-            batter_rows = []
-            for b in data.get("batters", [])[:4]:
-                name = b.get("name", "—")
-                runs_str = f"{b.get('runs', 0)}{'*' if not b.get('out', False) else ''}"
-                balls_str = f"({b.get('balls', 0)})"
-                batter_rows.append([name, runs_str, balls_str])
-
-            bat_h = _draw_top_table(draw, section_x, tables_y, table_w,
-                                      "TOP BATTERS", batter_rows,
-                                      accent, fonts, numeric_cols={1, 2})
-
-            bowler_rows = []
-            for bw in data.get("bowlers", [])[:4]:
-                bowler_rows.append([
-                    bw.get("name", "—"),
-                    bw.get("overs", "0"),
-                    str(bw.get("runs", 0)),
-                    str(bw.get("wickets", 0)),
-                    f"{bw.get('econ', 0):.2f}",
-                ])
-            bowl_h = _draw_top_table(draw,
-                                       section_x + table_w + gap, tables_y,
-                                       table_w,
-                                       "TOP BOWLERS", bowler_rows,
-                                       accent, fonts,
-                                       numeric_cols={1, 2, 3, 4})
-
-            section_y = tables_y + max(bat_h, bowl_h) + 25
-
-        # Result bar
-        result_y = section_y + 5
-        rh = _draw_result_bar(draw, 50, result_y, W - 100,
-                                 winner_name=winner_name,
-                                 win_margin_text=win_margin_text,
-                                 potm_name=potm_name,
-                                 potm_stats=potm_stats,
-                                 fonts=fonts)
-
-        # Footer
-        footer_y = result_y + rh + 15
-        footer_bits = []
-        if match_date:
-            footer_bits.append(f"📅 {match_date.strftime('%d %b %Y').upper()}")
-        if stadium:
-            footer_bits.append(f"📍 {stadium.upper()}")
-        footer_bits.append(f"🏏 {overs_total} OVER MATCH")
-        footer_text = "  |  ".join(footer_bits)
-        fw = _tw(draw, footer_text, f_footer)
-        draw.text(((W - fw) // 2, footer_y),
-                  footer_text, fill=DIM, font=f_footer)
-
-        actual_h = footer_y + 50
-        if actual_h < H:
-            img = img.crop((0, 0, W, actual_h))
-
+        out = Image.new("RGB", img.size, (3, 4, 6))
+        out.paste(img, mask=img.split()[-1])
         buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
+        out.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
-
     except Exception:
         logger.exception("Failed to render match summary card")
         return None
