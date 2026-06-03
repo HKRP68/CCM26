@@ -4,11 +4,7 @@
 
 <h1>🎨 Scorecard Designer</h1>
 <p style="color:var(--muted); margin-bottom:1.5rem;">
-  Generate batting, bowling, and match-summary scorecards from the uploaded HTML styles. The green
-  team box is fixed as the active side marker: <strong>BATTING</strong> on the
-  batting card and <strong>BOWLING</strong> on the bowling card. Use this page to
-  preview, change innings accent colours, choose text font families, adjust font
-  size, and reposition text groups with X/Y offsets.
+  Generate batting, bowling, and match-summary scorecards from the supplied Python templates: <code>Batting_Scorecard.py</code>, <code>bowling_scorecard_graphic.py</code>, and <code>match_summary_graphic-1.py</code>. The green team box stays as the active side marker: <strong>BATTING</strong> on batting cards and <strong>BOWLING</strong> on bowling cards. Use this page to preview, rename labels/values, choose each text object's font, fine-tune its template font size, and reposition it with X/Y offsets.
 </p>
 
 <form method="POST" action="{{ url_for('admin_scorecard_settings') }}">
@@ -70,7 +66,7 @@
       🏆 Match Summary Preview
     </h2>
     <p style="color:var(--muted); font-size:.85rem; margin-top:-.4rem;">
-      This preview uses the exact uploaded <code>Match summary.html</code> layout: 1600×900 card, Bebas/Bricolage font controls, two innings blocks, result bar, and POTM bar.
+      This preview uses the supplied <code>match_summary_graphic-1.py</code> layout: 1600×900 card, Bebas/Bricolage font controls, two innings blocks, result bar, and POTM bar.
     </p>
     <a id="preview_link_summary_inn1"
        href="{{ url_for('admin_scorecard_preview', innings=1, card_type='summary') }}"
@@ -88,8 +84,7 @@
       ✍️ Text Font / Size / Position
     </h2>
     <p style="color:var(--muted); font-size:.85rem; margin-top:-.4rem;">
-      Font size is added to the HTML-matching default size. X moves text right/left;
-      Y moves text down/up. These controls apply to generated scorecards, match summaries, and live previews.
+      Each row controls one text object from the template. Size is an adjustment on top of that template's exact default font size; X moves text right/left and Y moves text down/up. Empty Text Value keeps live match data, while filled Text Value renames/overrides that object in generated cards and previews.
     </p>
 
     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem; align-items:start;">
@@ -97,7 +92,7 @@
       <div style="border:1px solid var(--border); border-radius:10px; overflow:hidden;">
         <div style="padding:.75rem 1rem; background:rgba(255,255,255,.04); font-weight:800;">{{ title }}</div>
         <div style="display:grid; grid-template-columns: 1.15fr 1.1fr .85fr .55fr .55fr .55fr; gap:.5rem; padding:.75rem; color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em;">
-          <div>Object</div><div>Text Value</div><div>Font</div><div>Size</div><div>X</div><div>Y</div>
+          <div>Object</div><div>Text Value / Rename</div><div>Font</div><div>Size ±</div><div>X</div><div>Y</div>
         </div>
         {% set fields = text_settings[card_type] %}
         {% for field in text_fields[card_type] %}
