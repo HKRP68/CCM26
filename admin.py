@@ -8428,7 +8428,6 @@ def admin_scorecard_preview():
     try:
         from services.config_service import get_config
         from services.scorecard_card import generate_batting_scorecard
-        import re as _re
         cfg = get_config(db)
         innings = request.args.get("innings", "1")
         is_first = (innings == "1")
@@ -8451,18 +8450,15 @@ def admin_scorecard_preview():
              "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "strike_rate": 0.0,
              "status": "dnb"},
         ]
-        requested_color = request.args.get("color")
-        saved_color = (cfg.get("scorecard_color_inn1") if is_first
-                       else cfg.get("scorecard_color_inn2"))
-        preview_color = requested_color if _re.fullmatch(r"#[0-9a-fA-F]{6}", requested_color or "") else saved_color
         png = generate_batting_scorecard(
             "Sample Team A", "Sample Team B", 156, 3, "15.2",
             sample_rows, [(1, 12, "1.3"), (2, 78, "9.1"), (3, 134, "13.5")],
             {"wd": 4, "nb": 1, "b": 0, "lb": 2, "total": 7},
             is_first_innings=is_first,
-            match_title="WANDERERS STADIUM",
+            match_title="PREVIEW",
             match_no=42,
-            accent_hex=preview_color,
+            accent_hex=(cfg.get("scorecard_color_inn1") if is_first
+                        else cfg.get("scorecard_color_inn2")),
         )
         if not png:
             return "Preview render failed", 500
