@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CMU S1 Batting Stats Card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#02060d;
+    --panel:#07111f;
+    --panel-2:#0b1728;
+    --red:#ff1f37;
+    --red-2:#b70e1e;
+    --blue:#2194ff;
+    --blue-2:#075cb5;
+    --gold:#ffc767;
+    --white:#f5f7fb;
+    --muted:#aeb5c2;
+    --line:rgba(255,255,255,.18);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    min-height:100vh;
+    display:grid;
+    place-items:center;
+    background:
+      radial-gradient(circle at 12% 28%, rgba(255,31,55,.18), transparent 25%),
+      radial-gradient(circle at 90% 68%, rgba(33,148,255,.18), transparent 28%),
+      linear-gradient(135deg,#000 0%,#03101d 55%,#000 100%);
+    color:var(--white);
+    font-family:"Bricolage Grotesque", system-ui, sans-serif;
+  }
+
+  .card{
+    width:1536px;
+    height:864px;
+    position:relative;
+    overflow:hidden;
+    padding:68px 78px 64px;
+    background:
+      linear-gradient(90deg, rgba(255,31,55,.13), transparent 17%, transparent 78%, rgba(33,148,255,.13)),
+      radial-gradient(circle at 50% 0%, rgba(255,199,103,.14), transparent 30%),
+      linear-gradient(180deg, #08101d 0%, #020712 100%);
+    clip-path:polygon(4% 4%,96% 4%,99% 10%,99% 90%,96% 96%,4% 96%,1% 90%,1% 10%);
+    border:1px solid rgba(255,255,255,.32);
+    box-shadow:
+      0 0 0 8px rgba(255,255,255,.055) inset,
+      0 0 0 16px rgba(8,15,26,.95) inset,
+      0 0 42px rgba(33,148,255,.25),
+      0 0 34px rgba(255,31,55,.22);
+  }
+
+  .card::before{
+    content:"";
+    position:absolute;
+    inset:26px;
+    clip-path:polygon(4% 4%,96% 4%,99% 10%,99% 90%,96% 96%,4% 96%,1% 90%,1% 10%);
+    border:2px solid rgba(255,255,255,.18);
+    pointer-events:none;
+    box-shadow:0 0 22px rgba(255,255,255,.06) inset;
+  }
+
+  .card::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:
+      linear-gradient(90deg, transparent 7%, rgba(255,31,55,.55) 8%, transparent 19%),
+      linear-gradient(270deg, transparent 5%, rgba(33,148,255,.55) 7%, transparent 18%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 5px);
+    mix-blend-mode:screen;
+    opacity:.52;
+    pointer-events:none;
+  }
+
+  .corner-glow{
+    position:absolute;
+    height:5px;
+    width:260px;
+    background:linear-gradient(90deg,transparent,var(--gold),transparent);
+    filter:blur(.5px);
+    opacity:.95;
+  }
+  .corner-glow.top{top:78px; left:50%; transform:translateX(-50%)}
+  .corner-glow.bottom{bottom:72px; left:42%; transform:translateX(-50%)}
+
+  .top-grid{
+    position:relative;
+    z-index:2;
+    display:grid;
+    grid-template-columns: 1fr 390px;
+    gap:34px;
+    align-items:start;
+  }
+
+  .identity{
+    min-width:0;
+  }
+
+  .name-row{
+    display:flex;
+    align-items:center;
+    gap:22px;
+    margin-top:22px;
+    flex-wrap:nowrap;
+  }
+
+  .first-name,
+  .last-name{
+    font-family:"Russo One", sans-serif;
+    font-size:108px;
+    line-height:.92;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    text-shadow:0 7px 0 rgba(0,0,0,.22), 0 0 22px rgba(255,255,255,.18);
+    white-space:nowrap;
+  }
+  .first-name{
+    color:var(--red);
+    background:linear-gradient(180deg,#ff3146 8%,#ef1029 58%,#8f0713 100%);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 0 16px rgba(255,31,55,.22));
+  }
+  .last-name{
+    color:#e9edf5;
+    background:linear-gradient(180deg,#fff 8%,#d8dee8 48%,#737b89 100%);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+  }
+
+  .rating-wrap{
+    display:flex;
+    gap:14px;
+    margin-left:10px;
+  }
+
+  .rating-box{
+    width:150px;
+    height:172px;
+    display:grid;
+    place-items:center;
+    text-align:center;
+    background:linear-gradient(180deg,rgba(12,29,51,.93),rgba(4,11,22,.94));
+    clip-path:polygon(14% 0,86% 0,100% 15%,100% 85%,86% 100%,14% 100%,0 85%,0 15%);
+    position:relative;
+  }
+  .rating-box::before{
+    content:"";
+    position:absolute;
+    inset:3px;
+    clip-path:inherit;
+    border:2px solid var(--blue);
+    opacity:.78;
+    filter:drop-shadow(0 0 10px var(--blue));
+  }
+  .rating-box.red::before{border-color:var(--red); filter:drop-shadow(0 0 10px var(--red))}
+
+  .rating-label{
+    font-size:28px;
+    font-weight:800;
+    color:#d2d8e3;
+    letter-spacing:.5px;
+    text-transform:uppercase;
+    margin-bottom:4px;
+  }
+  .rating-box.red .rating-label{color:var(--red)}
+
+  .rating-num{
+    font-family:"Russo One", sans-serif;
+    font-size:74px;
+    line-height:.9;
+    color:#f7f8fb;
+    text-shadow:0 0 18px rgba(255,255,255,.18);
+  }
+  .rating-box.red .rating-num{color:var(--red)}
+
+  .logo-area{
+    height:255px;
+    display:grid;
+    place-items:center;
+    position:relative;
+  }
+  .logo-area::before{
+    content:"";
+    position:absolute;
+    width:300px;
+    height:210px;
+    background:radial-gradient(circle, rgba(255,199,103,.22), transparent 68%);
+    filter:blur(2px);
+  }
+  .logo-area img{
+    position:relative;
+    max-width:330px;
+    max-height:235px;
+    object-fit:contain;
+    filter:drop-shadow(0 0 18px rgba(255,255,255,.22)) drop-shadow(0 0 12px rgba(255,31,55,.18));
+  }
+
+  .role-row{
+    margin-top:22px;
+    height:76px;
+    display:flex;
+    align-items:center;
+    gap:28px;
+    border-top:1px solid rgba(255,255,255,.1);
+    border-bottom:1px solid rgba(255,199,103,.32);
+    padding-left:4px;
+  }
+  .badge{
+    width:230px;
+    height:55px;
+    display:grid;
+    place-items:center;
+    background:linear-gradient(180deg,#ff3146,#9c0715);
+    clip-path:polygon(8% 0,100% 0,92% 100%,0 100%);
+    border:1px solid rgba(255,255,255,.3);
+    box-shadow:0 0 16px rgba(255,31,55,.4) inset, 0 0 12px rgba(255,31,55,.18);
+    font-size:30px;
+    font-weight:900;
+    text-transform:uppercase;
+    letter-spacing:.6px;
+  }
+  .separator{
+    width:3px;
+    height:44px;
+    background:linear-gradient(180deg,transparent,#fff,transparent);
+    opacity:.75;
+  }
+  .bat-type{
+    font-size:29px;
+    font-weight:800;
+    color:#d8dde6;
+    text-transform:uppercase;
+    letter-spacing:1px;
+  }
+
+  .stats-panel{
+    position:relative;
+    z-index:2;
+    margin-top:26px;
+    height:378px;
+    padding:35px 56px 38px;
+    background:linear-gradient(180deg,rgba(5,16,31,.78),rgba(3,10,20,.84));
+    clip-path:polygon(3% 0,97% 0,100% 15%,100% 85%,97% 100%,3% 100%,0 85%,0 15%);
+    border:1px solid rgba(255,255,255,.18);
+    box-shadow:0 0 0 2px rgba(33,148,255,.13) inset, 0 0 0 1px rgba(255,31,55,.12), 0 22px 40px rgba(0,0,0,.32);
+  }
+  .stats-panel::before{
+    content:"";
+    position:absolute;
+    inset:12px;
+    clip-path:inherit;
+    border:1px solid rgba(255,255,255,.13);
+    pointer-events:none;
+  }
+
+  .section-title{
+    margin:0 0 36px;
+    font-size:34px;
+    line-height:1;
+    font-weight:900;
+    text-transform:uppercase;
+    color:var(--gold);
+    letter-spacing:.5px;
+    text-shadow:0 0 10px rgba(255,199,103,.2);
+  }
+
+  .stat-grid{
+    display:grid;
+    grid-template-columns:repeat(5,1fr);
+    position:relative;
+  }
+  .stat-grid.first{
+    padding-bottom:32px;
+    border-bottom:1px solid rgba(255,255,255,.14);
+  }
+  .stat-grid.second{padding-top:28px}
+
+  .stat{
+    min-height:90px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    position:relative;
+  }
+  .stat:not(:last-child)::after{
+    content:"";
+    position:absolute;
+    right:0;
+    top:10px;
+    bottom:10px;
+    width:2px;
+    background:linear-gradient(180deg,transparent,rgba(255,255,255,.32),transparent);
+  }
+  .stat-label{
+    font-size:29px;
+    font-weight:900;
+    color:var(--muted);
+    letter-spacing:1.2px;
+    text-transform:uppercase;
+    margin-bottom:10px;
+  }
+  .stat-value{
+    font-family:"Russo One", sans-serif;
+    font-size:62px;
+    line-height:.95;
+    color:#f7f8fb;
+    text-shadow:0 8px 0 rgba(0,0,0,.2),0 0 14px rgba(255,255,255,.12);
+  }
+  .second .stat-value{font-size:58px}
+
+  @media(max-width:1600px){
+    .card{transform:scale(.82)}
+    body{overflow:hidden}
+  }
+</style>
+</head>
+<body>
+  <main class="card" role="img" aria-label="Virat Kohli CMU S1 batting stats card">
+    <span class="corner-glow top"></span>
+    <span class="corner-glow bottom"></span>
+
+    <section class="top-grid">
+      <div class="identity">
+        <div class="name-row">
+          <span class="first-name">Virat</span>
+          <span class="last-name">Kohli</span>
+          <div class="rating-wrap">
+            <div class="rating-box">
+              <div>
+                <div class="rating-label">OVR</div>
+                <div class="rating-num">96</div>
+              </div>
+            </div>
+            <div class="rating-box red">
+              <div>
+                <div class="rating-label">Batting Rating</div>
+                <div class="rating-num">95</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="role-row">
+          <div class="badge">Batter</div>
+          <div class="separator"></div>
+          <div class="bat-type">Right Hand Bat</div>
+        </div>
+      </div>
+
+      <div class="logo-area">
+        <img src="BotLogo.png" alt="Bot Logo" />
+      </div>
+    </section>
+
+    <section class="stats-panel">
+      <h2 class="section-title">CMU S1 Stats Batting Stats</h2>
+
+      <div class="stat-grid first">
+        <div class="stat"><div class="stat-label">Inns</div><div class="stat-value">5</div></div>
+        <div class="stat"><div class="stat-label">Runs</div><div class="stat-value">33</div></div>
+        <div class="stat"><div class="stat-label">HS</div><div class="stat-value">11*</div></div>
+        <div class="stat"><div class="stat-label">Avg</div><div class="stat-value">16.50</div></div>
+        <div class="stat"><div class="stat-label">SR</div><div class="stat-value">173.68</div></div>
+      </div>
+
+      <div class="stat-grid second">
+        <div class="stat"><div class="stat-label">100s</div><div class="stat-value">0</div></div>
+        <div class="stat"><div class="stat-label">50s</div><div class="stat-value">0</div></div>
+        <div class="stat"><div class="stat-label">4s</div><div class="stat-value">3</div></div>
+        <div class="stat"><div class="stat-label">6s</div><div class="stat-value">2</div></div>
+        <div class="stat"><div class="stat-label">Ducks</div><div class="stat-value">0</div></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
