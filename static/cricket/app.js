@@ -1529,11 +1529,47 @@ function renderScorecardPanel() {
     ? (matchState.innings1Stats || matchState.stats)
     : (matchState.innings2Stats || matchState.stats);
 
-  // Set titles
-  const battingTitle = (activeTeam.teamName || 'BATTING').toUpperCase();
-  const bowlingTitle = (opposingTeam.teamName || 'BOWLING').toUpperCase();
+  // Set titles and hero summary
+  const battingTitle = (activeTeam.teamName || activeTeam.username || 'BATTING').toUpperCase();
+  const bowlingTitle = (opposingTeam.teamName || opposingTeam.username || 'BOWLING').toUpperCase();
+  const inningsOversText = `${activeInnings.overs || 0}.${activeInnings.balls || 0}`;
+  const inningsBallsBowled = ((activeInnings.overs || 0) * 6) + (activeInnings.balls || 0);
+  const runRate = inningsBallsBowled > 0 ? (((activeInnings.runs || 0) / inningsBallsBowled) * 6).toFixed(1) : '0.0';
+  const inningsTotalText = `${activeInnings.runs || 0}/${activeInnings.wickets || 0}`;
+
   document.getElementById('scorecard-batting-title').innerText = `${battingTitle} BATTING`;
   document.getElementById('scorecard-bowling-title').innerText = `${bowlingTitle} BOWLING`;
+
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.innerText = value;
+  };
+
+  setText('scorecard-hero-batting-team', battingTitle);
+  setText('scorecard-hero-bowling-team', bowlingTitle);
+  setText('scorecard-hero-total', inningsTotalText);
+  setText('scorecard-hero-overs', inningsOversText);
+  setText('scorecard-summary-run-rate', runRate);
+  setText('scorecard-summary-extras', activeInnings.extras || 0);
+  setText('scorecard-summary-overs', inningsOversText);
+  setText('scorecard-summary-total', inningsTotalText);
+
+  const chasePanel = document.getElementById('scorecard-hero-chase');
+  if (chasePanel) {
+    if (activeScorecardTab === 'innings2') {
+      const target = matchState.score?.target || ((firstInn.runs || 0) + 1);
+      const runsNeeded = Math.max(0, target - (activeInnings.runs || 0));
+      const ballsRemaining = Math.max(0, ((matchState.totalOvers || 0) * 6) - inningsBallsBowled);
+      const requiredRate = ballsRemaining > 0 ? ((runsNeeded / ballsRemaining) * 6).toFixed(1) : '0.0';
+      setText('scorecard-hero-target', `Target ${target} · Need ${runsNeeded}`);
+      setText('scorecard-hero-required-rate', `RRR ${requiredRate}`);
+      chasePanel.classList.remove('hidden');
+    } else {
+      chasePanel.classList.add('hidden');
+      setText('scorecard-hero-target', 'Target 0');
+      setText('scorecard-hero-required-rate', 'RRR 0.0');
+    }
+  }
 
   // Render batting rows — always show striker/non-striker even with 0 balls
   let anyBatRow = false;
@@ -1568,7 +1604,7 @@ function renderScorecardPanel() {
     }
 
     const row = document.createElement('div');
-    row.className = `tb-row ${isActive ? 'batting-active' : ''}`;
+    row.className = `tb-row ${isActive ? 'batting-active' : ''} ${pStat.isOut ? 'dismissed' : ''} ${statusClass === 'active' ? 'not-out' : ''}`;
     row.innerHTML = `
       <span class="tb-row-name">
         <span class="tb-row-name-text">${player.name}</span>
