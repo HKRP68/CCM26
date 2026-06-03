@@ -1,139 +1,164 @@
 {% extends "base.html" %}
-{% block title %}Scorecard Colors{% endblock %}
+{% block title %}Scorecard Designer{% endblock %}
 {% block content %}
 
-<h1>🎨 Scorecard Colors</h1>
+<h1>🎨 Scorecard Designer</h1>
 <p style="color:var(--muted); margin-bottom:1.5rem;">
-  Customize the accent color used for each innings' scorecard graphic.
-  Batting scorecards now follow the uploaded <code>Batting Scorecard.html</code>
-  layout, including the wide glass card, Bebas Neue-style team/stat display
-  text, Bricolage Grotesque-style table text, and the green team box that marks
-  the side currently batting. The accent color is used for glows, total
-  highlights, bowling W/ECON highlights, target line, and Fall of Wickets labels.
+  Generate batting and bowling scorecards from the uploaded HTML style. The green
+  team box is fixed as the active side marker: <strong>BATTING</strong> on the
+  batting card and <strong>BOWLING</strong> on the bowling card. Use this page to
+  preview, change innings accent colours, choose text font families, adjust font
+  size, and reposition text groups with X/Y offsets.
 </p>
 
-<form method="POST" action="{{ url_for('admin_scorecard_settings') }}"
-      style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;">
+<form method="POST" action="{{ url_for('admin_scorecard_settings') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-  <!-- Innings 1 -->
-  <div class="form-card" style="max-width:100%;">
-    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
-      🔴 Innings 1 Accent
-    </h2>
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;">
+    {% for innings, label, input_id, color_value, emoji in [
+      (1, 'Innings 1 Accent', 'color_inn1', cfg.scorecard_color_inn1 or '#c41e3a', '🔴'),
+      (2, 'Innings 2 Accent', 'color_inn2', cfg.scorecard_color_inn2 or '#00c9a7', '🟢')
+    ] %}
+    <div class="form-card" style="max-width:100%;">
+      <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
+        {{ emoji }} {{ label }}
+      </h2>
 
-    <label>Color
-      <input type="color" name="scorecard_color_inn1"
-             id="color_inn1"
-             value="{{ cfg.scorecard_color_inn1 or '#c41e3a' }}"
-             style="width:100%; height:60px; cursor:pointer; border:2px solid var(--border); border-radius:6px;">
-    </label>
+      <label>Color
+        <input type="color" name="scorecard_color_inn{{ innings }}"
+               id="{{ input_id }}"
+               value="{{ color_value }}"
+               style="width:100%; height:60px; cursor:pointer; border:2px solid var(--border); border-radius:6px;">
+      </label>
 
-    <div style="margin-top:.75rem;">
-      <div style="color:var(--muted); font-size:.78rem; margin-bottom:.4rem;">Quick presets:</div>
-      <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
-        {% for name, hex in presets %}
-        <button type="button" class="preset-swatch"
-                data-target="color_inn1" data-color="{{ hex }}"
-                title="{{ name }}"
-                style="width:36px; height:36px; border-radius:6px; border:2px solid var(--border); background:{{ hex }}; cursor:pointer; padding:0;"></button>
+      <div style="margin-top:.75rem;">
+        <div style="color:var(--muted); font-size:.78rem; margin-bottom:.4rem;">Quick presets:</div>
+        <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
+          {% for name, hex in presets %}
+          <button type="button" class="preset-swatch"
+                  data-target="{{ input_id }}" data-color="{{ hex }}"
+                  title="{{ name }}"
+                  style="width:36px; height:36px; border-radius:6px; border:2px solid var(--border); background:{{ hex }}; cursor:pointer; padding:0;"></button>
+          {% endfor %}
+        </div>
+      </div>
+
+      <hr class="pitch-line" style="margin:1rem 0;">
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:.75rem; text-align:center;">
+        {% for card_type, title in [('batting', 'Batting Preview'), ('bowling', 'Bowling Preview')] %}
+        <div>
+          <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">{{ title }}</div>
+          <a id="preview_link_{{ card_type }}_inn{{ innings }}"
+             href="{{ url_for('admin_scorecard_preview', innings=innings, card_type=card_type) }}"
+             target="_blank" rel="noopener" style="display:block; color:inherit; text-decoration:none;">
+            <img id="preview_{{ card_type }}_inn{{ innings }}"
+                 src="{{ url_for('admin_scorecard_preview', innings=innings, card_type=card_type) }}"
+                 data-base-src="{{ url_for('admin_scorecard_preview', innings=innings, card_type=card_type) }}"
+                 style="width:100%; border:1px solid var(--border); border-radius:6px; background:#050c14;">
+          </a>
+        </div>
         {% endfor %}
       </div>
+      <div style="margin-top:.35rem; font-size:.72rem; color:var(--muted); text-align:center;">Click a preview to open full size.</div>
     </div>
+    {% endfor %}
+  </div>
 
-    <hr class="pitch-line" style="margin:1rem 0;">
+  <div class="form-card" style="max-width:100%; margin-top:1.5rem;">
+    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
+      ✍️ Text Font / Size / Position
+    </h2>
+    <p style="color:var(--muted); font-size:.85rem; margin-top:-.4rem;">
+      Font size is added to the HTML-matching default size. X moves text right/left;
+      Y moves text down/up. These controls apply to generated scorecards and live previews.
+    </p>
 
-    <div style="text-align:center;">
-      <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">Website preview</div>
-      <a id="preview_link_inn1" href="{{ url_for('admin_scorecard_preview', innings=1) }}" target="_blank" rel="noopener"
-         style="display:block; color:inherit; text-decoration:none;">
-        <img id="preview_inn1" src="{{ url_for('admin_scorecard_preview', innings=1) }}"
-             data-base-src="{{ url_for('admin_scorecard_preview', innings=1) }}"
-             style="width:100%; border:1px solid var(--border); border-radius:6px;">
-      </a>
-      <div style="margin-top:.35rem; font-size:.72rem; color:var(--muted);">Click preview to open full size.</div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem; align-items:start;">
+      {% for card_type, title in [('batting', '🏏 Batting Text'), ('bowling', '🎳 Bowling Text')] %}
+      <div style="border:1px solid var(--border); border-radius:10px; overflow:hidden;">
+        <div style="padding:.75rem 1rem; background:rgba(255,255,255,.04); font-weight:800;">{{ title }}</div>
+        <div style="display:grid; grid-template-columns: 1.35fr .9fr .65fr .65fr .65fr; gap:.5rem; padding:.75rem; color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em;">
+          <div>Text</div><div>Font</div><div>Size</div><div>X</div><div>Y</div>
+        </div>
+        {% set fields = text_settings[card_type] %}
+        {% for key, field_label in [('team','Team names'),('tag', card_type|capitalize ~ ' tag'),('venue','Venue / match text'),('table_header','Table headers'),('table_body','Table rows'),('fow_title','FoW title'),('fow_body','FoW cells'),('stat_label','Stat labels'),('stat_value','Stat values'),('target','Target line')] %}
+          {% if fields.get(key) %}
+          {% set item = fields[key] %}
+          <input type="hidden" name="{{ card_type }}_field_keys" value="{{ key }}">
+          <div class="scorecard-text-row" style="display:grid; grid-template-columns: 1.35fr .9fr .65fr .65fr .65fr; gap:.5rem; align-items:center; padding:.55rem .75rem; border-top:1px solid var(--border);">
+            <div style="font-weight:700;">{{ field_label }}</div>
+            <select name="{{ card_type }}_{{ key }}_font" data-preview-control style="width:100%;">
+              <option value="body" {{ 'selected' if item.font == 'body' else '' }}>Bricolage</option>
+              <option value="display" {{ 'selected' if item.font == 'display' else '' }}>Bebas</option>
+              <option value="fallback" {{ 'selected' if item.font == 'fallback' else '' }}>Fallback</option>
+            </select>
+            <input type="number" name="{{ card_type }}_{{ key }}_size" value="{{ item.size }}" min="-30" max="60" data-preview-control style="width:100%;">
+            <input type="number" name="{{ card_type }}_{{ key }}_x" value="{{ item.x }}" min="-300" max="300" data-preview-control style="width:100%;">
+            <input type="number" name="{{ card_type }}_{{ key }}_y" value="{{ item.y }}" min="-300" max="300" data-preview-control style="width:100%;">
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endfor %}
     </div>
   </div>
 
-  <!-- Innings 2 -->
-  <div class="form-card" style="max-width:100%;">
-    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
-      🟢 Innings 2 Accent
-    </h2>
-
-    <label>Color
-      <input type="color" name="scorecard_color_inn2"
-             id="color_inn2"
-             value="{{ cfg.scorecard_color_inn2 or '#00c9a7' }}"
-             style="width:100%; height:60px; cursor:pointer; border:2px solid var(--border); border-radius:6px;">
-    </label>
-
-    <div style="margin-top:.75rem;">
-      <div style="color:var(--muted); font-size:.78rem; margin-bottom:.4rem;">Quick presets:</div>
-      <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
-        {% for name, hex in presets %}
-        <button type="button" class="preset-swatch"
-                data-target="color_inn2" data-color="{{ hex }}"
-                title="{{ name }}"
-                style="width:36px; height:36px; border-radius:6px; border:2px solid var(--border); background:{{ hex }}; cursor:pointer; padding:0;"></button>
-        {% endfor %}
-      </div>
-    </div>
-
-    <hr class="pitch-line" style="margin:1rem 0;">
-
-    <div style="text-align:center;">
-      <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">Website preview</div>
-      <a id="preview_link_inn2" href="{{ url_for('admin_scorecard_preview', innings=2) }}" target="_blank" rel="noopener"
-         style="display:block; color:inherit; text-decoration:none;">
-        <img id="preview_inn2" src="{{ url_for('admin_scorecard_preview', innings=2) }}"
-             data-base-src="{{ url_for('admin_scorecard_preview', innings=2) }}"
-             style="width:100%; border:1px solid var(--border); border-radius:6px;">
-      </a>
-      <div style="margin-top:.35rem; font-size:.72rem; color:var(--muted);">Click preview to open full size.</div>
-    </div>
-  </div>
-
-  <div style="grid-column: 1 / -1; display:flex; gap:.75rem; justify-content:flex-end;">
+  <div style="display:flex; gap:.75rem; justify-content:flex-end; margin-top:1.2rem;">
     <a href="{{ url_for('admin_economy') }}" class="btn btn-ghost">Cancel</a>
-    <button type="submit" class="btn">💾 Save Colors</button>
+    <button type="submit" class="btn">💾 Save Scorecard Settings</button>
   </div>
 </form>
 
 <div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-top:1.2rem; font-size:.85rem; color:var(--muted);">
-  ℹ️ <strong>Tip:</strong> The website previews update as soon as you pick a color, so you can test the look before saving.
-  The green team box is fixed because it represents the batting team.
+  ℹ️ <strong>Tip:</strong> Previews update as soon as you change colours or text controls, so you can test before saving.
 </div>
 
 <script>
-function refreshScorecardPreview(input) {
-  const innings = input.id === 'color_inn1' ? '1' : '2';
-  const preview = document.getElementById(`preview_inn${innings}`);
-  if (!preview) return;
-  const url = new URL(preview.dataset.baseSrc, window.location.origin);
-  url.searchParams.set('color', input.value);
-  url.searchParams.set('_', Date.now().toString());
-  const previewUrl = url.pathname + url.search;
-  preview.src = previewUrl;
-  const link = document.getElementById(`preview_link_inn${innings}`);
-  if (link) link.href = previewUrl;
+function collectScorecardSettings() {
+  const params = new URLSearchParams();
+  document.querySelectorAll('[data-preview-control]').forEach(input => {
+    params.set(input.name, input.value);
+  });
+  return params;
 }
 
-// Color picker → update the website preview before saving.
-document.querySelectorAll('input[type="color"][id^="color_inn"]').forEach(input => {
-  input.addEventListener('input', () => refreshScorecardPreview(input));
-  input.addEventListener('change', () => refreshScorecardPreview(input));
+function refreshAllScorecardPreviews() {
+  const textParams = collectScorecardSettings();
+  ['1', '2'].forEach(innings => {
+    const colorInput = document.getElementById(`color_inn${innings}`);
+    ['batting', 'bowling'].forEach(cardType => {
+      const preview = document.getElementById(`preview_${cardType}_inn${innings}`);
+      if (!preview) return;
+      const url = new URL(preview.dataset.baseSrc, window.location.origin);
+      url.searchParams.set('color', colorInput.value);
+      textParams.forEach((value, key) => url.searchParams.set(key, value));
+      url.searchParams.set('_', Date.now().toString());
+      const previewUrl = url.pathname + url.search;
+      preview.src = previewUrl;
+      const link = document.getElementById(`preview_link_${cardType}_inn${innings}`);
+      if (link) link.href = previewUrl;
+    });
+  });
+}
+
+let previewTimer;
+function schedulePreviewRefresh() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshAllScorecardPreviews, 250);
+}
+
+document.querySelectorAll('input[type="color"][id^="color_inn"], [data-preview-control]').forEach(input => {
+  input.addEventListener('input', schedulePreviewRefresh);
+  input.addEventListener('change', schedulePreviewRefresh);
 });
 
-// Preset swatch → set the color input and refresh preview.
 document.querySelectorAll('.preset-swatch').forEach(btn => {
   btn.addEventListener('click', () => {
-    const target = btn.getAttribute('data-target');
-    const color = btn.getAttribute('data-color');
-    const input = document.getElementById(target);
+    const input = document.getElementById(btn.getAttribute('data-target'));
     if (input) {
-      input.value = color;
-      refreshScorecardPreview(input);
+      input.value = btn.getAttribute('data-color');
+      refreshAllScorecardPreviews();
     }
   });
 });
