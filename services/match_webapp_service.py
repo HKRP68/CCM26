@@ -1478,6 +1478,13 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         logger.exception("save_final_scorecard failed")
 
+    try:
+        from services.player_stats_service import persist_player_game_stats
+        saved_counts = persist_player_game_stats(session, state or {})
+        logger.info("Saved webapp player stats for match %s: %s", match_id, saved_counts)
+    except Exception:
+        logger.exception("webapp player-stat persistence failed")
+
     session.commit()
 
     payload = {"ok": True, "result": result, "rewards": rewards,
@@ -1630,6 +1637,13 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
         save_final_scorecard(session, match_id, result_text=result_text)
     except Exception:
         pass
+    try:
+        if q["has_progress"]:
+            from services.player_stats_service import persist_player_game_stats
+            saved_counts = persist_player_game_stats(session, state or {})
+            logger.info("Saved terminated webapp player stats for match %s: %s", match_id, saved_counts)
+    except Exception:
+        logger.exception("terminated webapp player-stat persistence failed")
     session.commit()
     try:
         from services.match_state_store import cleanup_state
@@ -1675,6 +1689,13 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
         save_final_scorecard(session, match_id, result_text="Match abandoned (forfeit)")
     except Exception:
         pass
+    try:
+        if state and _balls_bowled_total(state) > 0:
+            from services.player_stats_service import persist_player_game_stats
+            saved_counts = persist_player_game_stats(session, state)
+            logger.info("Saved abandoned webapp player stats for match %s: %s", match_id, saved_counts)
+    except Exception:
+        logger.exception("abandoned webapp player-stat persistence failed")
     session.commit()
     try:
         from services.match_state_store import cleanup_state
