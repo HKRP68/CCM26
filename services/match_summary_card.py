@@ -54,12 +54,22 @@ _BEBAS_FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/bebas-neue/BebasNeue-Regular.ttf",
     "/usr/share/fonts/opentype/bebas-neue/BebasNeue-Regular.otf",
 )
-_BRICOLAGE_FONT_CANDIDATES = (
+_BODY_FONT_CANDIDATES = (
     os.path.join(_FONT_DIR, "BricolageGrotesque-SemiBold.ttf"),
     os.path.join(_FONT_DIR, "BricolageGrotesque-Bold.ttf"),
     os.path.join(_FONT_DIR, "BricolageGrotesque-ExtraBold.ttf"),
     os.path.join(_FONT_DIR, "BricolageGrotesque.ttf"),
 )
+_BODY_ITALIC_FONT_CANDIDATES = (
+    os.path.join(_FONT_DIR, "Lato-RegularItalic.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-Italic.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-SemiBoldItalic.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-BoldItalic.ttf"),
+)
+
+# Backwards-compatible alias for older callers/tests that inspect the previous
+# Bricolage candidate constant.
+_BRICOLAGE_FONT_CANDIDATES = _BODY_FONT_CANDIDATES
 
 
 def _first_existing(paths):
@@ -74,12 +84,14 @@ def _font(size, bold=False, italic=False, family="body"):
     if family == "display":
         candidate = _first_existing(_BEBAS_FONT_CANDIDATES)
     elif family == "body":
-        candidate = _first_existing(_BRICOLAGE_FONT_CANDIDATES)
+        candidate = _first_existing(
+            _BODY_ITALIC_FONT_CANDIDATES if italic else _BODY_FONT_CANDIDATES
+        )
     if candidate:
         try:
             return ImageFont.truetype(candidate, size)
         except (OSError, IOError):
-            pass
+            logger.warning("Unable to load bundled summary-card font %s", candidate)
     if bold and italic:
         path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
     elif bold:
