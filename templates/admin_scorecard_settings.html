@@ -6,9 +6,10 @@
 <p style="color:var(--muted); margin-bottom:1.5rem;">
   Customize the accent color used for each innings' scorecard graphic.
   Batting scorecards now follow the uploaded <code>Batting Scorecard.html</code>
-  layout, where the green team box marks the side currently batting. The accent
-  color is used for glows, total highlights, bowling W/ECON highlights, target
-  line, and Fall of Wickets labels.
+  layout, including the wide glass card, Bebas Neue-style team/stat display
+  text, Bricolage Grotesque-style table text, and the green team box that marks
+  the side currently batting. The accent color is used for glows, total
+  highlights, bowling W/ECON highlights, target line, and Fall of Wickets labels.
 </p>
 
 <form method="POST" action="{{ url_for('admin_scorecard_settings') }}"
@@ -44,9 +45,13 @@
 
     <div style="text-align:center;">
       <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">Website preview</div>
-      <img id="preview_inn1" src="{{ url_for('admin_scorecard_preview', innings=1) }}"
-           data-base-src="{{ url_for('admin_scorecard_preview', innings=1) }}"
-           style="width:100%; border:1px solid var(--border); border-radius:6px;">
+      <a id="preview_link_inn1" href="{{ url_for('admin_scorecard_preview', innings=1) }}" target="_blank" rel="noopener"
+         style="display:block; color:inherit; text-decoration:none;">
+        <img id="preview_inn1" src="{{ url_for('admin_scorecard_preview', innings=1) }}"
+             data-base-src="{{ url_for('admin_scorecard_preview', innings=1) }}"
+             style="width:100%; border:1px solid var(--border); border-radius:6px;">
+      </a>
+      <div style="margin-top:.35rem; font-size:.72rem; color:var(--muted);">Click preview to open full size.</div>
     </div>
   </div>
 
@@ -79,9 +84,13 @@
 
     <div style="text-align:center;">
       <div style="color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.5rem;">Website preview</div>
-      <img id="preview_inn2" src="{{ url_for('admin_scorecard_preview', innings=2) }}"
-           data-base-src="{{ url_for('admin_scorecard_preview', innings=2) }}"
-           style="width:100%; border:1px solid var(--border); border-radius:6px;">
+      <a id="preview_link_inn2" href="{{ url_for('admin_scorecard_preview', innings=2) }}" target="_blank" rel="noopener"
+         style="display:block; color:inherit; text-decoration:none;">
+        <img id="preview_inn2" src="{{ url_for('admin_scorecard_preview', innings=2) }}"
+             data-base-src="{{ url_for('admin_scorecard_preview', innings=2) }}"
+             style="width:100%; border:1px solid var(--border); border-radius:6px;">
+      </a>
+      <div style="margin-top:.35rem; font-size:.72rem; color:var(--muted);">Click preview to open full size.</div>
     </div>
   </div>
 
@@ -104,7 +113,10 @@ function refreshScorecardPreview(input) {
   const url = new URL(preview.dataset.baseSrc, window.location.origin);
   url.searchParams.set('color', input.value);
   url.searchParams.set('_', Date.now().toString());
-  preview.src = url.pathname + url.search;
+  const previewUrl = url.pathname + url.search;
+  preview.src = previewUrl;
+  const link = document.getElementById(`preview_link_inn${innings}`);
+  if (link) link.href = previewUrl;
 }
 
 // Color picker → update the website preview before saving.

@@ -10,6 +10,8 @@ BOWL-2-SCORECARD) with these enhancements:
       out     → subtle red tint
       dnb     → gray tint (player in XI but didn't bat)
   - Admin-customizable accent color per innings (passed in as accent_hex)
+  - Font family/size/style follows Batting Scorecard.html where available:
+      Bebas Neue for display labels, Bricolage Grotesque for table/body text
 
 Color philosophy:
   - Accent color is admin-tunable per innings (header border, RTG col, etc.)
@@ -46,13 +48,54 @@ MUTED      = (113, 128, 150)
 SEP        = (45, 55, 72)
 EXTRA_BG   = (15, 23, 42)
 
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "assets", "logo.png")
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGO_PATH = os.path.join(_ROOT_DIR, "assets", "logo.png")
+_FONT_DIR = os.path.join(_ROOT_DIR, "assets", "fonts")
+
+# The HTML mockup imports Bebas Neue for big condensed display text and
+# Bricolage Grotesque for table/body text.  The renderer first looks for
+# vendored fonts in assets/fonts, then for system fonts installed by Docker,
+# and finally falls back to DejaVu so scorecards still render everywhere.
+_BEBAS_FONT_CANDIDATES = (
+    os.path.join(_FONT_DIR, "BebasNeue-Regular.ttf"),
+    "/usr/share/fonts/truetype/bebas-neue/BebasNeue-Regular.ttf",
+    "/usr/share/fonts/opentype/bebas-neue/BebasNeue-Regular.otf",
+)
+_BRICOLAGE_FONT_CANDIDATES = (
+    os.path.join(_FONT_DIR, "BricolageGrotesque-SemiBold.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-Bold.ttf"),
+    os.path.join(_FONT_DIR, "BricolageGrotesque-ExtraBold.ttf"),
+)
+
+
+def _first_existing(paths):
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def _load_font(path, size):
+    try:
+        if path:
+            return ImageFont.truetype(path, size)
+    except (OSError, IOError):
+        pass
+    return None
 
 
 # ── Drawing helpers ────────────────────────────────────────────────────
 
-def _font(size, bold=False, italic=False):
+def _font(size, bold=False, italic=False, family="body"):
+    if family == "display":
+        display_font = _load_font(_first_existing(_BEBAS_FONT_CANDIDATES), size)
+        if display_font:
+            return display_font
+    elif family == "body":
+        body_font = _load_font(_first_existing(_BRICOLAGE_FONT_CANDIDATES), size)
+        if body_font:
+            return body_font
+
     if bold and italic:
         path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
     elif bold:
@@ -442,7 +485,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         gold = GOLD
 
         W = 1600
-        H = 900
+        H = 1024
         img = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img, "RGBA")
 
@@ -465,15 +508,15 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         draw.rectangle([card_x + card_w // 2, top_y, card_x + card_w, top_y + top_h],
                        fill=(0, 140, 255, 18))
 
-        f_team = _font(56, bold=True)
+        f_team = _font(66, family="display")
         f_tag = _font(14, bold=True)
         f_logo = _font(22, bold=True, italic=True)
         f_meta = _font(15, bold=True)
-        f_venue = _font(24, bold=True)
-        f_th = _font(21, bold=True, italic=True)
-        f_name = _font(22, bold=True)
-        f_dism = _font(19, italic=True)
-        f_cell = _font(22, bold=True)
+        f_venue = _font(23, bold=True)
+        f_th = _font(22, bold=True, italic=True)
+        f_name = _font(23, bold=True)
+        f_dism = _font(20, italic=True)
+        f_cell = _font(23, bold=True)
         f_stat_sub = _font(14, bold=True)
         f_stat_label = _font(22, bold=True)
         f_stat_note = _font(14)
@@ -500,7 +543,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                                        outline=(255, 255, 255, 24), width=1)
             txt = fit_text(name, f_team, x2 - x1 - 52)
             tw = _tw(draw, txt, f_team)
-            draw.text((x1 + (x2 - x1 - tw) // 2, y1 + 23), txt, fill=(238, 243, 251), font=f_team)
+            draw.text((x1 + (x2 - x1 - tw) // 2, y1 + 18), txt, fill=(238, 243, 251), font=f_team)
 
         left_x1, left_x2 = card_x + 40, card_x + 40 + 520
         right_x2, right_x1 = card_x + card_w - 40, card_x + card_w - 40 - 520
@@ -536,7 +579,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         table_y = venue_y + 60
         table_x = card_x + 12
         table_w = card_w - 24
-        table_h = 465
+        table_h = 564
         draw.rounded_rectangle([table_x, table_y, table_x + table_w, table_y + table_h], radius=24,
                                fill=(8, 16, 25, 204), outline=(255, 255, 255, 50), width=1)
 
@@ -553,7 +596,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         inner_x = table_x + 12
         inner_w = table_w - 24
         header_y = table_y + 12
-        row_h = 36
+        row_h = 45
         header_h = 44
         draw.rounded_rectangle([inner_x, header_y, inner_x + inner_w, header_y + header_h],
                                radius=12, fill=(255, 255, 255, 13))
@@ -624,7 +667,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 if idx == 0:
                     font_use = f_name
                     color = TEXT_DIM if status == "dnb" else TEXT
-                    ty = row_y + 6
+                    ty = row_y + 10
                 elif idx == 1:
                     font_use = f_dism
                     color = notout_blue if status == "not_out" else (TEXT_DIM if status == "dnb" else (214, 219, 228))
@@ -632,7 +675,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 else:
                     font_use = f_cell
                     color = sr_color if label == "SR" else (TEXT_DIM if status == "dnb" else TEXT)
-                    ty = row_y + 6
+                    ty = row_y + 8
                 if align == "l":
                     draw.text((cx + 22, ty), str(value), fill=color, font=font_use)
                 else:
@@ -663,7 +706,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             icon_font = _font(27, bold=True)
             draw.text((sx + 51 - _tw(draw, icon, icon_font) / 2, sy + 35), icon, fill=color, font=icon_font)
             draw.text((sx + 94, sy + 25), subtitle, fill=(158, 168, 184), font=f_stat_sub)
-            value_font = _font(76 if i == 3 else 58, bold=True)
+            value_font = _font(88 if i == 3 else 68, family="display")
             value_color = gold if i == 3 else TEXT
             draw.text((sx + 94, sy + 43), str(value), fill=value_color, font=value_font)
             draw.text((sx + 24, sy + 97), label_txt, fill=(221, 227, 238), font=f_stat_label)
