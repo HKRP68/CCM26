@@ -1,5 +1,7 @@
 """Database engine, session factory, and initialisation."""
 
+import os
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from config import DATABASE_URL
@@ -13,18 +15,26 @@ if "sqlite" in DATABASE_URL:
 #   - pool_pre_ping: tests connection with SELECT 1 before use. Cheap, reliable.
 #   - pool_recycle: proactively close connections older than 240s so we don't
 #     hit the server's idle-kill (saves one "broken pipe" round-trip per kill).
-#   - pool_size + max_overflow kept small to avoid lots of warm connections
-#     holding the Neon compute active.
+#   - pool_size + max_overflow are environment-tunable so the bot can handle
+#     concurrent Telegram updates without creating unbounded connections.
 _is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_URL.lower())
 
 if _is_postgres:
+    # The Telegram application handles multiple updates concurrently, so keep
+    # enough database connections available that fast commands do not queue
+    # behind one slow DB/image-heavy command. Values can still be tuned from
+    # the host environment for small/free database plans.
+    pool_size = int(os.getenv("DB_POOL_SIZE", "10"))
+    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "10"))
     engine = create_engine(
         DATABASE_URL,
         echo=False,
         pool_pre_ping=True,
         pool_recycle=240,          # < Neon's idle disconnect (~5min)
-        pool_size=2,               # small pool — bot is low concurrency
-        max_overflow=3,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout,
         connect_args=connect_args,
     )
 else:

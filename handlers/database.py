@@ -1,5 +1,7 @@
 """Database engine, session factory, and initialisation."""
 
+import os
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from config import DATABASE_URL
@@ -8,7 +10,24 @@ connect_args = {}
 if "sqlite" in DATABASE_URL:
     connect_args["check_same_thread"] = False
 
-engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=connect_args)
+_is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_URL.lower())
+
+if _is_postgres:
+    pool_size = int(os.getenv("DB_POOL_SIZE", "10"))
+    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "10"))
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=240,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout,
+        connect_args=connect_args,
+    )
+else:
+    engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

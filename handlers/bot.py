@@ -237,7 +237,15 @@ def main():
     try:
         print(f"  Telegram bot: ✅ starting...")
         logger.info("Starting bot...")
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        concurrent_updates = int(os.getenv("BOT_CONCURRENT_UPDATES", "16"))
+        connection_pool_size = int(os.getenv("BOT_CONNECTION_POOL_SIZE", "32"))
+        pool_timeout = float(os.getenv("BOT_POOL_TIMEOUT", "10"))
+        app = (ApplicationBuilder()
+               .token(BOT_TOKEN)
+               .concurrent_updates(concurrent_updates)
+               .connection_pool_size(connection_pool_size)
+               .pool_timeout(pool_timeout)
+               .build())
 
         # ── Command handlers ─────────────────────────────────────────
         # ── Core commands + short aliases ────────────────────────────

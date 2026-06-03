@@ -583,9 +583,18 @@ def main():
     try:
         logger.info("  Telegram bot: starting...")
         logger.info("Starting bot...")
+        # Keep the bot responsive under load.  PTB processes updates
+        # sequentially by default, so a single slow DB/image-heavy command can
+        # otherwise make every later command wait behind it.
+        concurrent_updates = int(os.getenv("BOT_CONCURRENT_UPDATES", "16"))
+        connection_pool_size = int(os.getenv("BOT_CONNECTION_POOL_SIZE", "32"))
+        pool_timeout = float(os.getenv("BOT_POOL_TIMEOUT", "10"))
         app = (ApplicationBuilder()
                .token(BOT_TOKEN)
                .post_init(register_bot_menu)
+               .concurrent_updates(concurrent_updates)
+               .connection_pool_size(connection_pool_size)
+               .pool_timeout(pool_timeout)
                .build())
 
         def _is_storage_only_command(update):
@@ -632,37 +641,54 @@ def main():
         app.add_handler(TypeHandler(_TGUpdate, _maintenance_check), group=-2)
 
         # ── Ban-guard middleware (group=-1, runs before all handlers) ──
+        # Cache ban lookups briefly so every button tap/command does not pay a
+        # synchronous database round trip before the real handler can run.
+        ban_cache_ttl = float(os.getenv("BAN_CACHE_TTL_SECONDS", "60"))
+        ban_cache = {}
+
         async def _ban_check(update, context):
             if _is_storage_only_command(update):
                 return
             user = update.effective_user
             if not user:
                 return
-            try:
-                from database import get_session as _gs
-                from models import User as _User
-                s = _gs()
+            now = time.monotonic()
+            cached = ban_cache.get(user.id)
+            if cached and now - cached[0] < ban_cache_ttl:
+                is_banned, reason = cached[1], cached[2]
+            else:
+                is_banned = False
+                reason = ""
                 try:
-                    u = s.query(_User).filter(_User.telegram_id == user.id).first()
-                    if u and u.is_banned:
-                        try:
+                    from database import get_session as _gs
+                    from models import User as _User
+                    s = _gs()
+                    try:
+                        u = (s.query(_User)
+                             .filter(_User.telegram_id == user.id)
+                             .first())
+                        if u and u.is_banned:
+                            is_banned = True
                             reason = (u.ban_reason or "").strip()
-                            txt = ("🚫 <b>You are banned from CricMaster Ultra.</b>\n"
-                                   + (f"\n<i>Reason: {reason}</i>" if reason else ""))
-                            if update.callback_query:
-                                await update.callback_query.answer(
-                                    "You are banned.", show_alert=True)
-                            elif update.message:
-                                await update.message.reply_text(txt, parse_mode="HTML")
-                        except Exception:
-                            pass
-                        raise ApplicationHandlerStop
-                finally:
-                    s.close()
-            except ApplicationHandlerStop:
-                raise
-            except Exception:
-                logger.exception("Ban-check middleware failed (non-fatal)")
+                    finally:
+                        s.close()
+                    ban_cache[user.id] = (now, is_banned, reason)
+                except Exception:
+                    logger.exception("Ban-check middleware failed (non-fatal)")
+                    return
+
+            if is_banned:
+                try:
+                    txt = ("🚫 <b>You are banned from CricMaster Ultra.</b>\n"
+                           + (f"\n<i>Reason: {reason}</i>" if reason else ""))
+                    if update.callback_query:
+                        await update.callback_query.answer(
+                            "You are banned.", show_alert=True)
+                    elif update.message:
+                        await update.message.reply_text(txt, parse_mode="HTML")
+                except Exception:
+                    pass
+                raise ApplicationHandlerStop
         app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-1)
 
         # ── Command handlers ─────────────────────────────────────────
