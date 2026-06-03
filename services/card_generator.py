@@ -415,18 +415,21 @@ def generate_card(player) -> bytes | None:
     except Exception:
         pass  # Fall through to auto-generation
 
-    # Player-image website card — use it automatically before the procedural
-    # fallback whenever this player has an uploaded portrait or the admin
-    # configured a global fallback PNG. Custom full-card art remains first.
+    # Website card with player image comes before the original procedural card
+    # whenever the admin selected the website-template option. Do not require a
+    # portrait here: uploading a blank template must immediately switch bot card
+    # output to the website design, even if a player cutout is missing.
     try:
-        from services.player_portrait_service import has_player_portrait
-        if has_player_portrait(player, include_global=True):
+        from services.card_template_service import get_template_config
+        from services.card_template_service import player_template_variant
+        tcfg = get_template_config(variant=player_template_variant(player))
+        if tcfg.get("style") == "template":
             tpl = generate_template_card(player)
             if tpl is not None:
                 return tpl
-            # No blank website template configured → fall through to tier card.
+            # Missing rarity template → fall through to original auto card.
     except Exception:
-        logger.exception("player-image card dispatch failed; using tier card")
+        logger.exception("website-template card dispatch failed; using tier card")
 
     # Generated-card cache check
     cached = _CARD_CACHE.get(player.id)

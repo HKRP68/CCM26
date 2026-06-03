@@ -18,7 +18,18 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <h3 style="margin:0 0 .8rem;font-size:1rem;">🎨 Automatic card priority</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0 0 1.5rem;line-height:1.5;">Cards are selected automatically in this order: <strong>custom full card</strong> → <strong>website card with player image</strong> → <strong>original auto-generated card</strong>.</p>
-  <input type="hidden" name="card_style" value="template">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.75rem;margin:0 0 1.5rem;">
+    <label style="display:block;border:1px solid var(--border);border-radius:9px;padding:.85rem;background:var(--input-bg);cursor:pointer;">
+      <input type="radio" name="card_style" value="template" {{ 'checked' if cfg.card_style == 'template' else '' }}>
+      <strong>website card with player image Template</strong> <span style="color:var(--muted);">• (current)</span>
+      <small style="display:block;color:var(--muted);margin-top:.35rem;line-height:1.45;">Uses uploaded blank templates and player images for bot card output.</small>
+    </label>
+    <label style="display:block;border:1px solid var(--border);border-radius:9px;padding:.85rem;background:var(--input-bg);cursor:pointer;">
+      <input type="radio" name="card_style" value="tier" {{ 'checked' if cfg.card_style != 'template' else '' }}>
+      <strong>Auto Generated Card</strong>
+      <small style="display:block;color:var(--muted);margin-top:.35rem;line-height:1.45;">Skips website templates and uses the original tier-based auto card.</small>
+    </label>
+  </div>
   <h3 style="margin:0 0 .4rem;font-size:1rem;">🖼️ Blank card templates</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0;line-height:1.5;">Choose a rarity tab and upload its blank 1536×1024 template. Each rarity is independent. If its template is not uploaded, cards continue to the original auto-generated card instead of borrowing another rarity's design.</p>
   <div class="card-tabs" role="tablist" aria-label="Card rarity templates">

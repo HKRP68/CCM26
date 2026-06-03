@@ -10613,10 +10613,18 @@ def admin_card_template():
                                                     normalise_template_settings)
         from services.country_flag_service import list_country_flags
         from services.player_portrait_service import has_global_player_portrait
-        settings = normalise_template_settings(cfg.card_template_settings)
+        from services.card_template_storage_service import get_state
+        state = get_state() or {}
+        cfg.card_style = state.get("card_style") or cfg.card_style
+        cfg.card_template_show_portrait = state.get(
+            "show_portrait", cfg.card_template_show_portrait)
+        settings = normalise_template_settings(
+            state.get("settings", cfg.card_template_settings))
         template_variants = list_template_variants(db)
         has_template = template_variants["base"]["uploaded"]
-        has_font = bool(cfg.card_template_font_path)
+        from services.card_template_service import TEMPLATES_ROOT, ALLOWED_FONT_EXT
+        has_font = any(os.path.isfile(os.path.join(TEMPLATES_ROOT, f"font.{ext}"))
+                       for ext in ALLOWED_FONT_EXT) or bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, has_template=has_template,
                                template_variants=template_variants, has_font=has_font, country_flags=list_country_flags(),
@@ -10630,16 +10638,11 @@ def admin_card_template():
 def admin_card_template_save():
     db = get_session()
     try:
-        from models import GameConfig
-        cfg = db.query(GameConfig).first()
-        if not cfg:
-            cfg = GameConfig()
-            db.add(cfg); db.flush()
-
-        # Optional blank-template uploads. Base retains the legacy config path;
-        # Star and Legend use deterministic files and only apply when uploaded.
+        # Optional blank-template uploads. All rarity templates are stored as
+        # deterministic files under data/card_templates and mirrored to the
+        # Telegram storage channel; card-template values are no longer saved in
+        # GameConfig.
         from services.card_template_service import save_template_image
-        root = os.path.dirname(os.path.abspath(__file__))
         for variant in ("base", "star", "legend"):
             template_file = request.files.get(f"template_file_{variant}")
             if template_file and template_file.filename:
@@ -10649,9 +10652,6 @@ def admin_card_template_save():
                     db.rollback()
                     flash(f"❌ {variant.title()} template: {msg}", "error")
                     return redirect(url_for("admin_card_template"))
-                if variant == "base":
-                    # Store relative to project root so deploy paths remain portable.
-                    cfg.card_template_image_path = os.path.relpath(path, root)
 
         # Optional font upload. This is the font used for every generated card.
         font_file = request.files.get("font_file")
@@ -10662,15 +10662,12 @@ def admin_card_template_save():
                 db.rollback()
                 flash(f"❌ {msg}", "error")
                 return redirect(url_for("admin_card_template"))
-            root = os.path.dirname(os.path.abspath(__file__))
-            cfg.card_template_font_path = os.path.relpath(path, root)
 
         # Style and concrete v7.1 HTML generator controls.
-        import json as _json
         from services.card_template_service import normalise_template_settings
         style = (request.form.get("card_style") or "tier").strip().lower()
-        cfg.card_style = style if style in ("tier", "template") else "tier"
-        cfg.card_template_show_portrait = bool(request.form.get("show_portrait"))
+        card_style = style if style in ("tier", "template") else "tier"
+        show_portrait = bool(request.form.get("show_portrait"))
         raw_settings = {
             key: request.form.get(key) for key in (
                 "player_x", "player_y", "player_w", "player_h",
@@ -10690,10 +10687,19 @@ def admin_card_template_save():
         }
         raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
         raw_settings["protect_bottom_box"] = bool(request.form.get("protect_bottom_box"))
-        cfg.card_template_settings = _json.dumps(normalise_template_settings(raw_settings),
-                                                  sort_keys=True)
-
-        db.commit()
+        settings = normalise_template_settings(raw_settings)
+        from services.card_template_storage_service import (
+            save_local_state, pin_state_sync, upload_assets_sync,
+            is_configured as template_storage_configured,
+        )
+        uploaded_assets = upload_assets_sync() if template_storage_configured() else {}
+        state = save_local_state({
+            "card_style": card_style,
+            "show_portrait": show_portrait,
+            "settings": settings,
+            "assets": uploaded_assets,
+        })
+        storage_saved = pin_state_sync(state, audit_text=f"style={card_style}")
 
         # Invalidate caches so the change shows immediately everywhere.
         try:
@@ -10709,13 +10715,12 @@ def admin_card_template_save():
         except Exception:
             pass
 
-        flash("✅ Card template updated. Will appear immediately everywhere.", "info")
-        try:
-            log_admin(db, "update_card_template", "game_config", cfg.id, "system",
-                      f"style={cfg.card_style} template={'yes' if cfg.card_template_image_path else 'no'}")
-            db.commit()
-        except Exception:
-            pass
+        if template_storage_configured() and storage_saved:
+            flash("✅ Card template updated and pinned to Telegram storage. Will appear immediately everywhere.", "info")
+        elif template_storage_configured():
+            flash("⚠️ Card template updated locally, but Telegram storage pin failed. Check bot channel permissions.", "error")
+        else:
+            flash("✅ Card template updated locally. Set CARD_TEMPLATE_STORAGE_CHAT_ID or STORAGE_CHAT_ID to mirror it to Telegram storage.", "info")
         return redirect(url_for("admin_card_template"))
     except Exception as e:
         db.rollback()
@@ -11197,6 +11202,46 @@ def admin_fantasy_detail(league_id):
                                ownership=ownership, top_scorers=top_scorers)
     finally:
         db.close()
+
+
+@app.route("/fantasy/<int:league_id>/broadcast", methods=["POST"])
+@login_required
+def admin_fantasy_broadcast(league_id):
+    """Broadcast fantasy league invite with an image, without changing lock status."""
+    db = get_session()
+    try:
+        from models import FantasyLeague
+        from services import fantasy_service
+        league = db.query(FantasyLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+        chat_ids = fantasy_service.get_group_chat_ids(db)
+        msg = fantasy_service.build_broadcast_message(league)
+        attachment = {
+            "type": "image",
+            "name": f"fantasy_{league_id}.png",
+            "bytes": fantasy_service.generate_broadcast_image(league),
+        }
+        button = {"text": "🏏 Open Fantasy", "url": fantasy_service.fantasy_deep_link(league_id)}
+        if chat_ids:
+            import threading
+            threading.Thread(
+                target=_run_broadcast_worker,
+                args=(None, list(chat_ids), msg, attachment, button),
+                daemon=True,
+            ).start()
+            flash(f"📣 Fantasy broadcast with image sent to {len(chat_ids)} groups.", "success")
+        else:
+            flash("No active groups to notify.", "info")
+        log_admin(db, "fantasy_broadcast", target_type="fantasy_league", target_id=league_id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_detail", league_id=league_id))
 
 
 @app.route("/fantasy/<int:league_id>/lock", methods=["POST"])
