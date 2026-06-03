@@ -3736,7 +3736,7 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             batsmen_rows, fow, extras,
             is_first_innings=is_first, match_title=match_title,
             target=target, chase_outcome=chase_outcome,
-            match_no=mid, accent_hex=accent_hex,
+            stadium=s.get("stadium"), match_no=mid, accent_hex=accent_hex,
         )
 
         # Generate bowling scorecard — team name is the bowling team

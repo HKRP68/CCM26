@@ -46,8 +46,28 @@ MUTED      = (113, 128, 150)
 SEP        = (45, 55, 72)
 EXTRA_BG   = (15, 23, 42)
 
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "assets", "logo.png")
+_ASSETS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "assets")
+_LOGO_PATH = os.path.join(_ASSETS_ROOT, "logo.png")
+_FONT_ROOT = os.path.join(_ASSETS_ROOT, "fonts")
+
+# The uploaded HTML mockup uses these Google Font families:
+#   - Bebas Neue for team names and large stat numbers
+#   - Bricolage Grotesque for table text, labels, and smaller UI text
+# If the TTF files are present under assets/fonts, the PNG renderer uses them;
+# otherwise it falls back to the existing DejaVu font so generation remains safe.
+_HTML_FONT_CANDIDATES = {
+    "bebas": [
+        os.path.join(_FONT_ROOT, "BebasNeue-Regular.ttf"),
+        os.path.join(_FONT_ROOT, "BebasNeue.ttf"),
+    ],
+    "bricolage": [
+        os.path.join(_FONT_ROOT, "BricolageGrotesque-Bold.ttf"),
+        os.path.join(_FONT_ROOT, "BricolageGrotesque-SemiBold.ttf"),
+        os.path.join(_FONT_ROOT, "BricolageGrotesque-VariableFont_opsz,wdth,wght.ttf"),
+        os.path.join(_FONT_ROOT, "BricolageGrotesque.ttf"),
+    ],
+}
 
 
 # ── Drawing helpers ────────────────────────────────────────────────────
@@ -65,6 +85,22 @@ def _font(size, bold=False, italic=False):
         return ImageFont.truetype(path, size)
     except (OSError, IOError):
         return ImageFont.load_default()
+
+
+def _html_font(size, family="bricolage", bold=True, italic=False):
+    """Load the same font families/sizes used by Batting Scorecard.html.
+
+    ``family`` accepts ``"bebas"`` or ``"bricolage"``. The function looks for
+    local TTF files under assets/fonts first so production can render the same
+    typefaces as the HTML mockup without depending on Google Fonts at runtime.
+    """
+    for path in _HTML_FONT_CANDIDATES.get(family, []):
+        try:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return _font(size, bold=bold, italic=italic)
 
 
 def _tw(draw, text, font):
@@ -421,204 +457,256 @@ def _draw_table_row(draw, x, y, w, columns, values, accent, *,
 # ══════════════════════════════════════════════════════════════════════
 
 def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wickets,
-                               overs_str, batsmen_rows, fall_of_wickets, extras_dict,
-                               is_first_innings=True, match_title="MATCH",
-                               target=None, chase_outcome=None,
+                               overs_str, batsmen_rows, fall_of_wickets,
+                               extras_dict, is_first_innings=True,
+                               match_title="MATCH", target=None,
+                               chase_outcome=None, stadium=None,
                                *, match_no=None, accent_hex=None) -> bytes | None:
-    """Generate batting scorecard.
+    """Generate an HTML-mockup-style batting scorecard.
 
-    Args:
-        team_name, opponent_name, total_runs, total_wickets, overs_str,
-        batsmen_rows, fall_of_wickets, extras_dict — as before
-        is_first_innings: True = red default accent, False = teal default
-        match_title: subtitle text
-        target, chase_outcome: for innings 2
-        match_no: int, shown in header (e.g. "MATCH #42")
-        accent_hex: '#rrggbb' override; if None, falls back to PRIMARY/SECONDARY
-
-    batsmen_rows can include 'status' field:
-        'out' / 'not_out' / 'dnb' (default 'out' if dismissal != 'not out',
-        else 'not_out'). DNB rows render in gray.
+    The visual follows ``Batting Scorecard.html``: a wide glass card, top team
+    name boxes with a green "BATTING" marker on the batting side, venue strip,
+    batting table, and large stat tiles at the bottom. ``accent_hex`` remains
+    admin-configurable and is used for headers, totals, and highlights.
     """
     try:
         default_accent = PRIMARY_DEFAULT if is_first_innings else SECONDARY_DEFAULT
         accent = _hex_to_rgb(accent_hex, default_accent)
-        innings_label = "1ST INNINGS" if is_first_innings else "2ND INNINGS"
-        label = f"{innings_label} · BATTING"
+        batting_green = (54, 219, 120)
+        out_red = (255, 70, 80)
+        notout_blue = (39, 184, 255)
+        gold = GOLD
 
-        W = 1400
-        row_h = 44
-        header_h = 170
-        section_h = 42
-        table_header_h = 38
-        summary_h = 68
-        bottom_h = 160
-        H = (header_h + section_h + table_header_h + (len(batsmen_rows) * row_h)
-             + summary_h + bottom_h + 50)
-
+        W = 1600
+        H = 900
         img = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img, "RGBA")
 
-        card_x, card_y = 20, 20
-        card_w = W - 40
-        card_h = H - 40
-        draw.rounded_rectangle([card_x, card_y, card_x + card_w, card_y + card_h],
-                                radius=10, fill=CARD_BG, outline=SEP, width=1)
+        draw.ellipse([-220, -190, 520, 440], fill=(accent[0], accent[1], accent[2], 48))
+        draw.ellipse([1080, -180, 1840, 460], fill=(0, 145, 255, 42))
+        draw.rounded_rectangle([22, 22, W - 22, H - 22], radius=30,
+                               fill=(7, 13, 20, 218), outline=(255, 255, 255, 45), width=1)
+        draw.rounded_rectangle([34, 34, W - 34, H - 34], radius=24,
+                               outline=(255, 255, 255, 26), width=1)
 
-        _draw_header(draw, img,
-                     x=card_x, y=card_y, w=card_w,
-                     accent=accent, label=label, match_title=match_title,
-                     match_no=match_no,
-                     home_team=team_name, away_team=opponent_name,
-                     score=total_runs, wickets=total_wickets, overs=overs_str)
+        card_x, card_y = 34, 34
+        card_w = W - 68
+        top_h = 150
+        top_y = card_y
 
-        table_x = card_x
-        table_w = card_w
-        section_y = card_y + header_h
-        _draw_section_title(draw, table_x, section_y, table_w,
-                            "BATTING CARD", f"{team_name.upper()} INNINGS", accent)
-        table_y = section_y + section_h
+        draw.rounded_rectangle([card_x, top_y, card_x + card_w, top_y + top_h], radius=24,
+                               fill=(255, 255, 255, 13), outline=(255, 255, 255, 44), width=1)
+        draw.rectangle([card_x, top_y, card_x + card_w // 2, top_y + top_h],
+                       fill=(accent[0], accent[1], accent[2], 22))
+        draw.rectangle([card_x + card_w // 2, top_y, card_x + card_w, top_y + top_h],
+                       fill=(0, 140, 255, 18))
+
+        # Match Batting Scorecard.html font families and pixel sizes.
+        f_team = _html_font(66, family="bebas", bold=False)
+        f_tag = _html_font(14, family="bricolage", bold=True)
+        f_logo = _html_font(22, family="bricolage", bold=True, italic=True)
+        f_meta = _html_font(15, family="bricolage", bold=True)
+        f_venue = _html_font(23, family="bricolage", bold=True)
+        f_th = _html_font(22, family="bricolage", bold=True, italic=True)
+        f_name = _html_font(23, family="bricolage", bold=True)
+        f_dism = _html_font(20, family="bricolage", bold=False)
+        f_cell = _html_font(23, family="bricolage", bold=True)
+        f_stat_sub = _html_font(14, family="bricolage", bold=True)
+        f_stat_label = _html_font(22, family="bricolage", bold=True)
+        f_stat_note = _html_font(14, family="bricolage", bold=False)
+
+        def fit_text(text, font, max_w):
+            text = str(text or "—").upper()
+            if _tw(draw, text, font) <= max_w:
+                return text
+            while len(text) > 3 and _tw(draw, text + "…", font) > max_w:
+                text = text[:-1]
+            return text + "…"
+
+        def draw_team_box(x1, y1, x2, y2, name, active=False):
+            if active:
+                draw.rounded_rectangle([x1, y1, x2, y2], radius=22,
+                                       fill=(47, 208, 111, 46),
+                                       outline=(80, 255, 155, 112), width=2)
+                draw.rounded_rectangle([x1 + 20, y1 - 12, x1 + 128, y1 + 20],
+                                       radius=14, fill=batting_green)
+                draw.text((x1 + 33, y1 - 4), "BATTING", fill=(7, 20, 13), font=f_tag)
+            else:
+                draw.rounded_rectangle([x1, y1, x2, y2], radius=22,
+                                       fill=(255, 255, 255, 8),
+                                       outline=(255, 255, 255, 24), width=1)
+            txt = fit_text(name, f_team, x2 - x1 - 52)
+            tw = _tw(draw, txt, f_team)
+            draw.text((x1 + (x2 - x1 - tw) // 2, y1 + 18), txt, fill=(238, 243, 251), font=f_team)
+
+        left_x1, left_x2 = card_x + 40, card_x + 40 + 520
+        right_x2, right_x1 = card_x + card_w - 40, card_x + card_w - 40 - 520
+        box_y1, box_y2 = top_y + 30, top_y + 122
+        draw_team_box(left_x1, box_y1, left_x2, box_y2, team_name, active=True)
+        draw_team_box(right_x1, box_y1, right_x2, box_y2, opponent_name, active=False)
+
+        logo_size = 118
+        logo_x = card_x + (card_w - logo_size) // 2
+        logo_y = top_y + 18
+        logo = _load_logo(target=logo_size)
+        if logo:
+            img.paste(logo, (logo_x, logo_y), logo)
+        else:
+            draw.rounded_rectangle([logo_x, logo_y, logo_x + logo_size, logo_y + logo_size],
+                                   radius=18, fill=(18, 28, 44), outline=(255, 255, 255, 42), width=1)
+            bot = "BOT"
+            draw.text((logo_x + (logo_size - _tw(draw, bot, f_logo)) // 2, logo_y + 44),
+                      bot, fill=accent, font=f_logo)
+        if match_no:
+            mt = f"MATCH #{match_no}"
+            draw.text((logo_x + (logo_size - _tw(draw, mt, f_meta)) // 2, logo_y + logo_size + 2),
+                      mt, fill=DIM, font=f_meta)
+
+        venue_text = (stadium or match_title or "MATCH").upper()
+        venue_y = top_y + top_h + 10
+        draw.rounded_rectangle([card_x, venue_y, card_x + card_w, venue_y + 48], radius=14,
+                               fill=(255, 255, 255, 14), outline=(255, 255, 255, 34), width=1)
+        venue_fit = fit_text(venue_text, f_venue, card_w - 80)
+        draw.text((card_x + (card_w - _tw(draw, venue_fit, f_venue)) // 2, venue_y + 10),
+                  venue_fit, fill=(217, 222, 231), font=f_venue)
+
+        table_y = venue_y + 60
+        table_x = card_x + 12
+        table_w = card_w - 24
+        table_h = 465
+        draw.rounded_rectangle([table_x, table_y, table_x + table_w, table_y + table_h], radius=24,
+                               fill=(8, 16, 25, 204), outline=(255, 255, 255, 50), width=1)
 
         cols = [
-            ("RTG", 0.07, "c"),
-            ("BATTER", 0.22, "l"),
-            ("DISMISSAL", 0.30, "l"),
-            ("R", 0.07, "r"),
-            ("B", 0.07, "r"),
-            ("4S", 0.07, "r"),
-            ("6S", 0.07, "r"),
-            ("SR", 0.13, "r"),
+            ("BATTER", 0.28, "l"),
+            ("DISMISSAL", 0.34, "l"),
+            ("R", 0.075, "c"),
+            ("B", 0.075, "c"),
+            ("4", 0.065, "c"),
+            ("6", 0.065, "c"),
+            ("SR", 0.10, "c"),
         ]
-        _draw_table_header(draw, table_x, table_y, table_w, cols, accent)
+        total_ratio = sum(c[1] for c in cols)
+        inner_x = table_x + 12
+        inner_w = table_w - 24
+        header_y = table_y + 12
+        row_h = 36
+        header_h = 44
+        draw.rounded_rectangle([inner_x, header_y, inner_x + inner_w, header_y + header_h],
+                               radius=12, fill=(255, 255, 255, 13))
+        cx = inner_x
+        for label, ratio, align in cols:
+            cw = int(inner_w * ratio / total_ratio)
+            if align == "l":
+                draw.text((cx + 22, header_y + 9), label, fill=gold, font=f_th)
+            else:
+                lw = _tw(draw, label, f_th)
+                draw.text((cx + (cw - lw) // 2, header_y + 9), label, fill=gold, font=f_th)
+            cx += cw
 
-        row_y = table_y + table_header_h
-        for b in batsmen_rows:
-            # Determine status — caller may set it explicitly, else infer
+        rows = list(batsmen_rows or [])[:11]
+        while len(rows) < 11:
+            rows.append({"name": "—", "dismissal": "—", "runs": 0, "balls": 0,
+                         "fours": 0, "sixes": 0, "strike_rate": 0.0, "status": "dnb"})
+
+        row_y = header_y + header_h
+        for b in rows:
             status = b.get("status")
             if not status:
                 dism = (b.get("dismissal") or "").lower()
-                if dism in ("did not bat", "dnb"):
+                if dism in ("did not bat", "dnb", "—", "-"):
                     status = "dnb"
                 elif dism == "not out":
                     status = "not_out"
                 else:
                     status = "out"
 
-            if status == "not_out":
-                runs_text = f"{b.get('runs', 0)}*"
-            elif status == "dnb":
-                runs_text = "0"
+            if status == "out":
+                fill = (255, 35, 45, 36)
+                stripe = out_red
+                sr_color = out_red
+            elif status == "not_out":
+                fill = (0, 140, 255, 38)
+                stripe = notout_blue
+                sr_color = notout_blue
             else:
-                runs_text = str(b.get("runs", 0))
+                fill = (255, 255, 255, 0)
+                stripe = (255, 255, 255, 0)
+                sr_color = DIM
 
+            draw.rectangle([inner_x, row_y, inner_x + inner_w, row_y + row_h], fill=fill)
+            if status in ("out", "not_out"):
+                draw.rectangle([inner_x, row_y, inner_x + 4, row_y + row_h], fill=stripe)
+            draw.line([(inner_x, row_y + row_h - 1), (inner_x + inner_w, row_y + row_h - 1)],
+                      fill=(255, 255, 255, 22), width=1)
+
+            dism = b.get("dismissal", "—")
+            if status == "not_out":
+                dism = "NOT OUT"
+            elif status == "dnb" and str(dism).lower() in ("did not bat", "dnb"):
+                dism = "—"
+            runs = f"{b.get('runs', 0)}*" if status == "not_out" else str(b.get("runs", 0))
             values = [
-                str(b.get("rating", "—")),
-                b.get("name", "—").upper(),
-                b.get("dismissal", "—"),
-                runs_text,
+                fit_text(b.get("name", "—"), f_name, int(inner_w * cols[0][1] / total_ratio) - 44),
+                fit_text(dism, f_dism, int(inner_w * cols[1][1] / total_ratio) - 44),
+                runs,
                 str(b.get("balls", 0)),
                 str(b.get("fours", 0)),
                 str(b.get("sixes", 0)),
-                f"{b.get('strike_rate', 0):.1f}",
+                f"{float(b.get('strike_rate', 0) or 0):.2f}",
             ]
-            _draw_table_row(draw, table_x, row_y, table_w, cols, values,
-                             accent, status=status)
+            cx = inner_x
+            for idx, ((label, ratio, align), value) in enumerate(zip(cols, values)):
+                cw = int(inner_w * ratio / total_ratio)
+                if idx == 0:
+                    font_use = f_name
+                    color = TEXT_DIM if status == "dnb" else TEXT
+                    ty = row_y + 6
+                elif idx == 1:
+                    font_use = f_dism
+                    color = notout_blue if status == "not_out" else (TEXT_DIM if status == "dnb" else (214, 219, 228))
+                    ty = row_y + 8
+                else:
+                    font_use = f_cell
+                    color = sr_color if label == "SR" else (TEXT_DIM if status == "dnb" else TEXT)
+                    ty = row_y + 6
+                if align == "l":
+                    draw.text((cx + 22, ty), str(value), fill=color, font=font_use)
+                else:
+                    vw = _tw(draw, str(value), font_use)
+                    draw.text((cx + (cw - vw) // 2, ty), str(value), fill=color, font=font_use)
+                cx += cw
             row_y += row_h
 
-        # Summary strip + bottom section: EXTRAS + FALL OF WICKETS
-        summary_x = card_x + 20
-        summary_w = card_w - 40
+        bottom_y = table_y + table_h + 18
+        gap = 16
+        stat_w = int((card_w - gap * 3) / 4)
+        stat_h = 138
         legal_balls = _overs_to_balls(overs_str)
         run_rate = (total_runs * 6 / legal_balls) if legal_balls else 0
-        _draw_metric_strip(draw, summary_x, row_y + 12, summary_w, [
-            ("TOTAL", f"{total_runs}/{total_wickets}"),
-            ("OVERS", overs_str),
-            ("RUN RATE", f"{run_rate:.2f}"),
-        ], accent)
-        bottom_y = row_y + 12 + summary_h + 12
-        bottom_padding = 20
-
-        extras_w = 240
-        extras_h = 110
-        extras_x = card_x + bottom_padding
-        draw.rounded_rectangle(
-            [extras_x, bottom_y, extras_x + extras_w, bottom_y + extras_h],
-            radius=8, fill=EXTRA_BG, outline=SEP, width=1)
-
-        f_extras_lbl = _font(11, bold=True)
-        f_extras_val = _font(38, bold=True)
-        f_extras_detail = _font(11, bold=True)
-
-        draw.text((extras_x + 16, bottom_y + 12),
-                  "EXTRAS", fill=accent, font=f_extras_lbl)
-        draw.text((extras_x + 16, bottom_y + 28),
-                  str(extras_dict.get("total", 0)),
-                  fill=TEXT, font=f_extras_val)
-
-        detail_y = bottom_y + 80
-        detail_text = "    ".join([
-            f"WD {extras_dict.get('wd', 0)}",
-            f"NB {extras_dict.get('nb', 0)}",
-            f"B {extras_dict.get('b', 0)}",
-            f"LB {extras_dict.get('lb', 0)}",
-        ])
-        draw.text((extras_x + 16, detail_y),
-                  detail_text, fill=DIM, font=f_extras_detail)
-
-        fow_x = extras_x + extras_w + 20
-        fow_w = card_x + card_w - fow_x - bottom_padding
-        draw.rounded_rectangle(
-            [fow_x, bottom_y, fow_x + fow_w, bottom_y + extras_h],
-            radius=8, fill=EXTRA_BG, outline=SEP, width=1)
-
-        draw.text((fow_x + 16, bottom_y + 12),
-                  "FALL OF WICKETS", fill=accent, font=f_extras_lbl)
-
-        f_fow_num = _font(15, bold=True)
-        f_fow_score = _font(15, bold=True)
-        f_fow_over = _font(10, italic=True)
-        if fall_of_wickets:
-            available_w = fow_w - 32
-            num_fow = min(len(fall_of_wickets), 10)
-            pill_w = available_w / max(num_fow, 1)
-            pill_y = bottom_y + 42
-
-            for i, fow in enumerate(fall_of_wickets[:10]):
-                if isinstance(fow, dict):
-                    num = fow.get("num", i + 1)
-                    score_v = fow.get("score", "—")
-                    over_v = fow.get("over", "—")
-                elif isinstance(fow, (tuple, list)):
-                    num = fow[0] if len(fow) > 0 else i + 1
-                    score_v = fow[1] if len(fow) > 1 else "—"
-                    over_v = fow[2] if len(fow) > 2 else "—"
-                else:
-                    continue
-                pill_x = fow_x + 16 + i * pill_w + pill_w / 2
-
-                num_text = str(num)
-                num_w = _tw(draw, num_text, f_fow_num)
-                draw.text((int(pill_x - num_w / 2), pill_y),
-                          num_text, fill=accent, font=f_fow_num)
-                draw.line([(int(pill_x), pill_y + 22),
-                           (int(pill_x), pill_y + 30)],
-                          fill=SEP, width=1)
-                sc_text = str(score_v)
-                sc_w = _tw(draw, sc_text, f_fow_score)
-                draw.text((int(pill_x - sc_w / 2), pill_y + 30),
-                          sc_text, fill=TEXT, font=f_fow_score)
-                ov_text = f"({over_v})"
-                ov_w = _tw(draw, ov_text, f_fow_over)
-                draw.text((int(pill_x - ov_w / 2), pill_y + 52),
-                          ov_text, fill=DIM, font=f_fow_over)
-        else:
-            f_none = _font(13, italic=True)
-            draw.text((fow_x + 16, bottom_y + 50),
-                      "No wickets fell", fill=DIM, font=f_none)
+        stats = [
+            ("⏱", "SCORING PACE", f"{run_rate:.1f}", "RUN RATE", "runs per over", out_red),
+            ("✦", "ADDITIONAL RUNS", str(extras_dict.get("total", 0)), "EXTRAS", "wides, no-balls, byes", gold),
+            ("◎", "PROGRESS", str(overs_str), "OVERS", "innings completed", notout_blue),
+            ("🏏", "INNINGS SCORE", f"{total_runs}/{total_wickets}", "TOTAL", f"after {overs_str} overs", accent),
+        ]
+        for i, (icon, subtitle, value, label_txt, note, color) in enumerate(stats):
+            sx = card_x + i * (stat_w + gap)
+            sy = bottom_y
+            draw.rounded_rectangle([sx, sy, sx + stat_w, sy + stat_h], radius=24,
+                                   fill=(10, 14, 20, 222), outline=(255, 255, 255, 42), width=1)
+            draw.rectangle([sx + 1, sy, sx + stat_w - 1, sy + 4], fill=color)
+            draw.ellipse([sx + 24, sy + 24, sx + 78, sy + 78], outline=color, width=2)
+            icon_font = _html_font(28, family="bricolage", bold=True)
+            draw.text((sx + 51 - _tw(draw, icon, icon_font) / 2, sy + 35), icon, fill=color, font=icon_font)
+            draw.text((sx + 94, sy + 25), subtitle, fill=(158, 168, 184), font=f_stat_sub)
+            value_font = _html_font(88 if i == 3 else 68, family="bebas", bold=False)
+            value_color = gold if i == 3 else TEXT
+            draw.text((sx + 94, sy + 36), str(value), fill=value_color, font=value_font)
+            draw.text((sx + 24, sy + 97), label_txt, fill=(221, 227, 238), font=f_stat_label)
+            draw.text((sx + 24, sy + 122), note, fill=(144, 160, 182), font=f_stat_note)
 
         if target is not None and not is_first_innings:
-            tgt_y = bottom_y + extras_h + 8
-            tgt_label = f"TARGET: {target}"
             outcome_txt = ""
             if chase_outcome == "won":
                 outcome_txt = " · CHASE COMPLETED ✓"
@@ -626,11 +714,9 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 outcome_txt = " · MATCH TIED"
             elif chase_outcome == "lost":
                 outcome_txt = " · TARGET MISSED"
-            full = tgt_label + outcome_txt
-            f_tgt = _font(13, bold=True)
-            tw_val = _tw(draw, full, f_tgt)
-            draw.text(((W - tw_val) // 2, tgt_y),
-                      full, fill=accent, font=f_tgt)
+            full = f"TARGET: {target}{outcome_txt}"
+            f_tgt = _html_font(16, family="bricolage", bold=True)
+            draw.text(((W - _tw(draw, full, f_tgt)) // 2, H - 42), full, fill=accent, font=f_tgt)
 
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
