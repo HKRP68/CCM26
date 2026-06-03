@@ -190,8 +190,22 @@ SCORECARD_TEXT_FIELDS = {
         ("player_name", "BATTER NAME", "BATTER NAME"),
         ("dismissal_text", "Dismissal row text", "DISMISSAL"),
         ("table_body", "Other table row numbers", ""),
-        ("stat_label", "Bottom stat labels", ""),
-        ("stat_value", "Bottom stat values", ""),
+        ("pace_subtitle", "Scoring Pace subtitle", "SCORING PACE"),
+        ("run_rate_value", "Run Rate value", ""),
+        ("run_rate_label", "Run Rate label", "RUN RATE"),
+        ("run_rate_note", "Run Rate note", "runs per over"),
+        ("extras_subtitle", "Extras subtitle", "ADDITIONAL RUNS"),
+        ("extras_value", "Extras value", ""),
+        ("extras_label", "Extras label", "EXTRAS"),
+        ("extras_note", "Extras note", "wides, no-balls, byes"),
+        ("overs_subtitle", "Overs subtitle", "PROGRESS"),
+        ("overs_value", "Overs value", ""),
+        ("overs_label", "Overs label", "OVERS"),
+        ("overs_note", "Overs note", "innings completed"),
+        ("total_subtitle", "Total subtitle", "INNINGS SCORE"),
+        ("total_value", "Total value", ""),
+        ("total_label", "Total label", "TOTAL"),
+        ("total_note", "Total note", ""),
         ("target", "Target / chase line", "TARGET"),
     ],
     "bowling": [
@@ -207,8 +221,14 @@ SCORECARD_TEXT_FIELDS = {
         ("table_body", "Other bowling row numbers", ""),
         ("fow_title", "Fall of Wickets title", "FALL OF WICKETS"),
         ("fow_body", "Fall of Wickets cells", ""),
-        ("stat_label", "Bottom stat labels", ""),
-        ("stat_value", "Bottom stat values", ""),
+        ("wickets_value", "Wickets value", ""),
+        ("wickets_label", "Wickets label", "WICKETS"),
+        ("economy_value", "Economy value", ""),
+        ("economy_label", "Economy label", "ECONOMY"),
+        ("bowling_overs_value", "Overs value", ""),
+        ("bowling_overs_label", "Overs label", "OVERS"),
+        ("opp_score_value", "Opp score value", ""),
+        ("opp_score_label", "Opp score label", "OPP SCORE"),
     ],
     "summary": [
         ("header_title", "SUMMARY header", "SUMMARY"),
@@ -241,9 +261,14 @@ def default_scorecard_text_settings():
                 "innings_meta", "innings_score", "result", "potm_badge",
                 "potm_name", "potm_label", "potm_value",
             }
+            display_keys = {
+                "team", "stat_value", "run_rate_value", "extras_value",
+                "overs_value", "total_value", "wickets_value", "economy_value",
+                "bowling_overs_value", "opp_score_value",
+            }
             settings[card_type][key] = {
                 "text": default_text,
-                "font": "display" if key in {"team", "stat_value"} or (card_type == "summary" and key in summary_display) else "body",
+                "font": "display" if key in display_keys or (card_type == "summary" and key in summary_display) else "body",
                 "size": 0,
                 "x": 0,
                 "y": 0,
@@ -307,6 +332,7 @@ def _text_from_setting(text_settings, card_type, key, default):
     setting = _settings_for(text_settings, card_type, key)
     text = str(setting.get("text", "") or "")
     return text if text else default
+
 
 def _draw_horizontal_gradient(draw, x, y, w, h, c1, c2):
     for i in range(w):
@@ -872,12 +898,12 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                     color = sr_color if label == "SR" else (TEXT_DIM if status == "dnb" else TEXT)
                 ty = text_vcenter_y(row_y, row_y + row_h, font_use)
                 tracking = table_body_tracking if idx in (0, 1) else 0
+                body_key = "player_name" if idx == 0 else ("dismissal_text" if idx == 1 else "table_body")
                 if align == "l":
-                    _draw_text_with_tracking(draw, _offset_xy(text_settings, "batting", "player_name", cx + 22, ty), str(value),
+                    _draw_text_with_tracking(draw, _offset_xy(text_settings, "batting", body_key, cx + 22, ty), str(value),
                                              fill=color, font=font_use, tracking=tracking)
                 else:
                     vw = _tracked_width(draw, str(value), font_use, tracking)
-                    body_key = "dismissal_text" if idx == 1 else "table_body"
                     _draw_text_with_tracking(draw, _offset_xy(text_settings, "batting", body_key, cx + (cw - vw) // 2, ty), str(value),
                                              fill=color, font=font_use, tracking=tracking)
                 cx += cw
@@ -895,13 +921,29 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         legal_balls = _overs_to_balls(overs_str)
         run_rate = (total_runs * 6 / legal_balls) if legal_balls else 0
         stats = [
-            ("SCORING PACE", f"{run_rate:.1f}", "RUN RATE", "runs per over", out_red, False),
-            ("ADDITIONAL RUNS", str(extras_dict.get("total", 0)), "EXTRAS", "wides, no-balls, byes", gold, False),
-            ("PROGRESS", str(overs_str), "OVERS", "innings completed", notout_blue, False),
-            ("INNINGS SCORE", f"{total_runs}/{total_wickets}", "TOTAL", f"after {overs_str} overs", gold, True),
+            ("pace_subtitle", "run_rate_value", "run_rate_label", "run_rate_note",
+             _text_from_setting(text_settings, "batting", "pace_subtitle", "SCORING PACE"),
+             _text_from_setting(text_settings, "batting", "run_rate_value", f"{run_rate:.1f}"),
+             _text_from_setting(text_settings, "batting", "run_rate_label", "RUN RATE"),
+             _text_from_setting(text_settings, "batting", "run_rate_note", "runs per over"), out_red, False),
+            ("extras_subtitle", "extras_value", "extras_label", "extras_note",
+             _text_from_setting(text_settings, "batting", "extras_subtitle", "ADDITIONAL RUNS"),
+             _text_from_setting(text_settings, "batting", "extras_value", str(extras_dict.get("total", 0))),
+             _text_from_setting(text_settings, "batting", "extras_label", "EXTRAS"),
+             _text_from_setting(text_settings, "batting", "extras_note", "wides, no-balls, byes"), gold, False),
+            ("overs_subtitle", "overs_value", "overs_label", "overs_note",
+             _text_from_setting(text_settings, "batting", "overs_subtitle", "PROGRESS"),
+             _text_from_setting(text_settings, "batting", "overs_value", str(overs_str)),
+             _text_from_setting(text_settings, "batting", "overs_label", "OVERS"),
+             _text_from_setting(text_settings, "batting", "overs_note", "innings completed"), notout_blue, False),
+            ("total_subtitle", "total_value", "total_label", "total_note",
+             _text_from_setting(text_settings, "batting", "total_subtitle", "INNINGS SCORE"),
+             _text_from_setting(text_settings, "batting", "total_value", f"{total_runs}/{total_wickets}"),
+             _text_from_setting(text_settings, "batting", "total_label", "TOTAL"),
+             _text_from_setting(text_settings, "batting", "total_note", f"after {overs_str} overs"), gold, True),
         ]
         sx = card_x
-        for i, (subtitle, value, label_txt, note, color, is_total) in enumerate(stats):
+        for i, (subtitle_key, value_key, label_key, note_key, subtitle, value, label_txt, note, color, is_total) in enumerate(stats):
             sy = bottom_y
             sw = stat_widths[i]
             tile_fill = (10, 14, 20, 222)
@@ -919,16 +961,19 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             # Do not draw the decorative stat icon/emoji elements in the PNG
             # scorecard.  They render as missing-glyph boxes in some runtime
             # fonts, so the tiles use only the accent rule plus text content.
-            draw.text(_offset_xy(text_settings, "batting", "stat_label", sx + 24, sy + 31), subtitle, fill=(158, 168, 184), font=f_stat_sub)
+            subtitle_font = _font_from_setting(text_settings, "batting", subtitle_key, 14, bold=True)
+            draw.text(_offset_xy(text_settings, "batting", subtitle_key, sx + 24, sy + 31), subtitle, fill=(158, 168, 184), font=subtitle_font)
 
-            value_font = _font_from_setting(text_settings, "batting", "stat_value", 88 if is_total else 68, family="display")
+            value_font = _font_from_setting(text_settings, "batting", value_key, 88 if is_total else 68, family="display")
             value_color = gold if is_total else TEXT
             # In the HTML, the large stat value sits below the icon/title row
             # and starts from the card padding, not beside the icon.
             value_y = sy + (61 if is_total else 60)
-            draw.text(_offset_xy(text_settings, "batting", "stat_value", sx + 24, value_y), str(value), fill=value_color, font=value_font)
-            draw.text(_offset_xy(text_settings, "batting", "stat_label", sx + 24, sy + 97), label_txt, fill=(221, 227, 238), font=f_stat_label)
-            draw.text(_offset_xy(text_settings, "batting", "stat_label", sx + 24, sy + 122), note, fill=(144, 160, 182), font=f_stat_note)
+            label_font = _font_from_setting(text_settings, "batting", label_key, 24 if is_total else 22, bold=True)
+            note_font = _font_from_setting(text_settings, "batting", note_key, 14)
+            draw.text(_offset_xy(text_settings, "batting", value_key, sx + 24, value_y), str(value), fill=value_color, font=value_font)
+            draw.text(_offset_xy(text_settings, "batting", label_key, sx + 24, sy + 97), label_txt, fill=(221, 227, 238), font=label_font)
+            draw.text(_offset_xy(text_settings, "batting", note_key, sx + 24, sy + 122), note, fill=(144, 160, 182), font=note_font)
             sx += sw + gap
 
         if target is not None and not is_first_innings:
@@ -996,7 +1041,7 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
         draw.rectangle([card_x + card_w // 2, header_y + 1, card_x + card_w - 15, header_y + header_h - 1],
                        fill=(0, 145, 255, 28))
 
-        f_team = _font_from_setting(text_settings, "bowling", "team", 70, family="display")
+        f_team = _font_from_setting(text_settings, "bowling", "team", 66, family="display")
         f_tag = _font_from_setting(text_settings, "bowling", "tag", 14, bold=True)
         f_th = _font_from_setting(text_settings, "bowling", "table_header", 25, bold=True, italic=True)
         f_name = _font_from_setting(text_settings, "bowling", "bowler_name", 31, bold=True, italic=True)
@@ -1167,24 +1212,25 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
         wkts = sum(int(b.get("wickets", 0) or 0) for b in bowlers_rows or [])
         team_economy = (conceded * 6 / bowling_balls) if bowling_balls else 0
         stats = [
-            (str(wkts), "WICKETS"),
-            (f"{team_economy:.1f}", "ECONOMY"),
-            (str(opp_overs or "0.0"), "OVERS"),
-            (f"{opp_score or 0}/{opp_wickets or 0}", "OPP SCORE"),
+            ("wickets_value", "wickets_label", _text_from_setting(text_settings, "bowling", "wickets_value", str(wkts)), _text_from_setting(text_settings, "bowling", "wickets_label", "WICKETS")),
+            ("economy_value", "economy_label", _text_from_setting(text_settings, "bowling", "economy_value", f"{team_economy:.1f}"), _text_from_setting(text_settings, "bowling", "economy_label", "ECONOMY")),
+            ("bowling_overs_value", "bowling_overs_label", _text_from_setting(text_settings, "bowling", "bowling_overs_value", str(opp_overs or "0.0")), _text_from_setting(text_settings, "bowling", "bowling_overs_label", "OVERS")),
+            ("opp_score_value", "opp_score_label", _text_from_setting(text_settings, "bowling", "opp_score_value", f"{opp_score or 0}/{opp_wickets or 0}"), _text_from_setting(text_settings, "bowling", "opp_score_label", "OPP SCORE")),
         ]
         unit_w = table_w / 4.25
         widths = [int(unit_w), int(unit_w), int(unit_w), table_w - int(unit_w) * 3]
         sx = table_x
-        for i, ((value, label), sw) in enumerate(zip(stats, widths)):
+        for i, ((value_key, label_key, value, label), sw) in enumerate(zip(stats, widths)):
             if i:
                 draw.line([(sx, bottom_y), (sx, bottom_y + bottom_h)], fill=(255, 255, 255, 42), width=1)
-            vf = f_total_value if i == 3 else f_stat_value
+            vf = _font_from_setting(text_settings, "bowling", value_key, 78 if i == 3 else 68, family="display")
             vx = sx + sw // 2 - _tw(draw, value, vf) // 2 - 54
             vy = text_vcenter_y(bottom_y, bottom_y + bottom_h, vf)
             lx = sx + sw // 2 + 16
             ly = text_vcenter_y(bottom_y, bottom_y + bottom_h, f_stat_label)
-            draw.text(_offset_xy(text_settings, "bowling", "stat_value", vx, vy), value, fill=(244, 245, 247), font=vf)
-            draw.text(_offset_xy(text_settings, "bowling", "stat_label", lx, ly), label, fill=(231, 234, 240), font=f_stat_label)
+            lf = _font_from_setting(text_settings, "bowling", label_key, 26, bold=True, italic=True)
+            draw.text(_offset_xy(text_settings, "bowling", value_key, vx, vy), value, fill=(244, 245, 247), font=vf)
+            draw.text(_offset_xy(text_settings, "bowling", label_key, lx, ly), label, fill=(231, 234, 240), font=lf)
             sx += sw
 
         buf = io.BytesIO()
