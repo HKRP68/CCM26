@@ -1150,7 +1150,9 @@ def play_shot(match_id, user_id, shot_index):
     striker = get_striker(state)
     bowler = get_bowler(state)
 
-    # Reuse the bot's outcome engine for identical probabilities/traits/form
+    # Reuse the bot's improved probability engine for identical /wpm, /cm,
+    # /vsbot, and /playmatch simulations (pitch wear, form, traits, delivery
+    # length/variation, and shot choice all feed the same calculator).
     oc = _bm._calc(state, striker, bowler, shot, delivery)
     res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
 
@@ -1210,7 +1212,7 @@ def play_shot(match_id, user_id, shot_index):
             next_act = A_COMPLETED
             res["match_over"] = True
             res["result"] = result
-    elif res["need_new_bat"] and state["total_wickets"] < 10:
+    elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
         # Save the dismissed batsman name (for selecting_wicket_batsman UI).
         try:
             dismissed = get_striker(state)
