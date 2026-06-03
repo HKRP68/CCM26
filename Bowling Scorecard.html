@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cricket Bowling Scorecard</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Bricolage+Grotesque:wght@700;800&display=swap" rel="stylesheet">
+
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at top left, rgba(255, 30, 45, 0.35), transparent 28%),
+    radial-gradient(circle at top right, rgba(0, 150, 255, 0.35), transparent 30%),
+    linear-gradient(135deg, #020407, #06111d 50%, #020407);
+  font-family: "Bricolage Grotesque", sans-serif;
+  color: #fff;
+}
+
+.scorecard {
+  width: 1600px;
+  height: 900px;
+  padding: 14px;
+  border-radius: 24px;
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255, 30, 45, 0.13), transparent 36%, transparent 64%, rgba(0, 145, 255, 0.14)),
+    rgba(5, 12, 20, 0.92);
+  border: 1px solid rgba(255,255,255,0.22);
+  box-shadow:
+    0 0 50px rgba(0,0,0,0.85),
+    inset 0 0 26px rgba(255,255,255,0.08);
+}
+
+.scorecard::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.13);
+  pointer-events: none;
+}
+
+/* TOP HEADER */
+.header {
+  height: 130px;
+  display: grid;
+  grid-template-columns: 1fr 180px 1fr;
+  align-items: center;
+  border-radius: 18px 18px 0 0;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255, 35, 45, 0.18), rgba(255,255,255,0.03), rgba(0, 145, 255, 0.20)),
+    rgba(8, 16, 27, 0.86);
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: inset 0 0 25px rgba(255,255,255,0.05);
+}
+
+.team-box {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 40px;
+  position: relative;
+}
+
+.team-box.left {
+  justify-content: flex-start;
+}
+
+.team-box.right {
+  justify-content: flex-end;
+}
+
+.team-box.left::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 120px;
+  height: 70px;
+  background:
+    linear-gradient(135deg, transparent 35%, rgba(255, 35, 45, 0.9)),
+    repeating-linear-gradient(135deg, rgba(255,60,70,0.28) 0 2px, transparent 2px 10px);
+}
+
+.team-box.right::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 140px;
+  height: 70px;
+  background:
+    linear-gradient(225deg, transparent 35%, rgba(0, 170, 255, 0.95)),
+    repeating-linear-gradient(225deg, rgba(0,170,255,0.28) 0 2px, transparent 2px 10px);
+}
+
+.team-highlight {
+  min-width: 420px;
+  min-height: 92px;
+  padding: 14px 28px;
+  border-radius: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.team-highlight.active-bowling {
+  background:
+    linear-gradient(180deg, rgba(46, 210, 113, 0.24), rgba(18, 115, 62, 0.18)),
+    rgba(255,255,255,0.03);
+  border: 1px solid rgba(95, 255, 165, 0.42);
+  box-shadow:
+    0 0 22px rgba(62, 255, 149, 0.18),
+    inset 0 0 24px rgba(78, 255, 154, 0.10);
+}
+
+.bowling-tag {
+  position: absolute;
+  top: -12px;
+  left: 20px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #36db78, #19a856);
+  color: #07140d;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  box-shadow: 0 4px 14px rgba(54, 219, 120, 0.35);
+}
+
+.team {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 70px;
+  letter-spacing: 4px;
+  line-height: 1;
+  color: #f1f2f5;
+  text-shadow:
+    0 5px 0 rgba(0,0,0,0.55),
+    0 0 18px rgba(255,255,255,0.20);
+  transform: skew(-8deg);
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.logo-wrap {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-left: 1px solid rgba(255,255,255,0.08);
+  border-right: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.08);
+}
+
+.logo-wrap img {
+  max-width: 160px;
+  max-height: 115px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 14px rgba(255,255,255,0.40));
+}
+
+/* MAIN BOWLING TABLE */
+.bowling-section {
+  margin-top: 8px;
+  height: 455px;
+  border-radius: 16px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255,50,60,0.09), transparent 40%, rgba(0,150,255,0.12)),
+    rgba(6, 15, 25, 0.78);
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow:
+    inset 0 0 22px rgba(255,255,255,0.06),
+    0 10px 24px rgba(0,0,0,0.45);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.bowling-table th {
+  height: 46px;
+  font-size: 25px;
+  letter-spacing: 3px;
+  font-style: italic;
+  color: #f1f4fa;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.13), rgba(255,255,255,0.04));
+  border-right: 1px solid rgba(255,255,255,0.13);
+  border-bottom: 1px solid rgba(255,255,255,0.18);
+  text-shadow: 0 3px 0 rgba(0,0,0,0.45);
+}
+
+.bowling-table th:first-child {
+  text-align: left;
+  padding-left: 36px;
+}
+
+.bowling-table td {
+  height: 51px;
+  font-size: 30px;
+  font-weight: 900;
+  text-align: center;
+  color: #f2f4f8;
+  border-right: 1px solid rgba(255,255,255,0.13);
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.035), rgba(0,0,0,0.02));
+  text-shadow: 0 3px 0 rgba(0,0,0,0.45);
+}
+
+.bowling-table td:first-child {
+  text-align: left;
+  padding-left: 36px;
+  font-size: 31px;
+  letter-spacing: 1px;
+  font-style: italic;
+}
+
+.bowling-table tr:nth-child(-n+5) td:first-child {
+  box-shadow: inset 4px 0 0 rgba(255, 70, 75, 0.9);
+}
+
+.bowling-table tr:nth-child(-n+5) td:last-child {
+  box-shadow: inset -4px 0 0 rgba(0, 170, 255, 0.9);
+}
+
+.empty-row td {
+  color: transparent;
+}
+
+/* FALL OF WICKETS */
+.fow-box {
+  margin-top: 12px;
+  height: 155px;
+  border-radius: 16px;
+  padding: 12px;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.07), rgba(0,150,255,0.06)),
+    rgba(5, 14, 25, 0.82);
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow:
+    inset 0 0 22px rgba(255,255,255,0.06),
+    0 10px 24px rgba(0,0,0,0.38);
+}
+
+.fow-title {
+  font-size: 28px;
+  font-style: italic;
+  letter-spacing: 1px;
+  font-weight: 900;
+  margin-bottom: 10px;
+  color: #f4f6fb;
+  text-shadow: 0 3px 0 rgba(0,0,0,0.45);
+}
+
+.fow-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fow-item {
+  height: 88px;
+  display: grid;
+  grid-template-rows: 38px 50px;
+  text-align: center;
+  border-right: 1px solid rgba(255,255,255,0.18);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+}
+
+.fow-item:last-child {
+  border-right: none;
+}
+
+.fow-over {
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  color: #ffc55b;
+  font-style: italic;
+  font-weight: 900;
+  border-bottom: 1px solid rgba(255,255,255,0.16);
+}
+
+.fow-score {
+  display: grid;
+  place-items: center;
+  font-size: 35px;
+  font-weight: 900;
+  color: #f2f4f8;
+  text-shadow: 0 3px 0 rgba(0,0,0,0.45);
+}
+
+/* BOTTOM BAR */
+.bottom-bar {
+  margin-top: 12px;
+  height: 100px;
+  border-radius: 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1.25fr;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255, 30, 45, 0.18), rgba(255,255,255,0.035), rgba(0, 150, 255, 0.20)),
+    rgba(5, 13, 23, 0.88);
+  border: 1px solid rgba(255,255,255,0.22);
+  box-shadow:
+    inset 0 0 24px rgba(255,255,255,0.07),
+    0 10px 25px rgba(0,0,0,0.50);
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  border-right: 1px solid rgba(255,255,255,0.18);
+  position: relative;
+}
+
+.stat:last-child {
+  border-right: none;
+}
+
+.stat:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 90px;
+  height: 70px;
+  background:
+    linear-gradient(135deg, transparent 35%, rgba(255, 35, 45, 0.95)),
+    repeating-linear-gradient(135deg, rgba(255,60,70,0.28) 0 2px, transparent 2px 10px);
+}
+
+.stat:last-child::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 100px;
+  height: 70px;
+  background:
+    linear-gradient(225deg, transparent 35%, rgba(0, 170, 255, 0.95)),
+    repeating-linear-gradient(225deg, rgba(0,170,255,0.28) 0 2px, transparent 2px 10px);
+}
+
+.stat-value {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 68px;
+  letter-spacing: 3px;
+  line-height: 1;
+  color: #f4f5f7;
+  text-shadow:
+    0 5px 0 rgba(0,0,0,0.50),
+    0 0 14px rgba(255,255,255,0.18);
+  transform: skew(-8deg);
+  z-index: 2;
+}
+
+.stat-label {
+  font-size: 26px;
+  letter-spacing: 5px;
+  font-style: italic;
+  font-weight: 800;
+  color: #e7eaf0;
+  text-shadow: 0 3px 0 rgba(0,0,0,0.45);
+  z-index: 2;
+}
+
+.total .stat-value {
+  font-size: 78px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="scorecard" id="scorecard">
+
+  <div class="header">
+    <div class="team-box left">
+      <div class="team-highlight active-bowling">
+        <div class="bowling-tag">BOWLING</div>
+        <div class="team">DADDYALEC</div>
+      </div>
+    </div>
+
+    <div class="logo-wrap">
+      <img src="logo.png" alt="Logo">
+    </div>
+
+    <div class="team-box right">
+      <div class="team-highlight">
+        <div class="team">VERY TOUCHABLES</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bowling-section">
+    <table class="bowling-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>OVERS</th>
+          <th>DOTS</th>
+          <th>RUNS</th>
+          <th>WICKETS</th>
+          <th>ECONOMY</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>GLENN MCGRATH</td>
+          <td>2.5</td>
+          <td>1</td>
+          <td>34</td>
+          <td>1</td>
+          <td>12.0</td>
+        </tr>
+        <tr>
+          <td>MITCHELL STARC</td>
+          <td>3.0</td>
+          <td>5</td>
+          <td>37</td>
+          <td>0</td>
+          <td>12.33</td>
+        </tr>
+        <tr>
+          <td>JAY DIJKSTRA</td>
+          <td>4.0</td>
+          <td>5</td>
+          <td>42</td>
+          <td>1</td>
+          <td>10.5</td>
+        </tr>
+        <tr>
+          <td>AMELIA KERR</td>
+          <td>3.0</td>
+          <td>6</td>
+          <td>38</td>
+          <td>1</td>
+          <td>12.67</td>
+        </tr>
+        <tr>
+          <td>SHANE WARNE</td>
+          <td>4.0</td>
+          <td>5</td>
+          <td>31</td>
+          <td>1</td>
+          <td>7.75</td>
+        </tr>
+        <tr class="empty-row">
+          <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+        </tr>
+        <tr class="empty-row">
+          <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+        </tr>
+        <tr class="empty-row">
+          <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="fow-box">
+    <div class="fow-title">FALL OF WICKETS</div>
+    <div class="fow-grid">
+      <div class="fow-item"><div class="fow-over">1st</div><div class="fow-score">9</div></div>
+      <div class="fow-item"><div class="fow-over">2nd</div><div class="fow-score">85</div></div>
+      <div class="fow-item"><div class="fow-over">3rd</div><div class="fow-score">125</div></div>
+      <div class="fow-item"><div class="fow-over">4th</div><div class="fow-score">137</div></div>
+      <div class="fow-item"><div class="fow-over">5th</div><div class="fow-score"></div></div>
+      <div class="fow-item"><div class="fow-over">6th</div><div class="fow-score"></div></div>
+      <div class="fow-item"><div class="fow-over">7th</div><div class="fow-score"></div></div>
+      <div class="fow-item"><div class="fow-over">8th</div><div class="fow-score"></div></div>
+      <div class="fow-item"><div class="fow-over">9th</div><div class="fow-score"></div></div>
+      <div class="fow-item"><div class="fow-over">10th</div><div class="fow-score"></div></div>
+    </div>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="stat">
+      <div class="stat-value">11.0</div>
+      <div class="stat-label">RUN-RATE</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">3</div>
+      <div class="stat-label">EXTRAS</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">16.5</div>
+      <div class="stat-label">OVERS</div>
+    </div>
+    <div class="stat total">
+      <div class="stat-value">185/4</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
