@@ -18,6 +18,9 @@ don't wake people up.
 
 import logging
 from datetime import datetime, timedelta
+from telegram import InlineKeyboardMarkup
+from services.miniapp_buttons import miniapp_button
+from services.quota_service import get_quota_status
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +32,9 @@ IST_OFFSET_HOURS = 5.5
 # How many users to process per tick (avoid long-running jobs on free tier)
 BATCH_SIZE = 50
 
-# Cooldown definitions: (cooldown_field, notified_flag, cooldown_seconds_fn, message)
-# cooldown_seconds_fn takes a session and returns the cooldown in seconds.
+# Cooldown definitions include both legacy last_* cooldowns and Mini App
+# quota-backed actions. Quota-backed actions are considered ready whenever at
+# least one free/ad slot is available in the same cycle used by the Mini App.
 
 
 def _ist_now():
@@ -65,13 +69,15 @@ def _get_cooldowns(session):
     return [
         {
             "field": "last_daily", "flag": "notified_daily_ready",
-            "cooldown": daily_cd,
-            "message": "🎁 Your Daily reward is ready! Use /daily to claim it.",
+            "cooldown": daily_cd, "quota_kind": "daily", "miniapp_tab": "daily",
+            "button_label": "📅 Open Daily",
+            "message": "📅 Your daily reward is ready! Open the Mini App to claim it.",
         },
         {
             "field": "last_gspin", "flag": "notified_gspin_ready",
-            "cooldown": gspin_cd,
-            "message": "🎡 Your Spin is ready! Use /gspin to spin the wheel.",
+            "cooldown": gspin_cd, "quota_kind": "spin", "miniapp_tab": "spin",
+            "button_label": "🎡 Open Spin",
+            "message": "🎡 Your spin is ready! Open the Mini App to spin the wheel.",
         },
         {
             "field": "last_claim", "flag": "notified_claim_ready",
@@ -86,12 +92,12 @@ def _get_cooldowns(session):
     ]
 
 
-async def _send_dm(application, telegram_id, text):
+async def _send_dm(application, telegram_id, text, reply_markup=None):
     """Send a DM; swallow errors (user may have blocked the bot)."""
     try:
         await application.bot.send_message(
             chat_id=telegram_id, text=text, parse_mode="HTML",
-            disable_web_page_preview=True)
+            reply_markup=reply_markup, disable_web_page_preview=True)
         return True
     except Exception as e:
         # Common: bot blocked, chat not found — don't spam logs
@@ -133,20 +139,37 @@ async def run_cooldown_notifications(application):
             for cd in cooldowns:
                 last = getattr(stats, cd["field"], None)
                 flag_set = getattr(stats, cd["flag"], False)
+                quota_kind = cd.get("quota_kind")
 
-                if last is None:
-                    # Never used this feature — keep flag clear, don't notify
+                ready = False
+                if quota_kind:
+                    try:
+                        quota = get_quota_status(stats, quota_kind, session=session)
+                        ready = not quota["all_used"]
+                    except Exception:
+                        ready = False
+                elif last is not None:
+                    elapsed = (now - last).total_seconds()
+                    ready = elapsed >= cd["cooldown"]
+
+                if last is None and not quota_kind:
+                    # Never used this legacy feature — keep flag clear.
                     if flag_set:
                         setattr(stats, cd["flag"], False)
                     continue
 
-                elapsed = (now - last).total_seconds()
-                ready = elapsed >= cd["cooldown"]
-
                 if ready and not flag_set:
                     # Newly ready → notify (unless quiet hours)
                     if not quiet:
-                        ok = await _send_dm(application, user.telegram_id, cd["message"])
+                        reply_markup = None
+                        if cd.get("miniapp_tab"):
+                            btn = miniapp_button(
+                                cd["button_label"], cd["miniapp_tab"],
+                                is_private=True)
+                            if btn is not None:
+                                reply_markup = InlineKeyboardMarkup([[btn]])
+                        ok = await _send_dm(application, user.telegram_id,
+                                            cd["message"], reply_markup)
                         if ok:
                             setattr(stats, cd["flag"], True)
                             sent_count += 1
@@ -157,7 +180,7 @@ async def run_cooldown_notifications(application):
                                 return
                     # If quiet, leave flag False so we notify once quiet ends
                 elif not ready and flag_set:
-                    # User acted (cooldown reset) → clear flag so next ready notifies
+                    # User acted (cooldown/quota reset) → clear flag so next ready notifies
                     setattr(stats, cd["flag"], False)
 
         session.commit()

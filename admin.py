@@ -2979,25 +2979,16 @@ def webapp_init():
         from models import UserStats
         from services import adsgram_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
-        from datetime import datetime as _dt
         from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
-        gspin_ready = True
-        gspin_remaining = 0
-        if stats and stats.last_gspin:
-            elapsed = (_dt.utcnow() - stats.last_gspin).total_seconds()
-            if elapsed < GSPIN_COOLDOWN:
-                gspin_ready = False
-                gspin_remaining = int(GSPIN_COOLDOWN - elapsed)
-        daily_ready = True
-        daily_remaining = 0
-        if stats and stats.last_daily:
-            elapsed = (_dt.utcnow() - stats.last_daily).total_seconds()
-            # Use the configured daily cooldown (admin can tune it)
-            from services.command_config_service import get_cooldown
-            effective_cd = get_cooldown(db, "daily", DAILY_COOLDOWN)
-            if elapsed < effective_cd:
-                daily_ready = False
-                daily_remaining = int(effective_cd - elapsed)
+        from services.command_config_service import get_cooldown
+        gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db)
+        daily_quota = _quota_service.get_quota_status(stats, "daily", session=db)
+        gspin_ready = not gspin_quota["all_used"]
+        gspin_remaining = gspin_quota["cycle_reset_in"] if gspin_quota["all_used"] else 0
+        daily_ready = not daily_quota["all_used"]
+        daily_remaining = daily_quota["cycle_reset_in"] if daily_quota["all_used"] else 0
+        effective_gspin_cd = get_cooldown(db, "gspin", GSPIN_COOLDOWN)
+        effective_daily_cd = get_cooldown(db, "daily", DAILY_COOLDOWN)
         played = user.matches_played or 0
         won = user.matches_won or 0
         win_rate = round(won / played * 100, 1) if played else 0
@@ -3040,14 +3031,14 @@ def webapp_init():
             "gspin": {
                 "ready": gspin_ready,
                 "cooldown_remaining": gspin_remaining,
-                "cooldown_total": GSPIN_COOLDOWN,
-                "quota": _quota_service.get_quota_status(stats, "spin", session=db),
+                "cooldown_total": effective_gspin_cd,
+                "quota": gspin_quota,
             },
             "daily": {
                 "ready": daily_ready,
                 "cooldown_remaining": daily_remaining,
-                "cooldown_total": DAILY_COOLDOWN,
-                "quota": _quota_service.get_quota_status(stats, "daily", session=db),
+                "cooldown_total": effective_daily_cd,
+                "quota": daily_quota,
             },
             "onboarding": {
                 "xi_set": (db.query(UserRoster)

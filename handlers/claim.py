@@ -3,6 +3,7 @@
 import io
 import logging
 from datetime import datetime
+from types import SimpleNamespace
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -195,8 +196,11 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(get_msg("claim_no_players"))
             return
 
-        # Save to dict WHILE session is open
+        # Save to plain data WHILE session is open.  SQLAlchemy expires ORM
+        # objects on commit; sending from a snapshot avoids lazy reloads during
+        # image generation and keeps /claim responsive.
         p = _player_to_dict(player)
+        player_snapshot = SimpleNamespace(**p)
         buy_val, sell_val = get_player_values(p["rating"])
         roster_count = user.roster_count
         user_id = user.id
@@ -228,7 +232,7 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await send_player_card(
             bot=context.bot,
             chat_id=update.effective_chat.id,
-            player=player,
+            player=player_snapshot,
             caption=text,
             reply_markup=keyboard,
             reply_to_message_id=update.message.message_id,
