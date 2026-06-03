@@ -513,10 +513,15 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         f_logo = _font(22, bold=True, italic=True)
         f_meta = _font(15, bold=True)
         f_venue = _font(23, bold=True)
-        f_th = _font(22, bold=True, italic=True)
-        f_name = _font(23, bold=True)
-        f_dism = _font(20, italic=True)
-        f_cell = _font(23, bold=True)
+        # Match the HTML table typography: header text is large/italic,
+        # while body cells use a heavy Bricolage-style weight.  Dismissals are
+        # intentionally bold (not regular italic) so they do not shrink/fade in
+        # the rendered PNG compared with the browser mockup.
+        f_th = _font(24, bold=True, italic=True)
+        f_name = _font(24, bold=True)
+        f_dism = _font(21, bold=True)
+        f_dism_notout = _font(21, bold=True, italic=True)
+        f_cell = _font(24, bold=True)
         f_stat_sub = _font(14, bold=True)
         f_stat_label = _font(22, bold=True)
         f_stat_note = _font(14)
@@ -528,6 +533,11 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             while len(text) > 3 and _tw(draw, text + "…", font) > max_w:
                 text = text[:-1]
             return text + "…"
+
+        def text_vcenter_y(y1, y2, font):
+            bb = draw.textbbox((0, 0), "Hg", font=font)
+            text_h = bb[3] - bb[1]
+            return y1 + ((y2 - y1 - text_h) // 2) - bb[1]
 
         def draw_team_box(x1, y1, x2, y2, name, active=False):
             if active:
@@ -601,13 +611,17 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         draw.rounded_rectangle([inner_x, header_y, inner_x + inner_w, header_y + header_h],
                                radius=12, fill=(255, 255, 255, 13))
         cx = inner_x
-        for label, ratio, align in cols:
+        for idx, (label, ratio, align) in enumerate(cols):
             cw = int(inner_w * ratio / total_ratio)
+            th_y = text_vcenter_y(header_y, header_y + header_h, f_th)
             if align == "l":
-                draw.text((cx + 22, header_y + 9), label, fill=gold, font=f_th)
+                draw.text((cx + 22, th_y), label, fill=gold, font=f_th)
             else:
                 lw = _tw(draw, label, f_th)
-                draw.text((cx + (cw - lw) // 2, header_y + 9), label, fill=gold, font=f_th)
+                draw.text((cx + (cw - lw) // 2, th_y), label, fill=gold, font=f_th)
+            if idx < len(cols) - 1:
+                draw.line([(cx + cw, header_y), (cx + cw, header_y + header_h)],
+                          fill=(255, 255, 255, 18), width=1)
             cx += cw
 
         rows = list(batsmen_rows or [])[:11]
@@ -646,6 +660,14 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             draw.line([(inner_x, row_y + row_h - 1), (inner_x + inner_w, row_y + row_h - 1)],
                       fill=(255, 255, 255, 22), width=1)
 
+            # HTML table cells have subtle vertical borders; adding them keeps
+            # the batting columns visually aligned with the browser mockup.
+            sep_x = inner_x
+            for _label, ratio, _align in cols[:-1]:
+                sep_x += int(inner_w * ratio / total_ratio)
+                draw.line([(sep_x, row_y), (sep_x, row_y + row_h)],
+                          fill=(255, 255, 255, 18), width=1)
+
             dism = b.get("dismissal", "—")
             if status == "not_out":
                 dism = "NOT OUT"
@@ -667,15 +689,13 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 if idx == 0:
                     font_use = f_name
                     color = TEXT_DIM if status == "dnb" else TEXT
-                    ty = row_y + 10
                 elif idx == 1:
-                    font_use = f_dism
+                    font_use = f_dism_notout if status == "not_out" else f_dism
                     color = notout_blue if status == "not_out" else (TEXT_DIM if status == "dnb" else (214, 219, 228))
-                    ty = row_y + 8
                 else:
                     font_use = f_cell
                     color = sr_color if label == "SR" else (TEXT_DIM if status == "dnb" else TEXT)
-                    ty = row_y + 8
+                ty = text_vcenter_y(row_y, row_y + row_h, font_use)
                 if align == "l":
                     draw.text((cx + 22, ty), str(value), fill=color, font=font_use)
                 else:
@@ -686,31 +706,55 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
 
         bottom_y = table_y + table_h + 18
         gap = 16
-        stat_w = int((card_w - gap * 3) / 4)
         stat_h = 138
+        # Match the HTML mockup's 1fr 1fr 1fr 1.35fr bottom grid so the
+        # innings score tile has enough room for large totals instead of every
+        # tile being squeezed into equal widths.
+        unit_w = (card_w - gap * 3) / 4.35
+        stat_widths = [int(unit_w), int(unit_w), int(unit_w)]
+        stat_widths.append(card_w - gap * 3 - sum(stat_widths))
         legal_balls = _overs_to_balls(overs_str)
         run_rate = (total_runs * 6 / legal_balls) if legal_balls else 0
         stats = [
-            ("⏱", "SCORING PACE", f"{run_rate:.1f}", "RUN RATE", "runs per over", out_red),
-            ("✦", "ADDITIONAL RUNS", str(extras_dict.get("total", 0)), "EXTRAS", "wides, no-balls, byes", gold),
-            ("◎", "PROGRESS", str(overs_str), "OVERS", "innings completed", notout_blue),
-            ("🏏", "INNINGS SCORE", f"{total_runs}/{total_wickets}", "TOTAL", f"after {overs_str} overs", accent),
+            ("⏱", "SCORING PACE", f"{run_rate:.1f}", "RUN RATE", "runs per over", out_red, False),
+            ("✦", "ADDITIONAL RUNS", str(extras_dict.get("total", 0)), "EXTRAS", "wides, no-balls, byes", gold, False),
+            ("◎", "PROGRESS", str(overs_str), "OVERS", "innings completed", notout_blue, False),
+            ("🏏", "INNINGS SCORE", f"{total_runs}/{total_wickets}", "TOTAL", f"after {overs_str} overs", gold, True),
         ]
-        for i, (icon, subtitle, value, label_txt, note, color) in enumerate(stats):
-            sx = card_x + i * (stat_w + gap)
+        sx = card_x
+        for i, (icon, subtitle, value, label_txt, note, color, is_total) in enumerate(stats):
             sy = bottom_y
-            draw.rounded_rectangle([sx, sy, sx + stat_w, sy + stat_h], radius=24,
-                                   fill=(10, 14, 20, 222), outline=(255, 255, 255, 42), width=1)
-            draw.rectangle([sx + 1, sy, sx + stat_w - 1, sy + 4], fill=color)
-            draw.ellipse([sx + 24, sy + 24, sx + 78, sy + 78], outline=color, width=2)
-            icon_font = _font(27, bold=True)
-            draw.text((sx + 51 - _tw(draw, icon, icon_font) / 2, sy + 35), icon, fill=color, font=icon_font)
-            draw.text((sx + 94, sy + 25), subtitle, fill=(158, 168, 184), font=f_stat_sub)
-            value_font = _font(88 if i == 3 else 68, family="display")
-            value_color = gold if i == 3 else TEXT
-            draw.text((sx + 94, sy + 43), str(value), fill=value_color, font=value_font)
+            sw = stat_widths[i]
+            tile_fill = (10, 14, 20, 222)
+            tile_outline = (255, 255, 255, 42)
+            if is_total:
+                tile_fill = (28, 24, 16, 226)
+                tile_outline = (255, 215, 110, 72)
+            draw.rounded_rectangle([sx, sy, sx + sw, sy + stat_h], radius=24,
+                                   fill=tile_fill, outline=tile_outline, width=1)
+            if is_total:
+                _draw_horizontal_gradient(draw, sx + 1, sy, sw - 1, 4, gold, (255, 239, 176))
+            else:
+                draw.rectangle([sx + 1, sy, sx + sw - 1, sy + 4], fill=color)
+
+            icon_size = 58 if is_total else 54
+            icon_x = sx + 24
+            icon_y = sy + 24
+            draw.ellipse([icon_x, icon_y, icon_x + icon_size, icon_y + icon_size], outline=color, width=2)
+            icon_font = _font(30 if is_total else 27, bold=True)
+            draw.text((icon_x + icon_size / 2 - _tw(draw, icon, icon_font) / 2, icon_y + 11),
+                      icon, fill=color, font=icon_font)
+            draw.text((sx + 94, sy + 31), subtitle, fill=(158, 168, 184), font=f_stat_sub)
+
+            value_font = _font(88 if is_total else 68, family="display")
+            value_color = gold if is_total else TEXT
+            # In the HTML, the large stat value sits below the icon/title row
+            # and starts from the card padding, not beside the icon.
+            value_y = sy + (61 if is_total else 60)
+            draw.text((sx + 24, value_y), str(value), fill=value_color, font=value_font)
             draw.text((sx + 24, sy + 97), label_txt, fill=(221, 227, 238), font=f_stat_label)
             draw.text((sx + 24, sy + 122), note, fill=(144, 160, 182), font=f_stat_note)
+            sx += sw + gap
 
         if target is not None and not is_first_innings:
             outcome_txt = ""
