@@ -78,16 +78,19 @@
       {% for card_type, title in [('batting', '🏏 Batting Text'), ('bowling', '🎳 Bowling Text')] %}
       <div style="border:1px solid var(--border); border-radius:10px; overflow:hidden;">
         <div style="padding:.75rem 1rem; background:rgba(255,255,255,.04); font-weight:800;">{{ title }}</div>
-        <div style="display:grid; grid-template-columns: 1.35fr .9fr .65fr .65fr .65fr; gap:.5rem; padding:.75rem; color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em;">
-          <div>Text</div><div>Font</div><div>Size</div><div>X</div><div>Y</div>
+        <div style="display:grid; grid-template-columns: 1.15fr 1.1fr .85fr .55fr .55fr .55fr; gap:.5rem; padding:.75rem; color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em;">
+          <div>Object</div><div>Text Value</div><div>Font</div><div>Size</div><div>X</div><div>Y</div>
         </div>
         {% set fields = text_settings[card_type] %}
-        {% for key, field_label in [('team','Team names'),('tag', card_type|capitalize ~ ' tag'),('venue','Venue / match text'),('table_header','Table headers'),('table_body','Table rows'),('fow_title','FoW title'),('fow_body','FoW cells'),('stat_label','Stat labels'),('stat_value','Stat values'),('target','Target line')] %}
+        {% for field in text_fields[card_type] %}
+          {% set key = field[0] %}
+          {% set field_label = field[1] %}
           {% if fields.get(key) %}
           {% set item = fields[key] %}
           <input type="hidden" name="{{ card_type }}_field_keys" value="{{ key }}">
-          <div class="scorecard-text-row" style="display:grid; grid-template-columns: 1.35fr .9fr .65fr .65fr .65fr; gap:.5rem; align-items:center; padding:.55rem .75rem; border-top:1px solid var(--border);">
+          <div class="scorecard-text-row" style="display:grid; grid-template-columns: 1.15fr 1.1fr .85fr .55fr .55fr .55fr; gap:.5rem; align-items:center; padding:.55rem .75rem; border-top:1px solid var(--border);">
             <div style="font-weight:700;">{{ field_label }}</div>
+            <input type="text" name="{{ card_type }}_{{ key }}_text" value="{{ item.text }}" maxlength="80" data-preview-control style="width:100%;" placeholder="Live data">
             <select name="{{ card_type }}_{{ key }}_font" data-preview-control style="width:100%;">
               <option value="body" {{ 'selected' if item.font == 'body' else '' }}>Bricolage</option>
               <option value="display" {{ 'selected' if item.font == 'display' else '' }}>Bebas</option>
