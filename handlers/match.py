@@ -346,26 +346,17 @@ async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
         finally:
             session.close()
 
-        # Custom image override — admin uploaded a custom card?
-        custom_card_bytes = None
-        try:
-            from services.player_image_service import get_custom_image_bytes
-            custom_card_bytes = get_custom_image_bytes(player_dict["player_id"])
-        except Exception:
-            pass
-
-        if custom_card_bytes:
-            card_bytes = custom_card_bytes
-        else:
-            card_bytes = generate_batsman_card(
-                player_dict["name"],
-                player_dict["rating"],
-                player_dict["bat_rating"],
-                stats,
-                bat_hand=player_dict.get("bat_hand", "Right"),
-                bowl_hand=player_dict.get("bowl_hand", "Right"),
-                bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
-            )
+        # In-match arrivals always use the CMU stats-card renderer; regular
+        # player-card custom images still apply to /claim, /buypl, /playerinfo.
+        card_bytes = generate_batsman_card(
+            player_dict["name"],
+            player_dict["rating"],
+            player_dict["bat_rating"],
+            stats,
+            bat_hand=player_dict.get("bat_hand", "Right"),
+            bowl_hand=player_dict.get("bowl_hand", "Right"),
+            bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
+        )
 
         # Compute form for the caption
         form_caption = ""
@@ -430,25 +421,17 @@ async def _send_bowler_card(ctx, chat_id, player_dict, owner_user_id):
         finally:
             session.close()
 
-        custom_card_bytes = None
-        try:
-            from services.player_image_service import get_custom_image_bytes
-            custom_card_bytes = get_custom_image_bytes(player_dict["player_id"])
-        except Exception:
-            pass
-
-        if custom_card_bytes:
-            card_bytes = custom_card_bytes
-        else:
-            card_bytes = generate_bowler_card(
-                player_dict["name"],
-                player_dict["rating"],
-                player_dict["bowl_rating"],
-                stats,
-                bat_hand=player_dict.get("bat_hand", "Right"),
-                bowl_hand=player_dict.get("bowl_hand", "Right"),
-                bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
-            )
+        # In-match arrivals always use the CMU stats-card renderer; regular
+        # player-card custom images still apply to /claim, /buypl, /playerinfo.
+        card_bytes = generate_bowler_card(
+            player_dict["name"],
+            player_dict["rating"],
+            player_dict["bowl_rating"],
+            stats,
+            bat_hand=player_dict.get("bat_hand", "Right"),
+            bowl_hand=player_dict.get("bowl_hand", "Right"),
+            bowl_style=player_dict.get("bowl_style", "Medium Pacer"),
+        )
 
         # Compute form for the caption
         form_caption = ""

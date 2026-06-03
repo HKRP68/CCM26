@@ -91,6 +91,43 @@
     {{ number_input('bowl_style_x', 'Bowling Style X') }}{{ number_input('bowl_style_y', 'Bowling Style Y') }}
     {{ number_input('bowl_style_font_size', 'Bowling Style Font Size') }}{{ number_input('bowl_style_letter_gap', 'Bowling Style Letter Gap') }}{{ number_input('bowl_style_max_width', 'Bowling Style Max Width') }}
   </div>
+  {% macro stats_number_input(name, label) -%}
+  <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="number" name="stats_{{ name }}" value="{{ stats_settings[name] }}" style="width:100%;"></div>
+  {%- endmacro %}
+  {% macro stats_text_input(name, label) -%}
+  <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="text" name="stats_{{ name }}" value="{{ stats_settings[name] }}" style="width:100%;"></div>
+  {%- endmacro %}
+  <h3 style="margin:1rem 0 .65rem;font-size:1rem;">📊 In-match batting & bowling stats cards</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin-top:0;line-height:1.5;">These CMU S1 cards are sent automatically when openers/new batsmen come to the crease and when a new bowler comes in. The renderer uses <code>assets/fonts/BricolageGrotesque-Regular.ttf</code> for labels/text and <code>assets/fonts/RussoOne-Regular.ttf</code> for names/numbers. Saved values are included in the Telegram storage-channel state.</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem;margin-bottom:1rem;">
+    {{ stats_text_input('title_batting', 'Batting Title') }}{{ stats_text_input('title_bowling', 'Bowling Title') }}
+    {{ stats_text_input('badge_batting', 'Batting Badge') }}{{ stats_text_input('badge_bowling', 'Bowling Badge') }}
+    {{ stats_text_input('ovr_label', 'OVR Label') }}{{ stats_text_input('bat_rating_label', 'Bat Rating Label') }}{{ stats_text_input('bowl_rating_label', 'Bowl Rating Label') }}
+    {{ stats_text_input('bat_meta_suffix', 'Bat-Hand Meta Suffix') }}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem;">
+    {{ stats_number_input('name_font_size', 'Name Font Size') }}{{ stats_number_input('rating_label_font_size', 'Rating Label Size') }}{{ stats_number_input('rating_num_font_size', 'Rating Number Size') }}
+    {{ stats_number_input('badge_font_size', 'Badge Font Size') }}{{ stats_number_input('meta_font_size', 'Meta Font Size') }}{{ stats_number_input('title_font_size', 'Title Font Size') }}
+    {{ stats_number_input('stat_label_font_size', 'Stat Label Size') }}{{ stats_number_input('stat_value_font_size', 'Stat Value Size') }}{{ stats_number_input('stat_value_second_font_size', '2nd Row Value Size') }}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem;">
+    <div style="border:1px solid var(--border);border-radius:9px;padding:.85rem;background:var(--input-bg);">
+      <strong>🏏 Batting stat labels</strong>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(90px,1fr));gap:.55rem;margin-top:.7rem;">
+        {% for key in ['inns','runs','hs','avg','sr','hundreds','fifties','fours','sixes','ducks'] %}
+        <div><label style="display:block;color:var(--muted);font-size:.72rem;margin-bottom:.15rem;">{{ key|replace('_',' ')|title }}</label><input type="text" name="stats_batting_labels_{{ key }}" value="{{ stats_settings.batting_labels[key] }}" style="width:100%;"></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div style="border:1px solid var(--border);border-radius:9px;padding:.85rem;background:var(--input-bg);">
+      <strong>🎳 Bowling stat labels</strong>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(90px,1fr));gap:.55rem;margin-top:.7rem;">
+        {% for key in ['inns','wickets','bbf','avg','econ','sr','hat_tricks','five_fers','three_fers'] %}
+        <div><label style="display:block;color:var(--muted);font-size:.72rem;margin-bottom:.15rem;">{{ key|replace('_',' ')|title }}</label><input type="text" name="stats_bowling_labels_{{ key }}" value="{{ stats_settings.bowling_labels[key] }}" style="width:100%;"></div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
   <button type="submit" class="btn btn-primary">💾 Save card generator settings</button>
 </form>
 
