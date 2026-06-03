@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cricket Scorecard Graphic</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Bricolage+Grotesque:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at top left, rgba(255, 40, 40, 0.28), transparent 26%),
+        radial-gradient(circle at top right, rgba(0, 145, 255, 0.26), transparent 28%),
+        linear-gradient(135deg, #020407, #07111d 45%, #030406);
+      font-family: "Bricolage Grotesque", sans-serif;
+      color: #fff;
+    }
+
+    .scorecard {
+      width: 1600px;
+      min-height: 900px;
+      padding: 34px;
+      border-radius: 30px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255, 35, 45, 0.13), transparent 40%, transparent 60%, rgba(0, 135, 255, 0.13)),
+        rgba(7, 13, 20, 0.80);
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow:
+        0 0 50px rgba(0,0,0,0.75),
+        inset 0 0 35px rgba(255,255,255,0.06);
+    }
+
+    .scorecard::before {
+      content: "";
+      position: absolute;
+      inset: 10px;
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.10);
+      pointer-events: none;
+    }
+
+    .top {
+      height: 150px;
+      border-radius: 24px;
+      display: grid;
+      grid-template-columns: 1fr 230px 1fr;
+      align-items: center;
+      padding: 0 40px;
+      background:
+        linear-gradient(90deg, rgba(255,0,35,0.18), rgba(255,255,255,0.04), rgba(0,140,255,0.18)),
+        rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow:
+        inset 0 0 22px rgba(255,255,255,0.07),
+        0 0 24px rgba(0,0,0,0.45);
+      gap: 12px;
+    }
+
+    .team-side {
+      display: flex;
+      align-items: center;
+      min-height: 110px;
+    }
+
+    .team-side.left {
+      justify-content: flex-start;
+    }
+
+    .team-side.right {
+      justify-content: flex-end;
+    }
+
+    .team-box {
+      padding: 18px 34px;
+      border-radius: 22px;
+      position: relative;
+      min-width: 420px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .team-box.active-batting {
+      background:
+        linear-gradient(180deg, rgba(47, 208, 111, 0.24), rgba(18, 110, 60, 0.18)),
+        rgba(255,255,255,0.04);
+      border: 1px solid rgba(80, 255, 155, 0.40);
+      box-shadow:
+        0 0 22px rgba(58, 255, 136, 0.18),
+        inset 0 0 24px rgba(65, 255, 148, 0.10);
+    }
+
+    .batting-tag {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #36db78, #1aa857);
+      color: #07140d;
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 2px;
+      box-shadow: 0 4px 14px rgba(54, 219, 120, 0.35);
+    }
+
+    .team {
+      font-family: "Bebas Neue", sans-serif;
+      font-size: 66px;
+      letter-spacing: 3px;
+      line-height: 1;
+      color: #eef3fb;
+      text-shadow: 0 4px 0 rgba(0,0,0,0.38);
+      white-space: nowrap;
+    }
+
+    .logo-wrap {
+      width: 190px;
+      height: 125px;
+      display: grid;
+      place-items: center;
+      margin: auto;
+    }
+
+    .logo-wrap img {
+      max-width: 180px;
+      max-height: 120px;
+      object-fit: contain;
+      filter: drop-shadow(0 0 16px rgba(255,255,255,0.33));
+    }
+
+    .venue {
+      height: 48px;
+      margin-top: 10px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.055);
+      border: 1px solid rgba(255,255,255,0.14);
+      font-size: 23px;
+      letter-spacing: 16px;
+      font-weight: 800;
+      color: #d9dee7;
+      text-shadow: 0 0 10px rgba(255,255,255,0.25);
+    }
+
+    .table-box {
+      margin-top: 12px;
+      border-radius: 24px;
+      padding: 12px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03)),
+        rgba(8, 16, 25, 0.72);
+      backdrop-filter: blur(15px);
+      border: 1px solid rgba(255,255,255,0.20);
+      box-shadow:
+        inset 0 0 24px rgba(255,255,255,0.06),
+        0 18px 28px rgba(0,0,0,0.45);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      border-radius: 18px;
+      overflow: hidden;
+    }
+
+    th {
+      height: 44px;
+      padding: 0 22px;
+      background: rgba(255,255,255,0.05);
+      border-bottom: 1px solid rgba(255,255,255,0.16);
+      font-size: 22px;
+      color: #ffc75d;
+      text-align: left;
+      letter-spacing: 1.4px;
+      font-style: italic;
+    }
+
+    td {
+      height: 45px;
+      padding: 0 22px;
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      border-right: 1px solid rgba(255,255,255,0.08);
+      color: #f1f4fb;
+      font-size: 23px;
+      font-weight: 800;
+    }
+
+    th:nth-child(3),
+    th:nth-child(4),
+    th:nth-child(5),
+    th:nth-child(6),
+    th:nth-child(7),
+    td:nth-child(3),
+    td:nth-child(4),
+    td:nth-child(5),
+    td:nth-child(6),
+    td:nth-child(7) {
+      text-align: center;
+    }
+
+    .dismissal {
+      color: #d6dbe4;
+      font-size: 20px;
+      letter-spacing: 1px;
+    }
+
+    .out-red {
+      background: linear-gradient(90deg, rgba(255,35,45,0.25), rgba(255,35,45,0.03));
+      box-shadow: inset 4px 0 0 rgba(255,70,80,0.95);
+    }
+
+    .not-out-blue {
+      background: linear-gradient(90deg, rgba(0,140,255,0.26), rgba(0,140,255,0.04));
+      box-shadow: inset 4px 0 0 rgba(0,170,255,0.95);
+    }
+
+    .notout {
+      color: #27b8ff;
+      font-style: italic;
+    }
+
+    .sr-red {
+      color: #ff6c6c;
+    }
+
+    .sr-blue {
+      color: #27b8ff;
+    }
+
+    .muted {
+      color: #bcc3cd;
+    }
+
+    .bottom {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1.35fr;
+      gap: 16px;
+    }
+
+    .stat {
+      min-height: 138px;
+      border-radius: 24px;
+      padding: 18px 24px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04)),
+        rgba(5, 13, 22, 0.80);
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow:
+        inset 0 0 24px rgba(255,255,255,0.06),
+        0 14px 24px rgba(0,0,0,0.45);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .stat.red::before,
+    .stat.gold::before,
+    .stat.blue::before,
+    .stat.total::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 4px;
+    }
+
+    .stat.red::before { background: linear-gradient(90deg, #ff5252, transparent); }
+    .stat.gold::before { background: linear-gradient(90deg, #ffd36d, transparent); }
+    .stat.blue::before { background: linear-gradient(90deg, #48b8ff, transparent); }
+    .stat.total::before { background: linear-gradient(90deg, #ffd36d, #ffefb0); }
+
+    .stat-top {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 10px;
+    }
+
+    .icon {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 28px;
+      font-weight: 700;
+      border: 2px solid currentColor;
+      flex-shrink: 0;
+    }
+
+    .stat-subtitle {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      color: #9ea8b8;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      font-family: "Bebas Neue", sans-serif;
+      font-size: 68px;
+      line-height: 0.9;
+      letter-spacing: 2px;
+      text-shadow: 0 4px 0 rgba(0,0,0,0.38);
+      color: #f5f8ff;
+    }
+
+    .stat-label {
+      margin-top: 6px;
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: 4px;
+      color: #dde3ee;
+    }
+
+    .stat-note {
+      margin-top: 4px;
+      font-size: 14px;
+      letter-spacing: 1px;
+      color: #90a0b6;
+    }
+
+    .red .icon { color: #ff6666; }
+    .gold .icon { color: #ffd36d; }
+    .blue .icon { color: #4cbcff; }
+
+    .total {
+      background:
+        linear-gradient(180deg, rgba(255,215,110,0.16), rgba(255,255,255,0.04)),
+        rgba(10, 14, 20, 0.86);
+      border: 1px solid rgba(255,215,110,0.28);
+      box-shadow:
+        inset 0 0 34px rgba(255,215,110,0.10),
+        0 18px 30px rgba(0,0,0,0.45),
+        0 0 26px rgba(255,196,69,0.10);
+      justify-content: center;
+    }
+
+    .total .stat-top {
+      margin-bottom: 4px;
+    }
+
+    .total .icon {
+      color: #ffd36d;
+      width: 58px;
+      height: 58px;
+      font-size: 30px;
+    }
+
+    .total .stat-value {
+      font-size: 88px;
+      color: #ffd36b;
+    }
+
+    .total .stat-label {
+      font-size: 24px;
+      letter-spacing: 5px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="scorecard" id="scorecard">
+
+    <div class="top">
+      <!-- To show batting team, keep active-batting on that team-box -->
+      <div class="team-side left">
+        <div class="team-box active-batting">
+          <div class="batting-tag">BATTING</div>
+          <div class="team">DADDYALEC</div>
+        </div>
+      </div>
+
+      <div class="logo-wrap">
+        <img src="logo.png" alt="Logo">
+      </div>
+
+      <div class="team-side right">
+        <div class="team-box">
+          <div class="team">VERY TOUCHABLES</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="venue">WANDERERS STADIUM</div>
+
+    <div class="table-box">
+      <table>
+        <thead>
+          <tr>
+            <th>BATTER</th>
+            <th>DISMISSAL</th>
+            <th>R</th>
+            <th>B</th>
+            <th>4</th>
+            <th>6</th>
+            <th>SR</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="out-red">
+            <td>SAI SUDHARSAN</td>
+            <td class="dismissal">c MENDIS b DIJKSTRA</td>
+            <td>25</td><td>21</td><td>4</td><td>0</td><td class="sr-red">119.05</td>
+          </tr>
+
+          <tr class="out-red">
+            <td>ROHIT SHARMA</td>
+            <td class="dismissal">b MCGRATH</td>
+            <td>5</td><td>3</td><td>1</td><td>0</td><td class="sr-red">166.67</td>
+          </tr>
+
+          <tr class="out-red">
+            <td>VIRAT KOHLI</td>
+            <td class="dismissal">c IYER b WARNE</td>
+            <td>79</td><td>41</td><td>9</td><td>2</td><td class="sr-red">192.68</td>
+          </tr>
+
+          <tr class="out-red">
+            <td>SHREYAS IYER</td>
+            <td class="dismissal">c &amp; b KERR</td>
+            <td>27</td><td>15</td><td>3</td><td>1</td><td class="sr-red">180.00</td>
+          </tr>
+
+          <tr class="not-out-blue">
+            <td>K SANGAKKARA</td>
+            <td class="dismissal notout">NOT OUT</td>
+            <td>22</td><td>11</td><td>3</td><td>0</td><td class="sr-blue">200.00</td>
+          </tr>
+
+          <tr class="not-out-blue">
+            <td>SACHIN TENDULKAR</td>
+            <td class="dismissal notout">NOT OUT</td>
+            <td>24</td><td>10</td><td>3</td><td>0</td><td class="sr-blue">240.00</td>
+          </tr>
+
+          <tr>
+            <td>BALLA STEYN</td>
+            <td class="dismissal muted">–</td>
+            <td>0</td><td>0</td><td>0</td><td>0</td><td class="muted">0.00</td>
+          </tr>
+
+          <tr>
+            <td>AMELIA KERR</td>
+            <td class="dismissal muted">–</td>
+            <td>0</td><td>0</td><td>0</td><td>0</td><td class="muted">0.00</td>
+          </tr>
+
+          <tr>
+            <td>MITCHELL STARC</td>
+            <td class="dismissal muted">–</td>
+            <td>0</td><td>0</td><td>0</td><td>0</td><td class="muted">0.00</td>
+          </tr>
+
+          <tr>
+            <td>JOSH HAZLEWOOD</td>
+            <td class="dismissal muted">–</td>
+            <td>0</td><td>0</td><td>0</td><td>0</td><td class="muted">0.00</td>
+          </tr>
+
+          <tr>
+            <td>MITCHELL JOHNSON</td>
+            <td class="dismissal muted">–</td>
+            <td>0</td><td>0</td><td>0</td><td>0</td><td class="muted">0.00</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bottom">
+      <div class="stat red">
+        <div class="stat-top">
+          <div class="icon">⏱</div>
+          <div class="stat-subtitle">Scoring Pace</div>
+        </div>
+        <div class="stat-value">11.0</div>
+        <div class="stat-label">RUN RATE</div>
+        <div class="stat-note">runs per over</div>
+      </div>
+
+      <div class="stat gold">
+        <div class="stat-top">
+          <div class="icon">✦</div>
+          <div class="stat-subtitle">Additional Runs</div>
+        </div>
+        <div class="stat-value">3</div>
+        <div class="stat-label">EXTRAS</div>
+        <div class="stat-note">wides, no-balls, byes</div>
+      </div>
+
+      <div class="stat blue">
+        <div class="stat-top">
+          <div class="icon">◎</div>
+          <div class="stat-subtitle">Progress</div>
+        </div>
+        <div class="stat-value">16.5</div>
+        <div class="stat-label">OVERS</div>
+        <div class="stat-note">innings completed</div>
+      </div>
+
+      <div class="stat total">
+        <div class="stat-top">
+          <div class="icon">🏏</div>
+          <div class="stat-subtitle">Innings Score</div>
+        </div>
+        <div class="stat-value">185/4</div>
+        <div class="stat-label">TOTAL</div>
+        <div class="stat-note">after 16.5 overs</div>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>
