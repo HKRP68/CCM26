@@ -301,8 +301,10 @@ def compute_match_result(s):
         return None
 
     if chasing_runs >= target:
-        # Chasing side won — by wickets remaining
-        wickets_left = 10 - chasing_wkts
+        # Chasing side won — by wickets remaining. Challenge mode uses a
+        # two-wicket innings, so respect the state's wicket limit instead of
+        # assuming a ten-wicket match.
+        wickets_left = max(0, int(s.get("wicket_limit", 10)) - chasing_wkts)
         return {"winner_team_id": chasing_team_id, "loser_team_id": defending_team_id,
                 "margin_type": "wickets", "margin_value": wickets_left,
                 "text": f"{chasing_name} won by {wickets_left} wicket"

@@ -97,7 +97,7 @@ def play_match_keyboard(match_id, chat_id=None, is_private=False):
 
 
 async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
-                                   bat_mention, bowl_mention):
+                                   bat_mention, bowl_mention, rules_note=None):
     """Post the 'Match Ready' card with all details + the Play Match button."""
     # A private chat with the bot uses a positive user-id chat_id; groups are
     # negative. Web App buttons only work in private chats, so pick the right
@@ -110,6 +110,7 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
         f"🏟️ <b>Venue:</b> {match.stadium or 'Neutral'}\n"
         f"🌤️ <b>Pitch:</b> {match.pitch_type or 'Balanced'}\n"
         f"⏱️ <b>Overs:</b> {match.overs}\n"
+        + (f"🎯 <b>Rules:</b> {rules_note}\n" if rules_note else "") +
         "━━━━━━━━━━━━━━━━━━━\n"
         f"🏏 <b>Batting first:</b> {bat_team}\n   {bat_mention}\n"
         f"🎳 <b>Bowling first:</b> {bowl_team}\n   {bowl_mention}\n"

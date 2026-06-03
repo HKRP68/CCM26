@@ -30,7 +30,7 @@ SETUP_AWAIT_READY = "AWAIT_READY"
 SETUP_DONE = "DONE"
 
 
-def init_match_for_webapp(session, match_id, xi_overrides=None):
+def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False):
     """Create the initial live state for a Mini-App-played match, right after
     the toss. Openers/bowler are placeholders until the teams pick them.
     Returns (ok, msg). Safe to call once; no-op if state already exists.
@@ -38,6 +38,10 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
     xi_overrides: optional {user_id: [xi player dicts]} for synthetic teams
     (e.g. the AI bot, whose XI isn't in UserRoster). When a user_id is present
     here, that XI is used instead of querying UserRoster.
+
+    challenge_rules: enable /cm rules on the Mini App engine: two wickets per
+    innings while keeping the same setup, scoring, scorecard, and stat
+    persistence paths used by /wpm.
     """
     from services.match_engine import create_match_state
     from models import UserRoster, Player
@@ -107,6 +111,10 @@ def init_match_for_webapp(session, match_id, xi_overrides=None):
     s["batting_order"] = []
     s["current_bowler"] = None
     s["played_via"] = "webapp"
+    if challenge_rules:
+        s["is_challenge"] = True
+        s["wicket_limit"] = 2
+        s["match_label"] = "Challenge Mode"
 
     try:
         from handlers.match import BOT_TG_ID_
