@@ -3,7 +3,7 @@
 Layout matches the user-uploaded HTML mockups (Bat1st, bat2nd, Bowl1st,
 BOWL-2-SCORECARD) with these enhancements:
 
-  - Bot logo in the header (instead of HTML's "BOT LOGO" placeholder)
+  - Bot logo centered at the top of the header (instead of HTML's "BOT LOGO" placeholder)
   - Match number tracked and displayed in header
   - Per-batsman row color:
       not_out → subtle green tint (still readable)
@@ -168,16 +168,16 @@ def _draw_header(draw, img, *, x, y, w, accent, label, match_title, match_no,
                  bowling=False):
     """Shared header for batting + bowling scorecards.
 
-    Layout (top to bottom, ~140px tall):
+    Layout (top to bottom, ~190px tall):
       ┌─ Brand strip (small) ──────────────────────────────────────┐
-      │ CRICMASTERULTRA                              MATCH #42      │
+      │ CRICMASTERULTRA       [centered bot logo]     MATCH #42     │
       ├─ Main row ─────────────────────────────────────────────────┤
-      │ [logo]  [BAT 1 SCORECARD]                  230/10           │
-      │         TEAM A vs TEAM B                  49.1 OVERS        │
+      │ [BAT 1 SCORECARD]                         230/10            │
+      │ TEAM A vs TEAM B                         49.1 OVERS         │
       └────────────────────────────────────────────────────────────┘
                   ▲ accent-colored bottom border
     """
-    H = 170
+    H = 190
     # Gradient bg
     _draw_horizontal_gradient(draw, x, y, w, H, HEADER_BG, CARD_BG)
     # Bottom accent border
@@ -223,20 +223,22 @@ def _draw_header(draw, img, *, x, y, w, accent, label, match_title, match_no,
         draw.text((x + w - strip_pad_x - mt_w, strip_y + 32),
                   mt_text, fill=MUTED, font=f_match_title)
 
-    # ── Main row: logo + badge + title (left), score (right) ──
-    main_y = y + 56
-
-    # Logo (left) — bumped up to match larger fonts
-    logo_size = 100
-    logo_x = x + strip_pad_x
-    logo_y = main_y
+    # Centered bot logo at the top of the scorecard header. The website
+    # preview route uses this same renderer, so keep the logo placement here
+    # rather than in the Mini App scorecard markup.
+    logo_size = 84
+    logo_x = x + (w - logo_size) // 2
+    logo_y = y + 10
     _draw_logo_block(img, draw, logo_x, logo_y, size=logo_size)
+
+    # ── Main row: badge + title (left), score (right) ──
+    main_y = y + 82
 
     # Badge with "BAT 1 SCORECARD" label, color-filled, sized to font
     badge_text = label
     badge_w = _tw(draw, badge_text, f_badge) + 28
     badge_h = 34
-    badge_x = logo_x + logo_size + 22
+    badge_x = x + strip_pad_x
     badge_y = main_y + 4
     draw.rounded_rectangle(
         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
@@ -448,7 +450,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
 
         W = 1400
         row_h = 44
-        header_h = 170
+        header_h = 190
         section_h = 42
         table_header_h = 38
         summary_h = 68
@@ -659,7 +661,7 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
 
         W = 1400
         row_h = 44
-        header_h = 170
+        header_h = 190
         section_h = 42
         table_header_h = 38
         summary_h = 68
