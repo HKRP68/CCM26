@@ -14,7 +14,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20260601-9">
+  <link rel="stylesheet" href="style.css?v=20260603-scorecard">
 </head>
 <body>
   <div id="app-container">
@@ -199,7 +199,28 @@
 
       <!-- SCORECARD PANEL -->
       <div id="panel-scorecard" class="tab-panel">
-        <div class="scorecard-wrapper">
+        <div class="scorecard-wrapper scorecard-main-wrapper">
+          <!-- SCORECARD HERO -->
+          <div class="scorecard-hero" id="scorecard-hero">
+            <div class="scorecard-hero-team batting-edge">
+              <span class="scorecard-hero-label">Batting</span>
+              <span class="scorecard-hero-name" id="scorecard-hero-batting-team">HOST XI</span>
+            </div>
+            <div class="scorecard-hero-score-block">
+              <span class="scorecard-hero-live">LIVE SCORE</span>
+              <div class="scorecard-hero-score" id="scorecard-hero-total">0/0</div>
+              <div class="scorecard-hero-overs"><span id="scorecard-hero-overs">0.0</span> OVERS</div>
+            </div>
+            <div class="scorecard-hero-team bowling-edge">
+              <span class="scorecard-hero-label">Bowling</span>
+              <span class="scorecard-hero-name" id="scorecard-hero-bowling-team">GUEST XI</span>
+            </div>
+            <div class="scorecard-hero-chase hidden" id="scorecard-hero-chase">
+              <span id="scorecard-hero-target">Target 0</span>
+              <span id="scorecard-hero-required-rate">RRR 0.0</span>
+            </div>
+          </div>
+
           <!-- TEAM TOGGLE TABS -->
           <div class="scorecard-team-tabs">
             <button class="sc-tab-btn active" id="scorecard-tab-host">HOST XI 0/0</button>
@@ -224,6 +245,25 @@
 
           <div class="extras-row" id="scorecard-extras">Extras 0 (w 0, lb 0, b 0, nb 0, p 0)</div>
           <div class="total-row" id="scorecard-total">TOTAL 0/0 (0.0 Ov)</div>
+
+          <div class="scorecard-summary-strip">
+            <div class="scorecard-summary-item">
+              <span class="scorecard-summary-label">Run Rate</span>
+              <span class="scorecard-summary-value" id="scorecard-summary-run-rate">0.0</span>
+            </div>
+            <div class="scorecard-summary-item">
+              <span class="scorecard-summary-label">Extras</span>
+              <span class="scorecard-summary-value" id="scorecard-summary-extras">0</span>
+            </div>
+            <div class="scorecard-summary-item">
+              <span class="scorecard-summary-label">Overs</span>
+              <span class="scorecard-summary-value" id="scorecard-summary-overs">0.0</span>
+            </div>
+            <div class="scorecard-summary-item total-summary">
+              <span class="scorecard-summary-label">Total</span>
+              <span class="scorecard-summary-value" id="scorecard-summary-total">0/0</span>
+            </div>
+          </div>
 
           <div class="yet-to-bat-section">
             <span class="ytb-label">YET TO BAT:</span>
