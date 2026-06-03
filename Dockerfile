@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install fonts for card generation
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends fonts-dejavu-core && \
+    apt-get install -y --no-install-recommends fonts-dejavu-core fonts-bebas-neue && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
