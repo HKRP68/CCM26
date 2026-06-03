@@ -258,7 +258,7 @@ def default_scorecard_text_settings():
             default_text = field[2] if len(field) > 2 else ""
             summary_display = {
                 "header_title", "match_no", "stadium", "innings_team",
-                "innings_meta", "innings_score", "result", "potm_badge",
+                "innings_meta", "innings_score", "row_number", "result", "potm_badge",
                 "potm_name", "potm_label", "potm_value",
             }
             display_keys = {
