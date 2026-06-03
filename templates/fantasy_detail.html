@@ -18,12 +18,10 @@
     {% endif %}
   </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
-    {% if league.status == 'open' %}
-    <form method="POST" action="{{ url_for('admin_fantasy_lock', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Lock this league and broadcast to all groups?');">
+    <form method="POST" action="{{ url_for('admin_fantasy_broadcast', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Broadcast this fantasy league with image to all groups?');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-sm" style="background:var(--accent);color:#000;">🔒 Lock & Broadcast</button>
+      <button type="submit" class="btn btn-sm" style="background:var(--accent);color:#000;">📣 Broadcast with Image</button>
     </form>
-    {% endif %}
     {% if league.status in ['locked', 'open'] %}
     <form method="POST" action="{{ url_for('admin_fantasy_score', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Recalculate all scores and finalize ranks?');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -347,45 +347,54 @@ def player_template_variant(player):
 def template_image_path(session=None, variant="base"):
     """Return the uploaded image for exactly one rarity template, if present."""
     variant = normalise_template_variant(variant)
-    if variant == "base":
-        from services.config_service import get_config
-        return template_asset_path(get_config(session).get("card_template_image_path"))
+    stem = "template" if variant == "base" else f"template_{variant}"
     for ext in ALLOWED_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}")
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             return path
+    if variant == "base":
+        # Legacy fallback for deployments that still have the old DB path.
+        from services.config_service import get_config
+        return template_asset_path(get_config(session).get("card_template_image_path"))
     return None
 
 
 def list_template_variants(session=None):
     """Describe each selectable rarity tab and whether it has its own upload."""
-    from services.config_service import get_config
-    base_path = template_asset_path(get_config(session).get("card_template_image_path"))
     result = {}
     for variant in CARD_TEMPLATE_VARIANTS:
-        own_path = base_path if variant == "base" else next((
-            os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}")
-            for ext in ALLOWED_EXT
-            if os.path.isfile(os.path.join(TEMPLATES_ROOT, f"template_{variant}.{ext}"))
-        ), None)
-        result[variant] = {"uploaded": bool(own_path)}
+        result[variant] = {"uploaded": bool(template_image_path(session, variant))}
     return result
 
 
 def get_template_config(session=None, variant="base"):
-    """Return the active template-card configuration as a dict.
-
-    Includes the resolved template/font paths and safe v7.1 layout settings.
-    """
+    """Return the active template-card configuration without hitting DB first."""
     from services.config_service import get_config
-    cfg = get_config(session)
+    try:
+        from services.card_template_storage_service import get_state
+        state = get_state() or {}
+    except Exception:
+        logger.exception("card-template storage state unavailable")
+        state = {}
+    cfg = {} if state else get_config(session)
+    style = state.get("card_style") or cfg.get("card_style") or "tier"
+    show_portrait = state.get("show_portrait", cfg.get("card_template_show_portrait", True))
+    settings = state.get("settings", cfg.get("card_template_settings"))
+    font_path = None
+    for ext in ALLOWED_FONT_EXT:
+        candidate = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+        if os.path.isfile(candidate):
+            font_path = candidate
+            break
+    if not font_path:
+        font_path = template_asset_path(cfg.get("card_template_font_path"))
     return {
-        "style": (cfg.get("card_style") or "tier"),
+        "style": str(style or "tier").lower(),
         "variant": normalise_template_variant(variant),
         "image_path": template_image_path(session, variant),
         "area_code": cfg.get("card_template_area_code") or "",
         "regions": parse_area_code(cfg.get("card_template_area_code") or ""),
-        "show_portrait": bool(cfg.get("card_template_show_portrait", True)),
-        "font_path": template_asset_path(cfg.get("card_template_font_path")),
-        "settings": normalise_template_settings(cfg.get("card_template_settings")),
+        "show_portrait": bool(show_portrait),
+        "font_path": font_path,
+        "settings": normalise_template_settings(settings),
     }

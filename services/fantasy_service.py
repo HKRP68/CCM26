@@ -355,3 +355,64 @@ def get_user_team_info(session, user_id, league_id):
         "locked": entry.locked,
         "squad": squad,
     }
+
+def get_group_chat_ids(session):
+    """Return active group/supergroup chat IDs for fantasy broadcasts."""
+    from models import BotChat
+    chats = (session.query(BotChat)
+             .filter(BotChat.is_active == True,
+                     BotChat.chat_type.in_(["group", "supergroup"]))
+             .all())
+    return [c.chat_id for c in chats]
+
+
+def build_broadcast_message(league):
+    link = fantasy_deep_link(getattr(league, "id", None))
+    return (f"🏏 <b>{league.name}</b> fantasy is live!\n\n"
+            f"Pick your XI from the Fantasy Mini App before squads lock.\n"
+            f"👉 {link}")
+
+
+def generate_broadcast_image(league):
+    """Create a lightweight fantasy broadcast PNG in memory."""
+    import io
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        # Last-resort valid PNG so the broadcast route still sends an image in
+        # minimal environments. Production requirements include Pillow.
+        import struct, zlib
+        w, h = 2, 2
+        raw = b"".join(b"\x00" + bytes([8, 98, 65]) * w for _ in range(h))
+        def chunk(kind, data):
+            return (struct.pack(">I", len(data)) + kind + data +
+                    struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+        return (b"\x89PNG\r\n\x1a\n" +
+                chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
+                chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    w, h = 1280, 720
+    img = Image.new("RGB", (w, h), (8, 18, 28))
+    draw = ImageDraw.Draw(img)
+    for y in range(h):
+        t = y / h
+        color = (int(8 + 8 * t), int(18 + 80 * t), int(28 + 35 * t))
+        draw.line([(0, y), (w, y)], fill=color)
+    draw.rounded_rectangle([70, 70, w - 70, h - 70], radius=36,
+                           outline=(0, 201, 167), width=5)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 76)
+        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+    except Exception:
+        title_font = body_font = small_font = ImageFont.load_default()
+    draw.text((110, 130), "FANTASY CRICKET", fill=(0, 201, 167), font=body_font)
+    name = str(getattr(league, "name", "Fantasy League") or "Fantasy League")[:34]
+    draw.text((110, 220), name, fill=(255, 255, 255), font=title_font)
+    draw.text((110, 360), "Build your XI • Captain • Vice Captain", fill=(232, 245, 241), font=body_font)
+    draw.text((110, 465), "Tap the button/message link to open Fantasy", fill=(190, 210, 210), font=small_font)
+    draw.ellipse([930, 165, 1150, 385], fill=(0, 201, 167), outline=(255, 255, 255), width=4)
+    draw.text((985, 225), "XI", fill=(8, 18, 28), font=title_font)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", quality=95)
+    return buf.getvalue()
