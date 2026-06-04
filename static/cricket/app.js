@@ -25,6 +25,8 @@ let selectedSpeed = 'normal';
 let autoplayActive = false;
 let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
+let eventGifTimer = null;
+let preloadedEventGifIds = new Set();
 let wasMyTurn = false;
 let lastActionableSig = null; // tracks the current actionable turn for auto-expand
 let selectionSubmitInFlight = false;
@@ -396,6 +398,7 @@ function applyMatchState(nextState) {
   if (Number.isFinite(currentRevision) && Number.isFinite(nextRevision) && nextRevision < currentRevision) return;
 
   matchState = nextState;
+  preloadEventGifs(matchState.eventGifs || {});
   pollFailureCount = 0;
 
   if (identitySelectionRequired) {
@@ -406,8 +409,8 @@ function applyMatchState(nextState) {
   if (matchState.commentary && matchState.commentary.length > 0) {
     const latest = matchState.commentary[0];
     if (latest && (latest.type === 'ball' || latest.runs !== undefined)) {
-      const uniqueKey = `${matchState.status}_${latest.over}`;
-      if (lastBallUniqueId && lastBallUniqueId !== uniqueKey) triggerMatchFlashAnimation(latest);
+      const uniqueKey = `${matchState.status}_${matchState.ballSeq ?? latest.over}`;
+      if (lastBallUniqueId && lastBallUniqueId !== uniqueKey) triggerMatchEvent(latest);
       lastBallUniqueId = uniqueKey;
     }
   }
@@ -1980,6 +1983,82 @@ function showError(msg) {
   document.querySelector('.loading-text').innerHTML = `<span style="color:#ef4444;font-weight:600">${msg}</span>`;
   document.querySelector('.cricket-ball-spinner').style.animationPlayState = 'paused';
   document.querySelector('.cricket-ball-spinner').style.borderColor = '#ef4444';
+}
+
+// Inline event GIFs. Falls back to the existing full-screen animation when
+// the administrator has not published an enabled GIF for the event.
+function eventKeyForCommentary(comm) {
+  if (comm.eventKey) return comm.eventKey;
+  if (comm.isWicket) return 'wicket';
+  if (comm.runs === 6) return 'six';
+  if (comm.runs === 4) return 'four';
+  if (comm.runs === 0) return 'dot_ball';
+  const text = String(comm.text || '').toLowerCase();
+  if (text.includes('no ball')) return 'no_ball';
+  if (text.includes('wide')) return 'wide';
+  return null;
+}
+
+function preloadEventGifs(config) {
+  Object.values(config).flat().forEach(item => {
+    if (!item?.url || preloadedEventGifIds.has(item.id)) return;
+    if (item.kind === 'video') {
+      const video = document.createElement('video');
+      video.preload = 'auto';
+      video.src = item.url;
+    } else {
+      const image = new Image();
+      image.src = item.url;
+    }
+    preloadedEventGifIds.add(item.id);
+  });
+}
+
+function triggerMatchEvent(comm) {
+  const key = eventKeyForCommentary(comm);
+  const choices = key ? (matchState?.eventGifs?.[key] || []) : [];
+  if (!choices.length) {
+    triggerMatchFlashAnimation(comm);
+    return;
+  }
+  const totalWeight = choices.reduce((sum, choice) => sum + Math.max(1, Number(choice.weight) || 1), 0);
+  let draw = Math.random() * totalWeight;
+  const item = choices.find(choice => ((draw -= Math.max(1, Number(choice.weight) || 1)) <= 0)) || choices[0];
+  const box = document.getElementById('event-gif-box');
+  const image = document.getElementById('event-gif-image');
+  const video = document.getElementById('event-gif-video');
+  const label = document.getElementById('event-gif-label');
+  if (!box || !image || !video || !item?.url) {
+    triggerMatchFlashAnimation(comm);
+    return;
+  }
+  clearTimeout(eventGifTimer);
+  image.src = '';
+  video.pause();
+  video.removeAttribute('src');
+  image.style.display = item.kind === 'video' ? 'none' : 'block';
+  video.style.display = item.kind === 'video' ? 'block' : 'none';
+  const media = item.kind === 'video' ? video : image;
+  media.onerror = () => {
+    box.classList.add('hidden');
+    media.onerror = null;
+    triggerMatchFlashAnimation(comm);
+  };
+  if (item.kind === 'video') {
+    video.src = item.url;
+    video.play().catch(() => {});
+  } else {
+    image.alt = `${item.label || key} animation`;
+    image.src = item.url;
+  }
+  label.textContent = item.label || key.replaceAll('_', ' ');
+  box.classList.remove('hidden');
+  eventGifTimer = setTimeout(() => {
+    box.classList.add('hidden');
+    image.src = '';
+    video.pause();
+    video.removeAttribute('src');
+  }, Math.max(500, Math.min(15000, Number(item.durationMs) || 3000)));
 }
 
 // Event Flash Animation & Haptic Feedback

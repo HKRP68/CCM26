@@ -415,6 +415,8 @@ def serialize_match_state(session, match, viewer_user):
             "over": f"{cur_overs}.{cur_balls}",
             "runs": lb_runs,
             "isWicket": is_wicket,
+            "eventKey": ({"wicket": "wicket", "wide": "wide", "noball": "no_ball"}.get(lb_type)
+                         or ("dot_ball" if lb_runs == 0 else "four" if lb_runs == 4 else "six" if lb_runs == 6 else None)),
             "text": state.get("last_commentary") or last_ball_raw.get("text") or "",
         }]
 

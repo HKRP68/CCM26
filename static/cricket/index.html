@@ -14,7 +14,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20260601-9">
+  <link rel="stylesheet" href="style.css?v=20260604-12">
 </head>
 <body>
   <div id="app-container">
@@ -136,6 +136,11 @@
         <!-- TARGET DISPLAY FOR INNINGS 2 -->
         <div id="target-display" class="target-bar hidden">
           🎯 Need <span id="target-runs-needed" class="glow-text">0</span> runs from <span id="target-balls-left">0</span> balls
+        </div>
+        <div id="event-gif-box" class="event-gif-box hidden" role="status" aria-live="polite">
+          <img id="event-gif-image" alt="Match event animation">
+          <video id="event-gif-video" muted loop playsinline></video>
+          <div id="event-gif-label" class="event-gif-label"></div>
         </div>
       </div>
 
@@ -442,6 +447,6 @@
 
   </div>
   
-  <script src="app.js?v=20260604-11"></script>
+  <script src="app.js?v=20260604-12"></script>
 </body>
 </html>

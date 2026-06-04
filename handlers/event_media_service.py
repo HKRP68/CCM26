@@ -21,15 +21,18 @@ logger = logging.getLogger(__name__)
 
 # All event keys we know about. Order matters for admin UI grouping.
 EVENT_KEYS = [
-    ("six",        "🔥 Six",          "When a 6 is hit"),
-    ("four",       "🏏 Four",         "When a 4 is hit"),
-    ("wicket",     "🟥 Wicket",       "When a wicket falls"),
-    ("fifty",      "⭐ Fifty",        "Batsman reaches 50 runs"),
-    ("hundred",    "🌟 Hundred",      "Batsman reaches 100 runs"),
-    ("hattrick",   "🎯 Hat-trick",    "Bowler takes 3 wickets in 3 balls"),
-    ("maiden_over","🎯 Maiden Over",  "Bowler bowls a maiden over"),
+    ("dot_ball",   "⚫ Dot Ball",      "When a legal delivery scores no runs"),
+    ("four",       "🏏 Four",          "When a 4 is hit"),
+    ("six",        "🔥 Six",           "When a 6 is hit"),
+    ("wicket",     "🟥 Wicket",        "When a wicket falls"),
+    ("wide",       "↔️ Wide",          "When a wide is bowled"),
+    ("no_ball",    "🚫 No Ball",       "When a no-ball is bowled"),
+    ("fifty",      "⭐ Fifty",          "Batsman reaches 50 runs"),
+    ("century",    "🌟 Century",        "Batsman reaches 100 runs"),
+    # Existing chat-animation events retained for backwards compatibility.
+    ("hattrick",   "🎯 Hat-trick",      "Bowler takes 3 wickets in 3 balls"),
+    ("maiden_over","🎯 Maiden Over",    "Bowler bowls a maiden over"),
 ]
-
 # Cooldown in seconds — same (chat, event) can't fire twice within this window
 COOLDOWN_SECONDS = 8
 
@@ -125,6 +128,70 @@ async def fire_event_media(context, chat_id, event_key):
                 await context.bot.send_animation(chat_id=chat_id, animation=f)
     except Exception:
         logger.exception(f"send_animation failed for event {event_key}")
+
+
+def miniapp_event_gifs(rows):
+    """Serialize enabled EventMedia rows for the browser MiniApp."""
+    result = {}
+    for row in rows:
+        if not row.enabled:
+            continue
+        key = "century" if row.event_key == "hundred" else row.event_key
+        result.setdefault(key, []).append({
+            "id": row.id,
+            "url": f"/api/event-media/{row.id}",
+            "durationMs": max(500, min(15000, int(row.duration_ms or 3000))),
+            "weight": max(1, int(row.weight or 1)),
+            "kind": ("video" if row.source_type == "telegram" or str(row.source).lower().endswith(".mp4") else "image"),
+            "label": row.label or key.replace("_", " ").title(),
+        })
+    return result
+
+
+_miniapp_cache = {"expires": 0, "payload": {}}
+
+
+def get_miniapp_event_gifs(session, ttl_seconds=5):
+    """Return enabled MiniApp GIF settings with a short poll-friendly cache."""
+    now = time.time()
+    if now < _miniapp_cache["expires"]:
+        return _miniapp_cache["payload"]
+    from models import EventMedia
+    payload = miniapp_event_gifs(
+        session.query(EventMedia).filter(EventMedia.enabled == True).all())
+    _miniapp_cache.update(expires=now + ttl_seconds, payload=payload)
+    return payload
+
+
+def invalidate_miniapp_event_gifs():
+    _miniapp_cache.update(expires=0, payload={})
+
+
+def optimize_event_media_upload(file_bytes, filename, max_width=960, max_height=540):
+    """Best-effort resize/optimization for uploaded animated GIFs."""
+    if not (filename or "").lower().endswith(".gif"):
+        return file_bytes
+    try:
+        from io import BytesIO
+        from PIL import Image, ImageSequence
+        image = Image.open(BytesIO(file_bytes))
+        ratio = min(1.0, max_width / image.width, max_height / image.height)
+        frames, durations = [], []
+        for frame in ImageSequence.Iterator(image):
+            rendered = frame.convert("RGBA")
+            if ratio < 1.0:
+                rendered = rendered.resize((max(1, round(image.width * ratio)), max(1, round(image.height * ratio))), Image.Resampling.LANCZOS)
+            frames.append(rendered)
+            durations.append(frame.info.get("duration", image.info.get("duration", 80)))
+        if not frames:
+            return file_bytes
+        output = BytesIO()
+        frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:], duration=durations, loop=image.info.get("loop", 0), optimize=True, disposal=2)
+        optimized = output.getvalue()
+        return optimized if optimized and len(optimized) < len(file_bytes) else file_bytes
+    except Exception:
+        logger.exception("GIF optimization failed; keeping original upload")
+        return file_bytes
 
 
 # ════════════════════════════════════════════════════════════════════

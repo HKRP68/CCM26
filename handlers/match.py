@@ -3081,7 +3081,7 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 if prev_bat_runs < 50 <= cur_bat_runs:
                     await fire_event_media(context, s["chat_id"], "fifty")
                 elif prev_bat_runs < 100 <= cur_bat_runs:
-                    await fire_event_media(context, s["chat_id"], "hundred")
+                    await fire_event_media(context, s["chat_id"], "century")
                 # Maiden over at end-of-over
                 if eoo and is_maiden:
                     await fire_event_media(context, s["chat_id"], "maiden_over")
