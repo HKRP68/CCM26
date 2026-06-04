@@ -6713,73 +6713,81 @@ def _broadcast_match_scorecard(match_id):
 
 
 def _top_performers_for_summary(arena_state):
-    """Small, dependency-light performer summary for the final image card."""
+    """Build the performer payload expected by the shared summary renderer."""
     if not arena_state:
         return None, None, None
 
-    def _stat(stats, rid):
-        if not stats:
-            return {}
-        return stats.get(str(rid)) or stats.get(rid) or {}
-
-    teams = [
-        (arena_state.get("inn1_team") or "Team 1",
-         arena_state.get("inn1_bat_xi") or [],
-         arena_state.get("inn1_bat_stats") or {},
-         arena_state.get("inn1_bowl_xi") or [],
-         arena_state.get("inn1_bowl_stats") or {}),
-        (arena_state.get("bat_team_name") or "Team 2",
-         arena_state.get("bat_xi") or [],
-         arena_state.get("bat_stats") or {},
-         arena_state.get("bowl_xi") or [],
-         arena_state.get("bowl_stats") or {}),
-    ]
     top_scorer = None
     top_wicket = None
-    top_per_team = {}
 
-    for team_name, bat_xi, bat_stats, bowl_xi, bowl_stats in teams:
+    def _batters(xi, stats, team_name):
+        nonlocal top_scorer
         rows = []
-        for p in bat_xi:
-            st = _stat(bat_stats, p.get("roster_id"))
-            row = {
-                "name": p.get("name", "Player"),
-                "runs": st.get("runs", 0),
-                "balls": st.get("balls", 0),
-                "wickets": 0,
-                "impact": st.get("runs", 0),
-            }
-            rows.append(row)
-            if top_scorer is None or row["runs"] > top_scorer.get("runs", 0):
-                top_scorer = row
-        for p in bowl_xi:
-            st = _stat(bowl_stats, p.get("roster_id"))
-            balls = st.get("balls", 0)
-            runs = st.get("runs", 0)
-            wickets = st.get("wickets", 0)
-            econ = (runs / balls * 6) if balls else 0
-            row = {
-                "name": p.get("name", "Player"),
-                "runs": 0,
+        for player in xi or []:
+            row = _arena_stat(stats, player.get("roster_id"))
+            balls = int(row.get("balls", 0) or 0)
+            if balls <= 0:
+                continue
+            batter = {
+                "name": player.get("name", "—"),
+                "rating": player.get("rating", "—"),
+                "team": team_name,
+                "runs": int(row.get("runs", 0) or 0),
                 "balls": balls,
-                "wickets": wickets,
-                "impact": wickets * 25 - runs,
-                "econ": round(econ, 2),
+                "fours": int(row.get("fours", 0) or 0),
+                "sixes": int(row.get("sixes", 0) or 0),
+                "out": bool(row.get("out")),
             }
-            rows.append(row)
-            if (top_wicket is None
-                    or wickets > top_wicket.get("wickets", 0)
-                    or (wickets == top_wicket.get("wickets", 0)
-                        and runs < top_wicket.get("runs_conceded", 10**9))):
-                top_wicket = {
-                    "name": row["name"],
-                    "wickets": wickets,
-                    "runs_conceded": runs,
-                    "overs": f"{balls // 6}.{balls % 6}" if balls % 6 else f"{balls // 6}",
-                    "econ": row["econ"],
-                }
-        top_per_team[team_name] = sorted(rows, key=lambda r: r.get("impact", 0), reverse=True)[:4]
+            rows.append(batter)
+            if top_scorer is None or batter["runs"] > top_scorer["runs"]:
+                top_scorer = batter
+        return sorted(rows, key=lambda item: (-item["runs"], item["balls"]))[:4]
 
+    def _bowlers(xi, stats, team_name):
+        nonlocal top_wicket
+        rows = []
+        for player in xi or []:
+            row = _arena_stat(stats, player.get("roster_id"))
+            balls = int(row.get("balls", 0) or 0)
+            if balls <= 0:
+                continue
+            runs = int(row.get("runs", 0) or 0)
+            wickets = int(row.get("wickets", 0) or 0)
+            bowler = {
+                "name": player.get("name", "—"),
+                "rating": player.get("rating", "—"),
+                "team": team_name,
+                "overs": f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6),
+                "runs": runs,
+                "wickets": wickets,
+                "econ": runs / (balls / 6),
+            }
+            rows.append(bowler)
+            if (top_wicket is None or wickets > top_wicket["wickets"] or
+                    (wickets == top_wicket["wickets"] and runs < top_wicket["runs"])):
+                top_wicket = bowler
+        return sorted(rows, key=lambda item: (-item["wickets"], item["econ"]))[:4]
+
+    inn1_team = arena_state.get("inn1_team") or "Team 1"
+    inn2_team = arena_state.get("bat_team_name") or "Team 2"
+    top_per_team = {
+        "inn1": {
+            "team": inn1_team,
+            "bowl_team": inn2_team,
+            "batters": _batters(arena_state.get("inn1_bat_xi"),
+                                 arena_state.get("inn1_bat_stats"), inn1_team),
+            "bowlers": _bowlers(arena_state.get("inn1_bowl_xi"),
+                                 arena_state.get("inn1_bowl_stats"), inn2_team),
+        },
+        "inn2": {
+            "team": inn2_team,
+            "bowl_team": arena_state.get("bowl_team_name") or inn1_team,
+            "batters": _batters(arena_state.get("bat_xi"),
+                                 arena_state.get("bat_stats"), inn2_team),
+            "bowlers": _bowlers(arena_state.get("bowl_xi"),
+                                 arena_state.get("bowl_stats"), inn1_team),
+        },
+    }
     return top_scorer, top_wicket, top_per_team
 
 
@@ -6788,12 +6796,31 @@ def _build_match_summary_image(match, sc, result_text, arena, pom):
     try:
         from datetime import datetime as _dt
         from services.match_summary_card import generate_match_summary
+        from services.config_service import get_config
         innings = sc.get("innings") or []
         if len(innings) < 2:
             return None
         inn1, inn2 = innings[0], innings[1]
         top_scorer, top_wicket, top_per_team = _top_performers_for_summary(arena)
         pom_name = pom.get("name") if isinstance(pom, dict) else None
+        pom_team = pom.get("team") if isinstance(pom, dict) else None
+        pom_rating = pom.get("rating") if isinstance(pom, dict) else None
+        if pom_name and (not pom_team or pom_rating is None):
+            player_groups = (
+                (arena.get("inn1_bat_xi") or [], arena.get("inn1_team")),
+                (arena.get("inn1_bowl_xi") or [], arena.get("bat_team_name")),
+                (arena.get("bat_xi") or [], arena.get("bat_team_name")),
+                (arena.get("bowl_xi") or [], arena.get("bowl_team_name")),
+            )
+            for players, team_name in player_groups:
+                player = next((p for p in players if p.get("name") == pom_name), None)
+                if player:
+                    pom_team = pom_team or team_name
+                    pom_rating = pom_rating if pom_rating is not None else player.get("rating")
+                    break
+        pom_stats = pom.get("stats") if isinstance(pom, dict) else None
+        if not pom_stats and isinstance(pom, dict):
+            pom_stats = f"{pom.get('runs', 0)} runs • {pom.get('wickets', 0)} wickets"
         return generate_match_summary(
             inn1_team=inn1.get("bat_team", "Team 1"),
             inn1_runs=inn1.get("runs", 0),
@@ -6809,9 +6836,9 @@ def _build_match_summary_image(match, sc, result_text, arena, pom):
                              if " won " in result_text else ""),
             overs_total=match.overs or arena.get("overs") or 0,
             potm_name=pom_name,
-            potm_rating=pom.get("rating") if isinstance(pom, dict) else None,
-            potm_team=pom.get("team") if isinstance(pom, dict) else None,
-            potm_stats=pom.get("stats") if isinstance(pom, dict) else None,
+            potm_rating=pom_rating,
+            potm_team=pom_team,
+            potm_stats=pom_stats,
             potm_impact=pom.get("impact_points") if isinstance(pom, dict) else None,
             top_scorer=top_scorer,
             top_wicket=top_wicket,
@@ -6819,84 +6846,240 @@ def _build_match_summary_image(match, sc, result_text, arena, pom):
             stadium=match.stadium or arena.get("stadium"),
             match_date=getattr(match, "completed_at", None) or _dt.utcnow(),
             is_spectator=bool(arena.get("is_spectator")),
+            match_no=match.id,
+            text_settings=get_config().get("scorecard_text_settings"),
         )
     except Exception:
         logger.exception("wpm match summary image render failed")
         return None
 
 
+def _arena_stat(stats, roster_id):
+    """Read an Arena stat row regardless of JSON/stringified roster keys."""
+    stats = stats or {}
+    return stats.get(roster_id) or stats.get(str(roster_id)) or {}
+
+
+def _arena_overs(state):
+    """Format the current (second) innings overs like the Telegram match flow."""
+    return f"{max(0, int(state.get('current_over', 1) or 1) - 1)}.{int(state.get('current_ball', 0) or 0)}"
+
+
+def _build_final_innings_scorecard_images(match, arena):
+    """Render the second-innings batting and bowling cards used by /playmatch."""
+    if not arena or int(arena.get("innings", 0) or 0) != 2:
+        return []
+    try:
+        from services.config_service import get_config
+        from services.scorecard_card import generate_batting_scorecard, generate_bowling_scorecard
+
+        bat_team = arena.get("bat_team_name", "Team")
+        bowl_team = arena.get("bowl_team_name", "Opponent")
+        total_runs = int(arena.get("total_runs", 0) or 0)
+        total_wickets = int(arena.get("total_wickets", 0) or 0)
+        overs_str = _arena_overs(arena)
+        bat_xi = arena.get("bat_xi") or []
+        bowl_xi = arena.get("bowl_xi") or []
+        bat_stats = arena.get("bat_stats") or {}
+        bowl_stats = arena.get("bowl_stats") or {}
+        fow = arena.get("fow") or []
+
+        ordered_batters, seen = [], set()
+        for player in list(arena.get("batting_order") or bat_xi) + list(bat_xi):
+            rid = player.get("roster_id")
+            if rid not in seen:
+                seen.add(rid)
+                ordered_batters.append(player)
+
+        batsmen_rows = []
+        for player in ordered_batters:
+            stats = _arena_stat(bat_stats, player.get("roster_id"))
+            balls = int(stats.get("balls", 0) or 0)
+            is_out = bool(stats.get("out"))
+            if balls == 0 and not is_out:
+                status, dismissal = "dnb", "did not bat"
+            elif is_out:
+                status = "out"
+                dismissal = stats.get("dismissal_text") or stats.get("how_out") or "out"
+            else:
+                status, dismissal = "not_out", "not out"
+            runs = int(stats.get("runs", 0) or 0)
+            batsmen_rows.append({
+                "rating": player.get("rating", 0), "name": player.get("name", "?"),
+                "dismissal": dismissal, "runs": runs, "balls": balls,
+                "fours": stats.get("fours", 0), "sixes": stats.get("sixes", 0),
+                "strike_rate": round(runs / balls * 100, 1) if balls else 0,
+                "status": status,
+            })
+
+        bowlers_rows = []
+        for player in bowl_xi:
+            stats = _arena_stat(bowl_stats, player.get("roster_id"))
+            balls = int(stats.get("balls", 0) or 0)
+            runs = int(stats.get("runs", 0) or 0)
+            wickets = int(stats.get("wickets", 0) or 0)
+            if balls == 0 and runs == 0 and wickets == 0:
+                continue
+            overs = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+            bowlers_rows.append({
+                "name": player.get("name", "?"), "overs": overs,
+                "maidens": stats.get("maidens", 0), "runs_conceded": runs,
+                "wickets": wickets,
+                "economy": round(runs / balls * 6, 2) if balls else 0,
+            })
+
+        extras = {"wd": int(arena.get("wides", 0) or 0),
+                  "nb": int(arena.get("noballs", 0) or 0), "b": 0,
+                  "lb": int(arena.get("legbyes", 0) or 0)}
+        extras["total"] = sum(extras.values())
+        target = int(arena.get("target", 0) or 0) or None
+        chase_outcome = None
+        if target:
+            chase_outcome = ("won" if total_runs >= target else
+                             "tied" if total_runs == target - 1 else "lost")
+
+        config = get_config()
+        common = {
+            "is_first_innings": False, "match_title": "MATCH",
+            "stadium": match.stadium or arena.get("stadium"), "match_no": match.id,
+            "accent_hex": config.get("scorecard_color_inn2"),
+            "text_settings": config.get("scorecard_text_settings"),
+        }
+        batting = generate_batting_scorecard(
+            bat_team, bowl_team, total_runs, total_wickets, overs_str,
+            batsmen_rows, fow, extras, target=target,
+            chase_outcome=chase_outcome, **common)
+        bowling = generate_bowling_scorecard(
+            bowl_team, bowlers_rows, fow, opponent_name=bat_team,
+            opp_score=total_runs, opp_wickets=total_wickets,
+            opp_overs=overs_str, **common)
+
+        images = []
+        if batting:
+            images.append((batting, f"🏏 <b>{bat_team}</b> — Batting Scorecard",
+                           "final_batting_scorecard.png"))
+        if bowling:
+            images.append((bowling, f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
+                           "final_bowling_scorecard.png"))
+        return images
+    except Exception:
+        logger.exception("final /wpm or /cm innings scorecard render failed")
+        return []
+
+
+def _completed_team_name(arena, team_id, fallback):
+    """Resolve a winning/losing Arena team id to its display name."""
+    if team_id == arena.get("bat_team_id"):
+        return arena.get("bat_team_name") or fallback
+    if team_id == arena.get("bowl_team_id"):
+        return arena.get("bowl_team_name") or fallback
+    return fallback
+
+
+def _send_completed_match_flow_async(chat_id, images, final_text, reply_markup):
+    """Send completion media in order, with the action button on final text."""
+    import json as _json
+    import os as _os
+    import threading
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return
+
+    def _work():
+        try:
+            import requests as _rq
+            base = f"https://api.telegram.org/bot{token}"
+            for photo, caption, filename in images:
+                response = _rq.post(
+                    f"{base}/sendPhoto",
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"photo": (filename, photo, "image/png")}, timeout=20)
+                if not response.ok:
+                    logger.warning("completed match photo send failed: %s", response.text)
+            payload = {"chat_id": chat_id, "text": final_text,
+                       "parse_mode": "HTML", "disable_web_page_preview": True}
+            if reply_markup:
+                payload["reply_markup"] = _json.dumps(reply_markup)
+            response = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
+            if not response.ok:
+                logger.warning("completed match message send failed: %s", response.text)
+        except Exception:
+            logger.exception("completed match Telegram flow failed")
+
+    try:
+        threading.Thread(target=_work, daemon=True).start()
+    except Exception:
+        logger.exception("could not spawn completed match Telegram worker")
+
+
 def _broadcast_match_result(match_id, result):
-    """Announce the final /wpm result to the original lobby chat with the
-    same text recap used by the Telegram match flows, a summary image, and a
-    PlayMatch spectate button."""
+    """Send /wpm and /cm's final cards and recap to the original lobby chat."""
+    from html import escape
     from services.match_broadcast import _launch_url
     from models import Match
 
     db = get_session()
     try:
-        m = db.query(Match).get(match_id)
-        if not m or not m.chat_id:
+        match = db.query(Match).get(match_id)
+        if not match or not match.chat_id:
             return
-        chat_id = m.chat_id
+        chat_id = match.chat_id
         try:
             from services.match_webapp_service import load_final_scorecard
-            sc = load_final_scorecard(db, match_id) or {}
-            innings = sc.get("innings") or []
+            scorecard = load_final_scorecard(db, match_id) or {}
         except Exception:
-            innings = []
-            sc = {}
-        score_lines = []
-        colors = ["🔴", "🟢"]
-        for i, inn in enumerate(innings[:2]):
-            score_lines.append(
-                f"{colors[i]} {inn.get('bat_team', 'Team')}: "
-                f"{inn.get('runs', 0)}/{inn.get('wickets', 0)} "
-                f"({inn.get('overs', '0')})")
-        score_block = "\n".join(score_lines) if score_lines else "Match completed."
-        result_text = result.get('text') or sc.get('result_text') or 'Match finished.'
-        arena = sc.get("arena_state") or {}
+            scorecard = {}
+        innings = scorecard.get("innings") or []
+        arena = scorecard.get("arena_state") or {}
+        result = result or arena.get("match_result") or {}
+        result_text = result.get("text") or scorecard.get("result_text") or "Match finished."
         rewards = arena.get("_completed_rewards") or {}
         pom = arena.get("_player_of_match") or result.get("player_of_match") or {}
-        reward_lines = []
-        if rewards:
-            reward_lines.append(f"🏆 Winner reward: <b>+{rewards.get('winner_coins', 0):,} coins</b>")
-            reward_lines.append(f"📉 Losing reward: <b>+{rewards.get('loser_coins', 0):,} coins</b>")
-        pom_line = ""
+
+        score_lines = []
+        for color, innings_row in zip(("🔴", "🟢"), innings[:2]):
+            score_lines.append(
+                f"{color} {escape(str(innings_row.get('bat_team', 'Team')))}: "
+                f"{innings_row.get('runs', 0)}/{innings_row.get('wickets', 0)} "
+                f"({innings_row.get('overs', '0')})")
+        score_block = "\n".join(score_lines) if score_lines else "Match completed."
+
+        text = ("━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
+                f"{score_block}\n\n🏆 <b>{escape(str(result_text))}</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━\n\n")
         if pom:
-            pom_line = (f"\n🌟 <b>Man of the Match:</b> {pom.get('name', 'Player')} "
-                        f"(<b>{pom.get('impact_points', 0)} Impact Points</b>)\n")
-        reward_block = ("\n".join(reward_lines) + "\n") if reward_lines else ""
-        text = (
-            "━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
-            f"{score_block}\n\n"
-            f"🏆 <b>{result_text}</b>\n"
-            f"{pom_line}"
-            f"{reward_block}"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "Tap below to spectate the full scorecard."
-        )
-        summary_bytes = _build_match_summary_image(m, sc, result_text, arena, pom)
+            text += ("⭐ <b>PLAYER OF THE MATCH</b>\n"
+                     f"🌟 {escape(str(pom.get('name', 'Player')))}\n"
+                     f"{pom.get('runs', 0)} runs • {pom.get('wickets', 0)} wickets\n"
+                     f"💫 Impact Points: {pom.get('impact_points', 0)}\n\n"
+                     "━━━━━━━━━━━━━━━━━━━\n\n")
+        if arena.get("is_spectator"):
+            text += ("🎬 <b>SPECTATOR MATCH</b>\n"
+                     "<i>No rewards distributed — pure entertainment.</i>\n"
+                     "━━━━━━━━━━━━━━━━━━━")
+        elif rewards:
+            winner_name = _completed_team_name(arena, result.get("winner_team_id"), "Winner")
+            loser_name = _completed_team_name(arena, result.get("loser_team_id"), "Loser")
+            text += ("🎁 <b>REWARDS</b>\n"
+                     f"🏆 {escape(str(winner_name))}: +{rewards.get('winner_coins', 0):,} Coins 💰 +{rewards.get('winner_gems', 0)} Gems 💎\n"
+                     f"📉 {escape(str(loser_name))}: +{rewards.get('loser_coins', 0):,} Coins 💰 +{rewards.get('loser_gems', 0)} Gems 💎\n"
+                     "━━━━━━━━━━━━━━━━━━━")
+        else:
+            text += "Tap below to open the completed match."
+
+        images = _build_final_innings_scorecard_images(match, arena)
+        summary = _build_match_summary_image(match, scorecard, result_text, arena, pom)
+        if summary:
+            images.append((summary, f"🏆 <b>Match Summary</b> — {escape(str(result_text))}",
+                           "match_summary.png"))
     finally:
         db.close()
 
     url = _launch_url(match_id, chat_id)
     reply_markup = None
     if url:
-        reply_markup = {"inline_keyboard": [[
-            {"text": "▶️ PlayMatch (Spectate)", "url": url}]]}
-
-    payload = {"chat_id": chat_id, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = __import__("json").dumps(reply_markup)
-    if summary_bytes:
-        payload["caption"] = text
-        _tg_send_photo_async(payload, summary_bytes)
-    else:
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                   "disable_web_page_preview": True}
-        if reply_markup:
-            payload["reply_markup"] = reply_markup
-        _tg_send_async(payload)
+        reply_markup = {"inline_keyboard": [[{"text": "Playmatch - Spectate", "url": url}]]}
+    _send_completed_match_flow_async(chat_id, images, text, reply_markup)
 
 
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
