@@ -7017,8 +7017,13 @@ def _completed_team_name(arena, team_id, fallback):
     return fallback
 
 
-def _send_completed_match_flow_async(chat_id, images, final_text, reply_markup):
-    """Send completion media in order, with the action button on final text."""
+def _send_completed_match_summary_async(chat_id, summary_image, caption, fallback_text, reply_markup):
+    """Send the completed Mini-App summary card, or fallback result text.
+
+    /wpm and /cm should post exactly one completion item to the lobby chat:
+    the match-summary scorecard image when rendering succeeds, otherwise the
+    same text MATCH RESULT template with the spectator button.
+    """
     import json as _json
     import os as _os
     import threading
@@ -7030,20 +7035,26 @@ def _send_completed_match_flow_async(chat_id, images, final_text, reply_markup):
         try:
             import requests as _rq
             base = f"https://api.telegram.org/bot{token}"
-            for photo, caption, filename in images:
+            if summary_image:
+                data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+                if reply_markup:
+                    data["reply_markup"] = _json.dumps(reply_markup)
                 response = _rq.post(
                     f"{base}/sendPhoto",
-                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
-                    files={"photo": (filename, photo, "image/png")}, timeout=20)
-                if not response.ok:
-                    logger.warning("completed match photo send failed: %s", response.text)
-            payload = {"chat_id": chat_id, "text": final_text,
+                    data=data,
+                    files={"photo": ("match_summary.png", summary_image, "image/png")},
+                    timeout=20)
+                if response.ok:
+                    return
+                logger.warning("completed match summary photo send failed: %s", response.text)
+
+            payload = {"chat_id": chat_id, "text": fallback_text,
                        "parse_mode": "HTML", "disable_web_page_preview": True}
             if reply_markup:
                 payload["reply_markup"] = _json.dumps(reply_markup)
             response = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
             if not response.ok:
-                logger.warning("completed match message send failed: %s", response.text)
+                logger.warning("completed match fallback message send failed: %s", response.text)
         except Exception:
             logger.exception("completed match Telegram flow failed")
 
@@ -7161,19 +7172,19 @@ def _build_and_send_match_result(match_id, result):
         else:
             text += "Tap below to open the completed match."
 
-        images = _build_final_innings_scorecard_images(match, arena)
+        # Per /wpm and /cm completion flow, send only the match-summary
+        # scorecard image. If it cannot be rendered or delivered, the Telegram
+        # worker falls back to this MATCH RESULT text template.
         summary = _build_match_summary_image(match, scorecard, result_text, arena, pom)
-        if summary:
-            images.append((summary, f"🏆 <b>Match Summary</b> — {escape(str(result_text))}",
-                           "match_summary.png"))
+        summary_caption = f"🏆 <b>Match Summary</b> — {escape(str(result_text))}"
     finally:
         db.close()
 
     url = _launch_url(match_id, chat_id)
     reply_markup = None
     if url:
-        reply_markup = {"inline_keyboard": [[{"text": "Playmatch - Spectate", "url": url}]]}
-    _send_completed_match_flow_async(chat_id, images, text, reply_markup)
+        reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectator", "url": url}]]}
+    _send_completed_match_summary_async(chat_id, summary, summary_caption, text, reply_markup)
 
 
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
