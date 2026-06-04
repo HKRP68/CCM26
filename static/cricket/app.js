@@ -1815,82 +1815,37 @@ function renderResultScreen() {
   }
 }
 
-function runAutoplayAction() {
-  if (!autoplayActive || !matchState || matchState.isProcessing) return;
+// When autoplay is ON, the user's own side is handled by the SERVER-SIDE bot AI
+// (the same difficulty/phase-aware engine /vsbot uses) rather than fragile DOM
+// clicking. Each cycle we POST /api/match/autoplay, which plays all of our
+// pending turns (and, in a vs-bot match, the bot's reply) and returns the new
+// state. The poll loop keeps calling until the match completes.
+let autoplayInFlight = false;
+async function runAutoplayAction() {
+  if (!autoplayActive || !matchState) return;
+  if (autoplayInFlight || matchState.isProcessing) return;
+  if (matchState.status === 'completed') return;
 
-  // 1. Check if it's xi_selection phase and we haven't confirmed yet
-  if (matchState.status === 'xi_selection') {
-    const isHost = matchState.myRole === 'host';
-    const isGuest = matchState.myRole === 'guest';
-    const confirmedHost = matchState.host.confirmed;
-    const confirmedGuest = matchState.guest && matchState.guest.confirmed;
+  // Only act when there is something for ME to do. Setup picks aren't
+  // turn-gated, so during xi_selection we always probe the server (it no-ops if
+  // our side is already locked in); during play we only act on our turn.
+  const inSetup = matchState.status === 'xi_selection';
+  const inPlay = matchState.status === 'innings1' || matchState.status === 'innings2';
+  if (!inSetup && !(inPlay && matchState.isMyTurn)) return;
 
-    const myConfirmed = isHost ? confirmedHost : confirmedGuest;
-    if (!myConfirmed) {
-      // Batsman setup auto-click
-      const sItem = document.querySelector('#striker-list .selection-item:not(.disabled)');
-      if (sItem) sItem.click();
-      const nsItem = document.querySelector('#non-striker-list .selection-item:not(.disabled)');
-      if (nsItem) nsItem.click();
-
-      // Bowler setup auto-click
-      const bItem = document.querySelector('#bowler-list .selection-item:not(.disabled)');
-      if (bItem) bItem.click();
-
-      console.log("[Autoplay] Auto-submitting Setup Selection...");
-      submitSetup();
-    }
-    return;
-  }
-
-  // 2. Check if gameplay phase and it is my turn
-  if ((matchState.status === 'innings1' || matchState.status === 'innings2') && matchState.isMyTurn) {
-    if (matchState.turnState === 'bowling_delivery') {
-      const deliveryGrid = document.getElementById('bowler-delivery-grid');
-      const buttons = deliveryGrid.querySelectorAll('.btn-variation');
-      if (buttons.length > 0) {
-        const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
-        randBtn.click();
-
-        const speedButtons = document.querySelectorAll('.btn-speed');
-        if (speedButtons.length > 0 && !document.getElementById('bowling-speed-section').classList.contains('hidden')) {
-          const randSpeedBtn = speedButtons[Math.floor(Math.random() * speedButtons.length)];
-          randSpeedBtn.click();
-        }
-
-        setTimeout(submitDelivery, 75);
-      }
-    }
-    else if (matchState.turnState === 'batting_shot') {
-      const shotSection = document.getElementById('batting-controls');
-      const buttons = shotSection.querySelectorAll('.btn-action-card');
-      if (buttons.length > 0) {
-        const randBtn = buttons[Math.floor(Math.random() * buttons.length)];
-        setTimeout(() => randBtn.click(), 75);
-      }
-    }
-    else if (matchState.turnState === 'selecting_wicket_batsman') {
-      const item = document.querySelector('#wicket-batsman-list .selection-item:not(.disabled)');
-      if (item) {
-        item.click();
-        const index = parseInt(item.dataset.index);
-        setTimeout(() => {
-          document.getElementById('controls-sheet').classList.add('minimized');
-          selectNextBatsman(index);
-        }, 75);
-      }
-    }
-    else if (matchState.turnState === 'selecting_over_bowler') {
-      const item = document.querySelector('#over-bowler-list .selection-item:not(.disabled)');
-      if (item) {
-        item.click();
-        const index = parseInt(item.dataset.index);
-        setTimeout(() => {
-          document.getElementById('controls-sheet').classList.add('minimized');
-          selectNextBowler(index);
-        }, 75);
-      }
-    }
+  autoplayInFlight = true;
+  try {
+    const resp = await fetch('/api/match/autoplay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, matchId }),
+    });
+    const data = await resp.json();
+    if (data && data.matchState) applyMatchState(data.matchState);
+  } catch (e) {
+    console.error('[Autoplay] server autoplay failed', e);
+  } finally {
+    autoplayInFlight = false;
   }
 }
 

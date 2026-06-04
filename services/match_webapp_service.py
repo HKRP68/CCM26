@@ -30,7 +30,8 @@ SETUP_AWAIT_READY = "AWAIT_READY"
 SETUP_DONE = "DONE"
 
 
-def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False):
+def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False,
+                          difficulty=None):
     """Create the initial live state for a Mini-App-played match, right after
     the toss. Openers/bowler are placeholders until the teams pick them.
     Returns (ok, msg). Safe to call once; no-op if state already exists.
@@ -42,6 +43,10 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     challenge_rules: enable /cm rules on the Mini App engine: two wickets per
     innings while keeping the same setup, scoring, scorecard, and stat
     persistence paths used by /wpm.
+
+    difficulty: when this is a vs-bot match (one side is the AI bot user), the
+    bot team's difficulty ("Easy"/"Medium"/"Hard"/"Legendary"). Stored in state
+    so the AI (auto_play_bot_turns / auto_play_user_turns) plays accordingly.
     """
     from services.match_engine import create_match_state
     from models import UserRoster, Player
@@ -129,6 +134,7 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
         if bot_user:
             s["is_vsbot"] = True
             s["bot_user_id"] = bot_user.id
+            s["vsbot_difficulty"] = difficulty or "Medium"
             if bu.id == bot_user.id:
                 s["batting_order"] = [bxi[0], bxi[1]] + [p for p in bxi if p["roster_id"] not in (bxi[0]["roster_id"], bxi[1]["roster_id"])]
                 s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
@@ -2070,10 +2076,11 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
 
         over = state.get("current_over", 1)
         total = state.get("overs", 1)
+        diff = state.get("vsbot_difficulty", "Medium")
 
         if na in (A_PICK_DELIVERY, A_PICK_LENGTH):
             bowler = get_bowler(state)
-            pick = bot_ai.pick_bot_delivery(bowler, over, total)
+            pick = bot_ai.pick_bot_delivery(bowler, over, total, difficulty=diff)
             state["current_delivery"] = pick["delivery"]
             state["selected_variation"] = pick.get("variation")
             mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
@@ -2093,7 +2100,8 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             _name, idx = bot_ai.pick_bot_shot(
                 striker, bowler, over, total,
                 state.get("total_runs", 0), state.get("total_wickets", 0),
-                target=state.get("target"), current_ball=state.get("current_ball", 0))
+                target=state.get("target"), current_ball=state.get("current_ball", 0),
+                difficulty=diff)
             shot = AVAILABLE_SHOTS[idx]
             oc = _bm._calc(state, striker, bowler, shot, delivery)
             res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
@@ -2147,6 +2155,173 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             continue
 
         if na == A_PICK_NEW_BATSMAN:
+            nb = state.get("next_batsman_idx", 2)
+            if nb < len(state.get("batting_order", [])):
+                state["striker_idx"] = nb
+                state["next_batsman_idx"] = nb + 1
+            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            continue
+
+        break
+
+    return steps
+
+
+def _user_controls_current_action(state, next_action, user_id):
+    """Does `user_id` control whatever the next action requires?"""
+    from services.match_state_store import (
+        A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+        A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER,
+    )
+    if next_action in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+        return user_id == state.get("bowl_team_id")
+    if next_action in (A_PICK_SHOT, A_PICK_NEW_BATSMAN):
+        return user_id == state.get("bat_team_id")
+    return False
+
+
+def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=None):
+    """Play ALL of ``user_id``'s currently-pending turns with the bot AI.
+
+    This is the per-user analogue of ``auto_play_bot_turns`` — it powers the Mini
+    App "autoplay" toggle so a human can hand their own side to the same
+    difficulty/phase-aware engine ``/vsbot`` uses. It drives whichever side the
+    user controls (bowling: delivery / new bowler; batting: shot / new batsman)
+    plus the one-time XI setup, reusing ``_apply_outcome`` and the same
+    next-action bookkeeping as the manual ``play_shot`` path.
+
+    Stops when it's the opponent's/bot's turn, the match completes, or no
+    progress is made (loop-safety). Saves state as it goes; caller need not
+    commit. Returns a list of step dicts (for optional commentary)."""
+    import handlers.match as _bm
+    from services import bot_ai
+    from services.bowling_service import AVAILABLE_SHOTS
+    from services.match_engine import (get_striker, get_bowler, is_innings_over,
+                                        transition_to_second_innings,
+                                        compute_match_result)
+    from services.match_state_store import (
+        A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+        A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER, A_COMPLETED,
+    )
+
+    steps = []
+    for _ in range(max_steps):
+        state = mwa.get_state(match_id)
+        if not state:
+            break
+        na = mwa.get_next_action(match_id)
+        if na == A_COMPLETED:
+            break
+
+        diff = difficulty or state.get("vsbot_difficulty") or "Medium"
+
+        # ── XI setup phase: auto-pick this user's side if still pending ──
+        if _in_setup(state):
+            role = role_for(state, user_id)
+            if role == "batsman" and not state.get("openers_done"):
+                bat_xi = state.get("bat_xi", [])
+                if len(bat_xi) < 2:
+                    break
+                ok, _started, _msg = select_openers(
+                    match_id, user_id, bat_xi[0]["roster_id"], bat_xi[1]["roster_id"])
+                if not ok:
+                    break
+                steps.append({"type": "auto_openers"})
+                continue
+            if role == "bowler" and not state.get("bowler_done"):
+                bowl_xi = state.get("bowl_xi", [])
+                if not bowl_xi:
+                    break
+                best = max(bowl_xi, key=lambda p: p.get("bowl_rating", 0) or 0)
+                ok, _started, _msg = select_bowler(match_id, user_id, best["roster_id"])
+                if not ok:
+                    break
+                steps.append({"type": "auto_bowler"})
+                continue
+            # Nothing for this user to do in setup (waiting on the other side).
+            break
+
+        if not _user_controls_current_action(state, na, user_id):
+            break  # opponent's / bot's turn — leave it for them
+
+        over = state.get("current_over", 1)
+        total = state.get("overs", 1)
+
+        if na in (A_PICK_DELIVERY, A_PICK_LENGTH):
+            bowler = get_bowler(state)
+            pick = bot_ai.pick_bot_delivery(bowler, over, total, difficulty=diff)
+            state["current_delivery"] = pick["delivery"]
+            state["selected_variation"] = pick.get("variation")
+            mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
+            steps.append({"type": "auto_delivery", "delivery": pick["delivery"]})
+            # If this same user also bats (PvP self-play is impossible, but be
+            # safe), keep going; otherwise hand the ball to the batsman.
+            if user_id != state.get("bat_team_id"):
+                break
+            continue
+
+        if na == A_PICK_SHOT:
+            striker = get_striker(state)
+            bowler = get_bowler(state)
+            delivery = state.get("current_delivery") or "Good"
+            _name, idx = bot_ai.pick_bot_shot(
+                striker, bowler, over, total,
+                state.get("total_runs", 0), state.get("total_wickets", 0),
+                target=state.get("target"), current_ball=state.get("current_ball", 0),
+                difficulty=diff)
+            shot = AVAILABLE_SHOTS[idx]
+            oc = _bm._calc(state, striker, bowler, shot, delivery)
+            res = _apply_outcome(state, oc, shot, delivery, striker, bowler)
+            try:
+                _c = _bm._maybe_pick_commentary(oc, striker, bowler, oc.get("runs", 0))
+            except Exception:
+                _c = None
+            state["last_ball"] = {
+                "text": res.get("rtxt"), "type": res.get("type"),
+                "runs": res.get("runs", 0), "shot": shot, "delivery": delivery,
+                "batsman": striker.get("name") if striker else None,
+                "bowler": bowler.get("name") if bowler else None,
+                "how": res.get("how"),
+            }
+            state["last_commentary"] = _c or res.get("rtxt")
+            _append_commentary_log(state, res, striker, bowler, _c or res.get("rtxt"))
+            steps.append({"type": "auto_shot", "shot": shot, "rtxt": res["rtxt"]})
+
+            if is_innings_over(state):
+                if state.get("innings", 1) == 1:
+                    transition_to_second_innings(state)
+                    state["setup"] = SETUP_DONE
+                    mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
+                else:
+                    state["match_result"] = compute_match_result(state)
+                    mwa.save_state(match_id, state, next_action=A_COMPLETED)
+                    mwa.bump_ball_seq(match_id)
+                    break
+            elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
+                nb = state.get("next_batsman_idx", 2)
+                if nb < len(state.get("batting_order", [])):
+                    state["striker_idx"] = nb
+                    state["next_batsman_idx"] = nb + 1
+                mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            elif res["eoo"]:
+                mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
+            else:
+                mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            mwa.bump_ball_seq(match_id)
+            continue
+
+        if na == A_PICK_NEW_BOWLER:
+            new_bowler = bot_ai.pick_bot_next_bowler(
+                state["bowl_xi"], state.get("prev_bowler_rid"),
+                state["bowl_stats"], state["overs"])
+            state["current_bowler"] = new_bowler
+            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            steps.append({"type": "auto_bowler_change", "name": new_bowler["name"]})
+            continue
+
+        if na == A_PICK_NEW_BATSMAN:
+            # Index-based (NOT pick_bot_next_batsman) so we never select an
+            # already-out batsman: next_batsman_idx only ever advances.
             nb = state.get("next_batsman_idx", 2)
             if nb < len(state.get("batting_order", [])):
                 state["striker_idx"] = nb
