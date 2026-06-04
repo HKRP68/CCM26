@@ -179,10 +179,15 @@
           </div>
         </div>
 
-        <!-- EVENT GIF DISPLAY BOX (sticky above autoplay) -->
-        <div id="event-gif-box" class="event-gif-box hidden" role="status" aria-live="polite">
+        <!-- EVENT GIF DISPLAY BOX (fixed area: shows GIFs when configured, the
+             ball outcome text otherwise, and an idle state between balls) -->
+        <div id="event-gif-box" class="event-gif-box is-idle" role="status" aria-live="polite">
           <img id="event-gif-image" alt="Match event animation">
           <video id="event-gif-video" muted loop playsinline></video>
+          <div id="event-gif-idle" class="event-gif-idle">
+            <span class="idle-ball">🏏</span>
+            <span class="idle-text">Match in progress…</span>
+          </div>
           <div id="event-gif-label" class="event-gif-label"></div>
         </div>
 

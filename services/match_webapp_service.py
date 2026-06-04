@@ -1119,13 +1119,16 @@ def _append_commentary_log(state, res, striker, bowler, text):
     def _bat_card(player):
         if not player:
             return None
-        bs = (state.get("bat_stats", {}) or {}).get(player.get("roster_id"), {})
+        # State is JSON-round-tripped, so bat_stats keys may be strings. Use the
+        # string-tolerant reader so the end-of-over card shows real figures
+        # instead of zeros.
+        bs = _stat_row(state.get("bat_stats"), player.get("roster_id"))
         return {"name": player.get("name"),
                 "runs": bs.get("runs", 0), "balls": bs.get("balls", 0)}
 
     # End-of-over summary card.
     if res.get("eoo"):
-        bws = (state.get("bowl_stats", {}) or {}).get(bowler.get("roster_id"), {}) if bowler else {}
+        bws = _stat_row(state.get("bowl_stats"), bowler.get("roster_id")) if bowler else {}
         b_overs_done = bws.get("overs_done", 0)
         b_this = bws.get("this_over_balls", 0)
         log.append({
