@@ -120,6 +120,33 @@
     </div>
   </div>
 
+  <div class="form-card" style="max-width:100%; margin-top:1.5rem;">
+    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
+      📤 Match-End Cards (/wpm &amp; /cm)
+    </h2>
+    <p style="color:var(--muted); font-size:.85rem; margin-top:-.4rem;">
+      Choose which cards are posted to the lobby chat when a /wpm or /cm match ends.
+      Select <strong>All</strong> or any combination. The MATCH RESULT recap text and the
+      <strong>PlayMatch - Spectate</strong> button are always sent. If nothing is ticked,
+      only the Match Summary is sent.
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:1rem; margin-top:.75rem;">
+      {% for token, label in [
+        ('summary', '🏆 Match Summary'),
+        ('bat1', '🏏 Innings 1 Batting'),
+        ('bowl1', '🎳 Innings 1 Bowling'),
+        ('bat2', '🏏 Innings 2 Batting'),
+        ('bowl2', '🎳 Innings 2 Bowling')
+      ] %}
+      <label style="display:flex; align-items:center; gap:.45rem; padding:.5rem .8rem; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--card);">
+        <input type="checkbox" name="wpm_result_cards" value="{{ token }}"
+               {% if token in wpm_result_cards %}checked{% endif %}>
+        {{ label }}
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
   <div style="display:flex; gap:.75rem; justify-content:flex-end; margin-top:1.2rem;">
     <a href="{{ url_for('admin_economy') }}" class="btn btn-ghost">Cancel</a>
     <button type="submit" class="btn">💾 Save Scorecard Settings</button>

@@ -6911,27 +6911,63 @@ def _arena_overs(state):
     return f"{max(0, int(state.get('current_over', 1) or 1) - 1)}.{int(state.get('current_ball', 0) or 0)}"
 
 
-def _build_final_innings_scorecard_images(match, arena):
-    """Render the second-innings batting and bowling cards used by /playmatch."""
-    if not arena or int(arena.get("innings", 0) or 0) != 2:
-        return []
+def _build_innings_cards(match, arena, innings_num):
+    """Render the batting + bowling scorecard images for one innings of a
+    completed Mini App match.
+
+    Returns a dict ``{"bat": (bytes, caption, filename), "bowl": (...)}`` with
+    only the entries that rendered successfully. Innings 1 is read from the
+    ``inn1_*`` snapshots taken at the innings break; innings 2 from the live
+    (final) state. Used by /wpm and /cm to post any admin-selected combination
+    of Bat1 / Bowl1 / Bat2 / Bowl2 cards to the lobby chat.
+    """
+    if not arena or innings_num not in (1, 2):
+        return {}
+    # Both innings live in the final state only once the 2nd innings has begun.
+    if int(arena.get("innings", 0) or 0) != 2:
+        return {}
     try:
         from services.config_service import get_config
         from services.scorecard_card import generate_batting_scorecard, generate_bowling_scorecard
 
-        bat_team = arena.get("bat_team_name", "Team")
-        bowl_team = arena.get("bowl_team_name", "Opponent")
-        total_runs = int(arena.get("total_runs", 0) or 0)
-        total_wickets = int(arena.get("total_wickets", 0) or 0)
-        overs_str = _arena_overs(arena)
-        bat_xi = arena.get("bat_xi") or []
-        bowl_xi = arena.get("bowl_xi") or []
-        bat_stats = arena.get("bat_stats") or {}
-        bowl_stats = arena.get("bowl_stats") or {}
-        fow = arena.get("fow") or []
+        config = get_config()
+        if innings_num == 1:
+            bat_team = arena.get("inn1_team") or arena.get("bowl_team_name", "Team")
+            bowl_team = arena.get("bowl_team_name", "Opponent")
+            total_runs = int(arena.get("inn1_runs", 0) or 0)
+            total_wickets = int(arena.get("inn1_wickets", 0) or 0)
+            overs_str = arena.get("inn1_overs") or "0.0"
+            bat_xi = arena.get("inn1_bat_xi") or []
+            bowl_xi = arena.get("inn1_bowl_xi") or []
+            bat_stats = arena.get("inn1_bat_stats") or {}
+            bowl_stats = arena.get("inn1_bowl_stats") or {}
+            batting_order = arena.get("inn1_batting_order") or bat_xi
+            fow = arena.get("inn1_fow") or []
+            extras = {"wd": int(arena.get("inn1_wides", 0) or 0),
+                      "nb": int(arena.get("inn1_noballs", 0) or 0), "b": 0,
+                      "lb": int(arena.get("inn1_legbyes", 0) or 0)}
+            target = None
+            accent = config.get("scorecard_color_inn1")
+        else:
+            bat_team = arena.get("bat_team_name", "Team")
+            bowl_team = arena.get("bowl_team_name", "Opponent")
+            total_runs = int(arena.get("total_runs", 0) or 0)
+            total_wickets = int(arena.get("total_wickets", 0) or 0)
+            overs_str = _arena_overs(arena)
+            bat_xi = arena.get("bat_xi") or []
+            bowl_xi = arena.get("bowl_xi") or []
+            bat_stats = arena.get("bat_stats") or {}
+            bowl_stats = arena.get("bowl_stats") or {}
+            batting_order = arena.get("batting_order") or bat_xi
+            fow = arena.get("fow") or []
+            extras = {"wd": int(arena.get("wides", 0) or 0),
+                      "nb": int(arena.get("noballs", 0) or 0), "b": 0,
+                      "lb": int(arena.get("legbyes", 0) or 0)}
+            target = int(arena.get("target", 0) or 0) or None
+            accent = config.get("scorecard_color_inn2")
 
         ordered_batters, seen = [], set()
-        for player in list(arena.get("batting_order") or bat_xi) + list(bat_xi):
+        for player in list(batting_order) + list(bat_xi):
             rid = player.get("roster_id")
             if rid not in seen:
                 seen.add(rid)
@@ -6974,21 +7010,16 @@ def _build_final_innings_scorecard_images(match, arena):
                 "economy": round(runs / balls * 6, 2) if balls else 0,
             })
 
-        extras = {"wd": int(arena.get("wides", 0) or 0),
-                  "nb": int(arena.get("noballs", 0) or 0), "b": 0,
-                  "lb": int(arena.get("legbyes", 0) or 0)}
-        extras["total"] = sum(extras.values())
-        target = int(arena.get("target", 0) or 0) or None
+        extras["total"] = sum(v for k, v in extras.items() if k != "total")
         chase_outcome = None
         if target:
             chase_outcome = ("won" if total_runs >= target else
                              "tied" if total_runs == target - 1 else "lost")
 
-        config = get_config()
         common = {
-            "is_first_innings": False, "match_title": "MATCH",
+            "is_first_innings": innings_num == 1, "match_title": "MATCH",
             "stadium": match.stadium or arena.get("stadium"), "match_no": match.id,
-            "accent_hex": config.get("scorecard_color_inn2"),
+            "accent_hex": accent,
             "text_settings": config.get("scorecard_text_settings"),
         }
         batting = generate_batting_scorecard(
@@ -7000,17 +7031,19 @@ def _build_final_innings_scorecard_images(match, arena):
             opp_score=total_runs, opp_wickets=total_wickets,
             opp_overs=overs_str, **common)
 
-        images = []
+        cards = {}
         if batting:
-            images.append((batting, f"🏏 <b>{bat_team}</b> — Batting Scorecard",
-                           "final_batting_scorecard.png"))
+            cards["bat"] = (batting,
+                            f"🏏 <b>{bat_team}</b> — Batting (Innings {innings_num})",
+                            f"innings{innings_num}_batting.png")
         if bowling:
-            images.append((bowling, f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
-                           "final_bowling_scorecard.png"))
-        return images
+            cards["bowl"] = (bowling,
+                             f"🎳 <b>{bowl_team}</b> — Bowling (Innings {innings_num})",
+                             f"innings{innings_num}_bowling.png")
+        return cards
     except Exception:
-        logger.exception("final /wpm or /cm innings scorecard render failed")
-        return []
+        logger.exception("/wpm or /cm innings %s scorecard render failed", innings_num)
+        return {}
 
 
 def _completed_team_name(arena, team_id, fallback):
@@ -7022,12 +7055,16 @@ def _completed_team_name(arena, team_id, fallback):
     return fallback
 
 
-def _send_completed_match_summary_async(chat_id, summary_image, caption, fallback_text, reply_markup):
-    """Send the completed Mini-App summary card, or fallback result text.
+def _send_completed_match_cards_async(chat_id, images, fallback_text, reply_markup):
+    """Post a completed Mini-App match recap to the lobby chat.
 
-    /wpm and /cm should post exactly one completion item to the lobby chat:
-    the match-summary scorecard image when rendering succeeds, otherwise the
-    same text MATCH RESULT template with the spectator button.
+    ``images`` is the admin-selected, ordered list of ``(bytes, caption,
+    filename)`` cards (any of Bat1 / Bowl1 / Bat2 / Bowl2 / summary). They are
+    delivered as a Telegram album when more than one is selected, or a single
+    photo otherwise. A separate MATCH RESULT message (``fallback_text``) always
+    follows, carrying the ``PlayMatch - Spectate`` button — sendMediaGroup
+    cannot attach inline buttons, so the recap text is the button host. If no
+    image renders, the text message alone still delivers the result + button.
     """
     import json as _json
     import os as _os
@@ -7040,26 +7077,41 @@ def _send_completed_match_summary_async(chat_id, summary_image, caption, fallbac
         try:
             import requests as _rq
             base = f"https://api.telegram.org/bot{token}"
-            if summary_image:
-                data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
-                if reply_markup:
-                    data["reply_markup"] = _json.dumps(reply_markup)
-                response = _rq.post(
+            cards = [c for c in (images or []) if c and c[0]]
+            if len(cards) == 1:
+                img_bytes, caption, fname = cards[0]
+                resp = _rq.post(
                     f"{base}/sendPhoto",
-                    data=data,
-                    files={"photo": ("match_summary.png", summary_image, "image/png")},
-                    timeout=20)
-                if response.ok:
-                    return
-                logger.warning("completed match summary photo send failed: %s", response.text)
+                    data={"chat_id": chat_id, "caption": caption or "",
+                          "parse_mode": "HTML"},
+                    files={"photo": (fname, img_bytes, "image/png")},
+                    timeout=30)
+                if not resp.ok:
+                    logger.warning("completed match photo send failed: %s", resp.text)
+            elif len(cards) >= 2:
+                media, files = [], {}
+                for i, (img_bytes, caption, fname) in enumerate(cards[:10]):
+                    key = f"photo{i}"
+                    files[key] = (fname, img_bytes, "image/png")
+                    item = {"type": "photo", "media": f"attach://{key}",
+                            "parse_mode": "HTML"}
+                    if i == 0 and caption:
+                        item["caption"] = caption
+                    media.append(item)
+                resp = _rq.post(
+                    f"{base}/sendMediaGroup",
+                    data={"chat_id": chat_id, "media": _json.dumps(media)},
+                    files=files, timeout=40)
+                if not resp.ok:
+                    logger.warning("completed match album send failed: %s", resp.text)
 
             payload = {"chat_id": chat_id, "text": fallback_text,
                        "parse_mode": "HTML", "disable_web_page_preview": True}
             if reply_markup:
                 payload["reply_markup"] = _json.dumps(reply_markup)
-            response = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
-            if not response.ok:
-                logger.warning("completed match fallback message send failed: %s", response.text)
+            resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
+            if not resp.ok:
+                logger.warning("completed match result message send failed: %s", resp.text)
         except Exception:
             logger.exception("completed match Telegram flow failed")
 
@@ -7182,19 +7234,38 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         else:
             text += "Tap below to open the completed match."
 
-        # Per /wpm and /cm completion flow, send only the match-summary
-        # scorecard image. If it cannot be rendered or delivered, the Telegram
-        # worker falls back to this MATCH RESULT text template.
-        summary = _build_match_summary_image(match, scorecard, result_text, arena, pom)
+        # Which cards to post is website-configurable (Scorecard Designer).
+        # Default "summary" preserves the historical single-card behavior; an
+        # admin can additionally enable Bat1 / Bowl1 / Bat2 / Bowl2. The MATCH
+        # RESULT text above is always sent as the recap + spectate-button host.
+        from services.config_service import get_wpm_result_cards
+        selection = get_wpm_result_cards()
+        inn_cards = {}
+        if any(t in selection for t in ("bat1", "bowl1")):
+            c1 = _build_innings_cards(match, arena, 1)
+            inn_cards["bat1"] = c1.get("bat")
+            inn_cards["bowl1"] = c1.get("bowl")
+        if any(t in selection for t in ("bat2", "bowl2")):
+            c2 = _build_innings_cards(match, arena, 2)
+            inn_cards["bat2"] = c2.get("bat")
+            inn_cards["bowl2"] = c2.get("bowl")
         summary_caption = f"🏆 <b>Match Summary</b> — {escape(str(result_text))}"
+        if "summary" in selection:
+            summary = _build_match_summary_image(match, scorecard, result_text, arena, pom)
+            inn_cards["summary"] = ((summary, summary_caption, "match_summary.png")
+                                    if summary else None)
+        # Assemble in the configured (innings reading) order, dropping any card
+        # that failed to render.
+        images = [inn_cards.get(token) for token in selection]
+        images = [c for c in images if c]
     finally:
         db.close()
 
     url = _launch_url(match_id, chat_id)
     reply_markup = None
     if url:
-        reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectator", "url": url}]]}
-    _send_completed_match_summary_async(chat_id, summary, summary_caption, text, reply_markup)
+        reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": url}]]}
+    _send_completed_match_cards_async(chat_id, images, text, reply_markup)
 
 
 
@@ -8995,14 +9066,19 @@ def admin_scorecard_settings():
                             "y": request.form.get(f"{prefix}{key}_y"),
                         }
                 text_settings = normalize_scorecard_text_settings(raw_text_settings)
+                from services.config_service import WPM_RESULT_CARD_TOKENS
+                chosen_cards = [t for t in request.form.getlist("wpm_result_cards")
+                                if t in WPM_RESULT_CARD_TOKENS]
+                wpm_result_cards = ",".join(chosen_cards) if chosen_cards else "summary"
                 save_config(db, {
                     "scorecard_color_inn1": c1,
                     "scorecard_color_inn2": c2,
                     "scorecard_text_settings": _json.dumps(text_settings, separators=(",", ":")),
+                    "wpm_result_cards": wpm_result_cards,
                 }, updated_by=session.get("admin_user", "admin"))
                 db.commit()
                 log_admin(db, "scorecard_settings_save", "config", 0,
-                          "scorecard", f"inn1={c1} inn2={c2}")
+                          "scorecard", f"inn1={c1} inn2={c2} cards={wpm_result_cards}")
                 db.commit()
                 flash("✅ Scorecard settings saved.", "info")
                 return redirect(url_for("admin_scorecard_settings"))
@@ -9011,10 +9087,12 @@ def admin_scorecard_settings():
                 flash(f"Error: {e}", "error")
 
         cfg = get_config(db)
+        from services.config_service import get_wpm_result_cards
         return render_template("admin_scorecard_settings.html",
                                cfg=cfg, presets=SCORECARD_COLOR_PRESETS,
                                text_settings=normalize_scorecard_text_settings(cfg.get("scorecard_text_settings")),
-                               text_fields=SCORECARD_TEXT_FIELDS)
+                               text_fields=SCORECARD_TEXT_FIELDS,
+                               wpm_result_cards=get_wpm_result_cards(db))
     finally:
         db.close()
 

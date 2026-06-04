@@ -261,6 +261,12 @@ def transition_to_second_innings(s):
     s["inn1_bat_xi"] = list(s["bat_xi"])
     s["inn1_bowl_xi"] = list(s["bowl_xi"])
     s["inn1_batting_order"] = list(s.get("batting_order", []))
+    # Snapshot fall-of-wickets + extras so the innings-1 batting/bowling cards
+    # can be rendered after completion (mirrors handlers.match._end_innings).
+    s["inn1_fow"] = list(s.get("fow", []))
+    s["inn1_wides"] = s.get("wides", 0)
+    s["inn1_noballs"] = s.get("noballs", 0)
+    s["inn1_legbyes"] = s.get("legbyes", 0)
 
     # Reset + swap for 2nd innings
     s["innings"] = 2

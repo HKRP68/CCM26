@@ -241,6 +241,8 @@ def _migrate_add_columns():
         "scorecard_color_inn1": "VARCHAR(9) DEFAULT '#c41e3a'",
         "scorecard_color_inn2": "VARCHAR(9) DEFAULT '#00c9a7'",
         "scorecard_text_settings": "TEXT",
+        # Which cards /wpm and /cm post to the lobby chat on completion.
+        "wpm_result_cards": "VARCHAR(120) DEFAULT 'summary'",
         # Maintenance mode
         "is_maintenance": "BOOLEAN DEFAULT FALSE",
         "maintenance_message": "TEXT",
