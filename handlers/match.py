@@ -348,7 +348,10 @@ async def _send_batsman_card(ctx, chat_id, player_dict, owner_user_id):
 
         # In-match arrivals always use the CMU stats-card renderer; regular
         # player-card custom images still apply to /claim, /buypl, /playerinfo.
-        card_bytes = generate_batsman_card(
+        # Render off the event loop — PIL is CPU-bound and would otherwise
+        # block every other live match while the image is drawn.
+        card_bytes = await asyncio.to_thread(
+            generate_batsman_card,
             player_dict["name"],
             player_dict["rating"],
             player_dict["bat_rating"],
@@ -423,7 +426,10 @@ async def _send_bowler_card(ctx, chat_id, player_dict, owner_user_id):
 
         # In-match arrivals always use the CMU stats-card renderer; regular
         # player-card custom images still apply to /claim, /buypl, /playerinfo.
-        card_bytes = generate_bowler_card(
+        # Render off the event loop — PIL is CPU-bound and would otherwise
+        # block every other live match while the image is drawn.
+        card_bytes = await asyncio.to_thread(
+            generate_bowler_card,
             player_dict["name"],
             player_dict["rating"],
             player_dict["bowl_rating"],
@@ -2231,21 +2237,19 @@ async def _confirm_overs(context, cid, mid, overs):
         import asyncio as _asyncio
         toss_msg = await context.bot.send_message(cid,
             "🪙 <b>TOSS</b>\n\n<i>Calling captain to the centre...</i>", parse_mode="HTML")
-        await _asyncio.sleep(0.7)
+        await _asyncio.sleep(0.3)
 
-        # Spin frames
+        # Spin frames — kept snappy so the match gets underway fast
         spin_frames = [
             "🪙 <b>TOSS</b>\n\n     ⬆️\n   ╱  🪙  ╲\n\n<i>Captain flicks the coin into the air...</i>",
-            "🪙 <b>TOSS</b>\n\n          🌀\n        🪙\n\n<i>It spins higher and higher...</i>",
             "🪙 <b>TOSS</b>\n\n     🌀 🪙 🌀\n\n<i>Tumbling end over end...</i>",
-            "🪙 <b>TOSS</b>\n\n          ⬇️\n        🪙\n\n<i>Coming down now!</i>",
         ]
         for f in spin_frames:
             try:
                 await toss_msg.edit_text(f, parse_mode="HTML")
             except Exception:
                 pass
-            await _asyncio.sleep(0.55)
+            await _asyncio.sleep(0.25)
 
         # Final reveal
         winner_name = w.username or w.first_name or "Captain"
@@ -2261,7 +2265,7 @@ async def _confirm_overs(context, cid, mid, overs):
                 parse_mode="HTML")
         except Exception:
             pass
-        await _asyncio.sleep(0.4)
+        await _asyncio.sleep(0.2)
 
         # Decision prompt
         await context.bot.send_message(cid,
@@ -2432,9 +2436,11 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🏏 {op1.get('name', '?')} & {pk['name']}\n"
                     f"🎳 {opening_bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
                     parse_mode="HTML")
-                await _send_batsman_card(context, cid, op1, s["bat_team_id"])
-                await _send_batsman_card(context, cid, pk, s["bat_team_id"])
-                await _send_bowler_card(context, cid, opening_bowler, s["bowl_team_id"])
+                await asyncio.gather(
+                    _send_batsman_card(context, cid, op1, s["bat_team_id"]),
+                    _send_batsman_card(context, cid, pk, s["bat_team_id"]),
+                    _send_bowler_card(context, cid, opening_bowler, s["bowl_team_id"]),
+                )
                 await render_screen(context, mid)
                 return
             # If this is innings 1 (shouldn't happen — vsbot innings 1 has its own
@@ -2493,10 +2499,12 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"🟢 {s['bat_team_name']} needs {s['target']} to win\n"
                 f"🏏 {op1.get('name', '?')} & {op2.get('name', '?')}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
                 parse_mode="HTML")
-            # Send opener cards for 2nd innings
-            await _send_batsman_card(context, cid, op1, s["bat_team_id"])
-            await _send_batsman_card(context, cid, op2, s["bat_team_id"])
-            await _send_bowler_card(context, cid, bowler, s["bowl_team_id"])
+            # Send opener cards for 2nd innings (in parallel — faster start)
+            await asyncio.gather(
+                _send_batsman_card(context, cid, op1, s["bat_team_id"]),
+                _send_batsman_card(context, cid, op2, s["bat_team_id"]),
+                _send_bowler_card(context, cid, bowler, s["bowl_team_id"]),
+            )
         else:
             # 1st innings — create fresh state
             m = session.query(Match).get(mid); m.status = "playing"; session.commit()
@@ -2523,10 +2531,12 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
                 f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
                 parse_mode="HTML")
-            # Send opener cards
-            await _send_batsman_card(context, cid, op1, s["bat_team_id"])
-            await _send_batsman_card(context, cid, op2, s["bat_team_id"])
-            await _send_bowler_card(context, cid, bowler, s["bowl_team_id"])
+            # Send opener cards (in parallel — faster start)
+            await asyncio.gather(
+                _send_batsman_card(context, cid, op1, s["bat_team_id"]),
+                _send_batsman_card(context, cid, op2, s["bat_team_id"]),
+                _send_bowler_card(context, cid, bowler, s["bowl_team_id"]),
+            )
 
         await render_screen(context, mid)
     except Exception: session.rollback(); logger.exception("SelBowl err")
@@ -3507,18 +3517,21 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.edit_message_text(f"🏏 New batsman: {nb['name']} ({nb['bat_rating']} BAT)", parse_mode="HTML")
     except Exception:
         pass
-    # Send batsman stats card (best-effort — don't let it strand the match)
-    try:
-        await _send_batsman_card(context, s["chat_id"], nb, s["bat_team_id"])
-    except Exception:
-        logger.warning("Batsman card send failed but continuing")
 
     try:
         if is_innings_over(s):
             await _end_innings(context, mid)
             return
+
+        # Send the arrival card and the next prompt concurrently so the
+        # batter change doesn't stall on image generation/upload.
+        async def _card():
+            try:
+                await _send_batsman_card(context, s["chat_id"], nb, s["bat_team_id"])
+            except Exception:
+                logger.warning("Batsman card send failed but continuing")
         # Single dispatcher — handles vsbot routing internally
-        await render_screen(context, mid)
+        await asyncio.gather(_card(), render_screen(context, mid))
     except Exception:
         logger.exception(f"new_batsman_callback next-step failed for match {mid}")
         try:
@@ -3579,10 +3592,17 @@ async def new_over_bowler_callback(update: Update, context: ContextTypes.DEFAULT
     bws["this_over_balls"] = 0
     _ss(context, mid, s, next_action=A_PICK_DELIVERY)
     await q.edit_message_text(f"🎳 Over {s['current_over']}: {bw['name']} | {bw.get('bowl_hand','R')[:1]}-{bw['bowl_style']}", parse_mode="HTML")
-    if not bw.get("is_bot_player"):
-        await _send_bowler_card(context, s["chat_id"], bw, s["bowl_team_id"])
+
+    # Send the bowler card and the next delivery prompt concurrently so the
+    # over transition doesn't stall on image generation/upload.
+    async def _card():
+        if not bw.get("is_bot_player"):
+            try:
+                await _send_bowler_card(context, s["chat_id"], bw, s["bowl_team_id"])
+            except Exception:
+                logger.warning("Bowler card send failed but continuing")
     # Single dispatcher (handles vsbot routing internally)
-    await render_screen(context, mid)
+    await asyncio.gather(_card(), render_screen(context, mid))
 
 
 # ═══════════════════════════ END INNINGS ═════════════════════════════
@@ -3745,28 +3765,32 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                       else _cfg.get("scorecard_color_inn2"))
         text_settings = _cfg.get("scorecard_text_settings")
 
-        # Generate batting scorecard
-        bat_card_bytes = generate_batting_scorecard(
-            bat_team, bowl_team,
-            total_runs, total_wickets, overs_str,
-            batsmen_rows, fow, extras,
-            is_first_innings=is_first, match_title=match_title,
-            target=target, chase_outcome=chase_outcome,
-            stadium=s.get("stadium"), match_no=mid, accent_hex=accent_hex,
-            text_settings=text_settings,
-        )
-
-        # Generate bowling scorecard — team name is the bowling team
-        # Pass the opponent's (batting) score so the "RUN SCORED BY OPPONENTS"
-        # panel can render.
-        bowl_card_bytes = generate_bowling_scorecard(
-            bowl_team, bowlers_rows, fow,
-            is_first_innings=is_first, match_title=match_title,
-            opponent_name=bat_team,
-            opp_score=total_runs, opp_wickets=total_wickets, opp_overs=overs_str,
-            stadium=s.get("stadium"),
-            match_no=mid, accent_hex=accent_hex,
-            text_settings=text_settings,
+        # Generate both scorecards off the event loop and in parallel — they
+        # are CPU-bound PIL renders and would otherwise block every other live
+        # match while drawing one after the other.
+        # Bowling scorecard: team name is the bowling team. Pass the opponent's
+        # (batting) score so the "RUN SCORED BY OPPONENTS" panel can render.
+        bat_card_bytes, bowl_card_bytes = await asyncio.gather(
+            asyncio.to_thread(
+                generate_batting_scorecard,
+                bat_team, bowl_team,
+                total_runs, total_wickets, overs_str,
+                batsmen_rows, fow, extras,
+                is_first_innings=is_first, match_title=match_title,
+                target=target, chase_outcome=chase_outcome,
+                stadium=s.get("stadium"), match_no=mid, accent_hex=accent_hex,
+                text_settings=text_settings,
+            ),
+            asyncio.to_thread(
+                generate_bowling_scorecard,
+                bowl_team, bowlers_rows, fow,
+                is_first_innings=is_first, match_title=match_title,
+                opponent_name=bat_team,
+                opp_score=total_runs, opp_wickets=total_wickets, opp_overs=overs_str,
+                stadium=s.get("stadium"),
+                match_no=mid, accent_hex=accent_hex,
+                text_settings=text_settings,
+            ),
         )
 
         # Best-effort durable value snapshot in the Telegram storage channel.
@@ -3973,7 +3997,7 @@ async def _end_innings(ctx, mid):
                 try:
                     from handlers.bowlout import start_bowlout
                     import asyncio as _asyncio
-                    await _asyncio.sleep(1.0)
+                    await _asyncio.sleep(0.3)
                     await start_bowlout(
                         ctx,
                         chat_id=s["chat_id"],
