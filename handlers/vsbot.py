@@ -521,7 +521,10 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
                 from services.match_webapp_service import init_match_for_webapp
                 # The bot's XI isn't in UserRoster — pass it explicitly.
                 overrides = {bot_user.id: bot_xi}
-                init_match_for_webapp(session, mid, xi_overrides=overrides)
+                bt = session.query(BotTeam).get(bot_team_id) if bot_team_id else None
+                init_match_for_webapp(
+                    session, mid, xi_overrides=overrides,
+                    difficulty=(bt.difficulty if bt else None))
             except Exception:
                 logger.exception("vsbot webapp init failed")
             try:

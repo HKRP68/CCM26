@@ -90,6 +90,12 @@ from handlers.vsbot import (
     vsbot_op2_callback,
     vsbot_selbowl_callback,
 )
+from handlers.wpmbot import (
+    wpmbot_handler,
+    wpmbot_pick_callback,
+    wpmbot_cancel_callback,
+    wpmbot_toss_callback,
+)
 
 # Quest handlers
 from handlers.quests import (
@@ -309,6 +315,12 @@ def main():
         app.add_handler(CallbackQueryHandler(vsbot_op1_callback, pattern=r"^vsb_op1_"))
         app.add_handler(CallbackQueryHandler(vsbot_op2_callback, pattern=r"^vsb_op2_"))
         app.add_handler(CallbackQueryHandler(vsbot_selbowl_callback, pattern=r"^vsb_selbowl_"))
+
+        # ── wpmbot (vs bot, played in the Mini App) ──────────────────
+        app.add_handler(CommandHandler(["wpmbot", "wpmb"], wpmbot_handler))
+        app.add_handler(CallbackQueryHandler(wpmbot_pick_callback, pattern=r"^wpmb_pick_"))
+        app.add_handler(CallbackQueryHandler(wpmbot_cancel_callback, pattern=r"^wpmb_cancel_"))
+        app.add_handler(CallbackQueryHandler(wpmbot_toss_callback, pattern=r"^wpmb_toss_"))
 
         # ── Quests ──────────────────────────────────────────────────
         app.add_handler(CommandHandler(["myquest", "mq", "quests"], myquest_handler))

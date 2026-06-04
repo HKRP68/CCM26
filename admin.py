@@ -5959,6 +5959,17 @@ def match_rest_action():
         def _finalize_and_respond(res, action_type=None):
             """Shared post-action finalize + throttled live-score refresh."""
             try:
+                # vs-bot (Mini App): after the human's action, let the AI play its
+                # consecutive turns so the bot side never stalls. This is the
+                # envelope path the Mini App uses; the legacy /api/webapp/* path
+                # already does this.
+                try:
+                    from services.match_webapp_service import (
+                        get_state_is_vsbot, auto_play_bot_turns)
+                    if get_state_is_vsbot(match.id):
+                        auto_play_bot_turns(db, match.id)
+                except Exception:
+                    logger.exception("auto_play_bot_turns failed (non-fatal)")
                 from services.match_state_store import A_COMPLETED as _DONE
                 if get_next_action(match.id) == _DONE:
                     from services.match_webapp_service import finalize_webapp_match
@@ -6063,6 +6074,67 @@ def match_rest_action():
                 "match": _match_rest_full_state(db, match.id, user.id)}
     except Exception as e:
         logger.exception("match_rest_action failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/match/autoplay", methods=["POST"])
+@csrf_exempt
+def match_rest_autoplay():
+    """POST /api/match/autoplay — hand the caller's side to the bot AI.
+
+    Body: {userId, matchId}. Plays ALL of the requesting user's currently
+    pending turns (and, in a vs-bot match, the bot's reply) with the same
+    difficulty/phase-aware engine /vsbot uses. Powers the Mini App "autoplay"
+    toggle. Returns the updated serialized match state so the client repaints
+    immediately. Each call advances one human burst + one bot burst; the client
+    keeps calling on its poll loop until the match completes.
+    """
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        from services.match_webapp_service import (
+            auto_play_user_turns, auto_play_bot_turns, get_state_is_vsbot)
+        from services.match_webapp_access import get_state, get_next_action
+        state = get_state(match.id)
+        if not state:
+            return {"ok": False, "error": "no_match"}, 404
+        # Spectators can't be autoplayed.
+        from services.match_webapp_service import role_for
+        if role_for(state, user.id) not in ("batsman", "bowler"):
+            return {"ok": False, "error": "spectator",
+                    "message": "Spectators cannot autoplay."}, 403
+
+        auto_play_user_turns(db, match.id, user.id)
+        if get_state_is_vsbot(match.id):
+            auto_play_bot_turns(db, match.id)
+
+        try:
+            from services.match_state_store import A_COMPLETED as _DONE
+            if get_next_action(match.id) == _DONE:
+                from services.match_webapp_service import finalize_webapp_match
+                fin = finalize_webapp_match(db, match.id)
+                _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+            else:
+                _broadcast_match_scorecard(match.id)
+        except Exception:
+            logger.exception("match_rest_autoplay broadcast/finalize failed")
+
+        match_state = None
+        try:
+            from services.crickidex_arena import serialize_match_state
+            match_state = serialize_match_state(db, match, user)
+        except Exception:
+            logger.exception("could not serialize post-autoplay state")
+        return {"ok": True, "matchState": match_state}
+    except Exception as e:
+        logger.exception("match_rest_autoplay failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
