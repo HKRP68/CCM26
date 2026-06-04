@@ -87,6 +87,9 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     bt = bu.team_name or f"@{bu.username}'s XI"
     bwt = bwu.team_name or f"@{bwu.username}'s XI"
     s["chat_id"] = m.chat_id
+    # Keep an immutable origin separate from the active gameplay chat. Final
+    # /wpm and /cm cards must always return to the lobby that created them.
+    s["original_lobby_chat_id"] = m.chat_id
     s["bat_user_tg"] = bu.telegram_id
     s["bowl_user_tg"] = bwu.telegram_id
     s["bat_team_name"] = bt
@@ -204,12 +207,18 @@ def whose_turn(state, next_action, user_id):
     return turn_side, is_mine
 
 
+def _stat_row(stats, roster_id):
+    """Read a stat row before or after JSON has stringified roster-id keys."""
+    stats = stats or {}
+    return stats.get(roster_id) or stats.get(str(roster_id)) or {}
+
+
 def _bat_card(state, idx):
     order = state.get("batting_order", [])
     if idx is None or idx < 0 or idx >= len(order):
         return None
     p = order[idx]
-    st = state.get("bat_stats", {}).get(p["roster_id"], {})
+    st = _stat_row(state.get("bat_stats"), p["roster_id"])
     return {
         "roster_id": p["roster_id"], "name": p["name"],
         "rating": p.get("rating"), "bat_rating": p.get("bat_rating"),
@@ -225,7 +234,7 @@ def _bowler_card(state):
     b = state.get("current_bowler")
     if not b:
         return None
-    bs = state.get("bowl_stats", {}).get(b["roster_id"], {})
+    bs = _stat_row(state.get("bowl_stats"), b["roster_id"])
     overs_done = bs.get("overs_done", 0)
     this_over = bs.get("this_over_balls", 0)
     ov_str = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
@@ -262,6 +271,9 @@ def build_snapshot(session, match_id, user_id):
     elif next_action in (A_PICK_SHOT, A_PICK_NEW_BATSMAN):
         turn = "batsman"
 
+    from services.match_engine import chase_requirements
+    chase = chase_requirements(state)
+
     snap = {
         "ok": True,
         "match_id": match_id,
@@ -280,6 +292,8 @@ def build_snapshot(session, match_id, user_id):
             "ball": state.get("current_ball", 0),
             "overs_str": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
             "target": state.get("target"),
+            "runs_required": chase.get("runs_required") if chase else None,
+            "balls_remaining": chase.get("balls_remaining") if chase else None,
         },
         "bat_team_name": state.get("bat_team_name", "Batting"),
         "bowl_team_name": state.get("bowl_team_name", "Bowling"),
@@ -1308,7 +1322,7 @@ def build_scorecard(match_id, user_id):
     def _batting(xi, stats):
         rows = []
         for p in xi:
-            st = stats.get(p["roster_id"], {})
+            st = _stat_row(stats, p["roster_id"])
             if not st.get("balls") and not st.get("out") and not st.get("runs"):
                 continue  # didn't bat
             rows.append({
@@ -1323,7 +1337,7 @@ def build_scorecard(match_id, user_id):
     def _bowling(xi, stats):
         rows = []
         for p in xi:
-            st = stats.get(p["roster_id"], {})
+            st = _stat_row(stats, p["roster_id"])
             if not st.get("balls"):
                 continue
             overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))

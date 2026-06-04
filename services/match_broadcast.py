@@ -190,6 +190,14 @@ def build_live_scorecard_text(state, waiting_for_mention=None):
                      f"{bws.get('wickets', 0)}-{bws.get('runs', 0)} ({b_ov} ov)")
     else:
         lines.append("• —")
+    if state.get("innings") == 2 and state.get("target"):
+        from services.match_engine import chase_requirements
+        chase = chase_requirements(state)
+        if chase:
+            lines.append(
+                f"🎯 Need {chase['runs_required']} runs from "
+                f"{chase['balls_remaining']} balls"
+            )
     lines.append("══════════════════════════════")
     if waiting_for_mention:
         lines.append(f"🎳 <b>Waiting for {waiting_for_mention} to deliver…</b>")

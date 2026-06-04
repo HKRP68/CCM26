@@ -68,13 +68,34 @@ def get_bowler(s):
     return s["current_bowler"]
 
 
+def chase_requirements(s):
+    """Return target, runs required, and balls remaining for a chase.
+
+    Values are clamped at zero so callers never display negative requirements
+    after the winning ball. The target is always the first-innings score + 1,
+    as set by :func:`transition_to_second_innings`.
+    """
+    if s.get("innings") != 2 or not s.get("target"):
+        return None
+    balls_played = ((s.get("current_over", 1) - 1) * 6
+                    + s.get("current_ball", 0))
+    return {
+        "target": int(s["target"]),
+        "runs_required": max(0, int(s["target"]) - int(s.get("total_runs", 0))),
+        "balls_remaining": max(0, int(s.get("overs", 0)) * 6 - balls_played),
+    }
+
+
 def is_innings_over(s):
+    # A chase ends on the winning ball, before any wicket/over follow-up can
+    # ask for another batsman or bowler.
+    chase = chase_requirements(s)
+    if chase and chase["runs_required"] == 0:
+        return True
     if s["total_wickets"] >= s.get("wicket_limit", 10):
         return True
     total_balls = (s["current_over"] - 1) * 6 + s["current_ball"]
     if total_balls >= s["overs"] * 6:
-        return True
-    if s["innings"] == 2 and s["target"] and s["total_runs"] >= s["target"]:
         return True
     return False
 
@@ -315,7 +336,7 @@ def compute_match_result(s):
     runs_short = target - 1 - chasing_runs
     if runs_short == 0:
         return {"winner_team_id": None, "loser_team_id": None,
-                "margin_type": "tie", "margin_value": 0, "text": "Match tied!"}
+                "margin_type": "tie", "margin_value": 0, "text": "Match Tied"}
     return {"winner_team_id": defending_team_id, "loser_team_id": chasing_team_id,
             "margin_type": "runs", "margin_value": runs_short,
             "text": f"{defending_name} won by {runs_short} run"
