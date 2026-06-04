@@ -140,10 +140,13 @@ function setupEventListeners() {
   });
 
   // Completed-match scorecard toggle. Keep the finished board read-only,
-  // but let players jump straight into the full scorecard and back.
+  // but let players jump into the scorecard and reopen the result at any time.
   document.getElementById('view-match-btn').addEventListener('click', () => {
     document.getElementById('result-overlay').classList.add('hidden');
     switchGameplayTab('scorecard');
+  });
+  document.getElementById('tab-result').addEventListener('click', () => {
+    if (matchState?.status === 'completed') renderResultScreen();
   });
 
   // Autoplay Pill Switch Toggle
@@ -242,6 +245,7 @@ function setupEventListeners() {
 }
 
 function switchGameplayTab(tab) {
+  document.getElementById('tab-result').classList.remove('active');
   ['match', 'scorecard', 'squads'].forEach(t => {
     document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
     document.getElementById(`panel-${t}`).classList.toggle('active', t === tab);
@@ -423,6 +427,7 @@ function applyMatchState(nextState) {
   else if (matchState.status === 'innings1' || matchState.status === 'innings2') renderGameplayScreen();
   else if (matchState.status === 'completed') {
     renderGameplayScreen();
+    lockCompletedMatchControls();
     renderResultScreen();
     stopPolling();
   }
@@ -1729,10 +1734,29 @@ function renderSquadsPanel() {
   }
 }
 
+function lockCompletedMatchControls() {
+  // A finished /wpm or /cm match is permanently read-only. The result tab is
+  // the way back from the scorecard; no shot, bowling, selection, or autoplay
+  // control remains actionable after innings two completes.
+  document.getElementById('controls-sheet')?.classList.add('hidden');
+  document.getElementById('autoplay-strip')?.classList.add('hidden');
+  const autoplayToggle = document.getElementById('autoplay-toggle-btn');
+  if (autoplayToggle) autoplayToggle.disabled = true;
+  document.querySelectorAll('#controls-sheet button, #controls-sheet .selection-item').forEach(control => {
+    control.disabled = true;
+    control.classList.add('disabled');
+  });
+  document.getElementById('tab-result')?.classList.remove('hidden');
+}
+
 // 5. Render Final Result Overlay modal
 function renderResultScreen() {
   const overlay = document.getElementById('result-overlay');
   overlay.classList.remove('hidden');
+  ['match', 'scorecard', 'squads'].forEach(tab => {
+    document.getElementById(`tab-${tab}`)?.classList.remove('active');
+  });
+  document.getElementById('tab-result')?.classList.add('active');
 
   const result = matchState.result;
 
