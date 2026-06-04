@@ -14,8 +14,8 @@ let pollingInterval = null;
 let fetchInFlight = false;
 let identitySelectionRequired = false;
 let pollFailureCount = 0;
-const POLL_REQUEST_TIMEOUT_MS = 3000;
-const MAX_POLL_FAILURES = 2;
+const POLL_REQUEST_TIMEOUT_MS = 8000;
+const MAX_POLL_FAILURES = 10;
 const MATCH_POLL_INTERVAL_MS = 150;
 const AUTOPLAY_ACTION_DELAY_MS = 0;
 

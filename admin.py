@@ -5888,6 +5888,12 @@ def match_rest_select_players():
                 return {"ok": False, "error": msg, "message": msg}, 400
             if st:
                 _broadcast_wpm_start_player_cards(match.id)
+                try:
+                    from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
+                    if get_state_is_vsbot(match.id):
+                        auto_play_bot_turns(db, match.id)
+                except Exception:
+                    logger.exception("auto-play after select-players failed")
             return {"ok": True, "success": True, "started": st, "message": msg}
 
         if role == "batsman":
@@ -6259,6 +6265,12 @@ def match_rest_poll():
         if not match:
             return {"error": "No active match found."}, 404
         ensure_webapp_match_completed(db, match.id)
+        try:
+            from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
+            if get_state_is_vsbot(match.id):
+                auto_play_bot_turns(db, match.id)
+        except Exception:
+            pass
         payload = serialize_match_state(db, match, viewer)
         if not payload:
             return {"error": "No active match found."}, 404

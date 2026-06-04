@@ -1623,6 +1623,22 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if v.get("bat_user_tg") == tg.id or v.get("bowl_user_tg") == tg.id:
                 mid = int(k.replace("ms_", "")); break
     if not mid:
+        # Webapp matches (wpm/wpmbot) store state in DB only — fall back to a DB query.
+        _session = get_session()
+        try:
+            _u = _session.query(User).filter(User.telegram_id == tg.id).first()
+            if _u:
+                _m = (_session.query(Match)
+                      .filter(Match.status == "playing",
+                              or_(Match.user1_id == _u.id, Match.user2_id == _u.id))
+                      .first())
+                if _m:
+                    mid = _m.id
+        except Exception:
+            logger.exception("endmatch DB fallback failed")
+        finally:
+            _session.close()
+    if not mid:
         await update.message.reply_text("❌ No active match found."); return
 
     kb = InlineKeyboardMarkup([[
