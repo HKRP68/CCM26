@@ -126,6 +126,7 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data[_cm_lobby_key(lobby_id)] = {
             "lobby_id": lobby_id,
             "chat_id": cid,
+            "original_lobby_chat_id": cid,
             "challenger_user_id": challenger.id,
             "challenger_tg_id": challenger.telegram_id,
             "target_user_id": target.id,

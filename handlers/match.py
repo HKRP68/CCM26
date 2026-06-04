@@ -1616,6 +1616,7 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "host_tg_id": host.telegram_id,
             "host_label": _user_label(host),
             "overs": overs,
+            "original_lobby_chat_id": cid,
         }
         lobby_msg = await update.message.reply_text(
             "🏏 <b>CRICKET MATCH LOBBY CREATED!</b> 🏏\n"

@@ -7099,9 +7099,8 @@ def _build_and_send_match_result(match_id, result):
     db = get_session()
     try:
         match = db.query(Match).get(match_id)
-        if not match or not match.chat_id:
+        if not match:
             return
-        chat_id = match.chat_id
         try:
             from services.match_webapp_service import load_final_scorecard
             scorecard = load_final_scorecard(db, match_id) or {}
@@ -7109,6 +7108,13 @@ def _build_and_send_match_result(match_id, result):
             scorecard = {}
         innings = scorecard.get("innings") or []
         arena = scorecard.get("arena_state") or {}
+        # Prefer the immutable lobby origin, then the persisted Match chat, and
+        # finally the active Arena chat for older matches created before the
+        # origin field existed.
+        chat_id = (arena.get("original_lobby_chat_id") or match.chat_id
+                   or arena.get("chat_id"))
+        if not chat_id:
+            return
         result = result or arena.get("match_result") or {}
         result_text = result.get("text") or scorecard.get("result_text") or "Match finished."
         rewards = arena.get("_completed_rewards") or {}
@@ -7121,9 +7127,19 @@ def _build_and_send_match_result(match_id, result):
                 f"{innings_row.get('runs', 0)}/{innings_row.get('wickets', 0)} "
                 f"({innings_row.get('overs', '0')})")
         score_block = "\n".join(score_lines) if score_lines else "Match completed."
+        if result.get("margin_type") == "wickets":
+            short_summary = (f"{arena.get('bat_team_name', 'The chasing team')} "
+                             f"completed the chase with "
+                             f"{result.get('margin_value', 0)} wickets remaining.")
+        elif result.get("margin_type") == "runs":
+            short_summary = (f"{arena.get('bowl_team_name', 'The defending team')} "
+                             f"defended the target by {result.get('margin_value', 0)} runs.")
+        else:
+            short_summary = "Both teams finished level after the second innings."
 
         text = ("━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
-                f"{score_block}\n\n🏆 <b>{escape(str(result_text))}</b>\n\n"
+                f"{score_block}\n\n🏆 <b>{escape(str(result_text))}</b>\n"
+                f"<i>{escape(short_summary)}</i>\n\n"
                 "━━━━━━━━━━━━━━━━━━━\n\n")
         if pom:
             text += ("⭐ <b>PLAYER OF THE MATCH</b>\n"
