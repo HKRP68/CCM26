@@ -6,6 +6,7 @@ import os
 import io
 import csv
 import logging
+import threading
 from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
@@ -7052,8 +7053,45 @@ def _send_completed_match_flow_async(chat_id, images, final_text, reply_markup):
         logger.exception("could not spawn completed match Telegram worker")
 
 
+_COMPLETED_MATCH_BROADCASTS = set()
+_COMPLETED_MATCH_BROADCASTS_LOCK = threading.Lock()
+
+
 def _broadcast_match_result(match_id, result):
-    """Send /wpm and /cm's final cards and recap to the original lobby chat."""
+    """Queue /wpm and /cm's final lobby recap once, off the action request.
+
+    Rendering the scorecard and match-summary images can be expensive. Keeping
+    all of that work in a background thread lets the Mini App immediately show
+    the winner and lock its controls before Telegram receives the final cards.
+    The in-process guard also prevents two near-simultaneous completion actions
+    from posting duplicate result flows.
+    """
+    with _COMPLETED_MATCH_BROADCASTS_LOCK:
+        if match_id in _COMPLETED_MATCH_BROADCASTS:
+            return
+        # Keep the idempotency guard bounded across long-running workers.
+        if len(_COMPLETED_MATCH_BROADCASTS) >= 4096:
+            _COMPLETED_MATCH_BROADCASTS.clear()
+        _COMPLETED_MATCH_BROADCASTS.add(match_id)
+
+    def _work():
+        try:
+            _build_and_send_match_result(match_id, result)
+        except Exception:
+            with _COMPLETED_MATCH_BROADCASTS_LOCK:
+                _COMPLETED_MATCH_BROADCASTS.discard(match_id)
+            logger.exception("completed match result build/send failed")
+
+    try:
+        threading.Thread(target=_work, daemon=True).start()
+    except Exception:
+        with _COMPLETED_MATCH_BROADCASTS_LOCK:
+            _COMPLETED_MATCH_BROADCASTS.discard(match_id)
+        logger.exception("could not queue completed match result")
+
+
+def _build_and_send_match_result(match_id, result):
+    """Build and send /wpm or /cm's final cards to its original lobby chat."""
     from html import escape
     from services.match_broadcast import _launch_url
     from models import Match
