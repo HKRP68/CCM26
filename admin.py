@@ -6172,6 +6172,7 @@ def match_rest_poll():
     try:
         from services.crickidex_arena import (resolve_viewer, find_active_match,
                                                serialize_match_state)
+        from services.match_webapp_service import ensure_webapp_match_completed
         uid = request.args.get("userId") or request.args.get("user_id")
         mid = request.args.get("matchId") or request.args.get("match_id")
         if not uid and not mid:
@@ -6180,6 +6181,7 @@ def match_rest_poll():
         match = find_active_match(db, viewer, mid)
         if not match:
             return {"error": "No active match found."}, 404
+        ensure_webapp_match_completed(db, match.id)
         payload = serialize_match_state(db, match, viewer)
         if not payload:
             return {"error": "No active match found."}, 404

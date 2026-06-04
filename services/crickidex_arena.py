@@ -285,7 +285,12 @@ def serialize_match_state(session, match, viewer_user):
         return None
 
     next_action = "COMPLETED" if completed_snapshot else mwa.get_next_action(match_id)
-    status = phase_status(state, match.status)           # xi_selection/innings1/innings2/completed
+    # Prefer the state-machine terminal pointer over the Match row while an
+    # action request is still finalizing. This prevents the Arena controls from
+    # rendering an opponent-waiting sheet after a chase has already reached its
+    # target but before the DB row is observed as completed.
+    effective_match_status = "completed" if next_action == "COMPLETED" else match.status
+    status = phase_status(state, effective_match_status)  # xi_selection/innings1/innings2/completed
     turn_state = turn_state_name(next_action)            # bowling_delivery/batting_shot/...
     viewer_uid = viewer_user.id if viewer_user else None
 

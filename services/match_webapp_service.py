@@ -259,6 +259,13 @@ def build_snapshot(session, match_id, user_id):
 
     m = session.query(Match).get(match_id)
     status = m.status if m else "unknown"
+    if next_action == A_COMPLETED:
+        # The Mini App polls very aggressively and can observe the state-machine
+        # pointer after the winning ball before the Match row has been marked
+        # completed. Treat the snapshot as completed immediately so the client
+        # never falls through to the generic "waiting for opponent" UI with a
+        # terminal score such as "Need 0 from 0".
+        status = "completed"
 
     striker = _bat_card(state, state.get("striker_idx"))
     non_striker = _bat_card(state, state.get("non_striker_idx"))
@@ -1662,6 +1669,43 @@ def finalize_webapp_match(session, match_id):
         pass
 
     return payload
+
+
+def ensure_webapp_match_completed(session, match_id):
+    """Self-heal a Mini-App match that has reached a terminal chase state.
+
+    Normal action endpoints finalize immediately after ``play_shot`` or AI
+    auto-play stores ``A_COMPLETED``.  If a poll request sees a terminal score
+    first (for example target reached on the last ball), finalize there too so
+    the Arena cannot stay on an opponent-waiting panel with no runs/balls left.
+    Returns the finalization payload when it completed the match, otherwise
+    ``None``.
+    """
+    from models import Match
+    from services.match_engine import compute_match_result, is_innings_over
+    from services.match_state_store import A_COMPLETED
+
+    m = session.query(Match).get(match_id)
+    if not m or m.status == "completed":
+        return None
+
+    state = mwa.get_state(match_id)
+    if not state:
+        return None
+
+    next_action = mwa.get_next_action(match_id)
+    terminal = next_action == A_COMPLETED
+
+    if not terminal and state.get("innings") == 2 and is_innings_over(state):
+        result = state.get("match_result") or compute_match_result(state)
+        if result:
+            state["match_result"] = result
+            mwa.save_state(match_id, state, next_action=A_COMPLETED)
+            terminal = True
+
+    if terminal:
+        return finalize_webapp_match(session, match_id)
+    return None
 
 
 # ══════════════════ Abandon / timeout ═══════════════════════════════
