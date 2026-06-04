@@ -5942,6 +5942,9 @@ def match_rest_action():
         state = get_state(match.id)
         if not state:
             return {"ok": False, "error": "no_match"}, 404
+        if state.get("played_via") == "wsp":
+            return {"ok": False, "error": "auto_simulated",
+                    "message": "This match is auto-simulated — no manual actions allowed."}, 400
         role = role_for(state, user.id)
 
         def _should_refresh_live_scorecard(res, action_type):

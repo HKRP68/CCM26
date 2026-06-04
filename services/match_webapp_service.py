@@ -155,6 +155,99 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     return True, "Match initialized for Mini App."
 
 
+def init_match_for_wsp(session, match_id, xi_overrides=None):
+    """Create the initial live state for a WSP auto-simulated match.
+
+    Like ``init_match_for_webapp`` but skips the interactive setup phase:
+    openers and bowler are auto-selected from position 0/1 of each XI so
+    the ball loop starts immediately. Sets ``played_via='wsp'`` so the
+    action endpoints reject manual delivery/shot submissions.
+    Returns (ok, msg).
+    """
+    from services.match_engine import create_match_state
+    from models import UserRoster, Player
+
+    xi_overrides = xi_overrides or {}
+
+    if mwa.get_state(match_id):
+        return True, "Already initialized."
+
+    m = session.query(Match).get(match_id)
+    if not m or not m.batting_first_id or not m.bowling_first_id:
+        return False, "Match toss not completed."
+
+    bu = session.query(User).get(m.batting_first_id)
+    bwu = session.query(User).get(m.bowling_first_id)
+    if not bu or not bwu:
+        return False, "Players missing."
+
+    def _xi(uid):
+        if uid in xi_overrides:
+            return xi_overrides[uid]
+        rows = (session.query(UserRoster, Player)
+                .join(Player, UserRoster.player_id == Player.id)
+                .filter(UserRoster.user_id == uid)
+                .order_by(UserRoster.order_position).limit(11).all())
+        return [{
+            "roster_id": e.id, "player_id": p.id, "name": p.name,
+            "rating": p.rating, "category": p.category,
+            "bat_rating": p.bat_rating, "bowl_rating": p.bowl_rating,
+            "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand,
+            "bat_hand": p.bat_hand,
+        } for e, p in rows]
+
+    bxi = _xi(bu.id)
+    bwxi = _xi(bwu.id)
+    if len(bxi) < 2 or len(bwxi) < 1:
+        return False, "Both teams need at least 2 batsmen and 1 bowler."
+
+    # Auto-select openers and first bowler from top of XI
+    op1, op2 = bxi[0], bxi[1]
+    bowler = bwxi[0]
+
+    s = create_match_state(match_id, m.overs, bu.id, bwu.id, bxi, bwxi,
+                           op1, op2, bowler)
+
+    bt = bu.team_name or f"@{bu.username}'s XI"
+    bwt = bwu.team_name or f"@{bwu.username}'s XI"
+    s["chat_id"] = m.chat_id
+    s["original_lobby_chat_id"] = m.chat_id
+    s["bat_user_tg"] = bu.telegram_id
+    s["bowl_user_tg"] = bwu.telegram_id
+    s["bat_team_name"] = bt
+    s["bowl_team_name"] = bwt
+    s["bat_username"] = bu.username
+    s["bowl_username"] = bwu.username
+
+    def _disp(uid):
+        if uid == bu.id:
+            return bt
+        if uid == bwu.id:
+            return bwt
+        uu = session.query(User).get(uid)
+        return (uu.team_name or (f"@{uu.username}" if uu and uu.username else "Player")) if uu else "Player"
+
+    s["host_name"] = _disp(m.user1_id)
+    s["guest_name"] = _disp(m.user2_id)
+    s["pitch_type"] = m.pitch_type
+
+    # Full batting order with openers first
+    s["batting_order"] = [op1, op2] + [p for p in bxi if p["roster_id"] not in (op1["roster_id"], op2["roster_id"])]
+    s["striker_idx"] = 0
+    s["non_striker_idx"] = 1
+    s["next_batsman_idx"] = 2
+    s["current_bowler"] = bowler
+    s["openers_done"] = True
+    s["bowler_done"] = True
+    s["setup"] = SETUP_DONE
+    s["played_via"] = "wsp"
+
+    mwa.save_state(match_id, s, next_action=A_PICK_DELIVERY)
+    m.status = "playing"
+    session.commit()
+    return True, "Match initialized for WSP auto-simulation."
+
+
 def role_for(state, user_id):
     """Return the user's role in the current innings."""
     if not state:
