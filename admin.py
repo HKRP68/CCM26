@@ -5744,6 +5744,11 @@ def webapp_match_state():
         if not snap:
             return {"ok": False, "error": "no_match",
                     "message": "No live match found."}, 404
+        try:
+            if snap.get("status") == "completed" or snap.get("next_action") == "COMPLETED":
+                _finalize_and_broadcast_if_terminal(db, match_id)
+        except Exception:
+            logger.exception("polling completion self-heal failed")
         return snap
     except Exception as e:
         logger.exception("webapp_match_state failed")
@@ -6390,9 +6395,7 @@ def webapp_match_deliver():
                 if steps:
                     result_after = steps[-1]
                 if _gna(match_id) == _DONE:
-                    from services.match_webapp_service import finalize_webapp_match
-                    fin = finalize_webapp_match(db, match_id)
-                    _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+                    _finalize_and_broadcast_if_terminal(db, match_id)
                 else:
                     _broadcast_match_scorecard(match_id)  # non-blocking
             else:
@@ -7103,8 +7106,13 @@ def _broadcast_match_result(match_id, result):
         logger.exception("could not queue completed match result")
 
 
-def _build_and_send_match_result(match_id, result):
-    """Build and send /wpm or /cm's final cards to its original lobby chat."""
+def _build_and_send_match_result(match_id, result, override_chat_id=None):
+    """Build and send /wpm or /cm's final cards to its lobby chat.
+
+    ``override_chat_id`` is used by /testwpm so admins can verify the final
+    summary flow in the chat where they run the diagnostic command without
+    changing the match's persisted origin chat.
+    """
     from html import escape
     from services.match_broadcast import _launch_url
     from models import Match
@@ -7124,8 +7132,8 @@ def _build_and_send_match_result(match_id, result):
         # Prefer the immutable lobby origin, then the persisted Match chat, and
         # finally the active Arena chat for older matches created before the
         # origin field existed.
-        chat_id = (arena.get("original_lobby_chat_id") or match.chat_id
-                   or arena.get("chat_id"))
+        chat_id = (override_chat_id or arena.get("original_lobby_chat_id")
+                   or match.chat_id or arena.get("chat_id"))
         if not chat_id:
             return
         result = result or arena.get("match_result") or {}
@@ -7189,6 +7197,48 @@ def _build_and_send_match_result(match_id, result):
     _send_completed_match_summary_async(chat_id, summary, summary_caption, text, reply_markup)
 
 
+
+
+def send_testwpm_summary_to_chat(match_id, chat_id, result=None):
+    """Queue a completed /wpm or /cm summary card to a specific chat.
+
+    This intentionally bypasses the normal duplicate-broadcast guard because
+    it is a website-toggleable diagnostic command: every /testwpm invocation
+    should prove whether rendering and Telegram delivery still work.
+    """
+    import threading
+
+    def _work():
+        try:
+            _build_and_send_match_result(match_id, result or {}, override_chat_id=chat_id)
+        except Exception:
+            logger.exception("/testwpm summary send failed")
+
+    try:
+        threading.Thread(target=_work, daemon=True).start()
+        return True
+    except Exception:
+        logger.exception("could not queue /testwpm summary send")
+        return False
+
+
+def _finalize_and_broadcast_if_terminal(db, match_id):
+    """Finalize a terminal Mini-App match and queue the summary once.
+
+    Called from action endpoints and polling as a self-heal path, so /wpm and
+    /cm cannot get stuck after a completed chase/second innings if the request
+    that delivered the final ball returns before the broadcast is queued.
+    """
+    try:
+        from services.match_webapp_service import ensure_webapp_match_completed
+        fin = ensure_webapp_match_completed(db, match_id)
+        if fin:
+            _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+        return fin
+    except Exception:
+        logger.exception("terminal match finalize/broadcast self-heal failed")
+        return None
+
 @app.route("/api/webapp/match/play-shot", methods=["POST"])
 @csrf_exempt
 def webapp_match_play_shot():
@@ -7218,10 +7268,8 @@ def webapp_match_play_shot():
         ended = (isinstance(res, dict) and res.get("match_over")) or (_gna(match_id) == _DONE)
         if ended:
             try:
-                from services.match_webapp_service import finalize_webapp_match
-                fin = finalize_webapp_match(db, match_id)
+                fin = _finalize_and_broadcast_if_terminal(db, match_id)
                 result = (fin or {}).get("result") or (res.get("result") if isinstance(res, dict) else {}) or {}
-                _broadcast_match_result(match_id, result)
             except Exception:
                 logger.exception("match finalize/broadcast failed")
         else:

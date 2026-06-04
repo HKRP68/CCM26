@@ -82,6 +82,7 @@ from handlers.match import (
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
+    testwpm_handler,
 )
 
 # Trait handlers
@@ -245,6 +246,7 @@ BOT_MENU_COMMANDS = (
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
     ("wpm", "Open a match lobby anyone can join (Mini App)"),
+    ("testwpm", "Test /wpm and /cm completion summary delivery"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
     ("lastmatch", "View your last match"),
@@ -722,6 +724,7 @@ def main():
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler("wpm", wpm_handler))
+        app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))

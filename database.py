@@ -522,6 +522,9 @@ def _migrate_add_columns():
                 ("gspin", "/gspin", "gs",
                  "Spin the wheel. Rewards configured in /gspin-rewards.",
                  "economy", 28800, 40, dict()),
+                ("testwpm", "/testwpm", "",
+                 "Diagnostic: test /wpm and /cm completion summary delivery.",
+                 "matches", 0, 90, dict()),
             ]
             n_cmd = 0; n_rwd = 0
             for key, name, aliases, desc, cat, cd, srt, rwd in defaults:
