@@ -480,6 +480,7 @@ def serialize_match_state(session, match, viewer_user):
         "tossWinnerId": toss_winner_tg,
         "tossDecision": match.toss_decision,
         "turnState": turn_state,
+        "ballSeq": mwa.get_ball_seq(match_id),
         "isProcessing": bool(state.get("action_processing_at")),
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
