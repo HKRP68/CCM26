@@ -2048,10 +2048,13 @@ body {
 
 /* ── Inline event GIF box ───────────────────────────────────────── */
 .event-gif-box {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  margin-top: 14px;
+  position: sticky;
+  top: 8px;
+  z-index: 6;
+  width: fit-content;
+  max-width: 100%;
+  max-height: min(38vh, 320px);
+  margin: 0 auto 14px;
   overflow: hidden;
   border: 1px solid rgba(0, 212, 255, 0.35);
   border-radius: var(--border-radius-md);
@@ -2060,12 +2063,25 @@ body {
   animation: eventGifReveal 0.18s ease-out;
 }
 
+.event-gif-box.fixed-16-9 {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+
 .event-gif-box img,
 .event-gif-box video {
   display: block;
   width: 100%;
   height: 100%;
+  max-width: 100%;
+  max-height: min(38vh, 320px);
   object-fit: contain;
+}
+
+.event-gif-box.natural-size img,
+.event-gif-box.natural-size video {
+  width: auto;
+  height: auto;
 }
 
 .event-gif-label {

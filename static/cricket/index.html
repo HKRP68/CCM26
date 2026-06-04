@@ -137,11 +137,6 @@
         <div id="target-display" class="target-bar hidden">
           🎯 Need <span id="target-runs-needed" class="glow-text">0</span> runs from <span id="target-balls-left">0</span> balls
         </div>
-        <div id="event-gif-box" class="event-gif-box hidden" role="status" aria-live="polite">
-          <img id="event-gif-image" alt="Match event animation">
-          <video id="event-gif-video" muted loop playsinline></video>
-          <div id="event-gif-label" class="event-gif-label"></div>
-        </div>
       </div>
 
       <!-- TAB SELECTION -->
@@ -182,6 +177,13 @@
             </div>
             <div class="player-circle-icon"><span class="inner-c">c</span></div>
           </div>
+        </div>
+
+        <!-- EVENT GIF DISPLAY BOX (sticky above autoplay) -->
+        <div id="event-gif-box" class="event-gif-box hidden" role="status" aria-live="polite">
+          <img id="event-gif-image" alt="Match event animation">
+          <video id="event-gif-video" muted loop playsinline></video>
+          <div id="event-gif-label" class="event-gif-label"></div>
         </div>
 
         <!-- AUTOPLAY SWITCH STRIP -->

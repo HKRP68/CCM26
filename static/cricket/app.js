@@ -2013,11 +2013,14 @@ function showError(msg) {
 // the administrator has not published an enabled GIF for the event.
 function eventKeyForCommentary(comm) {
   if (comm.eventKey) return comm.eventKey;
+  const text = String(comm.text || '').toLowerCase();
+  if (text.includes('implant')) return 'implant';
+  if (text.includes('century') || text.includes('hundred')) return 'century';
+  if (text.includes('fifty') || text.includes('half-century')) return 'fifty';
   if (comm.isWicket) return 'wicket';
   if (comm.runs === 6) return 'six';
   if (comm.runs === 4) return 'four';
   if (comm.runs === 0) return 'dot_ball';
-  const text = String(comm.text || '').toLowerCase();
   if (text.includes('no ball')) return 'no_ball';
   if (text.includes('wide')) return 'wide';
   return null;
@@ -2036,6 +2039,40 @@ function preloadEventGifs(config) {
     }
     preloadedEventGifIds.add(item.id);
   });
+}
+
+function applyEventGifSizing(box, media, item) {
+  const maxMobileWidth = Math.max(240, Math.min(640, Number(item.maxMobileWidth) || 440));
+  const viewportSafeWidth = Math.max(1, Math.min(maxMobileWidth, window.innerWidth - 32));
+  const naturalWidth = Number(item.width) || media.naturalWidth || media.videoWidth || 0;
+  const naturalHeight = Number(item.height) || media.naturalHeight || media.videoHeight || 0;
+  const fallbackNeeded = naturalWidth <= 0 || naturalHeight <= 0 || viewportSafeWidth < 240;
+  const useFixed = item.sizeMode === 'fixed_16_9' || fallbackNeeded;
+
+  box.classList.toggle('fixed-16-9', useFixed);
+  box.classList.toggle('natural-size', !useFixed);
+  box.style.width = '';
+  box.style.height = '';
+  box.style.aspectRatio = '';
+  media.style.width = '';
+  media.style.height = '';
+
+  if (useFixed) {
+    box.style.width = `${viewportSafeWidth}px`;
+    box.style.aspectRatio = '16 / 9';
+    media.style.width = '100%';
+    media.style.height = '100%';
+    return;
+  }
+
+  const scale = Math.min(1, viewportSafeWidth / naturalWidth);
+  const displayWidth = Math.max(1, Math.round(naturalWidth * scale));
+  const displayHeight = Math.max(1, Math.round(naturalHeight * scale));
+  box.style.width = `${displayWidth}px`;
+  box.style.height = `${displayHeight}px`;
+  box.style.aspectRatio = `${naturalWidth} / ${naturalHeight}`;
+  media.style.width = `${displayWidth}px`;
+  media.style.height = `${displayHeight}px`;
 }
 
 function triggerMatchEvent(comm) {
@@ -2063,22 +2100,40 @@ function triggerMatchEvent(comm) {
   image.style.display = item.kind === 'video' ? 'none' : 'block';
   video.style.display = item.kind === 'video' ? 'block' : 'none';
   const media = item.kind === 'video' ? video : image;
+  media.onload = null;
+  media.onloadedmetadata = null;
+  media.onerror = null;
+  const reveal = () => {
+    applyEventGifSizing(box, media, item);
+    box.classList.remove('hidden');
+  };
   media.onerror = () => {
     box.classList.add('hidden');
     media.onerror = null;
     triggerMatchFlashAnimation(comm);
   };
   if (item.kind === 'video') {
+    video.onloadedmetadata = reveal;
     video.src = item.url;
     video.play().catch(() => {});
+    if (item.width && item.height) reveal();
   } else {
+    image.onload = reveal;
     image.alt = `${item.label || key} animation`;
     image.src = item.url;
+    if (item.width && item.height) reveal();
   }
   label.textContent = item.label || key.replaceAll('_', ' ');
-  box.classList.remove('hidden');
   eventGifTimer = setTimeout(() => {
     box.classList.add('hidden');
+    box.classList.remove('fixed-16-9', 'natural-size');
+    box.style.width = '';
+    box.style.height = '';
+    box.style.aspectRatio = '';
+    image.onload = null;
+    image.onerror = null;
+    video.onloadedmetadata = null;
+    video.onerror = null;
     image.src = '';
     video.pause();
     video.removeAttribute('src');

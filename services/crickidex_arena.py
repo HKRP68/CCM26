@@ -409,13 +409,15 @@ def serialize_match_state(session, match, viewer_user):
             "isBoundary": is_boundary,
             "commentary": last_ball_raw.get("text"),
             "delivery": last_ball_raw.get("delivery") or "",
+            "eventKey": last_ball_raw.get("eventKey"),
         }
         commentary = [{
             "type": "ball",
             "over": f"{cur_overs}.{cur_balls}",
             "runs": lb_runs,
             "isWicket": is_wicket,
-            "eventKey": ({"wicket": "wicket", "wide": "wide", "noball": "no_ball"}.get(lb_type)
+            "eventKey": (last_ball_raw.get("eventKey")
+                         or {"wicket": "wicket", "wide": "wide", "noball": "no_ball"}.get(lb_type)
                          or ("dot_ball" if lb_runs == 0 else "four" if lb_runs == 4 else "six" if lb_runs == 6 else None)),
             "text": state.get("last_commentary") or last_ball_raw.get("text") or "",
         }]
@@ -425,6 +427,14 @@ def serialize_match_state(session, match, viewer_user):
     full_log = state.get("commentary_log")
     if isinstance(full_log, list) and full_log:
         commentary = list(reversed(full_log))
+        if last_ball_raw and commentary and isinstance(commentary[0], dict):
+            # Preserve milestone/special event keys from the latest delivery so
+            # the MiniApp GIF box can fire Fifty/Century/Implant animations.
+            latest_key = (last_ball_raw.get("eventKey")
+                          or {"wicket": "wicket", "wide": "wide", "noball": "no_ball"}.get(lb_type)
+                          or ("dot_ball" if lb_runs == 0 else "four" if lb_runs == 4 else "six" if lb_runs == 6 else None))
+            if latest_key and not commentary[0].get("eventKey"):
+                commentary[0]["eventKey"] = latest_key
 
     # ── /playmatch-compatible delivery vocabulary ──
     # Source these from the same service used by the Telegram /playmatch flow,

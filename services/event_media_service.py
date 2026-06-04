@@ -29,6 +29,7 @@ EVENT_KEYS = [
     ("no_ball",    "🚫 No Ball",       "When a no-ball is bowled"),
     ("fifty",      "⭐ Fifty",          "Batsman reaches 50 runs"),
     ("century",    "🌟 Century",        "Batsman reaches 100 runs"),
+    ("implant",    "💠 Implant",        "Special implant/player-trait moment"),
     # Existing chat-animation events retained for backwards compatibility.
     ("hattrick",   "🎯 Hat-trick",      "Bowler takes 3 wickets in 3 balls"),
     ("maiden_over","🎯 Maiden Over",    "Bowler bowls a maiden over"),
@@ -130,6 +131,32 @@ async def fire_event_media(context, chat_id, event_key):
         logger.exception(f"send_animation failed for event {event_key}")
 
 
+def detect_media_dimensions(file_bytes, filename):
+    """Return (width, height, media_type) for uploaded media when detectable."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    media_type = "video" if ext == ".mp4" else "image"
+    if ext in (".gif", ".webp", ".png", ".jpg", ".jpeg"):
+        try:
+            from io import BytesIO
+            from PIL import Image
+            image = Image.open(BytesIO(file_bytes))
+            return int(image.width or 0), int(image.height or 0), media_type
+        except Exception:
+            logger.exception("Could not detect uploaded media dimensions")
+    return None, None, media_type
+
+
+def normalize_size_mode(value):
+    return "fixed_16_9" if value == "fixed_16_9" else "original"
+
+
+def clamp_mobile_width(value):
+    try:
+        return max(240, min(640, int(value)))
+    except (TypeError, ValueError):
+        return 440
+
+
 def miniapp_event_gifs(rows):
     """Serialize enabled EventMedia rows for the browser MiniApp."""
     result = {}
@@ -137,13 +164,23 @@ def miniapp_event_gifs(rows):
         if not row.enabled:
             continue
         key = "century" if row.event_key == "hundred" else row.event_key
+        width = int(row.original_width or 0)
+        height = int(row.original_height or 0)
+        source = str(row.source or "")
+        kind = row.media_type or ("video" if source.lower().endswith(".mp4") else "image")
+        if row.source_type == "telegram" and not row.media_type:
+            kind = "video" if source.lower().endswith(".mp4") else "image"
         result.setdefault(key, []).append({
             "id": row.id,
             "url": f"/api/event-media/{row.id}",
             "durationMs": max(500, min(15000, int(row.duration_ms or 3000))),
             "weight": max(1, int(row.weight or 1)),
-            "kind": ("video" if row.source_type == "telegram" or str(row.source).lower().endswith(".mp4") else "image"),
+            "kind": kind,
             "label": row.label or key.replace("_", " ").title(),
+            "sizeMode": normalize_size_mode(row.size_mode),
+            "width": width if width > 0 else None,
+            "height": height if height > 0 else None,
+            "maxMobileWidth": clamp_mobile_width(row.max_mobile_width),
         })
     return result
 
