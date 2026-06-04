@@ -135,6 +135,18 @@ from handlers.wpmbot import (
     wpmbot_cancel_callback,
     wpmbot_toss_callback,
 )
+from handlers.wsp import (
+    wsp_handler,
+    wsp_join_callback,
+    wsp_cancel_callback,
+    wsp_decision_callback,
+)
+from handlers.wspbot import (
+    wspbot_handler,
+    wspbot_pick_callback,
+    wspbot_cancel_callback,
+    wspbot_toss_callback,
+)
 
 # Quest handlers
 from handlers.quests import (
@@ -853,6 +865,18 @@ def main():
         app.add_handler(CallbackQueryHandler(wpmbot_pick_callback, pattern=r"^wpmb_pick_"))
         app.add_handler(CallbackQueryHandler(wpmbot_cancel_callback, pattern=r"^wpmb_cancel_"))
         app.add_handler(CallbackQueryHandler(wpmbot_toss_callback, pattern=r"^wpmb_toss_"))
+
+        # ── wsp (PvP auto-simulated watch mode) ──────────────────────
+        app.add_handler(CommandHandler(["wsp"], wsp_handler))
+        app.add_handler(CallbackQueryHandler(wsp_join_callback,     pattern=r"^wsp_join$"))
+        app.add_handler(CallbackQueryHandler(wsp_cancel_callback,   pattern=r"^wsp_cancel$"))
+        app.add_handler(CallbackQueryHandler(wsp_decision_callback, pattern=r"^wsp_decision:"))
+
+        # ── wspbot (vs bot auto-simulated watch mode) ─────────────────
+        app.add_handler(CommandHandler(["wspbot", "wspb"], wspbot_handler))
+        app.add_handler(CallbackQueryHandler(wspbot_pick_callback,   pattern=r"^wspb_pick_"))
+        app.add_handler(CallbackQueryHandler(wspbot_cancel_callback, pattern=r"^wspb_cancel_"))
+        app.add_handler(CallbackQueryHandler(wspbot_toss_callback,   pattern=r"^wspb_toss_"))
 
         # ── Quests ──────────────────────────────────────────────────
         app.add_handler(CommandHandler(["myquest", "mq", "quests"], myquest_handler))
