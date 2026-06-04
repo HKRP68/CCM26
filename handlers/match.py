@@ -1397,6 +1397,123 @@ async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+
+
+async def testwpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Diagnostic command for /wpm and /cm completion broadcasts.
+
+    Usage:
+      /testwpm            -> use the caller's latest Mini-App match
+      /testwpm <match_id> -> test a specific match id
+
+    The command is controlled from the website's Commands page via the
+    ``testwpm`` BotCommand row.
+    """
+    tg = update.effective_user
+    cid = update.effective_chat.id
+    session = get_session()
+    try:
+        from services.command_config_service import is_command_enabled, get_disabled_message
+        if not is_command_enabled(session, "testwpm"):
+            await update.message.reply_text(
+                get_disabled_message(session, "testwpm"), parse_mode="HTML")
+            return
+
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await update.message.reply_text("❌ Use /debut first, then run /testwpm.")
+            return
+
+        match = None
+        if context.args:
+            try:
+                match_id = int(context.args[0])
+            except (TypeError, ValueError):
+                await update.message.reply_text(
+                    "Usage: <code>/testwpm [match_id]</code>", parse_mode="HTML")
+                return
+            match = session.query(Match).get(match_id)
+            if match and user.id not in (match.user1_id, match.user2_id):
+                await update.message.reply_text("❌ You are not a participant in that match.")
+                return
+        else:
+            # Prefer this chat's most recent match for this user, then any
+            # recent Mini-App match by the user.  Completed matches let admins
+            # verify summary delivery repeatedly; active terminal matches also
+            # exercise the self-healing finalizer.
+            match = (session.query(Match)
+                     .filter(or_(Match.user1_id == user.id, Match.user2_id == user.id),
+                             Match.chat_id == cid,
+                             Match.status.in_(["playing", "completed"]))
+                     .order_by(Match.completed_at.desc().nullslast(), Match.id.desc())
+                     .first())
+            if not match:
+                match = (session.query(Match)
+                         .filter(or_(Match.user1_id == user.id, Match.user2_id == user.id),
+                                 Match.status.in_(["playing", "completed"]))
+                         .order_by(Match.completed_at.desc().nullslast(), Match.id.desc())
+                         .first())
+
+        if not match:
+            await update.message.reply_text(
+                "🏏 No /wpm or /cm match found to test. Complete a match first, "
+                "or pass a match id: <code>/testwpm 123</code>.", parse_mode="HTML")
+            return
+
+        finalized = None
+        if match.status != "completed":
+            try:
+                from services.match_webapp_service import ensure_webapp_match_completed
+                finalized = ensure_webapp_match_completed(session, match.id)
+                if finalized:
+                    session.refresh(match)
+            except Exception:
+                logger.exception("/testwpm finalize check failed")
+
+        if match.status != "completed":
+            try:
+                from services.match_webapp_access import get_state, get_next_action
+                state = get_state(match.id) or {}
+                next_action = get_next_action(match.id)
+                innings = state.get("innings", "?")
+                score = f"{state.get('total_runs', 0)}/{state.get('total_wickets', 0)}"
+                await update.message.reply_text(
+                    "🧪 <b>TestWPM diagnostic</b>\n\n"
+                    f"Match <code>{match.id}</code> is not completed yet.\n"
+                    f"Status: <code>{match.status}</code> · Innings: <code>{innings}</code> · "
+                    f"Next: <code>{next_action}</code> · Score: <code>{score}</code>\n\n"
+                    "Finish the 2nd innings or chase, then run <code>/testwpm</code> again.",
+                    parse_mode="HTML")
+            except Exception:
+                await update.message.reply_text(
+                    f"🧪 Match <code>{match.id}</code> is not completed yet.", parse_mode="HTML")
+            return
+
+        queued = False
+        try:
+            from admin import send_testwpm_summary_to_chat
+            queued = send_testwpm_summary_to_chat(
+                match.id, cid, (finalized or {}).get("result") if isinstance(finalized, dict) else None)
+        except Exception:
+            logger.exception("/testwpm summary queue failed")
+
+        if queued:
+            await update.message.reply_text(
+                "✅ <b>TestWPM queued.</b>\n\n"
+                f"Match <code>{match.id}</code> is completed and the match-summary "
+                "card/text fallback is being sent to this chat.",
+                parse_mode="HTML")
+        else:
+            await update.message.reply_text(
+                "⚠️ Match is completed, but I could not queue the summary send. "
+                "Check BOT_TOKEN/network logs.")
+    except Exception:
+        logger.exception("testwpm_handler err")
+        await update.message.reply_text("❌ /testwpm failed. Check logs for details.")
+    finally:
+        session.close()
+
+
 # ═══════════════════════════ /info (during match) ═════════════════════
 
 async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
