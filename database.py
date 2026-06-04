@@ -62,7 +62,7 @@ def init_db():
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
-        FantasyEntry, FantasyPick,
+        FantasyEntry, FantasyPick, EventMedia,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -208,8 +208,13 @@ def _migrate_add_columns():
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
 
-    # EventMedia: MiniApp display timing (milliseconds).
+    # EventMedia: MiniApp display timing and natural-size configuration.
     _try_add("event_media", "duration_ms", "INTEGER DEFAULT 3000")
+    _try_add("event_media", "size_mode", "VARCHAR(20) DEFAULT 'original'")
+    _try_add("event_media", "original_width", "INTEGER")
+    _try_add("event_media", "original_height", "INTEGER")
+    _try_add("event_media", "max_mobile_width", "INTEGER DEFAULT 440")
+    _try_add("event_media", "media_type", "VARCHAR(10) DEFAULT 'image'")
 
     # Normalize the legacy milestone key so it remains editable in the dashboard.
     try:

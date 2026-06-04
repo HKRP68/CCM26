@@ -1124,6 +1124,13 @@ class EventMedia(Base):
     weight = Column(Integer, default=1)
     enabled = Column(Boolean, default=True)
     duration_ms = Column(Integer, default=3000)
+    # MiniApp display controls. By default the browser sizes the box from the
+    # uploaded GIF dimensions; fixed_16_9 is an admin-selected fallback mode.
+    size_mode = Column(String(20), default="original")
+    original_width = Column(Integer, nullable=True)
+    original_height = Column(Integer, nullable=True)
+    max_mobile_width = Column(Integer, default=440)
+    media_type = Column(String(10), default="image")
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(String(80), nullable=True)
 

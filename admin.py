@@ -9126,7 +9126,7 @@ def admin_media_detail(event_key):
     db = get_session()
     try:
         from models import EventMedia
-        from services.event_media_service import EVENT_KEYS, MEDIA_DIR
+        from services.event_media_service import EVENT_KEYS, MEDIA_DIR, clamp_mobile_width, normalize_size_mode
         import os as _os
         import uuid as _uuid
         from werkzeug.utils import secure_filename
@@ -9154,6 +9154,8 @@ def admin_media_detail(event_key):
                         duration_ms = max(500, min(15000, int(float(request.form.get("duration_seconds", 3)) * 1000)))
                     except (TypeError, ValueError):
                         duration_ms = 3000
+                    size_mode = normalize_size_mode(request.form.get("size_mode"))
+                    max_mobile_width = clamp_mobile_width(request.form.get("max_mobile_width"))
 
                     em = None
                     uploaded = request.files.get("upload")
@@ -9168,9 +9170,13 @@ def admin_media_detail(event_key):
                         # to Telegram AND save to disk if the channel isn't
                         # configured.
                         file_bytes = uploaded.read()
+                        media_width = None
+                        media_height = None
+                        media_type = "video" if ext == ".mp4" else "image"
                         if file_bytes:
-                            from services.event_media_service import optimize_event_media_upload
+                            from services.event_media_service import detect_media_dimensions, optimize_event_media_upload
                             file_bytes = optimize_event_media_upload(file_bytes, uploaded.filename)
+                            media_width, media_height, media_type = detect_media_dimensions(file_bytes, uploaded.filename)
                         if not file_bytes:
                             flash("Uploaded file is empty.", "error")
                             return redirect(url_for("admin_media_detail",
@@ -9199,6 +9205,9 @@ def admin_media_detail(event_key):
                                     source=up["file_id"],
                                     label=label or uploaded.filename,
                                     weight=weight, enabled=True, duration_ms=duration_ms,
+                                    size_mode=size_mode, original_width=media_width,
+                                    original_height=media_height, max_mobile_width=max_mobile_width,
+                                    media_type=media_type,
                                     uploaded_by=session.get("admin_user", "admin"),
                                 )
                                 db.add(em); db.commit()
@@ -9231,6 +9240,9 @@ def admin_media_detail(event_key):
                                 source=_os.path.join(event_key, unique),
                                 label=label or uploaded.filename,
                                 weight=weight, enabled=True, duration_ms=duration_ms,
+                                size_mode=size_mode, original_width=media_width,
+                                original_height=media_height, max_mobile_width=max_mobile_width,
+                                media_type=media_type,
                                 uploaded_by=session.get("admin_user", "admin"),
                             )
                             db.add(em); db.commit()
@@ -9249,10 +9261,18 @@ def admin_media_detail(event_key):
                             flash("URL must start with http:// or https://", "error")
                             return redirect(url_for("admin_media_detail",
                                                     event_key=event_key))
+                        try:
+                            url_width = int(request.form.get("original_width") or 0) or None
+                            url_height = int(request.form.get("original_height") or 0) or None
+                        except (TypeError, ValueError):
+                            url_width = url_height = None
                         em = EventMedia(
                             event_key=event_key, source_type="url",
                             source=url_input, label=label or None,
                             weight=weight, enabled=True, duration_ms=duration_ms,
+                            size_mode=size_mode, original_width=url_width,
+                            original_height=url_height, max_mobile_width=max_mobile_width,
+                            media_type=("video" if url_input.lower().split("?")[0].endswith(".mp4") else "image"),
                             uploaded_by=session.get("admin_user", "admin"),
                         )
                         db.add(em); db.commit()
@@ -9311,6 +9331,13 @@ def admin_media_detail(event_key):
                             pass
                         try:
                             em.duration_ms = max(500, min(15000, int(float(request.form.get("duration_seconds", 3)) * 1000)))
+                        except (TypeError, ValueError):
+                            pass
+                        em.size_mode = normalize_size_mode(request.form.get("size_mode"))
+                        em.max_mobile_width = clamp_mobile_width(request.form.get("max_mobile_width"))
+                        try:
+                            em.original_width = int(request.form.get("original_width") or 0) or None
+                            em.original_height = int(request.form.get("original_height") or 0) or None
                         except (TypeError, ValueError):
                             pass
                         db.commit()

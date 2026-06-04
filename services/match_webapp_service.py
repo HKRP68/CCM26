@@ -1080,6 +1080,8 @@ def _append_commentary_log(state, res, striker, bowler, text):
         event_key = "four"
     elif not event_key and runs == 6:
         event_key = "six"
+    if res.get("traits"):
+        event_key = "implant"
     if striker:
         rid = striker.get("roster_id")
         stats = (state.get("bat_stats", {}) or {}).get(str(rid)) or (state.get("bat_stats", {}) or {}).get(rid) or {}
@@ -1211,6 +1213,10 @@ def play_shot(match_id, user_id, shot_index):
         "how": res.get("how"),
     }
     state["last_commentary"] = commentary or res.get("rtxt")
+
+    traits = res.get("traits") or oc.get("traits_activated") or []
+    if traits:
+        state["last_ball"]["eventKey"] = "implant"
 
     # Accumulate a scrolling commentary log (ball rows + end-of-over /
     # end-of-innings summary cards) so the Mini App feed matches UnderCover.
