@@ -5968,7 +5968,17 @@ def match_rest_action():
                         _broadcast_match_scorecard(match.id)
             except Exception:
                 logger.exception("match_rest_action broadcast/finalize failed")
-            return {"ok": True, "success": True, "result": res}
+            # Return the updated Arena state with the action response so the
+            # Mini App can show the outcome immediately instead of waiting for
+            # its next polling request.
+            match_state = None
+            try:
+                from services.crickidex_arena import serialize_match_state
+                match_state = serialize_match_state(db, match, user)
+            except Exception:
+                logger.exception("could not serialize immediate post-action state")
+            return {"ok": True, "success": True, "result": res,
+                    "matchState": match_state}
 
         # ── Crickidex Arena envelope: {type, action:{...}} ──────────────
         # The frontend sends every gameplay action as {type, action}. Dispatch

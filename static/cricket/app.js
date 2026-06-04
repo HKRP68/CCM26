@@ -373,47 +373,7 @@ async function fetchState() {
     }
 
     const data = await response.json();
-    matchState = data;
-    pollFailureCount = 0;
-
-    // Direct browser links have no trusted Telegram user context. Show the
-    // intended room identity picker after the first spectator snapshot; an
-    // explicit spectator choice continues into the live board normally.
-    if (identitySelectionRequired) {
-      showIdentitySelection(matchState);
-      return;
-    }
-
-    // Check for new ball events to trigger premium alerts & haptic feedback
-    if (matchState.commentary && matchState.commentary.length > 0) {
-      const latest = matchState.commentary[0];
-      if (latest && (latest.type === 'ball' || latest.runs !== undefined)) {
-        const uniqueKey = `${matchState.status}_${latest.over}`;
-        if (lastBallUniqueId && lastBallUniqueId !== uniqueKey) {
-          triggerMatchFlashAnimation(latest);
-        }
-        lastBallUniqueId = uniqueKey;
-      }
-    }
-    
-    // Update Header info
-    document.getElementById('header-host-name').innerText = (matchState.host.teamName || matchState.host.username || 'HOST').toUpperCase();
-    document.getElementById('header-guest-name').innerText = (matchState.guest ? (matchState.guest.teamName || matchState.guest.username) : 'AI XI').toUpperCase();
-    document.getElementById('header-match-uuid').innerText = `MATCH ID: ${matchState.id.substring(0, 6).toUpperCase()}`;
-
-    // Route to appropriate screen
-    if (matchState.status === 'xi_selection') {
-      renderSetupScreen();
-    } else if (matchState.status === 'innings1' || matchState.status === 'innings2') {
-      renderGameplayScreen();
-    } else if (matchState.status === 'completed') {
-      renderGameplayScreen();
-      renderResultScreen();
-      stopPolling();
-    }
-
-    // Trigger autoplay evaluation after state update
-    setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
+    applyMatchState(data);
   } catch (err) {
     console.error("Polling error:", err);
     pollFailureCount += 1;
@@ -427,6 +387,44 @@ async function fetchState() {
   } finally {
     fetchInFlight = false;
   }
+}
+
+function applyMatchState(nextState) {
+  if (!nextState) return;
+  const currentRevision = Number(matchState?.ballSeq ?? -1);
+  const nextRevision = Number(nextState.ballSeq ?? currentRevision);
+  if (Number.isFinite(currentRevision) && Number.isFinite(nextRevision) && nextRevision < currentRevision) return;
+
+  matchState = nextState;
+  pollFailureCount = 0;
+
+  if (identitySelectionRequired) {
+    showIdentitySelection(matchState);
+    return;
+  }
+
+  if (matchState.commentary && matchState.commentary.length > 0) {
+    const latest = matchState.commentary[0];
+    if (latest && (latest.type === 'ball' || latest.runs !== undefined)) {
+      const uniqueKey = `${matchState.status}_${latest.over}`;
+      if (lastBallUniqueId && lastBallUniqueId !== uniqueKey) triggerMatchFlashAnimation(latest);
+      lastBallUniqueId = uniqueKey;
+    }
+  }
+
+  document.getElementById('header-host-name').innerText = (matchState.host.teamName || matchState.host.username || 'HOST').toUpperCase();
+  document.getElementById('header-guest-name').innerText = (matchState.guest ? (matchState.guest.teamName || matchState.guest.username) : 'AI XI').toUpperCase();
+  document.getElementById('header-match-uuid').innerText = `MATCH ID: ${matchState.id.substring(0, 6).toUpperCase()}`;
+
+  if (matchState.status === 'xi_selection') renderSetupScreen();
+  else if (matchState.status === 'innings1' || matchState.status === 'innings2') renderGameplayScreen();
+  else if (matchState.status === 'completed') {
+    renderGameplayScreen();
+    renderResultScreen();
+    stopPolling();
+  }
+
+  setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
 }
 
 // 1. Setup Screen Rendering
@@ -911,7 +909,9 @@ function renderControlsSection() {
 
   if (matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLER CONTROLS";
-    promptSubtitle.innerText = "Select a delivery, then choose its length";
+    promptSubtitle.innerText = matchState.deliveryOptions?.is_spinner
+      ? "Tap a spin delivery"
+      : "Select a delivery, then choose its length";
     document.getElementById('bowling-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderBowlerVariations();
@@ -960,19 +960,22 @@ function renderControlsSection() {
 // Render a delivery dropdown first, then only the selected variation's lengths.
 function renderBowlerVariations() {
   const deliverySelect = document.getElementById('bowler-delivery-select');
+  const dropdownSection = document.getElementById('bowler-delivery-dropdown-section');
   const deliveryGrid = document.getElementById('bowler-delivery-grid');
   const lengthSection = document.getElementById('bowler-length-section');
   const lengthTitle = document.getElementById('bowler-length-title');
   const bowlerType = matchState.bowler?.bowler_type || matchState.bowler?.bowl_style || 'fast';
   const bowlerName = matchState.bowler?.name || '';
   const normalizedBowlerType = bowlerType.toLowerCase();
+  const shared = matchState.deliveryOptions || {};
   const isOffSpin = bowlerType === 'off_spin' || normalizedBowlerType.includes('off spin') || normalizedBowlerType.includes('off-spin');
   const isLegSpin = bowlerType === 'leg_spin' || normalizedBowlerType.includes('leg spin') || normalizedBowlerType.includes('leg-spin');
-  const isSpin = isOffSpin || isLegSpin || normalizedBowlerType.includes('spin');
+  const isSpin = typeof shared?.is_spinner === 'boolean'
+    ? shared.is_spinner
+    : (isOffSpin || isLegSpin || normalizedBowlerType.includes('spin'));
 
   // Reuse the Telegram /playmatch vocabulary supplied by the backend. Keep a
   // defensive fallback for older servers so a cached client never soft-locks.
-  const shared = matchState.deliveryOptions || {};
   const spinDeliveries = Array.isArray(shared.deliveries) && shared.deliveries.length
     ? shared.deliveries
     : (isSpin ? ['Leg Break', 'Googly'] : []);
@@ -981,20 +984,30 @@ function renderBowlerVariations() {
     : (isSpin ? [] : ['Seam Up', 'Outswing']);
   const lengths = Array.isArray(shared.lengths) ? shared.lengths : [];
   const deliveryNames = spinDeliveries.length ? spinDeliveries : variations;
-  const cacheKey = JSON.stringify({ bowlerName, deliveryNames, lengths, isSpin });
+  const cacheKey = JSON.stringify({
+    bowlerName,
+    deliveryNames,
+    lengths,
+    isSpin,
+    ballSeq: matchState.ballSeq,
+  });
   if (deliverySelect.dataset.rendered === cacheKey) return;
   deliverySelect.dataset.rendered = cacheKey;
   selectedDelivery = null;
 
   deliverySelect.innerHTML = '<option value="">Choose a delivery...</option>';
-  deliveryNames.forEach(name => {
-    const option = document.createElement('option');
-    option.value = name;
-    option.innerText = name;
-    deliverySelect.appendChild(option);
-  });
   deliveryGrid.innerHTML = '';
   lengthSection.classList.add('hidden');
+  dropdownSection.classList.toggle('hidden', isSpin);
+
+  if (!isSpin) {
+    deliveryNames.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.innerText = name;
+      deliverySelect.appendChild(option);
+    });
+  }
 
   const renderSelectedDeliveryLengths = (variation) => {
     selectedDelivery = null;
@@ -1026,6 +1039,22 @@ function renderBowlerVariations() {
     lengthSection.classList.remove('hidden');
   };
   deliverySelect.onchange = event => renderSelectedDeliveryLengths(event.currentTarget.value);
+  if (isSpin) {
+    lengthTitle.innerText = 'Select Delivery';
+    spinDeliveries.forEach(delivery => {
+      const btn = document.createElement('button');
+      btn.className = 'btn-variation';
+      btn.innerText = delivery;
+      btn.dataset.delivery = delivery;
+      btn.addEventListener('click', (event) => {
+        deliveryGrid.querySelectorAll('.btn-variation').forEach(button => button.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        selectedDelivery = event.currentTarget.dataset.delivery;
+      });
+      deliveryGrid.appendChild(btn);
+    });
+    lengthSection.classList.remove('hidden');
+  }
 
   // Dynamically render speed variations for pacers only.
   document.getElementById('bowling-speed-section').classList.toggle('hidden', isSpin);
@@ -1066,7 +1095,8 @@ async function submitShot(shot) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit shot");
-    fetchState();
+    if (data.matchState) applyMatchState(data.matchState);
+    else fetchState();
   } catch (err) {
     alert(err.message);
   }
