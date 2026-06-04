@@ -856,8 +856,8 @@ function renderControlsSection() {
   if (isBatsmanWaitingForDelivery) {
     wasMyTurn = false;
     waitingBlock.classList.add('hidden');
-    promptText.innerText = "🏏 CHOOSE YOUR SHOT";
-    promptSubtitle.innerText = "Opponent bowler is preparing delivery...";
+    promptText.innerText = "🏏 GET READY TO PLAY";
+    promptSubtitle.innerText = "Bowler is running in…";
     hideActionSections();
     incomingCard.classList.add('hidden');
     battingControls.classList.remove('hidden');
@@ -865,24 +865,29 @@ function renderControlsSection() {
     return;
   }
 
-  // It is NOT my turn
+  // It is NOT my turn — surface the live action rather than a generic wait.
   if (!matchState.isMyTurn) {
     wasMyTurn = false;
     waitingBlock.classList.remove('hidden');
-    
-    let waitMsg = "Waiting for opponent...";
+
+    let waitMsg = "Waiting for opponent…";
+    let header = "⏳ OPPONENT'S TURN";
     if (matchState.turnState === 'bowling_delivery') {
-      waitMsg = "Opponent bowler is preparing delivery...";
+      waitMsg = "Bowler is running in…";
+      header = "🎳 BOWLER IS BOWLING";
     } else if (matchState.turnState === 'batting_shot') {
-      waitMsg = "Opponent batsman is preparing shot...";
+      waitMsg = "Batsman is facing the delivery…";
+      header = "🏏 BATSMAN ON STRIKE";
     } else if (matchState.turnState === 'selecting_wicket_batsman') {
-      waitMsg = "Opponent is picking next batsman...";
+      waitMsg = "New batsman walking in…";
+      header = "⚠️ NEW BATSMAN INCOMING";
     } else if (matchState.turnState === 'selecting_over_bowler') {
-      waitMsg = "Opponent is picking next bowler...";
+      waitMsg = "Setting up the next over…";
+      header = "🔄 NEXT OVER SETUP";
     }
     document.getElementById('waiting-status-text').innerText = waitMsg;
-    
-    promptText.innerText = "⏳ OPPONENT'S TURN";
+
+    promptText.innerText = header;
     promptSubtitle.innerText = waitMsg;
 
     hideActionSections();
@@ -1094,7 +1099,9 @@ const BATTING_SHOTS = [
 ].map(shot => ({ shot, label: shot }));
 
 async function submitShot(shot) {
-  // Keep the match sheet visible so the resolved outcome appears immediately.
+  // Collapse the shot sheet immediately so the resolved outcome (and the event
+  // box) is fully visible. The per-turn auto-expand re-opens it on the next ball.
+  minimizeControlsSheet();
   try {
     const res = await fetch('/api/match/action', {
       method: 'POST',
@@ -1108,6 +1115,14 @@ async function submitShot(shot) {
   } catch (err) {
     alert(err.message);
   }
+}
+
+// Minimize the bottom control sheet and flip its toggle chevron to "expand".
+function minimizeControlsSheet() {
+  const sheet = document.getElementById('controls-sheet');
+  if (sheet) sheet.classList.add('minimized');
+  const iconSvg = document.getElementById('toggle-controls-icon');
+  if (iconSvg) iconSvg.innerHTML = '<polyline points="18 15 12 9 6 15"></polyline>';
 }
 
 // Build the shot grid from a fixed list rather than cloning static DOM, so the
@@ -1147,7 +1162,7 @@ async function submitDelivery() {
   }
 
   // Minimize sheet immediately
-  document.getElementById('controls-sheet').classList.add('minimized');
+  minimizeControlsSheet();
 
   try {
     const res = await fetch('/api/match/action', {
@@ -1169,7 +1184,11 @@ async function submitDelivery() {
     document.getElementById('bowler-delivery-select').value = '';
     document.getElementById('bowler-delivery-grid').innerHTML = '';
     document.getElementById('bowler-length-section').classList.add('hidden');
-    fetchState();
+    // Apply the state returned by the action endpoint right away instead of
+    // waiting for the next poll cycle, so the bowler sees the outcome/turn flip
+    // immediately (mirrors submitShot).
+    if (data.matchState) applyMatchState(data.matchState);
+    else fetchState();
   } catch (err) {
     alert(err.message);
   }
@@ -2075,25 +2094,125 @@ function applyEventGifSizing(box, media, item) {
   media.style.height = `${displayHeight}px`;
 }
 
+// ── Fixed event box helpers ────────────────────────────────────────────────
+// The event box is always present (never hidden). It shows a GIF when one is
+// configured for the event, the ball-outcome text otherwise, and a neutral
+// idle state between balls.
+function getEventBoxEls() {
+  return {
+    box: document.getElementById('event-gif-box'),
+    image: document.getElementById('event-gif-image'),
+    video: document.getElementById('event-gif-video'),
+    idle: document.getElementById('event-gif-idle'),
+    label: document.getElementById('event-gif-label'),
+  };
+}
+
+function clearEventBoxParticles(box) {
+  if (box) box.querySelectorAll('.flash-particle').forEach(p => p.remove());
+}
+
+function clearEventBoxMedia() {
+  const { image, video } = getEventBoxEls();
+  if (image) {
+    image.onload = null;
+    image.onerror = null;
+    image.style.display = 'none';
+    image.src = '';
+  }
+  if (video) {
+    video.onloadedmetadata = null;
+    video.onerror = null;
+    video.style.display = 'none';
+    video.pause();
+    video.removeAttribute('src');
+  }
+}
+
+// Return the box to its neutral, always-visible idle state.
+function showEventBoxIdle() {
+  const { box, idle, label } = getEventBoxEls();
+  if (!box) return;
+  clearEventBoxMedia();
+  clearEventBoxParticles(box);
+  box.className = 'event-gif-box is-idle';
+  box.style.width = '';
+  box.style.height = '';
+  box.style.aspectRatio = '';
+  if (idle) idle.style.display = 'flex';
+  if (label) { label.textContent = ''; label.style.display = 'none'; }
+}
+
+// Native haptic feedback for the moment (Telegram WebApp only).
+function fireEventHaptic(comm) {
+  if (!(tg && tg.HapticFeedback)) return;
+  try {
+    if (comm.isWicket) tg.HapticFeedback.notificationOccurred('error');
+    else if (comm.runs === 4 || comm.runs === 6) tg.HapticFeedback.notificationOccurred('success');
+    else tg.HapticFeedback.impactOccurred('medium');
+  } catch (e) {
+    console.warn("Haptic trigger failed:", e);
+  }
+}
+
+// Render the ball outcome as text inside the fixed box (used when no GIF is
+// configured for the event — replaces the old floating popup overlay).
+function showEventBoxText(comm) {
+  const { box, idle, label } = getEventBoxEls();
+  if (!box) return;
+  clearTimeout(eventGifTimer);
+  clearEventBoxMedia();
+  clearEventBoxParticles(box);
+
+  let title = "";
+  let mod = "evt-runs";
+  if (comm.isWicket) { title = "🔴 OUT!"; mod = "evt-wicket"; }
+  else if (comm.runs === 6) { title = "🚀 SIX!"; mod = "evt-six"; }
+  else if (comm.runs === 4) { title = "⚡ FOUR!"; mod = "evt-four"; }
+  else if (comm.runs === 0) { title = "⚫ DOT BALL"; mod = "evt-dot"; }
+  else { title = `🏏 ${comm.runs} RUN${comm.runs === 1 ? '' : 'S'}`; mod = "evt-runs"; }
+
+  box.className = `event-gif-box is-text ${mod}`;
+  box.style.width = '';
+  box.style.height = '';
+  box.style.aspectRatio = '';
+  if (idle) idle.style.display = 'none';
+  if (label) {
+    label.style.display = 'flex';
+    label.innerHTML = `<span class="evt-title">${title}</span>` +
+      (comm.text ? `<span class="evt-sub">${comm.text}</span>` : '');
+  }
+
+  fireEventHaptic(comm);
+
+  // Confetti for the big moments, scoped to the box.
+  if (comm.runs === 6 || comm.isWicket || comm.runs === 4) {
+    const color = comm.runs === 6 ? '#ffa502' : (comm.runs === 4 ? '#1e90ff' : '#ff4757');
+    createParticles(box, color);
+  }
+
+  // Revert to idle after a short beat so the box stays present but neutral.
+  eventGifTimer = setTimeout(showEventBoxIdle, 2600);
+}
+
 function triggerMatchEvent(comm) {
   const key = eventKeyForCommentary(comm);
   const choices = key ? (matchState?.eventGifs?.[key] || []) : [];
   if (!choices.length) {
-    triggerMatchFlashAnimation(comm);
+    showEventBoxText(comm);
     return;
   }
   const totalWeight = choices.reduce((sum, choice) => sum + Math.max(1, Number(choice.weight) || 1), 0);
   let draw = Math.random() * totalWeight;
   const item = choices.find(choice => ((draw -= Math.max(1, Number(choice.weight) || 1)) <= 0)) || choices[0];
-  const box = document.getElementById('event-gif-box');
-  const image = document.getElementById('event-gif-image');
-  const video = document.getElementById('event-gif-video');
-  const label = document.getElementById('event-gif-label');
+  const { box, image, video, idle, label } = getEventBoxEls();
   if (!box || !image || !video || !item?.url) {
-    triggerMatchFlashAnimation(comm);
+    showEventBoxText(comm);
     return;
   }
   clearTimeout(eventGifTimer);
+  clearEventBoxParticles(box);
+  if (idle) idle.style.display = 'none';
   image.src = '';
   video.pause();
   video.removeAttribute('src');
@@ -2104,13 +2223,13 @@ function triggerMatchEvent(comm) {
   media.onloadedmetadata = null;
   media.onerror = null;
   const reveal = () => {
+    box.className = 'event-gif-box is-media';
     applyEventGifSizing(box, media, item);
-    box.classList.remove('hidden');
   };
   media.onerror = () => {
-    box.classList.add('hidden');
     media.onerror = null;
-    triggerMatchFlashAnimation(comm);
+    // Fall back to the in-box text rendering instead of leaving an empty box.
+    showEventBoxText(comm);
   };
   if (item.kind === 'video') {
     video.onloadedmetadata = reveal;
@@ -2123,88 +2242,14 @@ function triggerMatchEvent(comm) {
     image.src = item.url;
     if (item.width && item.height) reveal();
   }
-  label.textContent = item.label || key.replaceAll('_', ' ');
-  eventGifTimer = setTimeout(() => {
-    box.classList.add('hidden');
-    box.classList.remove('fixed-16-9', 'natural-size');
-    box.style.width = '';
-    box.style.height = '';
-    box.style.aspectRatio = '';
-    image.onload = null;
-    image.onerror = null;
-    video.onloadedmetadata = null;
-    video.onerror = null;
-    image.src = '';
-    video.pause();
-    video.removeAttribute('src');
-  }, Math.max(500, Math.min(15000, Number(item.durationMs) || 3000)));
-}
-
-// Event Flash Animation & Haptic Feedback
-function triggerMatchFlashAnimation(comm) {
-  let title = "";
-  let sub = comm.text || "";
-  let animationClass = "";
-  
-  if (comm.isWicket) {
-    title = "🔴 OUT!";
-    animationClass = "flash-wicket";
-  } else if (comm.runs === 6) {
-    title = "🚀 SIX!";
-    animationClass = "flash-six";
-  } else if (comm.runs === 4) {
-    title = "⚡ FOUR!";
-    animationClass = "flash-four";
-  } else if (comm.runs === 0) {
-    title = "⚫ DOT BALL";
-    animationClass = "flash-dot";
-  } else {
-    title = `🏏 ${comm.runs} RUNS`;
-    animationClass = "flash-runs";
+  if (label) {
+    label.style.display = 'flex';
+    label.textContent = item.label || key.replaceAll('_', ' ');
   }
-  
-  // Trigger Telegram WebApp native haptic notifications if available
-  if (tg && tg.HapticFeedback) {
-    try {
-      const haptic = tg.HapticFeedback;
-      if (comm.isWicket) {
-        haptic.notificationOccurred('error');
-      } else if (comm.runs === 4 || comm.runs === 6) {
-        haptic.notificationOccurred('success');
-      } else {
-        haptic.impactOccurred('medium');
-      }
-    } catch (e) {
-      console.warn("Haptic trigger failed:", e);
-    }
-  }
-
-  // Create flash overlay
-  let overlay = document.getElementById('event-flash-overlay');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'event-flash-overlay';
-    document.body.appendChild(overlay);
-  }
-  
-  overlay.className = `event-flash-overlay ${animationClass}`;
-  overlay.innerHTML = `
-    <div class="flash-content">
-      <div class="flash-title">${title}</div>
-      <div class="flash-subtitle">${sub}</div>
-    </div>
-  `;
-  
-  // Confetti/particles for major events
-  if (comm.runs === 6 || comm.isWicket || comm.runs === 4) {
-    const color = comm.runs === 6 ? '#ffa502' : (comm.runs === 4 ? '#1e90ff' : '#ff4757');
-    createParticles(overlay, color);
-  }
-  
-  overlay.style.display = 'flex';
-  setTimeout(() => {
-    overlay.style.display = 'none';
-  }, 1200);
+  fireEventHaptic(comm);
+  // After the GIF's duration, revert to idle — the box itself stays visible.
+  eventGifTimer = setTimeout(showEventBoxIdle,
+    Math.max(500, Math.min(15000, Number(item.durationMs) || 3000)));
 }
 
 function createParticles(container, color) {
