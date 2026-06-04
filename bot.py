@@ -129,6 +129,12 @@ from handlers.vsbot import (
     vsbot_op2_callback,
     vsbot_selbowl_callback,
 )
+from handlers.wpmbot import (
+    wpmbot_handler,
+    wpmbot_pick_callback,
+    wpmbot_cancel_callback,
+    wpmbot_toss_callback,
+)
 
 # Quest handlers
 from handlers.quests import (
@@ -272,6 +278,7 @@ BOT_MENU_COMMANDS = (
     ("cmtours", "Create a tournament"),
     ("mytours", "View your tournaments"),
     ("vsbot", "Play a match against a bot"),
+    ("wpmbot", "Play a bot in the Mini App"),
     ("myquest", "View and claim quest rewards"),
     ("achievements", "View your achievements"),
     ("howto", "Open the help guide"),
@@ -452,6 +459,8 @@ async def start_handler(update, context):
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
         "/wpm [overs] - Open a match lobby anyone can join (Mini App)\n"
+        "/vsbot [overs] - Play a bot opponent in chat\n"
+        "/wpmbot [overs] - Play a bot opponent in the Mini App\n"
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
@@ -838,6 +847,12 @@ def main():
         app.add_handler(CallbackQueryHandler(vsbot_op1_callback, pattern=r"^vsb_op1_"))
         app.add_handler(CallbackQueryHandler(vsbot_op2_callback, pattern=r"^vsb_op2_"))
         app.add_handler(CallbackQueryHandler(vsbot_selbowl_callback, pattern=r"^vsb_selbowl_"))
+
+        # ── wpmbot (vs bot, played in the Mini App) ──────────────────
+        app.add_handler(CommandHandler(["wpmbot", "wpmb"], wpmbot_handler))
+        app.add_handler(CallbackQueryHandler(wpmbot_pick_callback, pattern=r"^wpmb_pick_"))
+        app.add_handler(CallbackQueryHandler(wpmbot_cancel_callback, pattern=r"^wpmb_cancel_"))
+        app.add_handler(CallbackQueryHandler(wpmbot_toss_callback, pattern=r"^wpmb_toss_"))
 
         # ── Quests ──────────────────────────────────────────────────
         app.add_handler(CommandHandler(["myquest", "mq", "quests"], myquest_handler))
