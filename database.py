@@ -208,6 +208,16 @@ def _migrate_add_columns():
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
 
+    # EventMedia: MiniApp display timing (milliseconds).
+    _try_add("event_media", "duration_ms", "INTEGER DEFAULT 3000")
+
+    # Normalize the legacy milestone key so it remains editable in the dashboard.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE event_media SET event_key = 'century' WHERE event_key = 'hundred'"))
+    except Exception:
+        pass
+
     # GameConfig: new simulation-tuning columns
     new_gameconfig_cols = {
         "sim_dot_adjust": "FLOAT DEFAULT -10.0",

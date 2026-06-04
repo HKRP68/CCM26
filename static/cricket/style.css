@@ -2045,3 +2045,45 @@ body {
 .delivery-length-section {
   margin-top: 14px;
 }
+
+/* ── Inline event GIF box ───────────────────────────────────────── */
+.event-gif-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  border-radius: var(--border-radius-md);
+  background: #050811;
+  box-shadow: 0 0 18px rgba(0, 212, 255, 0.12);
+  animation: eventGifReveal 0.18s ease-out;
+}
+
+.event-gif-box img,
+.event-gif-box video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.event-gif-label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(4, 6, 14, 0.78);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+@keyframes eventGifReveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

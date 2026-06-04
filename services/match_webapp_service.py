@@ -1057,7 +1057,24 @@ def _append_commentary_log(state, res, striker, bowler, text):
     overs_done = max(0, state.get("current_over", 1) - 1)
     balls = state.get("current_ball", 0)
     runs = res.get("runs", 0)
-    is_wkt = res.get("type") == "wicket"
+    result_type = res.get("type")
+    is_wkt = result_type == "wicket"
+    event_key = {"wicket": "wicket", "wide": "wide", "noball": "no_ball"}.get(result_type)
+    if not event_key and result_type not in ("legbye",) and runs == 0:
+        event_key = "dot_ball"
+    elif not event_key and runs == 4:
+        event_key = "four"
+    elif not event_key and runs == 6:
+        event_key = "six"
+    if striker:
+        rid = striker.get("roster_id")
+        stats = (state.get("bat_stats", {}) or {}).get(str(rid)) or (state.get("bat_stats", {}) or {}).get(rid) or {}
+        current_runs = int(stats.get("runs") or 0)
+        previous_runs = max(0, current_runs - int(runs or 0))
+        if previous_runs < 100 <= current_runs:
+            event_key = "century"
+        elif previous_runs < 50 <= current_runs:
+            event_key = "fifty"
 
     # Ball row. After an over rolls (eoo), current_ball was reset to 0 and the
     # over counter advanced, so reconstruct the ball's real over.address here.
@@ -1070,6 +1087,7 @@ def _append_commentary_log(state, res, striker, bowler, text):
         "over": ball_over_label,
         "runs": runs,
         "isWicket": is_wkt,
+        "eventKey": event_key,
         "text": text or res.get("rtxt") or "",
         "batsmanName": (striker.get("name") if striker else ""),
         "bowlerName": (bowler.get("name") if bowler else ""),

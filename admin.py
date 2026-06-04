@@ -6123,6 +6123,44 @@ def spin_wheel_index():
     return send_from_directory(_SPIN_DIR, "index.html")
 
 
+@app.route("/api/event-media/<int:media_id>")
+@csrf_exempt
+def event_media_asset(media_id):
+    """Serve/proxy an enabled event animation through a stable MiniApp URL."""
+    db = get_session()
+    try:
+        from models import EventMedia
+        from services.event_media_service import MEDIA_DIR
+        media = db.query(EventMedia).get(media_id)
+        if not media or (not media.enabled and not session.get("admin_user")):
+            return {"error": "not_found"}, 404
+        if media.source_type == "url":
+            return redirect(media.source, code=302)
+        if media.source_type == "file":
+            path = media.source if os.path.isabs(media.source) else os.path.join(MEDIA_DIR, media.source)
+            if not os.path.isfile(path):
+                return {"error": "not_found"}, 404
+            return send_file(path, conditional=True, max_age=86400)
+        if media.source_type == "telegram":
+            import requests as _requests
+            token = os.getenv("BOT_TOKEN", "").strip()
+            if not token:
+                return {"error": "storage_unavailable"}, 503
+            meta = _requests.get(f"https://api.telegram.org/bot{token}/getFile", params={"file_id": media.source}, timeout=8).json()
+            file_path = ((meta.get("result") or {}).get("file_path"))
+            if not file_path:
+                return {"error": "storage_unavailable"}, 503
+            upstream = _requests.get(f"https://api.telegram.org/file/bot{token}/{file_path}", timeout=20)
+            upstream.raise_for_status()
+            return Response(upstream.content, content_type=upstream.headers.get("Content-Type", "image/gif"), headers={"Cache-Control": "public, max-age=86400"})
+        return {"error": "not_found"}, 404
+    except Exception:
+        logger.exception("event media asset failed")
+        return {"error": "storage_unavailable"}, 503
+    finally:
+        db.close()
+
+
 @app.route("/api/match", methods=["GET"])
 @csrf_exempt
 def match_rest_poll():
@@ -6144,6 +6182,8 @@ def match_rest_poll():
         payload = serialize_match_state(db, match, viewer)
         if not payload:
             return {"error": "No active match found."}, 404
+        from services.event_media_service import get_miniapp_event_gifs
+        payload["eventGifs"] = get_miniapp_event_gifs(db)
         return payload
     except Exception as e:
         logger.exception("match_rest_poll failed")
@@ -9056,7 +9096,12 @@ def admin_media_detail(event_key):
                         weight = max(1, min(100, int(weight_str)))
                     except ValueError:
                         weight = 1
+                    try:
+                        duration_ms = max(500, min(15000, int(float(request.form.get("duration_seconds", 3)) * 1000)))
+                    except (TypeError, ValueError):
+                        duration_ms = 3000
 
+                    em = None
                     uploaded = request.files.get("upload")
                     if uploaded and uploaded.filename:
                         ext = _os.path.splitext(uploaded.filename)[1].lower()
@@ -9069,6 +9114,9 @@ def admin_media_detail(event_key):
                         # to Telegram AND save to disk if the channel isn't
                         # configured.
                         file_bytes = uploaded.read()
+                        if file_bytes:
+                            from services.event_media_service import optimize_event_media_upload
+                            file_bytes = optimize_event_media_upload(file_bytes, uploaded.filename)
                         if not file_bytes:
                             flash("Uploaded file is empty.", "error")
                             return redirect(url_for("admin_media_detail",
@@ -9096,7 +9144,7 @@ def admin_media_detail(event_key):
                                     source_type="telegram",
                                     source=up["file_id"],
                                     label=label or uploaded.filename,
-                                    weight=weight, enabled=True,
+                                    weight=weight, enabled=True, duration_ms=duration_ms,
                                     uploaded_by=session.get("admin_user", "admin"),
                                 )
                                 db.add(em); db.commit()
@@ -9128,7 +9176,7 @@ def admin_media_detail(event_key):
                                 source_type="file",
                                 source=_os.path.join(event_key, unique),
                                 label=label or uploaded.filename,
-                                weight=weight, enabled=True,
+                                weight=weight, enabled=True, duration_ms=duration_ms,
                                 uploaded_by=session.get("admin_user", "admin"),
                             )
                             db.add(em); db.commit()
@@ -9150,7 +9198,7 @@ def admin_media_detail(event_key):
                         em = EventMedia(
                             event_key=event_key, source_type="url",
                             source=url_input, label=label or None,
-                            weight=weight, enabled=True,
+                            weight=weight, enabled=True, duration_ms=duration_ms,
                             uploaded_by=session.get("admin_user", "admin"),
                         )
                         db.add(em); db.commit()
@@ -9160,6 +9208,19 @@ def admin_media_detail(event_key):
                         flash("✅ Added URL", "info")
                     else:
                         flash("Provide either a URL or a file upload.", "error")
+
+                    replace_id = request.form.get("replace_media_id")
+                    if em is not None and replace_id:
+                        old_media = db.query(EventMedia).get(int(replace_id))
+                        if old_media and old_media.event_key == event_key and old_media.id != em.id:
+                            if old_media.source_type == "file":
+                                old_path = _os.path.join(MEDIA_DIR, old_media.source)
+                                if _os.path.exists(old_path):
+                                    try: _os.remove(old_path)
+                                    except OSError: pass
+                            db.delete(old_media)
+                            db.commit()
+                            flash("Replaced the previous GIF.", "info")
 
                 elif action == "delete":
                     mid = int(request.form.get("media_id", 0))
@@ -9194,12 +9255,21 @@ def admin_media_detail(event_key):
                             em.weight = max(1, min(100, int(request.form.get("weight", 1))))
                         except ValueError:
                             pass
+                        try:
+                            em.duration_ms = max(500, min(15000, int(float(request.form.get("duration_seconds", 3)) * 1000)))
+                        except (TypeError, ValueError):
+                            pass
                         db.commit()
-                        flash("Updated.", "info")
+                        flash("Saved and published.", "info")
             except Exception as e:
                 db.rollback()
                 logger.exception("media admin error")
                 flash(f"Error: {e}", "error")
+            try:
+                from services.event_media_service import invalidate_miniapp_event_gifs
+                invalidate_miniapp_event_gifs()
+            except Exception:
+                pass
             return redirect(url_for("admin_media_detail", event_key=event_key))
 
         rows = (db.query(EventMedia)

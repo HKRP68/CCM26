@@ -1123,6 +1123,7 @@ class EventMedia(Base):
     label = Column(String(120), nullable=True)
     weight = Column(Integer, default=1)
     enabled = Column(Boolean, default=True)
+    duration_ms = Column(Integer, default=3000)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(String(80), nullable=True)
 
