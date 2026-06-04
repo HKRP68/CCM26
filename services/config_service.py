@@ -46,6 +46,8 @@ DEFAULTS = {
     "scorecard_color_inn1": "#c41e3a",
     "scorecard_color_inn2": "#00c9a7",
     "scorecard_text_settings": None,
+    # Which cards /wpm and /cm post to the lobby chat on completion.
+    "wpm_result_cards": "summary",
     # Maintenance mode
     "is_maintenance": False,
     "maintenance_message": None,
@@ -69,6 +71,23 @@ DEFAULTS = {
 MATCH_STYLES = {"telegram", "webapp"}
 
 CARD_STYLES = {"tier", "template"}
+
+# Valid completion-card tokens for /wpm and /cm, in the order they should be
+# posted to the lobby chat (innings reading order, summary last).
+WPM_RESULT_CARD_TOKENS = ("bat1", "bowl1", "bat2", "bowl2", "summary")
+
+
+def get_wpm_result_cards(session=None):
+    """Return the ordered list of completion cards to post for /wpm and /cm.
+
+    Reads fresh so a website save is picked up by a separate bot/admin process
+    without a restart. Unknown tokens are dropped; an empty selection falls back
+    to ``["summary"]`` so the lobby always receives at least the recap card.
+    """
+    raw = _refresh(session).get("wpm_result_cards") or "summary"
+    chosen = {t.strip().lower() for t in str(raw).split(",") if t.strip()}
+    ordered = [t for t in WPM_RESULT_CARD_TOKENS if t in chosen]
+    return ordered or ["summary"]
 
 
 def get_challenge_max_overs(session=None):

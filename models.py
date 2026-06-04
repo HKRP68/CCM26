@@ -808,6 +808,11 @@ class GameConfig(Base):
     scorecard_color_inn1 = Column(String(9), default="#c41e3a")
     scorecard_color_inn2 = Column(String(9), default="#00c9a7")
     scorecard_text_settings = Column(Text, nullable=True)
+    # ── /wpm and /cm completion cards ──
+    # Comma-separated list of which cards to post to the lobby chat when a
+    # Mini App match ends. Valid tokens: summary, bat1, bowl1, bat2, bowl2.
+    # Empty/None falls back to "summary" (the historical behavior).
+    wpm_result_cards = Column(String(120), default="summary")
     # ── Maintenance mode ──
     # When is_maintenance is True, all bot commands except those from a
     # bypass user return maintenance_message instead of running. Matches
