@@ -816,19 +816,6 @@ function renderControlsSection() {
   // Render the inline status badges
   renderInlineMatchStatusBar();
 
-  // If executing simulation
-  if (matchState.isProcessing) {
-    waitingBlock.classList.remove('hidden');
-    document.getElementById('waiting-status-text').innerText = "Simulating delivery...";
-    
-    promptText.innerText = "⚡ MATCH IN PROGRESS";
-    promptSubtitle.innerText = "Simulating delivery...";
-
-    hideActionSections();
-    incomingCard.classList.add('hidden');
-    return;
-  }
-
   // Spectator role
   if (matchState.myRole === 'spectator') {
     wasMyTurn = false;
@@ -924,7 +911,7 @@ function renderControlsSection() {
 
   if (matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLER CONTROLS";
-    promptSubtitle.innerText = "Pick a delivery, then bowl immediately";
+    promptSubtitle.innerText = "Select a delivery, then choose its length";
     document.getElementById('bowling-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderBowlerVariations();
@@ -970,50 +957,81 @@ function renderControlsSection() {
   }
 }
 
-// Render dynamic bowler variations grid based on bowler type
+// Render a delivery dropdown first, then only the selected variation's lengths.
 function renderBowlerVariations() {
+  const deliverySelect = document.getElementById('bowler-delivery-select');
   const deliveryGrid = document.getElementById('bowler-delivery-grid');
+  const lengthSection = document.getElementById('bowler-length-section');
+  const lengthTitle = document.getElementById('bowler-length-title');
   const bowlerType = matchState.bowler?.bowler_type || matchState.bowler?.bowl_style || 'fast';
   const bowlerName = matchState.bowler?.name || '';
-  const isOffSpin = bowlerType === 'off_spin' || bowlerType.toLowerCase().includes('off spin') || bowlerType.toLowerCase().includes('off-spin');
-  const isLegSpin = bowlerType === 'leg_spin' || bowlerType.toLowerCase().includes('leg spin') || bowlerType.toLowerCase().includes('leg-spin');
-  const isSpin = isOffSpin || isLegSpin || bowlerType.toLowerCase().includes('spin');
-
-  const cacheKey = `${isOffSpin ? 'off_spin' : (isLegSpin ? 'leg_spin' : 'fast')}_${bowlerName}`;
-  if (deliveryGrid.dataset.rendered === cacheKey) return;
-  deliveryGrid.dataset.rendered = cacheKey;
-  selectedDelivery = null;
+  const normalizedBowlerType = bowlerType.toLowerCase();
+  const isOffSpin = bowlerType === 'off_spin' || normalizedBowlerType.includes('off spin') || normalizedBowlerType.includes('off-spin');
+  const isLegSpin = bowlerType === 'leg_spin' || normalizedBowlerType.includes('leg spin') || normalizedBowlerType.includes('leg-spin');
+  const isSpin = isOffSpin || isLegSpin || normalizedBowlerType.includes('spin');
 
   // Reuse the Telegram /playmatch vocabulary supplied by the backend. Keep a
   // defensive fallback for older servers so a cached client never soft-locks.
   const shared = matchState.deliveryOptions || {};
-  let deliveries = [];
-  if (Array.isArray(shared.deliveries) && shared.deliveries.length) {
-    deliveries = shared.deliveries.map(name => ({ id: name, name }));
-    document.getElementById('bowling-speed-section').classList.add('hidden');
-    selectedSpeed = 'normal';
-  } else if (Array.isArray(shared.variations) && shared.variations.length) {
-    const lengths = Array.isArray(shared.lengths) ? shared.lengths : [];
-    if (lengths.length) {
-      deliveries = shared.variations.flatMap(variation => (
-        lengths.map(length => ({
+  const spinDeliveries = Array.isArray(shared.deliveries) && shared.deliveries.length
+    ? shared.deliveries
+    : (isSpin ? ['Leg Break', 'Googly'] : []);
+  const variations = Array.isArray(shared.variations) && shared.variations.length
+    ? shared.variations
+    : (isSpin ? [] : ['Seam Up', 'Outswing']);
+  const lengths = Array.isArray(shared.lengths) ? shared.lengths : [];
+  const deliveryNames = spinDeliveries.length ? spinDeliveries : variations;
+  const cacheKey = JSON.stringify({ bowlerName, deliveryNames, lengths, isSpin });
+  if (deliverySelect.dataset.rendered === cacheKey) return;
+  deliverySelect.dataset.rendered = cacheKey;
+  selectedDelivery = null;
+
+  deliverySelect.innerHTML = '<option value="">Choose a delivery...</option>';
+  deliveryNames.forEach(name => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.innerText = name;
+    deliverySelect.appendChild(option);
+  });
+  deliveryGrid.innerHTML = '';
+  lengthSection.classList.add('hidden');
+
+  const renderSelectedDeliveryLengths = (variation) => {
+    selectedDelivery = null;
+    deliveryGrid.innerHTML = '';
+    if (!variation) {
+      lengthSection.classList.add('hidden');
+      return;
+    }
+
+    const choices = spinDeliveries.length || !lengths.length
+      ? [{ id: variation, name: variation }]
+      : lengths.map(length => ({
           id: `${variation} ${length}`.trim(),
           name: `${variation} ${length}`.trim(),
-        }))
-      ));
-    } else {
-      deliveries = shared.variations.map(name => ({ id: name, name }));
-    }
-    document.getElementById('bowling-speed-section').classList.remove('hidden');
-  } else {
-    deliveries = isSpin
-      ? [{ id: 'Leg Break', name: 'Leg Break' }, { id: 'Googly', name: 'Googly' }]
-      : [{ id: 'Seam Up', name: 'Seam Up' }, { id: 'Outswing', name: 'Outswing' }];
-    document.getElementById('bowling-speed-section').classList.toggle('hidden', isSpin);
-  }
+        }));
+    lengthTitle.innerText = choices.length === 1 ? 'Confirm Delivery' : `Choose ${variation} Length`;
+    choices.forEach(delivery => {
+      const btn = document.createElement('button');
+      btn.className = 'btn-variation';
+      btn.innerText = delivery.name;
+      btn.dataset.delivery = delivery.id;
+      btn.addEventListener('click', (event) => {
+        deliveryGrid.querySelectorAll('.btn-variation').forEach(button => button.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        selectedDelivery = event.currentTarget.dataset.delivery;
+      });
+      deliveryGrid.appendChild(btn);
+    });
+    lengthSection.classList.remove('hidden');
+  };
+  deliverySelect.onchange = event => renderSelectedDeliveryLengths(event.currentTarget.value);
 
   // Dynamically render speed variations for pacers only.
-  if (!isSpin) {
+  document.getElementById('bowling-speed-section').classList.toggle('hidden', isSpin);
+  if (isSpin) {
+    selectedSpeed = 'normal';
+  } else {
     const speedGroup = document.querySelector('.speed-button-group');
     if (speedGroup) {
       speedGroup.innerHTML = `
@@ -1021,30 +1039,14 @@ function renderBowlerVariations() {
         <button class="btn btn-speed${selectedSpeed === 'normal' ? ' active' : ''}" data-speed="normal">Normal</button>
         <button class="btn btn-speed${selectedSpeed === 'slow' ? ' active' : ''}" data-speed="slow">Slow</button>`;
       speedGroup.querySelectorAll('.btn-speed').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          speedGroup.querySelectorAll('.btn-speed').forEach(b => b.classList.remove('active'));
-          e.currentTarget.classList.add('active');
-          selectedSpeed = e.currentTarget.dataset.speed;
+        btn.addEventListener('click', (event) => {
+          speedGroup.querySelectorAll('.btn-speed').forEach(button => button.classList.remove('active'));
+          event.currentTarget.classList.add('active');
+          selectedSpeed = event.currentTarget.dataset.speed;
         });
       });
     }
   }
-  deliveryGrid.innerHTML = '';
-  deliveries.forEach(del => {
-    const btn = document.createElement('button');
-    btn.className = "btn-variation";
-    btn.innerText = del.name;
-    btn.dataset.delivery = del.id;
-    btn.addEventListener('click', (e) => {
-      const allActionBtns = deliveryGrid.querySelectorAll('.btn-variation');
-      allActionBtns.forEach(b => b.classList.remove('active'));
-      e.currentTarget.classList.add('active');
-      selectedDelivery = e.currentTarget.dataset.delivery;
-    });
-    deliveryGrid.appendChild(btn);
-  });
-
-  selectedDelivery = null;
 }
 
 // Render batting shot event listeners
@@ -1055,8 +1057,7 @@ const BATTING_SHOTS = [
 ].map(shot => ({ shot, label: shot }));
 
 async function submitShot(shot) {
-  // Minimize sheet immediately for snappy feedback
-  document.getElementById('controls-sheet').classList.add('minimized');
+  // Keep the match sheet visible so the resolved outcome appears immediately.
   try {
     const res = await fetch('/api/match/action', {
       method: 'POST',
@@ -1103,7 +1104,7 @@ function renderBattingShots({ disabled = false } = {}) {
 // Bowling Submit Handler
 async function submitDelivery() {
   if (!selectedDelivery) {
-    alert("Please select a delivery variation first!");
+    alert("Please select a delivery and length first!");
     return;
   }
 
@@ -1126,6 +1127,10 @@ async function submitDelivery() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit delivery");
+    selectedDelivery = null;
+    document.getElementById('bowler-delivery-select').value = '';
+    document.getElementById('bowler-delivery-grid').innerHTML = '';
+    document.getElementById('bowler-length-section').classList.add('hidden');
     fetchState();
   } catch (err) {
     alert(err.message);

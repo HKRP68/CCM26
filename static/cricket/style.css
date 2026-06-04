@@ -2009,3 +2009,39 @@ body {
 .tab-btn.active {
   text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }
+
+/* ── Grouped Delivery Picker ───────────────────────────────────── */
+.delivery-select-label {
+  display: block;
+}
+
+.delivery-select {
+  width: 100%;
+  appearance: none;
+  background: rgba(0, 212, 255, 0.04);
+  border: 1px solid rgba(0, 212, 255, 0.18);
+  border-radius: var(--border-radius-md);
+  color: var(--text-primary);
+  padding: 12px 36px 12px 12px;
+  font: 700 13px var(--font-family);
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--primary-accent) 50%), linear-gradient(135deg, var(--primary-accent) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.delivery-select:focus {
+  outline: none;
+  border-color: var(--primary-accent);
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.18);
+}
+
+.delivery-select option {
+  background: #101820;
+  color: var(--text-primary);
+}
+
+.delivery-length-section {
+  margin-top: 14px;
+}

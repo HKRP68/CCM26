@@ -341,11 +341,18 @@
             </div>
           </div>
 
-          <!-- BOWLING DELIVERIES GRID -->
+          <!-- BOWLING DELIVERY PICKER -->
           <div id="bowling-controls" class="controls-section hidden">
             <div class="delivery-selection-area">
-              <div class="button-grid premium-grid" id="bowler-delivery-grid">
-                <!-- Populated dynamically -->
+              <label class="section-subtitle delivery-select-label" for="bowler-delivery-select">Select Delivery</label>
+              <select id="bowler-delivery-select" class="delivery-select">
+                <option value="">Choose a delivery...</option>
+              </select>
+              <div id="bowler-length-section" class="delivery-length-section hidden">
+                <h3 id="bowler-length-title" class="section-subtitle">Choose Length</h3>
+                <div class="button-grid premium-grid" id="bowler-delivery-grid">
+                  <!-- Populated dynamically after a delivery is selected -->
+                </div>
               </div>
             </div>
             
