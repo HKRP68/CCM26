@@ -5,6 +5,9 @@ Shares the same database as the bot. Any changes here reflect in the bot instant
 import os
 import io
 import csv
+import json
+import zipfile
+import html as html_lib
 import logging
 import threading
 from datetime import datetime, timedelta
@@ -539,6 +542,7 @@ def players_list():
         bowl_rating_min = _parse_int(request.args.get("bowl_rating_min", ""))
         bowl_rating_max = _parse_int(request.args.get("bowl_rating_max", ""))
         version_mode = request.args.get("version_mode", "").strip()
+        version_filter = request.args.get("version", "").strip()
         sort = request.args.get("sort", "rating_desc").strip()
         page = max(1, int(request.args.get("page", 1)))
 
@@ -598,6 +602,8 @@ def players_list():
             query = query.filter(Player.parent_player_id.is_(None))
         elif version_mode == "version":
             query = query.filter(Player.parent_player_id.isnot(None))
+        if version_filter:
+            query = query.filter(Player.version == version_filter)
 
         # Sorting
         sort_map = {
@@ -625,6 +631,10 @@ def players_list():
 
         categories = [r[0] for r in db.query(Player.category).distinct().order_by(Player.category).all()]
         countries = [r[0] for r in db.query(Player.country).distinct().order_by(Player.country).all()]
+        versions = [r[0] for r in (db.query(Player.version)
+                                   .filter(Player.version.isnot(None))
+                                   .distinct().order_by(Player.version).all())
+                    if r[0]]
 
         # Set of player IDs with active custom images (for 🎨 indicator)
         from services.player_image_service import list_players_with_custom_images
@@ -648,6 +658,18 @@ def players_list():
         elif is_active == "0": active_filters.append(("Status", "Inactive"))
         if version_mode == "base": active_filters.append(("Type", "Base only"))
         elif version_mode == "version": active_filters.append(("Type", "Versions only"))
+        if version_filter: active_filters.append(("Version", version_filter))
+        if buypl_filter == "blocked": active_filters.append(("/buypl", "Blocked"))
+        elif buypl_filter == "available": active_filters.append(("/buypl", "Available"))
+
+        download_args = request.args.to_dict(flat=True)
+        download_args.pop("page", None)
+        download_args.pop("format", None)
+        download_urls = {
+            "csv": url_for("players_download", **download_args, format="csv"),
+            "json": url_for("players_download", **download_args, format="json"),
+            "xlsx": url_for("players_download", **download_args, format="xlsx"),
+        }
 
         return render_template(
             "players.html",
@@ -658,13 +680,13 @@ def players_list():
             bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active,
             buypl_filter=buypl_filter,
             sort=sort,
-            categories=categories, countries=countries,
-            custom_image_ids=custom_image_ids,
+            categories=categories, countries=countries, versions=versions,
+            custom_image_ids=custom_image_ids, download_urls=download_urls,
             active_filters=active_filters,
             rating_min=rating_min, rating_max=rating_max,
             bat_rating_min=bat_rating_min, bat_rating_max=bat_rating_max,
             bowl_rating_min=bowl_rating_min, bowl_rating_max=bowl_rating_max,
-            version_mode=version_mode,
+            version_mode=version_mode, version_filter=version_filter,
         )
     finally:
         db.close()
@@ -677,11 +699,11 @@ def players_list():
 def players_download():
     db = get_session()
     try:
-        # Apply same filters as the current view (if any)
-        q = request.args.get("q", "").strip()
-        category = request.args.get("category", "").strip()
-        country_filter = request.args.get("country", "").strip()
-        rating_range = request.args.get("rating_range", "").strip()
+        export_format = (request.args.get("format") or "csv").strip().lower()
+        if export_format in ("excel", "xls"):
+            export_format = "xlsx"
+        if export_format not in ("csv", "json", "xlsx"):
+            export_format = "csv"
 
         RANGE_MAP = {
             "95-100": (95, 100), "90-94": (90, 94), "85-89": (85, 89),
@@ -689,40 +711,46 @@ def players_download():
             "65-69": (65, 69), "60-64": (60, 64), "55-59": (55, 59), "50-54": (50, 54),
         }
 
-        query = db.query(Player)
-        if q: query = query.filter(Player.name.ilike(f"%{q}%"))
-        if category: query = query.filter(Player.category == category)
-        if country_filter: query = query.filter(Player.country == country_filter)
-        if rating_range and rating_range in RANGE_MAP:
-            r_min, r_max = RANGE_MAP[rating_range]
-            query = query.filter(Player.rating >= r_min, Player.rating <= r_max)
+        filters = _parse_player_filter_args(request.args)
+        query = _apply_player_filters(db.query(Player), filters, RANGE_MAP)
+        players = query.order_by(Player.rating.desc(), Player.name.asc(), Player.id.asc()).all()
+        rows = [_player_export_dict(p) for p in players]
 
-        players = query.order_by(Player.rating.desc(), Player.name.asc()).all()
-
-        log_admin(db, "players_download", detail=f"Downloaded {len(players)} players as CSV")
+        log_admin(db, "players_download", detail=f"Downloaded {len(players)} players as {export_format.upper()}")
         db.commit()
 
-        # Build CSV in memory
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["Name", "Rating", "Category", "Country", "Bat Hand",
-                         "Bowl Hand", "Bowl Style", "Bat Rating", "Bowl Rating",
-                         "Version", "Is Active"])
-        for p in players:
-            writer.writerow([
-                p.name, p.rating, p.category, p.country, p.bat_hand,
-                p.bowl_hand, p.bowl_style, p.bat_rating, p.bowl_rating,
-                p.version or "Base", "1" if p.is_active else "0",
-            ])
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        if export_format == "json":
+            payload = json.dumps(rows, ensure_ascii=False, indent=2)
+            return Response(
+                payload,
+                mimetype="application/json",
+                headers={"Content-Disposition": f"attachment; filename=players_{timestamp}.json"},
+            )
 
+        if export_format == "xlsx":
+            workbook = _build_players_xlsx(rows)
+            return send_file(
+                workbook,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                as_attachment=True,
+                download_name=f"players_{timestamp}.xlsx",
+            )
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=(list(rows[0].keys()) if rows else [
+            "id", "name", "rating", "category", "country", "bat_hand",
+            "bowl_hand", "bowl_style", "bat_rating", "bowl_rating",
+            "version", "parent_player_id", "is_active", "restricted_from_buypl",
+        ]))
+        writer.writeheader()
+        writer.writerows(rows)
         csv_data = output.getvalue()
         output.close()
-
-        filename = f"players_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         return Response(
             csv_data,
             mimetype="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
+            headers={"Content-Disposition": f"attachment; filename=players_{timestamp}.csv"},
         )
     finally:
         db.close()
@@ -1722,6 +1750,142 @@ def _parse_int(s):
     try: return int(s)
     except (ValueError, TypeError): return None
 
+
+
+def _parse_player_filter_args(args):
+    """Collect player list/export filters from request args."""
+    return {
+        "q": args.get("q", "").strip(),
+        "category": args.get("category", "").strip(),
+        "country_filter": args.get("country", "").strip(),
+        "rating_range": args.get("rating_range", "").strip(),
+        "bat_hand": args.get("bat_hand", "").strip(),
+        "bowl_hand": args.get("bowl_hand", "").strip(),
+        "is_active": args.get("is_active", "").strip(),
+        "buypl_filter": args.get("buypl", "").strip(),
+        "version_mode": args.get("version_mode", "").strip(),
+        "version_filter": args.get("version", "").strip(),
+        "rating_min": _parse_int(args.get("rating_min", "")),
+        "rating_max": _parse_int(args.get("rating_max", "")),
+        "bat_rating_min": _parse_int(args.get("bat_rating_min", "")),
+        "bat_rating_max": _parse_int(args.get("bat_rating_max", "")),
+        "bowl_rating_min": _parse_int(args.get("bowl_rating_min", "")),
+        "bowl_rating_max": _parse_int(args.get("bowl_rating_max", "")),
+    }
+
+
+def _apply_player_filters(query, filters, range_map):
+    """Apply all filters used by the Players tab to a Player query."""
+    q = filters["q"]
+    if q:
+        query = query.filter(Player.name.ilike(f"%{q}%"))
+    if filters["category"]:
+        query = query.filter(Player.category == filters["category"])
+    if filters["country_filter"]:
+        query = query.filter(Player.country == filters["country_filter"])
+    rating_range = filters["rating_range"]
+    if rating_range and rating_range in range_map:
+        r_min, r_max = range_map[rating_range]
+        query = query.filter(Player.rating >= r_min, Player.rating <= r_max)
+    if filters["rating_min"] is not None:
+        query = query.filter(Player.rating >= filters["rating_min"])
+    if filters["rating_max"] is not None:
+        query = query.filter(Player.rating <= filters["rating_max"])
+    if filters["bat_rating_min"] is not None:
+        query = query.filter(Player.bat_rating >= filters["bat_rating_min"])
+    if filters["bat_rating_max"] is not None:
+        query = query.filter(Player.bat_rating <= filters["bat_rating_max"])
+    if filters["bowl_rating_min"] is not None:
+        query = query.filter(Player.bowl_rating >= filters["bowl_rating_min"])
+    if filters["bowl_rating_max"] is not None:
+        query = query.filter(Player.bowl_rating <= filters["bowl_rating_max"])
+    if filters["bat_hand"]:
+        query = query.filter(Player.bat_hand == filters["bat_hand"])
+    if filters["bowl_hand"]:
+        query = query.filter(Player.bowl_hand == filters["bowl_hand"])
+    if filters["is_active"] == "1":
+        query = query.filter(Player.is_active == True)
+    elif filters["is_active"] == "0":
+        query = query.filter(Player.is_active == False)
+    if filters["buypl_filter"] == "blocked":
+        query = query.filter(Player.restricted_from_buypl == True)
+    elif filters["buypl_filter"] == "available":
+        query = query.filter(
+            (Player.restricted_from_buypl == False) |
+            (Player.restricted_from_buypl.is_(None))
+        )
+    if filters["version_mode"] == "base":
+        query = query.filter(Player.parent_player_id.is_(None))
+    elif filters["version_mode"] == "version":
+        query = query.filter(Player.parent_player_id.isnot(None))
+    if filters["version_filter"]:
+        query = query.filter(Player.version == filters["version_filter"])
+    return query
+
+
+def _player_export_dict(player):
+    return {
+        "id": player.id,
+        "name": player.name,
+        "rating": player.rating,
+        "category": player.category,
+        "country": player.country,
+        "bat_hand": player.bat_hand,
+        "bowl_hand": player.bowl_hand,
+        "bowl_style": player.bowl_style,
+        "bat_rating": player.bat_rating,
+        "bowl_rating": player.bowl_rating,
+        "version": player.version or "Base",
+        "parent_player_id": player.parent_player_id,
+        "is_active": bool(player.is_active),
+        "restricted_from_buypl": bool(getattr(player, "restricted_from_buypl", False)),
+    }
+
+
+def _build_players_xlsx(rows):
+    """Create a minimal XLSX workbook using only the Python stdlib."""
+    headers = list(rows[0].keys()) if rows else [
+        "id", "name", "rating", "category", "country", "bat_hand",
+        "bowl_hand", "bowl_style", "bat_rating", "bowl_rating",
+        "version", "parent_player_id", "is_active", "restricted_from_buypl",
+    ]
+
+    def cell(col_idx, row_idx, value):
+        col = ""
+        n = col_idx
+        while n:
+            n, rem = divmod(n - 1, 26)
+            col = chr(65 + rem) + col
+        ref = f"{col}{row_idx}"
+        if value is None:
+            return f'<c r="{ref}"/>'
+        if isinstance(value, bool):
+            return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return f'<c r="{ref}"><v>{value}</v></c>'
+        escaped = html_lib.escape(str(value), quote=False)
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escaped}</t></is></c>'
+
+    sheet_rows = []
+    sheet_rows.append('<row r="1">' + ''.join(cell(i + 1, 1, h) for i, h in enumerate(headers)) + '</row>')
+    for row_idx, row in enumerate(rows, start=2):
+        sheet_rows.append('<row r="{}">'.format(row_idx) + ''.join(
+            cell(i + 1, row_idx, row.get(h)) for i, h in enumerate(headers)
+        ) + '</row>')
+    worksheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{}</sheetData></worksheet>'.format(''.join(sheet_rows))
+    workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Players" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+    workbook_rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    content_types = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("xl/workbook.xml", workbook)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        zf.writestr("xl/worksheets/sheet1.xml", worksheet)
+    out.seek(0)
+    return out
 
 def _users_csv_export(db, base_query):
     """Stream a CSV of users matching the filter query (no pagination)."""

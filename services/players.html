@@ -3,7 +3,12 @@
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
   <h2>Players <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
-  <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+    <a href="{{ download_urls.csv }}" class="btn btn-ghost">⬇ CSV</a>
+    <a href="{{ download_urls.json }}" class="btn btn-ghost">⬇ JSON</a>
+    <a href="{{ download_urls.xlsx }}" class="btn btn-ghost">⬇ Excel</a>
+    <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
+  </div>
 </div>
 
 <form method="GET" class="toolbar">
@@ -16,38 +21,68 @@
     <option value="">All Countries</option>
     {% for c in countries %}<option value="{{ c }}" {{ 'selected' if c == country_filter }}>{{ c }}</option>{% endfor %}
   </select>
+  <select name="version">
+    <option value="">All Versions</option>
+    {% for v in versions %}<option value="{{ v }}" {{ 'selected' if v == version_filter }}>{{ v }}</option>{% endfor %}
+  </select>
+  <select name="version_mode">
+    <option value="" {{ 'selected' if not version_mode }}>All Cards</option>
+    <option value="base" {{ 'selected' if version_mode == 'base' }}>Base only</option>
+    <option value="version" {{ 'selected' if version_mode == 'version' }}>Versions only</option>
+  </select>
+  <select name="buypl">
+    <option value="" {{ 'selected' if not buypl_filter }}>All /buypl</option>
+    <option value="available" {{ 'selected' if buypl_filter == 'available' }}>Available in /buypl</option>
+    <option value="blocked" {{ 'selected' if buypl_filter == 'blocked' }}>Blocked from /buypl</option>
+  </select>
   <select name="rating_min">
     <option value="">Min Rating</option>
-    {% for r in range(50, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r|string == rating_min }}>{{ r }}+</option>{% endfor %}
+    {% for r in range(50, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r == rating_min }}>{{ r }}+</option>{% endfor %}
   </select>
   <select name="rating_max">
     <option value="">Max Rating</option>
-    {% for r in range(55, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r|string == rating_max }}>≤{{ r }}</option>{% endfor %}
+    {% for r in range(55, 101, 5) %}<option value="{{ r }}" {{ 'selected' if r == rating_max }}>≤{{ r }}</option>{% endfor %}
   </select>
   <button type="submit" class="btn btn-blue">Filter</button>
-  {% if q or category or country_filter or rating_min or rating_max %}
+  {% if q or category or country_filter or rating_min or rating_max or version_filter or version_mode or buypl_filter %}
   <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Clear</a>
   {% endif %}
 </form>
+
+{% if active_filters %}
+<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:-.35rem 0 1rem;">
+  {% for label, value in active_filters %}
+  <span style="font-size:.78rem;color:var(--accent);background:rgba(232,184,75,.1);border:1px solid rgba(232,184,75,.25);padding:.25rem .5rem;border-radius:999px;">{{ label }}: {{ value }}</span>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
         <th>Name</th>
+        <th>Version</th>
         <th>Rating</th>
         <th>Category</th>
         <th>Country</th>
         <th>Bat / Bowl</th>
         <th>Style</th>
         <th>Active</th>
+        <th>/buypl</th>
         <th>Actions</th>
       </tr>
     </thead>
     <tbody>
     {% for p in players %}
     <tr>
-      <td style="font-weight:600;">{{ p.name }}</td>
+      <td style="font-weight:600;">
+        {{ p.name }}
+        {% if p.id in custom_image_ids %}<span title="Custom image enabled">🎨</span>{% endif %}
+      </td>
+      <td>
+        <span style="font-size:.8rem;color:{{ 'var(--accent)' if p.parent_player_id else 'var(--muted)' }};">{{ p.version or 'Base' }}</span>
+      </td>
       <td><span class="rating-badge tier-{{ p._tier_css }}">{{ p.rating }}</span></td>
       <td>{{ p.category }}</td>
       <td>{{ p.country }}</td>
@@ -61,9 +96,21 @@
         {% endif %}
       </td>
       <td>
+        {% if p.restricted_from_buypl %}
+        <span style="color:var(--red);font-size:.8rem;">Blocked</span>
+        {% else %}
+        <span style="color:var(--green);font-size:.8rem;">Allowed</span>
+        {% endif %}
+      </td>
+      <td>
         <div class="actions">
           <a href="{{ url_for('player_edit', player_id=p.id) }}" class="btn btn-blue btn-sm">Edit</a>
-          <form method="POST" action="{{ url_for('player_delete', player_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Delete {{ p.name }}?')">
+          <form method="POST" action="{{ url_for('player_toggle_buypl', player_id=p.id) }}" style="display:inline;">
+            <button type="submit" class="btn {{ 'btn-green' if p.restricted_from_buypl else 'btn-ghost' }} btn-sm" title="{{ 'Unblock from /buypl' if p.restricted_from_buypl else 'Block from /buypl' }}">
+              {{ 'Unblock /buypl' if p.restricted_from_buypl else 'Block /buypl' }}
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('player_delete', player_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Delete {{ p.name }} ({{ p.version or 'Base' }})?')">
             <button type="submit" class="btn btn-red btn-sm">Del</button>
           </form>
           {% if p.is_active %}
@@ -80,7 +127,7 @@
     </tr>
     {% endfor %}
     {% if not players %}
-    <tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
+    <tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
     {% endif %}
     </tbody>
   </table>
@@ -89,14 +136,14 @@
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}
-  <a href="{{ url_for('players_list', page=page-1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">◀</a>
+  <a href="{{ url_for('players_list', page=page-1, q=q, category=category, country=country_filter, version=version_filter, version_mode=version_mode, buypl=buypl_filter, rating_min=rating_min, rating_max=rating_max) }}">◀</a>
   {% endif %}
 
   {% for p in range(1, total_pages + 1) %}
     {% if p == page %}
       <span class="current">{{ p }}</span>
     {% elif p <= 3 or p >= total_pages - 2 or (p >= page - 1 and p <= page + 1) %}
-      <a href="{{ url_for('players_list', page=p, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">{{ p }}</a>
+      <a href="{{ url_for('players_list', page=p, q=q, category=category, country=country_filter, version=version_filter, version_mode=version_mode, buypl=buypl_filter, rating_min=rating_min, rating_max=rating_max) }}">{{ p }}</a>
     {% elif p == 4 and page > 5 %}
       <span class="info">…</span>
     {% elif p == total_pages - 3 and page < total_pages - 4 %}
@@ -105,7 +152,7 @@
   {% endfor %}
 
   {% if page < total_pages %}
-  <a href="{{ url_for('players_list', page=page+1, q=q, category=category, country=country_filter, rating_min=rating_min, rating_max=rating_max) }}">▶</a>
+  <a href="{{ url_for('players_list', page=page+1, q=q, category=category, country=country_filter, version=version_filter, version_mode=version_mode, buypl=buypl_filter, rating_min=rating_min, rating_max=rating_max) }}">▶</a>
   {% endif %}
   <span class="info">{{ total }} players</span>
 </div>
