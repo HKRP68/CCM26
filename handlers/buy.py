@@ -1,9 +1,11 @@
 """Handler for /buypl <player_name> — buy a player from the market."""
 
+import asyncio
 import io
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -71,6 +73,14 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     search = " ".join(context.args).strip()
+
+    # Instant feedback while we look up the player + render the card (the render
+    # runs off the event loop, so this never blocks other users' commands).
+    try:
+        await update.message.reply_chat_action(ChatAction.UPLOAD_PHOTO)
+    except Exception:
+        pass
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
@@ -152,7 +162,8 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         )
         caption = "\n".join(caption_lines)
         keyboard = _join_gc_keyboard(official_link)
-        card_bytes = generate_card(player)
+        # send_player_card renders/caches the card itself (off-thread) — no need
+        # to generate here.
         from services.card_sender import send_player_card
         chat_id = (send_to.chat_id if hasattr(send_to, 'chat_id')
                    else send_to.chat.id)
@@ -172,10 +183,10 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         current_index=current_idx, owner_tg=owner_tg, flow="buy",
     )
 
-    card_bytes = generate_card(player)
-
     if edit_query is not None:
-        # Edit existing message: try edit_message_media for photo, fall back to caption-only
+        # Edit existing message: try edit_message_media for photo, fall back to caption-only.
+        # Pillow render is CPU-bound — run off the event loop so Prev/Next stays snappy.
+        card_bytes = await asyncio.to_thread(generate_card, player)
         try:
             if card_bytes and edit_query.message.photo:
                 from telegram import InputMediaPhoto

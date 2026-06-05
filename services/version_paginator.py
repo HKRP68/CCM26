@@ -27,14 +27,15 @@ def get_versions_ordered(session, base_id: int) -> List[Player]:
     versions = get_all_versions(session, base_id)
     if not versions:
         return []
-    # Place the base (parent_player_id is NULL) first, then variants
-    base = next((v for v in versions if v.parent_player_id is None), None)
-    variants = [v for v in versions if v.parent_player_id is not None]
-    # Variants ordered by version label (alpha) then id
-    variants.sort(key=lambda v: ((v.version or "").lower(), v.id))
-    if base:
-        return [base] + variants
-    return variants
+    # Canonical base = first row with no parent; fall back to the first edition.
+    # NOTE: keep EVERY other edition — including same-named rows that were never
+    # linked (parent_player_id IS NULL) — otherwise the carousel would silently
+    # drop them and never show ◀ Prev / Next ▶.
+    base = next((v for v in versions if v.parent_player_id is None), versions[0])
+    others = [v for v in versions if v.id != base.id]
+    # Remaining editions ordered by version label (alpha) then id
+    others.sort(key=lambda v: ((v.version or "").lower(), v.id))
+    return [base] + others
 
 
 def _format_version_label(player: Player) -> str:
