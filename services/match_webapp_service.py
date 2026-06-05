@@ -1763,12 +1763,15 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         pass
 
-    # Clean up the live state now that everything is persisted
-    try:
-        from services.match_state_store import cleanup_state
-        cleanup_state(mwa.fresh_ctx(), match_id)
-    except Exception:
-        pass
+    # NOTE: the live match_state row is intentionally LEFT IN PLACE here. It is
+    # removed by the match-summary broadcast path (admin._broadcast_match_result)
+    # only after the Match Summary has been delivered to the lobby chat. Keeping
+    # it alive through the final ball + summary avoids a race where a concurrent
+    # poll observes the deleted state with a still-"playing" Match row and the
+    # Mini App falls through to its no-match screen. Bot startup
+    # (restore_active_matches) reaps any completed-match leftover state as a
+    # backstop, and serialize_match_state reloads the read-only snapshot from the
+    # persisted final scorecard once the row is gone.
 
     return payload
 
