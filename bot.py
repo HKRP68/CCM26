@@ -19,6 +19,11 @@ from config import BOT_TOKEN
 from database import init_db
 from logger import setup_logging
 from services.reply_context import bind_reply_context, install_reply_defaults
+from services.button_access import (
+    bind_button_owner_context,
+    button_access_guard,
+    install_button_access_defaults,
+)
 
 # Phase 1 handlers
 from handlers.debut import debut_handler
@@ -547,6 +552,7 @@ def _send_admin_reply_blocking(chat_id, text):
 def main():
     setup_logging()
     install_reply_defaults()
+    install_button_access_defaults()
     logger.info("=" * 50)
     logger.info("CRICKET BOT STARTING...")
     logger.info("=" * 50)
@@ -629,7 +635,11 @@ def main():
         # ── Reply-context middleware (group=-4, runs before outbound replies) ──
         async def _bind_reply_context(update, context):
             bind_reply_context(update)
+            bind_button_owner_context(update)
         app.add_handler(TypeHandler(_TGUpdate, _bind_reply_context), group=-4)
+
+        # ── Button-owner guard (group=-5, before callbacks) ──
+        app.add_handler(TypeHandler(_TGUpdate, button_access_guard), group=-5)
 
         # ── Chat-tracker middleware (group=-3, runs FIRST) ──
         async def _track_chat(update, context):
