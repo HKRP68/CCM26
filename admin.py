@@ -6284,6 +6284,12 @@ def match_rest_autoplay():
             return {"ok": False, "error": "spectator",
                     "message": "Spectators cannot autoplay."}, 403
 
+        # Diagnostic: Autoplay hands the caller's OWN side to the AI. With the
+        # client toggle defaulting OFF per match, this should only fire when the
+        # user has explicitly turned Autoplay on. Logged so a runtime test can
+        # confirm the endpoint isn't being hit with the toggle off.
+        logger.info("match_rest_autoplay tick: match=%s user=%s na=%s",
+                    match.id, user.id, get_next_action(match.id))
         auto_play_user_turns(db, match.id, user.id)
         if get_state_is_vsbot(match.id):
             auto_play_bot_turns(db, match.id)
@@ -7450,6 +7456,32 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
             scorecard = {}
         innings = scorecard.get("innings") or []
         arena = scorecard.get("arena_state") or {}
+        # Fallback: if the persisted scorecard is missing or incomplete (e.g. it
+        # was saved before both innings were populated), rebuild from the still
+        # live match state. This broadcast runs BEFORE cleanup_state removes the
+        # state, so it is still available here — this prevents an empty recap
+        # (no batting/bowling/summary) in the lobby chat.
+        if len(innings) < 2 or not arena:
+            try:
+                from services.match_webapp_service import build_scorecard
+                from services.match_webapp_access import get_state as _live_state
+                live = _live_state(match_id)
+                if live:
+                    if not arena:
+                        arena = live
+                        scorecard["arena_state"] = arena
+                    rebuilt = build_scorecard(match_id, None)
+                    if (rebuilt.get("ok") and rebuilt.get("innings")
+                            and len(rebuilt["innings"]) > len(innings)):
+                        innings = rebuilt["innings"]
+                        scorecard["innings"] = innings
+                        scorecard.setdefault("target", rebuilt.get("target"))
+                    logger.warning(
+                        "match %s recap used live-state fallback (persisted "
+                        "scorecard had %s innings)", match_id,
+                        len(scorecard.get("innings") or []))
+            except Exception:
+                logger.exception("scorecard live-state fallback failed")
         # Prefer the immutable lobby origin, then the persisted Match chat, and
         # finally the active Arena chat for older matches created before the
         # origin field existed.

@@ -28,6 +28,7 @@ const EVENT_FLASH_MS = 900;
 let selectedDelivery = null;
 let selectedSpeed = 'normal';
 let autoplayActive = false;
+let autoplayMatchId = null; // match id Autoplay was last applied to (reset per match)
 let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
 let eventGifTimer = null;
@@ -157,14 +158,7 @@ function setupEventListeners() {
   // Autoplay Pill Switch Toggle
   const autoplayToggleBtn = document.getElementById('autoplay-toggle-btn');
   autoplayToggleBtn.addEventListener('click', () => {
-    autoplayActive = !autoplayActive;
-    if (autoplayActive) {
-      autoplayToggleBtn.classList.add('active');
-      autoplayToggleBtn.querySelector('.pill-label').innerText = 'ON';
-    } else {
-      autoplayToggleBtn.classList.remove('active');
-      autoplayToggleBtn.querySelector('.pill-label').innerText = 'OFF';
-    }
+    setAutoplayActive(!autoplayActive);
   });
 
   // Speed selection
@@ -409,6 +403,15 @@ function applyMatchState(nextState) {
   matchState = nextState;
   preloadEventGifs(matchState.eventGifs || {});
   pollFailureCount = 0;
+
+  // Autoplay must default OFF for every new match. The flag is a module global,
+  // so in a reused webview it would otherwise leak from a previous match and
+  // silently auto-play the human's deliveries/shots. Reset whenever the match
+  // id changes so OFF is the deterministic per-match default.
+  if (matchState.id && matchState.id !== autoplayMatchId) {
+    autoplayMatchId = matchState.id;
+    setAutoplayActive(false);
+  }
 
   if (identitySelectionRequired) {
     showIdentitySelection(matchState);
@@ -1825,18 +1828,30 @@ function renderResultScreen() {
 // clicking. Each cycle we POST /api/match/autoplay, which plays all of our
 // pending turns (and, in a vs-bot match, the bot's reply) and returns the new
 // state. The poll loop keeps calling until the match completes.
+// Single source of truth for the Autoplay flag + its pill UI, so the toggle and
+// the per-match reset can never drift apart.
+function setAutoplayActive(active) {
+  autoplayActive = !!active;
+  const btn = document.getElementById('autoplay-toggle-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', autoplayActive);
+  const label = btn.querySelector('.pill-label');
+  if (label) label.innerText = autoplayActive ? 'ON' : 'OFF';
+}
+
 let autoplayInFlight = false;
 async function runAutoplayAction() {
   if (!autoplayActive || !matchState) return;
   if (autoplayInFlight || matchState.isProcessing) return;
   if (matchState.status === 'completed') return;
 
-  // Only act when there is something for ME to do. Setup picks aren't
-  // turn-gated, so during xi_selection we always probe the server (it no-ops if
-  // our side is already locked in); during play we only act on our turn.
-  const inSetup = matchState.status === 'xi_selection';
+  // Autoplay only ever plays deliveries and shots — bowler/batsman SELECTION
+  // (opener setup, new bowler, incoming batsman) always stays manual, so skip
+  // setup and the selection turn states and leave those controls to the user.
   const inPlay = matchState.status === 'innings1' || matchState.status === 'innings2';
-  if (!inSetup && !(inPlay && matchState.isMyTurn)) return;
+  const isDeliveryOrShot = matchState.turnState === 'bowling_delivery'
+    || matchState.turnState === 'batting_shot';
+  if (!(inPlay && matchState.isMyTurn && isDeliveryOrShot)) return;
 
   autoplayInFlight = true;
   try {

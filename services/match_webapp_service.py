@@ -1527,6 +1527,10 @@ def save_final_scorecard(session, match_id, result_text=None):
 
     sc = build_scorecard(match_id, None)  # user_id not needed for full card
     if not sc.get("ok"):
+        # Live state already gone → no scorecard can be snapshotted. The recap
+        # path has a live-state fallback, but log so this is visible if it recurs.
+        logger.warning("save_final_scorecard: build_scorecard not ok for match %s "
+                       "(state missing?) — no row persisted", match_id)
         return False
     row = MatchScorecard(
         match_id=match_id,
@@ -2311,30 +2315,11 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
 
         diff = difficulty or state.get("vsbot_difficulty") or "Medium"
 
-        # ── XI setup phase: auto-pick this user's side if still pending ──
+        # ── XI setup phase ──
+        # Bowler/batsman SELECTION is always the user's call, even under Autoplay:
+        # opener selection (and the rest of the setup) stays manual. Autoplay only
+        # ever takes over deliveries and shots, so stop here and let the user pick.
         if _in_setup(state):
-            role = role_for(state, user_id)
-            if role == "batsman" and not state.get("openers_done"):
-                bat_xi = state.get("bat_xi", [])
-                if len(bat_xi) < 2:
-                    break
-                ok, _started, _msg = select_openers(
-                    match_id, user_id, bat_xi[0]["roster_id"], bat_xi[1]["roster_id"])
-                if not ok:
-                    break
-                steps.append({"type": "auto_openers"})
-                continue
-            if role == "bowler" and not state.get("bowler_done"):
-                bowl_xi = state.get("bowl_xi", [])
-                if not bowl_xi:
-                    break
-                best = max(bowl_xi, key=lambda p: p.get("bowl_rating", 0) or 0)
-                ok, _started, _msg = select_bowler(match_id, user_id, best["roster_id"])
-                if not ok:
-                    break
-                steps.append({"type": "auto_bowler"})
-                continue
-            # Nothing for this user to do in setup (waiting on the other side).
             break
 
         if not _user_controls_current_action(state, na, user_id):
@@ -2394,11 +2379,11 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
                     mwa.bump_ball_seq(match_id)
                     break
             elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
-                nb = state.get("next_batsman_idx", 2)
-                if nb < len(state.get("batting_order", [])):
-                    state["striker_idx"] = nb
-                    state["next_batsman_idx"] = nb + 1
-                mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+                # Wicket: batsman selection stays manual even under Autoplay —
+                # hand control back so the user picks the incoming batsman.
+                mwa.save_state(match_id, state, next_action=A_PICK_NEW_BATSMAN)
+                mwa.bump_ball_seq(match_id)
+                break
             elif res["eoo"]:
                 mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
             else:
@@ -2406,24 +2391,11 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
             mwa.bump_ball_seq(match_id)
             continue
 
-        if na == A_PICK_NEW_BOWLER:
-            new_bowler = bot_ai.pick_bot_next_bowler(
-                state["bowl_xi"], state.get("prev_bowler_rid"),
-                state["bowl_stats"], state["overs"])
-            state["current_bowler"] = new_bowler
-            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
-            steps.append({"type": "auto_bowler_change", "name": new_bowler["name"]})
-            continue
-
-        if na == A_PICK_NEW_BATSMAN:
-            # Index-based (NOT pick_bot_next_batsman) so we never select an
-            # already-out batsman: next_batsman_idx only ever advances.
-            nb = state.get("next_batsman_idx", 2)
-            if nb < len(state.get("batting_order", [])):
-                state["striker_idx"] = nb
-                state["next_batsman_idx"] = nb + 1
-            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
-            continue
+        # Bowler/batsman SELECTION is always the user's call, even under Autoplay.
+        # Stop on these actions so the user picks manually; Autoplay resumes (next
+        # tick) once the selection has been made and a delivery is due again.
+        if na in (A_PICK_NEW_BOWLER, A_PICK_NEW_BATSMAN):
+            break
 
         break
 
