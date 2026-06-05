@@ -6319,6 +6319,50 @@ def match_rest_autoplay():
         db.close()
 
 
+@app.route("/api/match/autoplay-toggle", methods=["POST"])
+@csrf_exempt
+def match_rest_autoplay_toggle():
+    """POST /api/match/autoplay-toggle — persist the caller's Autoplay flag.
+
+    Body: {userId, matchId, enabled}. Autoplay is server-authoritative so the
+    opponent's client can show the "is on Autoplay mode" banner and a reconnecting
+    user resumes in the same mode. Only the actual gameplay burst still runs via
+    /api/match/autoplay; this endpoint just records who is on autoplay.
+    """
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        from services.match_webapp_access import get_state, save_state
+        from services.match_webapp_service import role_for
+        state = get_state(match.id)
+        if not state:
+            return {"ok": False, "error": "no_match"}, 404
+        # Only the two players can be on autoplay; spectators cannot.
+        if role_for(state, user.id) not in ("batsman", "bowler"):
+            return {"ok": False, "error": "spectator",
+                    "message": "Spectators cannot autoplay."}, 403
+
+        enabled = bool(data.get("enabled", True))
+        users = list(state.get("autoplay_users") or [])
+        if enabled and user.id not in users:
+            users.append(user.id)
+        elif not enabled and user.id in users:
+            users = [u for u in users if u != user.id]
+        state["autoplay_users"] = users
+        save_state(match.id, state)
+        return {"ok": True, "enabled": user.id in users}
+    except Exception as e:
+        logger.exception("match_rest_autoplay_toggle failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 # ── Crickidex Arena Mini App (the UnderCover-style live-match frontend) ──
 # Served from static/cricket/. The "Play Match" button (services.match_broadcast)
 # opens /cricket?match_id=<id>&chat_id=<chat>; the page reads the Telegram user

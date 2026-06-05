@@ -404,13 +404,13 @@ function applyMatchState(nextState) {
   preloadEventGifs(matchState.eventGifs || {});
   pollFailureCount = 0;
 
-  // Autoplay must default OFF for every new match. The flag is a module global,
-  // so in a reused webview it would otherwise leak from a previous match and
-  // silently auto-play the human's deliveries/shots. Reset whenever the match
-  // id changes so OFF is the deterministic per-match default.
+  // Autoplay is server-authoritative. On a match change, sync the local flag
+  // from the serialized state (`myAutoplay`): a fresh match reports false (the
+  // deterministic per-match default, so the flag can't leak across matches in a
+  // reused webview), while reconnecting mid-match restores the user's mode.
   if (matchState.id && matchState.id !== autoplayMatchId) {
     autoplayMatchId = matchState.id;
-    setAutoplayActive(false);
+    setAutoplayActive(!!matchState.myAutoplay, false);
   }
 
   if (identitySelectionRequired) {
@@ -830,6 +830,12 @@ function renderControlsSection() {
   // Render the inline status badges
   renderInlineMatchStatusBar();
 
+  // Keep the Autoplay status banner in sync for every role (the opponent's
+  // "NOT my turn" branch returns early, so refresh it up here). Hide the quick
+  // card by default; only the autoplay delivery/shot branch below re-shows it.
+  renderAutoplayStatusBanner();
+  hideAutoplayQuickCard();
+
   // Spectator role
   if (matchState.myRole === 'spectator') {
     wasMyTurn = false;
@@ -858,7 +864,10 @@ function renderControlsSection() {
   // Show the batsman's shot sheet before the bowler has delivered. Presentation
   // is independent from authorization: these cards preview the available shots,
   // but remain disabled until the batting_shot phase becomes actionable.
-  const isBatsmanWaitingForDelivery = matchState.myRole === 'batting'
+  // While Autoplay is ON the shot grid is never shown — keep the quick card up
+  // instead of flashing the disabled shot preview between balls.
+  const isBatsmanWaitingForDelivery = !autoplayActive
+    && matchState.myRole === 'batting'
     && matchState.turnState === 'bowling_delivery'
     && matchState.isMyTurn === false;
   if (isBatsmanWaitingForDelivery) {
@@ -927,6 +936,20 @@ function renderControlsSection() {
 
   // Hide all sections initially
   hideActionSections();
+
+  // ── AUTOPLAY: hide the delivery/shot grid and show a quick text card ──
+  // Only deliveries and shots are auto-played; bowler/batsman SELECTION stays
+  // manual, so let selecting_over_bowler / selecting_wicket_batsman fall through
+  // to their normal grids below.
+  if (autoplayActive
+      && (matchState.turnState === 'bowling_delivery'
+          || matchState.turnState === 'batting_shot')) {
+    incomingCard.classList.add('hidden');
+    promptText.innerText = "⚙️ AUTOPLAY";
+    promptSubtitle.innerText = "Playing automatically…";
+    renderAutoplayQuickCard();
+    return;
+  }
 
   if (matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLER CONTROLS";
@@ -1830,13 +1853,83 @@ function renderResultScreen() {
 // state. The poll loop keeps calling until the match completes.
 // Single source of truth for the Autoplay flag + its pill UI, so the toggle and
 // the per-match reset can never drift apart.
-function setAutoplayActive(active) {
+// `persist` (default true) also records the flag on the server so the opponent
+// sees the "on Autoplay mode" banner; pass false when syncing FROM the server.
+function setAutoplayActive(active, persist = true) {
   autoplayActive = !!active;
   const btn = document.getElementById('autoplay-toggle-btn');
-  if (!btn) return;
-  btn.classList.toggle('active', autoplayActive);
-  const label = btn.querySelector('.pill-label');
-  if (label) label.innerText = autoplayActive ? 'ON' : 'OFF';
+  if (btn) {
+    btn.classList.toggle('active', autoplayActive);
+    const label = btn.querySelector('.pill-label');
+    if (label) label.innerText = autoplayActive ? 'ON' : 'OFF';
+  }
+  renderAutoplayStatusBanner();
+  if (persist && matchId && userId) {
+    // Best-effort: the local flag still drives our own loop if this fails.
+    fetch('/api/match/autoplay-toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, matchId, enabled: autoplayActive }),
+    }).catch(() => {});
+  }
+  // Make turning ON feel instant instead of waiting for the next poll tick.
+  if (autoplayActive) setTimeout(runAutoplayAction, 0);
+}
+
+// Banner shown in the Mini App: the autoplay user sees their own status; the
+// opponent sees that the other side is auto-playing. Driven purely by the
+// serialized state, so it reflects mode changes without per-ball spam.
+function renderAutoplayStatusBanner() {
+  const banner = document.getElementById('autoplay-status-banner');
+  if (!banner) return;
+  let text = '';
+  if (matchState) {
+    if (matchState.myAutoplay || (autoplayActive && matchState.myRole !== 'spectator')) {
+      text = '⚙️ Your team is playing in Autoplay mode';
+    } else if (matchState.opponentAutoplay) {
+      text = `⚙️ ${matchState.opponentTeamName || 'Opponent'} is on Autoplay mode`;
+    }
+  }
+  banner.innerText = text;
+  banner.classList.toggle('hidden', !text);
+}
+
+// Quick text card shown in place of the selection grid while Autoplay drives a
+// delivery/shot: "{Bowler} bowls {Delivery}" → "{Batter} played {Shot}" →
+// "{outcome}". Built from the last (just-played) ball in matchState.lastBall.
+function renderAutoplayQuickCard() {
+  const card = document.getElementById('autoplay-quick-card');
+  if (!card) return;
+  const lb = matchState && matchState.lastBall;
+  const titleize = (s) => String(s || '').replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  let html = '';
+  if (lb && (lb.bowler || lb.batsman)) {
+    const outcome = lb.isWicket ? 'WICKET!'
+      : (lb.runs === 4 ? 'FOUR!'
+        : (lb.runs === 6 ? 'SIX!'
+          : (lb.runs === 0 ? 'Dot ball'
+            : `${lb.runs} run${lb.runs === 1 ? '' : 's'}`)));
+    const outClass = lb.isWicket ? 'ap-out-wicket'
+      : (lb.runs === 4 || lb.runs === 6 ? 'ap-out-boundary'
+        : (lb.runs === 0 ? 'ap-out-dot' : 'ap-out-runs'));
+    const rows = [];
+    if (lb.bowler && lb.delivery)
+      rows.push(`<div class="ap-line">🎳 <b>${lb.bowler}</b> bowls ${titleize(lb.delivery)}</div>`);
+    if (lb.batsman && lb.shot)
+      rows.push(`<div class="ap-line">🏏 <b>${lb.batsman}</b> played ${titleize(lb.shot)}</div>`);
+    rows.push(`<div class="ap-outcome ${outClass}">${outcome}</div>`);
+    html = rows.join('');
+  } else {
+    html = '<div class="ap-line ap-waiting">Auto-playing…</div>';
+  }
+  card.innerHTML = html;
+  card.classList.remove('hidden');
+}
+
+function hideAutoplayQuickCard() {
+  const card = document.getElementById('autoplay-quick-card');
+  if (card) card.classList.add('hidden');
 }
 
 let autoplayInFlight = false;
