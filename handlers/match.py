@@ -176,6 +176,13 @@ def _user_label(user):
     return f"@{user.username}" if user.username else (user.first_name or "Player")
 
 
+def _team_label(user):
+    """Return a safe XI name for users with or without Telegram usernames."""
+    if not user:
+        return "Player's XI"
+    return user.team_name or f"{_user_label(user)}'s XI"
+
+
 def _chat_busy_message(match):
     """Friendly 'a match is already running here' message with what-you-can-do
     suggestions, plus a peek at who the current match is between."""
@@ -1992,8 +1999,8 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"✅ {_user_label(winner)} elected to {'BAT' if decision == 'bat' else 'BOWL'} FIRST")
         bat_user = session.query(User).get(match.batting_first_id)
         bowl_user = session.query(User).get(match.bowling_first_id)
-        bat_team = bat_user.team_name or f"@{bat_user.username}'s XI"
-        bowl_team = bowl_user.team_name or f"@{bowl_user.username}'s XI"
+        bat_team = _team_label(bat_user)
+        bowl_team = _team_label(bowl_user)
         from services.match_broadcast import send_match_ready_message
         await send_match_ready_message(
             context, cid, match, bat_team, bowl_team,
@@ -2037,7 +2044,7 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         r1 = session.query(UserRoster).filter(UserRoster.user_id == u1.id).count()
         r2 = session.query(UserRoster).filter(UserRoster.user_id == u2.id).count()
         if r1 < 11: await update.message.reply_text(f"❌ You need 11+ ({r1})."); return
-        if r2 < 11: await update.message.reply_text(f"❌ @{u2.username} needs 11+."); return
+        if r2 < 11: await update.message.reply_text(f"❌ {_user_label(u2)} needs 11+."); return
 
         # Validate XI composition
         from handlers.lineup import validate_xi, _get_ordered_roster
@@ -2053,7 +2060,7 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         valid2, errs2 = validate_xi(r2_roster)
         if not valid2:
             await update.message.reply_text(
-                f"❌ <b>@{u2.username}'s XI is invalid:</b>\n" + "\n".join(f"• {e}" for e in errs2),
+                f"❌ <b>{_team_label(u2)} is invalid:</b>\n" + "\n".join(f"• {e}" for e in errs2),
                 parse_mode="HTML")
             return
         st = random_match_settings(); now = datetime.utcnow()
@@ -2062,9 +2069,9 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   umpire1=st["umpire1"], umpire2=st["umpire2"], chat_id=cid, created_at=now,
                   expires_at=now + timedelta(seconds=MATCH_EXPIRE))
         session.add(m); session.commit()
-        t1 = u1.team_name or f"@{u1.username}'s XI"; t2 = u2.team_name or f"@{u2.username}'s XI"
+        t1 = _team_label(u1); t2 = _team_label(u2)
         await update.message.reply_text(
-            f"🔔 <b>NEW MATCH INVITATION!</b>\n\nFrom: @{u1.username} to @{u2.username}\n\n"
+            f"🔔 <b>NEW MATCH INVITATION!</b>\n\nFrom: {_mention(u1)} to {_mention(u2)}\n\n"
             f"🏏 <b>CRICKET GURU MATCH</b>\n\n{t1} vs {t2}\n📍 {st['pitch_type']} | 🌤️ {st['weather']} | 🌡️ {st['temperature']}°C\n"
             f"🏟️ {st['stadium']}\n🎩 {st['umpire1']} | {st['umpire2']}\n\n⏳ Expires: {MATCH_EXPIRE}s",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[

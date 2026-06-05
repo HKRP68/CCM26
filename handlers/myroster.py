@@ -43,9 +43,9 @@ def _build_roster_message(user, entries, stats, page, total, total_pages):
     # Build navigation + action buttons
     nav_buttons = []
     if page > 1:
-        nav_buttons.append(InlineKeyboardButton("◀️ Previous", callback_data=f"roster_page_{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton("◀️ Previous", callback_data=f"roster_page_{user.telegram_id}_{page - 1}"))
     if page < total_pages:
-        nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"roster_page_{page + 1}"))
+        nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"roster_page_{user.telegram_id}_{page + 1}"))
 
     keyboard_rows = []
     if nav_buttons:
@@ -108,7 +108,15 @@ async def roster_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     tg_user = query.from_user
 
-    page = int(query.data.split("_")[-1])
+    parts = query.data.split("_")
+    page = int(parts[-1])
+    owner_tg_id = int(parts[2]) if len(parts) >= 4 and parts[2].isdigit() else None
+    if owner_tg_id is not None and tg_user.id != owner_tg_id:
+        await query.answer(
+            "This button is not for you. Please use your own command.",
+            show_alert=True,
+        )
+        return
 
     session = get_session()
     try:
