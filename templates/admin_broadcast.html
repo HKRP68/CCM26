@@ -137,15 +137,15 @@
 
     <div class="attachment-grid">
       <div class="attachment-field">
-        <label for="image_file">🖼️ Add image (optional)</label>
-        <input id="image_file" name="image_file" type="file" accept="image/*">
+        <label for="image_files">🖼️ Add image(s) (optional)</label>
+        <input id="image_files" name="image_files" type="file" multiple accept="image/*">
       </div>
       <div class="attachment-field">
         <label for="document_file">📎 Add file (optional)</label>
         <input id="document_file" name="document_file" type="file">
       </div>
     </div>
-    <div class="attachment-help">Send a message, one image, or one file. Attachments can be up to 50MB. Choose only one attachment per broadcast.</div>
+    <div class="attachment-help">Send a message with one or more images as an album, or one file, but not both. Attachments can be up to 50MB, and albums can include up to 10 images.</div>
 
     <label style="display:flex;align-items:center;gap:.5rem;margin-top:.85rem;color:var(--text);font-size:.88rem;cursor:pointer;background:rgba(232,184,75,.06);border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem;">
       <input type="checkbox" name="add_fantasy_button" style="width:16px;height:16px;">
@@ -198,7 +198,7 @@
   {% if bc.message %}<div class="bc-msg">{{ bc.message }}</div>{% endif %}
   {% if bc.attachment_name %}
   <div style="margin-top:.45rem;color:var(--muted);font-size:.8rem;">
-    {{ '🖼️ Image' if bc.attachment_type == 'image' else '📎 File' }}: {{ bc.attachment_name }}
+    {% if bc.attachment_type == 'album' %}🖼️ Album{% elif bc.attachment_type == 'image' %}🖼️ Image{% else %}📎 File{% endif %}: {{ bc.attachment_name }}
   </div>
   {% endif %}
   <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;font-size:.82rem;color:var(--muted);">
