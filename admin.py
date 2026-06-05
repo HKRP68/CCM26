@@ -10434,6 +10434,8 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
     async def _send_album(cid):
         items = (attachment.get("items") or [])[:10]
         media = []
+        # Telegram albums cannot carry inline keyboards. If a button is present,
+        # keep the caption on the follow-up text so the button is still visible.
         use_caption = bool(message) and len(message) <= PHOTO_CAPTION_LIMIT and not reply_markup
         for index, item in enumerate(items):
             upload = InputFile(io.BytesIO(item["bytes"]), filename=item["name"])
@@ -10448,30 +10450,64 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
         elif reply_markup and not message:
             await _send_text(cid, button.get("text") or "Open")
 
+    async def _send_single_attachment(cid, attachment_type):
+        upload = InputFile(io.BytesIO(attachment["bytes"]),
+                           filename=attachment["name"])
+        if attachment_type == "image":
+            kwargs = {}
+            # Prefer a photo caption for image broadcasts. It keeps the image,
+            # text, and optional button in one Telegram API call and avoids the
+            # previous failure mode where a photo error prevented the text from
+            # being attempted at all.
+            if message and len(message) <= PHOTO_CAPTION_LIMIT:
+                kwargs.update({"caption": message, "parse_mode": "HTML"})
+            if reply_markup and (not message or len(message) <= PHOTO_CAPTION_LIMIT):
+                kwargs["reply_markup"] = reply_markup
+            await bot_instance.send_photo(chat_id=cid, photo=upload, **kwargs)
+            return bool(message and len(message) <= PHOTO_CAPTION_LIMIT)
+
+        kwargs = {}
+        if reply_markup and not message:
+            kwargs["reply_markup"] = reply_markup
+        await bot_instance.send_document(chat_id=cid, document=upload, **kwargs)
+        return False
+
     async def _send_one(cid):
+        text_delivered = False
+        attachment_delivered = False
         try:
-            # Attach the inline button to the text message when there is one,
-            # otherwise to single attachments that support it. Albums cannot
-            # carry inline keyboards, so button broadcasts send text separately.
-            attach_markup = reply_markup if not message else None
             if attachment:
                 attachment_type = attachment.get("type")
-                if attachment_type == "album":
-                    await _send_album(cid)
-                else:
-                    upload = InputFile(io.BytesIO(attachment["bytes"]),
-                                       filename=attachment["name"])
-                    if attachment_type == "image":
-                        await bot_instance.send_photo(chat_id=cid, photo=upload,
-                                                      reply_markup=attach_markup)
+                try:
+                    if attachment_type == "album":
+                        await _send_album(cid)
+                        attachment_delivered = True
+                        text_delivered = bool(message)
                     else:
-                        await bot_instance.send_document(chat_id=cid, document=upload,
-                                                         reply_markup=attach_markup)
-                    if message:
+                        text_delivered = await _send_single_attachment(cid, attachment_type)
+                        attachment_delivered = True
+                except Exception as e:
+                    # Do not let a bad/oversized image upload suppress the actual
+                    # broadcast message. Send the text fallback before marking the
+                    # chat as failed.
+                    log.warning(f"Broadcast attachment send to {cid} failed: {e}")
+
+                if message and not text_delivered:
+                    try:
                         await _send_text(cid, message)
+                        text_delivered = True
+                    except Exception as e:
+                        log.warning(f"Broadcast text send to {cid} failed: {e}")
+                elif reply_markup and not message and not attachment_delivered:
+                    try:
+                        await _send_text(cid, button.get("text") or "Open")
+                        text_delivered = True
+                    except Exception as e:
+                        log.warning(f"Broadcast fallback button send to {cid} failed: {e}")
             elif message:
                 await _send_text(cid, message)
-            return True
+                text_delivered = True
+            return attachment_delivered or text_delivered
         except Exception as e:
             log.warning(f"Broadcast send to {cid} failed: {e}")
             return False
