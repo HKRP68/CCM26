@@ -15,6 +15,7 @@ load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
+from services.telegram_user_service import user_lookup_filter
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
@@ -711,9 +712,7 @@ def users_list():
 
         query = db.query(User)
         if q:
-            query = query.filter(
-                (User.username.ilike(f"%{q}%")) | (User.first_name.ilike(f"%{q}%"))
-            )
+            query = query.filter(user_lookup_filter(q))
 
         total = query.count()
         total_pages = max(1, (total + per_page - 1) // per_page)

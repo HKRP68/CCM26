@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Player, UserRoster
 from services.activity_service import log_activity
+from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.flags import get_flag
 from services.bowling_service import is_spinner as _is_spin, get_bowler_profile_key
 
@@ -258,16 +259,18 @@ async def playingxi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
     session = get_session()
     try:
-        # Check if viewing another user's XI
+        # Check if viewing another user's XI. Reply targeting supports users without @username.
         target_user = None
         if context.args:
-            target_name = context.args[0].lstrip("@").strip()
-            target_user = session.query(User).filter(User.username.ilike(target_name)).first()
+            target_user, target_source = resolve_command_target(session, update, context, "xi")
             if not target_user:
-                await update.message.reply_text(f"❌ @{target_name} not found.")
+                if target_source == "not_mention":
+                    await update.message.reply_text("❌ Reply to a user or use a real @username mention.")
+                else:
+                    await update.message.reply_text("❌ User not found. If they changed or don't have a username, reply to their message and run /xi.")
                 return
 
-        viewer = session.query(User).filter(User.telegram_id == tg_user.id).first()
+        viewer = sync_telegram_user(session, tg_user)
         if not viewer:
             await update.message.reply_text("❌ Do /debut first!")
             return

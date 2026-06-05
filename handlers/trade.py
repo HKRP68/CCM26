@@ -12,6 +12,7 @@ from config import TRADE_EXPIRES_SECONDS
 from database import get_session
 from models import Player, User, UserRoster
 from services.rating_matcher_service import get_players_at_rating, get_tradable_players
+from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.trading_service import complete_trade, create_pending_trade, get_pending_trade_for_user, reject_trade
 
 logger = logging.getLogger(__name__)
@@ -129,27 +130,30 @@ async def _answer_not_part(query):
 # ── /trade @username ─────────────────────────────────────────────────
 async def trade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
-    if not context.args:
-        await update.message.reply_text("Usage: /trade @username\nExample: /trade @friend123")
-        return
-
-    target_raw = context.args[0].lstrip("@").strip()
-    if not target_raw:
-        await update.message.reply_text("❌ Invalid username format. Use /trade @username")
-        return
 
     session = get_session()
     try:
-        user1 = session.query(User).filter(User.telegram_id == tg_user.id).first()
+        user1 = sync_telegram_user(session, tg_user)
         if not user1:
             await update.message.reply_text("❌ Do /debut first!")
             return
-        if target_raw.lower() == (user1.username or "").lower():
-            await update.message.reply_text("❌ You cannot trade with yourself")
-            return
-        user2 = session.query(User).filter(User.username.ilike(target_raw)).first()
+        user2, target_source = resolve_command_target(session, update, context, "trade")
         if not user2:
-            await update.message.reply_text(f"❌ User @{target_raw} not found. They need to /debut first.")
+            if target_source == "not_mention":
+                await update.message.reply_text(
+                    "❌ Please reply to the user's message or use a real @username mention.\n"
+                    "Usage: /trade @username")
+            elif target_source == "missing":
+                await update.message.reply_text(
+                    "Usage: /trade @username\n"
+                    "Tip: for users without @username, reply to their message and run /trade.")
+            else:
+                await update.message.reply_text(
+                    "❌ User not found. They need to /debut first; if they changed or "
+                    "don't have a username, reply to their message and run /trade.")
+            return
+        if user2.id == user1.id:
+            await update.message.reply_text("❌ You cannot trade with yourself")
             return
         if (
             _active_trade_for_user(context, user1.id)

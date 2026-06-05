@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
+from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import (
     _active_cric_match_for_user,
     _active_cric_match_in_chat,
@@ -83,20 +84,28 @@ def _validate_user_xi(session, user_id):
 
 async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Create a targeted /cm lobby, mirroring /wpm until launch."""
-    if not context.args:
-        await update.message.reply_text("Usage: <code>/cm @username</code>", parse_mode="HTML")
-        return
-    target_name = context.args[0].lstrip("@").strip()
     cid = update.effective_chat.id
     session = get_session()
     try:
-        challenger = session.query(User).filter(User.telegram_id == update.effective_user.id).first()
+        challenger = sync_telegram_user(session, update.effective_user)
         if not challenger:
             await update.message.reply_text("❌ Use /debut first.")
             return
-        target = session.query(User).filter(User.username.ilike(target_name)).first()
+        target, target_source = resolve_command_target(session, update, context, "cm")
         if not target:
-            await update.message.reply_text(f"❌ @{target_name} not found. They need to use /debut first.")
+            if target_source == "missing":
+                await update.message.reply_text(
+                    "Usage: <code>/cm @username</code>\n"
+                    "Tip: for users without @username, reply to their message and run /cm.",
+                    parse_mode="HTML")
+            elif target_source == "not_mention":
+                await update.message.reply_text(
+                    "❌ Please reply to the user's message or use a real @username mention.",
+                    parse_mode="HTML")
+            else:
+                await update.message.reply_text(
+                    "❌ User not found. They need to use /debut first; if they changed or "
+                    "don't have a username, reply to their message and run /cm.")
             return
         if target.id == challenger.id:
             await update.message.reply_text("❌ You cannot challenge yourself.")

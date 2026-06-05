@@ -19,6 +19,7 @@ from config import BOT_TOKEN
 from database import init_db
 from logger import setup_logging
 from services.reply_context import bind_reply_context, install_reply_defaults
+from services.telegram_user_service import sync_update_users
 from services.button_access import (
     bind_button_owner_context,
     button_access_guard,
@@ -636,6 +637,18 @@ def main():
         async def _bind_reply_context(update, context):
             bind_reply_context(update)
             bind_button_owner_context(update)
+            try:
+                session = get_session()
+                try:
+                    sync_update_users(session, update)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    session.close()
+            except Exception:
+                logger.exception("Failed to sync Telegram user details")
         app.add_handler(TypeHandler(_TGUpdate, _bind_reply_context), group=-4)
 
         # ── Button-owner guard (group=-5, before callbacks) ──

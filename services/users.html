@@ -4,7 +4,7 @@
 <h2 style="margin-bottom:1rem;">Users <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
 
 <form method="GET" class="toolbar">
-  <input class="search" type="text" name="q" value="{{ q }}" placeholder="Search by username or name...">
+  <input class="search" type="text" name="q" value="{{ q }}" placeholder="Search by username, name, app ID, or Telegram ID...">
   <button type="submit" class="btn btn-blue">Search</button>
   {% if q %}<a href="{{ url_for('users_list') }}" class="btn btn-ghost">Clear</a>{% endif %}
 </form>
