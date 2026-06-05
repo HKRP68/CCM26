@@ -22,6 +22,7 @@ load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
+from services.telegram_user_service import user_lookup_filter
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog, Match, UserAchievement,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
@@ -1634,9 +1635,7 @@ def users_list():
         query = db.query(User)
 
         if q:
-            query = query.filter(
-                (User.username.ilike(f"%{q}%")) | (User.first_name.ilike(f"%{q}%"))
-            )
+            query = query.filter(user_lookup_filter(q))
 
         if coins_min is not None: query = query.filter(User.total_coins >= coins_min)
         if coins_max is not None: query = query.filter(User.total_coins <= coins_max)
@@ -2444,9 +2443,7 @@ def users_bulk_action():
         q = request.form.get("q", "").strip()
         query = db.query(User)
         if q:
-            query = query.filter(
-                (User.username.ilike(f"%{q}%")) | (User.first_name.ilike(f"%{q}%"))
-            )
+            query = query.filter(user_lookup_filter(q))
         for k, col in (
             ("coins_min", User.total_coins), ("gems_min", User.total_gems),
             ("roster_min", User.roster_count), ("wins_min", User.matches_won),
