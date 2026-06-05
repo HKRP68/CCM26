@@ -10595,11 +10595,12 @@ def admin_broadcast():
         db.close()
 
 
-def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None):
+def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None, pin_messages=False):
     """Background worker — sends a text, image, or file broadcast at ~20 chats/sec.
 
     ``button`` (optional) is a {"text": str, "url": str} dict rendered as an
     inline keyboard button beneath the broadcast (e.g. "🏏 Join Fantasy").
+    ``pin_messages`` pins the delivered broadcast message when Telegram allows it.
     """
     import time
     import logging as _lg
@@ -10639,7 +10640,7 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
     PHOTO_CAPTION_LIMIT = 1024
 
     async def _send_text(cid, text):
-        await bot_instance.send_message(
+        return await bot_instance.send_message(
             chat_id=cid, text=text, parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=reply_markup,
@@ -10657,12 +10658,18 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
             if index == 0 and use_caption:
                 kwargs.update({"caption": message, "parse_mode": "HTML"})
             media.append(InputMediaPhoto(media=upload, **kwargs))
+        pin_message_id = None
         if media:
-            await bot_instance.send_media_group(chat_id=cid, media=media)
+            sent_media = await bot_instance.send_media_group(chat_id=cid, media=media)
+            if sent_media:
+                pin_message_id = sent_media[0].message_id
         if message and not use_caption:
-            await _send_text(cid, message)
+            sent_text = await _send_text(cid, message)
+            pin_message_id = sent_text.message_id
         elif reply_markup and not message:
-            await _send_text(cid, button.get("text") or "Open")
+            sent_text = await _send_text(cid, button.get("text") or "Open")
+            pin_message_id = sent_text.message_id
+        return pin_message_id
 
     async def _send_single_attachment(cid, attachment_type):
         upload = InputFile(io.BytesIO(attachment["bytes"]),
@@ -10677,28 +10684,29 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
                 kwargs.update({"caption": message, "parse_mode": "HTML"})
             if reply_markup and (not message or len(message) <= PHOTO_CAPTION_LIMIT):
                 kwargs["reply_markup"] = reply_markup
-            await bot_instance.send_photo(chat_id=cid, photo=upload, **kwargs)
-            return bool(message and len(message) <= PHOTO_CAPTION_LIMIT)
+            sent_photo = await bot_instance.send_photo(chat_id=cid, photo=upload, **kwargs)
+            return bool(message and len(message) <= PHOTO_CAPTION_LIMIT), sent_photo.message_id
 
         kwargs = {}
         if reply_markup and not message:
             kwargs["reply_markup"] = reply_markup
-        await bot_instance.send_document(chat_id=cid, document=upload, **kwargs)
-        return False
+        sent_document = await bot_instance.send_document(chat_id=cid, document=upload, **kwargs)
+        return False, sent_document.message_id
 
     async def _send_one(cid):
         text_delivered = False
         attachment_delivered = False
+        pin_message_id = None
         try:
             if attachment:
                 attachment_type = attachment.get("type")
                 try:
                     if attachment_type == "album":
-                        await _send_album(cid)
+                        pin_message_id = await _send_album(cid)
                         attachment_delivered = True
                         text_delivered = bool(message)
                     else:
-                        text_delivered = await _send_single_attachment(cid, attachment_type)
+                        text_delivered, pin_message_id = await _send_single_attachment(cid, attachment_type)
                         attachment_delivered = True
                 except Exception as e:
                     # Do not let a bad/oversized image upload suppress the actual
@@ -10708,20 +10716,34 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
 
                 if message and not text_delivered:
                     try:
-                        await _send_text(cid, message)
+                        sent_text = await _send_text(cid, message)
+                        pin_message_id = sent_text.message_id
                         text_delivered = True
                     except Exception as e:
                         log.warning(f"Broadcast text send to {cid} failed: {e}")
                 elif reply_markup and not message and not attachment_delivered:
                     try:
-                        await _send_text(cid, button.get("text") or "Open")
+                        sent_text = await _send_text(cid, button.get("text") or "Open")
+                        pin_message_id = sent_text.message_id
                         text_delivered = True
                     except Exception as e:
                         log.warning(f"Broadcast fallback button send to {cid} failed: {e}")
             elif message:
-                await _send_text(cid, message)
+                sent_text = await _send_text(cid, message)
+                pin_message_id = sent_text.message_id
                 text_delivered = True
-            return attachment_delivered or text_delivered
+
+            delivered = attachment_delivered or text_delivered
+            if delivered and pin_messages and pin_message_id:
+                try:
+                    await bot_instance.pin_chat_message(
+                        chat_id=cid,
+                        message_id=pin_message_id,
+                        disable_notification=True,
+                    )
+                except Exception as e:
+                    log.warning(f"Broadcast pin in {cid} failed: {e}")
+            return delivered
         except Exception as e:
             log.warning(f"Broadcast send to {cid} failed: {e}")
             return False
@@ -12626,7 +12648,7 @@ def admin_fantasy_broadcast(league_id):
             import threading
             threading.Thread(
                 target=_run_broadcast_worker,
-                args=(None, list(chat_ids), msg, attachment, button),
+                args=(None, list(chat_ids), msg, attachment, button, True),
                 daemon=True,
             ).start()
             flash(f"📣 Fantasy broadcast queued for {len(chat_ids)} {target} chat(s).", "success")
