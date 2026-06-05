@@ -63,6 +63,8 @@ async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏏 <b>{league.name}</b>\n"
             f"Week {league.week_number}, {league.year} · {status_emoji} {status_label}\n\n"
         )
+        if getattr(league, "description", None):
+            text += f"📝 {league.description}\n\n"
 
         if team_info:
             text += (
@@ -158,6 +160,31 @@ async def myfantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Something went wrong. Try again.")
     finally:
         session.close()
+
+
+async def fantasyguide_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User-facing guide for fantasy commands and squad editing."""
+    text = (
+        "🏏 <b>Fantasy Guide</b>\n\n"
+        "<b>What is Fantasy?</b>\n"
+        "Pick an XI from the current fantasy player pool. Your players earn points when admins enter match scores.\n\n"
+        "<b>How to play</b>\n"
+        "1) Use /fantasy to open the current league.\n"
+        "2) Tap <b>Pick My Squad</b> in private chat or from the Mini App link.\n"
+        "3) Search players, filter by role/country, then select exactly 11 players.\n"
+        "4) Tap a selected player to set Captain (2×) and Vice-Captain (1.5×).\n"
+        "5) Confirm before squads lock.\n\n"
+        "<b>Editing your XI</b>\n"
+        "If the league is still open, use /fantasy again and tap <b>Change Squad</b>. "
+        "Locked leagues cannot be edited.\n\n"
+        "<b>Useful commands</b>\n"
+        "• /fantasy — open or edit your squad\n"
+        "• /myfantasy — view your squad, points, and rank\n"
+        "• /fantasyleaderboard — see top fantasy users\n"
+        "• /fantasystats — see top scoring fantasy players\n"
+        "• /fantasyguide — show this guide"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 # ═══════════════════════════════════════════════════════════════════════

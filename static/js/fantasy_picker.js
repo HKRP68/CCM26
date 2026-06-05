@@ -15,6 +15,9 @@ var state = {
   hasMore: true,
   currentFilter: 'all',
   currentSearch: '',
+  currentCountry: '',
+  countries: [],
+  countryRules: {},
   pendingRolePid: null,
 };
 
@@ -45,11 +48,16 @@ function preloadSquad(squad) {
       if (d.ok && d.league) {
         if (!state.leagueId) state.leagueId = d.league.id;
         document.getElementById('league-title').textContent = '🏏 ' + d.league.name;
+        state.countryRules = d.league.country_rules || {};
+        updateCountryOptions(Object.keys(state.countryRules));
         if (d.league.locked || d.league.status === 'locked') {
           state.locked = true;
           showLockedBanner();
         }
         if (d.team && d.team.squad) preloadSquad(d.team.squad);
+        loadPlayers(true);
+      } else {
+        loadPlayers(true);
       }
       updateFooter();
       renderPlayers();
@@ -62,11 +70,12 @@ function preloadSquad(squad) {
             if (d.ok) { preloadSquad(d.squad); state.locked = d.locked || false; }
             updateFooter();
             renderPlayers();
+            loadPlayers(true);
           }).catch(function() {});
+      } else {
+        loadPlayers(true);
       }
     });
-
-  loadPlayers();
 })();
 
 /* ── Player loading ───────────────────────────────────── */
@@ -82,13 +91,18 @@ function loadPlayers(reset) {
 
   var url = '/api/fantasy/players?page=' + state.page
     + '&role=' + encodeURIComponent(state.currentFilter)
-    + '&q=' + encodeURIComponent(state.currentSearch);
+    + '&q=' + encodeURIComponent(state.currentSearch)
+    + '&league_id=' + encodeURIComponent(state.leagueId || '')
+    + '&country=' + encodeURIComponent(state.currentCountry || '');
 
   fetch(url).then(function(r) { return r.json(); })
     .then(function(d) {
       state.loading = false;
       if (!d.ok) return;
       state.allPlayers = state.allPlayers.concat(d.players || []);
+      updateCountryOptions(d.countries || []);
+      mergeCountries(d.players || []);
+      if (d.country_rules) state.countryRules = d.country_rules;
       state.hasMore = d.players && d.players.length === 30;
       state.page++;
       renderPlayers();
@@ -136,6 +150,35 @@ function renderPlayers() {
   }
 
   list.innerHTML = html;
+}
+
+function mergeCountries(players) {
+  var seen = {};
+  state.countries.forEach(function(c) { seen[c] = true; });
+  players.forEach(function(p) {
+    if (p.country && !seen[p.country]) {
+      state.countries.push(p.country);
+      seen[p.country] = true;
+    }
+  });
+  state.countries.sort();
+  updateCountryOptions(state.countries);
+}
+
+function updateCountryOptions(extraCountries) {
+  var select = document.getElementById('country-filter');
+  if (!select) return;
+  var existing = {};
+  state.countries.forEach(function(c) { existing[c] = true; });
+  (extraCountries || []).forEach(function(c) {
+    if (c && !existing[c]) { state.countries.push(c); existing[c] = true; }
+  });
+  state.countries.sort();
+  var current = select.value;
+  select.innerHTML = '<option value="">All Countries</option>' + state.countries.map(function(c) {
+    return '<option value="' + escHtml(c) + '">' + escHtml(c) + '</option>';
+  }).join('');
+  select.value = current;
 }
 
 function setupInfiniteScroll() {
@@ -217,6 +260,32 @@ function onSearch() {
   }, 300);
 }
 
+function onCountryFilter() {
+  state.currentCountry = document.getElementById('country-filter').value || '';
+  loadPlayers(true);
+}
+
+function countryRuleStatus() {
+  var counts = {};
+  Object.values(state.selected).forEach(function(p) {
+    counts[p.country] = (counts[p.country] || 0) + 1;
+  });
+  var messages = [];
+  var valid = true;
+  Object.keys(state.countryRules || {}).forEach(function(country) {
+    var rule = state.countryRules[country] || {};
+    var count = counts[country] || 0;
+    var min = parseInt(rule.min || 0, 10);
+    var max = rule.max === null || rule.max === undefined || rule.max === '' ? null : parseInt(rule.max, 10);
+    if (min || max !== null) {
+      messages.push(country + ': ' + count + (min ? ' / min ' + min : '') + (max !== null ? ' / max ' + max : ''));
+    }
+    if (min && count < min) valid = false;
+    if (max !== null && count > max) valid = false;
+  });
+  return { valid: valid, text: messages.join(' · ') };
+}
+
 /* ── Footer ───────────────────────────────────────────── */
 function updateFooter() {
   var picks = Object.values(state.selected);
@@ -230,7 +299,14 @@ function updateFooter() {
   document.getElementById('vc-text').textContent = vc ? '✓' : '✗';
   document.getElementById('pts-text').textContent = pts.toFixed(1);
 
-  var ready = !state.locked && n === 11 && cap === 1 && vc === 1;
+  var ruleStatus = countryRuleStatus();
+  var ruleEl = document.getElementById('country-rule-text');
+  if (ruleEl) {
+    ruleEl.textContent = ruleStatus.text;
+    ruleEl.style.color = ruleStatus.valid ? 'var(--muted)' : 'var(--red)';
+  }
+
+  var ready = !state.locked && n === 11 && cap === 1 && vc === 1 && ruleStatus.valid;
   document.getElementById('confirm-btn').disabled = !ready;
   document.getElementById('confirm-btn').textContent = state.locked ? '🔒 Squads Locked' : 'Confirm Squad';
 }

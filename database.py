@@ -62,7 +62,8 @@ def init_db():
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
-        FantasyEntry, FantasyPick, EventMedia,
+        FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
+        EventMedia,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -207,6 +208,11 @@ def _migrate_add_columns():
         _try_add("users", col, coltype)
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
+
+    # Fantasy league configuration fields added after the original fantasy
+    # launch. New eligibility/rule tables are handled by create_all above.
+    _try_add("fantasy_leagues", "description", "TEXT")
+    _try_add("fantasy_leagues", "broadcast_message", "TEXT")
 
     # EventMedia: MiniApp display timing and natural-size configuration.
     _try_add("event_media", "duration_ms", "INTEGER DEFAULT 3000")

@@ -237,7 +237,7 @@ from handlers.feedback import feedback_handler
 from handlers.fantasy import (
     fantasy_handler, myfantasy_handler,
     fantasyleaderboard_handler, fantasystats_handler,
-    fantasy_lb_callback, fantasy_webapp_handler,
+    fantasyguide_handler, fantasy_lb_callback, fantasy_webapp_handler,
 )
 
 logger = logging.getLogger(__name__)
@@ -319,6 +319,7 @@ BOT_MENU_COMMANDS = (
     ("myfantasy", "View your fantasy squad and points"),
     ("fantasyleaderboard", "Fantasy league leaderboard"),
     ("fantasystats", "Top fantasy scorers this week"),
+    ("fantasyguide", "Learn fantasy rules and commands"),
 )
 
 
@@ -1076,6 +1077,7 @@ def main():
         app.add_handler(CommandHandler(["myfantasy", "mfl"], myfantasy_handler))
         app.add_handler(CommandHandler(["fantasyleaderboard", "flb"], fantasyleaderboard_handler))
         app.add_handler(CommandHandler(["fantasystats", "fstats"], fantasystats_handler))
+        app.add_handler(CommandHandler(["fantasyguide", "fguide"], fantasyguide_handler))
         app.add_handler(CallbackQueryHandler(fantasy_lb_callback, pattern=r"^fant_lb_"))
         app.add_handler(MessageHandler(
             filters.StatusUpdate.WEB_APP_DATA, fantasy_webapp_handler,

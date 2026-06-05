@@ -20,6 +20,7 @@
   --accent2-2: #6dd47e;
   --text: #f0ece0;
   --muted: #7d8f78;
+  --red: #ff6b6b;
   --input-bg: #0a1410;
   --captain-color: #e8b84b;
   --vc-color: #4cae5e;
@@ -231,6 +232,9 @@ body {
   <h1 id="league-title">🏏 Pick Your Fantasy Squad</h1>
   <div class="search-row">
     <input type="text" id="search-input" placeholder="Search players..." oninput="onSearch()">
+    <select id="country-filter" onchange="onCountryFilter()" style="margin-top:.5rem;width:100%;padding:.7rem .8rem;border-radius:12px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-family:'Outfit',sans-serif;">
+      <option value="">All Countries</option>
+    </select>
   </div>
   <div class="filters">
     <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
@@ -251,6 +255,7 @@ body {
     <span>Captain: <strong id="cap-text">✗</strong> &nbsp; VC: <strong id="vc-text">✗</strong></span>
     <span>Pts so far: <strong id="pts-text">0</strong></span>
   </div>
+  <div id="country-rule-text" style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem;"></div>
   <button id="confirm-btn" disabled onclick="confirmSquad()">Confirm Squad</button>
 </div>
 
