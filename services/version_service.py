@@ -39,37 +39,63 @@ def get_base_id(player_id, session=None):
 
 
 def get_all_versions(session: Session, base_id):
-    """Return all rows that are versions of this base (including the base itself).
-    Ordered: base first, then variants by id.
+    """Return all rows that are editions of this player (including the base itself).
+
+    Editions are discovered two ways so the version carousel stays reliable no
+    matter how the data was created:
+      1. Rows linked to the base via parent_player_id (the canonical variants).
+      2. Other ACTIVE rows that share the same player name but were never linked
+         (e.g. a same-named "IPL" card added as its own base, or an orphan
+         variant). Without this, /buypl & /playerinfo would collapse to a single
+         page and never show the ◀ Prev / Next ▶ buttons.
+
+    Ordered: base first, then variants by id. Deduped by row id.
     """
     base = session.query(Player).get(base_id)
     if not base:
         return []
     # If the supplied id is actually a variant, walk up to its base
     if base.parent_player_id:
-        base = session.query(Player).get(base.parent_player_id)
-        if not base:
-            return []
+        parent = session.query(Player).get(base.parent_player_id)
+        if parent:
+            base = parent
 
     variants = (session.query(Player)
                 .filter(Player.parent_player_id == base.id,
                         Player.is_active == True)
                 .order_by(Player.id).all())
-    return [base] + variants
+
+    ordered = [base] + variants
+    seen = {p.id for p in ordered}
+
+    # Merge in any other active rows with the same name that aren't linked.
+    if base.name:
+        for p in (session.query(Player)
+                  .filter(Player.name == base.name,
+                          Player.is_active == True,
+                          Player.id != base.id)
+                  .order_by(Player.id).all()):
+            if p.id not in seen:
+                ordered.append(p)
+                seen.add(p.id)
+
+    return ordered
 
 
 def user_owns_any_version(session: Session, user_id, player_id):
-    """True if the user has a roster entry for the base or any variant."""
+    """True if the user has a roster entry for any edition of this player.
+
+    Uses the same edition grouping as get_all_versions so the "can't own two
+    editions" rule stays consistent across linked variants AND same-named rows.
+    """
     base = session.query(Player).get(player_id)
     if not base:
         return False
     base_id = base.parent_player_id or base.id
 
-    # Get all version ids for this base
-    version_ids = [base_id]
-    for v in (session.query(Player.id)
-              .filter(Player.parent_player_id == base_id).all()):
-        version_ids.append(v[0])
+    version_ids = [v.id for v in get_all_versions(session, base_id)]
+    if not version_ids:
+        version_ids = [player_id]
 
     return (session.query(UserRoster)
             .filter(UserRoster.user_id == user_id,

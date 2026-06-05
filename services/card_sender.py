@@ -16,6 +16,7 @@ All send sites in the bot should use this instead of calling reply_photo
 or send_photo directly.
 """
 
+import asyncio
 import io
 import logging
 import os
@@ -160,7 +161,9 @@ async def send_player_card(
     # ── Strategy 3: Auto-generated card ──
     try:
         from services.card_generator import generate_card
-        gen_bytes = generate_card(player)
+        # Pillow rendering is CPU-bound and synchronous — run it off the event
+        # loop so a cache-miss render doesn't freeze the whole bot.
+        gen_bytes = await asyncio.to_thread(generate_card, player)
     except Exception:
         gen_bytes = None
 

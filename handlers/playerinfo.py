@@ -1,8 +1,10 @@
 """Handler for /playerinfo [name] — shows player card + version selector."""
 
+import asyncio
 import io
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -85,7 +87,7 @@ async def _send_player_card(session, user, player, target, owner_tg):
         except Exception:
             pass  # stale file_id, fall through
 
-    card_bytes = generate_card(player)
+    card_bytes = await asyncio.to_thread(generate_card, player)
     if card_bytes:
         sent = await target.reply_photo(
             photo=io.BytesIO(card_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
@@ -130,6 +132,13 @@ async def playerinfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     search_name = " ".join(context.args).strip()
+
+    # Instant feedback while we look up + render the card (render is off-thread).
+    try:
+        await update.message.reply_chat_action(ChatAction.UPLOAD_PHOTO)
+    except Exception:
+        pass
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
