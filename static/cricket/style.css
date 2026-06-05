@@ -592,6 +592,52 @@ body {
   box-shadow: 0 0 6px var(--primary-accent);
 }
 
+/* ── Autoplay status banner (own status / opponent on autoplay) ──── */
+.autoplay-status-banner {
+  background: var(--primary-dim);
+  border: 1px solid var(--primary-accent);
+  border-radius: var(--border-radius-md);
+  padding: 8px 14px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: var(--primary-accent);
+  text-align: center;
+}
+.autoplay-status-banner.hidden { display: none; }
+
+/* ── Autoplay quick card (shown in place of the selection grid) ──── */
+.autoplay-quick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius-md);
+  text-align: center;
+}
+.autoplay-quick-card.hidden { display: none; }
+.autoplay-quick-card .ap-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.autoplay-quick-card .ap-line b { color: var(--text-primary); }
+.autoplay-quick-card .ap-waiting { color: var(--text-muted); }
+.autoplay-quick-card .ap-outcome {
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.6px;
+}
+.autoplay-quick-card .ap-out-wicket { color: #ff4757; }
+.autoplay-quick-card .ap-out-boundary { color: var(--primary-accent); }
+.autoplay-quick-card .ap-out-dot { color: var(--text-muted); }
+.autoplay-quick-card .ap-out-runs { color: #2ed573; }
+
 /* ── Commentary Feed ───────────────────────────────────────────── */
 .commentary-feed-container {
   flex: 1;

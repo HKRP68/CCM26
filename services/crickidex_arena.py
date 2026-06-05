@@ -311,6 +311,7 @@ def serialize_match_state(session, match, viewer_user):
     bowl_team_id = state.get("bowl_team_id")
     openers_done = bool(state.get("openers_done"))
     bowler_done = bool(state.get("bowler_done"))
+    autoplay_users = set(state.get("autoplay_users") or [])
 
     # ── is it my turn? ──
     if status == "xi_selection":
@@ -342,6 +343,17 @@ def serialize_match_state(session, match, viewer_user):
 
     host = _team_block(u1)
     guest = _team_block(u2)
+
+    # Opponent (relative to the viewer) for the Autoplay banner. host=user1,
+    # guest=user2; the opponent is whichever participant the viewer is not.
+    opponent_uid = None
+    opponent_team_name = None
+    if viewer_uid == match.user1_id:
+        opponent_uid = match.user2_id
+        opponent_team_name = (guest or {}).get("teamName")
+    elif viewer_uid == match.user2_id:
+        opponent_uid = match.user1_id
+        opponent_team_name = (host or {}).get("teamName")
 
     # ── score / innings ──
     cur_runs = state.get("total_runs", 0)
@@ -415,6 +427,11 @@ def serialize_match_state(session, match, viewer_user):
             "commentary": last_ball_raw.get("text"),
             "delivery": last_ball_raw.get("delivery") or "",
             "eventKey": last_ball_raw.get("eventKey"),
+            # Names for the Autoplay quick-text card
+            # ("{bowler} bowls {delivery}" / "{batsman} played {shot}").
+            "bowler": last_ball_raw.get("bowler") or "",
+            "batsman": last_ball_raw.get("batsman") or "",
+            "shot": last_ball_raw.get("shot") or "",
         }
         commentary = [{
             "type": "ball",
@@ -525,6 +542,14 @@ def serialize_match_state(session, match, viewer_user):
         "currentSpeed": state.get("current_speed"),
         "currentSpeedKmh": state.get("last_speed"),
         "lastBall": last_ball,
+        # Server-authoritative Autoplay flags (state["autoplay_users"] holds the
+        # user ids on autoplay). Exposed so a reconnecting user resumes ON and the
+        # opponent's client can show the "is on Autoplay mode" banner. The
+        # opponent fields are resolved here (relative to the viewer) to avoid the
+        # client guessing host/guest from possibly-telegram-vs-internal ids.
+        "myAutoplay": bool(viewer_uid in autoplay_users),
+        "opponentAutoplay": bool(opponent_uid in autoplay_users) if opponent_uid else False,
+        "opponentTeamName": opponent_team_name,
         "partnership": {
             "runs": state.get("partnership_runs", 0),
             "balls": state.get("partnership_balls", 0),
