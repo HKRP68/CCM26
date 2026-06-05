@@ -137,7 +137,7 @@ def get_tier_colour(rating: int) -> tuple:
     else:              return ("BASIC", "#95a5a6", "#fafafa")
 
 # ── Phase 2: Trading & Roster ──────────────────────────────────────
-TRADE_EXPIRES_SECONDS = 20
+TRADE_EXPIRES_SECONDS = 60
 MAX_ACTIVE_TRADES = 1
 TRADE_MIN_RATING = 75
 TRADE_FEE_PERCENT = 5

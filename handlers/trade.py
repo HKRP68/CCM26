@@ -1,39 +1,136 @@
-"""Handler for /trade @username — multi-step trading flow."""
+"""Handler for /trade @username — exact same-OVR Telegram-storage flow."""
 
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import time
+import uuid
+from datetime import datetime
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from config import TRADE_EXPIRES_SECONDS
 from database import get_session
-from models import User, Player, Trade
-from config import get_buy_value, TRADE_EXPIRES_SECONDS
-from services.rating_matcher_service import (
-    find_matching_ratings,
-    get_players_at_rating,
-    get_trade_fee,
-    can_trade_with_user,
-)
-from services.activity_service import log_activity
-from services.trading_service import (
-    initiate_trade,
-    accept_trade,
-    reject_trade,
-    get_pending_trade_for_user,
-)
+from models import Player, User, UserRoster
+from services.rating_matcher_service import get_players_at_rating, get_tradable_players
+from services.trading_service import complete_trade, create_pending_trade, get_pending_trade_for_user, reject_trade
 
 logger = logging.getLogger(__name__)
+TRADE_STORE_KEY = "active_player_trades"
+USER_TRADE_KEY = "active_player_trade_by_user"
+
+
+def _mention(user: User) -> str:
+    return f"@{user.username}" if user.username else (user.first_name or f"user{user.telegram_id}")
+
+
+def _player_label(player: Player) -> str:
+    return f"{player.name} | OVR {player.rating}"
+
+
+def _store(context: ContextTypes.DEFAULT_TYPE) -> dict:
+    return context.bot_data.setdefault(TRADE_STORE_KEY, {})
+
+
+def _user_index(context: ContextTypes.DEFAULT_TYPE) -> dict:
+    return context.bot_data.setdefault(USER_TRADE_KEY, {})
+
+
+def _new_trade_id() -> str:
+    return uuid.uuid4().hex[:10]
+
+
+def _active_trade_for_user(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    tid = _user_index(context).get(user_id)
+    state = _store(context).get(tid)
+    if not state:
+        return None
+    if state.get("expires_at", 0) <= time.time() or state.get("status") in {"completed", "cancelled", "expired"}:
+        _clear_trade(context, tid)
+        return None
+    return state
+
+
+def _clear_trade(context: ContextTypes.DEFAULT_TYPE, trade_id: str):
+    state = _store(context).pop(trade_id, None)
+    if state:
+        for uid in (state.get("user1_id"), state.get("user2_id")):
+            _user_index(context).pop(uid, None)
+
+
+def _is_expired(state: dict) -> bool:
+    return time.time() >= state.get("expires_at", 0)
+
+
+def _load_users(session, state):
+    user1 = session.query(User).get(state["user1_id"])
+    user2 = session.query(User).get(state["user2_id"])
+    return user1, user2
+
+
+def _select_buttons(trade_id: str, rows, prefix: str, cancel_label: str):
+    buttons = [
+        [InlineKeyboardButton(_player_label(player), callback_data=f"{prefix}_{trade_id}_{entry.id}")]
+        for entry, player in rows
+    ]
+    buttons.append([InlineKeyboardButton(cancel_label, callback_data=f"tcancel_{trade_id}")])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def _send_expiry_message(context: ContextTypes.DEFAULT_TYPE, state: dict):
+    try:
+        if state.get("message_id"):
+            await context.bot.edit_message_text(
+                chat_id=state["chat_id"],
+                message_id=state["message_id"],
+                text="Trade expired.",
+            )
+        else:
+            await context.bot.send_message(chat_id=state["chat_id"], text="Trade expired.")
+    except Exception:
+        logger.exception("Failed to send trade expiry message")
+
+
+async def _expire_trade_job(context: ContextTypes.DEFAULT_TYPE):
+    trade_id = context.job.data["trade_id"]
+    state = _store(context).get(trade_id)
+    if not state or state.get("status") in {"completed", "cancelled", "expired"}:
+        return
+    state["status"] = "expired"
+    session = get_session()
+    try:
+        trade_db_id = state.get("db_trade_id")
+        if trade_db_id:
+            from models import Trade
+            trade = session.query(Trade).get(trade_db_id)
+            if trade and trade.status == "pending":
+                trade.status = "expired"
+                trade.updated_at = datetime.utcnow()
+                session.commit()
+        await _send_expiry_message(context, state)
+    finally:
+        session.close()
+        _clear_trade(context, trade_id)
+
+
+def _schedule_expiry(context: ContextTypes.DEFAULT_TYPE, trade_id: str):
+    if context.job_queue:
+        context.job_queue.run_once(
+            _expire_trade_job,
+            when=TRADE_EXPIRES_SECONDS,
+            data={"trade_id": trade_id},
+            name=f"trade_expiry_{trade_id}",
+        )
+
+
+async def _answer_not_part(query):
+    await query.answer("You are not part of this trade.", show_alert=True)
 
 
 # ── /trade @username ─────────────────────────────────────────────────
-
 async def trade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
-    logger.info(f"/trade from {tg_user.id}, args={context.args}")
-
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /trade @username\nExample: /trade @friend123"
-        )
+        await update.message.reply_text("Usage: /trade @username\nExample: /trade @friend123")
         return
 
     target_raw = context.args[0].lstrip("@").strip()
@@ -43,460 +140,320 @@ async def trade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user:
+        user1 = session.query(User).filter(User.telegram_id == tg_user.id).first()
+        if not user1:
             await update.message.reply_text("❌ Do /debut first!")
             return
-
-        if target_raw.lower() == (user.username or "").lower():
+        if target_raw.lower() == (user1.username or "").lower():
             await update.message.reply_text("❌ You cannot trade with yourself")
             return
-
-        target = session.query(User).filter(User.username.ilike(target_raw)).first()
-        if not target:
+        user2 = session.query(User).filter(User.username.ilike(target_raw)).first()
+        if not user2:
             await update.message.reply_text(f"❌ User @{target_raw} not found. They need to /debut first.")
             return
-
-        # Check for existing pending trade
-        pending = get_pending_trade_for_user(session, user.id)
-        if pending:
-            await update.message.reply_text(
-                "⚠️ You already have a pending trade. Cancel it first or wait for it to expire."
-            )
+        if (
+            _active_trade_for_user(context, user1.id)
+            or _active_trade_for_user(context, user2.id)
+            or get_pending_trade_for_user(session, user1.id)
+            or get_pending_trade_for_user(session, user2.id)
+        ):
+            await update.message.reply_text("⚠️ One of these users already has an active trade. Cancel it or wait for expiry.")
             return
 
-        # Find matching ratings
-        matching = find_matching_ratings(session, user.id, target.id)
-        if not matching:
-            await update.message.reply_text(
-                f"❌ No matching tradeable ratings with @{target.username}.\n"
-                "Both users need players rated 75+ OVR at the same rating."
-            )
+        user1_players = get_tradable_players(session, user1.id)
+        if not user1_players:
+            await update.message.reply_text("❌ You have no tradable players available.")
             return
 
-        # Show matching ratings
-        lines = []
-        for rating in matching:
-            my_players = get_players_at_rating(session, user.id, rating)
-            their_players = get_players_at_rating(session, target.id, rating)
-            my_names = ", ".join(p.name for _, p in my_players)
-            their_names = ", ".join(p.name for _, p in their_players)
-            fee = get_trade_fee(rating)
-            lines.append(
-                f"<b>{rating} OVR</b> (fee: {fee:,} 🪙)\n"
-                f"  You: {my_names}\n"
-                f"  Them: {their_names}"
-            )
+        trade_id = _new_trade_id()
+        state = {
+            "id": trade_id,
+            "user1_id": user1.id,
+            "user2_id": user2.id,
+            "user1_tg_id": user1.telegram_id,
+            "user2_tg_id": user2.telegram_id,
+            "chat_id": update.effective_chat.id,
+            "status": "awaiting_user1_player",
+            "created_at": time.time(),
+            "expires_at": time.time() + TRADE_EXPIRES_SECONDS,
+            "confirmations": [],
+        }
+        _store(context)[trade_id] = state
+        _user_index(context)[user1.id] = trade_id
+        _user_index(context)[user2.id] = trade_id
+        _schedule_expiry(context, trade_id)
 
         text = (
-            f"🔍 <b>TRADE MATCHES WITH</b> @{target.username}\n\n"
-            + "\n\n".join(lines) + "\n\n"
-            "Select a rating to trade:"
+            f"{_mention(user1)} wants to trade with {_mention(user2)}\n\n"
+            f"{_mention(user1)}, select your player to trade with {_mention(user2)}"
         )
-
-        buttons = []
-        for rating in matching:
-            buttons.append([
-                InlineKeyboardButton(
-                    f"⚡ {rating} OVR",
-                    callback_data=f"trate_{target.id}_{rating}",
-                )
-            ])
-        buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="tcancel")])
-
-        await update.message.reply_text(
-            text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons)
+        sent = await update.message.reply_text(
+            text,
+            reply_markup=_select_buttons(trade_id, user1_players, "t1p", "Cancel Trade"),
         )
-
+        state["message_id"] = sent.message_id
     except Exception:
-        logger.exception(f"Trade error for {tg_user.id}")
+        logger.exception("Trade start error for %s", tg_user.id)
         await update.message.reply_text("⚠️ Database error. Please try again later.")
     finally:
         session.close()
 
 
-# ── Step 2: Select your player at chosen rating ─────────────────────
-
-async def trade_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User selected a rating to trade at."""
+# ── Step 2: User 1 selects player ────────────────────────────────────
+async def trade_user1_player_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    parts = query.data.split("_")  # t1p_{trade_id}_{roster_id}
+    trade_id, roster_id = parts[1], int(parts[2])
+    state = _store(context).get(trade_id)
+    if not state:
+        await query.answer("Trade expired.", show_alert=True)
+        return
+    if query.from_user.id != state["user1_tg_id"]:
+        await _answer_not_part(query)
+        return
     await query.answer()
-    tg_user = query.from_user
-
-    parts = query.data.split("_")  # trate_{target_user_id}_{rating}
-    target_id = int(parts[1])
-    rating = int(parts[2])
+    if _is_expired(state):
+        state["status"] = "expired"
+        await query.edit_message_text("Trade expired.")
+        _clear_trade(context, trade_id)
+        return
 
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user:
+        user1, user2 = _load_users(session, state)
+        entry = session.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user1.id).first()
+        player = session.query(Player).get(entry.player_id) if entry else None
+        valid = any(e.id == roster_id for e, _ in get_tradable_players(session, user1.id))
+        if not entry or not player or not valid:
+            await query.edit_message_text("Trade cancelled because one player is no longer available.")
+            _clear_trade(context, trade_id)
             return
 
-        my_players = get_players_at_rating(session, user.id, rating)
-        if not my_players:
-            await query.edit_message_text(f"❌ You no longer have any {rating} OVR players")
+        user2_players = get_players_at_rating(session, user2.id, player.rating)
+        if not user2_players:
+            await query.edit_message_text(f"❌ {_mention(user2)} has no tradable players with OVR {player.rating}.")
+            _clear_trade(context, trade_id)
             return
 
-        text = (
-            f"🏏 <b>SELECT YOUR PLAYER TO TRADE</b> ({rating} OVR)\n\n"
-            "Available:\n"
+        state.update(
+            {
+                "status": "awaiting_user2_player",
+                "user1_selected_roster_id": entry.id,
+                "user1_selected_player_id": player.id,
+                "selected_player_name": player.name,
+                "selected_player_ovr": player.rating,
+            }
         )
-        buttons = []
-        for i, (entry, player) in enumerate(my_players, 1):
-            text += f"{i}. {player.name} - {player.rating} OVR | {player.category}\n"
-            label = player.name[:20]
-            if len(my_players) > 1:
-                label = f"{player.name[:18]} #{i}"
-            buttons.append([
-                InlineKeyboardButton(
-                    f"Select {label}",
-                    callback_data=f"tmypl_{target_id}_{rating}_{entry.id}",
-                )
-            ])
-
-        buttons.append([InlineKeyboardButton("◀️ Back", callback_data=f"tback_{target_id}")])
+        text = (
+            f"{_mention(user1)} selected {_player_label(player)}\n\n"
+            f"{_mention(user2)}, select your player to trade with {_mention(user1)}\n\n"
+            f"{_mention(user1)} has selected: {_player_label(player)}\n"
+            f"Rule: You can only select players with OVR {player.rating}"
+        )
         await query.edit_message_text(
-            text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons)
+            text,
+            reply_markup=_select_buttons(trade_id, user2_players, "t2p", "Reject Trade"),
         )
-
     except Exception:
-        logger.exception(f"Trade rating callback error for {tg_user.id}")
+        logger.exception("Trade user1 selection error")
     finally:
         session.close()
 
 
-# ── Step 3: Select their player at same rating ──────────────────────
-
-async def trade_myplayer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User selected their player, now pick the receiver's player."""
+# ── Step 3: User 2 selects player ────────────────────────────────────
+async def trade_user2_player_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    parts = query.data.split("_")  # t2p_{trade_id}_{roster_id}
+    trade_id, roster_id = parts[1], int(parts[2])
+    state = _store(context).get(trade_id)
+    if not state:
+        await query.answer("Trade expired.", show_alert=True)
+        return
+    if query.from_user.id != state["user2_tg_id"]:
+        await _answer_not_part(query)
+        return
     await query.answer()
-    tg_user = query.from_user
-
-    parts = query.data.split("_")  # tmypl_{target_id}_{rating}_{my_roster_id}
-    target_id = int(parts[1])
-    rating = int(parts[2])
-    my_roster_id = int(parts[3])
+    if _is_expired(state):
+        state["status"] = "expired"
+        await query.edit_message_text("Trade expired.")
+        _clear_trade(context, trade_id)
+        return
 
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        target = session.query(User).get(target_id)
-        if not user or not target:
+        user1, user2 = _load_users(session, state)
+        entry = session.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user2.id).first()
+        player = session.query(Player).get(entry.player_id) if entry else None
+        required_ovr = state["selected_player_ovr"]
+        valid = any(e.id == roster_id for e, _ in get_players_at_rating(session, user2.id, required_ovr))
+        if not entry or not player or player.rating != required_ovr or not valid:
+            await query.edit_message_text("Trade cancelled because one player is no longer available.")
+            _clear_trade(context, trade_id)
             return
 
-        their_players = get_players_at_rating(session, target.id, rating)
-        if not their_players:
-            await query.edit_message_text(f"❌ @{target.username} no longer has {rating} OVR players")
-            return
-
-        text = (
-            f"🏏 <b>SELECT @{target.username}'s PLAYER TO RECEIVE</b> ({rating} OVR)\n\n"
-            "Available:\n"
+        result = create_pending_trade(
+            session, user1, user2, state["user1_selected_roster_id"], entry.id
         )
-        buttons = []
-        for i, (entry, player) in enumerate(their_players, 1):
-            text += f"{i}. {player.name} - {player.rating} OVR | {player.category}\n"
-            label = player.name[:20]
-            if len(their_players) > 1:
-                label = f"{player.name[:18]} #{i}"
-            buttons.append([
-                InlineKeyboardButton(
-                    f"Select {label}",
-                    callback_data=f"tthpl_{target_id}_{my_roster_id}_{entry.id}",
-                )
-            ])
-
-        buttons.append([InlineKeyboardButton("◀️ Back", callback_data=f"trate_{target_id}_{rating}")])
-        await query.edit_message_text(
-            text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons)
-        )
-
-    except Exception:
-        logger.exception(f"Trade myplayer callback error for {tg_user.id}")
-    finally:
-        session.close()
-
-
-# ── Step 4: Confirm & send offer ─────────────────────────────────────
-
-async def trade_theirplayer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User selected both players. Show confirmation with fees."""
-    query = update.callback_query
-    await query.answer()
-    tg_user = query.from_user
-
-    parts = query.data.split("_")  # tthpl_{target_id}_{my_roster_id}_{their_roster_id}
-    target_id = int(parts[1])
-    my_roster_id = int(parts[2])
-    their_roster_id = int(parts[3])
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        target = session.query(User).get(target_id)
-        if not user or not target:
-            return
-
-        from models import UserRoster
-        my_entry = session.query(UserRoster).get(my_roster_id)
-        their_entry = session.query(UserRoster).get(their_roster_id)
-        if not my_entry or not their_entry:
-            await query.edit_message_text("❌ One of the players is no longer available")
-            return
-
-        my_player = session.query(Player).get(my_entry.player_id)
-        their_player = session.query(Player).get(their_entry.player_id)
-
-        buy_val = get_buy_value(my_player.rating)
-        fee = get_trade_fee(my_player.rating)
-
-        # Validate
-        check = can_trade_with_user(session, user, target, my_player.rating)
-        if not check["can_trade"]:
-            await query.edit_message_text(f"❌ {check['reason']}")
-            return
-
-        text = (
-            f"📬 <b>TRADE OFFER CONFIRMATION</b>\n\n"
-            f"➡️  You offer: {my_player.name} - {my_player.rating} OVR\n"
-            f"💰 Buy Value: {buy_val:,} 🪙\n"
-            f"💳 Trade Fee (5%): {fee:,} 🪙\n\n"
-            f"⬅️  You receive: {their_player.name} - {their_player.rating} OVR\n"
-            f"💰 Buy Value: {buy_val:,} 🪙\n"
-            f"💳 Trade Fee (5%): {fee:,} 🪙\n\n"
-            f"🔄 Fair Trade: ✅ Yes (Same rating)\n\n"
-            f"💸 Your cost: {fee:,} 🪙\n"
-            f"⏳ Offer expires in: {TRADE_EXPIRES_SECONDS} seconds"
-        )
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "✅ Send Offer",
-                    callback_data=f"tsend_{target_id}_{my_roster_id}_{their_roster_id}",
-                ),
-                InlineKeyboardButton("❌ Cancel", callback_data="tcancel"),
-            ]
-        ])
-
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
-
-    except Exception:
-        logger.exception(f"Trade confirm callback error for {tg_user.id}")
-    finally:
-        session.close()
-
-
-# ── Send the offer ───────────────────────────────────────────────────
-
-async def trade_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send the trade offer to the receiver."""
-    query = update.callback_query
-    await query.answer()
-    tg_user = query.from_user
-
-    parts = query.data.split("_")  # tsend_{target_id}_{my_roster_id}_{their_roster_id}
-    target_id = int(parts[1])
-    my_roster_id = int(parts[2])
-    their_roster_id = int(parts[3])
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        target = session.query(User).get(target_id)
-        if not user or not target:
-            return
-
-        result = initiate_trade(session, user, target, my_roster_id, their_roster_id)
         session.commit()
-
         if not result["success"]:
-            await query.edit_message_text(f"❌ {result['message']}")
+            await query.edit_message_text(result["message"])
+            _clear_trade(context, trade_id)
             return
 
-        init_p = result["init_player"]
-        recv_p = result["recv_player"]
-        trade_id = result["trade_id"]
-        fee = result["fee"]
-
-        # Update initiator's message
-        await query.edit_message_text(
-            f"📤 <b>TRADE OFFER SENT!</b>\n\n"
-            f"To: @{target.username}\n\n"
-            f"➡️  You offer: {init_p.name} - {init_p.rating} OVR\n"
-            f"⬅️  You receive: {recv_p.name} - {recv_p.rating} OVR\n\n"
-            f"⏳ Waiting for response... (expires in {TRADE_EXPIRES_SECONDS}s)\n",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel Offer", callback_data=f"treject_{trade_id}")]
-            ]),
+        state.update(
+            {
+                "status": "awaiting_confirmations",
+                "db_trade_id": result["trade_id"],
+                "user2_selected_roster_id": entry.id,
+                "user2_selected_player_id": player.id,
+                "user2_selected_player_name": player.name,
+                "user2_selected_player_ovr": player.rating,
+                "confirmations": [],
+            }
         )
-
-        # Send Accept/Reject in same chat (works in groups and DMs)
-        buy_val = get_buy_value(init_p.rating)
-        recv_text = (
-            f"📬 <b>INCOMING TRADE OFFER!</b>\n\n"
-            f"From: @{user.username} → To: @{target.username}\n\n"
-            f"➡️  Offering: {init_p.name} - {init_p.rating} OVR\n"
-            f"⬅️  Wants: {recv_p.name} - {recv_p.rating} OVR\n"
-            f"💳 Trade Fee: {fee:,} 🪙 (5% from both)\n\n"
-            f"⏳ Expires in: {TRADE_EXPIRES_SECONDS} seconds\n\n"
-            f"@{target.username} tap below to respond:"
+        init_player = result["init_player"]
+        recv_player = result["recv_player"]
+        text = (
+            "Trade Confirmation\n\n"
+            f"{_mention(user1)} gives:\n{_player_label(init_player)}\n\n"
+            f"{_mention(user2)} gives:\n{_player_label(recv_player)}\n\n"
+            "Both players have the same OVR rating."
         )
-
-        recv_keyboard = InlineKeyboardMarkup([
+        buttons = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Accept", callback_data=f"taccept_{trade_id}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"treject_{trade_id}"),
-            ]
+                InlineKeyboardButton(f"{_mention(user1)} Confirm", callback_data=f"tcfrm_{trade_id}_{user1.id}"),
+                InlineKeyboardButton(f"{_mention(user2)} Confirm", callback_data=f"tcfrm_{trade_id}_{user2.id}"),
+            ],
+            [InlineKeyboardButton("Cancel Trade", callback_data=f"tcancel_{trade_id}")],
         ])
-
-        # Send in same chat
-        chat_id = query.message.chat_id
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=recv_text,
-            parse_mode="HTML",
-            reply_markup=recv_keyboard,
-        )
-
+        await query.edit_message_text(text, reply_markup=buttons)
     except Exception:
         session.rollback()
-        logger.exception(f"Trade send error for {tg_user.id}")
+        logger.exception("Trade user2 selection error")
     finally:
         session.close()
 
 
-# ── Accept / Reject callbacks ────────────────────────────────────────
-
-async def trade_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receiver accepts the trade."""
+# ── Step 4: Confirm callbacks ────────────────────────────────────────
+async def trade_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    tg_user = query.from_user
-
-    trade_id = int(query.data.split("_")[1])
+    parts = query.data.split("_")  # tcfrm_{trade_id}_{expected_user_id}
+    trade_id, expected_user_id = parts[1], int(parts[2])
+    state = _store(context).get(trade_id)
+    if not state:
+        await query.answer("Trade expired.", show_alert=True)
+        return
+    if query.from_user.id not in {state["user1_tg_id"], state["user2_tg_id"]}:
+        await _answer_not_part(query)
+        return
 
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user:
+        user = session.query(User).filter(User.telegram_id == query.from_user.id).first()
+        user1, user2 = _load_users(session, state)
+        if not user or user.id != expected_user_id or user.id not in {user1.id, user2.id}:
+            await query.answer("This confirm button is not for you.", show_alert=True)
+            return
+        await query.answer()
+        if _is_expired(state):
+            await query.edit_message_text("Trade expired.")
+            _clear_trade(context, trade_id)
             return
 
-        result = accept_trade(session, trade_id, user)
+        confirmations = state.setdefault("confirmations", [])
+        if user.id not in confirmations:
+            confirmations.append(user.id)
+        confirmed_ids = set(confirmations)
+        other = user2 if user.id == user1.id else user1
+        if {user1.id, user2.id} - confirmed_ids:
+            await query.edit_message_text(
+                f"{_mention(user)} confirmed the trade.\nWaiting for {_mention(other)} confirmation...",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"{_mention(other)} Confirm", callback_data=f"tcfrm_{trade_id}_{other.id}")],
+                    [InlineKeyboardButton("Cancel Trade", callback_data=f"tcancel_{trade_id}")],
+                ]),
+            )
+            return
+
+        await query.edit_message_text(f"{_mention(user)} confirmed the trade.\nProcessing trade...")
+        result = complete_trade(session, state["db_trade_id"])
         session.commit()
-
         if not result["success"]:
-            await query.edit_message_text(f"❌ {result['message']}")
+            await context.bot.send_message(chat_id=state["chat_id"], text=result["message"])
+            _clear_trade(context, trade_id)
             return
-
-        init_p = result["init_player"]
-        recv_p = result["recv_player"]
         initiator = result["initiator"]
         receiver = result["receiver"]
-        fee = result["fee"]
-
-        # Notify receiver (the one who clicked accept)
-        await query.edit_message_text(
-            f"✅ <b>TRADE COMPLETED!</b>\n\n"
-            f"@{receiver.username} ↔ @{initiator.username}\n\n"
-            f"✅ @{receiver.username} gave: {recv_p.name} - {recv_p.rating} OVR\n"
-            f"✅ @{initiator.username} gave: {init_p.name} - {init_p.rating} OVR\n\n"
-            f"💸 Trade Fee: {fee:,} 🪙 from each\n"
-            f"💰 @{receiver.username} Balance: {receiver.total_coins:,}\n"
-            f"💰 @{initiator.username} Balance: {initiator.total_coins:,}",
-            parse_mode="HTML",
+        init_player = result["init_player"]
+        recv_player = result["recv_player"]
+        final_text = (
+            "Trade Completed Successfully\n\n"
+            f"{_mention(initiator)} received: {_player_label(recv_player)}\n"
+            f"{_mention(receiver)} received: {_player_label(init_player)}"
         )
-
+        await context.bot.send_message(chat_id=state["chat_id"], text=final_text)
+        _clear_trade(context, trade_id)
     except Exception:
         session.rollback()
-        logger.exception(f"Trade accept error for {tg_user.id}")
+        logger.exception("Trade confirm error")
     finally:
         session.close()
 
-
-async def trade_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reject or cancel a trade."""
-    query = update.callback_query
-    await query.answer()
-    tg_user = query.from_user
-
-    trade_id = int(query.data.split("_")[1])
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user:
-            return
-
-        result = reject_trade(session, trade_id, user)
-        session.commit()
-
-        if not result["success"]:
-            await query.edit_message_text(f"❌ {result['message']}")
-            return
-
-        trade = result["trade"]
-        is_initiator = trade.initiator_id == user.id
-        action = "cancelled" if is_initiator else "rejected"
-        await query.edit_message_text(f"❌ Trade {action} by @{user.username}.")
-
-    except Exception:
-        session.rollback()
-        logger.exception(f"Trade reject error for {tg_user.id}")
-    finally:
-        session.close()
-
-
-# ── Cancel / Back ────────────────────────────────────────────────────
 
 async def trade_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    parts = query.data.split("_")
+    trade_id = parts[1] if len(parts) > 1 else None
+    state = _store(context).get(trade_id) if trade_id else None
+    if state and query.from_user.id not in {state["user1_tg_id"], state["user2_tg_id"]}:
+        await _answer_not_part(query)
+        return
     await query.answer("Trade cancelled")
+    if state and state.get("db_trade_id"):
+        session = get_session()
+        try:
+            user = session.query(User).filter(User.telegram_id == query.from_user.id).first()
+            if user:
+                reject_trade(session, state["db_trade_id"], user)
+                session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("Trade cancel DB error")
+        finally:
+            session.close()
+    if state:
+        state["status"] = "cancelled"
+        _clear_trade(context, trade_id)
     try:
-        await query.edit_message_text("❌ Trade cancelled.")
+        await query.edit_message_text("Trade cancelled.")
     except Exception:
         pass
 
 
+# Legacy callback names kept so older imports do not break.
+async def trade_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await trade_cancel_callback(update, context)
+
+
+async def trade_myplayer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await trade_user1_player_callback(update, context)
+
+
+async def trade_theirplayer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await trade_user2_player_callback(update, context)
+
+
+async def trade_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await trade_confirm_callback(update, context)
+
+
+async def trade_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await trade_confirm_callback(update, context)
+
+
+async def trade_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await trade_cancel_callback(update, context)
+
+
 async def trade_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Go back to rating selection for a target user."""
-    query = update.callback_query
-    await query.answer()
-    tg_user = query.from_user
-
-    target_id = int(query.data.split("_")[1])
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        target = session.query(User).get(target_id)
-        if not user or not target:
-            return
-
-        matching = find_matching_ratings(session, user.id, target.id)
-        if not matching:
-            await query.edit_message_text("❌ No matching ratings available anymore.")
-            return
-
-        lines = []
-        for rating in matching:
-            fee = get_trade_fee(rating)
-            lines.append(f"<b>{rating} OVR</b> (fee: {fee:,} 🪙)")
-
-        text = (
-            f"🔍 <b>TRADE MATCHES WITH</b> @{target.username}\n\n"
-            + "\n".join(lines) + "\n\n"
-            "Select a rating to trade:"
-        )
-        buttons = [[InlineKeyboardButton(f"⚡ {r} OVR", callback_data=f"trate_{target_id}_{r}")] for r in matching]
-        buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="tcancel")])
-
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
-
-    except Exception:
-        logger.exception(f"Trade back error for {tg_user.id}")
-    finally:
-        session.close()
+    await trade_cancel_callback(update, context)
