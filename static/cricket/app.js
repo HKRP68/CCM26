@@ -18,6 +18,11 @@ const POLL_REQUEST_TIMEOUT_MS = 8000;
 const MAX_POLL_FAILURES = 10;
 const MATCH_POLL_INTERVAL_MS = 150;
 const AUTOPLAY_ACTION_DELAY_MS = 0;
+// How long the ball-outcome event box (GIF/text) lingers before reverting to
+// idle. Kept short so the outcome reads instantly after a shot and the
+// celebratory GIF only flashes briefly instead of holding the screen ~3s.
+// This is a pure UI reveal duration — it has nothing to do with bowling pace.
+const EVENT_FLASH_MS = 900;
 
 // Selected actions
 let selectedDelivery = null;
@@ -2147,7 +2152,7 @@ function showEventBoxText(comm) {
   }
 
   // Revert to idle after a short beat so the box stays present but neutral.
-  eventGifTimer = setTimeout(showEventBoxIdle, 2600);
+  eventGifTimer = setTimeout(showEventBoxIdle, EVENT_FLASH_MS);
 }
 
 function triggerMatchEvent(comm) {
@@ -2202,9 +2207,10 @@ function triggerMatchEvent(comm) {
     label.textContent = item.label || key.replaceAll('_', ' ');
   }
   fireEventHaptic(comm);
-  // After the GIF's duration, revert to idle — the box itself stays visible.
-  eventGifTimer = setTimeout(showEventBoxIdle,
-    Math.max(500, Math.min(15000, Number(item.durationMs) || 3000)));
+  // Flash the GIF briefly, then revert to idle — the box itself stays visible.
+  // The outcome (scorecard/commentary) already rendered instantly via
+  // applyMatchState, so the overlay is just a quick celebratory beat.
+  eventGifTimer = setTimeout(showEventBoxIdle, EVENT_FLASH_MS);
 }
 
 function createParticles(container, color) {
