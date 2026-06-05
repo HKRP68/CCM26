@@ -18,6 +18,7 @@ from telegram import BotCommand, Update as _TGUpdate
 from config import BOT_TOKEN
 from database import init_db
 from logger import setup_logging
+from services.reply_context import bind_reply_context, install_reply_defaults
 
 # Phase 1 handlers
 from handlers.debut import debut_handler
@@ -545,6 +546,7 @@ def _send_admin_reply_blocking(chat_id, text):
 
 def main():
     setup_logging()
+    install_reply_defaults()
     logger.info("=" * 50)
     logger.info("CRICKET BOT STARTING...")
     logger.info("=" * 50)
@@ -623,6 +625,11 @@ def main():
         def _is_storage_only_command(update):
             """Compatibility hook: all current commands use normal middleware."""
             return False
+
+        # ── Reply-context middleware (group=-4, runs before outbound replies) ──
+        async def _bind_reply_context(update, context):
+            bind_reply_context(update)
+        app.add_handler(TypeHandler(_TGUpdate, _bind_reply_context), group=-4)
 
         # ── Chat-tracker middleware (group=-3, runs FIRST) ──
         async def _track_chat(update, context):
