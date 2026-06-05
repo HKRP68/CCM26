@@ -6258,7 +6258,6 @@ def match_rest_poll():
     try:
         from services.crickidex_arena import (resolve_viewer, find_active_match,
                                                serialize_match_state)
-        from services.match_webapp_service import ensure_webapp_match_completed
         uid = request.args.get("userId") or request.args.get("user_id")
         mid = request.args.get("matchId") or request.args.get("match_id")
         if not uid and not mid:
@@ -6267,7 +6266,11 @@ def match_rest_poll():
         match = find_active_match(db, viewer, mid)
         if not match:
             return {"error": "No active match found."}, 404
-        ensure_webapp_match_completed(db, match.id)
+        # Finalize a terminal match AND queue its summary broadcast (+ deferred
+        # state cleanup) here too, so completion first observed by a poll still
+        # delivers the Match Summary. The broadcast guard dedupes against the
+        # action endpoint, so the summary is sent exactly once.
+        _finalize_and_broadcast_if_terminal(db, match.id)
         try:
             from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
             if get_state_is_vsbot(match.id):
@@ -7230,12 +7233,27 @@ def _broadcast_match_result(match_id, result):
         _COMPLETED_MATCH_BROADCASTS.add(match_id)
 
     def _work():
+        import time
         try:
+            # Give the Mini App a moment to render the just-decided result from
+            # the still-live state before the lobby chat receives its summary.
+            time.sleep(1.5)
             _build_and_send_match_result(match_id, result)
         except Exception:
             with _COMPLETED_MATCH_BROADCASTS_LOCK:
                 _COMPLETED_MATCH_BROADCASTS.discard(match_id)
             logger.exception("completed match result build/send failed")
+            return
+        # The summary has been built (from the persisted scorecard) and its
+        # Telegram send dispatched. The live match_state is no longer needed, so
+        # remove it now — this is the deferred cleanup finalize_webapp_match no
+        # longer performs inline.
+        try:
+            from services.match_state_store import cleanup_state
+            from services.match_webapp_access import fresh_ctx
+            cleanup_state(fresh_ctx(), match_id)
+        except Exception:
+            logger.exception("post-summary match state cleanup failed")
 
     try:
         threading.Thread(target=_work, daemon=True).start()
