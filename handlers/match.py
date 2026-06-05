@@ -17,6 +17,7 @@ from services.match_engine import (
 )
 from services.flags import get_flag
 from services.activity_service import log_activity
+from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.batsman_card import generate_batsman_card
 from services.bowler_card import generate_bowler_card
 from services.scorecard_card import generate_batting_scorecard, generate_bowling_scorecard
@@ -2017,9 +2018,6 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user; cid = update.effective_chat.id
-    if not context.args: await update.message.reply_text("Usage: /playmatch @username"); return
-    t = context.args[0].lstrip("@").strip()
-    if not t: await update.message.reply_text("Usage: /playmatch @username"); return
     session = get_session()
     try:
         # One match per chat
@@ -2029,13 +2027,22 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _chat_busy_message(existing), parse_mode="HTML")
             return
 
-        u1 = session.query(User).filter(User.telegram_id == tg.id).first()
+        u1 = sync_telegram_user(session, tg)
         if not u1: await update.message.reply_text("❌ /debut first!"); return
-        u2 = session.query(User).filter(User.username.ilike(t)).first()
+        u2, target_source = resolve_command_target(session, update, context, "playmatch")
         if not u2:
-            await update.message.reply_text(
-                f"❌ Couldn't find @{t}. They need to have set a Telegram @username "
-                f"and used /debut to be challenged.")
+            if target_source == "not_mention":
+                await update.message.reply_text(
+                    "❌ Please reply to the user's message or use a real @username mention.\n"
+                    "Usage: /playmatch @username")
+            elif target_source == "missing":
+                await update.message.reply_text(
+                    "Usage: /playmatch @username\n"
+                    "Tip: for users without @username, reply to their message and run /playmatch.")
+            else:
+                await update.message.reply_text(
+                    "❌ Couldn't find that user. Ask them to use /debut first; "
+                    "if they changed or don't have a username, reply to their message and run /playmatch.")
             return
         # Block self-play by user id (robust even if usernames are missing/changed)
         if u2.id == u1.id:

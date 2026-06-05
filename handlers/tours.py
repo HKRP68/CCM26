@@ -23,6 +23,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Tour, TourMatch, Match
+from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.tour_service import (
     create_tour, accept_tour, decline_tour, expire_pending_invite,
     get_user_tours, get_tour_matches, is_user_in_active_tour,
@@ -47,24 +48,26 @@ async def cmtours_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Tours can only be created in group chats.")
         return
 
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: <code>/cmtours @user2</code>", parse_mode="HTML")
-        return
-
-    target_username = context.args[0].lstrip("@").strip()
     session = get_session()
     try:
-        u1 = session.query(User).filter(User.telegram_id == tg.id).first()
+        u1 = sync_telegram_user(session, tg)
         if not u1:
             await update.message.reply_text("❌ Do /debut first!")
             return
-        if target_username.lower() == (u1.username or "").lower():
-            await update.message.reply_text("❌ You can't tour yourself.")
-            return
-        u2 = session.query(User).filter(User.username.ilike(target_username)).first()
+        u2, target_source = resolve_command_target(session, update, context, "cmtours")
         if not u2:
-            await update.message.reply_text(f"❌ @{target_username} not found.")
+            if target_source == "missing":
+                await update.message.reply_text(
+                    "Usage: <code>/cmtours @user2</code>\n"
+                    "Tip: for users without @username, reply to their message and run /cmtours.",
+                    parse_mode="HTML")
+            elif target_source == "not_mention":
+                await update.message.reply_text("❌ Reply to a user or use a real @username mention.")
+            else:
+                await update.message.reply_text("❌ User not found. If they changed or don't have a username, reply to their message and run /cmtours.")
+            return
+        if u2.id == u1.id:
+            await update.message.reply_text("❌ You can't tour yourself.")
             return
 
         # Check both users free
