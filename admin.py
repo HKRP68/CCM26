@@ -10235,29 +10235,57 @@ def admin_broadcast():
 
                 message = (request.form.get("message") or "").strip()
                 target = (request.form.get("target") or "all").strip()
-                image = request.files.get("image_file")
+                images = [
+                    file for file in request.files.getlist("image_files")
+                    if file and file.filename
+                ]
                 document = request.files.get("document_file")
-                image = image if image and image.filename else None
                 document = document if document and document.filename else None
 
-                if image and document:
-                    flash("Choose either one image or one file, not both.", "error")
+                if images and document:
+                    flash("Choose either image album uploads or one file, not both.", "error")
                     return redirect(url_for("admin_broadcast"))
-                if not message and not image and not document:
-                    flash("Add a message, image, or file before sending.", "error")
+                if len(images) > 10:
+                    flash("Telegram albums support up to 10 images per broadcast.", "error")
+                    return redirect(url_for("admin_broadcast"))
+                if not message and not images and not document:
+                    flash("Add a message, image album, or file before sending.", "error")
                     return redirect(url_for("admin_broadcast"))
                 if len(message) > 4000:
                     flash("Message too long (max 4000 chars)", "error")
                     return redirect(url_for("admin_broadcast"))
 
                 attachment = None
-                uploaded = image or document
-                if uploaded:
-                    attachment_type = "image" if image else "document"
-                    if image and not (uploaded.mimetype or "").startswith("image/"):
-                        flash("The image upload must be an image file.", "error")
-                        return redirect(url_for("admin_broadcast"))
-                    file_bytes = uploaded.read()
+                if images:
+                    items = []
+                    for image in images:
+                        if not (image.mimetype or "").startswith("image/"):
+                            flash("Every image upload must be an image file.", "error")
+                            return redirect(url_for("admin_broadcast"))
+                        file_bytes = image.read()
+                        if not file_bytes:
+                            flash("Uploaded image is empty.", "error")
+                            return redirect(url_for("admin_broadcast"))
+                        if len(file_bytes) > 50 * 1024 * 1024:
+                            flash(f"Image too large ({len(file_bytes) / 1024 / 1024:.1f}MB). "
+                                  "Telegram limit is 50MB.", "error")
+                            return redirect(url_for("admin_broadcast"))
+                        filename = secure_filename(image.filename) or "broadcast-image"
+                        items.append({"name": filename[:255], "bytes": file_bytes})
+                    if len(items) == 1:
+                        attachment = {
+                            "type": "image",
+                            "name": items[0]["name"],
+                            "bytes": items[0]["bytes"],
+                        }
+                    else:
+                        attachment = {
+                            "type": "album",
+                            "name": f"{len(items)} images",
+                            "items": items,
+                        }
+                elif document:
+                    file_bytes = document.read()
                     if not file_bytes:
                         flash("Uploaded attachment is empty.", "error")
                         return redirect(url_for("admin_broadcast"))
@@ -10265,11 +10293,9 @@ def admin_broadcast():
                         flash(f"Attachment too large ({len(file_bytes) / 1024 / 1024:.1f}MB). "
                               "Telegram limit is 50MB.", "error")
                         return redirect(url_for("admin_broadcast"))
-                    filename = secure_filename(uploaded.filename) or (
-                        "broadcast-image" if image else "broadcast-file"
-                    )
+                    filename = secure_filename(document.filename) or "broadcast-file"
                     attachment = {
-                        "type": attachment_type,
+                        "type": "document",
                         "name": filename[:255],
                         "bytes": file_bytes,
                     }
@@ -10367,7 +10393,8 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
     sent = 0
     failed = 0
 
-    from telegram import Bot, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram import (Bot, InputFile, InputMediaPhoto, InlineKeyboardButton,
+                          InlineKeyboardMarkup)
     from config import BOT_TOKEN
     bot_instance = Bot(token=BOT_TOKEN)
 
@@ -10395,26 +10422,55 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
 
     DELAY = 0.05
 
+    PHOTO_CAPTION_LIMIT = 1024
+
+    async def _send_text(cid, text):
+        await bot_instance.send_message(
+            chat_id=cid, text=text, parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+
+    async def _send_album(cid):
+        items = (attachment.get("items") or [])[:10]
+        media = []
+        use_caption = bool(message) and len(message) <= PHOTO_CAPTION_LIMIT and not reply_markup
+        for index, item in enumerate(items):
+            upload = InputFile(io.BytesIO(item["bytes"]), filename=item["name"])
+            kwargs = {}
+            if index == 0 and use_caption:
+                kwargs.update({"caption": message, "parse_mode": "HTML"})
+            media.append(InputMediaPhoto(media=upload, **kwargs))
+        if media:
+            await bot_instance.send_media_group(chat_id=cid, media=media)
+        if message and not use_caption:
+            await _send_text(cid, message)
+        elif reply_markup and not message:
+            await _send_text(cid, button.get("text") or "Open")
+
     async def _send_one(cid):
         try:
             # Attach the inline button to the text message when there is one,
-            # otherwise to the attachment itself (so a button always shows).
+            # otherwise to single attachments that support it. Albums cannot
+            # carry inline keyboards, so button broadcasts send text separately.
             attach_markup = reply_markup if not message else None
             if attachment:
-                upload = InputFile(io.BytesIO(attachment["bytes"]),
-                                   filename=attachment["name"])
-                if attachment["type"] == "image":
-                    await bot_instance.send_photo(chat_id=cid, photo=upload,
-                                                  reply_markup=attach_markup)
+                attachment_type = attachment.get("type")
+                if attachment_type == "album":
+                    await _send_album(cid)
                 else:
-                    await bot_instance.send_document(chat_id=cid, document=upload,
-                                                     reply_markup=attach_markup)
-            if message:
-                await bot_instance.send_message(
-                    chat_id=cid, text=message, parse_mode="HTML",
-                    disable_web_page_preview=True,
-                    reply_markup=reply_markup,
-                )
+                    upload = InputFile(io.BytesIO(attachment["bytes"]),
+                                       filename=attachment["name"])
+                    if attachment_type == "image":
+                        await bot_instance.send_photo(chat_id=cid, photo=upload,
+                                                      reply_markup=attach_markup)
+                    else:
+                        await bot_instance.send_document(chat_id=cid, document=upload,
+                                                         reply_markup=attach_markup)
+                    if message:
+                        await _send_text(cid, message)
+            elif message:
+                await _send_text(cid, message)
             return True
         except Exception as e:
             log.warning(f"Broadcast send to {cid} failed: {e}")
