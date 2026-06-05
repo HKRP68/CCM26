@@ -33,10 +33,10 @@ from handlers.release import (
     releasemultiple_confirm_callback,
 )
 from handlers.trade import (
-    trade_handler, trade_rating_callback, trade_myplayer_callback,
-    trade_theirplayer_callback, trade_send_callback,
-    trade_accept_callback, trade_reject_callback,
-    trade_cancel_callback, trade_back_callback,
+    trade_handler, trade_user1_player_callback, trade_user2_player_callback,
+    trade_confirm_callback, trade_cancel_callback,
+    trade_rating_callback, trade_myplayer_callback, trade_theirplayer_callback,
+    trade_send_callback, trade_accept_callback, trade_reject_callback, trade_back_callback,
 )
 
 # Phase 3 handlers
@@ -386,6 +386,11 @@ def main():
         app.add_handler(CallbackQueryHandler(myprofile_callback, pattern=r"^mp_"))
 
         # ── Trade callbacks ──────────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(trade_user1_player_callback, pattern=r"^t1p_"))
+        app.add_handler(CallbackQueryHandler(trade_user2_player_callback, pattern=r"^t2p_"))
+        app.add_handler(CallbackQueryHandler(trade_confirm_callback, pattern=r"^tcfrm_"))
+        app.add_handler(CallbackQueryHandler(trade_cancel_callback, pattern=r"^tcancel_"))
+        # Legacy trade callback patterns are routed to compatibility wrappers.
         app.add_handler(CallbackQueryHandler(trade_rating_callback, pattern=r"^trate_"))
         app.add_handler(CallbackQueryHandler(trade_myplayer_callback, pattern=r"^tmypl_"))
         app.add_handler(CallbackQueryHandler(trade_theirplayer_callback, pattern=r"^tthpl_"))

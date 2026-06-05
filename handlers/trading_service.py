@@ -1,79 +1,79 @@
-"""Player trading: initiate, accept, reject, expire."""
+"""Player trading services for exact same-OVR swaps."""
 
 import logging
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from models import User, Player, UserRoster, Trade
-from config import TRADE_EXPIRES_SECONDS, MAX_ACTIVE_TRADES
-from services.rating_matcher_service import get_trade_fee
+from config import TRADE_EXPIRES_SECONDS
+from models import Player, Trade, User, UserRoster
 from services.activity_service import log_activity
+from services.rating_matcher_service import (
+    get_players_at_rating,
+    is_player_locked,
+    is_player_non_tradable,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def expire_stale_trades(session: Session):
-    """Auto-expire any pending trades past their expiry time."""
+    """Auto-expire DB pending trades past their expiry time."""
     now = datetime.utcnow()
-    stale = (
-        session.query(Trade)
-        .filter(Trade.status == "pending", Trade.expires_at < now)
-        .all()
-    )
-    for t in stale:
-        t.status = "expired"
-        t.updated_at = now
+    stale = session.query(Trade).filter(Trade.status == "pending", Trade.expires_at < now).all()
+    for trade in stale:
+        trade.status = "expired"
+        trade.updated_at = now
     if stale:
         session.flush()
-        logger.info(f"Auto-expired {len(stale)} stale trades")
+        logger.info("Auto-expired %d stale trades", len(stale))
 
 
-def initiate_trade(
+def _get_owned_available_entry(session: Session, user_id: int, roster_id: int):
+    entry = (
+        session.query(UserRoster)
+        .filter(UserRoster.id == roster_id, UserRoster.user_id == user_id)
+        .first()
+    )
+    if not entry:
+        return None, None
+    player = session.query(Player).get(entry.player_id)
+    if not player or is_player_locked(entry, player) or is_player_non_tradable(player):
+        return None, None
+    if not any(e.id == entry.id for e, _ in get_players_at_rating(session, user_id, player.rating)):
+        return None, None
+    return entry, player
+
+
+def _validate_same_ovr_swap(
+    session: Session,
+    initiator: User,
+    receiver: User,
+    initiator_roster_id: int,
+    receiver_roster_id: int,
+):
+    init_entry, init_player = _get_owned_available_entry(session, initiator.id, initiator_roster_id)
+    recv_entry, recv_player = _get_owned_available_entry(session, receiver.id, receiver_roster_id)
+    if not init_entry or not recv_entry:
+        return None, None, None, None, "Trade cancelled because one player is no longer available."
+    if init_player.rating != recv_player.rating:
+        return None, None, None, None, "Trade cancelled because both players no longer have the same OVR."
+    return init_entry, init_player, recv_entry, recv_player, None
+
+
+def create_pending_trade(
     session: Session,
     initiator: User,
     receiver: User,
     initiator_roster_id: int,
     receiver_roster_id: int,
 ) -> dict:
-    """Create a pending trade. Returns {success, trade_id, fee, message}."""
+    """Persist a pending trade after both users have selected same-OVR cards."""
     expire_stale_trades(session)
-
-    # Re-check no active trade for initiator
-    pending = (
-        session.query(Trade)
-        .filter(
-            Trade.status == "pending",
-            ((Trade.initiator_id == initiator.id) | (Trade.receiver_id == initiator.id)),
-        )
-        .count()
+    init_entry, init_player, recv_entry, recv_player, error = _validate_same_ovr_swap(
+        session, initiator, receiver, initiator_roster_id, receiver_roster_id
     )
-    if pending >= MAX_ACTIVE_TRADES:
-        return {"success": False, "message": "You already have a pending trade"}
-
-    # Validate roster entries still exist
-    init_entry = session.query(UserRoster).filter(
-        UserRoster.id == initiator_roster_id, UserRoster.user_id == initiator.id
-    ).first()
-    recv_entry = session.query(UserRoster).filter(
-        UserRoster.id == receiver_roster_id, UserRoster.user_id == receiver.id
-    ).first()
-
-    if not init_entry:
-        return {"success": False, "message": "You no longer own this player"}
-    if not recv_entry:
-        return {"success": False, "message": f"@{receiver.username} no longer owns that player"}
-
-    init_player = session.query(Player).get(init_entry.player_id)
-    recv_player = session.query(Player).get(recv_entry.player_id)
-
-    if init_player.rating != recv_player.rating:
-        return {"success": False, "message": "Players must have the same rating to trade"}
-
-    fee = get_trade_fee(init_player.rating)
-    if initiator.total_coins < fee:
-        return {"success": False, "message": f"You need {fee:,} coins for the trade fee"}
-    if receiver.total_coins < fee:
-        return {"success": False, "message": f"@{receiver.username} can't afford the {fee:,} coin fee"}
+    if error:
+        return {"success": False, "message": error}
 
     now = datetime.utcnow()
     trade = Trade(
@@ -81,135 +81,82 @@ def initiate_trade(
         receiver_id=receiver.id,
         initiator_player_id=init_player.id,
         receiver_player_id=recv_player.id,
-        initiator_roster_id=initiator_roster_id,
-        receiver_roster_id=receiver_roster_id,
+        initiator_roster_id=init_entry.id,
+        receiver_roster_id=recv_entry.id,
         status="pending",
-        trade_fee=fee,
+        trade_fee=0,
         created_at=now,
         expires_at=now + timedelta(seconds=TRADE_EXPIRES_SECONDS),
+        updated_at=now,
     )
     session.add(trade)
     session.flush()
-
-    logger.info(
-        f"Trade #{trade.id} initiated: {initiator.telegram_id} offers "
-        f"{init_player.name}({init_player.rating}) ↔ {recv_player.name}({recv_player.rating}) "
-        f"to {receiver.telegram_id}, fee={fee}"
-    )
     return {
         "success": True,
+        "trade": trade,
         "trade_id": trade.id,
-        "fee": fee,
         "init_player": init_player,
         "recv_player": recv_player,
-        "message": "Trade offer sent",
+        "message": "Trade confirmation started",
     }
 
 
-def accept_trade(session: Session, trade_id: int, user: User) -> dict:
-    """Accept a pending trade. Swap players, deduct fees."""
+def complete_trade(session: Session, trade_id: int) -> dict:
+    """Final safety check and same-OVR player swap."""
     expire_stale_trades(session)
-
     trade = session.query(Trade).get(trade_id)
     if not trade:
         return {"success": False, "message": "Trade not found"}
     if trade.status != "pending":
-        return {"success": False, "message": f"Trade is already {trade.status}"}
-    if trade.receiver_id != user.id:
-        return {"success": False, "message": "Only the receiver can accept this trade"}
-
+        return {"success": False, "message": "Trade cancelled because it was already completed or cancelled."}
     now = datetime.utcnow()
     if trade.expires_at < now:
         trade.status = "expired"
+        trade.updated_at = now
         session.flush()
-        return {"success": False, "message": "Trade offer has expired"}
+        return {"success": False, "message": "Trade expired."}
 
     initiator = session.query(User).get(trade.initiator_id)
-    receiver = user
-
-    # Verify both roster entries still exist
-    init_entry = session.query(UserRoster).filter(
-        UserRoster.id == trade.initiator_roster_id,
-        UserRoster.user_id == initiator.id,
-    ).first()
-    recv_entry = session.query(UserRoster).filter(
-        UserRoster.id == trade.receiver_roster_id,
-        UserRoster.user_id == receiver.id,
-    ).first()
-
-    if not init_entry:
-        trade.status = "expired"
+    receiver = session.query(User).get(trade.receiver_id)
+    init_entry, init_player, recv_entry, recv_player, error = _validate_same_ovr_swap(
+        session, initiator, receiver, trade.initiator_roster_id, trade.receiver_roster_id
+    )
+    if error:
+        trade.status = "cancelled"
+        trade.updated_at = now
         session.flush()
-        return {"success": False, "message": "Trade failed: initiator no longer owns the player"}
-    if not recv_entry:
-        trade.status = "expired"
-        session.flush()
-        return {"success": False, "message": "Trade failed: you no longer own the player"}
+        return {"success": False, "message": error}
 
-    fee = trade.trade_fee
-    if initiator.total_coins < fee:
-        trade.status = "expired"
-        session.flush()
-        return {"success": False, "message": "Trade failed: initiator can't afford the fee"}
-    if receiver.total_coins < fee:
-        return {"success": False, "message": f"You need {fee:,} coins for the trade fee"}
-
-    # Version-ownership rule: a trade swap must not leave either side owning
-    # two versions of the same player. Check what each side will RECEIVE
-    # against the OTHER versions they already own (excluding the entry they're
-    # giving away).
-    from services.version_service import user_owns_any_version
-    from models import Player as _P, UserRoster as _UR
-
-    init_player = session.query(_P).get(init_entry.player_id)
-    recv_player = session.query(_P).get(recv_entry.player_id)
-
-    def _would_dupe(receiving_user_id, receiving_player, giving_up_roster_id):
-        """Would receiving_user end up with two versions of receiving_player's family?"""
-        if not receiving_player:
-            return False
-        base_id = receiving_player.parent_player_id or receiving_player.id
-        version_ids = [base_id]
-        for v in (session.query(_P.id)
-                  .filter(_P.parent_player_id == base_id).all()):
-            version_ids.append(v[0])
-        # Look for any roster entry of receiving_user that's a version,
-        # EXCLUDING the entry they're giving up
-        existing = (session.query(_UR)
-                    .filter(_UR.user_id == receiving_user_id,
-                            _UR.player_id.in_(version_ids),
-                            _UR.id != giving_up_roster_id).first())
-        return existing is not None
-
-    if _would_dupe(receiver.id, init_player, recv_entry.id):
-        return {"success": False,
-                "message": f"Trade rejected: you already own a version of {init_player.name}."}
-    if _would_dupe(initiator.id, recv_player, init_entry.id):
-        return {"success": False,
-                "message": f"Trade rejected: initiator already owns a version of {recv_player.name}."}
-
-    # Swap ownership
     init_entry.user_id = receiver.id
     recv_entry.user_id = initiator.id
-
-    # Deduct fees
-    initiator.total_coins -= fee
-    receiver.total_coins -= fee
-
     trade.status = "completed"
     trade.completed_at = now
+    trade.updated_at = now
+
+    log_activity(
+        session,
+        initiator.id,
+        "trade",
+        f"Received {recv_player.name} | OVR {recv_player.rating}; gave {init_player.name} | OVR {init_player.rating}",
+        player_name=recv_player.name,
+        player_rating=recv_player.rating,
+    )
+    log_activity(
+        session,
+        receiver.id,
+        "trade",
+        f"Received {init_player.name} | OVR {init_player.rating}; gave {recv_player.name} | OVR {recv_player.rating}",
+        player_name=init_player.name,
+        player_rating=init_player.rating,
+    )
     session.flush()
-
-    init_player = session.query(Player).get(trade.initiator_player_id)
-    recv_player = session.query(Player).get(trade.receiver_player_id)
-
-    log_activity(session, initiator.id, 'trade', f'Traded {init_player.name} → got {recv_player.name}', coins_change=-fee, player_name=init_player.name, player_rating=init_player.rating)
-    log_activity(session, receiver.id, 'trade', f'Traded {recv_player.name} → got {init_player.name}', coins_change=-fee, player_name=recv_player.name, player_rating=recv_player.rating)
-    session.flush()
-
     logger.info(
-        f"Trade #{trade.id} completed: {initiator.telegram_id} gave {init_player.name}, "
-        f"got {recv_player.name}. Fee {fee} each."
+        "Trade #%s completed: %s gave %s, %s gave %s",
+        trade.id,
+        initiator.telegram_id,
+        init_player.name,
+        receiver.telegram_id,
+        recv_player.name,
     )
     return {
         "success": True,
@@ -218,13 +165,25 @@ def accept_trade(session: Session, trade_id: int, user: User) -> dict:
         "receiver": receiver,
         "init_player": init_player,
         "recv_player": recv_player,
-        "fee": fee,
         "message": "Trade completed",
     }
 
 
+# Legacy API wrappers kept for existing imports/tests.
+def initiate_trade(session: Session, initiator: User, receiver: User, initiator_roster_id: int, receiver_roster_id: int) -> dict:
+    return create_pending_trade(session, initiator, receiver, initiator_roster_id, receiver_roster_id)
+
+
+def accept_trade(session: Session, trade_id: int, user: User) -> dict:
+    trade = session.query(Trade).get(trade_id)
+    if not trade:
+        return {"success": False, "message": "Trade not found"}
+    if trade.receiver_id != user.id:
+        return {"success": False, "message": "Only the receiver can accept this trade"}
+    return complete_trade(session, trade_id)
+
+
 def reject_trade(session: Session, trade_id: int, user: User) -> dict:
-    """Reject or cancel a pending trade."""
     trade = session.query(Trade).get(trade_id)
     if not trade:
         return {"success": False, "message": "Trade not found"}
@@ -232,22 +191,19 @@ def reject_trade(session: Session, trade_id: int, user: User) -> dict:
         return {"success": False, "message": f"Trade is already {trade.status}"}
     if trade.receiver_id != user.id and trade.initiator_id != user.id:
         return {"success": False, "message": "You are not part of this trade"}
-
-    trade.status = "rejected"
+    trade.status = "cancelled"
     trade.updated_at = datetime.utcnow()
     session.flush()
-
-    logger.info(f"Trade #{trade.id} rejected/cancelled by {user.telegram_id}")
     return {"success": True, "trade": trade, "message": "Trade cancelled"}
 
 
 def get_pending_trade_for_user(session: Session, user_id: int):
-    """Return the pending Trade for a user, or None."""
     expire_stale_trades(session)
     return (
         session.query(Trade)
         .filter(
             Trade.status == "pending",
+            Trade.expires_at > datetime.utcnow(),
             ((Trade.initiator_id == user_id) | (Trade.receiver_id == user_id)),
         )
         .first()
