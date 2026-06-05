@@ -1617,6 +1617,8 @@ class FantasyLeague(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+    broadcast_message = Column(Text, nullable=True)
     week_number = Column(Integer, nullable=False, default=1)
     year = Column(Integer, nullable=False, default=2025)
     status = Column(String(20), default="open", nullable=False)  # open | locked | scored
@@ -1627,6 +1629,41 @@ class FantasyLeague(Base):
     # website; the background job locks the league when it elapses.
     lock_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FantasyLeaguePlayer(Base):
+    """Player eligibility list for one fantasy league.
+
+    When a league has no rows in this table, all active players remain eligible
+    for backwards compatibility. As soon as admins save at least one row, the
+    Mini App and squad validation are restricted to this selected pool.
+    """
+    __tablename__ = "fantasy_league_players"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    league_id = Column(Integer, ForeignKey("fantasy_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_flp_league_player", "league_id", "player_id", unique=True),
+    )
+
+
+class FantasyCountryRule(Base):
+    """Per-country min/max squad limits for a fantasy league."""
+    __tablename__ = "fantasy_country_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    league_id = Column(Integer, ForeignKey("fantasy_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
+    country = Column(String(60), nullable=False)
+    min_players = Column(Integer, default=0, nullable=False)
+    max_players = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_fcr_league_country", "league_id", "country", unique=True),
+    )
 
 
 class FantasyMatch(Base):

@@ -134,6 +134,10 @@ def set_picks(session, entry_id, picks, bypass_lock=False):
     if valid_count != SQUAD_SIZE:
         return False, "One or more players not found."
 
+    ok, msg = validate_league_player_rules(session, league.id, player_ids)
+    if not ok:
+        return False, msg
+
     # Delete existing picks and replace
     session.query(FantasyPick).filter_by(entry_id=entry_id).delete()
 
@@ -156,6 +160,93 @@ def set_picks(session, entry_id, picks, bypass_lock=False):
     # Recompute entry total
     _refresh_entry_total(session, entry)
     return True, f"Squad saved! {SQUAD_SIZE} players locked in."
+
+
+def get_selected_player_ids(session, league_id):
+    """Return the admin-selected eligible player ids for this league."""
+    from models import FantasyLeaguePlayer
+    return [r.player_id for r in session.query(FantasyLeaguePlayer.player_id)
+            .filter_by(league_id=league_id).all()]
+
+
+def get_country_rules(session, league_id):
+    """Return {country: {min, max}} for configured league country rules."""
+    from models import FantasyCountryRule
+    rows = session.query(FantasyCountryRule).filter_by(league_id=league_id).all()
+    return {
+        r.country: {"min": int(r.min_players or 0), "max": r.max_players}
+        for r in rows
+    }
+
+
+def replace_player_pool(session, league_id, player_ids, country_rules):
+    """Replace eligible-player pool and per-country min/max rules."""
+    from models import FantasyLeaguePlayer, FantasyCountryRule, Player
+    clean_ids = []
+    seen = set()
+    for raw in player_ids or []:
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0 and pid not in seen:
+            clean_ids.append(pid)
+            seen.add(pid)
+
+    if clean_ids:
+        existing = set(pid for (pid,) in session.query(Player.id)
+                       .filter(Player.id.in_(clean_ids)).all())
+        clean_ids = [pid for pid in clean_ids if pid in existing]
+
+    session.query(FantasyLeaguePlayer).filter_by(league_id=league_id).delete()
+    for pid in clean_ids:
+        session.add(FantasyLeaguePlayer(league_id=league_id, player_id=pid))
+
+    session.query(FantasyCountryRule).filter_by(league_id=league_id).delete()
+    saved_rules = 0
+    for country, rule in (country_rules or {}).items():
+        country = (country or "").strip()
+        if not country:
+            continue
+        min_players = max(0, int(rule.get("min") or 0))
+        max_raw = rule.get("max")
+        max_players = None if max_raw in (None, "") else max(0, int(max_raw))
+        if max_players is not None and max_players < min_players:
+            max_players = min_players
+        if min_players or max_players is not None:
+            saved_rules += 1
+            session.add(FantasyCountryRule(
+                league_id=league_id,
+                country=country,
+                min_players=min_players,
+                max_players=max_players,
+            ))
+    session.flush()
+    return True, f"Saved {len(clean_ids)} eligible players and {saved_rules} country rules."
+
+
+def validate_league_player_rules(session, league_id, player_ids):
+    """Validate selected squad against player eligibility and country limits."""
+    from models import Player
+    eligible_ids = set(get_selected_player_ids(session, league_id))
+    selected = set(player_ids)
+    if eligible_ids and not selected.issubset(eligible_ids):
+        return False, "One or more selected players are not eligible for this fantasy league."
+
+    players = session.query(Player).filter(Player.id.in_(player_ids)).all()
+    by_country = {}
+    for p in players:
+        by_country[p.country] = by_country.get(p.country, 0) + 1
+
+    for country, rule in get_country_rules(session, league_id).items():
+        count = by_country.get(country, 0)
+        min_players = int(rule.get("min") or 0)
+        max_players = rule.get("max")
+        if min_players and count < min_players:
+            return False, f"Pick at least {min_players} player(s) from {country}."
+        if max_players is not None and count > int(max_players):
+            return False, f"Pick at most {max_players} player(s) from {country}."
+    return True, "OK"
 
 
 def _compute_pick_points(session, league_id, player_ids):
@@ -356,21 +447,41 @@ def get_user_team_info(session, user_id, league_id):
         "squad": squad,
     }
 
+def get_fantasy_chat_ids(session, target="groups"):
+    """Return active chat IDs for fantasy broadcasts.
+
+    target can be groups, private, or all.
+    """
+    from models import BotChat
+    q = session.query(BotChat).filter(BotChat.is_active == True)
+    if target == "private":
+        q = q.filter(BotChat.chat_type == "private")
+    elif target == "all":
+        pass
+    else:
+        q = q.filter(BotChat.chat_type.in_(["group", "supergroup"]))
+    return [c.chat_id for c in q.all()]
+
+
 def get_group_chat_ids(session):
     """Return active group/supergroup chat IDs for fantasy broadcasts."""
-    from models import BotChat
-    chats = (session.query(BotChat)
-             .filter(BotChat.is_active == True,
-                     BotChat.chat_type.in_(["group", "supergroup"]))
-             .all())
-    return [c.chat_id for c in chats]
+    return get_fantasy_chat_ids(session, "groups")
 
 
-def build_broadcast_message(league):
+def build_broadcast_message(league, custom_message=None, include_description=True):
     link = fantasy_deep_link(getattr(league, "id", None))
-    return (f"🏏 <b>{league.name}</b> fantasy is live!\n\n"
-            f"Pick your XI from the Fantasy Mini App before squads lock.\n"
-            f"👉 {link}")
+    custom = (custom_message or getattr(league, "broadcast_message", None) or "").strip()
+    desc = (getattr(league, "description", None) or "").strip()
+    if custom:
+        parts = [custom]
+    else:
+        parts = [f"🏏 <b>{league.name}</b> fantasy is live!"]
+    if include_description and desc:
+        parts.append(desc)
+    parts.append("Pick your XI from the Fantasy Mini App before squads lock.")
+    if link:
+        parts.append(f"👉 {link}")
+    return "\n\n".join(parts)
 
 
 def generate_broadcast_image(league):

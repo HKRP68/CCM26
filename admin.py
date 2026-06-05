@@ -12527,6 +12527,8 @@ def admin_fantasy_new():
                 from models import FantasyLeague
                 from datetime import datetime as _dt
                 name = request.form.get("name", "").strip()
+                description = request.form.get("description", "").strip()
+                broadcast_message = request.form.get("broadcast_message", "").strip()
                 if not name:
                     flash("League name is required.", "error")
                     return redirect(url_for("admin_fantasy_new"))
@@ -12542,7 +12544,8 @@ def admin_fantasy_new():
                 league = FantasyLeague(
                     name=name, week_number=week, year=year,
                     start_date=start_date, end_date=end_date, status="open",
-                    lock_at=lock_at,
+                    lock_at=lock_at, description=description or None,
+                    broadcast_message=broadcast_message or None,
                 )
                 db.add(league)
                 db.commit()
@@ -12562,7 +12565,7 @@ def admin_fantasy_new():
 def admin_fantasy_detail(league_id):
     db = get_session()
     try:
-        from models import FantasyLeague, FantasyEntry, FantasyMatch, User
+        from models import FantasyLeague, FantasyEntry, FantasyMatch, User, Player
         from services import fantasy_service
         league = db.query(FantasyLeague).get(league_id)
         if not league:
@@ -12573,10 +12576,21 @@ def admin_fantasy_detail(league_id):
         entries, total = fantasy_service.get_leaderboard(db, league_id, page=1, per_page=50)
         ownership = fantasy_service.get_player_ownership(db, league_id)
         top_scorers = fantasy_service.get_top_scorers(db, league_id)
+        selected_player_ids = set(fantasy_service.get_selected_player_ids(db, league_id))
+        country_rules = fantasy_service.get_country_rules(db, league_id)
+        players = (db.query(Player).filter(Player.is_active == True)
+                   .order_by(Player.country, Player.rating.desc(), Player.name).all())
+        countries = [c for (c,) in (db.query(Player.country)
+                     .filter(Player.is_active == True)
+                     .group_by(Player.country).order_by(Player.country).all())]
         return render_template("fantasy_detail.html",
                                league=league, matches=matches,
                                entries=entries, total_entries=total,
-                               ownership=ownership, top_scorers=top_scorers)
+                               ownership=ownership, top_scorers=top_scorers,
+                               players=players,
+                               selected_player_ids=selected_player_ids,
+                               country_rules=country_rules,
+                               countries=countries)
     finally:
         db.close()
 
@@ -12593,8 +12607,15 @@ def admin_fantasy_broadcast(league_id):
         if not league:
             flash("League not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
-        chat_ids = fantasy_service.get_group_chat_ids(db)
-        msg = fantasy_service.build_broadcast_message(league)
+        target = (request.form.get("target") or "groups").strip()
+        custom_message = (request.form.get("message") or "").strip()
+        include_description = request.form.get("include_description") == "on"
+        league.broadcast_message = custom_message or None
+        chat_ids = fantasy_service.get_fantasy_chat_ids(db, target)
+        msg = fantasy_service.build_broadcast_message(
+            league, custom_message=custom_message,
+            include_description=include_description,
+        )
         attachment = {
             "type": "image",
             "name": f"fantasy_{league_id}.png",
@@ -12608,9 +12629,9 @@ def admin_fantasy_broadcast(league_id):
                 args=(None, list(chat_ids), msg, attachment, button),
                 daemon=True,
             ).start()
-            flash(f"📣 Fantasy broadcast with image sent to {len(chat_ids)} groups.", "success")
+            flash(f"📣 Fantasy broadcast queued for {len(chat_ids)} {target} chat(s).", "success")
         else:
-            flash("No active groups to notify.", "info")
+            flash(f"No active chats matching '{target}' to notify.", "info")
         log_admin(db, "fantasy_broadcast", target_type="fantasy_league", target_id=league_id)
         db.commit()
     except Exception as e:
@@ -12674,6 +12695,49 @@ def admin_fantasy_settings(league_id):
         db.commit()
     except Exception as e:
         db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_fantasy_detail", league_id=league_id))
+
+
+@app.route("/fantasy/<int:league_id>/players", methods=["POST"])
+@login_required
+def admin_fantasy_players(league_id):
+    """Save eligible fantasy players and per-country squad rules."""
+    db = get_session()
+    try:
+        from models import FantasyLeague, Player
+        from services import fantasy_service
+        league = db.query(FantasyLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_fantasy_list"))
+
+        league.description = (request.form.get("description") or "").strip() or None
+        selected_ids = request.form.getlist("player_ids")
+        countries = [c for (c,) in (db.query(Player.country)
+                     .filter(Player.is_active == True)
+                     .group_by(Player.country).all())]
+        rules = {}
+        for country in countries:
+            key = country.replace(" ", "_")
+            min_raw = (request.form.get(f"country_min_{key}") or "").strip()
+            max_raw = (request.form.get(f"country_max_{key}") or "").strip()
+            if min_raw or max_raw:
+                rules[country] = {"min": min_raw or 0, "max": max_raw}
+        ok, msg = fantasy_service.replace_player_pool(db, league_id, selected_ids, rules)
+        if ok:
+            db.commit()
+            flash(f"✅ {msg}", "success")
+            log_admin(db, "fantasy_players", target_type="fantasy_league", target_id=league_id)
+            db.commit()
+        else:
+            db.rollback()
+            flash(msg, "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("Fantasy player settings failed")
         flash(f"Error: {e}", "error")
     finally:
         db.close()
@@ -12881,14 +12945,24 @@ def api_fantasy_players():
     db = get_session()
     try:
         from models import Player
+        from services import fantasy_service
         q_str = request.args.get("q", "").strip()
         role = request.args.get("role", "").strip().lower()
+        country = request.args.get("country", "").strip()
+        league_id = request.args.get("league_id", type=int)
         page = max(1, int(request.args.get("page", 1) or 1))
         per_page = 30
 
         q = db.query(Player).filter(Player.is_active == True)
+        if league_id:
+            eligible_ids = fantasy_service.get_selected_player_ids(db, league_id)
+            if eligible_ids:
+                q = q.filter(Player.id.in_(eligible_ids))
+        country_q = q
         if q_str:
             q = q.filter(Player.name.ilike(f"%{q_str}%"))
+        if country:
+            q = q.filter(Player.country == country)
         if role and role != "all":
             role_map = {"bat": "BAT", "bowl": "BOWL", "wk": "WK", "ar": "AR", "all-rounder": "AR"}
             cat = role_map.get(role, role.upper())
@@ -12899,6 +12973,9 @@ def api_fantasy_players():
             "ok": True,
             "total": total,
             "page": page,
+            "countries": [c for (c,) in country_q.with_entities(Player.country)
+                          .group_by(Player.country).order_by(Player.country).all()],
+            "country_rules": fantasy_service.get_country_rules(db, league_id) if league_id else {},
             "players": [
                 {"id": p.id, "name": p.name, "country": p.country,
                  "category": p.category, "rating": p.rating,
@@ -12994,10 +13071,12 @@ def api_fantasy_league():
             "league": {
                 "id": league.id,
                 "name": league.name,
+                "description": league.description or "",
                 "status": league.status,
                 "locked": fantasy_service.is_locked(league),
                 "week_number": league.week_number,
                 "year": league.year,
+                "country_rules": fantasy_service.get_country_rules(db, league.id),
             },
             "team": team_info,
         }

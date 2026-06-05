@@ -20,6 +20,16 @@
         <input type="text" name="name" required placeholder="IPL Week 3 Fantasy"
                style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
       </div>
+      <div style="grid-column:1 / -1;">
+        <label style="font-size:.8rem;color:var(--muted);">Fantasy Description (optional)</label>
+        <textarea name="description" rows="3" placeholder="Explain prizes, fixtures, rules, or deadline. This can also be sent in broadcasts."
+                  style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></textarea>
+      </div>
+      <div style="grid-column:1 / -1;">
+        <label style="font-size:.8rem;color:var(--muted);">Default Broadcast Message (optional)</label>
+        <textarea name="broadcast_message" rows="3" placeholder="Write the custom message to send with the Fantasy image + button."
+                  style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></textarea>
+      </div>
       <div>
         <label style="font-size:.8rem;color:var(--muted);">Week Number</label>
         <input type="number" name="week_number" value="1" min="1"

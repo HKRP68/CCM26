@@ -18,10 +18,7 @@
     {% endif %}
   </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
-    <form method="POST" action="{{ url_for('admin_fantasy_broadcast', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Broadcast this fantasy league with image to all groups?');">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-sm" style="background:var(--accent);color:#000;">📣 Broadcast with Image</button>
-    </form>
+    <a href="#fantasy-broadcast" class="btn btn-sm" style="background:var(--accent);color:#000;">📣 Broadcast</a>
     {% if league.status in ['locked', 'open'] %}
     <form method="POST" action="{{ url_for('admin_fantasy_score', league_id=league.id) }}" style="display:inline;" onsubmit="return confirm('Recalculate all scores and finalize ranks?');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -34,6 +31,44 @@
       <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red);">🗑 Delete</button>
     </form>
   </div>
+</div>
+
+{% if league.description %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .5rem;">📝 Fantasy Description</h3>
+  <div style="white-space:pre-wrap;color:var(--muted);font-size:.88rem;">{{ league.description }}</div>
+</div>
+{% endif %}
+
+<!-- Broadcast settings -->
+<div id="fantasy-broadcast" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .5rem;">📣 Broadcast Fantasy Invite</h3>
+  <p style="color:var(--muted);font-size:.82rem;margin:0 0 .75rem;">
+    Send the fantasy image, editable message, and Mini App button to groups, private chats, or both.
+  </p>
+  <form method="POST" action="{{ url_for('admin_fantasy_broadcast', league_id=league.id) }}"
+        onsubmit="return confirm('Queue this fantasy broadcast?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:1fr 220px;gap:.75rem;align-items:start;">
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Message</label>
+        <textarea name="message" rows="4" placeholder="Custom message to send with image + button"
+                  style="width:100%;padding:.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">{{ league.broadcast_message or '' }}</textarea>
+        <label style="display:flex;gap:.4rem;align-items:center;margin-top:.4rem;color:var(--muted);font-size:.8rem;">
+          <input type="checkbox" name="include_description" checked> Include fantasy description
+        </label>
+      </div>
+      <div>
+        <label style="font-size:.8rem;color:var(--muted);">Recipients</label>
+        <select name="target" style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <option value="groups">Groups only</option>
+          <option value="private">Private chats only</option>
+          <option value="all">Groups + Private</option>
+        </select>
+        <button type="submit" class="btn btn-primary btn-sm" style="width:100%;margin-top:.75rem;">Send Broadcast</button>
+      </div>
+    </div>
+  </form>
 </div>
 
 <!-- Auto-lock settings -->
@@ -53,6 +88,74 @@
     {% endif %}
   </form>
 </div>
+
+<!-- Player pool and country rules -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
+  <h3 style="font-size:.95rem;margin:0 0 .5rem;">👥 Eligible Players & Country Limits</h3>
+  <p style="color:var(--muted);font-size:.82rem;margin:0 0 .75rem;">
+    Select which players can appear in the Fantasy Mini App. If no player is selected, all active players remain eligible. Country min/max limits are enforced when users save their XI.
+  </p>
+  <form method="POST" action="{{ url_for('admin_fantasy_players', league_id=league.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="margin-bottom:.75rem;">
+      <label style="font-size:.8rem;color:var(--muted);">Description</label>
+      <textarea name="description" rows="3"
+                style="width:100%;padding:.6rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">{{ league.description or '' }}</textarea>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start;">
+      <div>
+        <div style="display:flex;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap;">
+          <input id="fantasy-player-search" type="search" placeholder="Search eligible players..." oninput="filterFantasyPlayers()"
+                 style="flex:1;min-width:180px;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <select id="fantasy-country-filter" onchange="filterFantasyPlayers()"
+                  style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+            <option value="">All countries</option>
+            {% for country in countries %}<option value="{{ country }}">{{ country }}</option>{% endfor %}
+          </select>
+        </div>
+        <div style="max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:.4rem;background:rgba(0,0,0,.08);">
+          {% for p in players %}
+          <label class="fantasy-player-row" data-name="{{ p.name|lower }}" data-country="{{ p.country }}"
+                 style="display:flex;align-items:center;gap:.5rem;padding:.35rem .25rem;border-bottom:1px solid rgba(255,255,255,.04);font-size:.83rem;">
+            <input type="checkbox" name="player_ids" value="{{ p.id }}" {% if p.id in selected_player_ids %}checked{% endif %}>
+            <span style="flex:1;">{{ p.name }} <span style="color:var(--muted);">({{ p.version or 'Base' }})</span></span>
+            <span style="color:var(--muted);">{{ p.country }} · {{ p.category }} · {{ p.rating }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
+          <thead><tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);"><th>Country</th><th>Min</th><th>Max</th></tr></thead>
+          <tbody>
+            {% for country in countries %}
+            {% set rule = country_rules.get(country, {}) %}
+            {% set key = country.replace(' ', '_') %}
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:.4rem 0;">{{ country }}</td>
+              <td><input type="number" min="0" name="country_min_{{ key }}" value="{{ rule.get('min', '') if rule else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
+              <td><input type="number" min="0" name="country_max_{{ key }}" value="{{ rule.get('max', '') if rule and rule.get('max') is not none else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm" style="margin-top:1rem;">Save Player Pool & Rules</button>
+  </form>
+</div>
+
+<script>
+function filterFantasyPlayers() {
+  var q = (document.getElementById('fantasy-player-search').value || '').toLowerCase();
+  var country = document.getElementById('fantasy-country-filter').value || '';
+  document.querySelectorAll('.fantasy-player-row').forEach(function(row) {
+    var okName = !q || row.dataset.name.indexOf(q) !== -1;
+    var okCountry = !country || row.dataset.country === country;
+    row.style.display = (okName && okCountry) ? 'flex' : 'none';
+  });
+}
+</script>
 
 <!-- Matches -->
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
