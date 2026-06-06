@@ -45,7 +45,7 @@
 <!-- Squad editor form -->
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;">
   <h3 style="font-size:.95rem;margin:0 0 .75rem;">Replace Squad</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin-bottom:1rem;">Current picks are pre-selected below. Tick/untick players to add or remove them, then mark 1 as Captain and 1 as Vice-Captain.</p>
+  <p style="color:var(--muted);font-size:.8rem;margin-bottom:1rem;">Current picks are pre-selected below, including any inactive players already on this squad. Tick/untick players to add or remove them, then mark 1 as Captain and 1 as Vice-Captain.</p>
 
   <div style="margin-bottom:.75rem;">
     <input type="text" id="admin-search" placeholder="🔍 Search player..."
@@ -66,10 +66,13 @@
       </thead>
       <tbody>
       {% for player in all_players %}
-      <tr class="admin-player-row" data-name="{{ player.name.lower() }}" data-pid="{{ player.id }}"
+      <tr class="admin-player-row" data-name="{{ player.name.lower() }}{% if not player.is_active %} inactive{% endif %}" data-pid="{{ player.id }}"
           style="border-top:1px solid var(--border);cursor:pointer;" onclick='togglePlayer({{ player.id }}, {{ player.name|tojson }}, {{ player.country|tojson }}, {{ player.category|tojson }})'>
         <td style="padding:.5rem;"><input type="checkbox" id="chk_{{ player.id }}" onclick='event.stopPropagation();togglePlayer({{ player.id }}, {{ player.name|tojson }}, {{ player.country|tojson }}, {{ player.category|tojson }})'></td>
-        <td style="padding:.5rem;font-weight:500;">{{ player.name }}</td>
+        <td style="padding:.5rem;font-weight:500;">
+          {{ player.name }}
+          {% if not player.is_active %}<span style="color:var(--danger, #ef4444);font-size:.75rem;margin-left:.35rem;">Inactive</span>{% endif %}
+        </td>
         <td style="padding:.5rem;color:var(--muted);">{{ player.country }}</td>
         <td style="padding:.5rem;color:var(--muted);">{{ player.category }}</td>
         <td style="padding:.5rem;color:var(--muted);">{{ player.rating }}</td>

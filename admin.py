@@ -12989,7 +12989,11 @@ def admin_fantasy_entry_edit(league_id, entry_id):
         picks = (db.query(FantasyPick, Player)
                  .join(Player, FantasyPick.player_id == Player.id)
                  .filter(FantasyPick.entry_id == entry_id).all())
-        all_players = db.query(Player).filter(Player.is_active == True).order_by(Player.name).all()
+        picked_player_ids = [player.id for _, player in picks]
+        player_filter = Player.is_active == True
+        if picked_player_ids:
+            player_filter = or_(player_filter, Player.id.in_(picked_player_ids))
+        all_players = db.query(Player).filter(player_filter).order_by(Player.name).all()
         role_rules = fantasy_service.get_role_rules(db, league_id)
         return render_template("fantasy_entry_edit.html",
                                league=league, entry=entry, user=user,
