@@ -1054,6 +1054,31 @@
   .player-row:active { transform: scale(0.98); }
   .player-row.owned { opacity: 0.6; }
   .player-row.blocked { border-color: rgba(255, 77, 109, 0.4); }
+
+  .player-card-thumb {
+    width: 44px; height: 59px;
+    border-radius: 8px; object-fit: cover;
+    background: var(--card); border: 1px solid rgba(232,184,75,0.28);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    flex-shrink: 0;
+  }
+  .player-card-thumb.browse { width: 42px; height: 56px; }
+  .player-card-thumb.xi { width: 34px; height: 45px; border-radius: 6px; cursor: pointer; }
+  .player-card-thumb.roster { width: 46px; height: 61px; }
+  .player-card-hero {
+    width: min(230px, 76vw); max-height: 310px;
+    border-radius: 16px; object-fit: contain;
+    display: block; margin: 0 auto 0.85rem;
+    background: var(--card); border: 1px solid rgba(232,184,75,0.35);
+    box-shadow: 0 12px 34px rgba(0,0,0,0.42), 0 0 22px rgba(232,184,75,0.1);
+  }
+  .modal-player-card {
+    width: min(220px, 72vw); max-height: 300px;
+    border-radius: 14px; object-fit: contain;
+    display: block; margin: 0 auto 0.75rem;
+    background: var(--card); border: 1px solid rgba(232,184,75,0.3);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.38);
+  }
   .player-rating {
     width: 44px; height: 44px;
     border-radius: 10px;
@@ -2867,6 +2892,16 @@ async function api(path, body) {
   }
 }
 
+function playerCardUrl(playerId) {
+  return `/webapp/player-card/${encodeURIComponent(playerId)}`;
+}
+
+function cardImg(url, alt, cls = '') {
+  const safeUrl = escapeHtmlAttr(url || '');
+  if (!safeUrl) return '';
+  return `<img class="${cls}" src="${safeUrl}" alt="${escapeHtmlAttr(alt || 'Player card')}" loading="lazy" decoding="async" onerror="this.style.display='none'">`;
+}
+
 // ════════════════ Toast ════════════════
 function toast(msg, type = 'info') {
   const c = document.getElementById('toasts');
@@ -4360,8 +4395,10 @@ function playerRow(p) {
   if (p.version && p.version !== 'Base') badges += `<span class="badge-mini version">${escapeHtml(p.version)}</span>`;
   if (p.owned) badges += `<span class="badge-mini owned">✓ Owned</span>`;
   else if (p.blocked) badges += `<span class="badge-mini blocked">Blocked</span>`;
+  const image = cardImg(p.card_url || playerCardUrl(p.id), `${p.name} card`, 'player-card-thumb browse');
   return `
     <div class="player-row ${cls.join(' ')}" onclick="openPlayer(${p.id})">
+      ${image}
       <div class="player-rating ${ratingTier(p.rating)}">${p.rating}</div>
       <div class="player-info">
         <div class="player-name">${escapeHtml(p.name)} ${badges}</div>
@@ -4392,6 +4429,7 @@ async function openPlayer(id) {
     return;
   }
   const p = data.player;
+  const image = cardImg(p.card_url || playerCardUrl(p.id), `${p.name} card`, 'modal-player-card');
   let buyBtn;
   if (p.owned_any_version) {
     buyBtn = `<button class="big-buy-btn owned" disabled>✅ Already owned</button>`;
@@ -4407,6 +4445,7 @@ async function openPlayer(id) {
     <div style="color:var(--muted);font-size:0.9rem;margin-bottom:1rem;">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</div>
 
     <div class="modal-card" style="text-align:center;">
+      ${image}
       <div class="player-rating ${ratingTier(p.rating)}" style="width:80px;height:80px;font-size:2rem;margin:0 auto;border-radius:18px;">${p.rating}</div>
       <div style="color:var(--muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-top:0.5rem;">Overall</div>
     </div>
@@ -4524,6 +4563,7 @@ function renderSquadList() {
       ${r.is_captain ? '<div class="captain-tag">CAPT</div>' : ''}
       ${squadSelectMode ? `<div class="select-mark">${squadSelected.has(r.roster_id) ? '✅' : '⬜'}</div>` : ''}
       <div class="roster-item-main">
+        ${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb roster')}
         <div style="flex:1;">
           <div class="pos">#${r.position} · ${ratingBadge(r.rating)}</div>
           <div class="name">${escapeHtml(r.name)}</div>
@@ -4730,7 +4770,8 @@ function renderXiList() {
       <div class="xi-row" data-roster-id="${r.roster_id}">
         <div class="xi-handle">⠿</div>
         <div class="xi-pos">${i + 1}</div>
-        <div class="xi-info">
+        <span onclick="openPlayerDetail(${r.roster_id})">${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb xi')}</span>
+        <div class="xi-info" onclick="openPlayerDetail(${r.roster_id})" style="cursor:pointer;">
           <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">CAPT</span>' : ''}</div>
           <div class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</div>
         </div>
@@ -4773,6 +4814,7 @@ function renderBenchGrouped() {
     grouped[cat].forEach(r => {
       out.push(`
         <div class="bench-row" onclick="swapBenchPlayer(${r.roster_id}, '${escapeHtmlAttr(r.name)}', '${escapeHtmlAttr(r.category)}')">
+          ${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb xi')}
           <div class="xi-info">
             <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}</div>
             <div class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</div>
@@ -6169,6 +6211,7 @@ function renderPlayerDetail() {
 
   const hero = `
     <div class="pd-hero">
+      ${cardImg(p.card_url || playerCardUrl(p.id), `${p.name} card`, 'player-card-hero')}
       <div class="pd-rating">${p.rating}</div>
       <div style="font-size:0.65rem;color:var(--muted);">OVR</div>
       <div class="pd-name">${escapeHtml(p.name)}</div>
