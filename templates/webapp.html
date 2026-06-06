@@ -2046,7 +2046,7 @@
   <div class="suggestion-head">
     <div>
       <div class="suggestion-title">💡 Suggestion Box</div>
-      <div class="suggestion-sub">Send ideas, bugs, or balance feedback straight to the admin.</div>
+      <div class="suggestion-sub">Send ideas, bugs, or balance feedback straight to the website report box.</div>
     </div>
   </div>
   <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message here…"></textarea>
@@ -3201,19 +3201,14 @@ async function sendSuggestion() {
   const { ok, data } = await api('/api/webapp/suggestion', { message: text });
   suggestionSending = false;
   if (btn) { btn.disabled = false; btn.textContent = '📨 Send'; }
-  if (!ok && !(data.saved || data.report_id)) {
+  if (!ok) {
     toast(data.message || 'Could not send suggestion.', 'error');
     hapticNotif('error');
     return;
   }
   if (msg) msg.value = '';
   updateSuggestionCount();
-  if (!ok) {
-    toast(data.message || 'Suggestion saved, but admin notification failed.', 'error');
-    hapticNotif('warning');
-    return;
-  }
-  toast(data.message || 'Suggestion sent to admin — thank you!', 'success');
+  toast(data.message || 'Suggestion added to the website report box — thank you!', 'success');
   hapticNotif('success');
 }
 
