@@ -57,21 +57,22 @@ def simulate_phase(phase, choice, batting_rating, bowling_rating, wickets_left):
     # Random variance: ±25%
     actual_runs = max(0, int(expected_runs * random.uniform(0.75, 1.25)))
 
-    # Expected wickets
-    expected_wkts = phase["base_wickets"] * wkt_mult * skill_wkt_mult
-    # Roll for each wicket; each independent
+    # Expected wickets this phase, bounded by wickets still in hand.
+    expected_wkts = max(0.0, phase["base_wickets"] * wkt_mult * skill_wkt_mult)
+    # Independent Bernoulli trials — one per wicket still standing — calibrated
+    # so the expected number of dismissals equals ``expected_wkts``. The old loop
+    # broke on the first "miss", so a phase almost never lost more than one
+    # wicket; this lets a phase realistically lose anywhere from 0 to several.
+    trials = max(1, int(wickets_left))
+    p = min(0.9, expected_wkts / trials)
+    # Soft cap so a fluke run of hits can't wipe the whole side in one phase.
+    cap = min(wickets_left, int(expected_wkts * 1.5) + 2)
     wickets_lost = 0
-    remaining = wickets_left
-    # Sample from a Poisson-ish distribution: bound to remaining wickets
-    while remaining > 0 and wickets_lost < int(expected_wkts * 1.5 + 1):
-        if random.random() < expected_wkts / 3.0:
-            wickets_lost += 1
-            remaining -= 1
-            expected_wkts -= 1.0
-            if expected_wkts <= 0:
-                break
-        else:
+    for _ in range(trials):
+        if wickets_lost >= cap:
             break
+        if random.random() < p:
+            wickets_lost += 1
 
     return actual_runs, wickets_lost
 
@@ -105,9 +106,15 @@ def simulate_innings(choices, batting_rating, bowling_rating, target=None):
 
         # Target chase short-circuit: stop if we've passed the target
         if target is not None and (runs_total + runs) >= target:
-            runs = target - runs_total  # exact runs needed
-            balls_faced += int(phase["balls"] * (runs / max(1, runs)))  # all balls used
-            wkts = 0  # didn't lose the wicket on the winning ball usually
+            needed = target - runs_total  # exact runs to win
+            # Estimate balls used to reach the target within this phase, in
+            # proportion to how far into the phase's scoring the win arrived
+            # (the old expression `runs / max(1, runs)` was always 1, so it
+            # always charged the full phase's balls).
+            frac = max(0.0, min(1.0, needed / runs)) if runs > 0 else 1.0
+            balls_faced += max(1, int(round(phase["balls"] * frac)))
+            runs = needed
+            wkts = 0  # winning runs come off the bat, not a dismissal
             runs_total += runs
             wickets_total += wkts
             wickets_left -= wkts

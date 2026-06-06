@@ -7786,6 +7786,33 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         rewards = arena.get("_completed_rewards") or {}
         pom = arena.get("_player_of_match") or result.get("player_of_match") or {}
 
+        # Guard against an empty summary. A forfeit/abandon before any real play
+        # would otherwise render a blank 0/0 scorecard + summary PNG. Detect the
+        # "no play" case and post a concise text recap only, skipping the cards.
+        def _row_has_play(r):
+            try:
+                if int(r.get("runs", 0) or 0) > 0 or int(r.get("wickets", 0) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            return str(r.get("overs", "0") or "0").strip() not in ("", "0", "0.0")
+
+        has_play = any(_row_has_play(r) for r in innings) or bool(
+            int(arena.get("total_runs", 0) or 0)
+            or int(arena.get("total_wickets", 0) or 0))
+        if not has_play:
+            no_play_text = (
+                "━━━━━━━━━━━━━━━━━━━\n🏁 <b>MATCH ENDED</b>\n\n"
+                f"<i>{escape(str(result_text))}</i>\n\n"
+                "No play took place, so there is no scorecard to show.\n"
+                "━━━━━━━━━━━━━━━━━━━")
+            np_url = _launch_url(match_id, chat_id)
+            np_markup = ({"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": np_url}]]}
+                         if np_url else None)
+            sent_np = _send_completed_match_cards(chat_id, [], no_play_text, np_markup)
+            logger.info("match %s ended with no play — sent text recap, skipped cards", match_id)
+            return bool(sent_np)
+
         score_lines = []
         for color, innings_row in zip(("🔴", "🟢"), innings[:2]):
             score_lines.append(
