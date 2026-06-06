@@ -30,9 +30,12 @@ _current_button_owner: contextvars.ContextVar[Optional[int]] = contextvars.Conte
 # second participant, and match-control buttons where the match state itself
 # validates whose turn/action it is.
 SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
+    "cric_join",
     "cric_join_",
     "cric_join:",
+    "cric_cancel_lobby",
     "cric_cancel_lobby_",
+    "cric_decision:",
     "match_accept_",
     "match_deny_",
     "pm_accept_",

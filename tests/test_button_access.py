@@ -58,6 +58,21 @@ class ButtonAccessTests(unittest.TestCase):
 
         self.assertTrue(button_access.check_callback_owner(update))
 
+    def test_wpm_join_button_is_shared_for_exact_callback(self):
+        button_access.register_button_owner(100, 200, 111)
+        update = DummyUpdate(DummyQuery(222, "cric_join"))
+
+        self.assertTrue(button_access.check_callback_owner(update))
+
+    def test_wpm_lobby_controls_are_shared_for_state_validation(self):
+        button_access.register_button_owner(100, 200, 111)
+
+        cancel_update = DummyUpdate(DummyQuery(222, "cric_cancel_lobby"))
+        decision_update = DummyUpdate(DummyQuery(222, "cric_decision:bat"))
+
+        self.assertTrue(button_access.check_callback_owner(cancel_update))
+        self.assertTrue(button_access.check_callback_owner(decision_update))
+
     def test_unregistered_legacy_buttons_remain_usable(self):
         update = DummyUpdate(DummyQuery(222, "roster_page_2"))
 
