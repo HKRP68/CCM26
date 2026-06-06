@@ -2004,13 +2004,25 @@ def user_detail(user_id):
             for p, q in quest_rows
         ]
 
+        player_categories = [
+            row[0] for row in (
+                db.query(Player.category)
+                .filter(Player.category.isnot(None), Player.category != "")
+                .distinct()
+                .order_by(Player.category.asc())
+                .all()
+            )
+        ]
+
         return render_template("user_detail.html", user=user, stats=stats,
                                roster=roster, activities=activities,
                                active_matches=match_meta,
                                recent_matches=recent_matches,
                                pending_trades=pending_trades,
                                quest_progress=quest_progress,
-                               today_key=today_key, month_key=month_key)
+                               today_key=today_key, month_key=month_key,
+                               player_categories=player_categories,
+                               rating_options=range(50, 101))
     finally:
         db.close()
 
@@ -2559,25 +2571,51 @@ def user_add_player(user_id):
     db = get_session()
     try:
         player_name = request.form.get("player_name", "").strip()
-        player = db.query(Player).filter(Player.name.ilike(f"%{player_name}%")).first()
-        if not player:
-            flash(f"Player '{player_name}' not found", "error")
-            return redirect(url_for("user_detail", user_id=user_id))
+        rating_raw = request.form.get("overall_rating", "").strip()
+        category = request.form.get("category", "").strip()
 
         user = db.query(User).get(user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
 
-        from datetime import datetime
+        query = db.query(Player).filter(Player.is_active == True)
+        filters = []
+        if player_name:
+            query = query.filter(Player.name.ilike(f"%{player_name}%"))
+            filters.append(f"name contains '{player_name}'")
+        if rating_raw:
+            try:
+                rating = int(rating_raw)
+            except ValueError:
+                flash("Overall rating must be a number between 50 and 100", "error")
+                return redirect(url_for("user_detail", user_id=user_id))
+            if rating < 50 or rating > 100:
+                flash("Overall rating must be between 50 and 100", "error")
+                return redirect(url_for("user_detail", user_id=user_id))
+            query = query.filter(Player.rating == rating)
+            filters.append(f"{rating} OVR")
+        if category:
+            query = query.filter(Player.category == category)
+            filters.append(category)
+
+        if not filters:
+            flash("Enter a player name, rating, or category to add a player", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        player = query.order_by(Player.rating.desc(), Player.name.asc()).first()
+        if not player:
+            flash(f"No active player found for {' + '.join(filters)}", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
         entry = UserRoster(user_id=user.id, player_id=player.id, acquired_date=datetime.utcnow())
         db.add(entry)
-        user.roster_count += 1
+        user.roster_count = (user.roster_count or 0) + 1
         from services.activity_service import log_activity
         log_activity(db, user.id, "admin_add", f"Admin added {player.name} ({player.rating} OVR)",
                      player_name=player.name, player_rating=player.rating)
         db.commit()
-        flash(f"Added {player.name} ({player.rating} OVR) to roster", "success")
+        flash(f"Added {player.name} ({player.rating} OVR, {player.category}) to roster", "success")
     except Exception as e:
         db.rollback()
         flash(f"Error: {e}", "error")
