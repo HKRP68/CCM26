@@ -38,14 +38,17 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                  if update.effective_chat else "private")
     is_private = (chat_type == "private")
 
-    text = ("🎮 <b>CricMaster Mini App</b>\n\n"
-            "Tap the button below to open the app. Spin the wheel, search "
-            "players, manage your roster — all in one place.\n\n"
-            "<i>📺 Watch a quick ad to unlock each spin.</i>")
+    text = ("🚨 <b>Your rewards are getting away!</b>\n\n"
+            "Open the <b>CricMaster Mini App</b> now, complete your quests, "
+            "and grab coins, gems, packs, and squad upgrades before the daily "
+            "reset wipes your easy progress.\n\n"
+            "🎯 <b>Quest hack:</b> check the Mini App first, claim what is ready, "
+            "then finish the fastest missions to flex a stronger XI.\n\n"
+            "<i>📺 Bonus: quick ads can unlock extra spins and daily rewards.</i>")
 
     if is_private:
         button = InlineKeyboardButton(
-            "🏏 Open CricMaster",
+            "🎯 Open Mini App + Quests",
             web_app=WebAppInfo(url=webapp_url),
         )
     else:
@@ -68,7 +71,7 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
             )
             return
-        button = InlineKeyboardButton("🏏 Open CricMaster", url=deep_link)
+        button = InlineKeyboardButton("🎯 Open Mini App + Quests", url=deep_link)
 
     kb = InlineKeyboardMarkup([[button]])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)

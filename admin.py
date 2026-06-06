@@ -28,6 +28,7 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
                     BotTeam, BotTeamPlayer,
                     Quest, UserQuestProgress,
+                    UserReport,
                     CommentaryEntry,
                     NotificationSchedule, NotificationLog,
                     ClaimRarityTier, GameConfig,
@@ -3307,6 +3308,70 @@ def _get_branding_safe(db):
         return {"channel_username": "", "channel_label": "", "channel_link": "",
                 "group_username": "", "group_label": "", "group_link": "",
                 "tagline": "", "has_any": False}
+
+
+@app.route("/api/webapp/suggestion", methods=["POST"])
+@csrf_exempt
+def webapp_suggestion():
+    """Accept Mini App suggestion-box messages and notify the admin."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        payload = request.get_json(silent=True) or {}
+        message = (payload.get("message") or "").strip()
+        if len(message) < 5:
+            return {"ok": False, "message": "Please write at least 5 characters."}, 400
+        if len(message) > 1000:
+            return {"ok": False, "message": "Suggestion is too long (max 1000 characters)."}, 400
+
+        cutoff = datetime.utcnow() - timedelta(days=1)
+        recent_count = (db.query(UserReport)
+                          .filter(UserReport.user_id == user.id,
+                                  UserReport.message.like("[Mini App Suggestion]%"),
+                                  UserReport.created_at >= cutoff)
+                          .count())
+        if recent_count >= 5:
+            return {"ok": False,
+                    "message": "You have sent 5 suggestions in the last 24 hours. Please wait before sending more."}, 429
+
+        report = UserReport(
+            user_id=user.id,
+            message=f"[Mini App Suggestion] {message}",
+            is_read=False,
+            is_resolved=False,
+        )
+        db.add(report)
+        db.commit()
+
+        admin_chat_id = os.getenv("ADMIN_CHAT_ID", "").strip()
+        if admin_chat_id:
+            user_label = f"@{user.username}" if user.username else (user.first_name or f"User {user.id}")
+            safe_label = html_lib.escape(user_label)
+            safe_team = html_lib.escape(user.team_name or "No team name")
+            safe_message = html_lib.escape(message)
+            chat_id = int(admin_chat_id) if admin_chat_id.lstrip("-").isdigit() else admin_chat_id
+            _tg_send_async({
+                "chat_id": chat_id,
+                "text": (
+                    "💡 <b>New Mini App Suggestion</b>\n\n"
+                    f"From: {safe_label} (<code>{user.telegram_id}</code>)\n"
+                    f"Team: {safe_team}\n"
+                    f"Report ID: <code>{report.id}</code>\n\n"
+                    f"<i>{safe_message}</i>"
+                ),
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            })
+
+        return {"ok": True, "report_id": report.id}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_suggestion failed")
+        return {"ok": False, "message": "Could not send suggestion. Please try again.", "error": str(e)}, 500
+    finally:
+        db.close()
 
 
 @app.route("/api/webapp/search", methods=["POST"])
