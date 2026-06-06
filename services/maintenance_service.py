@@ -15,6 +15,7 @@ can finish.
 """
 
 import logging
+import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -103,32 +104,74 @@ def get_maintenance_message(cfg=None):
     )
 
 
-def is_command_update(update):
-    """Return True when the update message is a bot command.
+def _normalize_bot_username(username):
+    """Normalize a Telegram bot username for case-insensitive comparison."""
+    return (username or "").strip().lstrip("@").casefold()
+
+
+def _command_token_from_text(text):
+    """Return the leading slash-command token from text, if present."""
+    text = (text or "").lstrip()
+    if not text.startswith("/"):
+        return ""
+    return text.split(maxsplit=1)[0]
+
+
+def _is_command_for_this_bot(command_token, bot_username=None):
+    """True for bare commands or commands addressed to this bot.
+
+    Telegram group chats can contain commands explicitly addressed to another
+    bot (for example, ``/help@OtherBot``). Normal CommandHandlers ignore those,
+    so the maintenance middleware must ignore them too instead of sending this
+    bot's maintenance response.
+    """
+    if not command_token.startswith("/"):
+        return False
+
+    if "@" not in command_token:
+        return True
+
+    addressed_username = _normalize_bot_username(command_token.rsplit("@", 1)[1])
+    this_username = _normalize_bot_username(bot_username or os.getenv("BOT_USERNAME"))
+    return bool(this_username and addressed_username == this_username)
+
+
+def is_command_update(update, bot_username=None):
+    """Return True when the update message is a command for this bot.
 
     During maintenance we still block non-command text so normal handlers do
-    not run, but only command messages should receive a maintenance reply.
+    not run, but only bare commands and commands addressed to this bot should
+    receive a maintenance reply. Commands addressed to another bot are treated
+    like group chatter and blocked silently.
     """
     message = getattr(update, "message", None)
-    text = (getattr(message, "text", None) or "").lstrip() if message else ""
-    if not text:
-        return False
-    if text.startswith("/"):
-        return True
+    text = (getattr(message, "text", None) or "") if message else ""
+    token = _command_token_from_text(text)
+    if token:
+        return _is_command_for_this_bot(token, bot_username)
 
     # Be defensive for test doubles or PTB message-like objects that expose
     # Telegram entities even when text has not been normalized.
+    lstripped_text = text.lstrip()
+    leading_spaces = len(text) - len(lstripped_text)
     for entity in getattr(message, "entities", None) or []:
         entity_type = getattr(entity, "type", None)
         offset = getattr(entity, "offset", None)
-        if entity_type == "bot_command" and offset == 0:
-            return True
+        if entity_type != "bot_command" or offset not in (0, leading_spaces):
+            continue
+        length = getattr(entity, "length", None)
+        entity_token = (
+            lstripped_text[:length]
+            if length
+            else _command_token_from_text(lstripped_text)
+        )
+        return _is_command_for_this_bot(entity_token, bot_username)
     return False
 
 
-def should_reply_with_maintenance(update):
+def should_reply_with_maintenance(update, bot_username=None):
     """True when a blocked update should receive the maintenance message."""
-    return is_command_update(update)
+    return is_command_update(update, bot_username)
 
 
 def should_block_update(update, cfg=None):
