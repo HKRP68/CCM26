@@ -8093,25 +8093,25 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         if url:
             reply_markup = {"inline_keyboard": [[{"text": "▶️ Play Match Again", "url": url}]]}
 
-        # Send the result text before rendering heavy PNGs, so players see the
-        # match outcome immediately even when all innings scorecards are enabled.
-        sent_result_text = _send_completed_match_cards(chat_id, [], text, reply_markup)
-
         # Which cards to post is website-configurable (Scorecard Designer).
         # Default "summary" preserves the historical single-card behavior; an
         # admin can additionally enable Bat1 / Bowl1 / Bat2 / Bowl2. The MATCH
         # RESULT text above is always sent as the recap + spectate-button host.
         from services.config_service import get_wpm_result_cards
         selection = get_wpm_result_cards()
-        # /wpmbot (vs-bot) always posts the match-summary card and only that
-        # card, regardless of the admin Scorecard-Designer toggle. Human-vs-human
-        # /wpm and /cm keep respecting the configured selection.
+        # /wpmbot (vs-bot) must always deliver its Match Summary regardless of
+        # the admin Scorecard-Designer toggle. Prefer the persisted final Arena
+        # snapshot because the live state may already have been cleaned up by a
+        # retry/self-heal path.
+        is_vsbot_match = bool(arena.get("is_vsbot"))
         try:
             from services.match_webapp_service import get_state_is_vsbot
-            if get_state_is_vsbot(match_id) or bool(arena.get("is_vsbot")):
-                selection = ["summary"]
+            is_vsbot_match = is_vsbot_match or get_state_is_vsbot(match_id)
         except Exception:
             logger.exception("vsbot summary-only override check failed (non-fatal)")
+        if is_vsbot_match:
+            selection = ["summary"]
+
         inn_cards = {}
 
         def _render_innings(num):
@@ -8159,10 +8159,28 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         # that failed to render.
         images = [inn_cards.get(token) for token in selection]
         images = [c for c in images if c]
+
+        # /wpmbot users specifically expect the Match Summary at completion.
+        # Render the summary before sending the final Telegram flow so the
+        # normal send path can post the summary card and the text recap together
+        # (and keep live match_state around until that attempt completes). If
+        # rendering fails, send a clear text-only summary fallback instead of
+        # silently considering the result delivered.
+        if is_vsbot_match:
+            if not images:
+                text += ("\n\n⚠️ <i>Match Summary image could not be rendered; "
+                         "the text recap above is the summary fallback.</i>")
+                logger.warning("wpmbot match %s summary image missing; sending text fallback", match_id)
+            sent_result_text = _send_completed_match_cards(chat_id, images, text, reply_markup)
+            sent_images = bool(images and sent_result_text)
+        else:
+            # Send the result text before posting heavy PNGs, so players see the
+            # outcome immediately even when all innings scorecards are enabled.
+            sent_result_text = _send_completed_match_cards(chat_id, [], text, reply_markup)
+            sent_images = _send_completed_match_images(chat_id, images)
     finally:
         db.close()
 
-    sent_images = _send_completed_match_images(chat_id, images)
     return bool(sent_result_text or sent_images)
 
 
