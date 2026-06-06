@@ -145,3 +145,26 @@ def test_recent_runs_window_caps_at_12():
     for _ in range(15):
         _apply(s, {"type": "runs", "runs": 1})
     assert len(s["recent_runs_window"]) == 12
+
+
+# ── Shared coin-toss helper ───────────────────────────────────────────────
+
+def test_run_coin_toss_win_logic(monkeypatch):
+    import asyncio
+    import services.match_broadcast as mb
+
+    async def _noop(*a, **k):
+        return None
+    monkeypatch.setattr(mb.asyncio, "sleep", _noop)
+
+    async def _edit(_text):
+        return None
+
+    # Coin forced to heads → calling heads wins, tails loses.
+    monkeypatch.setattr(mb.random, "choice", lambda seq: "heads")
+    coin, won = asyncio.get_event_loop().run_until_complete(
+        mb.run_coin_toss(_edit, "heads"))
+    assert coin == "heads" and won is True
+    coin, won = asyncio.get_event_loop().run_until_complete(
+        mb.run_coin_toss(_edit, "tails"))
+    assert coin == "heads" and won is False

@@ -223,20 +223,20 @@ async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAUL
             await query.answer("A challenge player already has an active match or lobby!", show_alert=True)
             return
         lobby["accepted"] = True
-        winner_id = random.choice([lobby["challenger_user_id"], lobby["target_user_id"]])
-        winner = session.query(User).get(winner_id)
-        lobby["toss_winner_id"] = winner_id
-        lobby["toss_winner_tg_id"] = winner.telegram_id
+        # The invited player (acceptor) calls the toss.
+        lobby["caller_user_id"] = user.id
+        lobby["caller_tg_id"] = user.telegram_id
         _cancel_cm_timer(context, lobby_id)
         await query.answer("Challenge accepted!")
+        from services.match_broadcast import coin_call_keyboard
         await query.edit_message_text(
             "🪙 <b>CHALLENGE TOSS</b>\n"
             "═════════════════════════════\n"
-            f"{_mention(winner)} won the toss. Choose your decision:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏏 Bat First", callback_data=f"cm_toss_bat_{lobby_id}_{winner_id}"),
-                InlineKeyboardButton("🎳 Bowl First", callback_data=f"cm_toss_bowl_{lobby_id}_{winner_id}"),
-            ]]))
+            f"{_mention(user)}, call it in the air!\n"
+            "<b>Heads</b> or <b>Tails?</b>",
+            parse_mode="HTML", reply_markup=coin_call_keyboard(
+                f"cm_coin_heads_{lobby_id}_{user.id}",
+                f"cm_coin_tails_{lobby_id}_{user.id}"))
     finally:
         session.close()
 
@@ -286,6 +286,61 @@ async def challenge_deny_callback(update: Update, context: ContextTypes.DEFAULT_
         _cancel_cm_timer(context, lobby_id)
         await query.answer()
         await query.edit_message_text("❌ Challenge denied.")
+    finally:
+        session.close()
+
+
+async def challenge_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cm_coin_(heads|tails)_<lobby_id>_<caller_uid> — invited player calls the
+    toss; the coin is flipped and the winner then chooses bat or bowl."""
+    query = update.callback_query
+    _, _, call, lobby_id, caller_id = query.data.split("_")
+    lobby_id = int(lobby_id)
+    caller_id = int(caller_id)
+    lobby = context.bot_data.get(_cm_lobby_key(lobby_id))
+    if not lobby or not lobby.get("accepted"):
+        await query.answer("This toss is no longer active.", show_alert=True)
+        return
+    if call not in ("heads", "tails"):
+        await query.answer("Invalid call.", show_alert=True)
+        return
+    if lobby.get("toss_winner_id"):
+        await query.answer("Toss already done — pick bat or bowl.", show_alert=True)
+        return
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == query.from_user.id).first()
+        if not user or user.id != caller_id or user.id != lobby.get("caller_user_id"):
+            await query.answer("Only the calling player can toss!", show_alert=True)
+            return
+        await query.answer()
+        from services.match_broadcast import run_coin_toss
+        coin, won = await run_coin_toss(
+            lambda t: query.edit_message_text(t, parse_mode="HTML"), call)
+
+        challenger = session.query(User).get(lobby["challenger_user_id"])
+        target = session.query(User).get(lobby["target_user_id"])
+        if not challenger or not target:
+            _pop_lobby(context, lobby_id)
+            await query.edit_message_text("Challenge players no longer exist.")
+            return
+        # The target called; they win if the coin matches their call.
+        winner = target if won else challenger
+        lobby["toss_winner_id"] = winner.id
+        lobby["toss_winner_tg_id"] = winner.telegram_id
+        await query.edit_message_text(
+            "🪙 <b>CHALLENGE TOSS</b>\n"
+            "═════════════════════════════\n"
+            f"The coin lands on <b>{coin.upper()}</b> — "
+            f"{_mention(target)} called <b>{call.upper()}</b>.\n\n"
+            f"🏆 {_mention(winner)} won the toss. Choose your decision:",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏏 Bat First", callback_data=f"cm_toss_bat_{lobby_id}_{winner.id}"),
+                InlineKeyboardButton("🎳 Bowl First", callback_data=f"cm_toss_bowl_{lobby_id}_{winner.id}"),
+            ]]))
+    except Exception:
+        logger.exception("/cm coin toss failed")
+        await query.answer("Toss failed — start again with /cm.", show_alert=True)
     finally:
         session.close()
 
@@ -358,11 +413,14 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
         bowl_user = session.query(User).get(match.bowling_first_id)
         bat_team = bat_user.team_name or f"@{bat_user.username}'s XI"
         bowl_team = bowl_user.team_name or f"@{bowl_user.username}'s XI"
+        toss_note = (f"{_user_label(user)} won & chose to "
+                     f"{'bat' if decision == 'bat' else 'bowl'}")
         from services.match_broadcast import send_match_ready_message
         await send_match_ready_message(
             context, lobby["chat_id"], match, bat_team, bowl_team,
             _mention(bat_user), _mention(bowl_user),
-            rules_note="Challenge Mode · 2 wickets per innings")
+            rules_note="Challenge Mode · 2 wickets per innings",
+            toss_note=toss_note)
     except Exception:
         session.rollback()
         logger.exception("/cm toss decision failed")
