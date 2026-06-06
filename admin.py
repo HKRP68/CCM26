@@ -7870,21 +7870,11 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         # match outcome immediately even when all innings scorecards are enabled.
         sent_result_text = _send_completed_match_cards(chat_id, [], text, reply_markup)
 
-        # Which cards to post is website-configurable (Scorecard Designer).
-        # Default "summary" preserves the historical single-card behavior; an
-        # admin can additionally enable Bat1 / Bowl1 / Bat2 / Bowl2. The MATCH
+        # Every completed Arena match (/wpm, /cm and /wpmbot) always posts the
+        # match-summary card and only that card; the admin Scorecard-Designer
+        # per-innings toggle is intentionally not consulted here. The MATCH
         # RESULT text above is always sent as the recap + spectate-button host.
-        from services.config_service import get_wpm_result_cards
-        selection = get_wpm_result_cards()
-        # /wpmbot (vs-bot) always posts the match-summary card and only that
-        # card, regardless of the admin Scorecard-Designer toggle. Human-vs-human
-        # /wpm and /cm keep respecting the configured selection.
-        try:
-            from services.match_webapp_service import get_state_is_vsbot
-            if get_state_is_vsbot(match_id) or bool(arena.get("is_vsbot")):
-                selection = ["summary"]
-        except Exception:
-            logger.exception("vsbot summary-only override check failed (non-fatal)")
+        selection = ["summary"]
         inn_cards = {}
 
         def _render_innings(num):
