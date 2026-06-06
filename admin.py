@@ -7229,7 +7229,26 @@ def _build_match_summary_image(match, sc, result_text, arena, pom):
         from services.config_service import get_config
         innings = sc.get("innings") or []
         if len(innings) < 2:
-            return None
+            # Some completions previously persisted an incomplete scorecard (or
+            # raced with cleanup) even though the final Arena state still has
+            # both innings. Build the two score rows directly from that state so
+            # the lobby always receives a non-empty Match Summary card.
+            if not arena or int(arena.get("innings", 0) or 0) != 2:
+                return None
+            innings = [
+                {
+                    "bat_team": arena.get("inn1_team") or arena.get("bowl_team_name") or "Team 1",
+                    "runs": int(arena.get("inn1_runs", 0) or 0),
+                    "wickets": int(arena.get("inn1_wickets", 0) or 0),
+                    "overs": arena.get("inn1_overs") or "0.0",
+                },
+                {
+                    "bat_team": arena.get("bat_team_name") or "Team 2",
+                    "runs": int(arena.get("total_runs", 0) or 0),
+                    "wickets": int(arena.get("total_wickets", 0) or 0),
+                    "overs": _arena_overs(arena),
+                },
+            ]
         inn1, inn2 = innings[0], innings[1]
         top_scorer, top_wicket, top_per_team = _top_performers_for_summary(arena)
         pom_name = pom.get("name") if isinstance(pom, dict) else None
@@ -7439,68 +7458,87 @@ def _completed_team_name(arena, team_id, fallback):
     return fallback
 
 
-def _send_completed_match_cards_async(chat_id, images, fallback_text, reply_markup):
-    """Post a completed Mini-App match recap to the lobby chat.
+def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
+    """Post a completed Mini-App match recap to the lobby chat synchronously.
 
-    ``images`` is the admin-selected, ordered list of ``(bytes, caption,
-    filename)`` cards (any of Bat1 / Bowl1 / Bat2 / Bowl2 / summary). They are
-    delivered as a Telegram album when more than one is selected, or a single
-    photo otherwise. A separate MATCH RESULT message (``fallback_text``) always
-    follows, carrying the ``PlayMatch - Spectate`` button — sendMediaGroup
-    cannot attach inline buttons, so the recap text is the button host. If no
-    image renders, the text message alone still delivers the result + button.
+    The caller already runs in a background broadcast worker, so doing the
+    Telegram calls inline lets us keep live match_state until the result text is
+    actually dispatched. If a selected album fails, each image is retried as an
+    individual photo before the mandatory MATCH RESULT message is sent.
     """
     import json as _json
     import os as _os
-    import threading
     token = _os.getenv("BOT_TOKEN", "").strip()
     if not token:
-        return
+        logger.warning("completed match Telegram flow skipped: BOT_TOKEN is empty")
+        return False
 
-    def _work():
-        try:
-            import requests as _rq
-            base = f"https://api.telegram.org/bot{token}"
-            cards = [c for c in (images or []) if c and c[0]]
-            if len(cards) == 1:
-                img_bytes, caption, fname = cards[0]
-                resp = _rq.post(
-                    f"{base}/sendPhoto",
-                    data={"chat_id": chat_id, "caption": caption or "",
-                          "parse_mode": "HTML"},
-                    files={"photo": (fname, img_bytes, "image/png")},
-                    timeout=30)
-                if not resp.ok:
-                    logger.warning("completed match photo send failed: %s", resp.text)
-            elif len(cards) >= 2:
-                media, files = [], {}
-                for i, (img_bytes, caption, fname) in enumerate(cards[:10]):
-                    key = f"photo{i}"
-                    files[key] = (fname, img_bytes, "image/png")
-                    item = {"type": "photo", "media": f"attach://{key}",
-                            "parse_mode": "HTML"}
-                    if i == 0 and caption:
-                        item["caption"] = caption
-                    media.append(item)
-                resp = _rq.post(
-                    f"{base}/sendMediaGroup",
-                    data={"chat_id": chat_id, "media": _json.dumps(media)},
-                    files=files, timeout=40)
-                if not resp.ok:
-                    logger.warning("completed match album send failed: %s", resp.text)
-
-            payload = {"chat_id": chat_id, "text": fallback_text,
-                       "parse_mode": "HTML", "disable_web_page_preview": True}
-            if reply_markup:
-                payload["reply_markup"] = _json.dumps(reply_markup)
-            resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
-            if not resp.ok:
-                logger.warning("completed match result message send failed: %s", resp.text)
-        except Exception:
-            logger.exception("completed match Telegram flow failed")
-
+    sent_any = False
     try:
-        threading.Thread(target=_work, daemon=True).start()
+        import requests as _rq
+        base = f"https://api.telegram.org/bot{token}"
+        cards = [c for c in (images or []) if c and c[0]]
+
+        def _send_photo(card):
+            img_bytes, caption, fname = card
+            resp = _rq.post(
+                f"{base}/sendPhoto",
+                data={"chat_id": chat_id, "caption": caption or "",
+                      "parse_mode": "HTML"},
+                files={"photo": (fname, img_bytes, "image/png")},
+                timeout=30)
+            if not resp.ok:
+                logger.warning("completed match photo send failed: %s", resp.text)
+                return False
+            return True
+
+        if len(cards) == 1:
+            sent_any = _send_photo(cards[0]) or sent_any
+        elif len(cards) >= 2:
+            media, files = [], {}
+            for i, (img_bytes, caption, fname) in enumerate(cards[:10]):
+                key = f"photo{i}"
+                files[key] = (fname, img_bytes, "image/png")
+                item = {"type": "photo", "media": f"attach://{key}",
+                        "parse_mode": "HTML"}
+                if i == 0 and caption:
+                    item["caption"] = caption
+                media.append(item)
+            resp = _rq.post(
+                f"{base}/sendMediaGroup",
+                data={"chat_id": chat_id, "media": _json.dumps(media)},
+                files=files, timeout=40)
+            if resp.ok:
+                sent_any = True
+            else:
+                logger.warning("completed match album send failed: %s", resp.text)
+                for card in cards[:10]:
+                    sent_any = _send_photo(card) or sent_any
+
+        payload = {"chat_id": chat_id, "text": fallback_text,
+                   "parse_mode": "HTML", "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = _json.dumps(reply_markup)
+        resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
+        if resp.ok:
+            sent_any = True
+        else:
+            logger.warning("completed match result message send failed: %s", resp.text)
+        return sent_any
+    except Exception:
+        logger.exception("completed match Telegram flow failed")
+        return sent_any
+
+
+def _send_completed_match_cards_async(chat_id, images, fallback_text, reply_markup):
+    """Fire-and-forget compatibility wrapper for callers outside broadcast."""
+    import threading
+    try:
+        threading.Thread(
+            target=_send_completed_match_cards,
+            args=(chat_id, images, fallback_text, reply_markup),
+            daemon=True,
+        ).start()
     except Exception:
         logger.exception("could not spawn completed match Telegram worker")
 
@@ -7532,7 +7570,8 @@ def _broadcast_match_result(match_id, result):
             # Give the Mini App a moment to render the just-decided result from
             # the still-live state before the lobby chat receives its summary.
             time.sleep(1.5)
-            _build_and_send_match_result(match_id, result)
+            if not _build_and_send_match_result(match_id, result):
+                raise RuntimeError("completed match result was not sent")
         except Exception:
             with _COMPLETED_MATCH_BROADCASTS_LOCK:
                 _COMPLETED_MATCH_BROADCASTS.discard(match_id)
@@ -7572,7 +7611,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
     try:
         match = db.query(Match).get(match_id)
         if not match:
-            return
+            return False
         try:
             from services.match_webapp_service import load_final_scorecard
             scorecard = load_final_scorecard(db, match_id) or {}
@@ -7612,7 +7651,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         chat_id = (override_chat_id or arena.get("original_lobby_chat_id")
                    or match.chat_id or arena.get("chat_id"))
         if not chat_id:
-            return
+            return False
         result = result or arena.get("match_result") or {}
         result_text = result.get("text") or scorecard.get("result_text") or "Match finished."
         rewards = arena.get("_completed_rewards") or {}
@@ -7690,7 +7729,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
     reply_markup = None
     if url:
         reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": url}]]}
-    _send_completed_match_cards_async(chat_id, images, text, reply_markup)
+    return _send_completed_match_cards(chat_id, images, text, reply_markup)
 
 
 
