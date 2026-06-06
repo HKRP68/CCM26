@@ -3407,9 +3407,14 @@ def webapp_suggestion():
 
         notify_ok, notify_message = _send_admin_suggestion_notification(user, report, message)
         if not notify_ok:
-            return {"ok": False, "message": notify_message, "report_id": report.id}, 502
+            return {
+                "ok": False,
+                "saved": True,
+                "message": notify_message,
+                "report_id": report.id,
+            }, 502
 
-        return {"ok": True, "message": notify_message, "report_id": report.id}
+        return {"ok": True, "saved": True, "message": notify_message, "report_id": report.id}
     except Exception as e:
         db.rollback()
         logger.exception("webapp_suggestion failed")

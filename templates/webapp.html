@@ -3201,13 +3201,18 @@ async function sendSuggestion() {
   const { ok, data } = await api('/api/webapp/suggestion', { message: text });
   suggestionSending = false;
   if (btn) { btn.disabled = false; btn.textContent = '📨 Send'; }
-  if (!ok) {
+  if (!ok && !(data.saved || data.report_id)) {
     toast(data.message || 'Could not send suggestion.', 'error');
     hapticNotif('error');
     return;
   }
   if (msg) msg.value = '';
   updateSuggestionCount();
+  if (!ok) {
+    toast(data.message || 'Suggestion saved, but admin notification failed.', 'error');
+    hapticNotif('warning');
+    return;
+  }
   toast(data.message || 'Suggestion sent to admin — thank you!', 'success');
   hapticNotif('success');
 }
