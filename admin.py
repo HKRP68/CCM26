@@ -8156,28 +8156,27 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
                 inn_cards["summary"] = _render_summary()
 
         # Assemble in the configured (innings reading) order, dropping any card
-        # that failed to render.
+        # that failed to render.  The Match Summary is mandatory for every
+        # Mini-App match mode (/wpmbot, /wpm, and /cm), matching the reliable
+        # vs-bot completion formula: render the summary before Telegram send,
+        # dispatch cards + text in one synchronous background flow, and keep the
+        # live match_state until that send attempt has completed.
+        summary_card = inn_cards.get("summary")
         images = [inn_cards.get(token) for token in selection]
         images = [c for c in images if c]
 
-        # /wpmbot users specifically expect the Match Summary at completion.
-        # Render the summary before sending the final Telegram flow so the
-        # normal send path can post the summary card and the text recap together
-        # (and keep live match_state around until that attempt completes). If
-        # rendering fails, send a clear text-only summary fallback instead of
-        # silently considering the result delivered.
-        if is_vsbot_match:
-            if not images:
-                text += ("\n\n⚠️ <i>Match Summary image could not be rendered; "
-                         "the text recap above is the summary fallback.</i>")
-                logger.warning("wpmbot match %s summary image missing; sending text fallback", match_id)
-            sent_result_text = _send_completed_match_cards(chat_id, images, text, reply_markup)
-            sent_images = bool(images and sent_result_text)
-        else:
-            # Send the result text before posting heavy PNGs, so players see the
-            # outcome immediately even when all innings scorecards are enabled.
-            sent_result_text = _send_completed_match_cards(chat_id, [], text, reply_markup)
-            sent_images = _send_completed_match_images(chat_id, images)
+        # If the mandatory summary PNG could not be produced, still send a clear
+        # text fallback for all Mini-App modes instead of treating a plain result
+        # message (or optional innings cards) as a complete recap.
+        summary_required = "summary" in selection
+        summary_missing = summary_required and not summary_card
+        if summary_missing:
+            text += ("\n\n⚠️ <i>Match Summary image could not be rendered; "
+                     "the text recap above is the summary fallback.</i>")
+            logger.warning("match %s summary image missing; sending text fallback", match_id)
+
+        sent_result_text = _send_completed_match_cards(chat_id, images, text, reply_markup)
+        sent_images = bool(images and sent_result_text)
     finally:
         db.close()
 
