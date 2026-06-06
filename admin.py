@@ -6571,6 +6571,13 @@ def match_rest_poll():
                 auto_play_bot_turns(db, match.id)
         except Exception:
             pass
+        # The bot's auto-play above can deliver the deciding ball on this very
+        # poll tick. serialize_match_state then reports status "completed" and
+        # the Arena client stops polling, so a pre-autoplay finalize check alone
+        # would miss it and never broadcast the summary. Re-check terminal AFTER
+        # the bot plays (mirrors match_rest_autoplay). The broadcast guard
+        # dedupes, so this cannot double-send.
+        _finalize_and_broadcast_if_terminal(db, match.id)
         payload = serialize_match_state(db, match, viewer)
         if not payload:
             return {"error": "No active match found."}, 404
@@ -7869,6 +7876,15 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         # RESULT text above is always sent as the recap + spectate-button host.
         from services.config_service import get_wpm_result_cards
         selection = get_wpm_result_cards()
+        # /wpmbot (vs-bot) always posts the match-summary card and only that
+        # card, regardless of the admin Scorecard-Designer toggle. Human-vs-human
+        # /wpm and /cm keep respecting the configured selection.
+        try:
+            from services.match_webapp_service import get_state_is_vsbot
+            if get_state_is_vsbot(match_id) or bool(arena.get("is_vsbot")):
+                selection = ["summary"]
+        except Exception:
+            logger.exception("vsbot summary-only override check failed (non-fatal)")
         inn_cards = {}
 
         def _render_innings(num):
