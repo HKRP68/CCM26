@@ -91,6 +91,51 @@
     font-size: 0.8rem; font-weight: 700;
   }
   .top-link:active { background: rgba(0,212,170,0.18); }
+
+  .quest-teaser {
+    margin: 0.65rem 0.8rem 0;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid rgba(252,200,68,0.38);
+    border-radius: 15px;
+    background:
+      radial-gradient(circle at top left, rgba(252,200,68,0.22), transparent 42%),
+      linear-gradient(135deg, rgba(255,77,109,0.14), rgba(0,212,170,0.09), rgba(17,24,39,0.92));
+    box-shadow: 0 12px 32px rgba(0,0,0,0.28), 0 0 22px rgba(232,184,75,0.08);
+  }
+  .quest-teaser-title { font-size: 0.88rem; font-weight: 900; letter-spacing: 0.01em; }
+  .quest-teaser-copy { margin: 0.28rem 0 0.7rem; color: var(--muted); font-size: 0.74rem; line-height: 1.42; }
+  .quest-teaser-btn {
+    width: 100%; border: 0; border-radius: 11px; padding: 0.62rem 0.75rem;
+    color: #08111d; font: inherit; font-size: 0.78rem; font-weight: 900;
+    background: linear-gradient(135deg, var(--accent-2), var(--green));
+    box-shadow: 0 8px 22px rgba(0,212,170,0.16); cursor: pointer;
+  }
+
+  .suggestion-box {
+    margin: 0.65rem 0.8rem 0.75rem;
+    padding: 0.8rem;
+    border-radius: 15px;
+    background: rgba(17,24,39,0.92);
+    border: 1px solid rgba(74,158,255,0.28);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.22);
+  }
+  .suggestion-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.45rem; }
+  .suggestion-title { font-size: 0.84rem; font-weight: 900; }
+  .suggestion-sub { color: var(--muted); font-size: 0.68rem; }
+  .suggestion-input {
+    width: 100%; min-height: 76px; resize: vertical; border-radius: 11px;
+    border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+    padding: 0.7rem; font: inherit; font-size: 0.78rem; line-height: 1.4; outline: none;
+  }
+  .suggestion-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(74,158,255,0.14); }
+  .suggestion-actions { display:flex; align-items:center; gap:0.55rem; margin-top:0.55rem; }
+  .suggestion-count { color: var(--muted); font-size: 0.67rem; flex:1; }
+  .suggestion-send {
+    border: 1px solid rgba(74,158,255,0.45); border-radius: 10px; padding: 0.5rem 0.78rem;
+    background: rgba(74,158,255,0.14); color: var(--blue); font: inherit; font-size: 0.74rem;
+    font-weight: 900; cursor: pointer;
+  }
+  .suggestion-send:disabled { opacity: 0.55; cursor: wait; }
   .appbar h1 {
     margin: 0; font-size: 1.1rem; letter-spacing: 0.04em;
     font-weight: 800; font-family: var(--font-display);
@@ -1991,6 +2036,26 @@
 <!-- Top community links (channel + official group) — populated from init -->
 <div class="top-links" id="top-links" style="display:none;"></div>
 
+<div class="quest-teaser" id="quest-teaser" style="display:none;">
+  <div class="quest-teaser-title">🚨 Free rewards are hiding in your Quests</div>
+  <div class="quest-teaser-copy">Open the Mini App, finish today’s quests, and grab the loot before someone else flexes a better squad.</div>
+  <button class="quest-teaser-btn" onclick="navigate('quests')">🎯 Reveal my quest rewards</button>
+</div>
+
+<div class="suggestion-box" id="suggestion-box" style="display:none;">
+  <div class="suggestion-head">
+    <div>
+      <div class="suggestion-title">💡 Suggestion Box</div>
+      <div class="suggestion-sub">Send ideas, bugs, or balance feedback straight to the admin.</div>
+    </div>
+  </div>
+  <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message here…"></textarea>
+  <div class="suggestion-actions">
+    <span class="suggestion-count" id="suggestion-count">0/1000</span>
+    <button class="suggestion-send" id="suggestion-send" onclick="sendSuggestion()">📨 Send</button>
+  </div>
+</div>
+
 <div class="toast-container" id="toasts"></div>
 
 
@@ -2782,6 +2847,7 @@ let currentCat = '';
 let isSpinning = false;
 let setupBotUsername = '';
 let lastOnboardingData = null;
+let suggestionSending = false;
 
 // ════════════════ API ════════════════
 async function api(path, body) {
@@ -2846,6 +2912,7 @@ function openSetupBot() {
 }
 
 function showSetupScreen(setup = {}) {
+  renderCommunityPanel(false);
   setupBotUsername = setup.bot_username || '';
   document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
   document.getElementById('screen-onboarding').classList.add('active');
@@ -3010,8 +3077,9 @@ async function refreshDashboard() {
   // Active events banner
   updateEventBanner(data.events || []);
 
-  // Top community links (channel + official group)
+  // Top community links (channel + official group), quest teaser, and suggestion box
   renderTopLinks(data.branding || {});
+  renderCommunityPanel(true);
 
   // Resume live match banner
   renderResumeBanner(data.live_match || null);
@@ -3104,6 +3172,49 @@ function renderTopLinks(branding) {
   el.innerHTML = links.join('');
   el.style.display = 'flex';
 }
+
+function renderCommunityPanel(show) {
+  const teaser = document.getElementById('quest-teaser');
+  const box = document.getElementById('suggestion-box');
+  if (teaser) teaser.style.display = show ? '' : 'none';
+  if (box) box.style.display = show ? '' : 'none';
+}
+
+function updateSuggestionCount() {
+  const msg = document.getElementById('suggestion-message');
+  const count = document.getElementById('suggestion-count');
+  if (msg && count) count.textContent = `${msg.value.length}/1000`;
+}
+
+async function sendSuggestion() {
+  if (suggestionSending) return;
+  const msg = document.getElementById('suggestion-message');
+  const btn = document.getElementById('suggestion-send');
+  const text = (msg?.value || '').trim();
+  if (text.length < 5) {
+    toast('Please write at least 5 characters.', 'error');
+    hapticNotif('error');
+    return;
+  }
+  suggestionSending = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const { ok, data } = await api('/api/webapp/suggestion', { message: text });
+  suggestionSending = false;
+  if (btn) { btn.disabled = false; btn.textContent = '📨 Send'; }
+  if (!ok) {
+    toast(data.message || 'Could not send suggestion.', 'error');
+    hapticNotif('error');
+    return;
+  }
+  if (msg) msg.value = '';
+  updateSuggestionCount();
+  toast('Suggestion sent to admin — thank you!', 'success');
+  hapticNotif('success');
+}
+
+document.addEventListener('input', (event) => {
+  if (event.target && event.target.id === 'suggestion-message') updateSuggestionCount();
+});
 
 function updateEventBanner(events) {
   const banner = document.getElementById('event-banner');
