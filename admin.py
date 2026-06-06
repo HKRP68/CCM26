@@ -6867,6 +6867,29 @@ def _tg_api_post(method, payload, timeout=8):
 
 
 
+_PLAYER_STAT_CARD_CACHE = {}
+_PLAYER_STAT_CARD_CACHE_LOCK = threading.Lock()
+_PLAYER_STAT_CARD_CACHE_MAX = 512
+
+
+def _player_stat_cache_key(player, owner_user_id, card_type):
+    """Stable in-memory key for generated in-match stat card images."""
+    if not player or not owner_user_id:
+        return None
+    return (
+        int(owner_user_id),
+        int(player.get("player_id") or player.get("id") or 0),
+        str(card_type or "batting"),
+        player.get("name"),
+        int(player.get("rating", 0) or 0),
+        int(player.get("bat_rating", 0) or 0),
+        int(player.get("bowl_rating", 0) or 0),
+        player.get("bat_hand"),
+        player.get("bowl_hand"),
+        player.get("bowl_style"),
+    )
+
+
 def _player_stat_defaults(card_type):
     """Default career stat payloads used when a player has no saved stats."""
     if card_type == "bowling":
@@ -6887,10 +6910,19 @@ def _build_player_stat_card_bytes(player, owner_user_id, card_type):
 
     PlayerGameStats is shared by /wpm, /cm, /vsbot, and /playmatch, so querying
     this row gives a combined career card. Missing rows deliberately render the
-    zero/default payload instead of failing the match request.
+    zero/default payload instead of failing the match request. The generated PNG
+    is cached briefly in-process because opener/new-batter cards can be posted
+    multiple times in the same match while career stats stay unchanged until the
+    match is finalized.
     """
     if not player or not owner_user_id:
         return None
+    cache_key = _player_stat_cache_key(player, owner_user_id, card_type)
+    if cache_key:
+        with _PLAYER_STAT_CARD_CACHE_LOCK:
+            cached = _PLAYER_STAT_CARD_CACHE.get(cache_key)
+            if cached:
+                return cached
     db = get_session()
     try:
         from models import PlayerGameStats
@@ -6916,13 +6948,19 @@ def _build_player_stat_card_bytes(player, owner_user_id, card_type):
                     "bbf_str": (f"{gs.best_bowl_wickets}/{gs.best_bowl_runs}"
                                 if (gs.best_bowl_wickets or 0) > 0 else "-"),
                 })
-            return generate_bowler_card(
+            photo = generate_bowler_card(
                 player.get("name", "Player"), player.get("rating", 0),
                 player.get("bowl_rating", 0), stats,
                 bat_hand=player.get("bat_hand", "Right"),
                 bowl_hand=player.get("bowl_hand", "Right"),
                 bowl_style=player.get("bowl_style", "Medium Pacer"),
             )
+            if cache_key and photo:
+                with _PLAYER_STAT_CARD_CACHE_LOCK:
+                    if len(_PLAYER_STAT_CARD_CACHE) >= _PLAYER_STAT_CARD_CACHE_MAX:
+                        _PLAYER_STAT_CARD_CACHE.clear()
+                    _PLAYER_STAT_CARD_CACHE[cache_key] = photo
+            return photo
 
         from services.batsman_card import generate_batsman_card
         stats = _player_stat_defaults("batting")
@@ -6943,13 +6981,19 @@ def _build_player_stat_card_bytes(player, owner_user_id, card_type):
                 "ducks": gs.ducks or 0,
                 "hs_str": gs.hs_str or "-",
             })
-        return generate_batsman_card(
+        photo = generate_batsman_card(
             player.get("name", "Player"), player.get("rating", 0),
             player.get("bat_rating", 0), stats,
             bat_hand=player.get("bat_hand", "Right"),
             bowl_hand=player.get("bowl_hand", "Right"),
             bowl_style=player.get("bowl_style", "Medium Pacer"),
         )
+        if cache_key and photo:
+            with _PLAYER_STAT_CARD_CACHE_LOCK:
+                if len(_PLAYER_STAT_CARD_CACHE) >= _PLAYER_STAT_CARD_CACHE_MAX:
+                    _PLAYER_STAT_CARD_CACHE.clear()
+                _PLAYER_STAT_CARD_CACHE[cache_key] = photo
+        return photo
     except Exception:
         logger.exception("failed to build %s stat card for %s", card_type, player.get("name"))
         return None
@@ -6994,36 +7038,51 @@ def _playmatch_spectate_markup(match_id, chat_id):
 
 
 def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
-    """Send one /wpm or /cm career stat card to the match's origin chat."""
+    """Queue one /wpm or /cm career stat card for the match's origin chat.
+
+    Card rendering hits the database and Pillow, so keep the entire build/send
+    flow out of the Mini App request path. This is especially noticeable at
+    match start, where two opener cards and one opening-bowler card are queued
+    together.
+    """
+    if not player or not owner_user_id:
+        return
+
+    def _work(player_snapshot):
+        try:
+            import json as _json
+            from services.match_webapp_access import get_state
+            state = get_state(match_id) or {}
+            chat_id = _match_origin_chat_id(match_id, state)
+            if not chat_id:
+                return
+            photo = _build_player_stat_card_bytes(player_snapshot, owner_user_id, card_type)
+            if not photo:
+                return
+            if card_type == "bowling":
+                caption = f"🎳 <b>{player_snapshot.get('name', 'Player')}</b> starts bowling"
+                filename = "wpm_bowler_card.png"
+            else:
+                caption = f"🏏 <b>{player_snapshot.get('name', 'Player')}</b> comes to the crease"
+                filename = "wpm_batter_card.png"
+            payload = {
+                "chat_id": chat_id,
+                "caption": caption,
+                "parse_mode": "HTML",
+            }
+            markup = _playmatch_spectate_markup(match_id, chat_id)
+            if markup:
+                # Telegram's multipart sendPhoto endpoint expects reply_markup as a
+                # JSON-encoded form field, not a nested object.
+                payload["reply_markup"] = _json.dumps(markup)
+            _tg_send_photo_async(payload, photo, filename=filename)
+        except Exception:
+            logger.exception("failed to broadcast /wpm player stat card")
+
     try:
-        import json as _json
-        from services.match_webapp_access import get_state
-        state = get_state(match_id) or {}
-        chat_id = _match_origin_chat_id(match_id, state)
-        if not chat_id or not player:
-            return
-        photo = _build_player_stat_card_bytes(player, owner_user_id, card_type)
-        if not photo:
-            return
-        if card_type == "bowling":
-            caption = f"🎳 <b>{player.get('name', 'Player')}</b> starts bowling"
-            filename = "wpm_bowler_card.png"
-        else:
-            caption = f"🏏 <b>{player.get('name', 'Player')}</b> comes to the crease"
-            filename = "wpm_batter_card.png"
-        payload = {
-            "chat_id": chat_id,
-            "caption": caption,
-            "parse_mode": "HTML",
-        }
-        markup = _playmatch_spectate_markup(match_id, chat_id)
-        if markup:
-            # Telegram's multipart sendPhoto endpoint expects reply_markup as a
-            # JSON-encoded form field, not a nested object.
-            payload["reply_markup"] = _json.dumps(markup)
-        _tg_send_photo_async(payload, photo, filename=filename)
+        threading.Thread(target=_work, args=(dict(player),), daemon=True).start()
     except Exception:
-        logger.exception("failed to broadcast /wpm player stat card")
+        logger.exception("could not queue /wpm player stat card")
 
 
 def _broadcast_wpm_start_player_cards(match_id):
@@ -7543,6 +7602,69 @@ def _send_completed_match_cards_async(chat_id, images, fallback_text, reply_mark
         logger.exception("could not spawn completed match Telegram worker")
 
 
+def _send_completed_match_images(chat_id, images):
+    """Post completed-match scorecard images without delaying result text.
+
+    This is used by the final /wpm and /cm recap path after the MATCH RESULT
+    message has already gone out, so slow image rendering or Telegram album
+    uploads do not make players wait for the outcome announcement.
+    """
+    import json as _json
+    import os as _os
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        logger.warning("completed match image flow skipped: BOT_TOKEN is empty")
+        return False
+    cards = [c for c in (images or []) if c and c[0]]
+    if not cards:
+        return False
+    sent_any = False
+    try:
+        import requests as _rq
+        base = f"https://api.telegram.org/bot{token}"
+
+        def _send_photo(card):
+            img_bytes, caption, fname = card
+            resp = _rq.post(
+                f"{base}/sendPhoto",
+                data={"chat_id": chat_id, "caption": caption or "",
+                      "parse_mode": "HTML"},
+                files={"photo": (fname, img_bytes, "image/png")},
+                timeout=30)
+            if not resp.ok:
+                logger.warning("completed match photo send failed: %s", resp.text)
+                return False
+            return True
+
+        if len(cards) == 1:
+            return _send_photo(cards[0])
+
+        media, files = [], {}
+        for i, (img_bytes, caption, fname) in enumerate(cards[:10]):
+            key = f"photo{i}"
+            files[key] = (fname, img_bytes, "image/png")
+            item = {"type": "photo", "media": f"attach://{key}",
+                    "parse_mode": "HTML"}
+            if i == 0 and caption:
+                item["caption"] = caption
+            media.append(item)
+        resp = _rq.post(
+            f"{base}/sendMediaGroup",
+            data={"chat_id": chat_id, "media": _json.dumps(media)},
+            files=files, timeout=40)
+        if resp.ok:
+            return True
+        logger.warning("completed match album send failed: %s", resp.text)
+        for card in cards[:10]:
+            sent_any = _send_photo(card) or sent_any
+        return sent_any
+    except Exception:
+        logger.exception("completed match image flow failed")
+        return sent_any
+
+
+
+
 _COMPLETED_MATCH_BROADCASTS = set()
 _COMPLETED_MATCH_BROADCASTS_LOCK = threading.Lock()
 
@@ -7612,6 +7734,13 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         match = db.query(Match).get(match_id)
         if not match:
             return False
+        from types import SimpleNamespace
+        render_match = SimpleNamespace(
+            id=match.id,
+            overs=match.overs,
+            stadium=match.stadium,
+            completed_at=getattr(match, "completed_at", None),
+        )
         try:
             from services.match_webapp_service import load_final_scorecard
             scorecard = load_final_scorecard(db, match_id) or {}
@@ -7698,6 +7827,15 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         else:
             text += "Tap below to open the completed match."
 
+        url = _launch_url(match_id, chat_id)
+        reply_markup = None
+        if url:
+            reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": url}]]}
+
+        # Send the result text before rendering heavy PNGs, so players see the
+        # match outcome immediately even when all innings scorecards are enabled.
+        sent_result_text = _send_completed_match_cards(chat_id, [], text, reply_markup)
+
         # Which cards to post is website-configurable (Scorecard Designer).
         # Default "summary" preserves the historical single-card behavior; an
         # admin can additionally enable Bat1 / Bowl1 / Bat2 / Bowl2. The MATCH
@@ -7705,19 +7843,48 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         from services.config_service import get_wpm_result_cards
         selection = get_wpm_result_cards()
         inn_cards = {}
-        if any(t in selection for t in ("bat1", "bowl1")):
-            c1 = _build_innings_cards(match, arena, 1)
-            inn_cards["bat1"] = c1.get("bat")
-            inn_cards["bowl1"] = c1.get("bowl")
-        if any(t in selection for t in ("bat2", "bowl2")):
-            c2 = _build_innings_cards(match, arena, 2)
-            inn_cards["bat2"] = c2.get("bat")
-            inn_cards["bowl2"] = c2.get("bowl")
-        summary_caption = f"🏆 <b>Match Summary</b> — {escape(str(result_text))}"
-        if "summary" in selection:
-            summary = _build_match_summary_image(match, scorecard, result_text, arena, pom)
-            inn_cards["summary"] = ((summary, summary_caption, "match_summary.png")
-                                    if summary else None)
+
+        def _render_innings(num):
+            cards = _build_innings_cards(render_match, arena, num)
+            return num, cards
+
+        def _render_summary():
+            summary_caption = f"🏆 <b>Match Summary</b> — {escape(str(result_text))}"
+            summary = _build_match_summary_image(render_match, scorecard, result_text, arena, pom)
+            return ((summary, summary_caption, "match_summary.png")
+                    if summary else None)
+
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            futures = {}
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                if any(t in selection for t in ("bat1", "bowl1")):
+                    futures[executor.submit(_render_innings, 1)] = "innings"
+                if any(t in selection for t in ("bat2", "bowl2")):
+                    futures[executor.submit(_render_innings, 2)] = "innings"
+                if "summary" in selection:
+                    futures[executor.submit(_render_summary)] = "summary"
+                for fut in as_completed(futures):
+                    kind = futures[fut]
+                    if kind == "summary":
+                        inn_cards["summary"] = fut.result()
+                    else:
+                        num, cards = fut.result()
+                        inn_cards[f"bat{num}"] = cards.get("bat")
+                        inn_cards[f"bowl{num}"] = cards.get("bowl")
+        except Exception:
+            logger.exception("parallel completed-card render failed; retrying serially")
+            if any(t in selection for t in ("bat1", "bowl1")):
+                c1 = _build_innings_cards(render_match, arena, 1)
+                inn_cards["bat1"] = c1.get("bat")
+                inn_cards["bowl1"] = c1.get("bowl")
+            if any(t in selection for t in ("bat2", "bowl2")):
+                c2 = _build_innings_cards(render_match, arena, 2)
+                inn_cards["bat2"] = c2.get("bat")
+                inn_cards["bowl2"] = c2.get("bowl")
+            if "summary" in selection:
+                inn_cards["summary"] = _render_summary()
+
         # Assemble in the configured (innings reading) order, dropping any card
         # that failed to render.
         images = [inn_cards.get(token) for token in selection]
@@ -7725,11 +7892,8 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
     finally:
         db.close()
 
-    url = _launch_url(match_id, chat_id)
-    reply_markup = None
-    if url:
-        reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": url}]]}
-    return _send_completed_match_cards(chat_id, images, text, reply_markup)
+    sent_images = _send_completed_match_images(chat_id, images)
+    return bool(sent_result_text or sent_images)
 
 
 
