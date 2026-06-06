@@ -7687,6 +7687,29 @@ def _completed_team_name(arena, team_id, fallback):
     return fallback
 
 
+def _completed_result_with_arena_fallback(result, arena):
+    """Return a completed-match result with persisted Arena fields filled in.
+
+    Some broadcast callers pass a small display-only result, for example the
+    webapp abandon path sends ``{"text": "Match ended by forfeit."}`` after
+    ``abandon_match`` has already persisted the full forfeit result in the
+    final scorecard's Arena state. A truthy partial dict should not hide the
+    persisted winner/margin data needed by the summary scorecard.
+    """
+    result = result if isinstance(result, dict) else {}
+    arena_result = arena.get("match_result") if isinstance(arena, dict) else {}
+    arena_result = arena_result if isinstance(arena_result, dict) else {}
+    if not arena_result:
+        return dict(result)
+
+    merged = dict(arena_result)
+    merged.update(result)
+    for key in ("winner_team_id", "loser_team_id", "margin_type", "margin_value"):
+        if result.get(key) in (None, "") and key in arena_result:
+            merged[key] = arena_result.get(key)
+    return merged
+
+
 def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
     """Post a completed Mini-App match recap to the lobby chat synchronously.
 
@@ -7951,7 +7974,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
                    or match.chat_id or arena.get("chat_id"))
         if not chat_id:
             return False
-        result = result or arena.get("match_result") or {}
+        result = _completed_result_with_arena_fallback(result, arena)
         result_text = result.get("text") or scorecard.get("result_text") or "Match finished."
         rewards = arena.get("_completed_rewards") or {}
         pom = arena.get("_player_of_match") or result.get("player_of_match") or {}
@@ -7997,6 +8020,8 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         elif result.get("margin_type") == "runs":
             short_summary = (f"{arena.get('bowl_team_name', 'The defending team')} "
                              f"defended the target by {result.get('margin_value', 0)} runs.")
+        elif result.get("margin_type") == "forfeit":
+            short_summary = result.get("text") or "Match decided by forfeit."
         else:
             short_summary = "Both teams finished level after the second innings."
 
@@ -8006,6 +8031,8 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
             margin_text = f"{margin_value} wicket{'s' if margin_value != 1 else ''}"
         elif result.get("margin_type") == "runs":
             margin_text = f"{margin_value} run{'s' if margin_value != 1 else ''}"
+        elif result.get("margin_type") == "forfeit":
+            margin_text = "Forfeit"
         else:
             margin_text = "Tie"
 
