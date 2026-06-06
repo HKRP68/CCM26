@@ -1898,22 +1898,78 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await q.answer("Join failed: your playing XI is invalid. Use /xi to fix it.", show_alert=True)
             return
 
-        winner = random.choice([host, guest])
         lobby.update({
             "guest_user_id": guest.id,
             "guest_tg_id": guest.telegram_id,
             "guest_label": _user_label(guest),
-            "toss_winner_user_id": winner.id,
-            "toss_winner_tg_id": winner.telegram_id,
+            # The joining guest calls the toss.
+            "caller_user_id": guest.id,
+            "caller_tg_id": guest.telegram_id,
         })
         # Lobby is now joined — stop the auto-expiry job.
         _cancel_lobby_timer(context, cid)
         await q.answer("Joined match lobby!")
+        from services.match_broadcast import coin_call_keyboard
         await q.edit_message_text(
-            "🪙 <b>TOSS COMPLETED!</b> 🪙\n"
+            "🪙 <b>TOSS</b> 🪙\n"
             "═════════════════════════════\n"
             f"• Host: {_user_label(host)}\n"
             f"• Guest: {_user_label(guest)}\n\n"
+            f"{_user_label(guest)}, call it in the air!\n"
+            "<b>Heads</b> or <b>Tails?</b>",
+            parse_mode="HTML",
+            reply_markup=coin_call_keyboard("cric_coin:heads", "cric_coin:tails"))
+    except Exception:
+        session.rollback()
+        logger.exception("/wpm lobby join failed")
+        await q.answer("Failed to join lobby.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def cric_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Heads/Tails call for a joined /wpm lobby. The joining guest calls; the
+    coin is flipped and the winner then chooses bat or bowl."""
+    q = update.callback_query
+    cid = q.message.chat_id
+    key = _cric_lobby_key(cid)
+    lobby = context.bot_data.get(key)
+    if not lobby or not lobby.get("guest_user_id"):
+        await q.answer("No joined lobby in this chat.", show_alert=True)
+        return
+    if q.from_user.id != lobby.get("caller_tg_id"):
+        await q.answer("Only the calling player can toss!", show_alert=True)
+        return
+    if lobby.get("toss_winner_user_id"):
+        await q.answer("Toss already done — pick bat or bowl.", show_alert=True)
+        return
+    call = q.data.split(":", 1)[1]
+    if call not in ("heads", "tails"):
+        await q.answer("Invalid call.", show_alert=True)
+        return
+    await q.answer()
+
+    from services.match_broadcast import run_coin_toss
+    coin, won = await run_coin_toss(
+        lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+
+    session = get_session()
+    try:
+        host = session.query(User).get(lobby["host_user_id"])
+        guest = session.query(User).get(lobby["guest_user_id"])
+        if not host or not guest:
+            context.bot_data.pop(key, None)
+            await q.edit_message_text("Lobby players no longer exist.")
+            return
+        # The guest called; they win if the coin matches their call.
+        winner = guest if won else host
+        lobby["toss_winner_user_id"] = winner.id
+        lobby["toss_winner_tg_id"] = winner.telegram_id
+        await q.edit_message_text(
+            "🪙 <b>TOSS RESULT</b> 🪙\n"
+            "═════════════════════════════\n"
+            f"The coin lands on <b>{coin.upper()}</b> — "
+            f"{_user_label(guest)} called <b>{call.upper()}</b>.\n\n"
             f"🎉 <b>{_user_label(winner)}</b> won the toss!\n"
             "Choose your decision:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
@@ -1921,9 +1977,8 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 InlineKeyboardButton("Bowl First 🎳", callback_data="cric_decision:bowl"),
             ]]))
     except Exception:
-        session.rollback()
-        logger.exception("/wpm lobby join failed")
-        await q.answer("Failed to join lobby.", show_alert=True)
+        logger.exception("/wpm coin toss failed")
+        await q.edit_message_text("Toss failed — start again with /wpm.")
     finally:
         session.close()
 
@@ -2002,10 +2057,12 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         bowl_user = session.query(User).get(match.bowling_first_id)
         bat_team = _team_label(bat_user)
         bowl_team = _team_label(bowl_user)
+        toss_note = (f"{_user_label(winner)} won & chose to "
+                     f"{'bat' if decision == 'bat' else 'bowl'}")
         from services.match_broadcast import send_match_ready_message
         await send_match_ready_message(
             context, cid, match, bat_team, bowl_team,
-            _mention(bat_user), _mention(bowl_user))
+            _mention(bat_user), _mention(bowl_user), toss_note=toss_note)
     except Exception:
         session.rollback()
         logger.exception("/wpm toss decision failed")
@@ -3401,21 +3458,31 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
         runs = oc.get("runs", 0)
 
         # Map outcome to event_key
-        if otype == "wicket":
+        if oc.get("free_hit") and otype == "runs" and runs in (4, 6):
+            key = "free_hit"
+        elif oc.get("mystery") and otype == "wicket":
+            key = "mystery"
+        elif otype == "wicket":
             how = (oc.get("how") or "").lower()
-            if "bowled" in how:
+            if "run out" in how or "runout" in how:
+                key = "wicket_runOut"
+            elif "bowled" in how:
                 key = "wicket_bowled"
             elif "lbw" in how:
                 key = "wicket_lbw"
             elif "stump" in how:
                 key = "wicket_stumped"
-            elif "keeper" in how or "kept" in how:
+            elif "keeper" in how or "kept" in how or "behind" in how:
                 key = "wicket_caught_keeper"
             elif "caught" in how or "catch" in how:
                 key = "wicket_caught_fielder"
             else:
                 key = "wicket_bowled"
-        elif otype == "wide" or otype == "noball" or otype == "legbye":
+        elif otype == "noball":
+            key = "no_ball"
+        elif otype == "wide":
+            key = "wide"
+        elif otype == "legbye":
             key = "extras"
         elif otype == "runs":
             if runs == 0:   key = "dot"
@@ -3516,6 +3583,22 @@ def _calc(s, striker, bowler, shot, delivery):
         "total_runs": s.get("total_runs", 0),
     }
 
+    # Live-match mechanics (UnderCover /cric parity). All read from state and
+    # default to no-op, so the legacy bot flow that doesn't maintain them is
+    # unaffected. The Mini App path (match_webapp_service) keeps these current.
+    free_hit = bool(s.get("free_hit"))
+    mystery = bool(s.get("mystery_active"))
+    recent_runs = sum(s.get("recent_runs_window") or [])
+    consec_wickets = int(s.get("consec_wickets", 0) or 0)
+    # How many times this exact delivery was bowled in a row this over (+ this one).
+    history = s.get("delivery_history") or []
+    delivery_repeat = 1
+    for prev in reversed(history):
+        if prev == delivery:
+            delivery_repeat += 1
+        else:
+            break
+
     return calculate_outcome(
         bowler.get("bowl_style", "Medium Pacer"),
         bowler.get("bowl_hand", "Right"),
@@ -3526,6 +3609,11 @@ def _calc(s, striker, bowler, shot, delivery):
         bowler_traits=bowler_traits,
         trait_ctx=trait_ctx,
         pitch_wear=pitch_wear,
+        free_hit=free_hit,
+        mystery=mystery,
+        recent_runs=recent_runs,
+        consec_wickets=consec_wickets,
+        delivery_repeat=delivery_repeat,
     )
 
 

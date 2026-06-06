@@ -418,6 +418,8 @@ def serialize_match_state(session, match, viewer_user):
             "batter": last_ball_raw.get("batsman") or "",
             "bowler": last_ball_raw.get("bowler") or "",
             "eventKey": last_ball_raw.get("eventKey"),
+            "isFreeHit": bool(last_ball_raw.get("free_hit")),
+            "isMystery": bool(last_ball_raw.get("mystery")),
         }
         commentary = [{
             "type": "ball",
@@ -524,6 +526,8 @@ def serialize_match_state(session, match, viewer_user):
         "tossWinnerId": toss_winner_tg,
         "tossDecision": match.toss_decision,
         "turnState": turn_state,
+        # Free hit armed for the upcoming legal ball (UnderCover /cric parity)
+        "freeHit": bool(state.get("free_hit")),
         "ballSeq": mwa.get_ball_seq(match_id),
         "isProcessing": bool(state.get("action_processing_at")),
         "myRole": my_role,

@@ -50,6 +50,12 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
         "over_runs": [],        # list of runs scored each completed over
         "partnership_runs": 0, "partnership_balls": 0,
         "partnership_history": [],  # [{runs, balls, batsman1, batsman2}]
+        # Live-match mechanics (UnderCover /cric parity)
+        "free_hit": False,          # next legal ball is a free hit (set after a no-ball)
+        "mystery_active": False,    # this ball is a "mystery ball" (rolled per ball)
+        "delivery_history": [],     # delivery strings bowled this over (spam penalty)
+        "recent_runs_window": [],   # batting runs over last ~12 balls (momentum)
+        "consec_wickets": 0,        # wickets in a row for the bowling side (momentum)
         "chat_id": None,
         # 1st innings result (saved after innings 1 ends)
         "inn1_runs": 0, "inn1_wickets": 0, "inn1_overs": "",
@@ -282,6 +288,12 @@ def transition_to_second_innings(s):
     s["timeline"] = []
     s["partnership_runs"] = 0
     s["partnership_balls"] = 0
+    # Reset live-match mechanics for the new innings
+    s["free_hit"] = False
+    s["mystery_active"] = False
+    s["delivery_history"] = []
+    s["recent_runs_window"] = []
+    s["consec_wickets"] = 0
     s["bat_team_id"], s["bowl_team_id"] = s.get("bowl_team_id"), s.get("bat_team_id")
     s["bat_user_tg"], s["bowl_user_tg"] = s.get("bowl_user_tg"), s.get("bat_user_tg")
     s["bat_team_name"], s["bowl_team_name"] = s["bowl_team_name"], s["bat_team_name"]

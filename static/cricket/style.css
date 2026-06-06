@@ -392,6 +392,35 @@ body {
   text-shadow: var(--glow-cyan);
 }
 
+/* Free hit banner (UnderCover /cric parity) */
+.free-hit-bar {
+  background: rgba(255, 196, 0, 0.10);
+  border: 1px solid rgba(255, 196, 0, 0.45);
+  border-radius: var(--border-radius-sm);
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  text-align: center;
+  margin-top: 10px;
+  color: #ffc400;
+  text-shadow: 0 0 8px rgba(255, 196, 0, 0.6);
+  box-shadow: 0 0 14px rgba(255, 196, 0, 0.18);
+  animation: free-hit-pulse 1.1s ease-in-out infinite;
+}
+@keyframes free-hit-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+/* Shot button icon */
+.btn-action-card .shot-icon {
+  display: block;
+  font-size: 18px;
+  line-height: 1;
+  margin-bottom: 3px;
+}
+
 /* ── Tabs ──────────────────────────────────────────────────────── */
 .tabs-container {
   display: flex;

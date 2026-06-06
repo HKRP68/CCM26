@@ -30,6 +30,7 @@ from database import get_session
 from models import User, Player, UserRoster, Match, BotTeam, BotTeamPlayer
 from services.bot_ai import BOT_TG_ID
 from services.button_timeout import schedule_button_timeout
+from services.match_broadcast import coin_call_keyboard, run_coin_toss
 from handlers.vsbot import (
     _get_or_create_bot_user, _build_bot_team_xi, _pitch_hint_vsbot,
 )
@@ -191,66 +192,26 @@ async def wpmbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         context.bot_data[f"wpmb_team_{m.id}"] = bot_team.id
         context.bot_data[f"wpmb_overs_{m.id}"] = overs
+        context.bot_data[f"wpmb_pitch_{m.id}"] = st
 
-        wid = random.choice([user.id, bot_user.id])
-        m.toss_winner_id = wid
-        session.commit()
-
-        # ── Animated coin toss ──
+        # ── Toss: the human calls heads or tails ──
+        kb = coin_call_keyboard(
+            f"wpmb_coin_heads_{m.id}_{user.id}",
+            f"wpmb_coin_tails_{m.id}_{user.id}")
         try:
             await q.edit_message_text(
-                "🪙 <b>TOSS</b>\n\n<i>Calling captain to the centre...</i>",
-                parse_mode="HTML")
-        except Exception:
-            pass
-        await asyncio.sleep(0.6)
-        for f in (
-            "🪙 <b>TOSS</b>\n\n     ⬆️\n   ╱  🪙  ╲\n\n<i>Captain flicks the coin into the air...</i>",
-            "🪙 <b>TOSS</b>\n\n          🌀\n        🪙\n\n<i>It spins higher and higher...</i>",
-            "🪙 <b>TOSS</b>\n\n     🌀 🪙 🌀\n\n<i>Tumbling end over end...</i>",
-            "🪙 <b>TOSS</b>\n\n          ⬇️\n        🪙\n\n<i>Coming down now!</i>",
-        ):
-            try:
-                await q.edit_message_text(f, parse_mode="HTML")
-            except Exception:
-                pass
-            await asyncio.sleep(0.5)
-
-        if wid == bot_user.id:
-            try:
-                await q.edit_message_text(
-                    f"🪙 <b>TOSS RESULT</b>\n\n🏆 <b>{bot_team.name}</b> wins the toss!",
-                    parse_mode="HTML")
-            except Exception:
-                pass
-            await asyncio.sleep(0.5)
-            bot_decision = "bowl" if random.random() < 0.6 else "bat"
-            await _wpmbot_apply_toss(context, q.message.chat_id, m.id,
-                                     bot_decision, bot_user.id)
-            return
-
-        try:
-            await q.edit_message_text(
-                f"🪙 <b>TOSS RESULT</b>\n\n"
-                f"🏆 <b>@{user.username or user.first_name}</b> wins the toss "
-                f"vs <b>{bot_team.name}</b>!\n\n"
+                f"🪙 <b>TOSS</b> — vs <b>{bot_team.name}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📍 Pitch: <b>{st['pitch_type']}</b> · 🌤️ {st['weather']}\n"
-                f"🏟️ {st['stadium']}\n\n"
-                f"<i>{_pitch_hint_vsbot(st['pitch_type'])}</i>",
-                parse_mode="HTML")
+                f"🏟️ {st['stadium']}\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>Call it in the air, captain!</i>\n"
+                f"<b>Heads</b> or <b>Tails?</b>",
+                parse_mode="HTML", reply_markup=kb)
         except Exception:
             pass
-        await asyncio.sleep(0.4)
-
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏏 Bat First", callback_data=f"wpmb_toss_bat_{m.id}_{user.id}"),
-            InlineKeyboardButton("🎳 Bowl First", callback_data=f"wpmb_toss_bowl_{m.id}_{user.id}"),
-        ]])
-        sent = await context.bot.send_message(
-            q.message.chat_id, "⚖️ Choose your call:", reply_markup=kb)
         try:
-            schedule_button_timeout(context, sent.chat_id, sent.message_id,
+            schedule_button_timeout(context, q.message.chat_id, q.message.message_id,
                                     delay_seconds=120)
         except Exception:
             pass
@@ -286,6 +247,97 @@ async def wpmbot_cancel_callback(update: Update, context: ContextTypes.DEFAULT_T
         await q.edit_message_text("🤖 <i>WPM vs Bot match cancelled.</i>", parse_mode="HTML")
     except Exception:
         pass
+
+
+# ════════════════════════════════════════════════════════════════════
+# Coin call: human calls heads/tails → flip → winner
+# ════════════════════════════════════════════════════════════════════
+
+async def wpmbot_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """wpmb_coin_(heads|tails)_<match_id>_<user_id>"""
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        parts = q.data.split("_")
+        call = parts[2]; mid = int(parts[3]); uid = int(parts[4])
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+    if call not in ("heads", "tails"):
+        await q.answer("Invalid")
+        return
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user or user.id != uid:
+            await q.answer("Only the calling captain can toss!", show_alert=True)
+            return
+        m = session.query(Match).get(mid)
+        if not m or m.status != "toss":
+            await q.answer("This toss is no longer active.", show_alert=True)
+            return
+        bot_user = session.query(User).filter(User.telegram_id == BOT_TG_ID).first()
+        bot_team_id = context.bot_data.get(f"wpmb_team_{mid}")
+        bot_team = session.query(BotTeam).get(bot_team_id) if bot_team_id else None
+        bot_name = bot_team.name if bot_team else "Bot XI"
+        await q.answer()
+
+        coin, won = await run_coin_toss(
+            lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+
+        st = context.bot_data.get(f"wpmb_pitch_{mid}") or {}
+        coin_label = coin.upper()
+        call_label = call.upper()
+
+        if won:
+            m.toss_winner_id = user.id
+            session.commit()
+            try:
+                await q.edit_message_text(
+                    f"🪙 <b>TOSS RESULT</b>\n\n"
+                    f"The coin lands on <b>{coin_label}</b> — you called <b>{call_label}</b>.\n"
+                    f"🏆 <b>@{user.username or user.first_name}</b> wins the toss "
+                    f"vs <b>{bot_name}</b>!\n\n"
+                    + (f"<i>{_pitch_hint_vsbot(st['pitch_type'])}</i>"
+                       if st.get('pitch_type') else ""),
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            await asyncio.sleep(0.4)
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏏 Bat First", callback_data=f"wpmb_toss_bat_{m.id}_{user.id}"),
+                InlineKeyboardButton("🎳 Bowl First", callback_data=f"wpmb_toss_bowl_{m.id}_{user.id}"),
+            ]])
+            sent = await context.bot.send_message(
+                q.message.chat_id, "⚖️ Choose your call:", reply_markup=kb)
+            try:
+                schedule_button_timeout(context, sent.chat_id, sent.message_id,
+                                        delay_seconds=120)
+            except Exception:
+                pass
+            return
+
+        # Human lost the toss → bot decides.
+        m.toss_winner_id = bot_user.id
+        session.commit()
+        try:
+            await q.edit_message_text(
+                f"🪙 <b>TOSS RESULT</b>\n\n"
+                f"The coin lands on <b>{coin_label}</b> — you called <b>{call_label}</b>.\n"
+                f"🏆 <b>{bot_name}</b> wins the toss!",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+        bot_decision = "bowl" if random.random() < 0.6 else "bat"
+        await _wpmbot_apply_toss(context, q.message.chat_id, mid,
+                                 bot_decision, bot_user.id)
+    except Exception:
+        session.rollback()
+        logger.exception("wpmbot_coin_callback error")
+    finally:
+        session.close()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -410,9 +462,14 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
             from handlers.match import _mention as _mm
             bat_mention = "🤖 AI" if bat_uid == bot_user.id else _mm(user)
             bowl_mention = "🤖 AI" if bowl_uid == bot_user.id else _mm(user)
+            winner = session.query(User).get(decider_uid)
+            winner_label = ("🤖 " + (bot_user.team_name or "Bot XI")
+                            if decider_uid == bot_user.id
+                            else f"@{winner.username or winner.first_name}")
+            toss_note = f"{winner_label} won & chose to {'bat' if decision == 'bat' else 'bowl'}"
             await send_match_ready_message(
                 context, chat_id, m, bat_team_name, bowl_team_name,
-                bat_mention, bowl_mention)
+                bat_mention, bowl_mention, toss_note=toss_note)
         except Exception:
             logger.exception("wpmbot match-ready message failed")
     except Exception:

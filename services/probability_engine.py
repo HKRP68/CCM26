@@ -258,6 +258,17 @@ SHOT_MODS = {
     "Loft":        {"4": +1, "6": +3, "W": +1.2, "dot": -1.5, "1": -1},        # aerial big hit
     "Defend":      {"dot": +20, "1": -2, "2": -1, "4": -3, "6": -1, "W": -0.5},  # block — burn balls, very safe
     "Leave":       {"dot": +35, "1": -5, "2": -1, "4": -4, "6": -2, "W": -1.5}, # let it pass — no runs, very low risk
+    # ── Extended shot repertoire (UnderCover /cric parity) ──
+    "On Drive":    {"4": +2.0, "1": +1, "dot": -1.5, "W": +0.3, "6": +0.3},     # elegant, productive
+    "Off Drive":   {"4": +2.2, "1": +0.8, "dot": -1.5, "W": +0.4},
+    "Hook":        {"4": +1.5, "6": +1.5, "W": +1.0, "dot": -1, "1": -0.5},     # vs short, aerial risk
+    "Square Cut":  {"4": +2.0, "1": +0.5, "dot": -1.5, "W": +0.4},
+    "Late Cut":    {"4": +1.5, "1": +1, "W": +0.6, "dot": -1},                   # fine and risky
+    "Reverse Sweep":{"4": +1.8, "6": +0.5, "W": +1.3, "dot": -1, "1": -0.5},    # all-or-nothing vs spin
+    "Slog Sweep":  {"6": +3, "4": +1, "W": +1.8, "dot": -2, "1": -1},           # max over cow corner
+    "Glance":      {"1": +3, "2": +0.5, "4": +0.4, "dot": -2, "W": -0.2},        # safe rotation
+    "Paddle":      {"1": +2, "4": +1, "W": +0.8, "dot": -1.5},                   # fine scoop
+    "Upper Cut":   {"4": +1.5, "6": +1.5, "W": +1.2, "dot": -1, "1": -0.5},     # aerial over slips
 }
 
 
@@ -394,19 +405,95 @@ def _get_bowler_key(bowl_style: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# DYNAMIC IN-MATCH MECHANICS  (UnderCover /cric parity)
+# ═══════════════════════════════════════════════════════════════════════
+# Free hit, mystery ball, momentum and bowler-spam penalty. These are
+# applied as multiplicative adjustments to the prob distribution just
+# before normalization, so they layer cleanly on top of everything above.
+# All are gated behind kwargs that default to no-op, so other callers
+# (legacy /playmatch, AI autoplay, simulations) are unaffected.
+
+MYSTERY_WICKET_MULT   = 1.35   # +35% wicket chance on a mystery ball
+MYSTERY_SCORING_MULT  = 0.50   # -50% boundary scoring on a mystery ball
+
+MOMENTUM_RUNS_WINDOW    = 12   # balls considered for the "recent runs" window
+MOMENTUM_RUNS_THRESHOLD = 12   # runs in the window that trigger batting momentum
+MOMENTUM_BOUNDARY_MULT  = 1.15 # +15% boundaries when the batters are flying
+MOMENTUM_WICKET_MULT    = 1.25 # +25% wicket when the bowler is on a roll (>=2 in a row)
+
+SPAM_REPEAT_THRESHOLD = 3      # same delivery id bowled 3+ times in a row
+SPAM_WICKET_STEP      = 0.18   # +18% wicket per extra repeat beyond the threshold
+SPAM_WICKET_CAP       = 1.70   # cap the spam wicket multiplier at +70%
+SPAM_EXTRAS_MULT      = 1.20   # repeated deliveries leak slightly more extras
+
+FREE_HIT_BOUNDARY_MULT = 1.35  # +35% boundaries on a free hit
+FREE_HIT_WICKET_MULT   = 0.10  # only a run-out is possible on a free hit
+
+
+def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
+                        recent_runs=0, consec_wickets=0, delivery_repeat=0):
+    """Multiplicatively adjust the prob distribution for live-match mechanics.
+
+    Runs after every additive layer and before _normalize, so the relative
+    boosts/cuts described by UnderCover translate directly. No-op when every
+    flag is at its default.
+    """
+    # Mystery ball — wicket spike, scoring slump (lost runs flow into dots).
+    if mystery:
+        probs["W"] *= MYSTERY_WICKET_MULT
+        lost = 0.0
+        for k in ("4", "6"):
+            lost += probs[k] * (1.0 - MYSTERY_SCORING_MULT)
+            probs[k] *= MYSTERY_SCORING_MULT
+        probs["dot"] += lost * 0.5
+
+    # Batting momentum — recent run glut makes boundaries flow.
+    if recent_runs >= MOMENTUM_RUNS_THRESHOLD:
+        probs["4"] *= MOMENTUM_BOUNDARY_MULT
+        probs["6"] *= MOMENTUM_BOUNDARY_MULT
+
+    # Bowling momentum — wickets in a row breed wickets.
+    if consec_wickets >= 2:
+        probs["W"] *= MOMENTUM_WICKET_MULT
+
+    # Bowler-spam penalty — predictable lines get punished.
+    if delivery_repeat >= SPAM_REPEAT_THRESHOLD:
+        extra = delivery_repeat - SPAM_REPEAT_THRESHOLD + 1
+        mult = min(SPAM_WICKET_CAP, 1.0 + SPAM_WICKET_STEP * extra)
+        probs["W"] *= mult
+        probs["wide"] *= SPAM_EXTRAS_MULT
+        probs["noball"] *= SPAM_EXTRAS_MULT
+
+    # Free hit — boundary bias up, dismissals (bar run-out) suppressed.
+    if free_hit:
+        probs["4"] *= FREE_HIT_BOUNDARY_MULT
+        probs["6"] *= FREE_HIT_BOUNDARY_MULT
+        probs["W"] *= FREE_HIT_WICKET_MULT
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════
 
 def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       over, total_overs, shot, bat_rating, bowl_rating,
                       striker_traits=None, bowler_traits=None, trait_ctx=None,
-                      pitch_wear=0):
+                      pitch_wear=0, free_hit=False, mystery=False,
+                      recent_runs=0, consec_wickets=0, delivery_repeat=0):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
 
+    Live-match mechanics (UnderCover /cric parity), all default to no-op:
+      free_hit        — this is a free-hit ball (no dismissal except run-out)
+      mystery         — this is a "mystery ball" (wicket spike, scoring slump)
+      recent_runs     — runs scored over the last ~12 balls (batting momentum)
+      consec_wickets  — wickets in a row for the bowling side (bowling momentum)
+      delivery_repeat — times this exact delivery was bowled in a row (spam)
+
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
-                   "runs": int, "how": str, "traits_activated": [..]}
+                   "runs": int, "how": str, "traits_activated": [..],
+                   "free_hit": bool, "mystery": bool}
     """
     # Start with base
     probs = dict(BASE)
@@ -486,6 +573,13 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     except Exception:
         logger.exception("Failed to apply admin sim adjustments")
 
+    # Layer 11: Dynamic in-match mechanics (free hit / mystery / momentum / spam)
+    _apply_dynamic_mods(
+        probs, free_hit=free_hit, mystery=mystery,
+        recent_runs=recent_runs, consec_wickets=consec_wickets,
+        delivery_repeat=delivery_repeat,
+    )
+
     # Final normalize
     _normalize(probs)
 
@@ -495,6 +589,10 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
 
     def _ret(d):
         d["traits_activated"] = traits_activated
+        if free_hit:
+            d["free_hit"] = True
+        if mystery:
+            d["mystery"] = True
         return d
 
     # Order: extras → wicket → runs (dot first since most common)
@@ -512,13 +610,17 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
 
     cumul += probs["W"]
     if r < cumul:
+        # Free hit: the only legal dismissal is a run-out.
+        if free_hit:
+            return _ret({"type": "wicket", "runs": random.choice([0, 1]), "how": "Run Out"})
         # Wicket type weighted by shot + bowler context
         hows_pacer = ["Bowled", "Caught", "LBW", "Caught Behind", "Caught & Bowled"]
         hows_spin  = ["Bowled", "Caught", "LBW", "Stumped", "Caught & Bowled"]
         # Risky shots → more catches; defensive shots → more bowled/LBW
-        if shot in ("Slog", "Loft", "Switch Hit", "Pull"):
+        if shot in ("Slog", "Loft", "Switch Hit", "Pull", "Hook",
+                    "Upper Cut", "Slog Sweep"):
             base_hows = ["Caught", "Caught", "Caught", "Bowled", "LBW"]
-        elif shot in ("Sweep",):
+        elif shot in ("Sweep", "Reverse Sweep", "Paddle"):
             base_hows = ["LBW", "Caught", "Bowled", "Caught"]
         else:
             base_hows = hows_spin if bowler_key in ("Off Spinner", "Leg Spinner") else hows_pacer

@@ -409,6 +409,8 @@ def build_snapshot(session, match_id, user_id):
         "timeline": state.get("timeline", [])[-12:],
         "selected_variation": state.get("selected_variation"),
         "current_delivery": state.get("current_delivery"),
+        # Free hit armed for the upcoming legal ball (UnderCover /cric parity)
+        "free_hit": bool(state.get("free_hit")),
         # Spec-aligned vocabulary (computed from the engine state)
         "phase": phase_status(state, status),
         "turn_state": turn_state_name(next_action),
@@ -547,6 +549,7 @@ def build_match_state_api(session, match_id, user_id):
         "timeline": base.get("timeline"),
         "current_delivery": base.get("current_delivery"),
         "selected_variation": base.get("selected_variation"),
+        "free_hit": bool(state.get("free_hit")),
         "last_ball": state.get("last_ball"),
         "commentary": state.get("last_commentary"),
         # Sync
@@ -1152,12 +1155,45 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         state["prev_bowler_rid"] = bowler["roster_id"]
         eoo = True
 
+    # ── Live-match mechanics bookkeeping (UnderCover /cric parity) ──────────
+    # Batting momentum window — off-the-bat runs over the last ~12 balls.
+    runs_off_bat = oc.get("runs", 0) if t in ("runs", "wicket", "noball") else 0
+    win = state.get("recent_runs_window") or []
+    win.append(int(runs_off_bat))
+    state["recent_runs_window"] = win[-12:]
+
+    # Bowling momentum — wickets in a row (reset by any legal non-wicket ball).
+    if t == "wicket":
+        state["consec_wickets"] = int(state.get("consec_wickets", 0) or 0) + 1
+    elif legal:
+        state["consec_wickets"] = 0
+
+    # Free hit — a no-ball arms it; the next legal ball consumes it. A wide
+    # leaves it standing so the free hit survives until a legal ball is bowled.
+    if t == "noball":
+        state["free_hit"] = True
+    elif legal:
+        state["free_hit"] = False
+
+    # Delivery-spam history — tracked within the current over only.
+    if eoo:
+        state["delivery_history"] = []
+    else:
+        hist = state.get("delivery_history") or []
+        hist.append(delivery)
+        state["delivery_history"] = hist
+
+    # Mystery is a single-ball event; clear it now that the ball is bowled.
+    state["mystery_active"] = False
+
     state["current_delivery"] = None
     state["selected_variation"] = None
 
     return {"rtxt": rtxt, "type": t, "runs": oc.get("runs", 0),
             "legal": legal, "need_new_bat": need_new_bat, "eoo": eoo,
-            "how": oc.get("how"), "traits": oc.get("traits_activated") or []}
+            "how": oc.get("how"), "free_hit": oc.get("free_hit", False),
+            "mystery": oc.get("mystery", False),
+            "traits": oc.get("traits_activated") or []}
 
 
 def _append_commentary_log(state, res, striker, bowler, text):
@@ -1293,6 +1329,11 @@ def play_shot(match_id, user_id, shot_index):
     striker = get_striker(state)
     bowler = get_bowler(state)
 
+    # Mystery ball — ~25% chance per over (≈4.7% per ball). Rolled here so it
+    # only affects the live Mini App flow; _calc reads it off the state.
+    import random as _rnd
+    state["mystery_active"] = (not state.get("free_hit")) and (_rnd.random() < 0.047)
+
     # Reuse the bot's improved probability engine for identical /wpm, /cm,
     # /vsbot, and /playmatch simulations (pitch wear, form, traits, delivery
     # length/variation, and shot choice all feed the same calculator).
@@ -1320,6 +1361,8 @@ def play_shot(match_id, user_id, shot_index):
         "batsman": striker.get("name") if striker else None,
         "bowler": bowler.get("name") if bowler else None,
         "how": res.get("how"),
+        "free_hit": bool(res.get("free_hit")),
+        "mystery": bool(res.get("mystery")),
     }
     state["last_commentary"] = commentary or res.get("rtxt")
 

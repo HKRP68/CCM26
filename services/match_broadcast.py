@@ -11,8 +11,10 @@ Launch scheme:
 Backward-compatible: the Mini App still understands the older lm_/sc_ forms.
 """
 
+import asyncio
 import logging
 import os
+import random
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo)
 
@@ -106,8 +108,45 @@ def play_match_keyboard(match_id, chat_id=None, is_private=False, label=None):
     ]])
 
 
+# ════════════════════════════════════════════════════════════════════
+# Shared coin-toss UI (heads/tails call → animated flip → result)
+# ════════════════════════════════════════════════════════════════════
+
+COIN_TOSS_FRAMES = [
+    "🪙 <b>TOSS</b>\n\n     ⬆️\n   ╱  🪙  ╲\n\n<i>The coin is in the air…</i>",
+    "🪙 <b>TOSS</b>\n\n          🌀\n        🪙\n\n<i>Spinning higher…</i>",
+    "🪙 <b>TOSS</b>\n\n     🌀 🪙 🌀\n\n<i>Tumbling end over end…</i>",
+    "🪙 <b>TOSS</b>\n\n          ⬇️\n        🪙\n\n<i>Coming down now!</i>",
+]
+
+
+def coin_call_keyboard(heads_cb, tails_cb, prompt_owner=None):
+    """Heads/Tails call buttons. heads_cb/tails_cb are full callback_data."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🪙 Heads", callback_data=heads_cb),
+        InlineKeyboardButton("🌑 Tails", callback_data=tails_cb),
+    ]])
+
+
+async def run_coin_toss(edit_fn, call_side):
+    """Animate a coin toss and return (coin_side, won).
+
+    edit_fn: async callable taking the HTML string to display each frame.
+    call_side: 'heads' or 'tails' — what the calling captain chose.
+    """
+    for fr in COIN_TOSS_FRAMES:
+        try:
+            await edit_fn(fr)
+        except Exception:
+            pass
+        await asyncio.sleep(0.45)
+    coin = random.choice(["heads", "tails"])
+    return coin, (coin == call_side)
+
+
 async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
-                                   bat_mention, bowl_mention, rules_note=None):
+                                   bat_mention, bowl_mention, rules_note=None,
+                                   toss_note=None):
     """Post the 'Match Ready' card with all details + the Play Match button."""
     # A private chat with the bot uses a positive user-id chat_id; groups are
     # negative. Web App buttons only work in private chats, so pick the right
@@ -120,6 +159,7 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
         f"🏟️ <b>Venue:</b> {match.stadium or 'Neutral'}\n"
         f"🌤️ <b>Pitch:</b> {match.pitch_type or 'Balanced'}\n"
         f"⏱️ <b>Overs:</b> {match.overs}\n"
+        + (f"🪙 <b>Toss:</b> {toss_note}\n" if toss_note else "")
         + (f"🎯 <b>Rules:</b> {rules_note}\n" if rules_note else "") +
         "━━━━━━━━━━━━━━━━━━━\n"
         f"🏏 <b>Batting first:</b> {bat_team}\n   {bat_mention}\n"

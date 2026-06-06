@@ -71,7 +71,7 @@ from handlers.bowlout import (
     bowlout_pick_callback,
 )
 from handlers.catch import bal_handler, catch_handler
-from handlers.challenge import challenge_handler, challenge_accept_callback, challenge_cancel_callback, challenge_deny_callback, challenge_toss_callback, challenge_pick_callback
+from handlers.challenge import challenge_handler, challenge_accept_callback, challenge_cancel_callback, challenge_deny_callback, challenge_coin_callback, challenge_toss_callback, challenge_pick_callback
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
@@ -80,7 +80,7 @@ from handlers.app import app_handler
 # Match handlers
 from handlers.match import (
     playmatch_handler, wpm_handler, cric_join_callback,
-    cric_cancel_lobby_callback, cric_decision_callback,
+    cric_cancel_lobby_callback, cric_coin_callback, cric_decision_callback,
     match_accept_callback, match_deny_callback,
     overs_text_handler, overs_button_callback, overs_custom_callback,
     toss_decision_callback,
@@ -140,6 +140,7 @@ from handlers.wpmbot import (
     wpmbot_handler,
     wpmbot_pick_callback,
     wpmbot_cancel_callback,
+    wpmbot_coin_callback,
     wpmbot_toss_callback,
 )
 from handlers.wsp import (
@@ -825,6 +826,7 @@ def main():
         app.add_handler(CallbackQueryHandler(challenge_accept_callback, pattern=r"^cm_accept_"))
         app.add_handler(CallbackQueryHandler(challenge_deny_callback, pattern=r"^cm_deny_"))
         app.add_handler(CallbackQueryHandler(challenge_cancel_callback, pattern=r"^cm_cancel_"))
+        app.add_handler(CallbackQueryHandler(challenge_coin_callback, pattern=r"^cm_coin_"))
         app.add_handler(CallbackQueryHandler(challenge_toss_callback, pattern=r"^cm_toss_"))
         app.add_handler(CallbackQueryHandler(challenge_pick_callback, pattern=r"^cm_pick_"))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
@@ -901,6 +903,7 @@ def main():
         app.add_handler(CommandHandler(["wpmbot", "wpmb"], wpmbot_handler))
         app.add_handler(CallbackQueryHandler(wpmbot_pick_callback, pattern=r"^wpmb_pick_"))
         app.add_handler(CallbackQueryHandler(wpmbot_cancel_callback, pattern=r"^wpmb_cancel_"))
+        app.add_handler(CallbackQueryHandler(wpmbot_coin_callback, pattern=r"^wpmb_coin_"))
         app.add_handler(CallbackQueryHandler(wpmbot_toss_callback, pattern=r"^wpmb_toss_"))
 
         # ── wsp (PvP auto-simulated watch mode) ──────────────────────
@@ -998,6 +1001,7 @@ def main():
         # ── Match callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
         app.add_handler(CallbackQueryHandler(cric_cancel_lobby_callback, pattern=r"^cric_cancel_lobby$"))
+        app.add_handler(CallbackQueryHandler(cric_coin_callback, pattern=r"^cric_coin:"))
         app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cric_decision:"))
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))
         app.add_handler(CallbackQueryHandler(match_deny_callback, pattern=r"^matchdeny_"))
