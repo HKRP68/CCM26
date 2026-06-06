@@ -2248,7 +2248,7 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                     mwa.save_state(match_id, state, next_action=A_COMPLETED)
                     mwa.bump_ball_seq(match_id)
                     break
-            elif res["need_new_bat"] and state["total_wickets"] < 10:
+            elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
                 nb = state.get("next_batsman_idx", 2)
                 if nb < len(state.get("batting_order", [])):
                     state["striker_idx"] = nb

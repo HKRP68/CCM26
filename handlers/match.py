@@ -3325,6 +3325,74 @@ def _get_roster_traits(roster_id):
         session.close()
 
 
+class _SkipSummary(Exception):
+    """Internal sentinel: bail out of the summary-card block without sending a
+    card and without logging an error (used when a match had no real play)."""
+
+
+def _state_has_play(s):
+    """True when the match actually had deliveries bowled in either innings.
+
+    Guards against posting a blank 0/0 summary card for matches that ended via
+    forfeit/abandon before any real play. A genuine completed match always has
+    runs and/or wickets recorded in at least one innings.
+    """
+    if not s:
+        return False
+    return any(int(s.get(k, 0) or 0) > 0 for k in (
+        "inn1_runs", "inn1_wickets", "total_runs", "total_wickets"))
+
+
+def _traits_for(s, roster_id):
+    """Per-match cached wrapper around ``_get_roster_traits``.
+
+    A roster entry's active traits do not change during a match, so we look them
+    up once per ``roster_id`` and reuse the result for every subsequent ball.
+    This removes one DB session + join query per player per ball from ``_calc``.
+    """
+    if not roster_id:
+        return []
+    cache = s.setdefault("_traits_cache", {})
+    key = str(roster_id)
+    if key not in cache:
+        cache[key] = _get_roster_traits(roster_id)
+    return cache[key]
+
+
+def _form_mod_for(s, roster_id):
+    """Per-match cached form rating modifier for a real roster entry.
+
+    Form is only written at match end (``record_match_performance``), so a
+    player's form score is constant for the duration of a match. Computing it
+    once per ``roster_id`` avoids opening a fresh DB session and running the
+    form queries on every single ball. Returns 0.0 for bot/synthetic players
+    (roster_id <= 0) or on any error, matching the previous inline behaviour.
+    """
+    if not roster_id or roster_id <= 0:
+        return 0.0
+    cache = s.setdefault("_form_cache", {})
+    key = str(roster_id)
+    if key in cache:
+        return cache[key]
+    mod = 0.0
+    try:
+        from services.form_service import compute_form_score, form_to_rating_mod
+        from database import get_session as _gs_db
+        from models import UserRoster as _UR
+        ses = _gs_db()
+        try:
+            ur = ses.query(_UR).get(roster_id)
+            if ur:
+                mod = form_to_rating_mod(
+                    compute_form_score(ses, ur.user_id, ur.player_id))
+        finally:
+            ses.close()
+    except Exception:
+        mod = 0.0
+    cache[key] = mod
+    return mod
+
+
 def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
     """Pick a single commentary line for this ball based on outcome type.
     Returns None if no commentary configured."""
@@ -3412,45 +3480,19 @@ def _calc(s, striker, bowler, shot, delivery):
     from services.probability_engine import calc_pitch_wear
     pitch_wear = calc_pitch_wear(innings, over, total_overs)
 
-    # Apply player form (modifies effective rating)
-    from services.form_service import compute_form_score, form_to_rating_mod
-    bat_form_mod = 0.0
-    bowl_form_mod = 0.0
-    try:
-        # Find the owning user_id for striker/bowler (positive roster_id = real)
-        striker_rid = striker.get("roster_id", 0)
-        bowler_rid = bowler.get("roster_id", 0)
-        if striker_rid > 0:
-            from database import get_session as _gs_db
-            from models import UserRoster as _UR
-            ses = _gs_db()
-            try:
-                ur = ses.query(_UR).get(striker_rid)
-                if ur:
-                    bat_form_mod = form_to_rating_mod(
-                        compute_form_score(ses, ur.user_id, ur.player_id))
-            finally:
-                ses.close()
-        if bowler_rid > 0:
-            from database import get_session as _gs_db
-            from models import UserRoster as _UR
-            ses = _gs_db()
-            try:
-                ur = ses.query(_UR).get(bowler_rid)
-                if ur:
-                    bowl_form_mod = form_to_rating_mod(
-                        compute_form_score(ses, ur.user_id, ur.player_id))
-            finally:
-                ses.close()
-    except Exception:
-        pass
+    # Apply player form (modifies effective rating). Form is constant for the
+    # whole match, so it is computed once per roster_id and cached on the state
+    # (see _form_mod_for) instead of querying the DB on every ball.
+    bat_form_mod = _form_mod_for(s, striker.get("roster_id", 0))
+    bowl_form_mod = _form_mod_for(s, bowler.get("roster_id", 0))
 
     eff_bat = striker["bat_rating"] + bat_form_mod
     eff_bowl = bowler["bowl_rating"] + bowl_form_mod
 
-    # Fetch traits for striker and bowler
-    striker_traits = _get_roster_traits(striker.get("roster_id"))
-    bowler_traits = _get_roster_traits(bowler.get("roster_id"))
+    # Fetch traits for striker and bowler (per-match cached — traits don't
+    # change mid-match, so this is a DB hit only on the first ball each faces).
+    striker_traits = _traits_for(s, striker.get("roster_id"))
+    bowler_traits = _traits_for(s, bowler.get("roster_id"))
 
     # Build trait context for activation conditions
     bs = s.get("bat_stats", {}).get(striker.get("roster_id"), {})
@@ -3859,15 +3901,23 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
 
         # Send in the order specified by the user: Batting first, then Bowling
         if bat_card_bytes:
-            await ctx.bot.send_photo(
-                chat_id=cid, photo=io.BytesIO(bat_card_bytes),
-                caption=f"🏏 <b>{bat_team}</b> — Batting Scorecard",
-                parse_mode="HTML")
+            bat_io = io.BytesIO(bat_card_bytes)
+            try:
+                await ctx.bot.send_photo(
+                    chat_id=cid, photo=bat_io,
+                    caption=f"🏏 <b>{bat_team}</b> — Batting Scorecard",
+                    parse_mode="HTML")
+            finally:
+                bat_io.close()
         if bowl_card_bytes:
-            await ctx.bot.send_photo(
-                chat_id=cid, photo=io.BytesIO(bowl_card_bytes),
-                caption=f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
-                parse_mode="HTML")
+            bowl_io = io.BytesIO(bowl_card_bytes)
+            try:
+                await ctx.bot.send_photo(
+                    chat_id=cid, photo=bowl_io,
+                    caption=f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
+                    parse_mode="HTML")
+            finally:
+                bowl_io.close()
     except Exception:
         logger.exception(f"Failed to send innings {innings_num} scorecards")
 
@@ -4377,7 +4427,16 @@ async def _end_innings(ctx, mid):
                             break
                     if potm_rating: break
 
-            summary_bytes = generate_match_summary(
+            # Only render/send a summary card when the match actually had play.
+            # A forfeit/abandon before the first ball would otherwise produce a
+            # blank 0/0 card — the result text above is enough in that case.
+            if not _state_has_play(s):
+                logger.info("match %s ended with no play — skipping summary card", mid)
+                raise _SkipSummary()
+            # Rendering the 2048×1280 PNG is CPU-heavy; run it off the event loop
+            # so concurrent live matches don't stall (mirrors the scorecard cards).
+            summary_bytes = await asyncio.to_thread(
+                generate_match_summary,
                 inn1_team=s.get("inn1_team", "Team 1"),
                 inn1_runs=s.get("inn1_runs", 0),
                 inn1_wickets=s.get("inn1_wickets", 0),
@@ -4429,11 +4488,17 @@ async def _end_innings(ctx, mid):
                        caption=f"Match summary values · Match {mid}")
                 except Exception:
                     logger.exception("match summary storage snapshot failed (non-fatal)")
-                await ctx.bot.send_photo(
-                    chat_id=cid, photo=io.BytesIO(summary_bytes),
-                    caption=f"🏆 <b>Match Summary</b> — {winner_name} wins {margin}!",
-                    parse_mode="HTML",
-                )
+                photo_io = io.BytesIO(summary_bytes)
+                try:
+                    await ctx.bot.send_photo(
+                        chat_id=cid, photo=photo_io,
+                        caption=f"🏆 <b>Match Summary</b> — {winner_name} wins {margin}!",
+                        parse_mode="HTML",
+                    )
+                finally:
+                    photo_io.close()
+        except _SkipSummary:
+            pass
         except Exception:
             logger.exception("match summary card failed (non-fatal)")
 
