@@ -27,32 +27,127 @@ DEFAULT_FIELDER = "the fielder"
 DEFAULT_KEEPER = "the keeper"
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# BUILT-IN FALLBACK COMMENTARY (UnderCover /cric voice)
+# ═══════════════════════════════════════════════════════════════════════
+# Used when the admin DB has no active lines for an event. This guarantees
+# cinematic commentary out-of-the-box; admins can still override per event.
+FALLBACK_LINES = {
+    "dot": [
+        "{bowler} keeps it tight — {batsman} can't get it away. Dot ball.",
+        "Beaten! {batsman} pushes at it but finds only the fielder. No run.",
+        "Solid defence from {batsman}. Watchful stuff.",
+    ],
+    "one": [
+        "Tucked away by {batsman} for a quick single.",
+        "{batsman} works it into the gap and scampers through for one.",
+    ],
+    "two": [
+        "Driven into the outfield — {batsman} comes back for the second.",
+        "Good running between the wickets, {batsman} picks up a couple.",
+    ],
+    "three": [
+        "Into the gap and they're running hard — three to {batsman}!",
+        "{batsman} finds the deep fielder and turns it into three.",
+    ],
+    "four": [
+        "FOUR! {batsman} times the {bowler} delivery beautifully through the gap!",
+        "Cracked away! {batsman} finds the rope with a gorgeous stroke. FOUR runs!",
+        "That's racing away! {batsman} pierces the field and beats the dive. FOUR!",
+    ],
+    "six": [
+        "🚀 MASSIVE! {batsman} stands tall and launches {bowler} into the stands for SIX!",
+        "💥 That is HUGE! {batsman} clears the rope with ease off {bowler}. Maximum!",
+        "Smacked! {batsman} picks up the length early and deposits it for SIX!",
+    ],
+    "wicket_bowled": [
+        "🎯 CLEAN BOWLED! {bowler} produces a peach — {batsman}'s stumps are shattered!",
+        "Timber! {bowler} sneaks through the gate and {batsman} has to go!",
+    ],
+    "wicket_lbw": [
+        "🦵 That's plumb! {bowler} traps {batsman} dead in front. LBW — given!",
+        "Up goes the finger! {batsman} is caught on the crease, {bowler} strikes LBW!",
+    ],
+    "wicket_caught_fielder": [
+        "🙌 Caught! {batsman} skies it and {fielder} settles under it off {bowler}.",
+        "Straight down the throat! {batsman} picks out {fielder}. {bowler} celebrates!",
+    ],
+    "wicket_caught_keeper": [
+        "🧤 Edged and taken! {keeper} pouches it cleanly off {bowler}. {batsman} walks.",
+        "Thin nick! {keeper} does the rest. {bowler} has his man, {batsman} is gone!",
+    ],
+    "wicket_stumped": [
+        "⚡ Stumped! {batsman} is out of the crease and {keeper} is lightning off {bowler}!",
+        "Done by the flight! {keeper} whips the bails — {batsman} is stranded!",
+    ],
+    "wicket_runOut": [
+        "🏃 RUN OUT! Disastrous mix-up and {batsman} is short of the crease!",
+        "Direct hit! {batsman} never made the ground. Brilliant fielding!",
+    ],
+    "extras": [
+        "Strays down the side — that'll be an extra.",
+        "Loose from {bowler}, and the batting side cashes in with an extra.",
+    ],
+    "wide": [
+        "↔️ Wide! {bowler} drifts too far across and the umpire signals it.",
+        "Down the leg side from {bowler} — wided by the umpire.",
+    ],
+    "no_ball": [
+        "🚫 NO-BALL! {bowler} oversteps — and it's a FREE HIT coming up!",
+        "Overstepped! {bowler} gives away a no-ball and the batting side a free hit.",
+    ],
+    "free_hit": [
+        "🎉 FREE HIT and {batsman} makes it count — that's dispatched!",
+        "No fear on the free hit — {batsman} swings hard off {bowler} and cashes in!",
+    ],
+    "mystery": [
+        "🌀 MYSTERY BALL does the trick! {bowler} bamboozles {batsman} completely!",
+        "Out of the back of the hand! {batsman} has no clue and {bowler} strikes!",
+    ],
+    "milestones": [
+        "What an innings from {batsman} — the crowd is on its feet!",
+    ],
+    "general": [
+        "{bowler} runs in to {batsman}...",
+    ],
+}
+
+
+def _render(text, batsman, bowler, fielder, keeper, runs):
+    """Substitute placeholders safely (no str.format — admin lines may have {})."""
+    text = (text or "")
+    text = text.replace("{batsman}", str(batsman or ""))
+    text = text.replace("{bowler}", str(bowler or ""))
+    text = text.replace("{fielder}", str(fielder or DEFAULT_FIELDER))
+    text = text.replace("{keeper}", str(keeper or DEFAULT_KEEPER))
+    text = text.replace("{runs}", str(runs or 0))
+    return text.strip()
+
+
 def pick_commentary(session, event_key, batsman="", bowler="",
                     fielder=DEFAULT_FIELDER, keeper=DEFAULT_KEEPER, runs=0):
     """Pick a random active commentary line for the given event.
-    Returns formatted string, or None if no entries exist.
+
+    Prefers admin-configured lines; falls back to the built-in cinematic bank
+    so commentary is never empty for a known event. Returns a formatted string,
+    or None only when nothing is available at all.
     """
     try:
         rows = (session.query(CommentaryEntry)
                 .filter(CommentaryEntry.event_key == event_key,
                         CommentaryEntry.is_active == True).all())
-        if not rows:
-            return None
-        # Weighted choice
-        weights = [max(1, r.weight or 1) for r in rows]
-        chosen = random.choices(rows, weights=weights, k=1)[0]
-        text = chosen.text or ""
-        # Replace placeholders. Use safe replacement (no .format because of {} in
-        # admin-entered strings that may contain unescaped braces)
-        text = text.replace("{batsman}", str(batsman or ""))
-        text = text.replace("{bowler}", str(bowler or ""))
-        text = text.replace("{fielder}", str(fielder or DEFAULT_FIELDER))
-        text = text.replace("{keeper}", str(keeper or DEFAULT_KEEPER))
-        text = text.replace("{runs}", str(runs or 0))
-        return text.strip()
+        if rows:
+            weights = [max(1, r.weight or 1) for r in rows]
+            chosen = random.choices(rows, weights=weights, k=1)[0]
+            return _render(chosen.text, batsman, bowler, fielder, keeper, runs)
     except Exception:
         logger.exception(f"pick_commentary failed for event {event_key}")
-        return None
+
+    # DB had nothing (or errored) — use the built-in fallback bank.
+    bank = FALLBACK_LINES.get(event_key)
+    if bank:
+        return _render(random.choice(bank), batsman, bowler, fielder, keeper, runs)
+    return None
 
 
 def list_event_keys():
@@ -61,7 +156,8 @@ def list_event_keys():
         "dot", "one", "two", "three", "four", "six",
         "wicket_bowled", "wicket_caught_fielder", "wicket_caught_keeper",
         "wicket_lbw", "wicket_stumped", "wicket_runOut",
-        "extras", "milestones", "general",
+        "extras", "wide", "no_ball", "free_hit", "mystery",
+        "milestones", "general",
     ]
 
 

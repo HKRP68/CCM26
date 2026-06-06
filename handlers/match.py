@@ -3401,21 +3401,31 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
         runs = oc.get("runs", 0)
 
         # Map outcome to event_key
-        if otype == "wicket":
+        if oc.get("free_hit") and otype == "runs" and runs in (4, 6):
+            key = "free_hit"
+        elif oc.get("mystery") and otype == "wicket":
+            key = "mystery"
+        elif otype == "wicket":
             how = (oc.get("how") or "").lower()
-            if "bowled" in how:
+            if "run out" in how or "runout" in how:
+                key = "wicket_runOut"
+            elif "bowled" in how:
                 key = "wicket_bowled"
             elif "lbw" in how:
                 key = "wicket_lbw"
             elif "stump" in how:
                 key = "wicket_stumped"
-            elif "keeper" in how or "kept" in how:
+            elif "keeper" in how or "kept" in how or "behind" in how:
                 key = "wicket_caught_keeper"
             elif "caught" in how or "catch" in how:
                 key = "wicket_caught_fielder"
             else:
                 key = "wicket_bowled"
-        elif otype == "wide" or otype == "noball" or otype == "legbye":
+        elif otype == "noball":
+            key = "no_ball"
+        elif otype == "wide":
+            key = "wide"
+        elif otype == "legbye":
             key = "extras"
         elif otype == "runs":
             if runs == 0:   key = "dot"
@@ -3516,6 +3526,22 @@ def _calc(s, striker, bowler, shot, delivery):
         "total_runs": s.get("total_runs", 0),
     }
 
+    # Live-match mechanics (UnderCover /cric parity). All read from state and
+    # default to no-op, so the legacy bot flow that doesn't maintain them is
+    # unaffected. The Mini App path (match_webapp_service) keeps these current.
+    free_hit = bool(s.get("free_hit"))
+    mystery = bool(s.get("mystery_active"))
+    recent_runs = sum(s.get("recent_runs_window") or [])
+    consec_wickets = int(s.get("consec_wickets", 0) or 0)
+    # How many times this exact delivery was bowled in a row this over (+ this one).
+    history = s.get("delivery_history") or []
+    delivery_repeat = 1
+    for prev in reversed(history):
+        if prev == delivery:
+            delivery_repeat += 1
+        else:
+            break
+
     return calculate_outcome(
         bowler.get("bowl_style", "Medium Pacer"),
         bowler.get("bowl_hand", "Right"),
@@ -3526,6 +3552,11 @@ def _calc(s, striker, bowler, shot, delivery):
         bowler_traits=bowler_traits,
         trait_ctx=trait_ctx,
         pitch_wear=pitch_wear,
+        free_hit=free_hit,
+        mystery=mystery,
+        recent_runs=recent_runs,
+        consec_wickets=consec_wickets,
+        delivery_repeat=delivery_repeat,
     )
 
 

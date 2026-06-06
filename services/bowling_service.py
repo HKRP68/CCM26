@@ -48,7 +48,26 @@ STYLE_MAP = {
 }
 
 AVAILABLE_SHOTS = ["Drive", "Cut", "Pull", "Leg Glance", "Flick", "Sweep",
-                   "Switch Hit", "Slog", "Loft", "Defend", "Leave"]
+                   "Switch Hit", "Slog", "Loft", "Defend", "Leave",
+                   # Extended shot repertoire (UnderCover /cric parity)
+                   "On Drive", "Off Drive", "Hook", "Square Cut", "Late Cut",
+                   "Reverse Sweep", "Slog Sweep", "Glance", "Paddle", "Upper Cut"]
+
+# Emoji icon per shot for the Mini App batting grid.
+SHOT_ICONS = {
+    "Drive": "☄️", "Cut": "✂️", "Pull": "🌪️", "Leg Glance": "🎯",
+    "Flick": "🪄", "Sweep": "🧹", "Switch Hit": "🔄", "Slog": "💣",
+    "Loft": "🚀", "Defend": "🛡️", "Leave": "🚫",
+    "On Drive": "🏏", "Off Drive": "🎯", "Hook": "🪝", "Square Cut": "🔪",
+    "Late Cut": "🌙", "Reverse Sweep": "🔁", "Slog Sweep": "🧨",
+    "Glance": "↗️", "Paddle": "🏓", "Upper Cut": "⬆️",
+}
+
+
+def get_shot_options():
+    """Return the batting shot list with icons for the Mini App."""
+    return [{"shot": s, "label": s, "icon": SHOT_ICONS.get(s, "🏏")}
+            for s in AVAILABLE_SHOTS]
 
 
 def get_bowler_profile_key(bowl_style):

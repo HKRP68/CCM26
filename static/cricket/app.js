@@ -716,6 +716,13 @@ function renderGameplayScreen() {
     targetDisplay.classList.add('hidden');
   }
 
+  // Free hit banner — armed after a no-ball (UnderCover /cric parity)
+  const freeHitBanner = document.getElementById('free-hit-banner');
+  if (freeHitBanner) {
+    if (matchState.freeHit) freeHitBanner.classList.remove('hidden');
+    else freeHitBanner.classList.add('hidden');
+  }
+
   // Active Striker / Non-Striker / Bowler details
   const striker = matchState.striker;
   const nonStriker = matchState.nonStriker;
@@ -1127,10 +1134,22 @@ function renderBowlerVariations() {
 
 // Render batting shot event listeners
 // Same shot vocabulary as Telegram /playmatch (services.bowling_service).
+// Same shot vocabulary + icons as services.bowling_service (AVAILABLE_SHOTS /
+// SHOT_ICONS). Extended with the UnderCover /cric repertoire.
+const SHOT_ICON_MAP = {
+  'Drive': '☄️', 'Cut': '✂️', 'Pull': '🌪️', 'Leg Glance': '🎯',
+  'Flick': '🪄', 'Sweep': '🧹', 'Switch Hit': '🔄', 'Slog': '💣',
+  'Loft': '🚀', 'Defend': '🛡️', 'Leave': '🚫',
+  'On Drive': '🏏', 'Off Drive': '🎯', 'Hook': '🪝', 'Square Cut': '🔪',
+  'Late Cut': '🌙', 'Reverse Sweep': '🔁', 'Slog Sweep': '🧨',
+  'Glance': '↗️', 'Paddle': '🏓', 'Upper Cut': '⬆️',
+};
 const BATTING_SHOTS = [
   'Drive', 'Cut', 'Pull', 'Leg Glance', 'Flick', 'Sweep',
   'Switch Hit', 'Slog', 'Loft', 'Defend', 'Leave',
-].map(shot => ({ shot, label: shot }));
+  'On Drive', 'Off Drive', 'Hook', 'Square Cut', 'Late Cut',
+  'Reverse Sweep', 'Slog Sweep', 'Glance', 'Paddle', 'Upper Cut',
+].map(shot => ({ shot, label: shot, icon: SHOT_ICON_MAP[shot] || '🏏' }));
 
 async function submitShot(shot) {
   // Collapse the shot sheet immediately so the resolved outcome (and the event
@@ -1177,7 +1196,7 @@ function renderBattingShots({ disabled = false } = {}) {
     const btn = document.createElement('button');
     btn.className = 'btn btn-action-card';
     btn.dataset.shot = s.shot;
-    btn.innerHTML = `<span class="label">${s.label}</span>`;
+    btn.innerHTML = `<span class="shot-icon">${s.icon || '🏏'}</span><span class="label">${s.label}</span>`;
     if (disabled) {
       btn.disabled = true;
       btn.classList.add('is-waiting-for-delivery');
