@@ -103,6 +103,34 @@ def get_maintenance_message(cfg=None):
     )
 
 
+def is_command_update(update):
+    """Return True when the update message is a bot command.
+
+    During maintenance we still block non-command text so normal handlers do
+    not run, but only command messages should receive a maintenance reply.
+    """
+    message = getattr(update, "message", None)
+    text = (getattr(message, "text", None) or "").lstrip() if message else ""
+    if not text:
+        return False
+    if text.startswith("/"):
+        return True
+
+    # Be defensive for test doubles or PTB message-like objects that expose
+    # Telegram entities even when text has not been normalized.
+    for entity in getattr(message, "entities", None) or []:
+        entity_type = getattr(entity, "type", None)
+        offset = getattr(entity, "offset", None)
+        if entity_type == "bot_command" and offset == 0:
+            return True
+    return False
+
+
+def should_reply_with_maintenance(update):
+    """True when a blocked update should receive the maintenance message."""
+    return is_command_update(update)
+
+
 def should_block_update(update, cfg=None):
     """Decide whether to block this update.
 
@@ -111,7 +139,8 @@ def should_block_update(update, cfg=None):
       - User is in bypass list → never block
       - Callback queries (taps on in-progress match buttons) → allowed
         through so users can finish matches already in flight
-      - Everything else → block
+      - Command messages → block and show the maintenance message
+      - Non-command messages → block silently so group chats are not spammed
     """
     if cfg is None:
         from services.config_service import get_config

@@ -672,21 +672,25 @@ def main():
                 return
             try:
                 from services.maintenance_service import (
-                    should_block_update, get_maintenance_message
+                    should_block_update, get_maintenance_message,
+                    should_reply_with_maintenance,
                 )
                 if not should_block_update(update):
                     return
-                # Blocked — send maintenance message
-                try:
-                    text = get_maintenance_message()
-                    if update.message:
-                        await update.message.reply_text(text, parse_mode="HTML")
-                    elif update.callback_query:
-                        # Shouldn't reach here since callbacks bypass, but defensive
-                        await update.callback_query.answer(
-                            "Bot under maintenance", show_alert=True)
-                except Exception:
-                    pass
+                # Blocked — reply only to commands. Non-command group chatter
+                # is stopped silently to avoid spamming every message during
+                # maintenance mode.
+                if should_reply_with_maintenance(update):
+                    try:
+                        text = get_maintenance_message()
+                        if update.message:
+                            await update.message.reply_text(text, parse_mode="HTML")
+                        elif update.callback_query:
+                            # Shouldn't reach here since callbacks bypass, but defensive
+                            await update.callback_query.answer(
+                                "Bot under maintenance", show_alert=True)
+                    except Exception:
+                        pass
                 raise ApplicationHandlerStop
             except ApplicationHandlerStop:
                 raise
