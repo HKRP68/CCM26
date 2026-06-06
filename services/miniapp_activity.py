@@ -1,9 +1,10 @@
 """Activity-message copy for Mini App actions echoed back to a Telegram group.
 
 When a user performs an important action inside the Mini App (spin, daily claim,
-buying/opening packs, buying/selling/upgrading players, applying traits) and the
-Mini App was opened *from a group*, the bot posts a short activity message into
-that same group so other members can see the action and stay engaged.
+quest reward claims, buying/opening packs, buying/selling/upgrading players,
+applying traits) and the Mini App was opened *from a group*, the bot posts a
+short activity message into that same group so other members can see the action
+and stay engaged.
 
 These functions are pure (no DB/network) so they're easy to unit test. They take
 the actor's display name plus action-specific context and return an HTML string
@@ -60,6 +61,23 @@ def _top_player(players):
         if best is None or (p.get("rating") or 0) > (best.get("rating") or 0):
             best = p
     return best
+
+
+def _reward_parts(reward):
+    """Return human-readable reward fragments from a quest reward dict."""
+    if not isinstance(reward, dict):
+        return []
+    parts = []
+    coins = reward.get("coins") or 0
+    gems = reward.get("gems") or 0
+    points = reward.get("points") or reward.get("quest_points") or 0
+    if coins:
+        parts.append(f"+{_fmt_int(coins)} 🪙")
+    if gems:
+        parts.append(f"+{_fmt_int(gems)} 💎")
+    if points:
+        parts.append(f"+{_fmt_int(points)} QP")
+    return parts
 
 
 def build_message(action, name, **ctx):
@@ -151,6 +169,22 @@ def build_message(action, name, **ctx):
             emoji = ctx.get("trait_emoji") or ""
             emoji = f"{emoji} " if emoji else ""
             return f"✨ {who} applied {emoji}<b>{tname}</b> to <b>{pname}</b>!"
+
+        if action == "quest_claim":
+            title = _esc(ctx.get("quest_title")) or "a quest"
+            parts = _reward_parts(ctx.get("reward"))
+            reward_text = f" ({', '.join(parts)})" if parts else ""
+            return f"🎯 {who} completed <b>{title}</b> and claimed the reward{reward_text}!"
+
+        if action == "quest_claim_all":
+            count = int(ctx.get("count") or 0)
+            if count <= 0:
+                return None
+            qtype = _esc(ctx.get("quest_type")) or "quest"
+            noun = "quest" if count == 1 else "quests"
+            parts = _reward_parts(ctx.get("reward"))
+            reward_text = f" ({', '.join(parts)})" if parts else ""
+            return f"🎯 {who} claimed {count} {qtype} {noun}{reward_text}!"
 
         return None
     except Exception:

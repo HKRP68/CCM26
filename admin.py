@@ -5358,7 +5358,17 @@ def webapp_quest_claim():
         if not ok:
             return {"ok": False, "error": "claim_failed", "message": message}, 400
 
+        quest_title = None
+        try:
+            from models import Quest as _Quest
+            quest = db.query(_Quest).get(qid)
+            quest_title = getattr(quest, "name", None) if quest else None
+        except Exception:
+            logger.exception("quest lookup for activity failed")
+
         db.commit()
+        post_miniapp_activity(user, "quest_claim",
+                              quest_title=quest_title, reward=reward)
         return {
             "ok": True,
             "message": message,
@@ -5395,6 +5405,8 @@ def webapp_quest_claim_all():
 
         count, total = claim_all_completed(db, user.id, qtype)
         db.commit()
+        post_miniapp_activity(user, "quest_claim_all",
+                              quest_type=qtype, count=count, reward=total)
         return {
             "ok": True,
             "count_claimed": count,
