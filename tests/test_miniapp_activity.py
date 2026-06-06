@@ -40,7 +40,33 @@ def test_activity_messages_cover_requested_action_types():
         ("sell_player", {"player_name": "MS Dhoni", "rating": 95, "sell": 50000}),
         ("upgrade_player", {"player_name": "MS Dhoni", "version": "Gold", "rating": 97}),
         ("apply_trait", {"player_name": "MS Dhoni", "trait_name": "Finisher", "trait_emoji": "🔥"}),
+        ("quest_claim", {"quest_title": "Win & Flex", "reward": {"points": 5, "coins": 1000}}),
+        ("quest_claim_all", {"quest_type": "daily", "count": 2, "reward": {"points": 10, "gems": 1}}),
     ]
 
     for action, ctx in cases:
         assert build_message(action, "Captain", **ctx)
+
+
+def test_quest_claim_activity_message_includes_reward_and_escapes_title():
+    text = build_message(
+        "quest_claim",
+        "Captain",
+        quest_title="Win & Flex",
+        reward={"points": 5, "coins": 1000, "gems": 2},
+    )
+
+    assert text == (
+        "🎯 <b>Captain</b> completed <b>Win &amp; Flex</b> and claimed "
+        "the reward (+1,000 🪙, +2 💎, +5 QP)!"
+    )
+
+
+def test_quest_claim_all_skips_empty_claims():
+    assert build_message(
+        "quest_claim_all",
+        "Captain",
+        quest_type="daily",
+        count=0,
+        reward={"points": 0},
+    ) is None
