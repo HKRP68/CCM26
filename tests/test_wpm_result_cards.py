@@ -28,6 +28,10 @@ class WpmResultCardsSelectionTests(unittest.TestCase):
         self._stub("bat1, garbage ,SUMMARY")
         self.assertEqual(get_wpm_result_cards(), ["bat1", "summary"])
 
+    def test_summary_is_appended_when_admin_selects_only_innings_cards(self):
+        self._stub("bat1,bowl1")
+        self.assertEqual(get_wpm_result_cards(), ["bat1", "bowl1", "summary"])
+
     def test_empty_falls_back_to_summary(self):
         self._stub("")
         self.assertEqual(get_wpm_result_cards(), ["summary"])

@@ -81,13 +81,16 @@ def get_wpm_result_cards(session=None):
     """Return the ordered list of completion cards to post for /wpm and /cm.
 
     Reads fresh so a website save is picked up by a separate bot/admin process
-    without a restart. Unknown tokens are dropped; an empty selection falls back
-    to ``["summary"]`` so the lobby always receives at least the recap card.
+    without a restart. Unknown tokens are dropped. The Match Summary card is
+    always appended, even when the admin selected only innings cards, because
+    players expect a final summary after every completed Mini-App match.
     """
     raw = _refresh(session).get("wpm_result_cards") or "summary"
     chosen = {t.strip().lower() for t in str(raw).split(",") if t.strip()}
     ordered = [t for t in WPM_RESULT_CARD_TOKENS if t in chosen]
-    return ordered or ["summary"]
+    if "summary" not in ordered:
+        ordered.append("summary")
+    return ordered
 
 
 def get_challenge_max_overs(session=None):
