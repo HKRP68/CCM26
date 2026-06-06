@@ -3149,10 +3149,62 @@ def _webapp_auth(allow_not_debuted=False):
     return (db, user, tg_id), None, None
 
 
+
+def _player_card_url(player_id):
+    """Return the Mini App-safe URL for a rendered player card image."""
+    try:
+        return url_for("webapp_player_card", player_id=int(player_id))
+    except Exception:
+        return f"/webapp/player-card/{int(player_id)}"
+
+
+def _image_mimetype(data):
+    """Best-effort MIME sniffing for generated or admin-uploaded card bytes."""
+    if not data:
+        return "image/png"
+    head = data[:16]
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return "image/gif"
+    return "image/png"
+
 @app.route("/webapp")
 def webapp():
     """Serve the Mini App HTML."""
     return render_template("webapp.html")
+
+
+@app.route("/webapp/player-card/<int:player_id>")
+def webapp_player_card(player_id):
+    """Serve a player card image for Mini App surfaces.
+
+    Uses the same card generation path as the bot, so active admin-uploaded
+    custom cards automatically override template/procedural cards.
+    """
+    db = get_session()
+    try:
+        player = db.query(Player).get(player_id)
+        if not player or not player.is_active:
+            return "Player not found", 404
+        from services.card_generator import generate_card
+        image_bytes = generate_card(player)
+        if not image_bytes:
+            return "Could not generate card", 500
+        resp = Response(image_bytes, mimetype=_image_mimetype(image_bytes))
+        # Custom cards can be toggled/uploaded from admin; keep Mini App fresh.
+        resp.headers["Cache-Control"] = "no-cache, max-age=0"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        return resp
+    except Exception:
+        logger.exception("webapp_player_card failed")
+        return "Could not load card", 500
+    finally:
+        db.close()
 
 
 @app.route("/api/webapp/init", methods=["POST"])
@@ -3408,6 +3460,7 @@ def webapp_search():
             "ok": True,
             "results": [{
                 "id": p.id,
+                "card_url": _player_card_url(p.id),
                 "name": p.name,
                 "rating": p.rating,
                 "category": p.category,
@@ -3445,6 +3498,7 @@ def webapp_player_detail(player_id):
             "ok": True,
             "player": {
                 "id": p.id,
+                "card_url": _player_card_url(p.id),
                 "name": p.name,
                 "rating": p.rating,
                 "category": p.category,
@@ -3733,6 +3787,7 @@ def webapp_roster():
                 "roster_id": r.id,
                 "position": r.order_position,
                 "player_id": p.id,
+                "card_url": _player_card_url(p.id),
                 "name": p.name,
                 "rating": p.rating,
                 "category": p.category,
@@ -4120,7 +4175,8 @@ def webapp_players():
             if only_unowned and owned:
                 continue
             results.append({
-                "id": p.id, "name": p.name, "rating": p.rating,
+                "id": p.id, "card_url": _player_card_url(p.id),
+                "name": p.name, "rating": p.rating,
                 "category": p.category, "country": p.country,
                 "version": p.version or "Base",
                 "bat_rating": p.bat_rating or 0,
@@ -4787,6 +4843,7 @@ def webapp_packs_open():
         for player, slot_type in result.get("players", []):
             players_out.append({
                 "id": player.id,
+                "card_url": _player_card_url(player.id),
                 "name": player.name,
                 "rating": player.rating,
                 "category": player.category,
@@ -4861,6 +4918,7 @@ def webapp_market():
                 "slot_id": s.id,
                 "slot_index": s.slot_index,
                 "player_id": p.id,
+                "card_url": _player_card_url(p.id),
                 "name": p.name,
                 "rating": p.rating,
                 "category": p.category,
@@ -5011,6 +5069,7 @@ def webapp_xi():
                 "roster_id": r.id,
                 "position": r.order_position,
                 "player_id": p.id,
+                "card_url": _player_card_url(p.id),
                 "name": p.name,
                 "rating": p.rating,
                 "bat_rating": p.bat_rating or 0,
@@ -5764,6 +5823,7 @@ def webapp_roster_player_detail():
             "player": {
                 "roster_id": entry.id,
                 "id": player.id,
+                "card_url": _player_card_url(player.id),
                 "name": player.name,
                 "rating": player.rating,
                 "bat_rating": player.bat_rating,
