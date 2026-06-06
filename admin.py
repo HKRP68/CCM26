@@ -7861,7 +7861,7 @@ def _broadcast_match_result(match_id, result):
         try:
             # Give the Mini App a moment to render the just-decided result from
             # the still-live state before the lobby chat receives its summary.
-            time.sleep(1.5)
+            time.sleep(1.0)
             if not _build_and_send_match_result(match_id, result):
                 raise RuntimeError("completed match result was not sent")
         except Exception:
@@ -7977,7 +7977,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
                 "No play took place, so there is no scorecard to show.\n"
                 "━━━━━━━━━━━━━━━━━━━")
             np_url = _launch_url(match_id, chat_id)
-            np_markup = ({"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": np_url}]]}
+            np_markup = ({"inline_keyboard": [[{"text": "▶️ Play Match Again", "url": np_url}]]}
                          if np_url else None)
             sent_np = _send_completed_match_cards(chat_id, [], no_play_text, np_markup)
             logger.info("match %s ended with no play — sent text recap, skipped cards", match_id)
@@ -8000,9 +8000,34 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         else:
             short_summary = "Both teams finished level after the second innings."
 
-        text = ("━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"
-                f"{score_block}\n\n🏆 <b>{escape(str(result_text))}</b>\n"
+        winner_name = _completed_team_name(arena, result.get("winner_team_id"), "Tie")
+        margin_value = int(result.get("margin_value", 0) or 0)
+        if result.get("margin_type") == "wickets":
+            margin_text = f"{margin_value} wicket{'s' if margin_value != 1 else ''}"
+        elif result.get("margin_type") == "runs":
+            margin_text = f"{margin_value} run{'s' if margin_value != 1 else ''}"
+        else:
+            margin_text = "Tie"
+
+        top_scorer, top_wicket, _top_per_team = _top_performers_for_summary(arena)
+        top_batsman_line = (
+            f"{escape(str(top_scorer.get('name', '—')))} — "
+            f"{top_scorer.get('runs', 0)} ({top_scorer.get('balls', 0)})"
+            if top_scorer else "—")
+        top_bowler_line = (
+            f"{escape(str(top_wicket.get('name', '—')))} — "
+            f"{top_wicket.get('wickets', 0)}/{top_wicket.get('runs', 0)} "
+            f"in {top_wicket.get('overs', '0')} ov"
+            if top_wicket else "—")
+
+        text = ("━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH SUMMARY SCORECARD</b>\n\n"
+                f"{score_block}\n\n"
+                f"🏆 <b>Winner:</b> {escape(str(winner_name))}\n"
+                f"📏 <b>Winning Margin:</b> {escape(str(margin_text))}\n"
                 f"<i>{escape(short_summary)}</i>\n\n"
+                "🔥 <b>KEY PERFORMANCE SUMMARY</b>\n"
+                f"🏏 <b>Top Batsman:</b> {top_batsman_line}\n"
+                f"🎳 <b>Top Bowler:</b> {top_bowler_line}\n"
                 "━━━━━━━━━━━━━━━━━━━\n\n")
         if pom:
             text += ("⭐ <b>PLAYER OF THE MATCH</b>\n"
@@ -8027,7 +8052,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         url = _launch_url(match_id, chat_id)
         reply_markup = None
         if url:
-            reply_markup = {"inline_keyboard": [[{"text": "PlayMatch - Spectate", "url": url}]]}
+            reply_markup = {"inline_keyboard": [[{"text": "▶️ Play Match Again", "url": url}]]}
 
         # Send the result text before rendering heavy PNGs, so players see the
         # match outcome immediately even when all innings scorecards are enabled.
