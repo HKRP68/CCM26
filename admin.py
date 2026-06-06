@@ -7722,6 +7722,91 @@ def _completed_result_with_arena_fallback(result, arena):
     return merged
 
 
+def _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_markup):
+    """Deliver the completed-match recap through the bot's own event loop.
+
+    This mirrors the reliable /vsbot and /playmatch summary delivery (and the
+    admin "Send Now" path at admin_notification_send_now) by scheduling the
+    Telegram calls on the running bot loop via run_coroutine_threadsafe, instead
+    of issuing raw HTTP from this detached broadcast thread. The bot's own send
+    pipeline handles connection pooling, retries and flood control, which the
+    fire-and-forget requests path did not — that unreliability is why /wpm, /cm
+    and /wpmbot summaries failed to arrive.
+
+    Returns True on success. Returns False when the bot bridge is not wired
+    (e.g. the admin panel is running without the bot) so the caller can fall
+    back to the direct HTTP path.
+    """
+    bot = _BOT_REF.get("bot")
+    loop = _BOT_REF.get("loop")
+    if not bot or not loop:
+        return False
+    try:
+        import asyncio as _asyncio
+        from io import BytesIO
+        from telegram import (InputMediaPhoto, InlineKeyboardMarkup,
+                              InlineKeyboardButton)
+
+        cards = [c for c in (images or []) if c and c[0]]
+
+        def _build_markup():
+            if not reply_markup:
+                return None
+            rows = []
+            for row in reply_markup.get("inline_keyboard", []):
+                btns = []
+                for b in row:
+                    if b.get("url"):
+                        btns.append(InlineKeyboardButton(b.get("text", " "), url=b["url"]))
+                    elif b.get("callback_data"):
+                        btns.append(InlineKeyboardButton(
+                            b.get("text", " "), callback_data=b["callback_data"]))
+                if btns:
+                    rows.append(btns)
+            return InlineKeyboardMarkup(rows) if rows else None
+
+        async def _send_photos():
+            if not cards:
+                return False
+            if len(cards) >= 2:
+                try:
+                    media = [InputMediaPhoto(
+                                media=BytesIO(c[0]),
+                                caption=(c[1] or "") if i == 0 else None,
+                                parse_mode="HTML")
+                             for i, c in enumerate(cards[:10])]
+                    await bot.send_media_group(chat_id=chat_id, media=media)
+                    return True
+                except Exception:
+                    logger.exception("bot-loop album send failed; retrying as singles")
+            ok = False
+            for img_bytes, caption, _fname in cards[:10]:
+                try:
+                    await bot.send_photo(chat_id=chat_id, photo=BytesIO(img_bytes),
+                                         caption=caption or "", parse_mode="HTML")
+                    ok = True
+                except Exception:
+                    logger.exception("bot-loop single photo send failed")
+            return ok
+
+        async def _send():
+            sent_any = await _send_photos()
+            try:
+                await bot.send_message(
+                    chat_id=chat_id, text=fallback_text, parse_mode="HTML",
+                    disable_web_page_preview=True, reply_markup=_build_markup())
+                sent_any = True
+            except Exception:
+                logger.exception("bot-loop completed-match message send failed")
+            return sent_any
+
+        future = _asyncio.run_coroutine_threadsafe(_send(), loop)
+        return bool(future.result(timeout=60))
+    except Exception:
+        logger.exception("bot-loop completed-match delivery failed; will fall back to HTTP")
+        return False
+
+
 def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
     """Post a completed Mini-App match recap to the lobby chat synchronously.
 
@@ -7729,7 +7814,14 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
     Telegram calls inline lets us keep live match_state until the result text is
     actually dispatched. If a selected album fails, each image is retried as an
     individual photo before the mandatory MATCH RESULT message is sent.
+
+    Delivery prefers the bot's own event loop (the proven /vsbot, /playmatch and
+    admin "Send Now" mechanism); the direct Telegram HTTP path below is kept as a
+    fallback for when the bot bridge is not available.
     """
+    if _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_markup):
+        return True
+
     import json as _json
     import os as _os
     token = _os.getenv("BOT_TOKEN", "").strip()
@@ -7985,6 +8077,11 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         chat_id = (override_chat_id or arena.get("original_lobby_chat_id")
                    or match.chat_id or arena.get("chat_id"))
         if not chat_id:
+            logger.warning(
+                "match %s summary not sent: no lobby chat_id "
+                "(original_lobby_chat_id=%s match.chat_id=%s arena.chat_id=%s)",
+                match_id, arena.get("original_lobby_chat_id"),
+                getattr(match, "chat_id", None), arena.get("chat_id"))
             return False
         result = _completed_result_with_arena_fallback(result, arena)
         result_text = result.get("text") or scorecard.get("result_text") or "Match finished."
