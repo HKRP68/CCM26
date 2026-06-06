@@ -144,6 +144,63 @@ def save_state(ctx, mid, state, next_action=None, last_prompt_msg_id=None):
         session.close()
 
 
+def save_autoplay_users(ctx, mid, user_id, active, max_retries=5):
+    """Merge one participant's Autoplay status into the latest persisted state.
+
+    Unlike save_state(), this intentionally updates only state["autoplay_users"]
+    against a freshly-read DB row.  The Mini App can toggle Autoplay while a
+    delivery/shot/selection request is still processing; rewriting the whole
+    stale snapshot from the status request can otherwise roll back score, ball,
+    wicket, or innings changes.  We use the MatchState.version token as an
+    optimistic guard and retry if another writer commits between our read and
+    write.
+
+    Returns the updated state dict, or None if the match state row is missing.
+    """
+    user_key = str(user_id)
+
+    for attempt in range(max_retries):
+        session = get_session()
+        try:
+            ms = session.query(MatchState).filter(MatchState.match_id == mid).first()
+            if not ms:
+                return None
+
+            version = ms.version or 0
+            state = _deserialize(ms.state_json)
+            autoplay_users = dict(state.get("autoplay_users") or {})
+            autoplay_users[user_key] = bool(active)
+            state["autoplay_users"] = autoplay_users
+
+            updated = (session.query(MatchState)
+                       .filter(MatchState.match_id == mid,
+                               MatchState.version == version)
+                       .update({
+                           MatchState.state_json: _serialize(state),
+                           MatchState.version: version + 1,
+                           MatchState.last_modified: datetime.utcnow(),
+                       }, synchronize_session=False))
+            if updated:
+                session.commit()
+                ctx.bot_data[_mem_key(mid)] = state
+                return state
+
+            session.rollback()
+            logger.info(
+                "save_autoplay_users retrying for match %s after version conflict (%s/%s)",
+                mid, attempt + 1, max_retries)
+        except Exception:
+            session.rollback()
+            logger.exception("save_autoplay_users DB write failed for match %s", mid)
+            return None
+        finally:
+            session.close()
+
+    logger.warning("save_autoplay_users gave up for match %s after %s retries",
+                   mid, max_retries)
+    return None
+
+
 def set_next_action(ctx, mid, next_action, last_prompt_msg_id=None):
     """Lightweight: update only the next_action pointer (and optionally msg id).
     Use when the state dict hasn't changed but the pointer has."""
