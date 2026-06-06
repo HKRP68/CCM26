@@ -1,5 +1,111 @@
 {% extends "base.html" %}
 {% block title %}User: {{ user.first_name }}{% endblock %}
+
+{% block head_extra %}
+<style>
+  .user-roster-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: .75rem;
+    flex-wrap: wrap;
+    gap: .75rem;
+  }
+  .user-add-player-form {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.5fr) minmax(110px, .7fr) minmax(150px, 1fr) auto;
+    gap: .5rem;
+    align-items: end;
+    width: min(100%, 720px);
+  }
+  .user-add-player-form .field label {
+    margin-bottom: .2rem;
+    font-size: .62rem;
+  }
+  .user-add-player-form input,
+  .user-add-player-form select {
+    min-height: 38px;
+    padding: .45rem .6rem;
+    font-size: .8rem;
+  }
+  .user-add-player-form .btn {
+    min-height: 38px;
+    white-space: nowrap;
+  }
+  .mobile-card-label { display: none; }
+
+  @media (max-width: 768px) {
+    .user-roster-header {
+      display: block;
+    }
+    .user-roster-header h3 {
+      margin-bottom: .65rem;
+    }
+    .user-add-player-form {
+      grid-template-columns: 1fr 1fr;
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .75rem;
+    }
+    .user-add-player-form .field-name,
+    .user-add-player-form .field-category,
+    .user-add-player-form .btn {
+      grid-column: 1 / -1;
+    }
+    .user-roster-table-wrap {
+      background: transparent;
+      border: 0;
+      overflow: visible;
+    }
+    .user-roster-table,
+    .user-roster-table thead,
+    .user-roster-table tbody,
+    .user-roster-table tr,
+    .user-roster-table td {
+      display: block;
+      width: 100%;
+    }
+    .user-roster-table thead { display: none; }
+    .user-roster-table tr {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: .65rem;
+      padding: .65rem;
+    }
+    .user-roster-table td {
+      border: 0;
+      padding: .35rem 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .user-roster-table td:first-child {
+      font-size: .95rem;
+      padding-top: 0;
+    }
+    .user-roster-table td:last-child {
+      padding-bottom: 0;
+    }
+    .user-roster-table td:last-child form,
+    .user-roster-table td:last-child button {
+      width: 100%;
+      justify-content: center;
+    }
+    .mobile-card-label {
+      display: inline;
+      color: var(--muted);
+      font-size: .68rem;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      font-weight: 700;
+    }
+  }
+</style>
+{% endblock %}
 {% block content %}
 <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;">
   <a href="{{ url_for('users_list') }}" class="btn btn-ghost btn-sm">← Users</a>
@@ -157,24 +263,41 @@
 {% endif %}
 
 <!-- ── Roster ─────────────────────────────────────────────────── -->
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem;">
+<div class="user-roster-header">
   <h3 style="font-size:.9rem;color:var(--muted);text-transform:uppercase;">Roster ({{ roster|length }})</h3>
-  <form method="POST" action="{{ url_for('user_add_player', user_id=user.id) }}" style="display:flex;gap:.5rem;align-items:center;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="text" name="player_name" placeholder="Add player by name..." style="width:200px;padding:.35rem .6rem;font-size:.8rem;">
-    <button type="submit" class="btn btn-green btn-sm">+ Add</button>
+  <form method="POST" action="{{ url_for('user_add_player', user_id=user.id) }}" class="user-add-player-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field field-name">
+      <label for="player-name-add">Player name</label>
+      <input id="player-name-add" type="text" name="player_name" placeholder="Search by name...">
+    </div>
+    <div class="field field-rating">
+      <label for="overall-rating-add">OVR</label>
+      <input id="overall-rating-add" type="number" name="overall_rating" min="50" max="100" list="rating-options" placeholder="50-100">
+      <datalist id="rating-options">
+        {% for rating in rating_options %}<option value="{{ rating }}"></option>{% endfor %}
+      </datalist>
+    </div>
+    <div class="field field-category">
+      <label for="category-add">Category</label>
+      <select id="category-add" name="category">
+        <option value="">Any category</option>
+        {% for category in player_categories %}<option value="{{ category }}">{{ category }}</option>{% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-green btn-sm">+ Add best match</button>
   </form>
 </div>
-<div class="table-wrap" style="margin-bottom:1.5rem;">
-  <table>
+<div class="table-wrap user-roster-table-wrap" style="margin-bottom:1.5rem;">
+  <table class="user-roster-table">
     <thead><tr><th>Player</th><th>Rating</th><th>Category</th><th>Acquired</th><th></th></tr></thead>
     <tbody>
     {% for entry, player in roster %}
     <tr>
-      <td style="font-weight:600;">{{ player.name }}</td>
-      <td><span class="rating-badge tier-{{ player._tier_css }}">{{ player.rating }}</span></td>
-      <td>{{ player.category }}</td>
-      <td style="font-size:.8rem;">{{ entry.acquired_date | ist('%d %b') if entry.acquired_date else '—' }}</td>
+      <td style="font-weight:600;"><span class="mobile-card-label">Player</span><span>{{ player.name }}</span></td>
+      <td><span class="mobile-card-label">Rating</span><span class="rating-badge tier-{{ player._tier_css }}">{{ player.rating }}</span></td>
+      <td><span class="mobile-card-label">Category</span><span>{{ player.category }}</span></td>
+      <td style="font-size:.8rem;"><span class="mobile-card-label">Acquired</span><span>{{ entry.acquired_date | ist('%d %b') if entry.acquired_date else '—' }}</span></td>
       <td>
         <form method="POST" action="{{ url_for('user_remove_player', user_id=user.id, roster_id=entry.id) }}" style="display:inline;" onsubmit="return confirm('Remove {{ player.name }}?')">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
