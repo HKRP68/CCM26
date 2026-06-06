@@ -2183,13 +2183,25 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             pick = bot_ai.pick_bot_delivery(bowler, over, total, difficulty=diff)
             state["current_delivery"] = pick["delivery"]
             state["selected_variation"] = pick.get("variation")
+            state["last_autoplay_delivery"] = {
+                "bowler": bowler.get("name") if bowler else None,
+                "delivery": pick["delivery"],
+            }
             mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
             # If the human is batting, stop here so they can play their shot
             if not _is_bot_side(state, "bat"):
-                steps.append({"type": "bot_delivery", "delivery": pick["delivery"]})
+                steps.append({
+                    "type": "bot_delivery",
+                    "bowler": bowler.get("name") if bowler else None,
+                    "delivery": pick["delivery"],
+                })
                 break
             # Bot batting too → continue to auto-shot below on next loop
-            steps.append({"type": "bot_delivery", "delivery": pick["delivery"]})
+            steps.append({
+                "type": "bot_delivery",
+                "bowler": bowler.get("name") if bowler else None,
+                "delivery": pick["delivery"],
+            })
             continue
 
         if na == A_PICK_SHOT:
@@ -2215,6 +2227,10 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                 "batsman": striker.get("name") if striker else None,
                 "bowler": bowler.get("name") if bowler else None,
                 "how": res.get("how"),
+            }
+            state["last_autoplay_shot"] = {
+                "batter": striker.get("name") if striker else None,
+                "shot": shot,
             }
             state["last_commentary"] = _c or res.get("rtxt")
             _append_commentary_log(state, res, striker, bowler,
@@ -2333,8 +2349,16 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
             pick = bot_ai.pick_bot_delivery(bowler, over, total, difficulty=diff)
             state["current_delivery"] = pick["delivery"]
             state["selected_variation"] = pick.get("variation")
+            state["last_autoplay_delivery"] = {
+                "bowler": bowler.get("name") if bowler else None,
+                "delivery": pick["delivery"],
+            }
             mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
-            steps.append({"type": "auto_delivery", "delivery": pick["delivery"]})
+            steps.append({
+                "type": "auto_delivery",
+                "bowler": bowler.get("name") if bowler else None,
+                "delivery": pick["delivery"],
+            })
             # If this same user also bats (PvP self-play is impossible, but be
             # safe), keep going; otherwise hand the ball to the batsman.
             if user_id != state.get("bat_team_id"):
@@ -2364,9 +2388,18 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
                 "bowler": bowler.get("name") if bowler else None,
                 "how": res.get("how"),
             }
+            state["last_autoplay_shot"] = {
+                "batter": striker.get("name") if striker else None,
+                "shot": shot,
+            }
             state["last_commentary"] = _c or res.get("rtxt")
             _append_commentary_log(state, res, striker, bowler, _c or res.get("rtxt"))
-            steps.append({"type": "auto_shot", "shot": shot, "rtxt": res["rtxt"]})
+            steps.append({
+                "type": "auto_shot",
+                "batter": striker.get("name") if striker else None,
+                "shot": shot,
+                "rtxt": res["rtxt"],
+            })
 
             if is_innings_over(state):
                 if state.get("innings", 1) == 1:

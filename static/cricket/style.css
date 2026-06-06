@@ -591,6 +591,37 @@ body {
   background-color: var(--primary-accent);
   box-shadow: 0 0 6px var(--primary-accent);
 }
+.autoplay-status-message {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 14px;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.autoplay-quick-card {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 23, 42, 0.76);
+  color: #f8fafc;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.autoplay-quick-card .muted {
+  display: block;
+  margin-top: 6px;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 
 /* ── Commentary Feed ───────────────────────────────────────────── */
 .commentary-feed-container {

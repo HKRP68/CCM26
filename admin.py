@@ -6439,9 +6439,10 @@ def match_rest_autoplay():
         # confirm the endpoint isn't being hit with the toggle off.
         logger.info("match_rest_autoplay tick: match=%s user=%s na=%s",
                     match.id, user.id, get_next_action(match.id))
-        auto_play_user_turns(db, match.id, user.id)
+        user_steps = auto_play_user_turns(db, match.id, user.id)
+        bot_steps = []
         if get_state_is_vsbot(match.id):
-            auto_play_bot_turns(db, match.id)
+            bot_steps = auto_play_bot_turns(db, match.id)
 
         try:
             from services.match_state_store import A_COMPLETED as _DONE
@@ -6460,7 +6461,7 @@ def match_rest_autoplay():
             match_state = serialize_match_state(db, match, user)
         except Exception:
             logger.exception("could not serialize post-autoplay state")
-        return {"ok": True, "matchState": match_state}
+        return {"ok": True, "matchState": match_state, "steps": user_steps + bot_steps}
     except Exception as e:
         logger.exception("match_rest_autoplay failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
@@ -6563,6 +6564,38 @@ def event_media_asset(media_id):
     except Exception:
         logger.exception("event media asset failed")
         return {"error": "storage_unavailable"}, 503
+    finally:
+        db.close()
+
+
+@app.route("/api/match/autoplay-status", methods=["POST"])
+@csrf_exempt
+def match_rest_autoplay_status():
+    """Persist a participant's Autoplay toggle so both players can see it."""
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        from services.match_webapp_access import get_state, save_state, get_next_action
+        from services.crickidex_arena import serialize_match_state
+        state = get_state(match.id)
+        if not state:
+            return {"ok": False, "error": "no_match"}, 404
+        autoplay_users = dict(state.get("autoplay_users") or {})
+        autoplay_users[str(user.id)] = bool(data.get("active"))
+        state["autoplay_users"] = autoplay_users
+        save_state(match.id, state, next_action=get_next_action(match.id))
+        return {
+            "ok": True,
+            "matchState": serialize_match_state(db, match, user),
+        }
+    except Exception as e:
+        logger.exception("match_rest_autoplay_status failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
 

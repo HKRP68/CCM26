@@ -414,6 +414,9 @@ def serialize_match_state(session, match, viewer_user):
             "isBoundary": is_boundary,
             "commentary": last_ball_raw.get("text"),
             "delivery": last_ball_raw.get("delivery") or "",
+            "shot": last_ball_raw.get("shot") or "",
+            "batter": last_ball_raw.get("batsman") or "",
+            "bowler": last_ball_raw.get("bowler") or "",
             "eventKey": last_ball_raw.get("eventKey"),
         }
         commentary = [{
@@ -456,6 +459,30 @@ def serialize_match_state(session, match, viewer_user):
 
     # ── toss ──
     toss_winner_tg = tg_of.get(match.toss_winner_id) if match.toss_winner_id else None
+
+    # ── autoplay status ──
+    autoplay_users = state.get("autoplay_users") or {}
+    autoplay_active_uids = {
+        int(uid) for uid, active in autoplay_users.items()
+        if active and str(uid).lstrip("-").isdigit()
+    }
+
+    def _team_name_for_uid(uid):
+        if uid == match.user1_id and host:
+            return host.get("teamName")
+        if uid == match.user2_id and guest:
+            return guest.get("teamName")
+        return None
+
+    autoplay_teams = [
+        {"userId": uid, "teamName": _team_name_for_uid(uid)}
+        for uid in autoplay_active_uids
+    ]
+    my_autoplay_active = bool(viewer_uid in autoplay_active_uids)
+    opponent_autoplay = next(
+        (team for team in autoplay_teams if team.get("userId") != viewer_uid),
+        None,
+    )
 
     # ── result (completed) ──
     result = None
@@ -525,6 +552,13 @@ def serialize_match_state(session, match, viewer_user):
         "currentSpeed": state.get("current_speed"),
         "currentSpeedKmh": state.get("last_speed"),
         "lastBall": last_ball,
+        "lastAutoplayDelivery": state.get("last_autoplay_delivery"),
+        "lastAutoplayShot": state.get("last_autoplay_shot"),
+        "autoplay": {
+            "isOnForMe": my_autoplay_active,
+            "opponent": opponent_autoplay,
+            "teams": autoplay_teams,
+        },
         "partnership": {
             "runs": state.get("partnership_runs", 0),
             "balls": state.get("partnership_balls", 0),
