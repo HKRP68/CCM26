@@ -45,7 +45,7 @@
 <!-- Squad editor form -->
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;">
   <h3 style="font-size:.95rem;margin:0 0 .75rem;">Replace Squad</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin-bottom:1rem;">Select exactly 11 players, mark 1 as Captain and 1 as Vice-Captain.</p>
+  <p style="color:var(--muted);font-size:.8rem;margin-bottom:1rem;">Current picks are pre-selected below. Tick/untick players to add or remove them, then mark 1 as Captain and 1 as Vice-Captain.</p>
 
   <div style="margin-bottom:.75rem;">
     <input type="text" id="admin-search" placeholder="🔍 Search player..."
@@ -53,23 +53,25 @@
            style="padding:.5rem .75rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);width:100%;max-width:300px;">
   </div>
 
-  <div id="selected-count" style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem;">Selected: 0/11 · Captain: ✗ · VC: ✗</div>
+  <div id="selected-count" style="font-size:.85rem;color:var(--muted);margin-bottom:.5rem;">Selected: 0/11 · Captain: ✗ · VC: ✗</div>
+  <div id="role-rule-count" style="font-size:.78rem;color:var(--muted);margin-bottom:.75rem;"></div>
 
   <div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">
     <table style="width:100%;border-collapse:collapse;font-size:.83rem;" id="admin-player-table">
       <thead style="position:sticky;top:0;background:var(--bg-soft);">
         <tr style="color:var(--muted);text-align:left;">
           <th style="padding:.5rem;">Pick</th><th style="padding:.5rem;">Player</th>
-          <th style="padding:.5rem;">Country</th><th style="padding:.5rem;">Rating</th><th style="padding:.5rem;">Role</th>
+          <th style="padding:.5rem;">Country</th><th style="padding:.5rem;">Category</th><th style="padding:.5rem;">Rating</th><th style="padding:.5rem;">Role</th>
         </tr>
       </thead>
       <tbody>
       {% for player in all_players %}
       <tr class="admin-player-row" data-name="{{ player.name.lower() }}" data-pid="{{ player.id }}"
-          style="border-top:1px solid var(--border);cursor:pointer;" onclick="togglePlayer({{ player.id }}, '{{ player.name | e }}', '{{ player.country | e }}', '{{ player.category | e }}')">
-        <td style="padding:.5rem;"><input type="checkbox" id="chk_{{ player.id }}" onclick="event.stopPropagation();togglePlayer({{ player.id }}, '{{ player.name | e }}', '{{ player.country | e }}', '{{ player.category | e }}')"></td>
+          style="border-top:1px solid var(--border);cursor:pointer;" onclick='togglePlayer({{ player.id }}, {{ player.name|tojson }}, {{ player.country|tojson }}, {{ player.category|tojson }})'>
+        <td style="padding:.5rem;"><input type="checkbox" id="chk_{{ player.id }}" onclick='event.stopPropagation();togglePlayer({{ player.id }}, {{ player.name|tojson }}, {{ player.country|tojson }}, {{ player.category|tojson }})'></td>
         <td style="padding:.5rem;font-weight:500;">{{ player.name }}</td>
         <td style="padding:.5rem;color:var(--muted);">{{ player.country }}</td>
+        <td style="padding:.5rem;color:var(--muted);">{{ player.category }}</td>
         <td style="padding:.5rem;color:var(--muted);">{{ player.rating }}</td>
         <td style="padding:.5rem;">
           <select id="role_{{ player.id }}" onchange="event.stopPropagation();updateCount()" disabled
@@ -95,6 +97,42 @@
 
 <script>
 var selected = {};
+var initialPicks = [
+  {% for fp, player in picks %}
+  {player_id: {{ player.id }}, name: {{ player.name|tojson }}, country: {{ player.country|tojson }}, category: {{ player.category|tojson }}, role: {{ fp.role|tojson }}}{% if not loop.last %},{% endif %}
+  {% endfor %}
+];
+var roleRules = {{ role_rules|tojson }};
+
+function normalizeRoleKey(category) {
+  var cat = String(category || '').trim().toUpperCase().replace(/_/g, ' ');
+  var compact = cat.replace(/[- ]/g, '');
+  if (cat.indexOf('WK') !== -1 || cat.indexOf('KEEP') !== -1) return 'wk';
+  if (cat === 'AR' || compact.indexOf('ALL') !== -1) return 'ar';
+  if (cat.indexOf('BOWL') !== -1) return 'bowl';
+  if (cat.indexOf('BAT') !== -1) return 'bat';
+  return 'bat';
+}
+
+function roleRuleStatus() {
+  var counts = {};
+  Object.values(selected).forEach(function(p) {
+    var key = normalizeRoleKey(p.category);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  var valid = true, messages = [];
+  Object.keys(roleRules || {}).forEach(function(roleKey) {
+    var rule = roleRules[roleKey] || {};
+    var count = counts[roleKey] || 0;
+    var min = parseInt(rule.min || 0, 10);
+    var max = rule.max === null || rule.max === undefined || rule.max === '' ? null : parseInt(rule.max, 10);
+    var label = rule.label || roleKey;
+    if (min || max !== null) messages.push(label + ': ' + count + (min ? ' / min ' + min : '') + (max !== null ? ' / max ' + max : ''));
+    if (min && count < min) valid = false;
+    if (max !== null && count > max) valid = false;
+  });
+  return {valid: valid, text: messages.join(' · ')};
+}
 
 function togglePlayer(pid, name, country, category) {
   var chk = document.getElementById('chk_' + pid);
@@ -127,6 +165,10 @@ function updateCount() {
   var n = Object.keys(selected).length;
   document.getElementById('selected-count').textContent =
     'Selected: ' + n + '/11 · Captain: ' + (captain ? '✓' : '✗') + ' · VC: ' + (vc ? '✓' : '✗');
+  var roleStatus = roleRuleStatus();
+  var roleEl = document.getElementById('role-rule-count');
+  roleEl.textContent = roleStatus.text;
+  roleEl.style.color = roleStatus.valid ? 'var(--muted)' : 'var(--danger, #ef4444)';
 }
 
 function submitSquad() {
@@ -136,6 +178,8 @@ function submitSquad() {
   var vcs = picks.filter(function(p){ return p.role === 'vc'; });
   if (caps.length !== 1) { alert('Select exactly 1 captain.'); return; }
   if (vcs.length !== 1) { alert('Select exactly 1 vice-captain.'); return; }
+  var roleStatus = roleRuleStatus();
+  if (!roleStatus.valid) { alert('Role limits are not satisfied: ' + roleStatus.text); return; }
   document.getElementById('picks-json-input').value = JSON.stringify(picks);
   document.getElementById('squad-form').submit();
 }
@@ -146,5 +190,15 @@ function filterAdminPlayers(val) {
     row.style.display = row.dataset.name.includes(val) ? '' : 'none';
   });
 }
+
+
+initialPicks.forEach(function(p) {
+  selected[p.player_id] = p;
+  var chk = document.getElementById('chk_' + p.player_id);
+  var roleEl = document.getElementById('role_' + p.player_id);
+  if (chk) chk.checked = true;
+  if (roleEl) { roleEl.disabled = false; roleEl.value = p.role || 'player'; }
+});
+updateCount();
 </script>
 {% endblock %}

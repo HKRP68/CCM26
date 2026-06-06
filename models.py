@@ -1666,6 +1666,22 @@ class FantasyCountryRule(Base):
     )
 
 
+class FantasyRoleRule(Base):
+    """Per-player-role min/max squad limits for a fantasy league."""
+    __tablename__ = "fantasy_role_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    league_id = Column(Integer, ForeignKey("fantasy_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
+    role_key = Column(String(20), nullable=False)  # bat | bowl | ar | wk
+    min_players = Column(Integer, default=0, nullable=False)
+    max_players = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_frr_league_role", "league_id", "role_key", unique=True),
+    )
+
+
 class FantasyMatch(Base):
     """A real-world cricket match added by admin within a fantasy league week."""
     __tablename__ = "fantasy_matches"
