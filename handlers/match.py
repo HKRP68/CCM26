@@ -35,7 +35,7 @@ FINE_COINS = 2000   # reduced from 10000 — the forfeit itself is the bigger pe
 FINE_GEMS = 5       # reduced from 20
 
 # Setup-phase expiries so a half-started match never blocks a chat forever.
-#   LOBBY_EXPIRE: an unjoined /wpm lobby auto-cancels after this long
+#   LOBBY_EXPIRE: an unjoined /cric lobby auto-cancels after this long
 #   OVERS_EXPIRE: an accepted /playmatch match auto-expires if no overs are chosen
 LOBBY_EXPIRE = 120
 OVERS_EXPIRE = 60
@@ -140,12 +140,12 @@ def _cric_lobby_key(chat_id):
 
 
 def _active_cric_match_in_chat(session, chat_id):
-    """Return a launched /wpm-style Mini App match in ``chat_id``.
+    """Return a launched /cric-style Mini App match in ``chat_id``.
 
     UnderCover does not treat an abandoned pre-match lobby as an active match:
     its match manager only receives a match after the toss decision.  Keep the
     same boundary here so old ``pending``/``toss`` rows from callback matches
-    cannot make a fresh ``/wpm`` lobby look busy.
+    cannot make a fresh ``/cric`` lobby look busy.
     """
     if not chat_id:
         return None
@@ -157,7 +157,7 @@ def _active_cric_match_in_chat(session, chat_id):
 
 
 def _active_cric_match_for_user(session, user_id):
-    """Return a launched /wpm-style Mini App match involving ``user_id``."""
+    """Return a launched /cric-style Mini App match involving ``user_id``."""
     return (session.query(Match)
             .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
                     Match.status.in_(("playing", "active")))
@@ -166,7 +166,7 @@ def _active_cric_match_for_user(session, user_id):
 
 
 def _cric_lobby_for_user(bot_data, user_id):
-    """Find an in-memory /wpm lobby containing ``user_id``."""
+    """Find an in-memory /cric lobby containing ``user_id``."""
     return next((lobby for key, lobby in bot_data.items()
                  if key.startswith("cric_lobby_")
                  and user_id in (lobby.get("host_user_id"),
@@ -1714,10 +1714,13 @@ async def endmatch_no_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.edit_message_text("🔄 Match continues!")
 
 
-# ════════════════════════ /wpm Mini-App lobby ════════════════════════
+# ════════════════════════ /cric Mini-App lobby ════════════════════════
 
 async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Create an UnderCover-style chat lobby that launches the cricket Mini App."""
+    """Create an UnderCover-style /cric chat lobby that launches the cricket Mini App.
+
+    Registered for both /cric and the legacy /wpm alias.
+    """
     tg = update.effective_user
     cid = update.effective_chat.id
     try:
@@ -1726,7 +1729,7 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         overs = 0
     if overs < 1 or overs > 5:
         await update.message.reply_text(
-            "ℹ️ <b>Usage:</b> <code>/wpm &lt;overs (1-5)&gt;</code> to start a match lobby.",
+            "ℹ️ <b>Usage:</b> <code>/cric &lt;overs (1-5)&gt;</code> to start a match lobby.",
             parse_mode="HTML")
         return
 
@@ -1785,16 +1788,16 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _expire_lobby, LOBBY_EXPIRE, name=f"lobby_{cid}",
                     data={"chat_id": cid, "lobby_msg_id": lobby_msg.message_id})
         except Exception:
-            logger.exception("Failed to schedule /wpm lobby expiry")
+            logger.exception("Failed to schedule /cric lobby expiry")
     except Exception:
-        logger.exception("/wpm lobby creation failed")
+        logger.exception("/cric lobby creation failed")
         await update.message.reply_text("❌ Failed to create cricket lobby.")
     finally:
         session.close()
 
 
 async def _expire_lobby(ctx):
-    """Auto-cancel a /wpm lobby that nobody joined.
+    """Auto-cancel a /cric lobby that nobody joined.
 
     Only fires for a still-open lobby (no guest). If the lobby was joined or
     already cancelled, this is a no-op.
@@ -1810,17 +1813,17 @@ async def _expire_lobby(ctx):
         msg_id = d.get("lobby_msg_id") or lobby.get("lobby_msg_id")
         if msg_id:
             await ctx.bot.edit_message_text(
-                "⏰ <b>Lobby expired</b> — no one joined.\nStart again with /wpm.",
+                "⏰ <b>Lobby expired</b> — no one joined.\nStart again with /cric.",
                 chat_id=cid, message_id=msg_id, parse_mode="HTML")
         else:
             await ctx.bot.send_message(
-                cid, "⏰ Match lobby expired — no one joined. Start again with /wpm.")
+                cid, "⏰ Match lobby expired — no one joined. Start again with /cric.")
     except Exception:
         logger.exception("Lobby expiry message failed")
 
 
 def _cancel_lobby_timer(ctx, cid):
-    """Remove the pending /wpm lobby auto-expiry job for a chat."""
+    """Remove the pending /cric lobby auto-expiry job for a chat."""
     try:
         if ctx.job_queue:
             for j in ctx.job_queue.get_jobs_by_name(f"lobby_{cid}"):
@@ -1921,14 +1924,14 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=coin_call_keyboard("cric_coin:heads", "cric_coin:tails"))
     except Exception:
         session.rollback()
-        logger.exception("/wpm lobby join failed")
+        logger.exception("/cric lobby join failed")
         await q.answer("Failed to join lobby.", show_alert=True)
     finally:
         session.close()
 
 
 async def cric_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Heads/Tails call for a joined /wpm lobby. The joining guest calls; the
+    """Heads/Tails call for a joined /cric lobby. The joining guest calls; the
     coin is flipped and the winner then chooses bat or bowl."""
     q = update.callback_query
     cid = q.message.chat_id
@@ -1977,14 +1980,14 @@ async def cric_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 InlineKeyboardButton("Bowl First 🎳", callback_data="cric_decision:bowl"),
             ]]))
     except Exception:
-        logger.exception("/wpm coin toss failed")
-        await q.edit_message_text("Toss failed — start again with /wpm.")
+        logger.exception("/cric coin toss failed")
+        await q.edit_message_text("Toss failed — start again with /cric.")
     finally:
         session.close()
 
 
 async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Launch a joined /wpm lobby after its toss winner chooses bat or bowl.
+    """Launch a joined /cric lobby after its toss winner chooses bat or bowl.
 
     This mirrors UnderCover's lifecycle: the lobby remains in memory through
     the toss and only becomes a persisted, active Mini App match here.
@@ -2065,7 +2068,7 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
             _mention(bat_user), _mention(bowl_user), toss_note=toss_note)
     except Exception:
         session.rollback()
-        logger.exception("/wpm toss decision failed")
+        logger.exception("/cric toss decision failed")
         await q.answer("Failed to launch cricket match.", show_alert=True)
     finally:
         session.close()

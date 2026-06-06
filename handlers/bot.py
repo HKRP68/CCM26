@@ -54,6 +54,8 @@ from handlers.profile import myprofile_handler, myprofile_callback
 # Match handlers
 from handlers.match import (
     playmatch_handler, match_accept_callback, match_deny_callback,
+    wpm_handler, cric_join_callback, cric_cancel_lobby_callback,
+    cric_coin_callback, cric_decision_callback,
     overs_text_handler, toss_decision_callback,
     opener1_callback, opener2_callback, select_bowler_callback,
     variation_callback, length_callback, spinner_delivery_callback,
@@ -147,6 +149,7 @@ async def start_handler(update, context):
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
+        "/cric /wpm [1-5] - Open a joinable Mini App match lobby\n"
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
@@ -281,6 +284,7 @@ def main():
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
+        app.add_handler(CommandHandler(["cric", "wpm"], wpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
 
@@ -380,6 +384,10 @@ def main():
         app.add_handler(CallbackQueryHandler(new_batsman_callback, pattern=r"^newbat_"))
         app.add_handler(CallbackQueryHandler(endmatch_yes_callback, pattern=r"^endmatch_"))
         app.add_handler(CallbackQueryHandler(endmatch_no_callback, pattern=r"^endmatchno_"))
+        app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
+        app.add_handler(CallbackQueryHandler(cric_cancel_lobby_callback, pattern=r"^cric_cancel_lobby$"))
+        app.add_handler(CallbackQueryHandler(cric_coin_callback, pattern=r"^cric_coin:"))
+        app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cric_decision:"))
 
         # ── Leaderboard & Profile ──────────────────────────────────
         app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lb_"))
