@@ -56,13 +56,16 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # the Mini App directly (no DM bounce); `/app` just opens it on home.
         bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
         miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
+        # Encode the origin group so Mini App actions echo back into this chat.
+        _chat_id = update.effective_chat.id if update.effective_chat else None
+        _sp = f"home_c{_chat_id}" if (_chat_id is not None and _chat_id < 0) else "home"
         if bot_username and miniapp_name:
             # Named Mini App — t.me/<bot>/<app> launches it straight away
-            deep_link = f"https://t.me/{bot_username}/{miniapp_name}"
+            deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp={_sp}"
         elif bot_username:
             # Bot's main Mini App (BotFather) — `?startapp` launches the app
             # directly instead of opening a DM chat
-            deep_link = f"https://t.me/{bot_username}?startapp=home"
+            deep_link = f"https://t.me/{bot_username}?startapp={_sp}"
         else:
             await update.message.reply_text(
                 "⚠️ Mini App buttons don't work in groups. Open this in a "

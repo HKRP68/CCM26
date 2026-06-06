@@ -60,7 +60,9 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             btn = miniapp_button("📅 Open Mini App to Claim", "daily",
-                                 is_private=is_private)
+                                 is_private=is_private,
+                                 origin_chat_id=(update.effective_chat.id
+                                                 if update.effective_chat else None))
             if btn is not None:
                 text = (
                     "📅 <b>Your daily reward is ready!</b>\n\n"
