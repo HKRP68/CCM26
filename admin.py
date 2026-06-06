@@ -3525,6 +3525,8 @@ def webapp_buy(player_id):
             pass
 
         db.commit()
+        post_miniapp_activity(user, "buy_player",
+                              player_name=p.name, rating=p.rating, price=price)
         return {
             "ok": True,
             "purchased": {"name": p.name, "rating": p.rating, "price": price},
@@ -3595,6 +3597,9 @@ def webapp_release(roster_id):
             pass
 
         db.commit()
+        post_miniapp_activity(user, "sell_player",
+                              player_name=player_name, rating=player_rating,
+                              sell=sell_value)
         return {
             "ok": True,
             "sell_value": sell_value,
@@ -3688,6 +3693,8 @@ def webapp_release_multi():
             pass
 
         db.commit()
+        post_miniapp_activity(user, "sell_multi",
+                              count=len(released), total=total_coins)
         return {
             "ok": True,
             "released_count": len(released),
@@ -3848,6 +3855,7 @@ def webapp_spin():
             pass
 
         db.commit()
+        post_miniapp_activity(user, "gspin", reward=result)
         return {
             "ok": True,
             "reward": result,
@@ -3982,6 +3990,11 @@ def webapp_daily():
 
         quota_service.consume_slot(stats, "daily", slot_type)
         db.commit()
+        post_miniapp_activity(user, "daily",
+                              coins=result.get("coins"), gems=result.get("gems"),
+                              streak=result.get("streak"),
+                              milestone=result.get("milestone"),
+                              milestone_player=result.get("milestone_player"))
 
         return {
             "ok": True,
@@ -4601,6 +4614,8 @@ def webapp_freepack_open():
             return result, 400
 
         db.commit()
+        post_miniapp_activity(user, "open_pack", pack_name="Free Pack",
+                              players=[result.get("player")] if result.get("player") else [])
         result["balance"] = {
             "coins": user.total_coins or 0,
             "gems": user.total_gems or 0,
@@ -4719,6 +4734,7 @@ def webapp_packs_buy():
                     "message": result.get("message", "Could not buy pack.")}, 400
 
         db.commit()
+        post_miniapp_activity(user, "buy_pack", pack_name=pack.name)
         return {
             "ok": True,
             "inventory_id": result.get("inventory_id"),
@@ -4785,9 +4801,12 @@ def webapp_packs_open():
                     for p in result.get("players_to_claim", [])]
 
         db.commit()
+        _opened_pack_name = result["pack"].name if result.get("pack") else "Pack"
+        post_miniapp_activity(user, "open_pack",
+                              pack_name=_opened_pack_name, players=players_out)
         return {
             "ok": True,
-            "pack_name": result["pack"].name if result.get("pack") else "Pack",
+            "pack_name": _opened_pack_name,
             "players": players_out,
             "overflow": overflow,
             "pity_triggered": result.get("pity_triggered", False),
@@ -4950,6 +4969,9 @@ def webapp_market_buy(slot_id):
             pass
 
         db.commit()
+        post_miniapp_activity(user, "buy_player",
+                              player_name=player.name, rating=player.rating,
+                              price=slot.final_price)
         return {
             "ok": True,
             "player_name": player.name,
@@ -5577,6 +5599,10 @@ def webapp_upgrade_apply():
             db.rollback()
             return result, 400
         db.commit()
+        _to = result.get("to") or {}
+        post_miniapp_activity(user, "upgrade_player",
+                              player_name=_to.get("name"),
+                              version=_to.get("version"), rating=_to.get("rating"))
         return result
     except Exception as e:
         db.rollback()
@@ -5771,11 +5797,34 @@ def webapp_trait_apply():
         data = request.get_json(silent=True) or {}
         roster_id = int(data.get("roster_id") or 0)
         inventory_id = int(data.get("inventory_id") or 0)
+
+        # Capture display names before the inventory row is consumed.
+        _pname = _tname = _temoji = None
+        try:
+            from models import TraitInventory, Trait, UserRoster
+            _roster = (db.query(UserRoster)
+                       .filter(UserRoster.id == roster_id,
+                               UserRoster.user_id == user.id).first())
+            if _roster:
+                _pl = db.query(Player).get(_roster.player_id)
+                _pname = _pl.name if _pl else None
+            _inv = (db.query(TraitInventory)
+                    .filter(TraitInventory.id == inventory_id,
+                            TraitInventory.user_id == user.id).first())
+            if _inv:
+                _tr = db.query(Trait).get(_inv.trait_id)
+                if _tr:
+                    _tname, _temoji = _tr.name, (_tr.emoji or "")
+        except Exception:
+            pass
+
         ok, msg = apply_trait_to_player(db, user, inventory_id, roster_id)
         if not ok:
             db.rollback()
             return {"ok": False, "message": msg}, 400
         db.commit()
+        post_miniapp_activity(user, "apply_trait", player_name=_pname,
+                              trait_name=_tname, trait_emoji=_temoji)
         return {"ok": True, "message": msg}
     except Exception as e:
         db.rollback()
@@ -6872,6 +6921,120 @@ def _tg_api_post(method, payload, timeout=8):
         logger.exception("telegram %s failed", method)
         return None
 
+
+# ── Mini App activity → group chat ──────────────────────────────────────────
+# When the Mini App is opened *from a group* (the launch deep link carries the
+# group id as a ``home_c<chatId>`` start_param), important actions are echoed
+# back into that group so members stay engaged. Origin chat is read from the
+# SIGNED initData, so the chat id is trustworthy. A light per-(chat,user)
+# throttle prevents bulk actions (e.g. opening many packs) from flooding a group.
+_ACTIVITY_THROTTLE = {}
+_ACTIVITY_THROTTLE_LOCK = threading.Lock()
+_ACTIVITY_MIN_INTERVAL = 4.0  # seconds between activity posts per (chat, user)
+
+
+def _origin_group_chat_id():
+    """Return the group/supergroup chat id the Mini App was launched from, or
+    None for private DM / unknown launches.
+
+    The id is parsed from ``start_param`` inside the HMAC-signed initData
+    (format ``<tab>_c<chatId>``) and only returned when negative (groups). In
+    dev mode an ``origin_chat_id`` request-body override is accepted for testing.
+    """
+    import os as _os
+    import re as _re
+
+    if _os.getenv("WEBAPP_DEV_MODE") == "1":
+        try:
+            data = request.get_json(silent=True) or {}
+            dev_cid = int(data.get("origin_chat_id") or 0)
+            if dev_cid < 0:
+                return dev_cid
+        except Exception:
+            pass
+
+    init_data = request.headers.get("Authorization", "") or ""
+    if init_data.startswith("tma "):
+        init_data = init_data[4:]
+    if not init_data or init_data.startswith("DEV_"):
+        return None
+    try:
+        from services.webapp_auth import verify_init_data
+        verified = verify_init_data(init_data, _os.getenv("BOT_TOKEN", ""))
+    except Exception:
+        verified = None
+    if not verified:
+        return None
+    sp = (verified.get("start_param") or "").strip()
+    m = _re.match(r"^[a-z]+_c(-?\d+)$", sp)
+    if not m:
+        return None
+    try:
+        cid = int(m.group(1))
+    except (ValueError, TypeError):
+        return None
+    return cid if cid < 0 else None
+
+
+def _miniapp_activity_keyboard(chat_id):
+    """Inline keyboard JSON with an 'Open Mini App' button that re-encodes the
+    origin chat id so the activity loop is self-sustaining. URL deep link is used
+    (not a WebApp button) because Telegram rejects WebApp buttons in groups."""
+    import os as _os
+    bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+    if not bot_username:
+        return None
+    miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
+    start_param = f"home_c{chat_id}"
+    if miniapp_name:
+        url = f"https://t.me/{bot_username}/{miniapp_name}?startapp={start_param}"
+    else:
+        url = f"https://t.me/{bot_username}?startapp={start_param}"
+    return {"inline_keyboard": [[{"text": "🎮 Open Mini App", "url": url}]]}
+
+
+def post_miniapp_activity(user, action, **ctx):
+    """Echo a Mini App action into the group the Mini App was opened from.
+
+    No-op for private/DM launches. Throttled per (chat, user). Builds the message
+    via services.miniapp_activity and sends it (with an Open Mini App button)
+    asynchronously so the request never blocks on Telegram.
+    """
+    try:
+        chat_id = _origin_group_chat_id()
+        if not chat_id:
+            return
+        import time as _time
+        now = _time.time()
+        tg_id = getattr(user, "telegram_id", None)
+        key = (chat_id, tg_id)
+        with _ACTIVITY_THROTTLE_LOCK:
+            last = _ACTIVITY_THROTTLE.get(key, 0)
+            if now - last < _ACTIVITY_MIN_INTERVAL:
+                return
+            _ACTIVITY_THROTTLE[key] = now
+            if len(_ACTIVITY_THROTTLE) > 5000:
+                cutoff = now - _ACTIVITY_MIN_INTERVAL
+                for k in [k for k, t in _ACTIVITY_THROTTLE.items() if t < cutoff]:
+                    _ACTIVITY_THROTTLE.pop(k, None)
+
+        from services.miniapp_activity import build_message
+        name = getattr(user, "team_name", None) or getattr(user, "first_name", None)
+        text = build_message(action, name, **ctx)
+        if not text:
+            return
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        kb = _miniapp_activity_keyboard(chat_id)
+        if kb:
+            payload["reply_markup"] = kb
+        _tg_send_async(payload)
+    except Exception:
+        logger.exception("post_miniapp_activity failed (action=%s)", action)
 
 
 _PLAYER_STAT_CARD_CACHE = {}

@@ -78,8 +78,12 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             else:
                 bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
                 miniapp_name = _os.getenv("MINIAPP_NAME", "").strip()
+                # Encode the origin group so Mini App actions echo back here.
+                _chat_id = update.effective_chat.id if update.effective_chat else None
+                _sp = (f"market_c{_chat_id}"
+                       if (_chat_id is not None and _chat_id < 0) else "market")
                 if bot_username and miniapp_name:
-                    deep = f"https://t.me/{bot_username}/{miniapp_name}?startapp=market"
+                    deep = f"https://t.me/{bot_username}/{miniapp_name}?startapp={_sp}"
                 elif bot_username:
                     deep = f"https://t.me/{bot_username}?start=market"
                 else:

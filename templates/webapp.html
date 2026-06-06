@@ -7047,6 +7047,9 @@ function handleHashDeepLink() {
       if (sp) target = sp;
     } catch (e) {}
   }
+  // Strip an origin-chat suffix (e.g. "home_c-100123") used to echo Mini App
+  // activity back to a group; the tab name is everything before "_c<digits>".
+  target = target.replace(/_c-?\d+$/, '');
   target = alias[target] || target;
   if (validScreens.includes(target) && target !== 'home') {
     navigate(target);

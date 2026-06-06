@@ -87,7 +87,9 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             btn = miniapp_button("🎡 Open Mini App to Spin", "spin",
-                                 is_private=is_private)
+                                 is_private=is_private,
+                                 origin_chat_id=(update.effective_chat.id
+                                                 if update.effective_chat else None))
             if btn is not None:
                 text = (
                     "🎡 <b>Your spin is ready!</b>\n\n"
