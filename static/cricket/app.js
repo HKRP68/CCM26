@@ -158,7 +158,7 @@ function setupEventListeners() {
   // Autoplay Pill Switch Toggle
   const autoplayToggleBtn = document.getElementById('autoplay-toggle-btn');
   autoplayToggleBtn.addEventListener('click', () => {
-    setAutoplayActive(!autoplayActive);
+    handleAutoplayToggle(!autoplayActive);
   });
 
   // Speed selection
@@ -411,6 +411,8 @@ function applyMatchState(nextState) {
   if (matchState.id && matchState.id !== autoplayMatchId) {
     autoplayMatchId = matchState.id;
     setAutoplayActive(false);
+  } else if (!autoplayOffPending && matchState.autoplay?.isOnForMe !== undefined) {
+    setAutoplayActive(!!matchState.autoplay.isOnForMe);
   }
 
   if (identitySelectionRequired) {
@@ -827,6 +829,8 @@ function renderControlsSection() {
     overBowlerControls.classList.add('hidden');
   };
 
+  renderAutoplayStatusMessage();
+
   // Render the inline status badges
   renderInlineMatchStatusBar();
 
@@ -863,13 +867,18 @@ function renderControlsSection() {
     && matchState.isMyTurn === false;
   if (isBatsmanWaitingForDelivery) {
     wasMyTurn = false;
-    waitingBlock.classList.add('hidden');
-    promptText.innerText = "🏏 GET READY TO PLAY";
-    promptSubtitle.innerText = "Bowler is running in…";
+    waitingBlock.classList.toggle('hidden', autoplayActive);
+    promptText.innerText = autoplayActive ? "🏏 BATTING AUTOPLAY" : "🏏 GET READY TO PLAY";
+    promptSubtitle.innerText = autoplayActive ? "Your team is playing in Autoplay mode" : "Bowler is running in…";
     hideActionSections();
+    resetAutoplayQuickCards();
     incomingCard.classList.add('hidden');
-    battingControls.classList.remove('hidden');
-    renderBattingShots({ disabled: true });
+    if (autoplayActive) {
+      renderAutoplayQuickCard('batting_wait');
+    } else {
+      battingControls.classList.remove('hidden');
+      renderBattingShots({ disabled: true });
+    }
     return;
   }
 
@@ -927,6 +936,23 @@ function renderControlsSection() {
 
   // Hide all sections initially
   hideActionSections();
+  resetAutoplayQuickCards();
+
+  if (autoplayActive && matchState.turnState === 'bowling_delivery') {
+    promptText.innerText = "🎳 BOWLING AUTOPLAY";
+    promptSubtitle.innerText = "Your team is playing in Autoplay mode";
+    incomingCard.classList.add('hidden');
+    renderAutoplayQuickCard('bowling');
+    return;
+  }
+
+  if (autoplayActive && matchState.turnState === 'batting_shot') {
+    promptText.innerText = "🏏 BATTING AUTOPLAY";
+    promptSubtitle.innerText = "Your team is playing in Autoplay mode";
+    incomingCard.classList.add('hidden');
+    renderAutoplayQuickCard('batting');
+    return;
+  }
 
   if (matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLER CONTROLS";
@@ -1830,6 +1856,103 @@ function renderResultScreen() {
 // state. The poll loop keeps calling until the match completes.
 // Single source of truth for the Autoplay flag + its pill UI, so the toggle and
 // the per-match reset can never drift apart.
+function renderAutoplayStatusMessage() {
+  const box = document.getElementById('autoplay-status-message');
+  if (!box || !matchState) return;
+  const messages = [];
+  if (autoplayActive || matchState.autoplay?.isOnForMe) {
+    messages.push('Autoplay is ON for your team');
+  }
+  if (matchState.autoplay?.opponent?.teamName) {
+    messages.push(`${matchState.autoplay.opponent.teamName} is on Autoplay mode`);
+  }
+  if (!messages.length) {
+    box.classList.add('hidden');
+    box.innerText = '';
+    return;
+  }
+  box.innerText = messages.join(' • ');
+  box.classList.remove('hidden');
+}
+
+function resetAutoplayQuickCards() {
+  ['bowling-controls', 'batting-controls'].forEach(id => {
+    const controls = document.getElementById(id);
+    if (!controls) return;
+    controls.querySelectorAll(':scope > .autoplay-quick-card').forEach(card => card.remove());
+    Array.from(controls.children).forEach(child => {
+      child.style.display = '';
+    });
+  });
+}
+
+function renderAutoplayQuickCard(kind) {
+  const displayKind = kind === 'batting_wait' ? 'batting' : kind;
+  const controls = displayKind === 'bowling'
+    ? document.getElementById('bowling-controls')
+    : document.getElementById('batting-controls');
+  if (!controls) return;
+  Array.from(controls.children).forEach(child => {
+    if (!child.classList.contains('autoplay-quick-card')) child.style.display = 'none';
+  });
+  let card = controls.querySelector(':scope > .autoplay-quick-card');
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'autoplay-quick-card';
+    controls.appendChild(card);
+  }
+  if (kind === 'batting_wait') {
+    const delivery = matchState.lastAutoplayDelivery;
+    const line = delivery?.delivery
+      ? `${delivery.bowler || 'Bowler'} bowls ${delivery.delivery}`
+      : 'Autoplay is waiting for the delivery';
+    card.innerHTML = `${line}<span class="muted">Your shot will be selected automatically.</span>`;
+    card.style.display = '';
+    controls.classList.remove('hidden');
+    return;
+  }
+  const playerName = displayKind === 'bowling'
+    ? (matchState.lastAutoplayDelivery?.bowler || matchState.bowler?.name || 'Bowler')
+    : (matchState.lastAutoplayShot?.batter || matchState.striker?.name || 'Batter');
+  const actionName = displayKind === 'bowling'
+    ? (matchState.lastAutoplayDelivery?.delivery || matchState.currentDelivery || 'delivery')
+    : (matchState.lastAutoplayShot?.shot || matchState.lastBall?.shot || 'shot');
+  const line = displayKind === 'bowling'
+    ? `${playerName} bowls ${actionName}`
+    : `${playerName} played ${actionName}`;
+  card.innerHTML = `${line}<span class="muted">Autoplay is processing…</span>`;
+  card.style.display = '';
+  controls.classList.remove('hidden');
+}
+
+
+async function postAutoplayStatus(active) {
+  if (!matchId || !userId || userId === 'spectator') return;
+  try {
+    const resp = await fetch('/api/match/autoplay-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, matchId, active: !!active }),
+    });
+    const data = await resp.json();
+    if (data && data.matchState) applyMatchState(data.matchState);
+  } catch (e) {
+    console.error('[Autoplay] status update failed', e);
+  }
+}
+
+function handleAutoplayToggle(active) {
+  if (!active && autoplayInFlight) {
+    autoplayOffPending = true;
+    setAutoplayActive(false);
+    return;
+  }
+  autoplayOffPending = false;
+  setAutoplayActive(active);
+  postAutoplayStatus(active);
+  if (active) setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
+}
+
 function setAutoplayActive(active) {
   autoplayActive = !!active;
   const btn = document.getElementById('autoplay-toggle-btn');
@@ -1840,6 +1963,7 @@ function setAutoplayActive(active) {
 }
 
 let autoplayInFlight = false;
+let autoplayOffPending = false;
 async function runAutoplayAction() {
   if (!autoplayActive || !matchState) return;
   if (autoplayInFlight || matchState.isProcessing) return;
@@ -1866,6 +1990,10 @@ async function runAutoplayAction() {
     console.error('[Autoplay] server autoplay failed', e);
   } finally {
     autoplayInFlight = false;
+    if (autoplayOffPending) {
+      autoplayOffPending = false;
+      postAutoplayStatus(false);
+    }
   }
 }
 
