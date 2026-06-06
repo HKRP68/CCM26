@@ -3189,7 +3189,9 @@ def webapp_player_card(player_id):
     db = get_session()
     try:
         player = db.query(Player).get(player_id)
-        if not player or not player.is_active:
+        # Owned roster rows can reference cards later deactivated by admins.
+        # Keep rendering those existing cards; only truly missing players 404.
+        if not player:
             return "Player not found", 404
         from services.card_generator import generate_card
         image_bytes = generate_card(player)
