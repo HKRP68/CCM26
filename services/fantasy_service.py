@@ -10,6 +10,32 @@ CAPTAIN_MULTIPLIER = 2.0
 VC_MULTIPLIER = 1.5
 SQUAD_SIZE = 11
 
+ROLE_RULES = {
+    "bat": {"label": "Batsmen", "aliases": ("BAT", "BATSMAN", "BATTER")},
+    "bowl": {"label": "Bowlers", "aliases": ("BOWL", "BOWLER")},
+    "ar": {"label": "All-rounders", "aliases": ("AR", "ALLROUNDER", "ALL-ROUNDER", "ALL ROUNDER")},
+    "wk": {"label": "Wicketkeepers", "aliases": ("WK", "WICKETKEEPER", "WICKET-KEEPER", "WICKET KEEPER")},
+}
+
+
+def normalize_role_key(category):
+    """Map a player category string to the fantasy rule key used for min/max rules."""
+    cat = (category or "").strip().upper().replace("_", " ")
+    compact = cat.replace("-", " ").replace(" ", "")
+    for key, cfg in ROLE_RULES.items():
+        aliases = cfg.get("aliases") or ()
+        if cat in aliases or compact in [a.replace("-", " ").replace(" ", "") for a in aliases]:
+            return key
+    if "WK" in cat or "KEEP" in cat:
+        return "wk"
+    if "ALL" in cat or cat == "AR":
+        return "ar"
+    if "BOWL" in cat:
+        return "bowl"
+    if "BAT" in cat:
+        return "bat"
+    return "bat"
+
 
 def get_active_league(session):
     """Return the most recent open or locked league, or None."""
@@ -179,9 +205,23 @@ def get_country_rules(session, league_id):
     }
 
 
-def replace_player_pool(session, league_id, player_ids, country_rules):
-    """Replace eligible-player pool and per-country min/max rules."""
-    from models import FantasyLeaguePlayer, FantasyCountryRule, Player
+def get_role_rules(session, league_id):
+    """Return {role_key: {label, min, max}} for configured league role rules."""
+    from models import FantasyRoleRule
+    rows = session.query(FantasyRoleRule).filter_by(league_id=league_id).all()
+    return {
+        r.role_key: {
+            "label": ROLE_RULES.get(r.role_key, {}).get("label", r.role_key),
+            "min": int(r.min_players or 0),
+            "max": r.max_players,
+        }
+        for r in rows
+    }
+
+
+def replace_player_pool(session, league_id, player_ids, country_rules, role_rules=None):
+    """Replace eligible-player pool plus per-country and per-role min/max rules."""
+    from models import FantasyLeaguePlayer, FantasyCountryRule, FantasyRoleRule, Player
     clean_ids = []
     seen = set()
     for raw in player_ids or []:
@@ -221,12 +261,33 @@ def replace_player_pool(session, league_id, player_ids, country_rules):
                 min_players=min_players,
                 max_players=max_players,
             ))
+
+
+    session.query(FantasyRoleRule).filter_by(league_id=league_id).delete()
+    saved_role_rules = 0
+    for role_key, rule in (role_rules or {}).items():
+        role_key = (role_key or "").strip().lower()
+        if role_key not in ROLE_RULES:
+            continue
+        min_players = max(0, int(rule.get("min") or 0))
+        max_raw = rule.get("max")
+        max_players = None if max_raw in (None, "") else max(0, int(max_raw))
+        if max_players is not None and max_players < min_players:
+            max_players = min_players
+        if min_players or max_players is not None:
+            saved_role_rules += 1
+            session.add(FantasyRoleRule(
+                league_id=league_id,
+                role_key=role_key,
+                min_players=min_players,
+                max_players=max_players,
+            ))
     session.flush()
-    return True, f"Saved {len(clean_ids)} eligible players and {saved_rules} country rules."
+    return True, f"Saved {len(clean_ids)} eligible players, {saved_rules} country rules, and {saved_role_rules} role rules."
 
 
 def validate_league_player_rules(session, league_id, player_ids):
-    """Validate selected squad against player eligibility and country limits."""
+    """Validate selected squad against eligibility, country limits, and role limits."""
     from models import Player
     eligible_ids = set(get_selected_player_ids(session, league_id))
     selected = set(player_ids)
@@ -235,8 +296,11 @@ def validate_league_player_rules(session, league_id, player_ids):
 
     players = session.query(Player).filter(Player.id.in_(player_ids)).all()
     by_country = {}
+    by_role = {}
     for p in players:
         by_country[p.country] = by_country.get(p.country, 0) + 1
+        role_key = normalize_role_key(p.category)
+        by_role[role_key] = by_role.get(role_key, 0) + 1
 
     for country, rule in get_country_rules(session, league_id).items():
         count = by_country.get(country, 0)
@@ -246,6 +310,16 @@ def validate_league_player_rules(session, league_id, player_ids):
             return False, f"Pick at least {min_players} player(s) from {country}."
         if max_players is not None and count > int(max_players):
             return False, f"Pick at most {max_players} player(s) from {country}."
+
+    for role_key, rule in get_role_rules(session, league_id).items():
+        count = by_role.get(role_key, 0)
+        min_players = int(rule.get("min") or 0)
+        max_players = rule.get("max")
+        label = ROLE_RULES.get(role_key, {}).get("label", role_key)
+        if min_players and count < min_players:
+            return False, f"Pick at least {min_players} {label}."
+        if max_players is not None and count > int(max_players):
+            return False, f"Pick at most {max_players} {label}."
     return True, "OK"
 
 

@@ -12635,6 +12635,8 @@ def admin_fantasy_detail(league_id):
         top_scorers = fantasy_service.get_top_scorers(db, league_id)
         selected_player_ids = set(fantasy_service.get_selected_player_ids(db, league_id))
         country_rules = fantasy_service.get_country_rules(db, league_id)
+        role_rules = fantasy_service.get_role_rules(db, league_id)
+        role_rule_options = fantasy_service.ROLE_RULES
         players = (db.query(Player).filter(Player.is_active == True)
                    .order_by(Player.country, Player.rating.desc(), Player.name).all())
         countries = [c for (c,) in (db.query(Player.country)
@@ -12647,6 +12649,8 @@ def admin_fantasy_detail(league_id):
                                players=players,
                                selected_player_ids=selected_player_ids,
                                country_rules=country_rules,
+                               role_rules=role_rules,
+                               role_rule_options=role_rule_options,
                                countries=countries)
     finally:
         db.close()
@@ -12783,7 +12787,13 @@ def admin_fantasy_players(league_id):
             max_raw = (request.form.get(f"country_max_{key}") or "").strip()
             if min_raw or max_raw:
                 rules[country] = {"min": min_raw or 0, "max": max_raw}
-        ok, msg = fantasy_service.replace_player_pool(db, league_id, selected_ids, rules)
+        role_rules = {}
+        for role_key in fantasy_service.ROLE_RULES.keys():
+            min_raw = (request.form.get(f"role_min_{role_key}") or "").strip()
+            max_raw = (request.form.get(f"role_max_{role_key}") or "").strip()
+            if min_raw or max_raw:
+                role_rules[role_key] = {"min": min_raw or 0, "max": max_raw}
+        ok, msg = fantasy_service.replace_player_pool(db, league_id, selected_ids, rules, role_rules)
         if ok:
             db.commit()
             flash(f"✅ {msg}", "success")
@@ -12980,9 +12990,11 @@ def admin_fantasy_entry_edit(league_id, entry_id):
                  .join(Player, FantasyPick.player_id == Player.id)
                  .filter(FantasyPick.entry_id == entry_id).all())
         all_players = db.query(Player).filter(Player.is_active == True).order_by(Player.name).all()
+        role_rules = fantasy_service.get_role_rules(db, league_id)
         return render_template("fantasy_entry_edit.html",
                                league=league, entry=entry, user=user,
-                               picks=picks, all_players=all_players)
+                               picks=picks, all_players=all_players,
+                               role_rules=role_rules)
     finally:
         db.close()
 
@@ -13021,9 +13033,16 @@ def api_fantasy_players():
         if country:
             q = q.filter(Player.country == country)
         if role and role != "all":
-            role_map = {"bat": "BAT", "bowl": "BOWL", "wk": "WK", "ar": "AR", "all-rounder": "AR"}
-            cat = role_map.get(role, role.upper())
-            q = q.filter(Player.category.ilike(f"%{cat}%"))
+            from sqlalchemy import or_
+            role_terms = {
+                "bat": ["BAT", "BATSMAN", "BATTER"],
+                "bowl": ["BOWL", "BOWLER"],
+                "wk": ["WK", "WICKET"],
+                "ar": ["AR", "ALL"],
+                "all-rounder": ["AR", "ALL"],
+            }
+            terms = role_terms.get(role, [role.upper()])
+            q = q.filter(or_(*[Player.category.ilike(f"%{term}%") for term in terms]))
         total = q.count()
         players = q.order_by(Player.rating.desc(), Player.name).offset((page - 1) * per_page).limit(per_page).all()
         return {
@@ -13033,6 +13052,7 @@ def api_fantasy_players():
             "countries": [c for (c,) in country_q.with_entities(Player.country)
                           .group_by(Player.country).order_by(Player.country).all()],
             "country_rules": fantasy_service.get_country_rules(db, league_id) if league_id else {},
+            "role_rules": fantasy_service.get_role_rules(db, league_id) if league_id else {},
             "players": [
                 {"id": p.id, "name": p.name, "country": p.country,
                  "category": p.category, "rating": p.rating,
@@ -13134,6 +13154,7 @@ def api_fantasy_league():
                 "week_number": league.week_number,
                 "year": league.year,
                 "country_rules": fantasy_service.get_country_rules(db, league.id),
+                "role_rules": fantasy_service.get_role_rules(db, league.id),
             },
             "team": team_info,
         }

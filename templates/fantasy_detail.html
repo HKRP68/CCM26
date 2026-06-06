@@ -93,7 +93,7 @@
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1rem;">
   <h3 style="font-size:.95rem;margin:0 0 .5rem;">👥 Eligible Players & Country Limits</h3>
   <p style="color:var(--muted);font-size:.82rem;margin:0 0 .75rem;">
-    Select which players can appear in the Fantasy Mini App. If no player is selected, all active players remain eligible. Country min/max limits are enforced when users save their XI.
+    Select which players can appear in the Fantasy Mini App. If no player is selected, all active players remain eligible. Country and player-role min/max limits are enforced when users save their XI.
   </p>
   <form method="POST" action="{{ url_for('admin_fantasy_players', league_id=league.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -124,21 +124,40 @@
           {% endfor %}
         </div>
       </div>
-      <div>
-        <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
-          <thead><tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);"><th>Country</th><th>Min</th><th>Max</th></tr></thead>
-          <tbody>
-            {% for country in countries %}
-            {% set rule = country_rules.get(country, {}) %}
-            {% set key = country.replace(' ', '_') %}
-            <tr style="border-bottom:1px solid var(--border);">
-              <td style="padding:.4rem 0;">{{ country }}</td>
-              <td><input type="number" min="0" name="country_min_{{ key }}" value="{{ rule.get('min', '') if rule else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
-              <td><input type="number" min="0" name="country_max_{{ key }}" value="{{ rule.get('max', '') if rule and rule.get('max') is not none else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <div style="display:grid;gap:1rem;">
+        <div>
+          <h4 style="font-size:.85rem;margin:0 0 .4rem;color:var(--text);">Role Limits</h4>
+          <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
+            <thead><tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);"><th>Role</th><th>Min</th><th>Max</th></tr></thead>
+            <tbody>
+              {% for role_key, cfg in role_rule_options.items() %}
+              {% set rule = role_rules.get(role_key, {}) %}
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:.4rem 0;">{{ cfg.label }}</td>
+                <td><input type="number" min="0" max="11" name="role_min_{{ role_key }}" value="{{ rule.get('min', '') if rule else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
+                <td><input type="number" min="0" max="11" name="role_max_{{ role_key }}" value="{{ rule.get('max', '') if rule and rule.get('max') is not none else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h4 style="font-size:.85rem;margin:0 0 .4rem;color:var(--text);">Country Limits</h4>
+          <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
+            <thead><tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--border);"><th>Country</th><th>Min</th><th>Max</th></tr></thead>
+            <tbody>
+              {% for country in countries %}
+              {% set rule = country_rules.get(country, {}) %}
+              {% set key = country.replace(' ', '_') %}
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:.4rem 0;">{{ country }}</td>
+                <td><input type="number" min="0" name="country_min_{{ key }}" value="{{ rule.get('min', '') if rule else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
+                <td><input type="number" min="0" name="country_max_{{ key }}" value="{{ rule.get('max', '') if rule and rule.get('max') is not none else '' }}" style="width:70px;padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:5px;color:var(--text);"></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
     <button type="submit" class="btn btn-primary btn-sm" style="margin-top:1rem;">Save Player Pool & Rules</button>

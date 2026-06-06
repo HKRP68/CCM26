@@ -63,7 +63,7 @@ def init_db():
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
-        EventMedia,
+        FantasyRoleRule, EventMedia,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
@@ -452,13 +452,19 @@ def _migrate_add_columns():
 
     # Create fantasy league tables (idempotent via CREATE TABLE IF NOT EXISTS)
     try:
-        from models import FantasyLeague, FantasyMatch, FantasyPlayerScore, FantasyEntry, FantasyPick  # noqa: F401
+        from models import (
+            FantasyLeague, FantasyMatch, FantasyPlayerScore, FantasyEntry, FantasyPick,
+            FantasyLeaguePlayer, FantasyCountryRule, FantasyRoleRule,
+        )  # noqa: F401
         Base.metadata.create_all(bind=engine, tables=[
             FantasyLeague.__table__,
             FantasyMatch.__table__,
             FantasyPlayerScore.__table__,
             FantasyEntry.__table__,
             FantasyPick.__table__,
+            FantasyLeaguePlayer.__table__,
+            FantasyCountryRule.__table__,
+            FantasyRoleRule.__table__,
         ])
     except Exception:
         import logging

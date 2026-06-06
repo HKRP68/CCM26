@@ -18,6 +18,7 @@ var state = {
   currentCountry: '',
   countries: [],
   countryRules: {},
+  roleRules: {},
   pendingRolePid: null,
 };
 
@@ -49,6 +50,7 @@ function preloadSquad(squad) {
         if (!state.leagueId) state.leagueId = d.league.id;
         document.getElementById('league-title').textContent = '🏏 ' + d.league.name;
         state.countryRules = d.league.country_rules || {};
+        state.roleRules = d.league.role_rules || {};
         updateCountryOptions(Object.keys(state.countryRules));
         if (d.league.locked || d.league.status === 'locked') {
           state.locked = true;
@@ -103,6 +105,7 @@ function loadPlayers(reset) {
       updateCountryOptions(d.countries || []);
       mergeCountries(d.players || []);
       if (d.country_rules) state.countryRules = d.country_rules;
+      if (d.role_rules) state.roleRules = d.role_rules;
       state.hasMore = d.players && d.players.length === 30;
       state.page++;
       renderPlayers();
@@ -226,13 +229,18 @@ function setRole(role) {
     });
   }
 
-  if (role === 'player' && state.selected[pid].role === 'player') {
-    // Deselect
-    delete state.selected[pid];
-  } else {
-    state.selected[pid].role = role;
-  }
+  state.selected[pid].role = role;
 
+  closeRolePopup();
+  updateFooter();
+  renderPlayers();
+}
+
+function removePendingPlayer() {
+  var pid = state.pendingRolePid;
+  if (pid && state.selected[pid]) {
+    delete state.selected[pid];
+  }
   closeRolePopup();
   updateFooter();
   renderPlayers();
@@ -263,6 +271,39 @@ function onSearch() {
 function onCountryFilter() {
   state.currentCountry = document.getElementById('country-filter').value || '';
   loadPlayers(true);
+}
+
+function normalizeRoleKey(category) {
+  var cat = String(category || '').trim().toUpperCase().replace(/_/g, ' ');
+  var compact = cat.replace(/[- ]/g, '');
+  if (cat.indexOf('WK') !== -1 || cat.indexOf('KEEP') !== -1) return 'wk';
+  if (cat === 'AR' || compact.indexOf('ALL') !== -1) return 'ar';
+  if (cat.indexOf('BOWL') !== -1) return 'bowl';
+  if (cat.indexOf('BAT') !== -1) return 'bat';
+  return 'bat';
+}
+
+function roleRuleStatus() {
+  var counts = {};
+  Object.values(state.selected).forEach(function(p) {
+    var key = normalizeRoleKey(p.category);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  var messages = [];
+  var valid = true;
+  Object.keys(state.roleRules || {}).forEach(function(roleKey) {
+    var rule = state.roleRules[roleKey] || {};
+    var count = counts[roleKey] || 0;
+    var min = parseInt(rule.min || 0, 10);
+    var max = rule.max === null || rule.max === undefined || rule.max === '' ? null : parseInt(rule.max, 10);
+    var label = rule.label || roleKey;
+    if (min || max !== null) {
+      messages.push(label + ': ' + count + (min ? ' / min ' + min : '') + (max !== null ? ' / max ' + max : ''));
+    }
+    if (min && count < min) valid = false;
+    if (max !== null && count > max) valid = false;
+  });
+  return { valid: valid, text: messages.join(' · ') };
 }
 
 function countryRuleStatus() {
@@ -299,14 +340,18 @@ function updateFooter() {
   document.getElementById('vc-text').textContent = vc ? '✓' : '✗';
   document.getElementById('pts-text').textContent = pts.toFixed(1);
 
-  var ruleStatus = countryRuleStatus();
+  var countryStatus = countryRuleStatus();
+  var roleStatus = roleRuleStatus();
   var ruleEl = document.getElementById('country-rule-text');
   if (ruleEl) {
-    ruleEl.textContent = ruleStatus.text;
-    ruleEl.style.color = ruleStatus.valid ? 'var(--muted)' : 'var(--red)';
+    var textParts = [];
+    if (roleStatus.text) textParts.push(roleStatus.text);
+    if (countryStatus.text) textParts.push(countryStatus.text);
+    ruleEl.textContent = textParts.join(' · ');
+    ruleEl.style.color = (countryStatus.valid && roleStatus.valid) ? 'var(--muted)' : 'var(--red)';
   }
 
-  var ready = !state.locked && n === 11 && cap === 1 && vc === 1 && ruleStatus.valid;
+  var ready = !state.locked && n === 11 && cap === 1 && vc === 1 && countryStatus.valid && roleStatus.valid;
   document.getElementById('confirm-btn').disabled = !ready;
   document.getElementById('confirm-btn').textContent = state.locked ? '🔒 Squads Locked' : 'Confirm Squad';
 }
@@ -317,6 +362,14 @@ function confirmSquad() {
     return { player_id: p.player_id, role: p.role };
   });
   if (picks.length !== 11) return;
+  var countryStatus = countryRuleStatus();
+  var roleStatus = roleRuleStatus();
+  if (!countryStatus.valid || !roleStatus.valid) {
+    var msg = [roleStatus.text, countryStatus.text].filter(Boolean).join(' · ');
+    if (tg && tg.showAlert) tg.showAlert('Squad rules are not satisfied: ' + msg);
+    else alert('Squad rules are not satisfied: ' + msg);
+    return;
+  }
   if (!state.leagueId) {
     if (tg) tg.showAlert('No active fantasy league found.');
     else alert('No active fantasy league found.');
