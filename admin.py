@@ -6990,7 +6990,7 @@ def _miniapp_activity_keyboard(chat_id):
         url = f"https://t.me/{bot_username}/{miniapp_name}?startapp={start_param}"
     else:
         url = f"https://t.me/{bot_username}?startapp={start_param}"
-    return {"inline_keyboard": [[{"text": "🎮 Open Mini App", "url": url}]]}
+    return {"inline_keyboard": [[{"text": "Open Mini App", "url": url}]]}
 
 
 def post_miniapp_activity(user, action, **ctx):
