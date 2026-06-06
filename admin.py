@@ -6526,15 +6526,11 @@ def match_rest_autoplay_status():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
-        from services.match_webapp_access import get_state, save_state, get_next_action
+        from services.match_webapp_access import save_autoplay_users
         from services.crickidex_arena import serialize_match_state
-        state = get_state(match.id)
+        state = save_autoplay_users(match.id, user.id, bool(data.get("active")))
         if not state:
             return {"ok": False, "error": "no_match"}, 404
-        autoplay_users = dict(state.get("autoplay_users") or {})
-        autoplay_users[str(user.id)] = bool(data.get("active"))
-        state["autoplay_users"] = autoplay_users
-        save_state(match.id, state, next_action=get_next_action(match.id))
         return {
             "ok": True,
             "matchState": serialize_match_state(db, match, user),

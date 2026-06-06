@@ -51,6 +51,11 @@ def save_state(mid, state, next_action=None, last_prompt_msg_id=None):
                       last_prompt_msg_id=last_prompt_msg_id)
 
 
+def save_autoplay_users(mid, user_id, active):
+    """Persist only the Autoplay participant map against latest DB state."""
+    return _store.save_autoplay_users(_DummyCtx(), mid, user_id, active)
+
+
 def set_next_action(mid, next_action, last_prompt_msg_id=None):
     _store.set_next_action(_DummyCtx(), mid, next_action,
                            last_prompt_msg_id=last_prompt_msg_id)
