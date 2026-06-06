@@ -18,6 +18,9 @@ const POLL_REQUEST_TIMEOUT_MS = 8000;
 const MAX_POLL_FAILURES = 10;
 const MATCH_POLL_INTERVAL_MS = 150;
 const AUTOPLAY_ACTION_DELAY_MS = 0;
+// Fixed ball-by-ball pacing. Each visible transition in the Mini App
+// (delivery reveal, ready-to-shot handoff, and shot-to-outcome reveal) is 0.6s.
+const BALL_FLOW_DELAY_MS = 600;
 // How long the ball-outcome event box (GIF/text) lingers before reverting to
 // idle. Kept short so the outcome reads instantly after a shot and the
 // celebratory GIF only flashes briefly instead of holding the screen ~3s.
@@ -32,6 +35,8 @@ let autoplayMatchId = null; // match id Autoplay was last applied to (reset per 
 let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
 let eventGifTimer = null;
+let flowStageTimer = null;
+let flowActionInFlight = false;
 let preloadedEventGifIds = new Set();
 let wasMyTurn = false;
 let lastActionableSig = null; // tracks the current actionable turn for auto-expand
@@ -358,7 +363,7 @@ async function fetchWithTimeout(url, options = {}) {
 }
 
 async function fetchState() {
-  if (fetchInFlight) return;
+  if (fetchInFlight || flowActionInFlight) return;
   fetchInFlight = true;
   try {
     // Build query safely without sending stringified "null" or "undefined"
@@ -424,7 +429,10 @@ function applyMatchState(nextState) {
     const latest = matchState.commentary[0];
     if (latest && (latest.type === 'ball' || latest.runs !== undefined)) {
       const uniqueKey = `${matchState.status}_${matchState.ballSeq ?? latest.over}`;
-      if (lastBallUniqueId && lastBallUniqueId !== uniqueKey) triggerMatchEvent(latest);
+      const shouldRevealOutcome = lastBallUniqueId
+        ? lastBallUniqueId !== uniqueKey
+        : flowActionInFlight;
+      if (shouldRevealOutcome) triggerMatchEvent(latest);
       lastBallUniqueId = uniqueKey;
     }
   }
@@ -1155,7 +1163,10 @@ async function submitShot(shot) {
   // Collapse the shot sheet immediately so the resolved outcome (and the event
   // box) is fully visible. The per-turn auto-expand re-opens it on the next ball.
   minimizeControlsSheet();
+  showFlowStage('🏏 Shot played', `${shot} selected — outcome incoming…`, 'evt-runs');
+  flowActionInFlight = true;
   try {
+    const flowDelay = delay(BALL_FLOW_DELAY_MS);
     const res = await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1163,10 +1174,13 @@ async function submitShot(shot) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit shot");
+    await flowDelay;
     if (data.matchState) applyMatchState(data.matchState);
-    else fetchState();
+    else { flowActionInFlight = false; fetchState(); }
   } catch (err) {
     alert(err.message);
+  } finally {
+    flowActionInFlight = false;
   }
 }
 
@@ -1214,10 +1228,14 @@ async function submitDelivery() {
     return;
   }
 
-  // Minimize sheet immediately
+  // Minimize sheet immediately and show the delivery reveal for exactly 0.6s
+  // before handing the screen to the batsman.
   minimizeControlsSheet();
+  showFlowStage('🎳 Bowler delivers', `${selectedDelivery} at ${selectedSpeed} pace`, 'evt-runs');
+  flowActionInFlight = true;
 
   try {
+    const flowDelay = delay(BALL_FLOW_DELAY_MS);
     const res = await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1237,13 +1255,17 @@ async function submitDelivery() {
     document.getElementById('bowler-delivery-select').value = '';
     document.getElementById('bowler-delivery-grid').innerHTML = '';
     document.getElementById('bowler-length-section').classList.add('hidden');
+    await flowDelay;
+    showFlowStage('🏏 Batsman ready', 'Ready to play the shot', 'evt-dot');
     // Apply the state returned by the action endpoint right away instead of
     // waiting for the next poll cycle, so the bowler sees the outcome/turn flip
     // immediately (mirrors submitShot).
     if (data.matchState) applyMatchState(data.matchState);
-    else fetchState();
+    else { flowActionInFlight = false; fetchState(); }
   } catch (err) {
     alert(err.message);
+  } finally {
+    flowActionInFlight = false;
   }
 }
 
@@ -2275,6 +2297,32 @@ function fireEventHaptic(comm) {
   } catch (e) {
     console.warn("Haptic trigger failed:", e);
   }
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function showFlowStage(title, subtitle = '', mod = 'evt-runs') {
+  const { box, idle, label } = getEventBoxEls();
+  if (!box) return;
+  clearTimeout(eventGifTimer);
+  clearTimeout(flowStageTimer);
+  clearEventBoxMedia();
+  clearEventBoxParticles(box);
+  box.className = `event-gif-box is-text is-flow-stage ${mod}`;
+  box.style.width = '';
+  box.style.height = '';
+  box.style.aspectRatio = '';
+  if (idle) idle.style.display = 'none';
+  if (label) {
+    label.style.display = 'flex';
+    label.innerHTML = `<span class="evt-title">${title}</span>` +
+      (subtitle ? `<span class="evt-sub">${subtitle}</span>` : '');
+  }
+  flowStageTimer = setTimeout(() => {
+    if (box.classList.contains('is-flow-stage')) showEventBoxIdle();
+  }, BALL_FLOW_DELAY_MS);
 }
 
 // Render the ball outcome as text inside the fixed box (used when no GIF is
