@@ -3208,7 +3208,7 @@ async function sendSuggestion() {
   }
   if (msg) msg.value = '';
   updateSuggestionCount();
-  toast('Suggestion sent to admin — thank you!', 'success');
+  toast(data.message || 'Suggestion sent to admin — thank you!', 'success');
   hapticNotif('success');
 }
 

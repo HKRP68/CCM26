@@ -3310,6 +3310,66 @@ def _get_branding_safe(db):
                 "tagline": "", "has_any": False}
 
 
+def _admin_chat_id_for_notifications():
+    """Return the Telegram chat configured for admin notifications.
+
+    The suggestion box should not silently succeed when this value is missing
+    because users expect the admin to receive the message immediately.  Keep
+    the primary env var aligned with /feedback and accept a couple of common
+    aliases to avoid deployment misconfiguration causing dropped notifications.
+    """
+    for key in ("ADMIN_CHAT_ID", "ADMIN_TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_CHAT_ID"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return int(value) if value.lstrip("-").isdigit() else value
+    return None
+
+
+def _send_admin_suggestion_notification(user, report, message):
+    """Send a Mini App suggestion to the configured admin chat.
+
+    Returns ``(ok, user_message)`` so the API can avoid showing a false
+    success toast when Telegram rejected the notification.
+    """
+    chat_id = _admin_chat_id_for_notifications()
+    if not chat_id:
+        logger.warning(
+            "suggestion report %s saved, but no admin chat env var is configured",
+            getattr(report, "id", None),
+        )
+        return False, "Suggestion saved, but admin notifications are not configured."
+
+    user_label = f"@{user.username}" if user.username else (user.first_name or f"User {user.id}")
+    safe_label = html_lib.escape(user_label)
+    safe_team = html_lib.escape(user.team_name or "No team name")
+    safe_message = html_lib.escape(message)
+    payload = {
+        "chat_id": chat_id,
+        "text": (
+            "💡 <b>New Mini App Suggestion</b>\n\n"
+            f"From: {safe_label} (<code>{user.telegram_id}</code>)\n"
+            f"Team: {safe_team}\n"
+            f"Report ID: <code>{report.id}</code>\n\n"
+            f"<i>{safe_message}</i>"
+        ),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    result = _tg_api_post("sendMessage", payload, timeout=10)
+    if result and result.get("ok"):
+        return True, "Suggestion sent to admin — thank you!"
+
+    description = "Telegram did not accept the admin notification."
+    if isinstance(result, dict):
+        description = result.get("description") or description
+    logger.warning(
+        "suggestion report %s saved, but admin notification failed: %s",
+        report.id,
+        description,
+    )
+    return False, f"Suggestion saved, but the admin notification failed: {description}"
+
+
 @app.route("/api/webapp/suggestion", methods=["POST"])
 @csrf_exempt
 def webapp_suggestion():
@@ -3345,27 +3405,11 @@ def webapp_suggestion():
         db.add(report)
         db.commit()
 
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID", "").strip()
-        if admin_chat_id:
-            user_label = f"@{user.username}" if user.username else (user.first_name or f"User {user.id}")
-            safe_label = html_lib.escape(user_label)
-            safe_team = html_lib.escape(user.team_name or "No team name")
-            safe_message = html_lib.escape(message)
-            chat_id = int(admin_chat_id) if admin_chat_id.lstrip("-").isdigit() else admin_chat_id
-            _tg_send_async({
-                "chat_id": chat_id,
-                "text": (
-                    "💡 <b>New Mini App Suggestion</b>\n\n"
-                    f"From: {safe_label} (<code>{user.telegram_id}</code>)\n"
-                    f"Team: {safe_team}\n"
-                    f"Report ID: <code>{report.id}</code>\n\n"
-                    f"<i>{safe_message}</i>"
-                ),
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            })
+        notify_ok, notify_message = _send_admin_suggestion_notification(user, report, message)
+        if not notify_ok:
+            return {"ok": False, "message": notify_message, "report_id": report.id}, 502
 
-        return {"ok": True, "report_id": report.id}
+        return {"ok": True, "message": notify_message, "report_id": report.id}
     except Exception as e:
         db.rollback()
         logger.exception("webapp_suggestion failed")
