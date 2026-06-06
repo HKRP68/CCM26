@@ -46,7 +46,21 @@ class MaintenanceServiceTests(unittest.TestCase):
         update = DummyUpdate("/playmatch@CricketCardBot")
 
         self.assertTrue(should_block_update(update, MAINTENANCE_ON))
-        self.assertTrue(should_reply_with_maintenance(update))
+        self.assertTrue(is_command_update(update, "CricketCardBot"))
+        self.assertTrue(should_reply_with_maintenance(update, "CricketCardBot"))
+
+    def test_commands_addressed_to_other_bot_are_blocked_silently(self):
+        update = DummyUpdate("/help@OtherBot")
+
+        self.assertTrue(should_block_update(update, MAINTENANCE_ON))
+        self.assertFalse(is_command_update(update, "CricketCardBot"))
+        self.assertFalse(should_reply_with_maintenance(update, "CricketCardBot"))
+
+    def test_commands_addressed_to_this_bot_match_case_insensitively(self):
+        update = DummyUpdate("/help@cricketcardbot")
+
+        self.assertTrue(is_command_update(update, "CricketCardBot"))
+        self.assertTrue(should_reply_with_maintenance(update, "CricketCardBot"))
 
     def test_bypassed_user_is_not_blocked(self):
         update = DummyUpdate("/playmatch", user_id=999)

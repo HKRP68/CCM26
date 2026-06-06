@@ -680,7 +680,9 @@ def main():
                 # Blocked — reply only to commands. Non-command group chatter
                 # is stopped silently to avoid spamming every message during
                 # maintenance mode.
-                if should_reply_with_maintenance(update):
+                if should_reply_with_maintenance(
+                    update, getattr(context.bot, "username", None)
+                ):
                     try:
                         text = get_maintenance_message()
                         if update.message:
