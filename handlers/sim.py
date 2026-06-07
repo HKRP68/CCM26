@@ -89,6 +89,12 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # hold a pooled connection during the suspense delay. ----
     session = get_session()
     try:
+        from services.command_config_service import is_command_enabled, get_disabled_message
+        if not is_command_enabled(session, "sim"):
+            await update.message.reply_text(
+                get_disabled_message(session, "sim"), parse_mode="HTML")
+            return
+
         user = sync_telegram_user(session, update.effective_user)
         if not user:
             await update.message.reply_text("❌ Do /debut first!")

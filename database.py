@@ -539,6 +539,10 @@ def _migrate_add_columns():
                 ("testwpm", "/testwpm", "",
                  "Diagnostic: test /wpm and /cm completion summary delivery.",
                  "matches", 0, 90, dict()),
+                ("sim", "/sim", "simmatch",
+                 "Instant auto-simulated match vs a Sim XI — scorecard, result, "
+                 "and ball-by-ball commentary JSON.",
+                 "matches", 0, 95, dict()),
             ]
             n_cmd = 0; n_rwd = 0
             for key, name, aliases, desc, cat, cd, srt, rwd in defaults:
