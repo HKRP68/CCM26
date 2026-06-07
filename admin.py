@@ -6302,6 +6302,44 @@ def match_rest_select_players():
         db.close()
 
 
+@app.route("/api/match/impact-player", methods=["POST"])
+@csrf_exempt
+def match_rest_impact_player():
+    """POST /api/match/impact-player
+    Body: {userId, matchId, inRosterId, outRosterId}. Applies the one-time
+    IPL-style Impact Player substitution from non-XI bench into the active XI.
+    """
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        try:
+            in_rid = int(data.get("inRosterId") or data.get("in_roster_id") or 0)
+            out_rid = int(data.get("outRosterId") or data.get("out_roster_id") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "bad_roster_id", "message": "Pick both players."}, 400
+        from services.match_webapp_service import use_impact_player
+        ok, msg, rec = use_impact_player(db, match.id, user.id, in_rid, out_rid)
+        if not ok:
+            return {"ok": False, "error": msg, "message": msg}, 400
+        try:
+            _broadcast_match_scorecard(match.id)
+        except Exception:
+            logger.exception("impact player scorecard broadcast failed")
+        from services.crickidex_arena import serialize_match_state
+        return {"ok": True, "message": msg, "impact": rec,
+                "matchState": serialize_match_state(db, match, user)}
+    except Exception as e:
+        logger.exception("match_rest_impact_player failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/match/action", methods=["POST"])
 @csrf_exempt
 def match_rest_action():

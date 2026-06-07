@@ -486,6 +486,28 @@ def serialize_match_state(session, match, viewer_user):
         None,
     )
 
+    # ── Impact Player availability/summary ──
+    impact_player = {"canUse": False, "used": False, "summary": _impact_summary_for_result(state)}
+    if viewer_uid and status != "completed":
+        try:
+            from services.match_webapp_service import get_impact_player_options
+            opts = get_impact_player_options(session, match_id, viewer_uid)
+            if opts.get("ok"):
+                impact_player = {
+                    "canUse": bool(opts.get("can_use")),
+                    "used": bool(opts.get("used")),
+                    "legalBreak": opts.get("legal_break"),
+                    "message": opts.get("message"),
+                    "incomingOptions": [_p(p) for p in opts.get("incoming_options", [])],
+                    "replaceablePlayers": [{**_p(p),
+                                             "disabled": bool(p.get("disabled")),
+                                             "disabledReason": p.get("disabled_reason")}
+                                            for p in opts.get("replaceable_players", [])],
+                    "summary": _impact_summary_for_result(state),
+                }
+        except Exception:
+            logger.exception("impact player options failed (non-fatal)")
+
     # ── result (completed) ──
     result = None
     if status == "completed":
@@ -533,6 +555,7 @@ def serialize_match_state(session, match, viewer_user):
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
         "result": result,
+        "impactPlayer": impact_player,
         "deliveryOptions": delivery_options,
         "host": host,
         "guest": guest,
@@ -573,6 +596,22 @@ def serialize_match_state(session, match, viewer_user):
         "inn2PartnershipHistory": inn2_partnerships,
     }
 
+
+
+def _impact_summary_for_result(state):
+    usage = ((state.get("impact_players") or {}).get("usage") or {})
+    rows = []
+    for uid_s, rec in usage.items():
+        if not isinstance(rec, dict) or not rec.get("used"):
+            continue
+        rows.append({
+            "teamName": rec.get("team_name") or "Team",
+            "inPlayer": rec.get("in_player"),
+            "outPlayer": rec.get("out_player"),
+            "usedAt": rec.get("used_at"),
+            "innings": rec.get("innings"),
+        })
+    return rows
 
 def _build_result(session, state, match, tg_of, host, guest):
     """Result overlay payload for a completed match."""
@@ -650,4 +689,5 @@ def _build_result(session, state, match, tg_of, host, guest):
         "loserReward": loser_reward,
         "resultText": (state.get("match_result") or {}).get("text"),
         "motm": motm,
+        "impactPlayers": state.get("impact_player_summary") or _impact_summary_for_result(state),
     }

@@ -246,6 +246,11 @@
             <span class="ytb-list" id="scorecard-yet-to-bat"></span>
           </div>
 
+          <div class="impact-scorecard-box" id="scorecard-impact-box">
+            <div class="impact-scorecard-title">✨ IMPACT PLAYERS</div>
+            <div id="scorecard-impact-list" class="impact-scorecard-list">Not used yet</div>
+          </div>
+
           <!-- Bowling Team Section -->
           <div class="scorecard-section-title" id="scorecard-bowling-title" style="margin-top: 16px;">BOWLING</div>
           <div class="scorecard-table">
@@ -402,6 +407,27 @@
             <button id="submit-over-bowler-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Bowler</button>
           </div>
 
+          <!-- IMPACT PLAYER SELECTION -->
+          <div id="impact-player-controls" class="controls-section hidden">
+            <div class="impact-control-header">
+              <div>
+                <p class="info-text impact-title">✨ Impact Player</p>
+                <p class="info-text" id="impact-player-hint">Can be used between overs, after a wicket, or at innings break.</p>
+              </div>
+              <button id="impact-player-cancel-btn" class="btn btn-secondary btn-sm hidden">Cancel</button>
+            </div>
+            <button id="use-impact-player-btn" class="btn btn-primary btn-block btn-green">Use Impact Player</button>
+            <div id="impact-player-picker" class="hidden">
+              <p class="warning-text" id="impact-player-step-text">Select incoming substitute:</p>
+              <div id="impact-incoming-list" class="selection-list mb-3"></div>
+              <div id="impact-outgoing-wrap" class="hidden">
+                <p class="warning-text">Now select a player to remove from Playing XI:</p>
+                <div id="impact-outgoing-list" class="selection-list mb-3"></div>
+              </div>
+              <button id="confirm-impact-player-btn" class="btn btn-primary btn-block btn-green mt-3" disabled>Confirm Impact Player</button>
+            </div>
+          </div>
+
           <!-- OPPONENT WAITING STATE -->
           <div id="controls-waiting" class="controls-state">
             <div class="waiting-turn">
@@ -449,6 +475,11 @@
           <div class="motm-badge">🌟 MAN OF THE MATCH 🌟</div>
           <h3 id="result-motm-name">-</h3>
           <p id="result-motm-stats">-</p>
+        </div>
+
+        <div id="result-impact-section" class="motm-section impact-result-section hidden">
+          <div class="motm-badge">✨ IMPACT PLAYERS ✨</div>
+          <div id="result-impact-list" class="impact-scorecard-list">Not used</div>
         </div>
 
         <div class="result-buttons" style="display: flex; gap: 10px; width: 100%;">
