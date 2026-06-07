@@ -92,6 +92,9 @@ from handlers.match import (
     testwpm_handler,
 )
 
+# Auto-simulated match handler (/sim)
+from handlers.sim import sim_handler
+
 # Trait handlers
 from handlers.traits import (
     traits_handler, traitshop_handler, traitapply_handler,
@@ -783,6 +786,7 @@ def main():
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler("wpm", wpm_handler))
+        app.add_handler(CommandHandler(["sim", "simmatch"], sim_handler))
         app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
