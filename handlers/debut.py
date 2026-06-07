@@ -38,13 +38,15 @@ def _build_post_debut_onboarding_markup(chat=None):
 
     Telegram only accepts native Web App buttons in private chats. Group and
     supergroup messages must use the Mini App deep-link fallback provided by
-    ``miniapp_button``.
+    ``miniapp_button``. The post-debut starter guide is rendered on the home
+    dashboard, so target that routable screen instead of the pre-debut setup
+    screen.
     """
     chat_type = getattr(chat, "type", "private") if chat else "private"
     is_private = chat_type == "private"
     btn = miniapp_button(
         "🏏 Continue Starter Guide in Mini App",
-        "onboarding",
+        "home",
         is_private=is_private,
         origin_chat_id=(getattr(chat, "id", None) if chat else None),
     )
