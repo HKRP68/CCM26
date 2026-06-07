@@ -79,7 +79,7 @@ def test_post_debut_onboarding_private_uses_native_webapp(monkeypatch):
     markup = build_markup(SimpleNamespace(type="private", id=123))
 
     button = _only_button(markup)
-    assert button.web_app.url == "https://mini.example/app#onboarding"
+    assert button.web_app.url == "https://mini.example/app#home"
     assert button.url is None
 
 
@@ -94,7 +94,7 @@ def test_post_debut_onboarding_group_uses_deep_link_not_webapp(monkeypatch):
     button = _only_button(markup)
     assert button.web_app is None
     assert button.url == (
-        "https://t.me/CricMasterBot/play?startapp=onboarding_c-100987654321"
+        "https://t.me/CricMasterBot/play?startapp=home_c-100987654321"
     )
 
 
