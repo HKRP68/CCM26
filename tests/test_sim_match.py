@@ -203,7 +203,7 @@ def test_toss_winner_can_elect_to_bowl_and_json_intro_names_openers():
         "Bowling DC",
     ]
     assert m["innings1"]["innings_intro"][3] == (
-        "CSK1 and CSK2 will open the attack for CSK. CSK1 is on strike."
+        "CSK1 and CSK2 will open the batting for CSK. CSK1 is on strike."
     )
     assert m["innings1"]["innings_intro"][4].endswith(
         "will bowl the opening over for DC"

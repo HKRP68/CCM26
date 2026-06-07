@@ -355,7 +355,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             f"INNINGS {innings_no}",
             f"Batting {batting_team}",
             f"Bowling {bowling_team}",
-            (f"{opening_striker_name} and {opening_non_striker_name} will open the attack "
+            (f"{opening_striker_name} and {opening_non_striker_name} will open the batting "
              f"for {batting_team}. {opening_striker_name} is on strike."
              if opening_striker_name and opening_non_striker_name else ""),
             (f"{opening_bowler_name} will bowl the opening over for {bowling_team}"
