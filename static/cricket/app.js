@@ -41,6 +41,7 @@ let preloadedEventGifIds = new Set();
 let wasMyTurn = false;
 let lastActionableSig = null; // tracks the current actionable turn for auto-expand
 let selectionSubmitInFlight = false;
+let impactSelection = { incoming: null, outgoing: null, open: false };
 
 // Initial Setup
 async function init() {
@@ -149,6 +150,13 @@ function setupEventListeners() {
       window.close();
     }
   });
+
+  const useImpactBtn = document.getElementById('use-impact-player-btn');
+  if (useImpactBtn) useImpactBtn.addEventListener('click', openImpactPlayerPicker);
+  const cancelImpactBtn = document.getElementById('impact-player-cancel-btn');
+  if (cancelImpactBtn) cancelImpactBtn.addEventListener('click', closeImpactPlayerPicker);
+  const confirmImpactBtn = document.getElementById('confirm-impact-player-btn');
+  if (confirmImpactBtn) confirmImpactBtn.addEventListener('click', submitImpactPlayer);
 
   // Completed-match scorecard toggle. Keep the finished board read-only,
   // but let players jump into the scorecard and reopen the result at any time.
@@ -633,6 +641,29 @@ function renderSetupScreen() {
     submitBtn.classList.remove('hidden');
     waitingInd.classList.add('hidden');
   }
+
+  renderSetupImpactControls();
+}
+
+function renderSetupImpactControls() {
+  const sheet = document.getElementById('controls-sheet');
+  const impact = matchState.impactPlayer || {};
+  if (!sheet) return;
+  const isInningsBreak = matchState.currentInningsIdx === 1 && matchState.status === 'xi_selection';
+  if (!isInningsBreak || matchState.myRole === 'spectator' || impact.used) {
+    sheet.classList.add('hidden');
+    return;
+  }
+  sheet.classList.remove('hidden');
+  document.getElementById('controls-waiting')?.classList.add('hidden');
+  document.getElementById('batting-controls')?.classList.add('hidden');
+  document.getElementById('bowling-controls')?.classList.add('hidden');
+  document.getElementById('wicket-batsman-controls')?.classList.add('hidden');
+  document.getElementById('over-bowler-controls')?.classList.add('hidden');
+  document.getElementById('incoming-delivery-container')?.classList.add('hidden');
+  document.getElementById('controls-prompt-text').innerText = '✨ INNINGS BREAK';
+  document.getElementById('controls-prompt-subtitle').innerText = 'Use Impact Player now, or confirm your innings setup.';
+  renderImpactPlayerControls();
 }
 
 // Setup Submit handler
@@ -837,11 +868,13 @@ function renderControlsSection() {
   const bowlingControls = document.getElementById('bowling-controls');
   const wicketBatsmanControls = document.getElementById('wicket-batsman-controls');
   const overBowlerControls = document.getElementById('over-bowler-controls');
+  const impactControls = document.getElementById('impact-player-controls');
   const hideActionSections = () => {
     battingControls.classList.add('hidden');
     bowlingControls.classList.add('hidden');
     wicketBatsmanControls.classList.add('hidden');
     overBowlerControls.classList.add('hidden');
+    if (impactControls) impactControls.classList.add('hidden');
   };
 
   renderAutoplayStatusMessage();
@@ -924,6 +957,7 @@ function renderControlsSection() {
 
     hideActionSections();
     incomingCard.classList.add('hidden');
+    renderImpactPlayerControls();
     return;
   }
 
@@ -952,6 +986,7 @@ function renderControlsSection() {
   // Hide all sections initially
   hideActionSections();
   resetAutoplayQuickCards();
+  renderImpactPlayerControls();
 
   if (autoplayActive && matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLING AUTOPLAY";
@@ -1016,6 +1051,121 @@ function renderControlsSection() {
     document.getElementById('over-bowler-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderOverBowlerSelectionSheet();
+  }
+}
+
+
+function renderImpactPlayerControls() {
+  const controls = document.getElementById('impact-player-controls');
+  const btn = document.getElementById('use-impact-player-btn');
+  const hint = document.getElementById('impact-player-hint');
+  if (!controls || !btn || !matchState) return;
+  const impact = matchState.impactPlayer || {};
+  if (matchState.myRole === 'spectator' || impact.used || matchState.status === 'completed') {
+    controls.classList.add('hidden');
+    closeImpactPlayerPicker({ silent: true });
+    return;
+  }
+  controls.classList.remove('hidden');
+  const legal = impact.legalBreak ? `Available ${impact.legalBreak}.` : (impact.message || 'Use between overs, after a wicket, or at innings break.');
+  hint.innerText = legal;
+  btn.disabled = !impact.canUse;
+  btn.classList.toggle('hidden', impactSelection.open);
+  if (impactSelection.open) renderImpactPlayerPicker();
+}
+
+function openImpactPlayerPicker() {
+  impactSelection = { incoming: null, outgoing: null, open: true };
+  renderImpactPlayerPicker();
+}
+
+function closeImpactPlayerPicker(opts = {}) {
+  impactSelection = { incoming: null, outgoing: null, open: false };
+  const picker = document.getElementById('impact-player-picker');
+  const btn = document.getElementById('use-impact-player-btn');
+  const cancel = document.getElementById('impact-player-cancel-btn');
+  if (picker) picker.classList.add('hidden');
+  if (btn) btn.classList.remove('hidden');
+  if (cancel) cancel.classList.add('hidden');
+  if (!opts.silent) renderImpactPlayerControls();
+}
+
+function renderImpactPlayerPicker() {
+  const impact = matchState.impactPlayer || {};
+  const picker = document.getElementById('impact-player-picker');
+  const incomingList = document.getElementById('impact-incoming-list');
+  const outgoingWrap = document.getElementById('impact-outgoing-wrap');
+  const outgoingList = document.getElementById('impact-outgoing-list');
+  const confirmBtn = document.getElementById('confirm-impact-player-btn');
+  const cancelBtn = document.getElementById('impact-player-cancel-btn');
+  const stepText = document.getElementById('impact-player-step-text');
+  if (!picker || !incomingList || !outgoingList || !confirmBtn) return;
+  picker.classList.remove('hidden');
+  if (cancelBtn) cancelBtn.classList.remove('hidden');
+  if (stepText) stepText.innerText = impactSelection.incoming
+    ? `Incoming: ${impactSelection.incoming.name}. Select player to remove:`
+    : 'Select incoming substitute from outside Playing XI:';
+
+  const buildPlayerRow = (p, onClick, selected) => {
+    const div = document.createElement('div');
+    div.className = `selection-item ${selected ? 'selected' : ''} ${p.disabled ? 'disabled' : ''}`;
+    div.innerHTML = `
+      <span class="selection-item-name">${p.name}</span>
+      <span class="selection-item-meta">${p.ovr || p.rating || 0} OVR · ${p.role || p.category || 'Player'}${p.disabledReason ? ' · ' + p.disabledReason : ''}</span>
+    `;
+    if (!p.disabled) div.onclick = onClick;
+    return div;
+  };
+
+  incomingList.innerHTML = '';
+  const incoming = impact.incomingOptions || [];
+  if (!incoming.length) {
+    incomingList.innerHTML = '<div class="no-options">No bench players available outside Playing XI</div>';
+  } else {
+    incoming.forEach(p => incomingList.appendChild(buildPlayerRow(p, () => {
+      impactSelection.incoming = p;
+      impactSelection.outgoing = null;
+      renderImpactPlayerPicker();
+    }, impactSelection.incoming && impactSelection.incoming.id === p.id)));
+  }
+
+  outgoingList.innerHTML = '';
+  if (impactSelection.incoming) {
+    outgoingWrap.classList.remove('hidden');
+    (impact.replaceablePlayers || []).forEach(p => outgoingList.appendChild(buildPlayerRow(p, () => {
+      impactSelection.outgoing = p;
+      renderImpactPlayerPicker();
+    }, impactSelection.outgoing && impactSelection.outgoing.id === p.id)));
+  } else {
+    outgoingWrap.classList.add('hidden');
+  }
+  confirmBtn.disabled = !(impactSelection.incoming && impactSelection.outgoing);
+}
+
+async function submitImpactPlayer() {
+  if (!impactSelection.incoming || !impactSelection.outgoing) return;
+  const btn = document.getElementById('confirm-impact-player-btn');
+  try {
+    if (btn) btn.disabled = true;
+    const res = await fetch('/api/match/impact-player', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        matchId,
+        inRosterId: impactSelection.incoming.id,
+        outRosterId: impactSelection.outgoing.id
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.error || 'Failed to use Impact Player');
+    closeImpactPlayerPicker({ silent: true });
+    if (data.matchState) applyMatchState(data.matchState);
+    else fetchState();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1768,6 +1918,8 @@ function renderScorecardPanel() {
   document.getElementById('scorecard-yet-to-bat').innerText =
     (ytbPlayers && ytbPlayers.length > 0) ? ytbPlayers.map(p => p.name).join(', ') : 'None';
 
+  renderImpactPlayerSummary('scorecard-impact-list', matchState.impactPlayer?.summary || matchState.result?.impactPlayers || []);
+
   // Render bowling rows
   const bowlContainer = document.getElementById('scorecard-bowling-rows');
   bowlContainer.innerHTML = '';
@@ -1888,6 +2040,46 @@ function renderResultScreen() {
   } else {
     motmSection.classList.add('hidden');
   }
+
+  const impactSection = document.getElementById('result-impact-section');
+  const impactRows = result?.impactPlayers || matchState.impactPlayer?.summary || [];
+  if (impactRows.length) {
+    impactSection.classList.remove('hidden');
+    renderImpactPlayerSummary('result-impact-list', impactRows);
+  } else {
+    impactSection.classList.add('hidden');
+  }
+}
+
+function renderImpactPlayerSummary(elementId, rows) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const usedRows = rows || [];
+  const teamNames = [];
+  if (matchState?.host) teamNames.push(matchState.host.teamName || matchState.host.username || 'Host');
+  if (matchState?.guest) teamNames.push(matchState.guest.teamName || matchState.guest.username || 'Guest');
+
+  const renderRow = (team, row) => {
+    if (!row) return `<div class="impact-summary-row muted"><b>${team}</b>: Not used</div>`;
+    const inp = row.inPlayer || row.in_player || 'Impact player';
+    const outp = row.outPlayer || row.out_player || 'XI player';
+    const when = row.usedAt || row.used_at || '';
+    return `<div class="impact-summary-row"><b>${team}</b>: ${inp} replaced ${outp}${when ? ` <span>${when}</span>` : ''}</div>`;
+  };
+
+  if (teamNames.length) {
+    el.innerHTML = teamNames.map(team => {
+      const row = usedRows.find(r => (r.teamName || r.team_name || '').toLowerCase() === team.toLowerCase());
+      return renderRow(team, row);
+    }).join('');
+    return;
+  }
+
+  if (!usedRows.length) {
+    el.innerHTML = '<div class="impact-summary-row muted">Both teams: Not used</div>';
+    return;
+  }
+  el.innerHTML = usedRows.map(r => renderRow(r.teamName || r.team_name || 'Team', r)).join('');
 }
 
 // When autoplay is ON, the user's own side is handled by the SERVER-SIDE bot AI
