@@ -113,10 +113,43 @@ def _current_over_label(state):
     return f"{max(0, state.get('current_over', 1) - 1)}.{state.get('current_ball', 0)} ov"
 
 
+def _is_active_player(player):
+    return not isinstance(player, dict) or player.get("active", True) is not False
+
+
+def _active_players(players):
+    return [p for p in (players or []) if _is_active_player(p)]
+
+
 def _replace_player_in_list(players, out_rid, incoming):
     for i, p in enumerate(players or []):
         if p.get("roster_id") == out_rid:
             players[i] = incoming
+            return i
+    return None
+
+
+def _apply_impact_to_identity_list(players, out_rid, incoming):
+    """Keep the outgoing player's identity for stat lookup, but mark inactive.
+
+    Impact substitutions can occur after the outgoing player has already batted
+    or bowled. Scorecard and career persistence resolve stat rows through these
+    XI lists, so replacing the dict in-place can orphan existing stats.
+    """
+    for i, p in enumerate(players or []):
+        if p.get("roster_id") == out_rid and _is_active_player(p):
+            inactive = dict(p)
+            inactive["active"] = False
+            inactive["impact_replaced"] = True
+            inactive["replaced_by_roster_id"] = incoming.get("roster_id")
+            players[i] = inactive
+
+            if not any(pl.get("roster_id") == incoming.get("roster_id") for pl in players):
+                replacement = dict(incoming)
+                replacement["active"] = True
+                replacement["impact_replacement"] = True
+                replacement["replaced_roster_id"] = out_rid
+                players.append(replacement)
             return i
     return None
 
@@ -134,7 +167,7 @@ def get_impact_player_options(session, match_id, user_id):
     used = bool(rec.get("used"))
 
     active_key = _team_active_xi_key(state, user_id)
-    active_xi = list(state.get(active_key, []) or [])
+    active_xi = _active_players(state.get(active_key, []) or [])
     active_ids = {p.get("roster_id") for p in active_xi}
     unavailable = set(active_ids)
     for urec in usage.values():
@@ -215,7 +248,7 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
         return False, outgoing.get("disabled_reason") or "That player cannot be replaced right now.", None
 
     xi_key = _team_active_xi_key(state, user_id)
-    idx = _replace_player_in_list(state.get(xi_key, []), out_roster_id, incoming)
+    idx = _apply_impact_to_identity_list(state.get(xi_key, []), out_roster_id, incoming)
     if idx is None:
         return False, "Outgoing player is not in your active XI.", None
 
@@ -225,9 +258,20 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
             "out": False, "how_out": "", "bowled_by": "",
         }
         order = state.get("batting_order", []) or []
-        replaced_in_order = _replace_player_in_list(order, out_roster_id, incoming)
-        if replaced_in_order is None:
-            order.append(incoming)
+        out_batting = (state.get("bat_stats", {}).get(out_roster_id)
+                       or state.get("bat_stats", {}).get(str(out_roster_id))
+                       or {})
+        has_batted = bool(out_batting.get("balls") or out_batting.get("runs")
+                          or out_batting.get("out"))
+        if has_batted:
+            # A dismissed/used batter must stay in the historical order, so the
+            # incoming impact player is added as the next available batter.
+            if not any(p.get("roster_id") == in_roster_id for p in order):
+                order.append(incoming)
+        else:
+            replaced_in_order = _replace_player_in_list(order, out_roster_id, incoming)
+            if replaced_in_order is None:
+                order.append(incoming)
         state["batting_order"] = order
     else:
         state.setdefault("bowl_stats", {})[str(in_roster_id)] = {
@@ -647,9 +691,11 @@ def build_snapshot(session, match_id, user_id):
         "is_my_turn": whose_turn(state, next_action, user_id)[1],
         # Squad lists (names + role) for the Squads tab
         "bat_xi": [{"name": p.get("name"), "bowl_style": p.get("bowl_style"),
-                    "category": p.get("category")} for p in state.get("bat_xi", [])],
+                    "category": p.get("category"), "active": _is_active_player(p)}
+                   for p in state.get("bat_xi", [])],
         "bowl_xi": [{"name": p.get("name"), "bowl_style": p.get("bowl_style"),
-                     "category": p.get("category")} for p in state.get("bowl_xi", [])],
+                     "category": p.get("category"), "active": _is_active_player(p)}
+                    for p in state.get("bowl_xi", [])],
         # Stable host/guest identities for the match header (independent of who
         # is currently batting). host = user1, guest = user2.
         "host_name": state.get("host_name"),
@@ -666,14 +712,14 @@ def build_snapshot(session, match_id, user_id):
             {"roster_id": p["roster_id"], "name": p["name"],
              "bat_rating": p.get("bat_rating"), "rating": p.get("rating"),
              "category": p.get("category")}
-            for p in state.get("bat_xi", [])
+            for p in _active_players(state.get("bat_xi", []))
         ]
     if role == "bowler" and in_setup and not bowler_done:
         snap["bowler_options"] = [
             {"roster_id": p["roster_id"], "name": p["name"],
              "bowl_rating": p.get("bowl_rating"), "rating": p.get("rating"),
              "bowl_style": p.get("bowl_style"), "category": p.get("category")}
-            for p in state.get("bowl_xi", [])
+            for p in _active_players(state.get("bowl_xi", []))
         ]
 
     snap["setup_progress"] = {
@@ -821,7 +867,7 @@ def select_openers(match_id, user_id, striker_rid, non_striker_rid):
     if striker_rid == non_striker_rid:
         return False, False, "Striker and non-striker must be different players."
 
-    bat_xi = state.get("bat_xi", [])
+    bat_xi = _active_players(state.get("bat_xi", []))
     by_rid = {p["roster_id"]: p for p in bat_xi}
     if striker_rid not in by_rid or non_striker_rid not in by_rid:
         return False, False, "Pick players from your XI."
@@ -853,7 +899,7 @@ def select_bowler(match_id, user_id, bowler_rid):
     if not _in_setup(state) or state.get("bowler_done"):
         return False, False, "Bowler already chosen."
 
-    bowl_xi = state.get("bowl_xi", [])
+    bowl_xi = _active_players(state.get("bowl_xi", []))
     by_rid = {p["roster_id"]: p for p in bowl_xi}
     if bowler_rid not in by_rid:
         return False, False, "Pick a bowler from your XI."
@@ -901,7 +947,7 @@ def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
             return False, False, "Only the batting side picks openers."
         if striker_idx is None or non_striker_idx is None:
             return False, False, "Provide both strikerIdx and nonStrikerIdx."
-        bat_xi = state.get("bat_xi", [])
+        bat_xi = _active_players(state.get("bat_xi", []))
         if not (0 <= striker_idx < len(bat_xi)) or not (0 <= non_striker_idx < len(bat_xi)):
             return False, False, "Player index out of range."
         if striker_idx == non_striker_idx:
@@ -914,7 +960,7 @@ def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
     if bowler_idx is not None:
         if role != "bowler":
             return False, False, "Only the bowling side picks the bowler."
-        bowl_xi = state.get("bowl_xi", [])
+        bowl_xi = _active_players(state.get("bowl_xi", []))
         if not (0 <= bowler_idx < len(bowl_xi)):
             return False, False, "Bowler index out of range."
         b_rid = bowl_xi[bowler_idx]["roster_id"]
@@ -1677,7 +1723,7 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     na = mwa.get_next_action(match_id)
     if na != A_PICK_NEW_BOWLER:
         return False, "Not time to change bowler."
-    by_rid = {p["roster_id"]: p for p in state.get("bowl_xi", [])}
+    by_rid = {p["roster_id"]: p for p in _active_players(state.get("bowl_xi", []))}
     if bowler_rid not in by_rid:
         return False, "Pick a bowler from your XI."
     if bowler_rid == state.get("prev_bowler_rid"):
@@ -1696,7 +1742,7 @@ def get_new_bowler_options(match_id, user_id):
     opts = [{"roster_id": p["roster_id"], "name": p["name"],
              "bowl_rating": p.get("bowl_rating"), "bowl_style": p.get("bowl_style"),
              "rating": p.get("rating"), "disabled": (p["roster_id"] == prev)}
-            for p in state.get("bowl_xi", [])]
+            for p in _active_players(state.get("bowl_xi", []))]
     return {"ok": True, "options": opts}
 
 
@@ -2538,7 +2584,7 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
 
         if na == A_PICK_NEW_BOWLER:
             new_bowler = bot_ai.pick_bot_next_bowler(
-                state["bowl_xi"], state.get("prev_bowler_rid"),
+                _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
                 state["bowl_stats"], state["overs"])
             state["current_bowler"] = new_bowler
             mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)

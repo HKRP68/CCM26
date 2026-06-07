@@ -113,3 +113,65 @@ def test_use_impact_player_rejects_current_bowler_after_wicket(monkeypatch):
     assert rec is None
     assert state["current_bowler"]["roster_id"] == 200
     assert state["bowl_xi"][0]["roster_id"] == 200
+
+
+def test_impact_player_preserves_outgoing_identity_when_replaced(monkeypatch):
+    state = _after_wicket_state()
+    state["bowl_stats"] = {
+        "200": {"balls": 3, "runs": 10, "wickets": 1},
+        "201": {"balls": 6, "runs": 8, "wickets": 0},
+        "202": {"balls": 6, "runs": 5, "wickets": 1},
+    }
+    _patch_after_wicket(monkeypatch, state)
+
+    ok, msg, rec = svc.use_impact_player(_FakeSession([_incoming_row()]), 99, 2, 300, 202)
+
+    assert ok is True
+    assert "Impact Player confirmed" in msg
+    assert rec["in_roster_id"] == 300
+    by_rid = {p["roster_id"]: p for p in state["bowl_xi"]}
+    assert by_rid[202]["active"] is False
+    assert by_rid[202]["impact_replaced"] is True
+    assert by_rid[202]["replaced_by_roster_id"] == 300
+    assert by_rid[300]["active"] is True
+    assert by_rid[300]["impact_replacement"] is True
+    assert state["bowl_stats"]["202"]["wickets"] == 1
+    assert state["bowl_stats"]["300"] == {
+        "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
+        "this_over_balls": 0, "maidens": 0, "this_over_runs": 0,
+    }
+
+
+def test_persist_stats_lookup_includes_inactive_impact_player(monkeypatch):
+    import services.player_stats_service as stats_svc
+
+    calls = []
+    monkeypatch.setattr(
+        stats_svc,
+        "_update_bowling",
+        lambda session, user_id, player_id, bowling: (
+            calls.append((user_id, player_id, bowling)) or True
+        ),
+    )
+
+    state = {
+        "innings": 2,
+        "bat_team_id": 1,
+        "bowl_team_id": 2,
+        "bat_xi": [],
+        "bowl_xi": [
+            {**_player(202, "Other Bowler"), "active": False, "impact_replaced": True},
+            {**_player(300, "Impact Sub"), "active": True, "impact_replacement": True},
+        ],
+        "bat_stats": {},
+        "bowl_stats": {
+            "202": {"balls": 6, "runs": 5, "wickets": 1},
+            "300": {"balls": 0, "runs": 0, "wickets": 0},
+        },
+        "inn1_stats_saved": True,
+    }
+
+    counts = stats_svc.persist_player_game_stats(object(), state)
+
+    assert counts["bowling"] == 1
+    assert calls == [(2, 1202, {"balls": 6, "runs": 5, "wickets": 1})]
