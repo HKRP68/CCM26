@@ -41,11 +41,9 @@ let preloadedEventGifIds = new Set();
 let wasMyTurn = false;
 let lastActionableSig = null; // tracks the current actionable turn for auto-expand
 let selectionSubmitInFlight = false;
-let impactSelection = { incoming: null, outgoing: null, open: false };
-// Set when the user taps "Maybe Later" at the innings break so the optional
-// Impact Player sheet stays dismissed across poll cycles. Reset once the break
-// is over (see renderSetupImpactControls).
-let impactBreakSkipped = false;
+// `mountId` tracks which selection sheet currently hosts the picker so the
+// 150ms poll can re-render it in place without losing an in-progress pick.
+let impactSelection = { incoming: null, outgoing: null, open: false, mountId: null };
 
 function isActiveXIPlayer(player) {
   return player?.active !== false;
@@ -163,14 +161,13 @@ function setupEventListeners() {
     }
   });
 
-  const useImpactBtn = document.getElementById('use-impact-player-btn');
-  if (useImpactBtn) useImpactBtn.addEventListener('click', openImpactPlayerPicker);
+  // The "Use Impact Player" banner is created dynamically per selection sheet,
+  // so it binds its own onclick. Only the picker's persistent Cancel/Confirm
+  // buttons need static listeners here.
   const cancelImpactBtn = document.getElementById('impact-player-cancel-btn');
   if (cancelImpactBtn) cancelImpactBtn.addEventListener('click', closeImpactPlayerPicker);
   const confirmImpactBtn = document.getElementById('confirm-impact-player-btn');
   if (confirmImpactBtn) confirmImpactBtn.addEventListener('click', submitImpactPlayer);
-  const skipImpactBtn = document.getElementById('skip-impact-player-btn');
-  if (skipImpactBtn) skipImpactBtn.addEventListener('click', skipImpactPlayerBreak);
 
   // Completed-match scorecard toggle. Keep the finished board read-only,
   // but let players jump into the scorecard and reopen the result at any time.
@@ -668,32 +665,13 @@ function renderSetupScreen() {
   renderSetupImpactControls();
 }
 
+// At the 2nd-innings break the Impact Player option is offered inline inside the
+// setup screen (above the openers/bowler pickers). The bottom controls-sheet is
+// not used here, so it stays hidden — the banner is non-blocking, so the player
+// can simply confirm their setup without interacting with it.
 function renderSetupImpactControls() {
-  const sheet = document.getElementById('controls-sheet');
-  const impact = matchState.impactPlayer || {};
-  if (!sheet) return;
-  const isInningsBreak = matchState.currentInningsIdx === 1 && matchState.status === 'xi_selection';
-  if (!isInningsBreak || matchState.myRole === 'spectator' || impact.used) {
-    impactBreakSkipped = false;
-    sheet.classList.add('hidden');
-    return;
-  }
-  // "Maybe Later" was tapped: keep the optional Impact Player sheet dismissed so
-  // the 150ms poll loop doesn't reopen it over the openers/bowler setup.
-  if (impactBreakSkipped) {
-    sheet.classList.add('hidden');
-    return;
-  }
-  sheet.classList.remove('hidden');
-  document.getElementById('controls-waiting')?.classList.add('hidden');
-  document.getElementById('batting-controls')?.classList.add('hidden');
-  document.getElementById('bowling-controls')?.classList.add('hidden');
-  document.getElementById('wicket-batsman-controls')?.classList.add('hidden');
-  document.getElementById('over-bowler-controls')?.classList.add('hidden');
-  document.getElementById('incoming-delivery-container')?.classList.add('hidden');
-  document.getElementById('controls-prompt-text').innerText = '✨ INNINGS BREAK';
-  document.getElementById('controls-prompt-subtitle').innerText = 'Use Impact Player now, or confirm your innings setup.';
-  renderImpactPlayerControls();
+  document.getElementById('controls-sheet')?.classList.add('hidden');
+  renderImpactEntry('impact-entry-setup');
 }
 
 // Setup Submit handler
@@ -898,13 +876,11 @@ function renderControlsSection() {
   const bowlingControls = document.getElementById('bowling-controls');
   const wicketBatsmanControls = document.getElementById('wicket-batsman-controls');
   const overBowlerControls = document.getElementById('over-bowler-controls');
-  const impactControls = document.getElementById('impact-player-controls');
   const hideActionSections = () => {
     battingControls.classList.add('hidden');
     bowlingControls.classList.add('hidden');
     wicketBatsmanControls.classList.add('hidden');
     overBowlerControls.classList.add('hidden');
-    if (impactControls) impactControls.classList.add('hidden');
   };
 
   renderAutoplayStatusMessage();
@@ -987,7 +963,6 @@ function renderControlsSection() {
 
     hideActionSections();
     incomingCard.classList.add('hidden');
-    renderImpactPlayerControls();
     return;
   }
 
@@ -1016,7 +991,6 @@ function renderControlsSection() {
   // Hide all sections initially
   hideActionSections();
   resetAutoplayQuickCards();
-  renderImpactPlayerControls();
 
   if (autoplayActive && matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLING AUTOPLAY";
@@ -1074,58 +1048,103 @@ function renderControlsSection() {
     document.getElementById('wicket-batsman-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderWicketBatsmanSelectionSheet();
-  } 
+    renderImpactEntry('impact-entry-wicket');
+  }
   else if (matchState.turnState === 'selecting_over_bowler') {
     promptText.innerText = "🎳 SELECT BOWLER FOR NEXT OVER";
     promptSubtitle.innerText = "Tap a bowler to continue";
     document.getElementById('over-bowler-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderOverBowlerSelectionSheet();
+    renderImpactEntry('impact-entry-bowler');
   }
 }
 
 
-function renderImpactPlayerControls() {
-  const controls = document.getElementById('impact-player-controls');
-  const btn = document.getElementById('use-impact-player-btn');
-  const hint = document.getElementById('impact-player-hint');
-  if (!controls || !btn || !matchState) return;
+// Renders the Impact Player entry point into the given selection sheet's mount:
+//   • already used  → a small "✨ Impact Used" chip (the only lasting indicator)
+//   • usable now    → a "✨ Use Impact Player" banner + availability hint
+//   • otherwise     → nothing (mount cleared)
+// If the picker is currently open in THIS mount, it re-renders the picker in
+// place instead — keeping the 150ms poll idempotent so an in-progress pick
+// (incoming/outgoing) is never wiped out.
+function renderImpactEntry(mountId) {
+  const mount = document.getElementById(mountId);
+  if (!mount || !matchState) return;
   const impact = matchState.impactPlayer || {};
-  if (matchState.myRole === 'spectator' || impact.used || matchState.status === 'completed') {
-    controls.classList.add('hidden');
-    closeImpactPlayerPicker({ silent: true });
+
+  // Picker is open here → keep it mounted and refresh its contents only.
+  if (impactSelection.open && impactSelection.mountId === mountId) {
+    const picker = document.getElementById('impact-player-picker');
+    if (picker && picker.parentElement !== mount) mount.appendChild(picker);
+    if (mount.parentElement) mount.parentElement.classList.add('impact-picking');
+    renderImpactPlayerPicker();
     return;
   }
-  controls.classList.remove('hidden');
-  const legal = impact.legalBreak ? `Available ${impact.legalBreak}.` : (impact.message || 'Use between overs, after a wicket, or at innings break.');
-  hint.innerText = legal;
-  btn.disabled = !impact.canUse;
-  btn.classList.toggle('hidden', impactSelection.open);
-  if (impactSelection.open) renderImpactPlayerPicker();
+
+  if (matchState.myRole === 'spectator' || matchState.status === 'completed') {
+    mount.innerHTML = '';
+    return;
+  }
+
+  if (impact.used) {
+    mount.innerHTML = '<div class="impact-used-chip">✨ Impact Player used</div>';
+    return;
+  }
+
+  if (!impact.canUse) {
+    mount.innerHTML = '';
+    return;
+  }
+
+  const hint = impact.legalBreak
+    ? `Available now — ${impact.legalBreak}.`
+    : (impact.message || 'Bring on a substitute from outside your Playing XI.');
+  mount.innerHTML = `
+    <button type="button" class="impact-entry-banner">
+      <span class="impact-entry-spark">✨</span>
+      <span class="impact-entry-text">
+        <span class="impact-entry-title">Use Impact Player</span>
+        <span class="impact-entry-hint">${hint}</span>
+      </span>
+      <span class="impact-entry-chevron">›</span>
+    </button>`;
+  mount.querySelector('.impact-entry-banner').onclick = () => openImpactPlayerPicker(mountId);
 }
 
-function openImpactPlayerPicker() {
-  impactSelection = { incoming: null, outgoing: null, open: true };
+// Move the single picker node back to its hidden home so a subsequent list
+// rebuild (container.innerHTML = '') can never delete it, and drop the
+// "picking" state so the underlying selection list reappears.
+function homeImpactPicker() {
+  const picker = document.getElementById('impact-player-picker');
+  const home = document.getElementById('impact-player-picker-home');
+  if (picker && home && picker.parentElement !== home) home.appendChild(picker);
+  if (picker) picker.classList.add('hidden');
+  document.querySelectorAll('.impact-picking').forEach(el => el.classList.remove('impact-picking'));
+}
+
+function openImpactPlayerPicker(mountId) {
+  const mount = document.getElementById(mountId);
+  if (!mount) return;
+  impactSelection = { incoming: null, outgoing: null, open: true, mountId };
+  const picker = document.getElementById('impact-player-picker');
+  if (picker) {
+    mount.appendChild(picker);
+    picker.classList.remove('hidden');
+  }
+  // Hide the surrounding selection list/buttons for a focused, in-place swap.
+  if (mount.parentElement) mount.parentElement.classList.add('impact-picking');
   renderImpactPlayerPicker();
 }
 
-// "Maybe Later": using an Impact Player at the innings break is optional, so
-// dismiss the sheet and let the user proceed to confirm their openers/bowler.
-function skipImpactPlayerBreak() {
-  impactBreakSkipped = true;
-  closeImpactPlayerPicker({ silent: true });
-  document.getElementById('controls-sheet')?.classList.add('hidden');
-}
-
+// Cancel/Back: close the picker WITHOUT touching controls-sheet visibility (the
+// old "Maybe Later" hid the whole sheet and could soft-lock a live selection).
+// The underlying selection list is untouched, so it simply reappears.
 function closeImpactPlayerPicker(opts = {}) {
-  impactSelection = { incoming: null, outgoing: null, open: false };
-  const picker = document.getElementById('impact-player-picker');
-  const btn = document.getElementById('use-impact-player-btn');
-  const cancel = document.getElementById('impact-player-cancel-btn');
-  if (picker) picker.classList.add('hidden');
-  if (btn) btn.classList.remove('hidden');
-  if (cancel) cancel.classList.add('hidden');
-  if (!opts.silent) renderImpactPlayerControls();
+  const mountId = impactSelection.mountId;
+  impactSelection = { incoming: null, outgoing: null, open: false, mountId: null };
+  homeImpactPicker();
+  if (!opts.silent && mountId) renderImpactEntry(mountId);
 }
 
 function renderImpactPlayerPicker() {
@@ -1135,28 +1154,30 @@ function renderImpactPlayerPicker() {
   const outgoingWrap = document.getElementById('impact-outgoing-wrap');
   const outgoingList = document.getElementById('impact-outgoing-list');
   const confirmBtn = document.getElementById('confirm-impact-player-btn');
-  const cancelBtn = document.getElementById('impact-player-cancel-btn');
+  const summary = document.getElementById('impact-confirm-summary');
   const stepText = document.getElementById('impact-player-step-text');
   if (!picker || !incomingList || !outgoingList || !confirmBtn) return;
   picker.classList.remove('hidden');
-  if (cancelBtn) cancelBtn.classList.remove('hidden');
+
+  const rating = (p) => p.ovr || p.rating || 0;
   if (stepText) stepText.innerText = impactSelection.incoming
-    ? `Incoming: ${impactSelection.incoming.name}. Select player to remove:`
-    : 'Select incoming substitute from outside Playing XI:';
+    ? 'Step 2 — pick the player to replace:'
+    : 'Step 1 — pick the substitute coming in:';
 
   const buildPlayerRow = (p, onClick, selected) => {
     const div = document.createElement('div');
     div.className = `selection-item ${selected ? 'selected' : ''} ${p.disabled ? 'disabled' : ''}`;
     div.innerHTML = `
       <span class="selection-item-name">${p.name}</span>
-      <span class="selection-item-meta">${p.ovr || p.rating || 0} OVR · ${p.role || p.category || 'Player'}${p.disabledReason ? ' · ' + p.disabledReason : ''}</span>
+      <span class="selection-item-meta">${rating(p)} OVR · ${p.role || p.category || 'Player'}${p.disabledReason ? ' · ' + p.disabledReason : ''}</span>
     `;
     if (!p.disabled) div.onclick = onClick;
     return div;
   };
 
   incomingList.innerHTML = '';
-  const incoming = impact.incomingOptions || [];
+  // Highest-rated bench options first so the strongest sub is easy to find.
+  const incoming = (impact.incomingOptions || []).slice().sort((a, b) => rating(b) - rating(a));
   if (!incoming.length) {
     incomingList.innerHTML = '<div class="no-options">No bench players available outside Playing XI</div>';
   } else {
@@ -1177,7 +1198,20 @@ function renderImpactPlayerPicker() {
   } else {
     outgoingWrap.classList.add('hidden');
   }
-  confirmBtn.disabled = !(impactSelection.incoming && impactSelection.outgoing);
+
+  // Confirm-summary step: show "X comes in for Y" before the final tap so an
+  // accidental swap is easy to catch.
+  const ready = impactSelection.incoming && impactSelection.outgoing;
+  if (summary) {
+    if (ready) {
+      summary.classList.remove('hidden');
+      summary.innerHTML = `<b>${impactSelection.incoming.name}</b> comes in for <b>${impactSelection.outgoing.name}</b>`;
+    } else {
+      summary.classList.add('hidden');
+      summary.innerHTML = '';
+    }
+  }
+  confirmBtn.disabled = !ready;
 }
 
 async function submitImpactPlayer() {
@@ -1502,7 +1536,7 @@ function renderWicketBatsmanSelectionSheet() {
       if (isSelected) div.classList.add('selected');
       
       div.innerHTML = `
-        <span class="selection-item-name">${item.player.name}</span>
+        <span class="selection-item-name">${item.player.name}${item.player.impact_replacement ? ' <span class="impact-badge">✨</span>' : ''}</span>
         <span class="selection-item-meta">${getBatRating(item.player)} OVR - ${item.player.role || 'Batsman'}</span>
       `;
       
@@ -1609,7 +1643,7 @@ function renderOverBowlerSelectionSheet() {
       }
       
       div.innerHTML = `
-        <span class="selection-item-name">${item.player.name}</span>
+        <span class="selection-item-name">${item.player.name}${item.player.impact_replacement ? ' <span class="impact-badge">✨</span>' : ''}</span>
         <span class="selection-item-meta">${metaText}</span>
       `;
       
