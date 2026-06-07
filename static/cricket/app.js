@@ -149,6 +149,10 @@ function setupEventListeners() {
     });
   }
 
+  // Innings break: skip the countdown and head straight to team selection
+  const ibContinueBtn = document.getElementById('ib-continue-btn');
+  if (ibContinueBtn) ibContinueBtn.addEventListener('click', continuePastInningsBreak);
+
   // Close app button
   document.getElementById('close-app-btn').addEventListener('click', () => {
     if (tg) {
@@ -459,7 +463,12 @@ function applyMatchState(nextState) {
   document.getElementById('header-guest-name').innerText = (matchState.guest ? (matchState.guest.teamName || matchState.guest.username) : 'AI XI').toUpperCase();
   document.getElementById('header-match-uuid').innerText = `MATCH ID: ${matchState.id.substring(0, 6).toUpperCase()}`;
 
+  if (matchState.status !== 'innings_break') {
+    document.getElementById('innings-break-overlay')?.classList.add('hidden');
+  }
+
   if (matchState.status === 'xi_selection') renderSetupScreen();
+  else if (matchState.status === 'innings_break') renderInningsBreakScreen();
   else if (matchState.status === 'innings1' || matchState.status === 'innings2') renderGameplayScreen();
   else if (matchState.status === 'completed') {
     renderGameplayScreen();
@@ -2037,6 +2046,87 @@ function lockCompletedMatchControls() {
     control.classList.add('disabled');
   });
   document.getElementById('tab-result')?.classList.remove('hidden');
+}
+
+// Innings Break Overlay: target + 1st-innings scorecard summary, shown
+// between the end of the 1st innings and 2nd-innings team selection.
+function renderInningsBreakScreen() {
+  showScreen('gameplay-screen');
+  const overlay = document.getElementById('innings-break-overlay');
+  overlay.classList.remove('hidden');
+
+  const aiTeam = { telegramId: 'ai', username: 'AI', teamName: 'AI XI', xi: [] };
+  const inn1 = matchState.innings?.[0] || { runs: 0, wickets: 0, overs: 0, balls: 0, battingId: null };
+  const target = matchState.score?.target ?? matchState.innings?.[1]?.target;
+
+  const teamForTgId = (tgId) => {
+    if (tgId == null) return aiTeam;
+    if (matchState.host?.telegramId?.toString() === tgId.toString()) return matchState.host;
+    if (matchState.guest?.telegramId?.toString() === tgId.toString()) return matchState.guest;
+    return aiTeam;
+  };
+  const settingTeam = teamForTgId(inn1.battingId);
+  const chasingTeam = (settingTeam === matchState.host) ? (matchState.guest || aiTeam) : matchState.host;
+
+  document.getElementById('ib-score-title').innerText =
+    `${inn1.runs}/${inn1.wickets} (${inn1.overs}.${inn1.balls} ov)`;
+  document.getElementById('ib-team-line').innerText =
+    `${(settingTeam.teamName || settingTeam.username || 'Team 1').toUpperCase()} set the target`;
+
+  const ballsLeft = matchState.totalOvers ? matchState.totalOvers * 6 : null;
+  const targetText = document.getElementById('ib-target-text');
+  targetText.innerText = target
+    ? `🎯 ${(chasingTeam.teamName || chasingTeam.username || 'Chasing side').toUpperCase()} need ${target} run${target === 1 ? '' : 's'} to win${ballsLeft ? ` from ${ballsLeft} balls` : ''}`
+    : '';
+
+  // Top scorers / wicket-takers from the just-finished 1st innings
+  const stats = matchState.innings1Stats || {};
+  const statFor = (p) => (p && p.id != null && stats[p.id.toString()]) || {};
+  const inn1BatXI = (settingTeam.xi && settingTeam.xi.length) ? settingTeam.xi : (matchState.battingXI || []);
+  const inn1BowlXI = (chasingTeam.xi && chasingTeam.xi.length) ? chasingTeam.xi : (matchState.bowlingXI || []);
+
+  const topBatters = inn1BatXI
+    .map(p => ({ name: p.name, ...statFor(p) }))
+    .filter(p => (p.balls || 0) > 0)
+    .sort((a, b) => (b.runs || 0) - (a.runs || 0))
+    .slice(0, 2)
+    .map(p => `${p.name} ${p.runs || 0}(${p.balls || 0})`);
+  document.getElementById('ib-top-batters').innerText = topBatters.length ? topBatters.join(' · ') : '-';
+
+  const topBowlers = inn1BowlXI
+    .map(p => ({ name: p.name, ...statFor(p) }))
+    .filter(p => (p.ballsBowled || 0) > 0)
+    .sort((a, b) => (b.wickets || 0) - (a.wickets || 0))
+    .slice(0, 2)
+    .map(p => `${p.name} ${p.wickets || 0}/${p.runsConceded || 0}`);
+  document.getElementById('ib-top-bowlers').innerText = topBowlers.length ? topBowlers.join(' · ') : '-';
+
+  const remaining = matchState.inningsBreak?.secondsRemaining;
+  document.getElementById('ib-countdown-text').innerText =
+    (remaining !== undefined && remaining !== null)
+      ? `Heading to team selection in ${remaining}s…`
+      : 'Heading to team selection shortly…';
+}
+
+let _ibContinueInFlight = false;
+async function continuePastInningsBreak() {
+  if (_ibContinueInFlight) return;
+  _ibContinueInFlight = true;
+  const btn = document.getElementById('ib-continue-btn');
+  if (btn) btn.disabled = true;
+  try {
+    await fetch('/api/match/innings-break/continue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, matchId })
+    });
+    fetchState();
+  } catch (err) {
+    console.error('continuePastInningsBreak failed:', err);
+  } finally {
+    _ibContinueInFlight = false;
+    if (btn) btn.disabled = false;
+  }
 }
 
 // 5. Render Final Result Overlay modal

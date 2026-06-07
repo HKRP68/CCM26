@@ -17,7 +17,7 @@ from models import Match, User
 from services import match_webapp_access as mwa
 from services.match_state_store import (
     A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT, A_PICK_NEW_BATSMAN,
-    A_PICK_NEW_BOWLER, A_INNINGS_BREAK, A_COMPLETED,
+    A_PICK_NEW_BOWLER, A_INNINGS_BREAK, A_COMPLETED, CasAbort,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,10 @@ SETUP_AWAIT_OPENERS = "AWAIT_OPENERS"
 SETUP_AWAIT_BOWLER = "AWAIT_BOWLER"
 SETUP_AWAIT_READY = "AWAIT_READY"
 SETUP_DONE = "DONE"
+# Transient phase shown between innings: target + 1st-innings scorecard, before
+# either side picks their 2nd-innings XI. Auto-advances after INNINGS_BREAK_SECONDS.
+SETUP_INNINGS_BREAK = "INNINGS_BREAK"
+INNINGS_BREAK_SECONDS = 8
 
 
 
@@ -549,11 +553,13 @@ def role_for(state, user_id):
 
 def phase_status(state, match_status):
     """Normalized match phase:
-      'xi_selection' (setup), 'innings1', 'innings2', 'completed', or the raw
-      match status as a fallback."""
+      'xi_selection' (setup), 'innings_break', 'innings1', 'innings2',
+      'completed', or the raw match status as a fallback."""
     if match_status == "completed":
         return "completed"
     setup = state.get("setup")
+    if setup == SETUP_INNINGS_BREAK:
+        return "innings_break"
     if setup in (SETUP_PICKING, SETUP_AWAIT_OPENERS, SETUP_AWAIT_BOWLER,
                  SETUP_AWAIT_READY):
         return "xi_selection"
@@ -848,88 +854,171 @@ def get_state_is_vsbot(match_id):
     return bool(st and st.get("is_vsbot"))
 
 
-def _maybe_start_match(state, match_id):
-    """If both openers and bowler are chosen, start the ball loop."""
-    if state.get("openers_done") and state.get("bowler_done"):
-        state["setup"] = SETUP_DONE
-        mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
-        return True
-    mwa.save_state(match_id, state)
-    return False
-
-
 def _in_setup(state):
     return state.get("setup") in (SETUP_PICKING, SETUP_AWAIT_OPENERS,
                                   SETUP_AWAIT_BOWLER, SETUP_AWAIT_READY)
 
 
+def _start_match_if_both_done(state):
+    """If both openers and bowler are chosen, flip to the ball loop. Returns
+    (started, next_action_or_None) for the caller to fold into its CAS write."""
+    if state.get("openers_done") and state.get("bowler_done"):
+        state["setup"] = SETUP_DONE
+        return True, A_PICK_DELIVERY
+    return False, None
+
+
+def _resume_after_innings_break(state):
+    """Leave the innings-break screen (target + 1st-innings scorecard) and
+    (re)enter 2nd-innings setup. Mutates state in place; returns the
+    next_action to persist alongside it."""
+    state.pop("innings_break_started_at", None)
+    if state.get("is_vsbot"):
+        # vsbot: keep it flowing — bowling side picks a bowler (auto for bot).
+        state["setup"] = SETUP_DONE
+        return A_PICK_NEW_BOWLER
+    # PvP: re-enter player selection so BOTH sides pick again
+    # (new batting side → openers, new bowling side → bowler).
+    state["setup"] = SETUP_PICKING
+    state["openers_done"] = False
+    state["bowler_done"] = False
+    state["current_bowler"] = None
+    return "SETUP"
+
+
+def advance_innings_break_if_due(match_id):
+    """If the match is sitting on the innings-break screen and the display
+    window has elapsed, atomically resume into 2nd-innings setup.
+
+    Driven from the poll endpoint so both clients transition together off the
+    same server clock — no per-user "I'm ready" handshake (which would just
+    reintroduce a "waiting for opponent" style stall).
+    """
+    def _mutate(state):
+        if state.get("setup") != SETUP_INNINGS_BREAK:
+            raise CasAbort(False)
+        started_at = state.get("innings_break_started_at") or 0
+        if (_time.time() - started_at) < INNINGS_BREAK_SECONDS:
+            raise CasAbort(False)
+        next_action = _resume_after_innings_break(state)
+        return True, next_action
+
+    return bool(mwa.update_state_cas(match_id, _mutate))
+
+
+def continue_past_innings_break(match_id, user_id):
+    """Let an engaged player skip the innings-break countdown early. Either
+    side may call this — it's just a UI gate, not a competitive action — and
+    it's idempotent (a no-op once the match has already moved on)."""
+    def _mutate(state):
+        if user_id not in (state.get("bat_team_id"), state.get("bowl_team_id")):
+            raise CasAbort((False, "Spectators can't skip the innings break."))
+        if state.get("setup") != SETUP_INNINGS_BREAK:
+            raise CasAbort((True, "Already moving on."))
+        next_action = _resume_after_innings_break(state)
+        return (True, "Heading into 2nd-innings team selection…"), next_action
+
+    result = mwa.update_state_cas(match_id, _mutate)
+    if result is None:
+        return False, "Match not found."
+    return result
+
+
 def select_openers(match_id, user_id, striker_rid, non_striker_rid):
     """Batsman picks openers. Independent of bowler pick; auto-starts when both
-    are in. Returns (ok, started, msg)."""
-    state = mwa.get_state(match_id)
-    if not state:
+    are in. Returns (ok, started, msg).
+
+    Runs as an atomic read-modify-write (services.match_state_store.update_state_cas)
+    so a concurrent bowler pick from the other side can't be silently overwritten —
+    both flags are validated and set against the SAME freshly-read state, on every
+    retry attempt, instead of racing two independent whole-state overwrites.
+    """
+    def _mutate(state):
+        if user_id != state.get("bat_team_id"):
+            raise CasAbort((False, False, "Only the batting side picks openers."))
+        if not _in_setup(state) or state.get("openers_done"):
+            raise CasAbort((False, False, "Openers already chosen."))
+        if striker_rid == non_striker_rid:
+            raise CasAbort((False, False, "Striker and non-striker must be different players."))
+
+        bat_xi = _active_players(state.get("bat_xi", []))
+        by_rid = {p["roster_id"]: p for p in bat_xi}
+        if striker_rid not in by_rid or non_striker_rid not in by_rid:
+            raise CasAbort((False, False, "Pick players from your XI."))
+
+        opener1 = by_rid[striker_rid]
+        opener2 = by_rid[non_striker_rid]
+        order = [opener1, opener2]
+        for p in bat_xi:
+            if p["roster_id"] not in (striker_rid, non_striker_rid):
+                order.append(p)
+        state["batting_order"] = order
+        state["striker_idx"] = 0
+        state["non_striker_idx"] = 1
+        state["next_batsman_idx"] = 2
+        state["openers_done"] = True
+
+        started, next_action = _start_match_if_both_done(state)
+        msg = ("Openers locked in — match starting!" if started
+               else "Openers locked in. Waiting for the bowler…")
+        return (True, started, msg), next_action
+
+    result = mwa.update_state_cas(match_id, _mutate)
+    if result is None:
         return False, False, "Match not found."
-    if user_id != state.get("bat_team_id"):
-        return False, False, "Only the batting side picks openers."
-    if not _in_setup(state) or state.get("openers_done"):
-        return False, False, "Openers already chosen."
-    if striker_rid == non_striker_rid:
-        return False, False, "Striker and non-striker must be different players."
-
-    bat_xi = _active_players(state.get("bat_xi", []))
-    by_rid = {p["roster_id"]: p for p in bat_xi}
-    if striker_rid not in by_rid or non_striker_rid not in by_rid:
-        return False, False, "Pick players from your XI."
-
-    opener1 = by_rid[striker_rid]
-    opener2 = by_rid[non_striker_rid]
-    order = [opener1, opener2]
-    for p in bat_xi:
-        if p["roster_id"] not in (striker_rid, non_striker_rid):
-            order.append(p)
-    state["batting_order"] = order
-    state["striker_idx"] = 0
-    state["non_striker_idx"] = 1
-    state["next_batsman_idx"] = 2
-    state["openers_done"] = True
-    started = _maybe_start_match(state, match_id)
-    return True, started, ("Openers locked in — match starting!" if started
-                           else "Openers locked in. Waiting for the bowler…")
+    return result
 
 
 def select_bowler(match_id, user_id, bowler_rid):
     """Bowling side picks bowler. Independent of openers pick; auto-starts when
-    both are in. Returns (ok, started, msg)."""
-    state = mwa.get_state(match_id)
-    if not state:
+    both are in. Returns (ok, started, msg).
+
+    See select_openers — uses the same atomic CAS write to avoid clobbering a
+    concurrent openers pick from the batting side.
+    """
+    def _mutate(state):
+        if user_id != state.get("bowl_team_id"):
+            raise CasAbort((False, False, "Only the bowling side picks the bowler."))
+        if not _in_setup(state) or state.get("bowler_done"):
+            raise CasAbort((False, False, "Bowler already chosen."))
+
+        bowl_xi = _active_players(state.get("bowl_xi", []))
+        by_rid = {p["roster_id"]: p for p in bowl_xi}
+        if bowler_rid not in by_rid:
+            raise CasAbort((False, False, "Pick a bowler from your XI."))
+
+        state["current_bowler"] = by_rid[bowler_rid]
+        state["bowler_done"] = True
+
+        started, next_action = _start_match_if_both_done(state)
+        msg = ("Bowler selected — match starting!" if started
+               else "Bowler selected. Waiting for the openers…")
+        return (True, started, msg), next_action
+
+    result = mwa.update_state_cas(match_id, _mutate)
+    if result is None:
         return False, False, "Match not found."
-    if user_id != state.get("bowl_team_id"):
-        return False, False, "Only the bowling side picks the bowler."
-    if not _in_setup(state) or state.get("bowler_done"):
-        return False, False, "Bowler already chosen."
-
-    bowl_xi = _active_players(state.get("bowl_xi", []))
-    by_rid = {p["roster_id"]: p for p in bowl_xi}
-    if bowler_rid not in by_rid:
-        return False, False, "Pick a bowler from your XI."
-
-    state["current_bowler"] = by_rid[bowler_rid]
-    state["bowler_done"] = True
-    started = _maybe_start_match(state, match_id)
-    return True, started, ("Bowler selected — match starting!" if started
-                           else "Bowler selected. Waiting for the openers…")
+    return result
 
 
 def mark_ready(match_id, user_id):
-    """Deprecated in the simultaneous model; reports/forces start state."""
-    state = mwa.get_state(match_id)
-    if not state:
+    """Deprecated in the simultaneous model; reports/forces start state.
+
+    select_openers/select_bowler now flip setup → SETUP_DONE atomically as soon
+    as both flags land, so this is normally a no-op report — but it still uses
+    the CAS write for the rare case where it needs to force the flip, to avoid
+    clobbering concurrent state changes."""
+    def _mutate(state):
+        both = bool(state.get("openers_done") and state.get("bowler_done"))
+        if both and state.get("setup") != SETUP_DONE:
+            state["setup"] = SETUP_DONE
+            return (True, both, "Match starting!"), A_PICK_DELIVERY
+        return (True, both, "Match starting!" if both else "Waiting for both picks…"), None
+
+    result = mwa.update_state_cas(match_id, _mutate)
+    if result is None:
         return False, False, "Match not found."
-    both = bool(state.get("openers_done") and state.get("bowler_done"))
-    if both and state.get("setup") != SETUP_DONE:
-        state["setup"] = SETUP_DONE
-        mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
-    return True, both, ("Match starting!" if both else "Waiting for both picks…")
+    return result
 
 
 def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
@@ -1672,21 +1761,17 @@ def play_shot(match_id, user_id, shot_index):
         from services.match_engine import (transition_to_second_innings,
                                            compute_match_result)
         if state.get("innings", 1) == 1:
-            # End of 1st innings → set up the chase
+            # End of 1st innings → set up the chase, then show a brief
+            # "innings break" screen (target + 1st-innings scorecard) before
+            # either side has to pick its 2nd-innings XI. The poll endpoint
+            # auto-advances out of this via advance_innings_break_if_due()
+            # once INNINGS_BREAK_SECONDS has elapsed (see _resume_after_innings_break
+            # for what happens next, vsbot vs PvP).
             transition_to_second_innings(state)
             res["innings_break"] = True
-            if state.get("is_vsbot"):
-                # vsbot: keep it flowing — bowling side picks a bowler (auto for bot).
-                next_act = A_PICK_NEW_BOWLER
-                state["setup"] = SETUP_DONE
-            else:
-                # PvP: re-enter player selection so BOTH sides pick again
-                # (new batting side → openers, new bowling side → bowler).
-                state["setup"] = SETUP_PICKING
-                state["openers_done"] = False
-                state["bowler_done"] = False
-                state["current_bowler"] = None
-                next_act = "SETUP"
+            state["setup"] = SETUP_INNINGS_BREAK
+            state["innings_break_started_at"] = _time.time()
+            next_act = A_INNINGS_BREAK
         else:
             # End of 2nd innings → match over
             result = compute_match_result(state)

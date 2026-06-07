@@ -23,10 +23,12 @@ No Flask/Telegram imports here — just data mapping, so it stays testable.
 """
 
 import logging
+import time as _time
 
 from services import match_webapp_access as mwa
 from services.match_webapp_service import (
     role_for, phase_status, turn_state_name, whose_turn,
+    SETUP_INNINGS_BREAK, INNINGS_BREAK_SECONDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -361,6 +363,18 @@ def serialize_match_state(session, match, viewer_user):
         "target": target,
     }
 
+    # ── innings break (target + 1st-innings scorecard, before 2nd-innings XI
+    # picking) — server-clock-driven so both clients count down identically ──
+    innings_break = None
+    if state.get("setup") == SETUP_INNINGS_BREAK:
+        started_at = state.get("innings_break_started_at") or 0
+        elapsed = max(0.0, _time.time() - started_at)
+        innings_break = {
+            "active": True,
+            "secondsRemaining": max(0, round(INNINGS_BREAK_SECONDS - elapsed)),
+            "durationSeconds": INNINGS_BREAK_SECONDS,
+        }
+
     # innings[0] (first) and innings[1] (second)
     inn1_bat_tg = tg_of.get(state.get("inn1_bat_team_id"))
     inn1_bowl_tg = tg_of.get(state.get("inn1_bowl_team_id"))
@@ -564,6 +578,7 @@ def serialize_match_state(session, match, viewer_user):
         "guest": guest,
         "currentInningsIdx": current_innings_idx,
         "innings": innings_arr,
+        "inningsBreak": innings_break,
         "score": score,
         "striker": striker,
         "nonStriker": non_striker,

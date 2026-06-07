@@ -446,6 +446,39 @@
     </div>
 
     <!-- RESULT OVERLAY -->
+    <!-- INNINGS BREAK OVERLAY: target + 1st-innings scorecard, shown right
+         after the 1st innings ends and before either side picks its 2nd-innings
+         XI (auto-advances; "Continue" lets either player skip the wait). -->
+    <div id="innings-break-overlay" class="overlay hidden">
+      <div class="result-card glass-card">
+        <div class="trophy-emoji">🏏</div>
+        <div class="result-kicker">INNINGS BREAK</div>
+        <h2 id="ib-score-title">0/0 (0.0 ov)</h2>
+        <p class="result-outcome-detail" id="ib-team-line"></p>
+
+        <div class="target-bar" id="ib-target-banner" style="margin: 14px 0;">
+          <span id="ib-target-text"></span>
+        </div>
+
+        <div class="scoreboard-summary">
+          <div class="summary-innings">
+            <span class="label">Top Scorers:</span>
+            <span id="ib-top-batters">-</span>
+          </div>
+          <div class="summary-innings">
+            <span class="label">Top Wickets:</span>
+            <span id="ib-top-bowlers">-</span>
+          </div>
+        </div>
+
+        <p class="reward-sub" id="ib-countdown-text">Team selection begins shortly…</p>
+
+        <div class="result-buttons" style="display: flex; gap: 10px; width: 100%;">
+          <button id="ib-continue-btn" class="btn btn-primary btn-block btn-green" style="margin-top: 0;">Continue to Team Selection ▶</button>
+        </div>
+      </div>
+    </div>
+
     <div id="result-overlay" class="overlay hidden">
       <div class="result-card glass-card">
         <div class="trophy-emoji">🏆</div>

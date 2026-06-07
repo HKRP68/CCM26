@@ -56,6 +56,14 @@ def save_autoplay_users(mid, user_id, active):
     return _store.save_autoplay_users(_DummyCtx(), mid, user_id, active)
 
 
+def update_state_cas(mid, mutator, max_retries=5):
+    """Atomic read-modify-write guarded by MatchState.version (see
+    match_state_store.update_state_cas). Use for concurrent-submission flows
+    (e.g. openers/bowler selection) where overwriting a stale whole-state
+    snapshot would silently drop the other side's update."""
+    return _store.update_state_cas(_DummyCtx(), mid, mutator, max_retries=max_retries)
+
+
 def set_next_action(mid, next_action, last_prompt_msg_id=None):
     _store.set_next_action(_DummyCtx(), mid, next_action,
                            last_prompt_msg_id=last_prompt_msg_id)
