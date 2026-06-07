@@ -50,16 +50,28 @@ def _new_bowl_stat():
     return {"balls": 0, "runs": 0, "wickets": 0, "maidens": 0}
 
 
-def _pick_shot(over, total_overs, wickets):
-    """Choose a shot for the auto-batsman based on phase and wickets lost."""
-    powerplay = over <= max(1, total_overs * 0.3)
-    death = over > total_overs - max(1, round(total_overs * 0.2))
+def _pick_shot(over, total_overs, wickets, phase="Middle", run_factor=1.0):
+    """Choose a shot for the auto-batsman based on phase, wickets, and pitch.
+
+    phase: 'Powerplay' | 'Middle' | 'Death' (format-aware).
+    run_factor: pitch run factor (<1 bowling-friendly → more conservative;
+                >1 batting-friendly → more aggressive).
+    """
+    # Base aggression weights per pool: [attack, normal, defend].
     if wickets >= 7:
-        pool, weights = _DEFENSIVE + _NORMAL, None
-    elif powerplay or death:
-        pool, weights = _ATTACK + _NORMAL, None
+        w = [1, 3, 3]
+    elif phase in ("Powerplay", "Death"):
+        w = [5, 3, 1]
     else:
-        pool, weights = _NORMAL + _ATTACK[:3] + _DEFENSIVE[:2], None
+        w = [2, 4, 2]
+
+    # Pitch tilt: shift weight toward attack on batting pitches, toward defence
+    # on bowling pitches.
+    tilt = run_factor - 1.0  # roughly -0.15 .. +0.30
+    w[0] = max(0.2, w[0] * (1 + tilt * 2))
+    w[2] = max(0.2, w[2] * (1 - tilt * 2))
+
+    pool = random.choices([_ATTACK, _NORMAL, _DEFENSIVE], weights=w, k=1)[0]
     return random.choice(pool)
 
 
@@ -72,12 +84,13 @@ def _pick_delivery(bowler):
             random.choice(opts.get("lengths") or ["Good"]))
 
 
-def _build_bowling_plan(bowling_xi, overs):
+def _build_bowling_plan(bowling_xi, overs, max_bowler_overs=None):
     """Pick the over-by-over bowler list (Option B rules).
 
     Only Bowlers + All-rounders bowl, sorted by bowl rating. No bowler bowls two
-    overs in a row; each is capped at the standard ~20% quota (extended only if
-    too few bowlers exist to fill the innings).
+    overs in a row; each is capped at the format's per-bowler quota
+    (max_bowler_overs), extended only if too few bowlers exist to fill the
+    innings.
     """
     eligible = [p for p in bowling_xi
                 if p.get("category") in ("Bowler", "All-rounder")]
@@ -85,7 +98,8 @@ def _build_bowling_plan(bowling_xi, overs):
         eligible = list(bowling_xi)
     eligible.sort(key=lambda p: p.get("bowl_rating", 0), reverse=True)
 
-    cap = max(math.ceil(overs / 5), math.ceil(overs / len(eligible)))
+    quota = max_bowler_overs or math.ceil(overs / 5)
+    cap = max(quota, math.ceil(overs / len(eligible)))
     counts = {id(p): 0 for p in eligible}
     plan, last = [], None
     for _ in range(overs):
@@ -108,16 +122,22 @@ def _fielder_keeper(bowling_xi):
 
 def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                      innings_no, batting_team, bowling_team,
-                     target=None, commentary=None, feed=None):
+                     target=None, commentary=None, feed=None,
+                     fmt=None, run_factor=1.0):
     """Simulate one innings and return its result dict.
 
     commentary: optional callable(event_key, batsman, bowler, fielder, keeper,
                 runs) -> str|None used to render a line per ball.
     feed: optional list to append ball-by-ball commentary entries to.
+    fmt: optional format config (services.match_formats) controlling the bowler
+         quota and phase windows.
+    run_factor: pitch run factor used to tune batting aggression.
     """
+    from services.match_formats import phase_for
     order = sorted(batting_xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
                    reverse=True)
-    plan = _build_bowling_plan(bowling_xi, overs)
+    plan = _build_bowling_plan(bowling_xi, overs,
+                               (fmt or {}).get("max_bowler_overs"))
     fielders, keeper = _fielder_keeper(bowling_xi)
 
     bat_stats = {id(p): _new_bat_stat() for p in order}
@@ -166,7 +186,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 break
             striker = order[striker_i]
             bs = bat_stats[id(striker)]
-            shot = _pick_shot(over_idx + 1, overs, total_wkts)
+            phase = phase_for(over_idx + 1, fmt) if fmt else "Middle"
+            shot = _pick_shot(over_idx + 1, overs, total_wkts, phase, run_factor)
             variation, length = _pick_delivery(bowler)
             oc = calculate_outcome(
                 bowler.get("bowl_style"), bowler.get("bowl_hand"),
@@ -299,34 +320,53 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
-                   commentary=None):
+                   commentary=None, fmt=None):
     """Simulate a full two-innings match.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
         bat_rating, bowl_rating, category, bowl_style, bowl_hand, bat_hand.
+    fmt: optional format config (services.match_formats.get_format/custom_format).
+         If omitted, a custom format is derived from ``overs``.
     Returns a dict with both innings, the result, and a commentary feed.
     """
-    # Toss winner bats first (default: home).
+    from services.match_formats import custom_format
+    from services.ground_conditions import get_pitch_meta
+
+    if fmt is None:
+        fmt = custom_format(overs)
+    overs = fmt["overs"]
+    pitch_meta = get_pitch_meta(pitch_type)
+    run_factor = pitch_meta.get("run_factor", 1.0)
+
+    # Toss: the winner makes the pitch-correct choice; bat-first side resolves.
+    ideal = pitch_meta.get("ideal_toss", "bat")
     if toss_winner == away_name:
-        first_bat, first_bowl = away_xi, home_xi
-        first_name, second_name = away_name, home_name
+        first_name = away_name if ideal == "bat" else home_name
+    else:  # default: home won the toss
+        first_name = home_name if ideal == "bat" else away_name
+    if first_name == home_name:
+        first_bat, first_bowl, second_name = home_xi, away_xi, away_name
     else:
-        first_bat, first_bowl = home_xi, away_xi
-        first_name, second_name = home_name, away_name
+        first_bat, first_bowl, second_name = away_xi, home_xi, home_name
 
     feed = []
     inn1 = simulate_innings(first_bat, first_bowl, overs, pitch_type,
                             1, first_name, second_name,
-                            target=None, commentary=commentary, feed=feed)
+                            target=None, commentary=commentary, feed=feed,
+                            fmt=fmt, run_factor=run_factor)
     target = inn1["runs"] + 1
     inn2 = simulate_innings(first_bowl, first_bat, overs, pitch_type,
                             2, second_name, first_name,
-                            target=target, commentary=commentary, feed=feed)
+                            target=target, commentary=commentary, feed=feed,
+                            fmt=fmt, run_factor=run_factor)
 
     result = _compute_result(inn1, inn2, target)
     return {
         "overs": overs,
         "pitch": pitch_type,
+        "pitch_meta": pitch_meta,
+        "format": fmt["label"],
+        "toss": f"{toss_winner or home_name} won the toss",
         "innings1": inn1,
         "innings2": inn2,
         "target": target,
