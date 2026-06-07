@@ -1,0 +1,1221 @@
+{
+  "events": {
+    "boundary_four": [
+      {
+        "text": "{batter} plays a magnificent cover drive! It races away across the turf and beats the fielder to the ropes for four.",
+        "tags": ["pace", "off_side", "front_foot"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Short and punished! {batter} swivels on the back foot and pulls it powerfully to the square leg boundary for a cracking four.",
+        "tags": ["pace", "leg_side", "back_foot"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "A juicy full toss from {bowler} and {batter} doesn't miss out! Smacked straight down the ground, beating the man at long-on for four.",
+        "tags": ["spin", "pace", "poor_delivery"],
+        "weight": 0.8,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Thick outside edge! It flies past the diving slip fielder and races down to the vacant third man region for four lucky runs.",
+        "tags": ["pace", "lucky", "edge"],
+        "weight": 0.5,
+        "emotion": "tension"
+      },
+      {
+        "text": "Delicate touch! {batter} opens the face of the bat at the last moment and guides it fine past the keeper for a boundary.",
+        "tags": ["pace", "off_side", "late_cut"],
+        "weight": 1.0,
+        "emotion": "calm"
+      },
+      {
+        "text": "Powerful sweep shot! {batter} gets down on one knee and slog sweeps it hard through mid-wicket, one bounce and over the rope for four.",
+        "tags": ["spin", "leg_side", "sweep"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Driven on the up! {batter} punches it through the gap at extra cover, the fielder gives chase but the ball wins the race.",
+        "tags": ["pace", "off_side", "drive"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Beautifully timed straight drive! {bowler} can only watch as the ball races past him to the long-off boundary for a classic four.",
+        "tags": ["pace", "straight", "drive"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Carved through point! {batter} makes room and slashes hard, the ball rockets through the infield and hits the fence in a flash.",
+        "tags": ["pace", "off_side", "cut"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Flicked off the pads with elegance! {batter} uses his wrists beautifully to send the ball racing to the fine leg boundary for four.",
+        "tags": ["pace", "leg_side", "flick"],
+        "weight": 1.0,
+        "emotion": "calm"
+      },
+      {
+        "text": "Width offered and width taken! {batter} throws his hands at a wide one outside off and it screams through backward point for four.",
+        "tags": ["pace", "off_side", "cut"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "That's been dispatched! {bowler} strays onto the pads and {batter} whips it away through mid-wicket with disdain. Four runs.",
+        "tags": ["pace", "leg_side", "flick"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Reverse sweep! {batter} gets into an unorthodox position and paddles it past short third man. Inventive shot, four runs.",
+        "tags": ["spin", "off_side", "reverse_sweep"],
+        "weight": 0.8,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Back of a length and {batter} rocks onto the back foot, punching it through the covers with authority. The outfielder can only wave at it.",
+        "tags": ["pace", "off_side", "back_foot"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Pitched up and {batter} leans into a gorgeous on-drive. Bisects mid-on and mid-wicket perfectly, that's four all the way.",
+        "tags": ["pace", "leg_side", "drive"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Inside edge and it runs away fine! {batter} was trying to work it square but gets a fortunate boundary through the vacant leg side.",
+        "tags": ["pace", "lucky", "leg_side"],
+        "weight": 0.5,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Short and sat up nicely! {batter} was waiting for that, rolls the wrists on a pull shot that races to deep mid-wicket for four.",
+        "tags": ["pace", "leg_side", "pull"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Ramp shot! {batter} goes down early and helps it over the keeper's head. Unorthodox but effective, and it reaches the boundary.",
+        "tags": ["pace", "fine_leg", "ramp"],
+        "weight": 0.7,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Length ball on the stumps and {batter} lofts it cleanly over the bowler's head. Not enough to clear the rope but it bounces into the fence. Four.",
+        "tags": ["pace", "straight", "loft"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Drops it short and {batter} is all over it! A fierce cut shot that bisects point and gully and rattles the advertising boards.",
+        "tags": ["pace", "off_side", "cut"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Tossed up by {bowler} and {batter} goes after it! Lovely use of the feet, gets to the pitch and drills it through extra cover for four.",
+        "tags": ["spin", "off_side", "drive"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Late cut played expertly! {batter} waits, waits, and at the last instant rolls the wrists to steer it past gully. Class shot, four runs.",
+        "tags": ["pace", "off_side", "late_cut"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Overpitched and punished! {batter} barely has to move his feet, just presents the full face of the bat and times it to perfection through mid-off.",
+        "tags": ["pace", "off_side", "drive"],
+        "weight": 1.0,
+        "emotion": "calm"
+      },
+      {
+        "text": "Creamed off the front foot! {batter} gets forward and absolutely middles it through the covers. That is pure timing, races away for four.",
+        "tags": ["pace", "off_side", "front_foot"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Uppish but safe! {batter} drives on the up, it flies between mid-off and the bowler, neither can react in time. Four more.",
+        "tags": ["pace", "straight", "drive"],
+        "weight": 0.8,
+        "emotion": "tension"
+      }
+    ],
+
+    "boundary_six": [
+      {
+        "text": "That is absolutely massive! {batter} gets hold of it and launches it high over long-on for a huge six!",
+        "tags": ["power", "long_on", "loft"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "In the slot and dispatched! {batter} clears the front leg and smokes it straight back over the bowler's head for a maximum.",
+        "tags": ["full_length", "straight", "loft"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Top edge on the hook shot! It somehow carries all the way over the fine leg boundary, six runs to the total.",
+        "tags": ["pace", "short_ball", "leg_side"],
+        "weight": 0.8,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Dancing down the track! {batter} meets the pitch of the ball and lifts it gracefully over the extra cover fence for a stunning six.",
+        "tags": ["spin", "aggressive", "straight"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Power hitting at its best! {batter} muscles a short delivery deep into the stands at mid-wicket, checking to see if the ball is still in the ground!",
+        "tags": ["power", "leg_side", "pull"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Clean strike! {batter} picks the length early and deposits it into the second tier over long-off. That's a monster hit!",
+        "tags": ["power", "straight", "loft"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Slog sweep connected perfectly! The ball sails high into the night sky and lands deep in the crowd at square leg for six.",
+        "tags": ["spin", "leg_side", "sweep"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Upper cut over third man! {batter} uses the pace of the ball brilliantly to steer it over the ropes for a cheeky six.",
+        "tags": ["pace", "short_ball", "upper_cut"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Stand and deliver! {batter} doesn't even bother moving his feet, just swings hard and the ball disappears over cow corner. Maximum!",
+        "tags": ["power", "leg_side", "slog"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "That has gone a long way! {batter} gets underneath a length ball and launches it miles over long-on. The crowd erupts!",
+        "tags": ["power", "straight", "loft"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Reverse sweep for six! {batter} switches hands and paddles it high over short third man. Incredible audacity, incredible execution.",
+        "tags": ["spin", "off_side", "reverse_sweep"],
+        "weight": 0.7,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Steps out and launches it downtown! {batter} charges {bowler}, gets to the pitch and sends it soaring over long-off for a massive six.",
+        "tags": ["spin", "straight", "charge"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Flat-batted and powerful! {batter} picks up a length ball and hammers it flat over mid-wicket. Barely got any elevation but had sheer brute force.",
+        "tags": ["power", "leg_side", "pull"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Back foot punch over cover! {batter} leans back and lofts it with a high elbow. Beautiful, almost effortless six.",
+        "tags": ["pace", "off_side", "back_foot"],
+        "weight": 0.9,
+        "emotion": "admiration"
+      },
+      {
+        "text": "One hand off the bat and it still clears the boundary! {batter} shows his raw power with a one-handed flick over square leg for six.",
+        "tags": ["power", "leg_side", "flick"],
+        "weight": 0.6,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Ramp shot for six! {batter} gets under the bouncer and helps it over the fine leg fence. Uses the pace of {bowler} against him.",
+        "tags": ["pace", "fine_leg", "ramp"],
+        "weight": 0.7,
+        "emotion": "excitement"
+      },
+      {
+        "text": "That's been crunched! Short from {bowler} and {batter} absolutely murders the pull shot. It clears mid-wicket with yards to spare. Six!",
+        "tags": ["pace", "leg_side", "pull"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Into the second tier! {batter} skips down the track and goes absolutely ballistic over long-on. The ball might still be going!",
+        "tags": ["spin", "straight", "charge"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Flicked high and handsome! {batter} picks it off the toes and sends it sailing over deep square leg. Effortless power on display.",
+        "tags": ["pace", "leg_side", "flick"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Picked the slower ball! {batter} reads the change of pace, waits back and heaves it over the long-on boundary. Smart hitting.",
+        "tags": ["pace", "straight", "slog"],
+        "weight": 0.9,
+        "emotion": "excitement"
+      }
+    ],
+
+    "wicket_bowled": [
+      {
+        "text": "Clean bowled! {bowler} produces a peach of a delivery that beats the outside edge and crashes into the off stump.",
+        "tags": ["pace", "stumps", "fast"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Knocked him over! The middle stump is cartwheeling out of the ground! {batter} is completely beaten for pace.",
+        "tags": ["pace", "yorker", "stumps"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Through the gate! A beautiful spinning delivery drifts in and turns away to rattle the timber. {batter} looks back in disbelief.",
+        "tags": ["spin", "skill"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Played all around it! {batter} tries to work it to the leg side but misses completely, the ball hits the base of leg stump.",
+        "tags": ["pace", "leg_side", "miss"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Chopped onto his own stumps! {batter} tries to cut a ball too close to the body and drags it back onto the wicket.",
+        "tags": ["pace", "inside_edge", "unlucky"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Yorker! Right in the blockhole and {batter} can't dig it out. The stumps are shattered, what a delivery from {bowler}!",
+        "tags": ["pace", "yorker", "stumps"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Bowled around his legs! {batter} shuffles across and misses the flick, the ball clips leg stump on its way through. He's got to go.",
+        "tags": ["pace", "leg_side", "shuffle"],
+        "weight": 0.8,
+        "emotion": "drama"
+      },
+      {
+        "text": "Off stump out of the ground! {bowler} nips one back in from outside off, {batter} shouldered arms and paid the ultimate price.",
+        "tags": ["pace", "nip_back", "leave"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Timber! {bowler} gets it to jag back in sharply, beats the inside edge and hits the top of off. Brilliant bowling.",
+        "tags": ["pace", "seam", "skill"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Stumps everywhere! A searing yorker from {bowler} that {batter} had absolutely no answer to. All three stumps disturbed.",
+        "tags": ["pace", "yorker", "stumps"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Gone! {bowler} tosses it up, draws {batter} forward, the ball dips and turns past the bat to hit the top of middle. Masterful spin bowling.",
+        "tags": ["spin", "flight", "skill"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Dragged on! {batter} tries to drive but gets an inside edge onto the stumps. He stands there for a moment, can't believe it. Has to walk.",
+        "tags": ["pace", "inside_edge", "unlucky"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      }
+    ],
+
+    "wicket_caught": [
+      {
+        "text": "Up in the air... and taken safely! {batter} tries to go big but mistimes it, finding the fielder at long-off who makes no mistake.",
+        "tags": ["loft", "outfield", "safe_hands"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Edged and gone! A faint tickle through to the keeper who accepts the catch with glee. {bowler} gets his man!",
+        "tags": ["edge", "keeper", "pace"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Straight to the fielder! {batter} drives firmly but picks out the man at cover point perfectly. A very soft dismissal in the end.",
+        "tags": ["bad_shot", "infield"],
+        "weight": 0.8,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "A stunning diving catch! {batter} thought he had cleared the infield but the fielder at mid-wicket pulls off a blinder to his right!",
+        "tags": ["fielding", "spectacular"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Top edge goes high into the night sky! The wicketkeeper calls for it, runs back, and takes a well-judged catch under pressure.",
+        "tags": ["high_catch", "keeper"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Caught at slip! A lovely delivery that shapes away, takes the outside edge, and carries comfortably to first slip.",
+        "tags": ["slip", "edge", "skill"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Holes out to deep mid-wicket! {batter} tried to clear the fence but didn't quite get enough on it. The fielder judges it perfectly.",
+        "tags": ["outfield", "mistimed", "slog"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "What a catch! Running back from mid-on, the fielder takes it over his shoulder at full stretch. {batter} can't believe it, that looked like six.",
+        "tags": ["fielding", "spectacular", "outfield"],
+        "weight": 0.8,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Sliced straight to backward point! {batter} threw his hands at a wide delivery and found the fielder's chest. A regulation catch in the end.",
+        "tags": ["off_side", "infield", "bad_shot"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Leading edge! {batter} tries to work it to the leg side, gets a leading edge and it pops up gently to mid-off. Simple catch, big wicket.",
+        "tags": ["leading_edge", "infield", "unlucky"],
+        "weight": 0.9,
+        "emotion": "drama"
+      },
+      {
+        "text": "Caught behind! That nipped away from {bowler}, took the edge and the keeper dived to his right to take a sharp chance. Great reflexes.",
+        "tags": ["edge", "keeper", "pace"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Toe-ends it to long-on! {batter} was looking to go big over the top but didn't get the elevation. Comfortable catch for the outfielder.",
+        "tags": ["outfield", "mistimed", "loft"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Feathered through! The slightest of edges off {batter}'s glove and the keeper snaffles it. {bowler} knew it immediately, that's a brilliant piece of bowling.",
+        "tags": ["edge", "keeper", "skill"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Skied it! {batter} gets under a full delivery and spoons it straight up in the air. The mid-off fielder settles under it comfortably. Dolly catch.",
+        "tags": ["infield", "mistimed", "full"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Juggled but held! The fielder at deep square leg gets underneath it, fumbles the first attempt but recovers brilliantly. {batter} has to depart.",
+        "tags": ["outfield", "fielding"],
+        "weight": 0.7,
+        "emotion": "tension"
+      }
+    ],
+
+    "wicket_lbw": [
+      {
+        "text": "Huge appeal and the finger goes up! Trapped in front by {bowler}! {batter} is given out LBW, struck on the front pad plumb in front of middle.",
+        "tags": ["pace", "plumb", "front_pad"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "LBW! {bowler} nips one back in from outside off, {batter} plays all around it and is hit on the back pad. Dead in front, has to go.",
+        "tags": ["pace", "nip_back", "back_pad"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Rapped on the pads! {bowler} gets one to straighten from the off side and it would have hit middle and leg. The umpire has no hesitation.",
+        "tags": ["pace", "straighten", "plumb"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Stone dead! A full delivery from {bowler} swings back in late and catches {batter} right in front of all three stumps. Easy decision for the umpire.",
+        "tags": ["pace", "swing", "plumb"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Pinned him! {bowler} bowls a quicker one that skids through low and hits the pad before {batter} can bring his bat down. LBW, out!",
+        "tags": ["pace", "skid", "low"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Trapped! The arm ball from {bowler} goes on straight with the angle, {batter} was expecting it to turn and is struck on the knee roll. Absolutely plumb.",
+        "tags": ["spin", "arm_ball", "plumb"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "That's gone! {bowler} fires one in full on middle stump, {batter} tries to flick but misses and is hit flush on the pads. The umpire raises the finger slowly.",
+        "tags": ["pace", "full", "front_pad"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Big shout from {bowler} and the umpire agrees! {batter} was hit on the back pad trying to work it across the line. Going on to hit leg stump, out LBW.",
+        "tags": ["pace", "across_line", "back_pad"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Huge appeal! The spinner gets one to grip and turn sharply into the pads. {batter} was playing for the turn that never came. Given out LBW!",
+        "tags": ["spin", "turn", "plumb"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "In-swinger and it's crashing into the pads! {bowler} gets one to hoop back in and {batter} is trapped in front. That was going to demolish middle stump.",
+        "tags": ["pace", "swing", "plumb"],
+        "weight": 1.0,
+        "emotion": "drama"
+      }
+    ],
+
+    "wicket_run_out": [
+      {
+        "text": "Run out! Brilliant piece of fielding! A direct hit from the deep and {batter} is caught well short of the crease. The replays confirm it.",
+        "tags": ["direct_hit", "outfield", "fielding"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Disaster! A mix-up between the batters and there's a run out! {batter} is stranded in the middle of the pitch. Terrible running between the wickets.",
+        "tags": ["mix_up", "terrible_running"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Sent back and too late! {batter} set off for the single but was sent back by his partner. The throw comes in to the keeper's end and the bails are off.",
+        "tags": ["sent_back", "keeper_end"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Run out by a whisker! The fielder swoops in from point, underarms it to the keeper and {batter} is just short. The third umpire gives it out!",
+        "tags": ["close_call", "underarm", "third_umpire"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Caught short! {batter} tried to steal a second run but the throw from deep mid-wicket is flat and accurate. The stumps are broken, well short.",
+        "tags": ["overthrow_attempt", "outfield"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Suicidal running! {batter} responded to the call but there was never a single there. The fielder at mid-on lobs it to the bowler who whips the bails off.",
+        "tags": ["suicidal", "infield"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Direct hit from the boundary! What an arm on that fielder! {batter} was trying to come back for the second and is run out by a bullet throw.",
+        "tags": ["direct_hit", "outfield", "spectacular"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Gone! A sharp piece of work from the fielding side. The ball goes to backward point, quick pick up, rifle throw, and the stumps are down. {batter} has to go.",
+        "tags": ["sharp_fielding", "infield"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Lazy running and it costs a wicket! {batter} didn't ground the bat and the throw beats him to the crease. A needless dismissal.",
+        "tags": ["lazy_running", "avoidable"],
+        "weight": 0.8,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "What a throw! The fielder picks up on the run at deep cover and hits the one stump he can see from forty yards. {batter} is run out, incredible athleticism!",
+        "tags": ["direct_hit", "outfield", "spectacular"],
+        "weight": 0.9,
+        "emotion": "excitement"
+      }
+    ],
+
+    "wicket_stumped": [
+      {
+        "text": "Stumped! {batter} dances down the pitch but can't get to the ball. Quick as a flash, the keeper whips the bails off. Well stumped!",
+        "tags": ["spin", "keeper", "quick"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Out of his crease and stumped! {batter} charges down the track to {bowler} but the ball turns away. The keeper does the rest.",
+        "tags": ["spin", "charge", "turn"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Beaten in the flight! {batter} comes down the pitch, the ball dips and spins past the outside edge. Lightning glovework from the keeper, stumped!",
+        "tags": ["spin", "flight", "keeper"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Smart bowling from {bowler}! Sees {batter} advancing, fires it wide outside off, and the keeper collects and breaks the stumps in one motion. Out, stumped!",
+        "tags": ["spin", "keeper", "smart"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Stumped down the leg side! {bowler} drags it down leg, {batter}'s back foot lifts for just a moment and the keeper is sharp enough to strike.",
+        "tags": ["spin", "leg_side", "keeper"],
+        "weight": 0.7,
+        "emotion": "drama"
+      },
+      {
+        "text": "Out! {batter} dances out of his ground looking to smash it over the top, misses completely, and the keeper has the bails off before {batter} can recover.",
+        "tags": ["spin", "aggressive", "miss"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Deceived by the slower one! {batter} is down the pitch but the ball holds its line. Left stranded, the keeper completes a tidy stumping.",
+        "tags": ["spin", "slower", "stranded"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Lovely piece of work all around! {bowler} flights it beautifully, {batter} is lured out of the crease, beaten on the turn, and stumped by the razor-sharp keeper.",
+        "tags": ["spin", "flight", "keeper"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      }
+    ],
+
+    "dot": [
+      {
+        "text": "Solid forward defense from {batter}. Gets right behind the line of the ball and blocks it dead.",
+        "tags": ["defensive", "standard"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Beaten! A beauty of a delivery from {bowler} that moves away late past the outside edge. Close!",
+        "tags": ["skill", "pace"],
+        "weight": 1.0,
+        "emotion": "admiration"
+      },
+      {
+        "text": "Driven straight to the fielder at point. Good timing but straight to the man, no run available.",
+        "tags": ["fielding", "off_side"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Short ball ducked underneath by {batter}. Well directed bouncer but safely negotiated.",
+        "tags": ["bouncer", "leave"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Play and a miss! {batter} attempts a loose drive away from his body and is lucky not to edge that.",
+        "tags": ["loose", "miss"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Defended back down the pitch to the bowler. {bowler} fields it on his follow-through.",
+        "tags": ["defensive", "straight"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Leaves that one alone outside the off stump. Good judgement shown by {batter}.",
+        "tags": ["leave", "discipline"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Pushed to mid-on, {batter} thinks about the single but wisely stays put. Good fielding keeps it to a dot.",
+        "tags": ["mid_on", "fielding"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Good length delivery, {batter} gets behind it and blocks solidly. Keeping out the good ones.",
+        "tags": ["defensive", "standard"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Back of a length, not enough width to free the arms. {batter} defends watchfully on the back foot.",
+        "tags": ["back_foot", "defensive"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Appeal for LBW! Not given. Hit outside the line says the umpire. {bowler} is convinced but has to walk back.",
+        "tags": ["appeal", "not_out", "drama"],
+        "weight": 0.8,
+        "emotion": "tension"
+      },
+      {
+        "text": "Almost played on! The ball clips the inside edge and just misses leg stump by a coat of paint. {batter} exhales in relief.",
+        "tags": ["inside_edge", "close_call"],
+        "weight": 0.7,
+        "emotion": "tension"
+      },
+      {
+        "text": "Hit on the pads! There's an appeal but it pitched outside leg. Not out. {bowler} shakes his head and walks back.",
+        "tags": ["appeal", "not_out"],
+        "weight": 0.8,
+        "emotion": "tension"
+      },
+      {
+        "text": "Worked to square leg, fielder is quick off the mark and cuts off the single. Good ground fielding keeps the pressure on.",
+        "tags": ["leg_side", "fielding"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Slower ball from {bowler} and {batter} spots it early, pulls out of the shot. Just defends it back down the track.",
+        "tags": ["slower_ball", "defensive"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Nothing to hit there! {bowler} lands it on a nagging length just outside off stump. {batter} wisely shoulders arms.",
+        "tags": ["leave", "discipline"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Swinging and missing! {batter} goes for an expansive drive but the ball wasn't there for the shot. Beaten all ends up.",
+        "tags": ["miss", "loose"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Blocked with soft hands. The ball drops at his feet and dies. No run, but {batter} is seeing it nicely.",
+        "tags": ["defensive", "soft_hands"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Just over the stumps! That kicked off a length from {bowler}, extra bounce surprised {batter} but went harmlessly over the bails.",
+        "tags": ["bounce", "close_call"],
+        "weight": 0.7,
+        "emotion": "tension"
+      },
+      {
+        "text": "Punched to cover, excellent stop diving to his left! That saves a certain boundary. Kept to a dot by brilliant fielding.",
+        "tags": ["off_side", "fielding", "spectacular"],
+        "weight": 0.8,
+        "emotion": "excitement"
+      }
+    ],
+
+    "single": [
+      {
+        "text": "Soft hands used by {batter}, pushed gently towards mid-off and they scamper through for a quick single.",
+        "tags": ["defensive", "off_side"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Worked away nicely with the wrists to square leg, finding the gap for an easy routine single.",
+        "tags": ["leg_side", "rotation"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Dropped at his feet and they decide to run! A direct hit would have been close, but they make it home safely.",
+        "tags": ["risky", "quick"],
+        "weight": 0.5,
+        "emotion": "tension"
+      },
+      {
+        "text": "Guided down to third man for a single. Sensible batting, rotating the strike and keeping the scoreboard ticking.",
+        "tags": ["safe", "rotation"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Punched off the back foot to deep cover. The fielder runs around to tidy up, keeping it down to just a single.",
+        "tags": ["back_foot", "off_side"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Inside edge onto the pad, the ball trickles away to the leg side and they pinch a cheeky single.",
+        "tags": ["lucky", "leg_side"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Driven firmly to mid-on, misfield allows them to go through! That should have been a dot ball.",
+        "tags": ["misfield", "bonus"],
+        "weight": 0.5,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Nudged off the hip to fine leg. Easy single, {batter} is rotating the strike well here.",
+        "tags": ["leg_side", "rotation"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Dabbed down to third man. Not the most glamorous shot but it does the job. One run added.",
+        "tags": ["off_side", "safe"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Tapped to the off side and they call quickly. Good running between the wickets converts a tight single. Well judged.",
+        "tags": ["off_side", "quick_running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Played into the gap at mid-wicket with nice timing. Easy single, keeping the scoreboard moving along.",
+        "tags": ["leg_side", "timing"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Defended into the covers, they think about two but settle for one. Sensible cricket, no need to take risks.",
+        "tags": ["off_side", "safe"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Off the pads, just wide of the fielder at short leg. They scurry through for a single, good awareness from both batters.",
+        "tags": ["leg_side", "quick"],
+        "weight": 0.8,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Steered to backward point and they set off immediately. Sharp running, the throw comes in but they're home comfortably.",
+        "tags": ["off_side", "quick_running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Tucked off the pads to the leg side. One run. {batter} is keeping things ticking over nicely.",
+        "tags": ["leg_side", "rotation"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Pushed towards mid-off, the fielder has to run to his right and they take the single. Good placement from {batter}.",
+        "tags": ["off_side", "placement"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      }
+    ],
+
+    "double": [
+      {
+        "text": "Placed into the gap at deep mid-wicket! Excellent running between the wickets, they come back for the second comfortably.",
+        "tags": ["leg_side", "gap", "running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Pushed through the covers and they're running hard! The throw comes in from the deep but they make it back for two. Good cricket.",
+        "tags": ["off_side", "running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Cut away to deep point and they push for the second. The throw is slightly wide and they're home safely. Two runs.",
+        "tags": ["off_side", "cut", "running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Whipped off the pads to deep square leg! They turn quickly and come back for two. Excellent running between the wickets by both batters.",
+        "tags": ["leg_side", "running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Driven to the long-off boundary! The fielder does well to cut it off but can only hold it to two. Nearly went all the way.",
+        "tags": ["off_side", "drive", "almost_four"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Pulled away to deep mid-wicket, the fielder slides to stop it near the rope. Two runs, saved a boundary there with good fielding.",
+        "tags": ["leg_side", "pull", "almost_four"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Played into the gap at wide mid-on and they are quick between the wickets. Easy two, no drama involved.",
+        "tags": ["leg_side", "gap"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Miscued towards long-on but there's enough distance to come back for two. Not off the middle of the bat but they'll take it.",
+        "tags": ["mistimed", "running"],
+        "weight": 0.8,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Flicked off the pads and it bisects the two fielders in the deep. Comfortable two, smart batting from {batter}.",
+        "tags": ["leg_side", "flick", "placement"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Guided to third man and they scamper back for the second! Quick call, quick running, and they beat the throw. Two valuable runs.",
+        "tags": ["off_side", "quick_running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      }
+    ],
+
+    "three": [
+      {
+        "text": "Driven to the deep and it beats the sweeper! They run three as the fielder has to chase it all the way to the fence. Held to three by a desperate dive.",
+        "tags": ["off_side", "deep", "running"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Misfield in the outfield! The ball slips through the fingers and they run three while the fielder scrambles to recover. Sloppy work in the field.",
+        "tags": ["misfield", "bonus"],
+        "weight": 0.8,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Pulled away to deep mid-wicket, the fielder has a long chase! They take three, outstanding running between the wickets. {batter} is barely breathing!",
+        "tags": ["leg_side", "pull", "running"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Cut hard to deep backward point and they push for three! The throw is wayward and they complete the third run comfortably. Three runs.",
+        "tags": ["off_side", "cut", "running"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Driven down the ground, the ball beats the fielder at long-off who has to turn and chase. They push for three and just make it. Tight!",
+        "tags": ["straight", "drive", "tight_running"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Overthrow! The throw from the deep goes past the stumps and they get an extra run. Three in total, a bonus run from the fielding side's error.",
+        "tags": ["overthrow", "bonus"],
+        "weight": 0.6,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Lofted over the infield to the deep! The fielder runs around from long-on and dives to keep it in. Three runs taken, could have been four.",
+        "tags": ["loft", "deep", "almost_four"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Worked away through the leg side and they run hard! Three completed with a brilliant piece of running. {batter} slides his bat in just in time.",
+        "tags": ["leg_side", "running"],
+        "weight": 1.0,
+        "emotion": "tension"
+      }
+    ],
+
+    "wide": [
+      {
+        "text": "Wayward line down the leg side, the umpire stretches his arms. Wide called.",
+        "tags": ["standard", "leg_side"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Too wide outside off stump, chasing the tramlines. Umpire calls it a wide, free run.",
+        "tags": ["off_side"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Bouncer goes way over the head of {batter}! The square leg umpire signals a wide for height.",
+        "tags": ["bouncer", "height"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Slipping down the leg side again! {bowler} is struggling with his line here. Wide signalled, the captain won't be pleased.",
+        "tags": ["leg_side", "poor_line"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "That's gone miles down the leg side! Even the keeper struggled to collect it. Wide called, sloppy delivery.",
+        "tags": ["leg_side", "poor_delivery"],
+        "weight": 0.8,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Sprayed well outside off stump. {batter} left it alone and the umpire extends both arms. Wide, and rightly so.",
+        "tags": ["off_side"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "Wide! The slower ball from {bowler} drifts too far down the leg side. Bonus run for the batting side.",
+        "tags": ["leg_side", "slower_ball"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "That's a wide! Trying the bouncer but it's too high and too wide. Umpire has no hesitation in signalling.",
+        "tags": ["bouncer", "height"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      }
+    ],
+
+    "noball": [
+      {
+        "text": "Huge shout for a wicket but the umpire signals No Ball! {bowler} has overstepped the line considerably.",
+        "tags": ["overstep", "standard"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "It's a No Ball for height! That full toss was dangerously high above the waist. Free hit coming up!",
+        "tags": ["beamer", "dangerous"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "No Ball! {bowler} has overstepped the crease. A free run and a free hit on the way for the batting side. Pressure on the bowler.",
+        "tags": ["overstep", "free_hit"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "Front foot no ball! {bowler} was right on the line and the third umpire confirms his front foot has landed beyond the crease. Free hit next ball!",
+        "tags": ["overstep", "third_umpire"],
+        "weight": 1.0,
+        "emotion": "drama"
+      },
+      {
+        "text": "No ball called! {bowler} trying too hard for extra pace and has overstepped in the process. Gift for the batting side.",
+        "tags": ["overstep", "extra_pace"],
+        "weight": 1.0,
+        "emotion": "disappointment"
+      },
+      {
+        "text": "That's a no ball for height! Full toss above waist height, that could have been dangerous. Free hit coming up, {batter} will be licking his lips.",
+        "tags": ["beamer", "dangerous", "free_hit"],
+        "weight": 0.8,
+        "emotion": "tension"
+      }
+    ],
+
+    "byes": [
+      {
+        "text": "Past the keeper! The ball beats everyone including the wicketkeeper, byes signalled. Runs added to the extras column.",
+        "tags": ["keeper_miss", "standard"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Byes! That took an awkward bounce and beat the keeper who dives in vain. The batters run through for byes.",
+        "tags": ["bounce", "keeper_miss"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Through to the keeper... oh, he's fumbled it! The batters are alert and steal a run. Byes conceded.",
+        "tags": ["fumble", "alert_running"],
+        "weight": 0.8,
+        "emotion": "neutral"
+      },
+      {
+        "text": "The ball clips the top of off stump but somehow the bail stays on! It deflects past the keeper and they run through. Byes.",
+        "tags": ["close_call", "lucky"],
+        "weight": 0.5,
+        "emotion": "tension"
+      }
+    ],
+
+    "legbyes": [
+      {
+        "text": "Off the pads and away to the leg side! Leg byes signalled by the umpire. The batters take the run.",
+        "tags": ["pads", "leg_side"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Struck on the pad, no shot offered but the ball runs away to fine leg. Leg bye taken, the umpire signals accordingly.",
+        "tags": ["pads", "fine_leg"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Hits the thigh pad and deflects to square leg. The batters run through for leg byes. {bowler} is frustrated, beating the bat but not getting rewarded.",
+        "tags": ["pads", "square_leg"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      },
+      {
+        "text": "Off the hip and it rolls towards fine leg. Leg bye signalled. Not off the bat, but the batters take advantage and run through.",
+        "tags": ["pads", "fine_leg"],
+        "weight": 1.0,
+        "emotion": "neutral"
+      }
+    ],
+
+    "free_hit": [
+      {
+        "text": "Free hit! {batter} swings hard and connects! But it's straight to the fielder in the deep. Can't be out though, it's a free hit. Dot ball.",
+        "tags": ["free_hit", "dot"],
+        "weight": 1.0,
+        "emotion": "tension"
+      },
+      {
+        "text": "Free hit delivery and {batter} launches it! It sails over the boundary for six! Making the most of the free hit opportunity!",
+        "tags": ["free_hit", "six"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Free hit and {batter} crunches it through the covers for four! That's the way to capitalize on a no-ball. Free runs!",
+        "tags": ["free_hit", "four"],
+        "weight": 1.0,
+        "emotion": "excitement"
+      },
+      {
+        "text": "Free hit but {batter} can't take advantage. Swings and misses, the ball goes through to the keeper. A reprieve wasted.",
+        "tags": ["free_hit", "miss"],
+        "weight": 1.0,
+        "emotion": "tension"
+      }
+    ]
+  },
+
+  "narratives": {
+    "collapse_wicket": [
+      "Another one bites the dust! {team} are falling apart here. The dug-out looks extremely worried.",
+      "The procession continues! Batsmen are coming and going like a revolving door. {team} in deep trouble.",
+      "Absolute disaster for {team}! They are losing wickets in clumps and the innings is unraveling fast.",
+      "Panic stations now! A collapse is unfolding right before our eyes. Someone needs to anchor this innings.",
+      "Wickets tumbling here! {team} are in a complete mess, and the body language in the dugout says it all.",
+      "The wheels are coming off for {team}! They simply cannot stem the bleeding here. This is turning into a rout."
+    ],
+
+    "high_pressure_dot": [
+      "Swing and a miss! Nerves of steel from {bowler}. The crowd is on the edge of their seats!",
+      "The pressure is mounting with every dot ball! The required rate is climbing and the tension is palpable.",
+      "You can hear a pin drop in the stadium! The tension is unbearable as another ball passes without a run.",
+      "Gold dust! A dot ball at this stage is massive for the fielding side. The batter looks frustrated.",
+      "Dot ball! The equation is getting tougher by the delivery. The asking rate is spiralling out of control.",
+      "Can't find the boundary! {batter} is struggling to get it off the square. The pressure is immense."
+    ],
+
+    "partnership_50": [
+      "That's the 50 partnership! These two are rebuilding the innings nicely and looking comfortable in the middle.",
+      "A solid stand developing here. 50 runs added between these two, bringing some stability back to the innings.",
+      "Frustration growing for {fielding_team} as this partnership crosses the 50-run mark. They need a breakthrough.",
+      "Fifty-run partnership! These two have batted intelligently and rotated the strike brilliantly. Good foundation being laid.",
+      "Half-century stand! A really important partnership in the context of this match. Both batters looking settled."
+    ],
+
+    "milestone_50": [
+      "Fifty for {batter}! A well-compiled innings under pressure. Raises the bat to acknowledge the applause.",
+      "He raises his bat to the crowd! A fighting half-century from {batter}, playing a crucial role for his team.",
+      "Great knock! {batter} reaches his fifty with style. He has looked in fine touch since ball one.",
+      "Fifty up for {batter}! He punches the air and acknowledges the dressing room. What an innings this has been.",
+      "Half-century! {batter} gets to the milestone and the crowd rises to applaud. A measured innings of real quality."
+    ],
+
+    "milestone_100": [
+      "HUNDRED! What a magnificent innings from {batter}! He takes off his helmet and soaks in the applause.",
+      "Take a bow, {batter}! A century to remember. This has been a masterclass in batting.",
+      "Ton up! {batter} reaches the magical three figures. A truly special performance on the big stage.",
+      "CENTURY! The crowd goes absolutely wild! {batter} leaps in the air, what an extraordinary knock this has been!",
+      "A hundred runs! {batter} raises his bat, kisses the badge on his helmet. This innings will be talked about for years."
+    ],
+
+    "expensive_over": [
+      "Expensive over! The momentum is shifting back to the batting side. {bowler} will be disappointed with that effort.",
+      "Runs leaking now! {bowler} is under the pump as the batters capitalize on some loose deliveries.",
+      "Big over for the batting side! This could be the turning point of the match.",
+      "Runs flowing freely! The batters are cashing in and the bowling side is under serious pressure now.",
+      "That's gone for plenty! {bowler} has been taken to the cleaners in that over. The captain needs to think quickly."
+    ],
+
+    "maiden_over": [
+      "Six dots in a row! A magnificent maiden over from {bowler} keeps the pressure firmly on.",
+      "Brilliant bowling! Completely tied down the batter for six balls. A maiden over is gold dust in this format.",
+      "Maiden! Just what the doctor ordered. {bowler} hitting the right areas consistently.",
+      "A rare maiden over in T20 cricket! {bowler} has been outstanding, not giving an inch to the batters.",
+      "Six balls, zero runs! {bowler} takes a moment to appreciate that. Exceptional discipline and control."
+    ],
+
+    "last_over_drama": [
+      "It all comes down to this! Final over, nerves jangling on both sides. This is what cricket is all about!",
+      "Last over! The crowd is on their feet, every delivery could decide the match. Incredible scenes here!",
+      "Six balls to decide this contest! The tension is thick, you can feel it right through the television screen."
+    ],
+
+    "close_finish": [
+      "What a finish! This match has gone right down to the wire. Edge-of-the-seat stuff!",
+      "Nailbiting finish! Both teams gave everything out there. That's why we love this game!",
+      "It couldn't have been any closer! Heart rates through the roof in both camps."
+    ],
+
+    "big_over": [
+      "That over has changed the complexion of this match! The batting side has seized the momentum.",
+      "A massive over! The required rate has dropped significantly. The pressure is shifting back onto the bowlers.",
+      "What an over that was! The batting side has broken free and the runs are flowing."
+    ],
+
+    "death_overs": [
+      "Into the death overs now! This is where reputations are made and matches are won.",
+      "The business end of the innings is here. Every ball counts from here on in.",
+      "Slog overs! The batters will be looking to tee off and maximize every delivery."
+    ],
+
+    "powerplay": [
+      "Powerplay is on! Only two fielders allowed outside the circle. The batters will be looking to capitalize.",
+      "Inside the powerplay, fielding restrictions in play. This is where the batting side needs to set the platform.",
+      "Powerplay cricket! Aggressive fields, attacking bowling, this is the most exciting phase of the game."
+    ]
+  }
+}
