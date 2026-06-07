@@ -2290,14 +2290,6 @@ body {
 }
 
 /* ── Impact Player ───────────────────────────────────────────────── */
-.impact-control-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
 .impact-title {
   color: var(--warning-accent);
   font-weight: 900;
@@ -2346,3 +2338,101 @@ body {
 .impact-summary-row span { color: var(--text-muted); }
 .impact-summary-row.muted { color: var(--text-muted); }
 .impact-result-section { background: rgba(0, 212, 255, 0.04); }
+
+/* ── Impact Player — inline entry banner ─────────────────────────── */
+.impact-entry-mount:empty { display: none; }
+.impact-entry-mount { margin-bottom: 12px; }
+
+.impact-entry-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+  color: var(--warning-accent);
+  background: linear-gradient(90deg, rgba(255, 140, 0, 0.16), rgba(255, 140, 0, 0.04));
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: var(--border-radius-sm);
+  box-shadow: 0 0 0 rgba(255, 140, 0, 0.35);
+  cursor: pointer;
+  animation: impact-shimmer 2.4s ease-in-out infinite;
+  transition: transform 0.12s ease, box-shadow 0.2s ease;
+}
+.impact-entry-banner:hover { transform: translateY(-1px); }
+.impact-entry-banner:active { transform: scale(0.99); }
+
+@keyframes impact-shimmer {
+  0%, 100% { box-shadow: 0 0 6px rgba(255, 140, 0, 0.12); }
+  50%      { box-shadow: 0 0 16px rgba(255, 140, 0, 0.30); }
+}
+
+.impact-entry-spark { font-size: 20px; line-height: 1; flex-shrink: 0; }
+.impact-entry-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.impact-entry-title {
+  font-weight: 900;
+  font-size: 13px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.impact-entry-hint {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.impact-entry-chevron { font-size: 22px; font-weight: 700; opacity: 0.7; flex-shrink: 0; }
+
+/* "Impact Used" persistent indicator (replaces the button once spent). */
+.impact-used-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  background: rgba(255, 140, 0, 0.07);
+  border: 1px solid rgba(255, 140, 0, 0.22);
+  border-radius: 999px;
+}
+
+/* ── Impact Player — in-place picker ─────────────────────────────── */
+/* While the picker is open inside a selection sheet, hide the underlying
+   list/buttons for a clean, focused swap. */
+.impact-picking > :not(.impact-entry-mount) { display: none !important; }
+
+.impact-picker { animation: impact-fade-in 0.18s ease; }
+@keyframes impact-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.impact-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.impact-picker-header .impact-title { margin: 0; }
+
+.impact-confirm-summary {
+  margin: 10px 0 4px;
+  padding: 9px 12px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-secondary);
+  background: rgba(255, 140, 0, 0.08);
+  border: 1px dashed rgba(255, 140, 0, 0.35);
+  border-radius: var(--border-radius-sm);
+}
+.impact-confirm-summary b { color: var(--warning-accent); font-weight: 800; }
+
+/* ✨ badge on a player who entered via Impact substitution. */
+.impact-badge {
+  font-size: 10px;
+  color: var(--warning-accent);
+  margin-left: 2px;
+}

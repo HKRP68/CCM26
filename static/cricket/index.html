@@ -66,6 +66,10 @@
       </div>
 
       <div class="setup-container">
+        <!-- IMPACT PLAYER ENTRY (2nd-innings break only; JS injects the banner
+             or moves the picker here). Empty/hidden otherwise. -->
+        <div class="impact-entry-mount impact-entry-setup" id="impact-entry-setup"></div>
+
         <!-- BATTING SETUP -->
         <div id="batting-setup" class="setup-section hidden">
           <div class="glass-card">
@@ -395,6 +399,7 @@
 
           <!-- INCOMING BATSMAN SELECTION -->
           <div id="wicket-batsman-controls" class="controls-section hidden">
+            <div class="impact-entry-mount" id="impact-entry-wicket"></div>
             <p class="warning-text">Striker got out! Select your next batsman:</p>
             <div id="wicket-batsman-list" class="selection-list mb-3"></div>
             <button id="submit-wicket-batsman-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Batsman</button>
@@ -402,29 +407,29 @@
 
           <!-- INCOMING BOWLER SELECTION -->
           <div id="over-bowler-controls" class="controls-section hidden">
+            <div class="impact-entry-mount" id="impact-entry-bowler"></div>
             <p class="info-text">Bowler for the next over:</p>
             <div id="over-bowler-list" class="selection-list mb-3"></div>
             <button id="submit-over-bowler-btn" class="btn btn-primary btn-block btn-green mt-3">Confirm Bowler</button>
           </div>
 
-          <!-- IMPACT PLAYER SELECTION -->
-          <div id="impact-player-controls" class="controls-section hidden">
-            <div class="impact-control-header">
-              <div>
-                <p class="info-text impact-title">✨ Impact Player</p>
-                <p class="info-text" id="impact-player-hint">Can be used between overs, after a wicket, or at innings break.</p>
+          <!-- IMPACT PLAYER PICKER (single reusable node; JS moves it into the
+               active selection's .impact-entry-mount when opened, and returns it
+               to this neutral hidden home on cancel/confirm so a list rebuild
+               can never delete it). -->
+          <div id="impact-player-picker-home" class="hidden">
+            <div id="impact-player-picker" class="impact-picker hidden">
+              <div class="impact-picker-header">
+                <p class="impact-title">✨ Impact Player</p>
+                <button id="impact-player-cancel-btn" class="btn btn-secondary btn-sm">Cancel</button>
               </div>
-              <button id="impact-player-cancel-btn" class="btn btn-secondary btn-sm hidden">Cancel</button>
-            </div>
-            <button id="use-impact-player-btn" class="btn btn-primary btn-block btn-green">Use Impact Player</button>
-            <button id="skip-impact-player-btn" class="btn btn-secondary btn-block mt-2">Maybe Later</button>
-            <div id="impact-player-picker" class="hidden">
               <p class="warning-text" id="impact-player-step-text">Select incoming substitute:</p>
               <div id="impact-incoming-list" class="selection-list mb-3"></div>
               <div id="impact-outgoing-wrap" class="hidden">
                 <p class="warning-text">Now select a player to remove from Playing XI:</p>
                 <div id="impact-outgoing-list" class="selection-list mb-3"></div>
               </div>
+              <div id="impact-confirm-summary" class="impact-confirm-summary hidden"></div>
               <button id="confirm-impact-player-btn" class="btn btn-primary btn-block btn-green mt-3" disabled>Confirm Impact Player</button>
             </div>
           </div>
