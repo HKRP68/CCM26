@@ -102,3 +102,109 @@ def test_chase_stops_at_target():
         # won by wickets — must not have used all 10 wickets unnecessarily nor
         # exceeded the over limit
         assert i2["balls"] <= 10 * 6
+
+
+def test_chase_stops_immediately_when_wide_reaches_target(monkeypatch):
+    home, away = _make_xi("H", 70), _make_xi("A", 70)
+
+    monkeypatch.setattr(
+        "services.sim_match.calculate_outcome",
+        lambda *args, **kwargs: {"type": "wide"},
+    )
+
+    inn = simulate_innings(home, away, 1, "Flat", 2, "Chase", "Def", target=1)
+
+    assert inn["runs"] == 1
+    assert inn["balls"] == 0
+    assert inn["timeline"] == ["WD"]
+
+
+def test_chase_stops_immediately_when_no_ball_reaches_target(monkeypatch):
+    home, away = _make_xi("H", 70), _make_xi("A", 70)
+
+    monkeypatch.setattr(
+        "services.sim_match.calculate_outcome",
+        lambda *args, **kwargs: {"type": "noball", "runs": 0},
+    )
+
+    inn = simulate_innings(home, away, 1, "Flat", 2, "Chase", "Def", target=1)
+
+    assert inn["runs"] == 1
+    assert inn["balls"] == 0
+    assert inn["timeline"] == ["NB"]
+
+
+def test_player_of_match_counts_each_bowler_wicket_impact_once_per_innings():
+    from services.sim_match import _player_of_the_match
+
+    batter = {"name": "Match-winning Batter"}
+    bowler = {"name": "Repeated Bowler"}
+    inn1 = {
+        "order": [batter],
+        "bat_stats": {id(batter): {"runs": 60}},
+        "bowl_plan": [bowler, bowler, bowler, bowler],
+        "bowl_stats": {id(bowler): {"wickets": 2}},
+    }
+    inn2 = {
+        "order": [],
+        "bat_stats": {},
+        "bowl_plan": [],
+        "bowl_stats": {},
+    }
+
+    assert _player_of_the_match(inn1, inn2, {}) == "Match-winning Batter"
+
+
+def test_json_feed_includes_ball_roles_and_over_summaries():
+    random.seed(21)
+    home, away = _make_xi("H", 82), _make_xi("A", 80)
+    m = simulate_match(home, away, 2, "Flat", "Alpha", "Bravo")
+
+    ball_events = [e for e in m["commentary_feed"] if e.get("event") != "end_of_over"]
+    over_events = [e for e in m["commentary_feed"] if e.get("event") == "end_of_over"]
+
+    assert ball_events
+    assert all(e.get("striker") and e.get("bowler") for e in ball_events)
+    assert over_events
+    assert all(e.get("team_score") and e.get("batsmen_score") for e in over_events)
+    assert all("over_timeline" in e for e in over_events)
+    assert m["innings1"]["over_summaries"]
+    assert m["innings1"]["over_summaries"][0]["team_score"]
+
+
+def test_toss_winner_can_elect_to_bowl_and_json_intro_names_openers():
+    random.seed(33)
+    home, away = _make_xi("CSK", 82), _make_xi("DC", 80)
+
+    m = simulate_match(
+        home,
+        away,
+        2,
+        "Flat",
+        "CSK",
+        "DC",
+        toss_winner="DC",
+        toss_decision="bowl",
+    )
+
+    assert m["toss"] == {
+        "winner": "DC",
+        "decision": "bowl",
+        "text": "DC won the toss and elected to Bowl first",
+    }
+    assert m["innings1"]["batting_team"] == "CSK"
+    assert m["innings1"]["bowling_team"] == "DC"
+    assert m["innings1"]["openers"] == ["CSK1", "CSK2"]
+    assert m["innings1"]["opening_striker"] == "CSK1"
+    assert m["innings1"]["opening_bowler"].startswith("DC")
+    assert m["innings1"]["innings_intro"][:3] == [
+        "INNINGS 1",
+        "Batting CSK",
+        "Bowling DC",
+    ]
+    assert m["innings1"]["innings_intro"][3] == (
+        "CSK1 and CSK2 will open the batting for CSK. CSK1 is on strike."
+    )
+    assert m["innings1"]["innings_intro"][4].endswith(
+        "will bowl the opening over for DC"
+    )

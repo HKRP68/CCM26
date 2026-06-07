@@ -23,7 +23,7 @@ from services.match_state_store import (
     A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER, A_COMPLETED,
 )
 from services.match_webapp_service import (
-    _apply_outcome, _append_commentary_log, SETUP_DONE,
+    _active_players, _apply_outcome, _append_commentary_log, SETUP_DONE,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def _wsp_advance_step(match_id):
 
         if na == A_PICK_NEW_BOWLER:
             new_bowler = bot_ai.pick_bot_next_bowler(
-                state["bowl_xi"], state.get("prev_bowler_rid"),
+                _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
                 state["bowl_stats"], state["overs"])
             state["current_bowler"] = new_bowler
             mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)

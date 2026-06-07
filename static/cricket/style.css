@@ -2273,3 +2273,61 @@ body {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Impact Player ───────────────────────────────────────────────── */
+.impact-control-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.impact-title {
+  color: var(--warning-accent);
+  font-weight: 900;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.btn-sm {
+  width: auto;
+  padding: 7px 10px;
+  font-size: 11px;
+  margin-top: 0;
+}
+
+.selection-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.impact-scorecard-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--border-radius-sm);
+  border: 1px dashed rgba(255, 140, 0, 0.28);
+  background: rgba(255, 140, 0, 0.05);
+}
+
+.impact-scorecard-title {
+  color: var(--warning-accent);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.impact-scorecard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.impact-summary-row b { color: var(--text-primary); }
+.impact-summary-row span { color: var(--text-muted); }
+.impact-summary-row.muted { color: var(--text-muted); }
+.impact-result-section { background: rgba(0, 212, 255, 0.04); }
