@@ -170,3 +170,41 @@ def test_json_feed_includes_ball_roles_and_over_summaries():
     assert all("over_timeline" in e for e in over_events)
     assert m["innings1"]["over_summaries"]
     assert m["innings1"]["over_summaries"][0]["team_score"]
+
+
+def test_toss_winner_can_elect_to_bowl_and_json_intro_names_openers():
+    random.seed(33)
+    home, away = _make_xi("CSK", 82), _make_xi("DC", 80)
+
+    m = simulate_match(
+        home,
+        away,
+        2,
+        "Flat",
+        "CSK",
+        "DC",
+        toss_winner="DC",
+        toss_decision="bowl",
+    )
+
+    assert m["toss"] == {
+        "winner": "DC",
+        "decision": "bowl",
+        "text": "DC won the toss and elected to Bowl first",
+    }
+    assert m["innings1"]["batting_team"] == "CSK"
+    assert m["innings1"]["bowling_team"] == "DC"
+    assert m["innings1"]["openers"] == ["CSK1", "CSK2"]
+    assert m["innings1"]["opening_striker"] == "CSK1"
+    assert m["innings1"]["opening_bowler"].startswith("DC")
+    assert m["innings1"]["innings_intro"][:3] == [
+        "INNINGS 1",
+        "Batting CSK",
+        "Bowling DC",
+    ]
+    assert m["innings1"]["innings_intro"][3] == (
+        "CSK1 and CSK2 will open the attack for CSK. CSK1 is on strike."
+    )
+    assert m["innings1"]["innings_intro"][4].endswith(
+        "will bowl the opening over for DC"
+    )
