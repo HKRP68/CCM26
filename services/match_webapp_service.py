@@ -86,9 +86,18 @@ def _impact_player_summary(state):
     return summaries
 
 
+IMPACT_INNINGS_BREAK_SETUP_PHASES = (
+    SETUP_PICKING,
+    SETUP_AWAIT_OPENERS,
+    SETUP_AWAIT_BOWLER,
+    SETUP_AWAIT_READY,
+)
+
+
 def _impact_break_label(state, next_action=None):
     na = next_action or mwa.get_next_action(state.get("match_id"))
-    if state.get("setup") != SETUP_DONE and state.get("innings") == 2:
+    if (state.get("innings") == 2
+            and state.get("setup") in IMPACT_INNINGS_BREAK_SETUP_PHASES):
         return "innings break"
     if na == A_PICK_NEW_BATSMAN:
         return "after wicket"

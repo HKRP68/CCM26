@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
 import services.match_webapp_service as svc
-from services.match_state_store import A_PICK_NEW_BATSMAN
+from services.match_state_store import (
+    A_COMPLETED, A_PICK_NEW_BATSMAN, A_PICK_SHOT,
+)
 
 
 class _FakeQuery:
@@ -175,3 +177,65 @@ def test_persist_stats_lookup_includes_inactive_impact_player(monkeypatch):
 
     assert counts["bowling"] == 1
     assert calls == [(2, 1202, {"balls": 6, "runs": 5, "wickets": 1})]
+
+
+def _patch_next_action(monkeypatch, state, next_action):
+    monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
+    monkeypatch.setattr(svc.mwa, "get_next_action", lambda match_id: next_action)
+    monkeypatch.setattr(svc.mwa, "save_state", lambda *args, **kwargs: None)
+
+
+def _innings_two_state_without_setup():
+    state = _after_wicket_state()
+    state.pop("setup", None)
+    state["innings"] = 2
+    return state
+
+
+def test_missing_setup_in_innings_two_is_not_treated_as_innings_break(monkeypatch):
+    state = _innings_two_state_without_setup()
+    _patch_next_action(monkeypatch, state, A_PICK_SHOT)
+
+    opts = svc.get_impact_player_options(_FakeSession([_incoming_row()]), 99, 2)
+    ok, msg, rec = svc.use_impact_player(
+        _FakeSession([_incoming_row()]), 99, 2, 300, 202,
+    )
+
+    assert opts["can_use"] is False
+    assert opts["legal_break"] is None
+    assert ok is False
+    assert msg == (
+        "Impact Player can be used only between overs, after a wicket, or "
+        "at innings break."
+    )
+    assert rec is None
+
+
+def test_completed_innings_two_without_setup_is_not_treated_as_innings_break(monkeypatch):
+    state = _innings_two_state_without_setup()
+    _patch_next_action(monkeypatch, state, A_COMPLETED)
+
+    opts = svc.get_impact_player_options(_FakeSession([_incoming_row()]), 99, 2)
+    ok, msg, rec = svc.use_impact_player(
+        _FakeSession([_incoming_row()]), 99, 2, 300, 202,
+    )
+
+    assert opts["can_use"] is False
+    assert opts["legal_break"] is None
+    assert ok is False
+    assert msg == (
+        "Impact Player can be used only between overs, after a wicket, or "
+        "at innings break."
+    )
+    assert rec is None
+
+
+def test_pvp_innings_break_setup_phase_allows_impact_player(monkeypatch):
+    state = _innings_two_state_without_setup()
+    state["setup"] = svc.SETUP_PICKING
+    _patch_next_action(monkeypatch, state, "SETUP")
+
+    opts = svc.get_impact_player_options(_FakeSession([_incoming_row()]), 99, 2)
+
+    assert opts["can_use"] is True
+    assert opts["legal_break"] == "innings break"
