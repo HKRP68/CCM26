@@ -209,10 +209,11 @@ async def _auto_decide(context, mid, state, next_act):
                     return
 
         elif next_act == A_PICK_NEW_BOWLER:
-            # Pick best non-prev bowler
+            # Pick best active non-prev bowler
             from services.bot_ai import pick_bot_next_bowler
+            from services.match_engine import _active_players
             new_bowler = pick_bot_next_bowler(
-                state["bowl_xi"],
+                _active_players(state["bowl_xi"]),
                 state.get("prev_bowler_rid"),
                 state["bowl_stats"],
                 state["overs"],
