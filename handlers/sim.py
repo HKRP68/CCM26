@@ -7,7 +7,6 @@ ball-by-ball commentary as a JSON file. Team setup is automatic:
   - only Bowlers + All-rounders bowl (rotated, no consecutive overs)
 """
 
-import asyncio
 import io
 import json
 import logging
@@ -22,7 +21,7 @@ from models import Player
 from handlers.lineup import _get_ordered_roster, validate_xi
 from services.telegram_user_service import sync_telegram_user
 from services.config_service import get_config
-from services.commentary_service import pick_commentary
+from services.commentary_service import build_commentary_picker
 from services.sim_match import (
     simulate_match, render_innings_card, render_result, render_match_summary_image,
 )
@@ -71,13 +70,13 @@ def _build_bot_xi(session, avg_rating):
     if len(rows) < 11:
         near_pool = (session.query(Player)
                      .filter(Player.is_active == True, Player.rating.between(lo, hi))
-                     .order_by(func.random()).all())
+                     .order_by(func.random()).limit(64).all())
         append_distinct_base_players(rows, near_pool)
 
     if len(rows) < 11:
         full_pool = (session.query(Player)
                      .filter(Player.is_active == True)
-                     .order_by(func.random()).all())
+                     .order_by(func.random()).limit(128).all())
         append_distinct_base_players(rows, full_pool)
 
     return [_player_to_dict(p) for p in rows[:11] if p]
@@ -130,6 +129,7 @@ def _parse_format(args):
 
 
 async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    progress = None
     fmt, err = _parse_format(context.args)
     if err:
         await update.message.reply_text(
@@ -138,34 +138,57 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     overs = fmt["overs"]
 
-    # ---- All DB work + the (instant) simulation happen up front, so we don't
-    # hold a pooled connection during the suspense delay. ----
+    # Acknowledge the command before the heavier DB reads, match simulation, and
+    # image rendering so users get an immediate bot reply in busy chats.
+    try:
+        progress = await update.message.reply_text(
+            f"🏏 <b>SIM MATCH</b> — {fmt['label']} ({overs} ov)\n"
+            "⚡ <i>Setting up teams…</i>",
+            parse_mode="HTML")
+    except Exception:
+        progress = None
+
+    # ---- All DB work + the simulation happen up front, so we don't hold a
+    # pooled connection while delivering Telegram messages. ----
     session = get_session()
     try:
         from services.command_config_service import is_command_enabled, get_disabled_message
         if not is_command_enabled(session, "sim"):
-            await update.message.reply_text(
-                get_disabled_message(session, "sim"), parse_mode="HTML")
+            if progress:
+                await progress.edit_text(get_disabled_message(session, "sim"), parse_mode="HTML")
+            else:
+                await update.message.reply_text(
+                    get_disabled_message(session, "sim"), parse_mode="HTML")
             return
 
         user = sync_telegram_user(session, update.effective_user)
         if not user:
-            await update.message.reply_text("❌ Do /debut first!")
+            if progress:
+                await progress.edit_text("❌ Do /debut first!")
+            else:
+                await update.message.reply_text("❌ Do /debut first!")
             return
 
         roster = _get_ordered_roster(session, user.id)
         session.commit()
         if len(roster) < 11:
-            await update.message.reply_text(
+            text = (
                 f"❌ You need 11 players to simulate a match (you have {len(roster)}).\n"
                 f"Build a squad with /claim, /buypl or /buypack, then /autobuild.")
+            if progress:
+                await progress.edit_text(text)
+            else:
+                await update.message.reply_text(text)
             return
 
         valid, errors = validate_xi(roster)
         if not valid:
-            await update.message.reply_text(
-                "❌ Your Playing XI is invalid:\n• " + "\n• ".join(errors)
-                + "\n\nFix it with /pxi, /swap or /autobuild.", parse_mode="HTML")
+            text = ("❌ Your Playing XI is invalid:\n• " + "\n• ".join(errors)
+                    + "\n\nFix it with /pxi, /swap or /autobuild.")
+            if progress:
+                await progress.edit_text(text, parse_mode="HTML")
+            else:
+                await update.message.reply_text(text, parse_mode="HTML")
             return
 
         user_xi = _xi_from_roster(roster)
@@ -173,21 +196,30 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         opponent = _reply_target_user(session, update)
         if opponent and opponent.id == user.id:
-            await update.message.reply_text("❌ Reply to another real user to sim your XI vs their XI.")
+            if progress:
+                await progress.edit_text("❌ Reply to another real user to sim your XI vs their XI.")
+            else:
+                await update.message.reply_text("❌ Reply to another real user to sim your XI vs their XI.")
             return
 
         if opponent:
             opponent_roster = _get_ordered_roster(session, opponent.id)
             if len(opponent_roster) < 11:
-                await update.message.reply_text(
-                    f"❌ {_team_display_name(opponent)} needs 11 players to simulate "
-                    f"(they have {len(opponent_roster)}).")
+                text = (f"❌ {_team_display_name(opponent)} needs 11 players to simulate "
+                        f"(they have {len(opponent_roster)}).")
+                if progress:
+                    await progress.edit_text(text)
+                else:
+                    await update.message.reply_text(text)
                 return
             opp_valid, opp_errors = validate_xi(opponent_roster)
             if not opp_valid:
-                await update.message.reply_text(
-                    f"❌ {_team_display_name(opponent)}'s Playing XI is invalid:\n• "
-                    + "\n• ".join(opp_errors), parse_mode="HTML")
+                text = (f"❌ {_team_display_name(opponent)}'s Playing XI is invalid:\n• "
+                        + "\n• ".join(opp_errors))
+                if progress:
+                    await progress.edit_text(text, parse_mode="HTML")
+                else:
+                    await update.message.reply_text(text, parse_mode="HTML")
                 return
             opponent_xi = _xi_from_roster(opponent_roster)
             opponent_name = _team_display_name(opponent, "Opponent XI")
@@ -195,8 +227,12 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             avg_rating = round(sum(p.rating for _, p in roster[:11]) / 11)
             opponent_xi = _build_bot_xi(session, avg_rating)
             if len(opponent_xi) < 11:
-                await update.message.reply_text(
-                    "⚠️ Couldn't assemble an opponent from the player pool. Try again later.")
+                if progress:
+                    await progress.edit_text(
+                        "⚠️ Couldn't assemble an opponent from the player pool. Try again later.")
+                else:
+                    await update.message.reply_text(
+                        "⚠️ Couldn't assemble an opponent from the player pool. Try again later.")
                 return
             opponent_name = "🤖 Sim XI"
 
@@ -206,9 +242,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toss_winner = random.choice([team_name, opponent_name])
         toss_decision = random.choice(["bat", "bowl"])
 
-        def commentary(event_key, batsman, bowler, fielder, keeper, runs):
-            return pick_commentary(session, event_key, batsman=batsman, bowler=bowler,
-                                   fielder=fielder, keeper=keeper, runs=runs)
+        commentary = build_commentary_picker(session)
 
         match = simulate_match(user_xi, opponent_xi, overs, pitch,
                                team_name, opponent_name, toss_winner=toss_winner,
@@ -267,25 +301,36 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
     except Exception:
         logger.exception("sim_handler preparation failed")
-        await update.message.reply_text("⚠️ Couldn't start the simulation. Try again.")
+        if progress:
+            try:
+                await progress.edit_text("⚠️ Couldn't start the simulation. Try again.")
+            except Exception:
+                await update.message.reply_text("⚠️ Couldn't start the simulation. Try again.")
+        else:
+            await update.message.reply_text("⚠️ Couldn't start the simulation. Try again.")
         return
     finally:
         session.close()
 
     # ---- Suspense + delivery (no DB connection held) ----
     try:
-        progress = await update.message.reply_text(
-            f"🏏 <b>SIM MATCH</b> — {match['format']} ({overs} ov)\n"
-            f"🪙 {match['toss']['text']}\n"
-            f"📍 <b>{pitch}</b> — <i>{pitch_meta.get('description', '')}</i>\n\n"
-            f"⏳ <i>Match in progress…</i>",
-            parse_mode="HTML")
-        await asyncio.sleep(10)
-        try:
-            await progress.edit_text("🏁 <b>Match Ended!</b>", parse_mode="HTML")
-        except Exception:
-            pass
-        await asyncio.sleep(1)
+        if progress:
+            try:
+                await progress.edit_text(
+                    f"🏏 <b>SIM MATCH</b> — {match['format']} ({overs} ov)\n"
+                    f"🪙 {match['toss']['text']}\n"
+                    f"📍 <b>{pitch}</b> — <i>{pitch_meta.get('description', '')}</i>\n\n"
+                    "🏁 <b>Match Ended!</b>",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+        else:
+            await update.message.reply_text(
+                f"🏏 <b>SIM MATCH</b> — {match['format']} ({overs} ov)\n"
+                f"🪙 {match['toss']['text']}\n"
+                f"📍 <b>{pitch}</b> — <i>{pitch_meta.get('description', '')}</i>\n\n"
+                "🏁 <b>Match Ended!</b>",
+                parse_mode="HTML")
 
         await update.message.reply_text(card1, parse_mode="HTML")
         await update.message.reply_text(card2, parse_mode="HTML")
