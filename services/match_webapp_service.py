@@ -2791,11 +2791,28 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
             mwa.bump_ball_seq(match_id)
             continue
 
-        # Bowler/batsman SELECTION is always the user's call, even under Autoplay.
-        # Stop on these actions so the user picks manually; Autoplay resumes (next
-        # tick) once the selection has been made and a delivery is due again.
-        if na in (A_PICK_NEW_BOWLER, A_PICK_NEW_BATSMAN):
-            break
+        # Under Autoplay the user has handed their whole side to the AI, so the
+        # new-bowler / new-batsman picks are made automatically (mirroring
+        # auto_play_bot_turns) rather than pausing for a manual tap. Opener /
+        # opening-bowler selection at match start and at the innings break is the
+        # only selection that stays manual — that path is gated by _in_setup above.
+        if na == A_PICK_NEW_BOWLER:
+            new_bowler = bot_ai.pick_bot_next_bowler(
+                _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
+                state["bowl_stats"], state["overs"])
+            state["current_bowler"] = new_bowler
+            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            steps.append({"type": "auto_bowler", "name": new_bowler["name"]})
+            continue
+
+        if na == A_PICK_NEW_BATSMAN:
+            nb = state.get("next_batsman_idx", 2)
+            if nb < len(state.get("batting_order", [])):
+                state["striker_idx"] = nb
+                state["next_batsman_idx"] = nb + 1
+            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            steps.append({"type": "auto_batsman"})
+            continue
 
         break
 

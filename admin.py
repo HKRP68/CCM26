@@ -6544,10 +6544,27 @@ def match_rest_autoplay():
         # confirm the endpoint isn't being hit with the toggle off.
         logger.info("match_rest_autoplay tick: match=%s user=%s na=%s",
                     match.id, user.id, get_next_action(match.id))
-        user_steps = auto_play_user_turns(db, match.id, user.id)
-        bot_steps = []
-        if get_state_is_vsbot(match.id):
-            bot_steps = auto_play_bot_turns(db, match.id)
+
+        # Fully automatic Autoplay: play many balls per request instead of one.
+        # Each iteration plays the user's pending turns (delivery, shot, and — now
+        # that selection is automated — new bowler/batsman) then the bot's reply,
+        # looping until the match completes, a genuine manual stop is reached
+        # (no progress: e.g. the innings-break openers/bowler setup, or in PvP the
+        # human opponent's turn), or a per-request ball budget keeps the request
+        # short so the UI repaints while the score climbs.
+        from services.match_state_store import A_COMPLETED as _DONE
+        MAX_AUTOPLAY_STEPS_PER_REQUEST = 48  # ~a few overs of deliveries+shots
+        is_vsbot = get_state_is_vsbot(match.id)
+        user_steps, bot_steps = [], []
+        while len(user_steps) + len(bot_steps) < MAX_AUTOPLAY_STEPS_PER_REQUEST:
+            us = auto_play_user_turns(db, match.id, user.id)
+            bs = auto_play_bot_turns(db, match.id) if is_vsbot else []
+            user_steps.extend(us)
+            bot_steps.extend(bs)
+            if get_next_action(match.id) == _DONE:
+                break
+            if not us and not bs:
+                break  # manual stop (innings-break setup / opponent's turn)
 
         try:
             from services.match_state_store import A_COMPLETED as _DONE
