@@ -186,6 +186,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 over_had_extra = True
                 timeline.append("WD")
                 _emit("wide", striker["name"], bowler["name"], 0, legal_balls)
+                if target is not None and total_runs >= target:
+                    chased = True
                 continue  # not a legal ball, no strike change
 
             if otype == "noball":
@@ -203,6 +205,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                         bs["sixes"] += 1
                 timeline.append("NB")
                 _emit("no_ball", striker["name"], bowler["name"], runs, legal_balls)
+                if target is not None and total_runs >= target:
+                    chased = True
                 free_hit = True
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
@@ -438,7 +442,11 @@ def _player_of_the_match(inn1, inn2, result):
         for p in inn["order"]:
             impact.setdefault(p["name"], 0)
             impact[p["name"]] += inn["bat_stats"][id(p)]["runs"]
+        seen_bowlers = set()
         for bp in inn["bowl_plan"]:
+            if id(bp) in seen_bowlers:
+                continue
+            seen_bowlers.add(id(bp))
             impact.setdefault(bp["name"], 0)
             impact[bp["name"]] += inn["bowl_stats"][id(bp)]["wickets"] * 25
     if not impact:
