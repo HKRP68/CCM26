@@ -21,6 +21,12 @@ def _sample_pack():
             "noball": [{"text": "{bowler} oversteps."}],
             "byes": [{"text": "Beats everyone, byes."}],
             "legbyes": [{"text": "Off the pad, leg byes."}],
+            "free_hit": [
+                {"text": "Free hit! {batter} swings hard but it is a dot ball.", "tags": ["free_hit", "dot"]},
+                {"text": "Free hit and {batter} crunches it for four!", "tags": ["free_hit", "four"]},
+                {"text": "Free hit delivery and {batter} launches it for six!", "tags": ["free_hit", "six"]},
+                {"text": "Free hit but {batter} swings and misses.", "tags": ["free_hit", "miss"]},
+            ],
             "wicket_run_out": [{"text": "{batter} is short of the crease!"}],
             "wicket_caught": [
                 {"text": "Edged through to the keeper, gone!"},
@@ -43,8 +49,9 @@ def test_key_remapping():
     assert out["two"] == ["Two more for {batsman}."]
     assert out["no_ball"] == ["{bowler} oversteps."]
     assert out["wicket_runOut"][0].endswith("crease!")
-    # byes + legbyes both fold into 'extras'
-    assert len(out["extras"]) == 2
+    # Only legbyes fold into 'extras'; bye-only templates are skipped because
+    # the live engine does not emit a separate bye outcome.
+    assert out["extras"] == ["Off the pad, leg byes."]
     # unknown source key is dropped
     assert "totally_unknown_key" not in out
 
@@ -54,6 +61,16 @@ def test_caught_keeper_fielder_split():
     assert any("keeper" in t.lower() for t in out["wicket_caught_keeper"])
     assert any("fielder" in t.lower() for t in out["wicket_caught_fielder"])
     assert "keeper" not in out["wicket_caught_fielder"][0].lower()
+
+
+def test_free_hit_import_keeps_only_boundary_templates():
+    out = convert_pack(_sample_pack())
+    assert out["free_hit"] == [
+        "Free hit and {batsman} crunches it for four!",
+        "Free hit delivery and {batsman} launches it for six!",
+    ]
+    assert all("dot ball" not in line.lower() for line in out["free_hit"])
+    assert all("miss" not in line.lower() for line in out["free_hit"])
 
 
 def test_placeholder_normalisation_and_drop():
@@ -83,3 +100,9 @@ def test_real_pack_converts():
         out = convert_pack(json.load(f))
     assert sum(len(v) for v in out.values()) > 100
     assert set(out).issubset(set(list_event_keys()))
+    assert not any("bye" in line.lower() and "leg bye" not in line.lower() and "leg byes" not in line.lower()
+                   for line in out.get("extras", []))
+    assert all(any(word in line.lower() for word in ("four", "six", "boundary", "rope", "maximum"))
+               for line in out.get("free_hit", []))
+    assert not any(any(word in line.lower() for word in ("dot ball", "miss"))
+                   for line in out.get("free_hit", []))
