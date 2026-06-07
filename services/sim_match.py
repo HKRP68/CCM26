@@ -123,7 +123,7 @@ def _fielder_keeper(bowling_xi):
 def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                      innings_no, batting_team, bowling_team,
                      target=None, commentary=None, feed=None,
-                     fmt=None, run_factor=1.0):
+                     fmt=None, run_factor=1.0, scenario=False):
     """Simulate one innings and return its result dict.
 
     commentary: optional callable(event_key, batsman, bowler, fielder, keeper,
@@ -134,6 +134,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     run_factor: pitch run factor used to tune batting aggression.
     """
     from services.match_formats import phase_for
+    from services.match_dynamics import chase_pressure, scenario_boost
     order = sorted(batting_xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
                    reverse=True)
     plan = _build_bowling_plan(bowling_xi, overs,
@@ -152,6 +153,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     striker_i, non_striker_i, next_i = 0, 1, 2
     free_hit = False
     chased = False
+    recent_runs_window = []   # batting runs over the last ~12 balls (momentum)
+    consec_wickets = 0        # wickets in a row for the bowling side (momentum)
 
     def _balls_to_overs(b):
         return f"{b // 6}.{b % 6}"
@@ -189,6 +192,12 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             phase = phase_for(over_idx + 1, fmt) if fmt else "Middle"
             shot = _pick_shot(over_idx + 1, overs, total_wkts, phase, run_factor)
             variation, length = _pick_delivery(bowler)
+            # Chase pressure (+ optional scenario drama for sim/bot turns).
+            pressure = chase_pressure(innings_no, target, total_runs,
+                                      legal_balls, overs, total_wkts)
+            if scenario:
+                pressure = min(1.0, pressure + scenario_boost(
+                    innings_no, target, total_runs, legal_balls, overs, True))
             oc = calculate_outcome(
                 bowler.get("bowl_style"), bowler.get("bowl_hand"),
                 variation, length, pitch_type,
@@ -196,6 +205,9 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 striker.get("bat_rating", 0) or striker.get("rating", 0),
                 bowler.get("bowl_rating", 0),
                 free_hit=free_hit,
+                recent_runs=sum(recent_runs_window),
+                consec_wickets=consec_wickets,
+                pressure=pressure,
             )
             otype = oc["type"]
 
@@ -289,6 +301,17 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
 
+            # Momentum bookkeeping (per legal ball): wickets in a row build
+            # bowling momentum; a run glut builds batting momentum.
+            if otype == "wicket":
+                consec_wickets += 1
+                recent_runs_window.append(0)
+            else:
+                consec_wickets = 0
+                recent_runs_window.append(runs if otype == "runs" else 0)
+            if len(recent_runs_window) > 12:
+                recent_runs_window = recent_runs_window[-12:]
+
             if target is not None and total_runs >= target:
                 chased = True
 
@@ -320,7 +343,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
-                   commentary=None, fmt=None):
+                   commentary=None, fmt=None, scenario=True):
     """Simulate a full two-innings match.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
@@ -353,14 +376,32 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
     inn1 = simulate_innings(first_bat, first_bowl, overs, pitch_type,
                             1, first_name, second_name,
                             target=None, commentary=commentary, feed=feed,
-                            fmt=fmt, run_factor=run_factor)
+                            fmt=fmt, run_factor=run_factor, scenario=scenario)
     target = inn1["runs"] + 1
     inn2 = simulate_innings(first_bowl, first_bat, overs, pitch_type,
                             2, second_name, first_name,
                             target=target, commentary=commentary, feed=feed,
-                            fmt=fmt, run_factor=run_factor)
+                            fmt=fmt, run_factor=run_factor, scenario=scenario)
 
     result = _compute_result(inn1, inn2, target)
+
+    # Tie → resolve with an auto super over (reusing the shared dynamics engine).
+    super_over = None
+    if result["margin_type"] == "tie":
+        from services.match_dynamics import resolve_super_over
+        so_feed = []
+        super_over = resolve_super_over(
+            first_bat, first_bowl, first_name, second_name, pitch_type,
+            run_factor=run_factor, commentary=commentary, feed=so_feed)
+        feed.extend(so_feed)
+        if not super_over.get("shared"):
+            result = {"winner": super_over["winner"], "loser": super_over["loser"],
+                      "margin_type": "super_over", "margin": 0,
+                      "text": f"Match tied — {super_over['text']}"}
+        else:
+            result = {"winner": None, "loser": None, "margin_type": "tie",
+                      "margin": 0, "text": super_over["text"]}
+
     return {
         "overs": overs,
         "pitch": pitch_type,
@@ -371,6 +412,7 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
         "innings2": inn2,
         "target": target,
         "result": result,
+        "super_over": super_over,
         "commentary_feed": feed,
         "potm": _player_of_the_match(inn1, inn2, result),
     }
@@ -438,11 +480,19 @@ def render_result(match):
     """Render the final result / winner announcement."""
     res = match["result"]
     i1, i2 = match["innings1"], match["innings2"]
+    so_line = ""
+    if match.get("super_over") and match["super_over"].get("innings"):
+        parts = []
+        for fn, fi, sn, si in match["super_over"]["innings"]:
+            parts.append(f"⚡ Super Over — {_esc(fn)}: {fi['runs']}/{fi['wickets']} · "
+                         f"{_esc(sn)}: {si['runs']}/{si['wickets']}")
+        so_line = "\n" + "\n".join(parts)
     return (
         "🏆 <b>MATCH RESULT</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"{_esc(i1['batting_team'])}: <b>{i1['runs']}/{i1['wickets']}</b> ({i1['overs']})\n"
-        f"{_esc(i2['batting_team'])}: <b>{i2['runs']}/{i2['wickets']}</b> ({i2['overs']})\n"
+        f"{_esc(i2['batting_team'])}: <b>{i2['runs']}/{i2['wickets']}</b> ({i2['overs']})"
+        f"{so_line}\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"🎉 <b>{_esc(res['text'])}</b>\n"
         f"🌟 Player of the Match: <b>{_esc(match['potm'])}</b>"

@@ -3599,6 +3599,17 @@ def _calc(s, striker, bowler, shot, delivery):
         else:
             break
 
+    # Chase pressure (required rate + death overs). Honest for human deliveries
+    # too — it only reflects the match situation, not who is batting.
+    try:
+        from services.match_dynamics import chase_pressure
+        balls_bowled = (over - 1) * 6 + int(s.get("current_ball", 0) or 0)
+        pressure = chase_pressure(s.get("innings", 1), s.get("target"),
+                                  s.get("total_runs", 0), balls_bowled,
+                                  total_overs, s.get("total_wickets", 0))
+    except Exception:
+        pressure = 0.0
+
     return calculate_outcome(
         bowler.get("bowl_style", "Medium Pacer"),
         bowler.get("bowl_hand", "Right"),
@@ -3614,6 +3625,7 @@ def _calc(s, striker, bowler, shot, delivery):
         recent_runs=recent_runs,
         consec_wickets=consec_wickets,
         delivery_repeat=delivery_repeat,
+        pressure=pressure,
     )
 
 
