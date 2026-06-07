@@ -2,6 +2,14 @@
 
 import random
 
+
+def _active_players(players):
+    return [
+        p for p in (players or [])
+        if not isinstance(p, dict) or p.get("active", True) is not False
+    ]
+
+
 # Timeline ball symbols
 SYM = {
     0: "0️⃣", 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣",
@@ -299,7 +307,7 @@ def transition_to_second_innings(s):
     s["bat_team_name"], s["bowl_team_name"] = s["bowl_team_name"], s["bat_team_name"]
     s["bat_username"], s["bowl_username"] = s.get("bowl_username"), s.get("bat_username")
     s["bat_xi"], s["bowl_xi"] = s["bowl_xi"], s["bat_xi"]
-    s["batting_order"] = list(s["bat_xi"])
+    s["batting_order"] = list(_active_players(s["bat_xi"]))
     s["striker_idx"] = 0
     s["non_striker_idx"] = 1
     s["next_batsman_idx"] = 2

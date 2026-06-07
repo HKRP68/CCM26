@@ -73,6 +73,9 @@ def _p(pd):
         "bowl_style": pd.get("bowl_style"),
         "bowl_hand": pd.get("bowl_hand"),
         "bat_hand": pd.get("bat_hand"),
+        "active": pd.get("active", True) is not False,
+        "impact_replaced": bool(pd.get("impact_replaced")),
+        "impact_replacement": bool(pd.get("impact_replacement")),
     }
 
 
