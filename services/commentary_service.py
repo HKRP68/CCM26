@@ -12,10 +12,13 @@ to get a single rendered line. If no commentary exists for the event, returns No
 Admin can CRUD lines via the website + bulk-import a Python dict file.
 """
 
+import ast
+from functools import lru_cache
+import json
 import logging
+from pathlib import Path
 import random
 import re
-import ast
 
 from models import CommentaryEntry
 
@@ -25,6 +28,73 @@ logger = logging.getLogger(__name__)
 # Default fielder/keeper names used when context doesn't supply them
 DEFAULT_FIELDER = "the fielder"
 DEFAULT_KEEPER = "the keeper"
+
+
+RULES_FILE = Path(__file__).resolve().parents[1] / "cricket_engine_v1_v2_rules.json"
+
+# Event names used by the uploaded browser-port rules differ slightly from the
+# Python engine/admin keys. Keep the adapter small and explicit so future rule
+# files can be validated without changing the live outcome engine.
+RULES_EVENT_KEY_MAP = {
+    "noBall": "no_ball",
+    "bye": "extras",
+    "legBye": "extras",
+    "milestone_50": "milestones",
+    "milestone_100": "milestones",
+    "wicket_caughtAndBowled": "wicket_caught_fielder",
+    "milestone_fifer": "milestones",
+    "milestone_century_partnership": "milestones",
+    "milestone_hat_trick": "milestones",
+}
+
+
+def _normalise_rules_event_key(event_key):
+    return RULES_EVENT_KEY_MAP.get(event_key, event_key)
+
+
+def _merge_unique_lines(target, event_key, lines):
+    if not isinstance(lines, list):
+        return
+    normalised_key = _normalise_rules_event_key(event_key)
+    bucket = target.setdefault(normalised_key, [])
+    seen = set(bucket)
+    for line in lines:
+        line = str(line or "").strip()
+        if line and line not in seen:
+            bucket.append(line)
+            seen.add(line)
+
+
+@lru_cache(maxsize=1)
+def _load_rules_commentary():
+    """Load commentaryPack from cricket_engine_v1_v2_rules.json.
+
+    The JSON is treated as a fallback commentary pack only: admin DB rows still
+    take priority, and the probability/outcome engine remains unchanged.
+    """
+    try:
+        with RULES_FILE.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        logger.exception("Failed to load rules commentary from %s", RULES_FILE)
+        return {}
+
+    commentary_pack = payload.get("commentaryPack", {})
+    if not isinstance(commentary_pack, dict):
+        return {}
+
+    loaded = {}
+    for event_key, lines in commentary_pack.items():
+        _merge_unique_lines(loaded, event_key, lines)
+    return loaded
+
+
+def _fallback_bank(event_key):
+    """Return JSON-backed lines first, then built-in emergency lines."""
+    bank = []
+    bank.extend(_load_rules_commentary().get(event_key, []))
+    bank.extend(FALLBACK_LINES.get(event_key, []))
+    return bank
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -143,8 +213,9 @@ def pick_commentary(session, event_key, batsman="", bowler="",
     except Exception:
         logger.exception(f"pick_commentary failed for event {event_key}")
 
-    # DB had nothing (or errored) — use the built-in fallback bank.
-    bank = FALLBACK_LINES.get(event_key)
+    # DB had nothing (or errored) — use the uploaded rules pack first, then
+    # built-in emergency lines so known events still produce commentary.
+    bank = _fallback_bank(event_key)
     if bank:
         return _render(random.choice(bank), batsman, bowler, fielder, keeper, runs)
     return None
@@ -157,6 +228,7 @@ def list_event_keys():
         "wicket_bowled", "wicket_caught_fielder", "wicket_caught_keeper",
         "wicket_lbw", "wicket_stumped", "wicket_runOut",
         "extras", "wide", "no_ball", "free_hit", "mystery",
+        "wicket_hitWicket", "catch_dropped", "event_over",
         "milestones", "general",
     ]
 
