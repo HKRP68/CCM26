@@ -51,16 +51,28 @@ def _new_bowl_stat():
     return {"balls": 0, "runs": 0, "wickets": 0, "maidens": 0}
 
 
-def _pick_shot(over, total_overs, wickets):
-    """Choose a shot for the auto-batsman based on phase and wickets lost."""
-    powerplay = over <= max(1, total_overs * 0.3)
-    death = over > total_overs - max(1, round(total_overs * 0.2))
+def _pick_shot(over, total_overs, wickets, phase="Middle", run_factor=1.0):
+    """Choose a shot for the auto-batsman based on phase, wickets, and pitch.
+
+    phase: 'Powerplay' | 'Middle' | 'Death' (format-aware).
+    run_factor: pitch run factor (<1 bowling-friendly → more conservative;
+                >1 batting-friendly → more aggressive).
+    """
+    # Base aggression weights per pool: [attack, normal, defend].
     if wickets >= 7:
-        pool, weights = _DEFENSIVE + _NORMAL, None
-    elif powerplay or death:
-        pool, weights = _ATTACK + _NORMAL, None
+        w = [1, 3, 3]
+    elif phase in ("Powerplay", "Death"):
+        w = [5, 3, 1]
     else:
-        pool, weights = _NORMAL + _ATTACK[:3] + _DEFENSIVE[:2], None
+        w = [2, 4, 2]
+
+    # Pitch tilt: shift weight toward attack on batting pitches, toward defence
+    # on bowling pitches.
+    tilt = run_factor - 1.0  # roughly -0.15 .. +0.30
+    w[0] = max(0.2, w[0] * (1 + tilt * 2))
+    w[2] = max(0.2, w[2] * (1 - tilt * 2))
+
+    pool = random.choices([_ATTACK, _NORMAL, _DEFENSIVE], weights=w, k=1)[0]
     return random.choice(pool)
 
 
@@ -73,12 +85,13 @@ def _pick_delivery(bowler):
             random.choice(opts.get("lengths") or ["Good"]))
 
 
-def _build_bowling_plan(bowling_xi, overs):
+def _build_bowling_plan(bowling_xi, overs, max_bowler_overs=None):
     """Pick the over-by-over bowler list (Option B rules).
 
     Only Bowlers + All-rounders bowl, sorted by bowl rating. No bowler bowls two
-    overs in a row; each is capped at the standard ~20% quota (extended only if
-    too few bowlers exist to fill the innings).
+    overs in a row; each is capped at the format's per-bowler quota
+    (max_bowler_overs), extended only if too few bowlers exist to fill the
+    innings.
     """
     eligible = [p for p in bowling_xi
                 if p.get("category") in ("Bowler", "All-rounder")]
@@ -86,7 +99,8 @@ def _build_bowling_plan(bowling_xi, overs):
         eligible = list(bowling_xi)
     eligible.sort(key=lambda p: p.get("bowl_rating", 0), reverse=True)
 
-    cap = max(math.ceil(overs / 5), math.ceil(overs / len(eligible)))
+    quota = max_bowler_overs or math.ceil(overs / 5)
+    cap = max(quota, math.ceil(overs / len(eligible)))
     counts = {id(p): 0 for p in eligible}
     plan, last = [], None
     for _ in range(overs):
@@ -109,16 +123,23 @@ def _fielder_keeper(bowling_xi):
 
 def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                      innings_no, batting_team, bowling_team,
-                     target=None, commentary=None, feed=None):
+                     target=None, commentary=None, feed=None,
+                     fmt=None, run_factor=1.0, scenario=False):
     """Simulate one innings and return its result dict.
 
     commentary: optional callable(event_key, batsman, bowler, fielder, keeper,
                 runs) -> str|None used to render a line per ball.
     feed: optional list to append ball-by-ball commentary entries to.
+    fmt: optional format config (services.match_formats) controlling the bowler
+         quota and phase windows.
+    run_factor: pitch run factor used to tune batting aggression.
     """
+    from services.match_formats import phase_for
+    from services.match_dynamics import chase_pressure, scenario_boost
     order = sorted(batting_xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
                    reverse=True)
-    plan = _build_bowling_plan(bowling_xi, overs)
+    plan = _build_bowling_plan(bowling_xi, overs,
+                               (fmt or {}).get("max_bowler_overs"))
     fielders, keeper = _fielder_keeper(bowling_xi)
 
     bat_stats = {id(p): _new_bat_stat() for p in order}
@@ -134,6 +155,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     striker_i, non_striker_i, next_i = 0, 1, 2
     free_hit = False
     chased = False
+    recent_runs_window = []   # batting runs over the last ~12 balls (momentum)
+    consec_wickets = 0        # wickets in a row for the bowling side (momentum)
 
     def _balls_to_overs(b):
         return f"{b // 6}.{b % 6}"
@@ -218,8 +241,15 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 break
             striker = order[striker_i]
             bs = bat_stats[id(striker)]
-            shot = _pick_shot(over_idx + 1, overs, total_wkts)
+            phase = phase_for(over_idx + 1, fmt) if fmt else "Middle"
+            shot = _pick_shot(over_idx + 1, overs, total_wkts, phase, run_factor)
             variation, length = _pick_delivery(bowler)
+            # Chase pressure (+ optional scenario drama for sim/bot turns).
+            pressure = chase_pressure(innings_no, target, total_runs,
+                                      legal_balls, overs, total_wkts)
+            if scenario:
+                pressure = min(1.0, pressure + scenario_boost(
+                    innings_no, target, total_runs, legal_balls, overs, True))
             oc = calculate_outcome(
                 bowler.get("bowl_style"), bowler.get("bowl_hand"),
                 variation, length, pitch_type,
@@ -227,6 +257,9 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 striker.get("bat_rating", 0) or striker.get("rating", 0),
                 bowler.get("bowl_rating", 0),
                 free_hit=free_hit,
+                recent_runs=sum(recent_runs_window),
+                consec_wickets=consec_wickets,
+                pressure=pressure,
             )
             otype = oc["type"]
 
@@ -329,6 +362,17 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
 
+            # Momentum bookkeeping (per legal ball): wickets in a row build
+            # bowling momentum; a run glut builds batting momentum.
+            if otype == "wicket":
+                consec_wickets += 1
+                recent_runs_window.append(0)
+            else:
+                consec_wickets = 0
+                recent_runs_window.append(runs if otype == "runs" else 0)
+            if len(recent_runs_window) > 12:
+                recent_runs_window = recent_runs_window[-12:]
+
             if target is not None and total_runs >= target:
                 chased = True
 
@@ -380,21 +424,36 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
-                   toss_decision="bat", commentary=None):
+                   toss_decision=None, commentary=None, fmt=None, scenario=True):
     """Simulate a full two-innings match.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
         bat_rating, bowl_rating, category, bowl_style, bowl_hand, bat_hand.
+    fmt: optional format config (services.match_formats.get_format/custom_format).
+         If omitted, a custom format is derived from ``overs``.
     Returns a dict with both innings, the result, and a commentary feed.
     """
-    # Toss winner may choose to bat or bowl first (default: bat for backward compatibility).
-    normalized_decision = str(toss_decision or "bat").strip().lower()
-    if normalized_decision not in ("bat", "bowl"):
-        normalized_decision = "bat"
+    from services.match_formats import custom_format
+    from services.ground_conditions import get_pitch_meta
 
+    if fmt is None:
+        fmt = custom_format(overs)
+    overs = fmt["overs"]
+    pitch_meta = get_pitch_meta(pitch_type)
+    run_factor = pitch_meta.get("run_factor", 1.0)
+
+    # Toss decision: an explicit bat/bowl choice is honoured; when omitted the
+    # toss winner makes the pitch-correct call (batting-friendly pitch → bat).
     teams_by_name = {home_name: home_xi, away_name: away_xi}
     if toss_winner not in teams_by_name:
         toss_winner = home_name
+
+    if toss_decision is None:
+        normalized_decision = str(pitch_meta.get("ideal_toss", "bat")).strip().lower()
+    else:
+        normalized_decision = str(toss_decision).strip().lower()
+    if normalized_decision not in ("bat", "bowl"):
+        normalized_decision = "bat"
 
     toss_winner_is_away = toss_winner == away_name
     toss_loser_name = home_name if toss_winner_is_away else away_name
@@ -411,25 +470,48 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
     feed = []
     inn1 = simulate_innings(first_bat, first_bowl, overs, pitch_type,
                             1, first_name, second_name,
-                            target=None, commentary=commentary, feed=feed)
+                            target=None, commentary=commentary, feed=feed,
+                            fmt=fmt, run_factor=run_factor, scenario=scenario)
     target = inn1["runs"] + 1
     inn2 = simulate_innings(first_bowl, first_bat, overs, pitch_type,
                             2, second_name, first_name,
-                            target=target, commentary=commentary, feed=feed)
+                            target=target, commentary=commentary, feed=feed,
+                            fmt=fmt, run_factor=run_factor, scenario=scenario)
 
     result = _compute_result(inn1, inn2, target)
+
+    # Tie → resolve with an auto super over (reusing the shared dynamics engine).
+    super_over = None
+    if result["margin_type"] == "tie":
+        from services.match_dynamics import resolve_super_over
+        so_feed = []
+        super_over = resolve_super_over(
+            first_bat, first_bowl, first_name, second_name, pitch_type,
+            run_factor=run_factor, commentary=commentary, feed=so_feed)
+        feed.extend(so_feed)
+        if not super_over.get("shared"):
+            result = {"winner": super_over["winner"], "loser": super_over["loser"],
+                      "margin_type": "super_over", "margin": 0,
+                      "text": f"Match tied — {super_over['text']}"}
+        else:
+            result = {"winner": None, "loser": None, "margin_type": "tie",
+                      "margin": 0, "text": super_over["text"]}
+
     return {
         "overs": overs,
         "pitch": pitch_type,
-        "innings1": inn1,
-        "innings2": inn2,
-        "target": target,
-        "result": result,
+        "pitch_meta": pitch_meta,
+        "format": fmt["label"],
         "toss": {
             "winner": toss_winner,
             "decision": normalized_decision,
             "text": f"{toss_winner} won the toss and elected to {normalized_decision.title()} first",
         },
+        "innings1": inn1,
+        "innings2": inn2,
+        "target": target,
+        "result": result,
+        "super_over": super_over,
         "commentary_feed": feed,
         "potm": _player_of_the_match(inn1, inn2, result),
     }
@@ -497,11 +579,19 @@ def render_result(match):
     """Render the final result / winner announcement."""
     res = match["result"]
     i1, i2 = match["innings1"], match["innings2"]
+    so_line = ""
+    if match.get("super_over") and match["super_over"].get("innings"):
+        parts = []
+        for fn, fi, sn, si in match["super_over"]["innings"]:
+            parts.append(f"⚡ Super Over — {_esc(fn)}: {fi['runs']}/{fi['wickets']} · "
+                         f"{_esc(sn)}: {si['runs']}/{si['wickets']}")
+        so_line = "\n" + "\n".join(parts)
     return (
         "🏆 <b>MATCH RESULT</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"{_esc(i1['batting_team'])}: <b>{i1['runs']}/{i1['wickets']}</b> ({i1['overs']})\n"
-        f"{_esc(i2['batting_team'])}: <b>{i2['runs']}/{i2['wickets']}</b> ({i2['overs']})\n"
+        f"{_esc(i2['batting_team'])}: <b>{i2['runs']}/{i2['wickets']}</b> ({i2['overs']})"
+        f"{so_line}\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"🎉 <b>{_esc(res['text'])}</b>\n"
         f"🌟 Player of the Match: <b>{_esc(match['potm'])}</b>"

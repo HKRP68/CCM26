@@ -27,7 +27,9 @@ SECTIONS = {
         "body": (
             "<b>🏏 Playing Matches</b>\n\n"
             "<b>/playmatch</b> (or <b>/pm</b>) — challenge another player\n"
-            "<b>/vsbot N</b> — play vs a bot team for N overs (1-20)\n\n"
+            "<b>/vsbot N</b> — play vs a bot team for N overs (1-20)\n"
+            "<b>/sim N</b> — instantly simulate a full match vs a Sim XI; get the "
+            "scorecard + commentary in seconds (no tapping)\n\n"
             "<b>The flow:</b>\n"
             "1️⃣ Select overs (1-20)\n"
             "2️⃣ Animated coin toss decides who calls\n"

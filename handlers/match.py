@@ -1280,6 +1280,8 @@ async def recentmatches_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 margin = "Tied"
             elif m.margin_type == "forfeit":
                 margin = "Forfeit"
+            elif m.margin_type == "super_over":
+                margin = "Super Over"
             elif m.margin_type and m.margin_value is not None:
                 margin = f"by {m.margin_value} {m.margin_type}"
             score = ""
@@ -1358,6 +1360,8 @@ async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         margin = ""
         if m.margin_type == "forfeit":
             margin = "by forfeit"
+        elif m.margin_type == "super_over":
+            margin = "in the Super Over"
         elif m.margin_type and m.margin_value is not None:
             margin = f"by {m.margin_value} {m.margin_type}"
 
@@ -3599,6 +3603,17 @@ def _calc(s, striker, bowler, shot, delivery):
         else:
             break
 
+    # Chase pressure (required rate + death overs). Honest for human deliveries
+    # too — it only reflects the match situation, not who is batting.
+    try:
+        from services.match_dynamics import chase_pressure
+        balls_bowled = (over - 1) * 6 + int(s.get("current_ball", 0) or 0)
+        pressure = chase_pressure(s.get("innings", 1), s.get("target"),
+                                  s.get("total_runs", 0), balls_bowled,
+                                  total_overs, s.get("total_wickets", 0))
+    except Exception:
+        pressure = 0.0
+
     return calculate_outcome(
         bowler.get("bowl_style", "Medium Pacer"),
         bowler.get("bowl_hand", "Right"),
@@ -3614,6 +3629,7 @@ def _calc(s, striker, bowler, shot, delivery):
         recent_runs=recent_runs,
         consec_wickets=consec_wickets,
         delivery_repeat=delivery_repeat,
+        pressure=pressure,
     )
 
 
@@ -4123,67 +4139,40 @@ async def _end_innings(ctx, mid):
         # Match complete — give rewards
         target = s["target"]; chasing = s["total_runs"]; overs = s.get("overs", 10)
 
-        # ── TIED MATCH → BOWL-OUT TIEBREAKER ──────────────────────────
+        # ── TIED MATCH → AUTO SUPER OVER ──────────────────────────────
+        # /playmatch and /vsbot resolve a tie with an auto-simulated super
+        # over (shared dynamics engine, same as /sim). The Mini-App /cm
+        # challenge uses an interactive bowl-out instead; that path lives in
+        # the webapp finalizer, not here.
         if chasing == target - 1:
-            if (s.get("is_spectator") or s.get("is_bot_vs_bot")
-                    or s.get("bat_user_tg") == BOT_TG_ID_
-                    or s.get("bowl_user_tg") == BOT_TG_ID_):
-                # AI tie — bowling side declared winner for stats; margin=0 → "(tied)"
+            from services.match_dynamics import resolve_super_over
+            so = resolve_super_over(
+                s["bat_xi"], s["bowl_xi"],
+                s["bat_team_name"], s["bowl_team_name"],
+                s.get("pitch_type"))
+            bat_side_won = (not so.get("shared")
+                            and so.get("winner") == s["bat_team_name"])
+            if bat_side_won:
+                winner_name = s["bat_team_name"]; loser_name = s["bowl_team_name"]
+                winner_tg = s["bat_user_tg"]; loser_tg = s["bowl_user_tg"]
+                winner_uid = s["bat_team_id"]; loser_uid = s["bowl_team_id"]
+            else:
+                # Bowling side took the super over (or it stayed level even
+                # after repeats → bowling side edges it, matching the prior
+                # tie-break default so stats always have a winner).
                 winner_name = s["bowl_team_name"]; loser_name = s["bat_team_name"]
                 winner_tg = s["bowl_user_tg"]; loser_tg = s["bat_user_tg"]
                 winner_uid = s["bowl_team_id"]; loser_uid = s["bat_team_id"]
-                margin_type = "runs"; margin_val = 0; margin = "(tied)"
-            else:
-                # Human vs human — fire bowl-out
-                try:
-                    await ctx.bot.send_message(
-                        s["chat_id"],
-                        f"🤝 <b>TIED!</b>\nBoth teams ended on <b>{chasing}</b>.\n\n"
-                        f"🎯 Bowl-out tiebreaker starting...",
-                        parse_mode="HTML")
-                except Exception: pass
-
-                try:
-                    db_t = get_session()
-                    try:
-                        m = db_t.query(Match).get(mid)
-                        if m:
-                            m.status = "completed"
-                            m.completed_at = datetime.utcnow()
-                            m.margin_type = "bowlout_pending"
-                            m.margin_value = 0
-                            db_t.commit()
-                    finally:
-                        db_t.close()
-                except Exception:
-                    logger.exception("Failed to mark tied match completed")
-
-                # NOTE: don't send scorecards here. They'll be sent by
-                # _finalize_bowlout in handlers/bowlout.py once the bowl-out
-                # finishes, with the winner declared.
-
-                try:
-                    from handlers.bowlout import start_bowlout
-                    import asyncio as _asyncio
-                    await _asyncio.sleep(0.3)
-                    await start_bowlout(
-                        ctx,
-                        chat_id=s["chat_id"],
-                        user1_id=s["bat_team_id"],
-                        user2_id=s["bowl_team_id"],
-                        user1_team_name=s["bat_team_name"],
-                        user2_team_name=s["bowl_team_name"],
-                        first_picker_user_id=s["bat_team_id"],
-                        match_id=mid,
-                    )
-                except Exception:
-                    logger.exception("start_bowlout failed")
-
-                # NOTE: do NOT cleanup_state here. The bowl-out's
-                # _finalize_bowlout reads state to render the post-bowl-out
-                # scorecards, and cleans up after.
-                release_match_lock(mid)
-                return
+            margin_type = "super_over"; margin_val = 0
+            margin = "(Super Over tied)" if so.get("shared") else "(Super Over)"
+            try:
+                await ctx.bot.send_message(
+                    s["chat_id"],
+                    f"🤝 <b>TIED!</b> Both teams finished on <b>{chasing}</b>.\n"
+                    f"⚡ <b>SUPER OVER</b> — {so['text']}",
+                    parse_mode="HTML")
+            except Exception:
+                pass
 
         elif chasing >= target:
             winner_name = s["bat_team_name"]; loser_name = s["bowl_team_name"]

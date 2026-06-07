@@ -26,13 +26,13 @@ from services.commentary_service import pick_commentary
 from services.sim_match import (
     simulate_match, render_innings_card, render_result, render_match_summary_image,
 )
+from services.match_formats import resolve_format, get_format, custom_format
+from services.ground_conditions import list_pitches, get_pitch_meta
 from services.sim_team import append_distinct_base_players, distinct_base_players
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OVERS = 5
 MAX_OVERS = 20
-PITCHES = ["Flat", "Hard", "Green", "Dry", "Dead"]
 
 
 def _player_to_dict(p):
@@ -108,29 +108,46 @@ def _xi_from_roster(roster):
     return [_player_to_dict(p) for _, p in roster[:11]]
 
 
-def _parse_overs(args):
+def _parse_format(args):
+    """Resolve the /sim argument into a format config.
+
+    Accepts a format name (T10 / T20 / ODI) or a custom over count, defaulting
+    to T20. Returns (fmt_dict, error).
+    """
     if not args:
-        return DEFAULT_OVERS, None
+        return get_format("T20"), None
+    token = args[0]
+    fk = resolve_format(token)
+    if fk:
+        return get_format(fk), None
     try:
-        n = int(args[0])
+        n = int(token)
     except (ValueError, TypeError):
-        return None, "Overs must be a number."
+        return None, "Use a format (T10, T20, ODI) or a number of overs."
     if n < 1 or n > MAX_OVERS:
         return None, f"Overs must be between 1 and {MAX_OVERS}."
-    return n, None
+    return custom_format(n), None
 
 
 async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    overs, err = _parse_overs(context.args)
+    fmt, err = _parse_format(context.args)
     if err:
-        await update.message.reply_text(f"❌ {err}\nUsage: <code>/sim [overs 1-{MAX_OVERS}]</code>",
-                                        parse_mode="HTML")
+        await update.message.reply_text(
+            f"❌ {err}\nUsage: <code>/sim [T10|T20 | overs 1-{MAX_OVERS}]</code>",
+            parse_mode="HTML")
         return
+    overs = fmt["overs"]
 
     # ---- All DB work + the (instant) simulation happen up front, so we don't
     # hold a pooled connection during the suspense delay. ----
     session = get_session()
     try:
+        from services.command_config_service import is_command_enabled, get_disabled_message
+        if not is_command_enabled(session, "sim"):
+            await update.message.reply_text(
+                get_disabled_message(session, "sim"), parse_mode="HTML")
+            return
+
         user = sync_telegram_user(session, update.effective_user)
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
@@ -183,7 +200,9 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             opponent_name = "🤖 Sim XI"
 
-        pitch = random.choice(PITCHES)
+        pitches = list_pitches() or ["Flat", "Hard", "Green", "Dry", "Dead"]
+        pitch = random.choice(pitches)
+        pitch_meta = get_pitch_meta(pitch)
         toss_winner = random.choice([team_name, opponent_name])
         toss_decision = random.choice(["bat", "bowl"])
 
@@ -193,7 +212,8 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         match = simulate_match(user_xi, opponent_xi, overs, pitch,
                                team_name, opponent_name, toss_winner=toss_winner,
-                               toss_decision=toss_decision, commentary=commentary)
+                               toss_decision=toss_decision, commentary=commentary,
+                               fmt=fmt)
 
         # Pre-render everything while the session is alive.
         card1 = render_innings_card(match["innings1"])
@@ -207,8 +227,10 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         match_intro = [match["toss"]["text"]] + match["innings1"].get("innings_intro", [])
         feed_payload = {
+            "format": match["format"],
             "overs": overs,
             "pitch": pitch,
+            "pitch_description": pitch_meta.get("description", ""),
             "toss": match["toss"],
             "match_intro": match_intro,
             "teams": {"home": team_name, "away": opponent_name},
@@ -253,9 +275,10 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---- Suspense + delivery (no DB connection held) ----
     try:
         progress = await update.message.reply_text(
-            f"🏏 <b>SIM MATCH</b> — {overs} overs\n"
+            f"🏏 <b>SIM MATCH</b> — {match['format']} ({overs} ov)\n"
             f"🪙 {match['toss']['text']}\n"
-            f"📍 Pitch: {pitch}\n\n⏳ <i>Match in progress…</i>",
+            f"📍 <b>{pitch}</b> — <i>{pitch_meta.get('description', '')}</i>\n\n"
+            f"⏳ <i>Match in progress…</i>",
             parse_mode="HTML")
         await asyncio.sleep(10)
         try:

@@ -140,6 +140,7 @@ PITCH_MODS = {
     "Dusty":  {"W": +0.5, "dot": +1, "1": +0.5, "6": -0.5},           # spin grip
     "Hard":   {"4": +0.5, "6": +0.5, "1": +0.3, "W": -0.3, "dot": -0.5},  # bouncy
     "Flat":   {"4": +0.5, "6": +0.5, "1": +0.5, "dot": -0.5, "W": -0.3},  # batting-friendly
+    "Dead":   {"4": +1.0, "6": +1.0, "1": +0.5, "dot": -1.0, "W": -0.8},  # lifeless, run-fest
 }
 
 
@@ -431,12 +432,16 @@ FREE_HIT_WICKET_MULT   = 0.10  # only a run-out is possible on a free hit
 
 
 def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
-                        recent_runs=0, consec_wickets=0, delivery_repeat=0):
+                        recent_runs=0, consec_wickets=0, delivery_repeat=0,
+                        pressure=0.0):
     """Multiplicatively adjust the prob distribution for live-match mechanics.
 
     Runs after every additive layer and before _normalize, so the relative
     boosts/cuts described by UnderCover translate directly. No-op when every
     flag is at its default.
+
+    pressure: 0.0..1.0 chase/scenario desperation. Models a batting side forced
+    to take risks — boundaries AND wickets rise, dots/ones fall (slogging).
     """
     # Mystery ball — wicket spike, scoring slump (lost runs flow into dots).
     if mystery:
@@ -470,6 +475,16 @@ def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
         probs["6"] *= FREE_HIT_BOUNDARY_MULT
         probs["W"] *= FREE_HIT_WICKET_MULT
 
+    # Chase / scenario pressure — desperate hitting: more boundaries, more
+    # wickets, fewer dots and singles. Bounded so it never dominates the model.
+    if pressure > 0:
+        p = max(0.0, min(1.0, pressure))
+        probs["6"] *= (1.0 + p * 0.60)
+        probs["4"] *= (1.0 + p * 0.30)
+        probs["W"] *= (1.0 + p * 0.50)
+        probs["dot"] *= (1.0 - p * 0.20)
+        probs["1"] *= (1.0 - p * 0.10)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT
@@ -479,7 +494,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       over, total_overs, shot, bat_rating, bowl_rating,
                       striker_traits=None, bowler_traits=None, trait_ctx=None,
                       pitch_wear=0, free_hit=False, mystery=False,
-                      recent_runs=0, consec_wickets=0, delivery_repeat=0):
+                      recent_runs=0, consec_wickets=0, delivery_repeat=0,
+                      pressure=0.0):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -577,7 +593,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     _apply_dynamic_mods(
         probs, free_hit=free_hit, mystery=mystery,
         recent_runs=recent_runs, consec_wickets=consec_wickets,
-        delivery_repeat=delivery_repeat,
+        delivery_repeat=delivery_repeat, pressure=pressure,
     )
 
     # Final normalize
