@@ -1,9 +1,8 @@
 """Handler for /debut command."""
 
 import logging
-import os
 from datetime import datetime
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -11,6 +10,7 @@ from models import User, UserRoster, UserStats
 from services.player_service import get_players_for_debut
 from config import DEBUT_COINS, DEBUT_GEMS
 from services.activity_service import log_activity
+from services.miniapp_buttons import miniapp_button
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +33,25 @@ def _build_post_debut_onboarding_text(players_count: int) -> str:
     )
 
 
-def _build_post_debut_onboarding_markup():
-    """Return an optional Mini App continuation button for the starter guide."""
-    webapp_url = os.getenv("WEBAPP_URL", "").strip()
-    if not webapp_url.startswith("https://"):
+def _build_post_debut_onboarding_markup(chat=None):
+    """Return an optional Mini App continuation button for the starter guide.
+
+    Telegram only accepts native Web App buttons in private chats. Group and
+    supergroup messages must use the Mini App deep-link fallback provided by
+    ``miniapp_button``.
+    """
+    chat_type = getattr(chat, "type", "private") if chat else "private"
+    is_private = chat_type == "private"
+    btn = miniapp_button(
+        "🏏 Continue Starter Guide in Mini App",
+        "onboarding",
+        is_private=is_private,
+        origin_chat_id=(getattr(chat, "id", None) if chat else None),
+    )
+    if btn is None:
         return None
 
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "🏏 Continue Starter Guide in Mini App",
-            web_app=WebAppInfo(url=webapp_url + "#onboarding"),
-        )
-    ]])
+    return InlineKeyboardMarkup([[btn]])
 
 
 async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,16 +178,32 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, parse_mode="HTML", disable_web_page_preview=True)
 
         # Follow the account creation with a short, actionable starter guide so
-        # new users know which system to try next.
+        # new users know which system to try next. Keep the text deliverable even
+        # if Telegram rejects the optional Mini App button.
+        onboarding_text = _build_post_debut_onboarding_text(len(players))
+        onboarding_markup = _build_post_debut_onboarding_markup(update.effective_chat)
         try:
             await update.message.reply_text(
-                _build_post_debut_onboarding_text(len(players)),
+                onboarding_text,
                 parse_mode="HTML",
-                reply_markup=_build_post_debut_onboarding_markup(),
+                reply_markup=onboarding_markup,
                 disable_web_page_preview=True,
             )
         except Exception:
-            logger.exception("Post-debut onboarding guide failed (non-fatal)")
+            if onboarding_markup is None:
+                logger.exception("Post-debut onboarding guide failed (non-fatal)")
+            else:
+                logger.exception(
+                    "Post-debut onboarding guide button failed; retrying without markup"
+                )
+                try:
+                    await update.message.reply_text(
+                        onboarding_text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    logger.exception("Post-debut onboarding guide retry failed (non-fatal)")
 
         # If no referral was completed by the link path, ask for a code.
         # Sets a flag so the text-message catcher knows they're a fresh
