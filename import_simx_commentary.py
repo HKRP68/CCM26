@@ -41,7 +41,8 @@ EVENT_KEY_MAP = {
     "three":    "three",
     "wide":     "wide",
     "noball":   "no_ball",
-    "byes":     "extras",
+    # This bot only emits legbye extras, not byes; do not fold bye-only lines
+    # into extras or live leg-bye balls can describe keeper byes.
     "legbyes":  "extras",
     "free_hit": "free_hit",
 }
@@ -79,6 +80,35 @@ def _lines_from(items):
             yield item
 
 
+def _item_text(item):
+    if isinstance(item, dict):
+        return item.get("text", "")
+    if isinstance(item, str):
+        return item
+    return ""
+
+
+def _item_tags(item):
+    if not isinstance(item, dict):
+        return []
+    return [str(tag).lower() for tag in item.get("tags") or []]
+
+
+def _is_boundary_free_hit(item):
+    """Return True only for free-hit templates compatible with a 4/6 result."""
+    tags = set(_item_tags(item))
+    if tags:
+        return bool(tags & {"four", "six", "boundary", "rope", "maximum"})
+
+    text = _item_text(item).lower()
+    if any(blocked in text for blocked in (
+        "dot ball", "swings and misses", "swing and miss", "can't take advantage",
+        "cannot take advantage", "misses", "no run",
+    )):
+        return False
+    return bool(re.search(r"\b(four|six|boundary|rope|maximum)\b", text))
+
+
 def convert_pack(pack):
     """Convert a loaded SimCricketX commentary pack into {event_key: [lines]}.
 
@@ -107,6 +137,11 @@ def convert_pack(pack):
         dest = EVENT_KEY_MAP.get(src_key)
         if not dest:
             logger.info("Skipping unmapped event key: %s", src_key)
+            continue
+        if src_key == "free_hit":
+            for item in items or []:
+                if _is_boundary_free_hit(item):
+                    add(dest, _item_text(item))
             continue
         for raw in _lines_from(items):
             add(dest, raw)
