@@ -1623,6 +1623,21 @@ body {
   box-shadow: 0 0 16px rgba(0, 212, 255, 0.08);
 }
 
+.cricbuzz-impact-row {
+  background: linear-gradient(135deg, rgba(255, 196, 0, 0.08), rgba(255, 140, 0, 0.04));
+  border-left: 3px solid #ffc400;
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-radius: 8px;
+}
+
+.cricbuzz-impact-row .impact-feed-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffc400;
+  letter-spacing: 0.3px;
+}
+
 .over-end-header {
   display: flex;
   justify-content: space-between;

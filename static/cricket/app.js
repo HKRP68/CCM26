@@ -42,6 +42,10 @@ let wasMyTurn = false;
 let lastActionableSig = null; // tracks the current actionable turn for auto-expand
 let selectionSubmitInFlight = false;
 let impactSelection = { incoming: null, outgoing: null, open: false };
+// Set when the user taps "Maybe Later" at the innings break so the optional
+// Impact Player sheet stays dismissed across poll cycles. Reset once the break
+// is over (see renderSetupImpactControls).
+let impactBreakSkipped = false;
 
 function isActiveXIPlayer(player) {
   return player?.active !== false;
@@ -161,6 +165,8 @@ function setupEventListeners() {
   if (cancelImpactBtn) cancelImpactBtn.addEventListener('click', closeImpactPlayerPicker);
   const confirmImpactBtn = document.getElementById('confirm-impact-player-btn');
   if (confirmImpactBtn) confirmImpactBtn.addEventListener('click', submitImpactPlayer);
+  const skipImpactBtn = document.getElementById('skip-impact-player-btn');
+  if (skipImpactBtn) skipImpactBtn.addEventListener('click', skipImpactPlayerBreak);
 
   // Completed-match scorecard toggle. Keep the finished board read-only,
   // but let players jump into the scorecard and reopen the result at any time.
@@ -659,6 +665,13 @@ function renderSetupImpactControls() {
   if (!sheet) return;
   const isInningsBreak = matchState.currentInningsIdx === 1 && matchState.status === 'xi_selection';
   if (!isInningsBreak || matchState.myRole === 'spectator' || impact.used) {
+    impactBreakSkipped = false;
+    sheet.classList.add('hidden');
+    return;
+  }
+  // "Maybe Later" was tapped: keep the optional Impact Player sheet dismissed so
+  // the 150ms poll loop doesn't reopen it over the openers/bowler setup.
+  if (impactBreakSkipped) {
     sheet.classList.add('hidden');
     return;
   }
@@ -1085,6 +1098,14 @@ function renderImpactPlayerControls() {
 function openImpactPlayerPicker() {
   impactSelection = { incoming: null, outgoing: null, open: true };
   renderImpactPlayerPicker();
+}
+
+// "Maybe Later": using an Impact Player at the innings break is optional, so
+// dismiss the sheet and let the user proceed to confirm their openers/bowler.
+function skipImpactPlayerBreak() {
+  impactBreakSkipped = true;
+  closeImpactPlayerPicker({ silent: true });
+  document.getElementById('controls-sheet')?.classList.add('hidden');
 }
 
 function closeImpactPlayerPicker(opts = {}) {
@@ -1751,6 +1772,14 @@ function renderCommentaryFeed() {
           ${comm.motm ? `<div class="match-motm">⭐ MOTM: <b>${comm.motm.name}</b> — ${comm.motm.runs}R ${comm.motm.wickets}W</div>` : ''}
         </div>
       `;
+    } else if (comm.type === 'impact_player') {
+      // Impact Player substitution rows carry no runs/over of their own — render
+      // them as a distinct feed card instead of treating them like a ball (which
+      // would crash on comm.runs.toString()).
+      item.className = "cricbuzz-impact-row";
+      const impactText = comm.text
+        || `Impact Player: ${comm.inPlayer || ''} replaces ${comm.outPlayer || ''}`;
+      item.innerHTML = `<div class="impact-feed-text">✨ ${impactText}</div>`;
     } else {
       item.className = "cricbuzz-ball-row";
 
@@ -1760,13 +1789,16 @@ function renderCommentaryFeed() {
         .replace(/\b(WICKET!?|OUT!?|FOUR!?|SIX!?|MAXIMUM|BOUNDARY|BOWLED|CAUGHT|LBW|STUMPED)/gi,
                  "<b class='hl-event'>$1</b>");
 
+      // Defensive: any non-ball entry that slips through here must not crash on
+      // an undefined `runs` (see the impact_player case above).
+      const runsVal = (comm.runs == null) ? 0 : comm.runs;
       const outcomeClass = comm.isWicket ? 'outcome-wicket' :
-                           (comm.runs === 4 ? 'outcome-four' :
-                           (comm.runs === 6 ? 'outcome-six' :
-                           (comm.runs === 0 ? 'outcome-dot' :
-                           (comm.runs >= 3 ? 'outcome-boundary' : 'outcome-normal'))));
+                           (runsVal === 4 ? 'outcome-four' :
+                           (runsVal === 6 ? 'outcome-six' :
+                           (runsVal === 0 ? 'outcome-dot' :
+                           (runsVal >= 3 ? 'outcome-boundary' : 'outcome-normal'))));
 
-      const outcomeText = comm.isWicket ? 'W' : comm.runs.toString();
+      const outcomeText = comm.isWicket ? 'W' : runsVal.toString();
 
       item.innerHTML = `
         <div class="ball-over-num">${comm.over}</div>
