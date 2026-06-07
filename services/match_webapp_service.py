@@ -956,7 +956,11 @@ def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
             return False, False, "Only the batting side picks openers."
         if striker_idx is None or non_striker_idx is None:
             return False, False, "Provide both strikerIdx and nonStrikerIdx."
-        bat_xi = _active_players(state.get("bat_xi", []))
+        # Frontend XI indices are positions in the serialized XI, which includes
+        # inactive Impact-replaced placeholders so scorecard/stat identity remains
+        # stable. Do not compact the XI before indexing; select_openers below
+        # still validates that the resolved roster ids are active selections.
+        bat_xi = state.get("bat_xi", []) or []
         if not (0 <= striker_idx < len(bat_xi)) or not (0 <= non_striker_idx < len(bat_xi)):
             return False, False, "Player index out of range."
         if striker_idx == non_striker_idx:
@@ -969,7 +973,10 @@ def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
     if bowler_idx is not None:
         if role != "bowler":
             return False, False, "Only the bowling side picks the bowler."
-        bowl_xi = _active_players(state.get("bowl_xi", []))
+        # Same index-space contract as openers: indices address the serialized
+        # bowling XI, not the compacted active-only list. select_bowler rejects
+        # inactive Impact-replaced roster ids after translation.
+        bowl_xi = state.get("bowl_xi", []) or []
         if not (0 <= bowler_idx < len(bowl_xi)):
             return False, False, "Bowler index out of range."
         b_rid = bowl_xi[bowler_idx]["roster_id"]
