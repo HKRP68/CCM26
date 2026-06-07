@@ -1731,6 +1731,36 @@ def finalize_webapp_match(session, match_id):
     winner_uid = result.get("winner_team_id")
     loser_uid = result.get("loser_team_id")
 
+    # ── TIED MATCH → AUTO SUPER OVER (non-challenge Mini-App matches) ──
+    # /wpm and /wpmbot resolve a tie with an auto-simulated super over (the
+    # shared dynamics engine, same as /sim and the chat flow). /cm challenge
+    # matches keep the shared-tie behavior here; routing them to an interactive
+    # bowl-out needs a Mini-App-aware finalizer and is a separate change.
+    if (result.get("margin_type") == "tie" and state
+            and not state.get("is_challenge")):
+        try:
+            from services.match_dynamics import resolve_super_over
+            bat_name = state.get("bat_team_name", "Team A")
+            bowl_name = state.get("bowl_team_name", "Team B")
+            so = resolve_super_over(
+                state.get("bat_xi") or [], state.get("bowl_xi") or [],
+                bat_name, bowl_name, state.get("pitch_type"))
+            if not so.get("shared") and so.get("winner"):
+                if so["winner"] == bat_name:
+                    winner_uid = state.get("bat_team_id")
+                    loser_uid = state.get("bowl_team_id")
+                else:
+                    winner_uid = state.get("bowl_team_id")
+                    loser_uid = state.get("bat_team_id")
+                result["winner_team_id"] = winner_uid
+                result["loser_team_id"] = loser_uid
+                result["margin_type"] = "super_over"
+                result["margin_value"] = 0
+                result["text"] = f"Match tied — {so['text']}"
+                state["match_result"] = result
+        except Exception:
+            logger.exception("auto super over resolution failed (non-fatal)")
+
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
     m.margin_type = result.get("margin_type")
