@@ -502,7 +502,10 @@ function renderSetupScreen() {
     const nonStrikerContainer = document.getElementById('non-striker-list');
     if (strikerContainer && nonStrikerContainer) {
       const getBatRating = (p) => p.batting_ovr || p.batting_rating || p.rating || p.ovr || 0;
-      const sortedBatting = matchState.battingXI.map((p, idx) => ({ p, idx }))
+      const isActiveXIPlayer = (p) => p?.active !== false;
+      const sortedBatting = matchState.battingXI
+        .map((p, idx) => ({ p, idx }))
+        .filter(({ p }) => isActiveXIPlayer(p))
         .sort((a, b) => getBatRating(b.p) - getBatRating(a.p));
 
       let sSel = strikerContainer.querySelector('.selection-item.selected')?.dataset.index;
@@ -554,7 +557,10 @@ function renderSetupScreen() {
     const container = document.getElementById('bowler-list');
     if (container) {
       const getBowlRating = (p) => p.bowling_ovr || p.bowling_rating || p.rating || p.ovr || 0;
-      const sortedBowling = matchState.bowlingXI.map((p, idx) => ({ p, idx }))
+      const isActiveXIPlayer = (p) => p?.active !== false;
+      const sortedBowling = matchState.bowlingXI
+        .map((p, idx) => ({ p, idx }))
+        .filter(({ p }) => isActiveXIPlayer(p))
         .sort((a, b) => getBowlRating(b.p) - getBowlRating(a.p));
 
       let currentSel = container.querySelector('.selection-item.selected')?.dataset.index;

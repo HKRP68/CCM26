@@ -239,3 +239,53 @@ def test_pvp_innings_break_setup_phase_allows_impact_player(monkeypatch):
 
     assert opts["can_use"] is True
     assert opts["legal_break"] == "innings break"
+
+
+def test_select_players_uses_serialized_batting_xi_indices_after_impact(monkeypatch):
+    state = {
+        "setup": svc.SETUP_PICKING,
+        "bat_team_id": 1,
+        "bowl_team_id": 2,
+        "bat_xi": [
+            _player(100, "Opener"),
+            {**_player(101, "Replaced Player"), "active": False, "impact_replaced": True},
+            _player(102, "Impact Opener"),
+        ],
+        "bowl_xi": [_player(200, "Bowler")],
+        "openers_done": False,
+        "bowler_done": False,
+    }
+    monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
+    monkeypatch.setattr(svc.mwa, "save_state", lambda *args, **kwargs: None)
+
+    ok, started, msg = svc.select_players(99, 1, striker_idx=0, non_striker_idx=2)
+
+    assert ok is True
+    assert started is False
+    assert msg == "Openers locked in. Waiting for the bowler…"
+    assert [p["roster_id"] for p in state["batting_order"]] == [100, 102]
+
+
+def test_select_players_uses_serialized_bowling_xi_indices_after_impact(monkeypatch):
+    state = {
+        "setup": svc.SETUP_PICKING,
+        "bat_team_id": 1,
+        "bowl_team_id": 2,
+        "bat_xi": [_player(100, "Batter")],
+        "bowl_xi": [
+            _player(200, "New Ball Bowler"),
+            {**_player(201, "Replaced Bowler"), "active": False, "impact_replaced": True},
+            _player(202, "Impact Bowler"),
+        ],
+        "openers_done": False,
+        "bowler_done": False,
+    }
+    monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
+    monkeypatch.setattr(svc.mwa, "save_state", lambda *args, **kwargs: None)
+
+    ok, started, msg = svc.select_players(99, 2, bowler_idx=2)
+
+    assert ok is True
+    assert started is False
+    assert msg == "Bowler selected. Waiting for the openers…"
+    assert state["current_bowler"]["roster_id"] == 202
