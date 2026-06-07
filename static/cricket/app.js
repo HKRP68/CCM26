@@ -43,6 +43,10 @@ let lastActionableSig = null; // tracks the current actionable turn for auto-exp
 let selectionSubmitInFlight = false;
 let impactSelection = { incoming: null, outgoing: null, open: false };
 
+function isActiveXIPlayer(player) {
+  return player?.active !== false;
+}
+
 // Initial Setup
 async function init() {
   const cleanParam = (val) => {
@@ -502,7 +506,6 @@ function renderSetupScreen() {
     const nonStrikerContainer = document.getElementById('non-striker-list');
     if (strikerContainer && nonStrikerContainer) {
       const getBatRating = (p) => p.batting_ovr || p.batting_rating || p.rating || p.ovr || 0;
-      const isActiveXIPlayer = (p) => p?.active !== false;
       const sortedBatting = matchState.battingXI
         .map((p, idx) => ({ p, idx }))
         .filter(({ p }) => isActiveXIPlayer(p))
@@ -557,7 +560,6 @@ function renderSetupScreen() {
     const container = document.getElementById('bowler-list');
     if (container) {
       const getBowlRating = (p) => p.bowling_ovr || p.bowling_rating || p.rating || p.ovr || 0;
-      const isActiveXIPlayer = (p) => p?.active !== false;
       const sortedBowling = matchState.bowlingXI
         .map((p, idx) => ({ p, idx }))
         .filter(({ p }) => isActiveXIPlayer(p))
@@ -1434,6 +1436,9 @@ function renderWicketBatsmanSelectionSheet() {
 
   const bench = matchState.battingXI.map((player, index) => ({ player, index }))
     .filter(item => {
+      // Exclude inactive preserved identities after impact substitutions
+      if (!isActiveXIPlayer(item.player)) return false;
+
       // Exclude players currently at the crease
       if (matchState.striker && item.player.id.toString() === matchState.striker.id.toString()) return false;
       if (matchState.nonStriker && item.player.id.toString() === matchState.nonStriker.id.toString()) return false;
@@ -1452,7 +1457,7 @@ function renderWicketBatsmanSelectionSheet() {
   }
 
   let currentSel = container.querySelector('.selection-item.selected')?.dataset.index;
-  if (currentSel === undefined && bench.length > 0) {
+  if (!bench.some(item => item.index.toString() === currentSel) && bench.length > 0) {
     currentSel = bench[0].index.toString();
   }
 
@@ -1518,6 +1523,7 @@ function renderOverBowlerSelectionSheet() {
 
   // Fallback check: if ALL other bowlers have also exceeded limits, everyone except the consecutive bowler is allowed
   const otherEligible = matchState.bowlingXI.some((p, idx) => {
+    if (!isActiveXIPlayer(p)) return false;
     if (idx === currentBowlIdx) return false;
     const stats = matchState.stats[p.id] || { overs: 0 };
     return (stats.overs || 0) < maxOvers;
@@ -1541,14 +1547,14 @@ function renderOverBowlerSelectionSheet() {
     }
 
     return { player, index, eligible, reason, overs: stats.overs };
-  }).sort((a, b) => {
+  }).filter(item => isActiveXIPlayer(item.player)).sort((a, b) => {
     if (a.eligible !== b.eligible) return b.eligible ? 1 : -1;
     return getBowlRating(b.player) - getBowlRating(a.player);
   });
 
   let currentSel = container.querySelector('.selection-item.selected')?.dataset.index;
   const firstEligible = bench.find(item => item.eligible);
-  if (currentSel === undefined && firstEligible) {
+  if (!bench.some(item => item.index.toString() === currentSel) && firstEligible) {
     currentSel = firstEligible.index.toString();
   }
 
