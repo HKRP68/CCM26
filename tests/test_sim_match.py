@@ -153,3 +153,20 @@ def test_player_of_match_counts_each_bowler_wicket_impact_once_per_innings():
     }
 
     assert _player_of_the_match(inn1, inn2, {}) == "Match-winning Batter"
+
+
+def test_json_feed_includes_ball_roles_and_over_summaries():
+    random.seed(21)
+    home, away = _make_xi("H", 82), _make_xi("A", 80)
+    m = simulate_match(home, away, 2, "Flat", "Alpha", "Bravo")
+
+    ball_events = [e for e in m["commentary_feed"] if e.get("event") != "end_of_over"]
+    over_events = [e for e in m["commentary_feed"] if e.get("event") == "end_of_over"]
+
+    assert ball_events
+    assert all(e.get("striker") and e.get("bowler") for e in ball_events)
+    assert over_events
+    assert all(e.get("team_score") and e.get("batsmen_score") for e in over_events)
+    assert all("over_timeline" in e for e in over_events)
+    assert m["innings1"]["over_summaries"]
+    assert m["innings1"]["over_summaries"][0]["team_score"]

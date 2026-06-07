@@ -18,6 +18,7 @@ handles message sending and the suspense delay.
 
 import math
 import random
+from datetime import datetime
 
 from services.probability_engine import calculate_outcome
 from services.bowling_service import get_delivery_options, AVAILABLE_SHOTS
@@ -128,6 +129,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     extras = {"wides": 0, "noballs": 0, "legbyes": 0}
     fow = []  # [(runs, wkts, name, over_str)]
     timeline = []
+    over_summaries = []
 
     striker_i, non_striker_i, next_i = 0, 1, 2
     free_hit = False
@@ -135,6 +137,24 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
     def _balls_to_overs(b):
         return f"{b // 6}.{b % 6}"
+
+    def _batting_snapshot():
+        active = []
+        for idx in (striker_i, non_striker_i):
+            if idx >= len(order):
+                continue
+            p = order[idx]
+            bs = bat_stats[id(p)]
+            active.append({
+                "name": p["name"],
+                "runs": bs["runs"],
+                "balls": bs["balls"],
+                "fours": bs["fours"],
+                "sixes": bs["sixes"],
+                "out": bs["out"],
+                "striker": idx == striker_i,
+            })
+        return active
 
     def _emit(event_key, batsman, bowler, runs, legal_balls):
         line = None
@@ -149,8 +169,39 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 "innings": innings_no,
                 "over": _balls_to_overs(legal_balls),
                 "score": f"{total_runs}/{total_wkts}",
+                "striker": batsman,
+                "bowler": bowler,
                 "event": event_key,
                 "text": line or "",
+            })
+
+    def _record_over_summary(over_no, bowler, over_timeline, completed_balls):
+        summary = {
+            "innings": innings_no,
+            "over": over_no,
+            "over_label": _balls_to_overs(completed_balls),
+            "batting_team": batting_team,
+            "bowling_team": bowling_team,
+            "team_score": f"{total_runs}/{total_wkts}",
+            "batsmen_score": _batting_snapshot(),
+            "bowler": bowler["name"],
+            "over_timeline": list(over_timeline),
+        }
+        over_summaries.append(summary)
+        if feed is not None:
+            current_striker = order[striker_i]["name"] if striker_i < len(order) else ""
+            feed.append({
+                "innings": innings_no,
+                "over": _balls_to_overs(completed_balls),
+                "score": summary["team_score"],
+                "striker": current_striker,
+                "bowler": bowler["name"],
+                "event": "end_of_over",
+                "team_score": summary["team_score"],
+                "batsmen_score": summary["batsmen_score"],
+                "over_timeline": summary["over_timeline"],
+                "text": (f"End of over {over_no}: {batting_team} "
+                         f"{summary['team_score']}"),
             })
 
     legal_balls = 0
@@ -161,6 +212,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         over_bowler_runs = 0
         over_had_extra = False
         balls_this_over = 0
+        over_timeline = []
         while balls_this_over < 6:
             if total_wkts >= 10 or chased:
                 break
@@ -185,6 +237,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 over_bowler_runs += 1
                 over_had_extra = True
                 timeline.append("WD")
+                over_timeline.append("WD")
                 _emit("wide", striker["name"], bowler["name"], 0, legal_balls)
                 if target is not None and total_runs >= target:
                     chased = True
@@ -204,6 +257,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                     elif runs == 6:
                         bs["sixes"] += 1
                 timeline.append("NB")
+                over_timeline.append("NB")
                 _emit("no_ball", striker["name"], bowler["name"], runs, legal_balls)
                 if target is not None and total_runs >= target:
                     chased = True
@@ -224,6 +278,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 extras["legbyes"] += runs  # not charged to bowler
                 over_had_extra = True
                 timeline.append("LB")
+                over_timeline.append("LB")
                 _emit("extras", striker["name"], bowler["name"], runs, legal_balls)
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
@@ -243,6 +298,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 if how != "Run Out":
                     bw["wickets"] += 1
                 timeline.append("W")
+                over_timeline.append("W")
                 fow.append((total_runs, total_wkts, striker["name"],
                             _balls_to_overs(legal_balls)))
                 _emit(_HOW_TO_EVENT.get(how, "wicket_caught_fielder"),
@@ -266,6 +322,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 elif runs == 6:
                     bs["sixes"] += 1
                 timeline.append(str(runs))
+                over_timeline.append(str(runs))
                 _emit(_RUNS_TO_EVENT.get(runs, "general"),
                       striker["name"], bowler["name"], runs, legal_balls)
                 free_hit = False
@@ -276,10 +333,12 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 chased = True
 
         # end of over
-        if balls_this_over >= 6 and over_bowler_runs == 0 and not over_had_extra:
-            bw["maidens"] += 1
-        # swap strike at end of over
-        striker_i, non_striker_i = non_striker_i, striker_i
+        if balls_this_over >= 6:
+            if over_bowler_runs == 0 and not over_had_extra:
+                bw["maidens"] += 1
+            _record_over_summary(over_idx + 1, bowler, over_timeline, legal_balls)
+            # swap strike at end of over
+            striker_i, non_striker_i = non_striker_i, striker_i
 
     return {
         "innings": innings_no,
@@ -293,6 +352,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         "extras_total": extras["wides"] + extras["noballs"] + extras["legbyes"],
         "fow": fow,
         "timeline": timeline,
+        "over_summaries": over_summaries,
         "order": order,
         "bat_stats": {id(p): bat_stats[id(p)] for p in order},
         "bowl_plan": plan,
@@ -410,6 +470,108 @@ def render_result(match):
         "━━━━━━━━━━━━━━━━━━━\n"
         f"🎉 <b>{_esc(res['text'])}</b>\n"
         f"🌟 Player of the Match: <b>{_esc(match['potm'])}</b>"
+    )
+
+
+def _top_batters(inn, limit=4):
+    rows = []
+    for p in inn["order"]:
+        bs = inn["bat_stats"][id(p)]
+        if bs["balls"] == 0 and not bs["out"]:
+            continue
+        rows.append({
+            "name": p["name"],
+            "runs": bs["runs"],
+            "balls": bs["balls"],
+            "fours": bs["fours"],
+            "sixes": bs["sixes"],
+            "out": bs["out"],
+        })
+    return sorted(rows, key=lambda r: (r["runs"], -r["balls"]), reverse=True)[:limit]
+
+
+def _top_bowlers(inn, limit=4):
+    rows = []
+    seen = set()
+    for bp in inn["bowl_plan"]:
+        if id(bp) in seen:
+            continue
+        seen.add(id(bp))
+        bw = inn["bowl_stats"][id(bp)]
+        if bw["balls"] == 0:
+            continue
+        rows.append({
+            "name": bp["name"],
+            "wickets": bw["wickets"],
+            "runs": bw["runs"],
+            "overs": f"{bw['balls'] // 6}.{bw['balls'] % 6}",
+        })
+    return sorted(rows, key=lambda r: (r["wickets"], -r["runs"]), reverse=True)[:limit]
+
+
+def _potm_stats(match):
+    name = match.get("potm")
+    if not name:
+        return None
+    runs = wickets = 0
+    for inn in (match["innings1"], match["innings2"]):
+        for p in inn["order"]:
+            if p["name"] == name:
+                runs += inn["bat_stats"][id(p)]["runs"]
+        seen = set()
+        for bp in inn["bowl_plan"]:
+            if id(bp) in seen:
+                continue
+            seen.add(id(bp))
+            if bp["name"] == name:
+                wickets += inn["bowl_stats"][id(bp)]["wickets"]
+    bits = []
+    if runs:
+        bits.append(f"{runs} runs")
+    if wickets:
+        bits.append(f"{wickets} wkts")
+    return ", ".join(bits) or "Impact performance"
+
+
+def render_match_summary_image(match, *, text_settings=None, stadium=None, match_no=None):
+    """Render the /sim match summary PNG bytes, or None if rendering fails."""
+    from services.match_summary_card import generate_match_summary
+
+    i1, i2 = match["innings1"], match["innings2"]
+    res = match["result"]
+    winner = res.get("winner") or "Tied"
+    margin = res.get("text") or "Match tied"
+    top_per_team = {
+        "inn1": {
+            "team": i1["batting_team"],
+            "batters": _top_batters(i1),
+            "bowlers": _top_bowlers(i1),
+        },
+        "inn2": {
+            "team": i2["batting_team"],
+            "batters": _top_batters(i2),
+            "bowlers": _top_bowlers(i2),
+        },
+    }
+    return generate_match_summary(
+        inn1_team=i1["batting_team"],
+        inn1_runs=i1["runs"],
+        inn1_wickets=i1["wickets"],
+        inn1_overs=i1["overs"],
+        inn2_team=i2["batting_team"],
+        inn2_runs=i2["runs"],
+        inn2_wickets=i2["wickets"],
+        inn2_overs=i2["overs"],
+        winner_name=winner,
+        win_margin_text=margin,
+        overs_total=match["overs"],
+        potm_name=match.get("potm"),
+        potm_stats=_potm_stats(match),
+        top_per_team=top_per_team,
+        stadium=stadium or match.get("pitch"),
+        match_date=datetime.utcnow(),
+        match_no=match_no,
+        text_settings=text_settings,
     )
 
 

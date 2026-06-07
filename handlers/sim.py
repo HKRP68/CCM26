@@ -21,9 +21,10 @@ from database import get_session
 from models import Player
 from handlers.lineup import _get_ordered_roster, validate_xi
 from services.telegram_user_service import sync_telegram_user
+from services.config_service import get_config
 from services.commentary_service import pick_commentary
 from services.sim_match import (
-    simulate_match, render_innings_card, render_result,
+    simulate_match, render_innings_card, render_result, render_match_summary_image,
 )
 from services.sim_team import append_distinct_base_players, distinct_base_players
 
@@ -82,6 +83,31 @@ def _build_bot_xi(session, avg_rating):
     return [_player_to_dict(p) for p in rows[:11] if p]
 
 
+def _team_display_name(user, fallback="User XI"):
+    if not user:
+        return fallback
+    if user.team_name:
+        return user.team_name
+    if user.username:
+        return f"@{user.username}"
+    if user.first_name:
+        return f"{user.first_name}'s XI"
+    return fallback
+
+
+def _reply_target_user(session, update):
+    message = getattr(update, "effective_message", None) or getattr(update, "message", None)
+    reply = getattr(message, "reply_to_message", None) if message is not None else None
+    tg_user = getattr(reply, "from_user", None) if reply is not None else None
+    if tg_user is None or getattr(tg_user, "is_bot", False):
+        return None
+    return sync_telegram_user(session, tg_user)
+
+
+def _xi_from_roster(roster):
+    return [_player_to_dict(p) for _, p in roster[:11]]
+
+
 def _parse_overs(args):
     if not args:
         return DEFAULT_OVERS, None
@@ -125,39 +151,84 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 + "\n\nFix it with /pxi, /swap or /autobuild.", parse_mode="HTML")
             return
 
-        user_xi = [_player_to_dict(p) for _, p in roster[:11]]
-        avg_rating = round(sum(p.rating for _, p in roster[:11]) / 11)
-        bot_xi = _build_bot_xi(session, avg_rating)
-        if len(bot_xi) < 11:
-            await update.message.reply_text(
-                "⚠️ Couldn't assemble an opponent from the player pool. Try again later.")
+        user_xi = _xi_from_roster(roster)
+        team_name = _team_display_name(user, "Your XI")
+
+        opponent = _reply_target_user(session, update)
+        if opponent and opponent.id == user.id:
+            await update.message.reply_text("❌ Reply to another real user to sim your XI vs their XI.")
             return
 
-        team_name = user.team_name or (f"@{user.username}" if user.username else "Your XI")
-        bot_name = "🤖 Sim XI"
+        if opponent:
+            opponent_roster = _get_ordered_roster(session, opponent.id)
+            if len(opponent_roster) < 11:
+                await update.message.reply_text(
+                    f"❌ {_team_display_name(opponent)} needs 11 players to simulate "
+                    f"(they have {len(opponent_roster)}).")
+                return
+            opp_valid, opp_errors = validate_xi(opponent_roster)
+            if not opp_valid:
+                await update.message.reply_text(
+                    f"❌ {_team_display_name(opponent)}'s Playing XI is invalid:\n• "
+                    + "\n• ".join(opp_errors), parse_mode="HTML")
+                return
+            opponent_xi = _xi_from_roster(opponent_roster)
+            opponent_name = _team_display_name(opponent, "Opponent XI")
+        else:
+            avg_rating = round(sum(p.rating for _, p in roster[:11]) / 11)
+            opponent_xi = _build_bot_xi(session, avg_rating)
+            if len(opponent_xi) < 11:
+                await update.message.reply_text(
+                    "⚠️ Couldn't assemble an opponent from the player pool. Try again later.")
+                return
+            opponent_name = "🤖 Sim XI"
+
         pitch = random.choice(PITCHES)
-        toss_winner = random.choice([team_name, bot_name])
+        toss_winner = random.choice([team_name, opponent_name])
 
         def commentary(event_key, batsman, bowler, fielder, keeper, runs):
             return pick_commentary(session, event_key, batsman=batsman, bowler=bowler,
                                    fielder=fielder, keeper=keeper, runs=runs)
 
-        match = simulate_match(user_xi, bot_xi, overs, pitch,
-                               team_name, bot_name, toss_winner=toss_winner,
+        match = simulate_match(user_xi, opponent_xi, overs, pitch,
+                               team_name, opponent_name, toss_winner=toss_winner,
                                commentary=commentary)
 
         # Pre-render everything while the session is alive.
         card1 = render_innings_card(match["innings1"])
         card2 = render_innings_card(match["innings2"])
         result_text = render_result(match)
+        cfg = get_config()
+        summary_bytes = render_match_summary_image(
+            match,
+            text_settings=cfg.get("scorecard_text_settings"),
+            stadium=f"SIM • {pitch} pitch",
+        )
         feed_payload = {
             "overs": overs,
             "pitch": pitch,
             "toss": f"{toss_winner} won the toss & batted first",
-            "teams": {"home": team_name, "away": bot_name},
+            "teams": {"home": team_name, "away": opponent_name},
             "result": match["result"]["text"],
             "player_of_the_match": match["potm"],
+            "innings": [
+                {
+                    "innings": match["innings1"]["innings"],
+                    "batting_team": match["innings1"]["batting_team"],
+                    "score": f"{match['innings1']['runs']}/{match['innings1']['wickets']}",
+                    "overs": match["innings1"]["overs"],
+                    "over_summaries": match["innings1"].get("over_summaries", []),
+                },
+                {
+                    "innings": match["innings2"]["innings"],
+                    "batting_team": match["innings2"]["batting_team"],
+                    "score": f"{match['innings2']['runs']}/{match['innings2']['wickets']}",
+                    "overs": match["innings2"]["overs"],
+                    "over_summaries": match["innings2"].get("over_summaries", []),
+                },
+            ],
             "commentary": match["commentary_feed"],
+            "note": "/sim is a friendly simulation and does not update player batting or bowling stats.",
         }
     except Exception:
         logger.exception("sim_handler preparation failed")
@@ -183,6 +254,14 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(card1, parse_mode="HTML")
         await update.message.reply_text(card2, parse_mode="HTML")
         await update.message.reply_text(result_text, parse_mode="HTML")
+
+        if summary_bytes:
+            photo = io.BytesIO(summary_bytes)
+            photo.name = f"sim_summary_{update.effective_user.id}.png"
+            photo.seek(0)
+            await update.message.reply_photo(
+                photo=InputFile(photo, filename=photo.name),
+                caption="🖼️ Match Summary")
 
         buf = io.BytesIO(json.dumps(feed_payload, indent=2, ensure_ascii=False).encode("utf-8"))
         buf.seek(0)
