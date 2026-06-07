@@ -152,6 +152,7 @@ def get_impact_player_options(session, match_id, user_id):
 
     striker_rid = None
     non_striker_rid = None
+    current_bowler_rid = (state.get("current_bowler") or {}).get("roster_id")
     order = state.get("batting_order", []) or []
     try:
         striker_rid = order[state.get("striker_idx")].get("roster_id")
@@ -167,7 +168,10 @@ def get_impact_player_options(session, match_id, user_id):
         reason = None
         if user_id == state.get("bat_team_id") and rid in (striker_rid, non_striker_rid):
             reason = "At crease"
-        if user_id == state.get("bowl_team_id") and rid == state.get("prev_bowler_rid"):
+        if (user_id == state.get("bowl_team_id") and legal_label == "after wicket"
+                and rid == current_bowler_rid):
+            reason = "Bowling current over"
+        elif user_id == state.get("bowl_team_id") and rid == state.get("prev_bowler_rid"):
             reason = "Bowled previous over"
         replaceable.append({**p, "disabled": bool(reason), "disabled_reason": reason})
 
