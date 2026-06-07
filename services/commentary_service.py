@@ -124,6 +124,51 @@ def _render(text, batsman, bowler, fielder, keeper, runs):
     return text.strip()
 
 
+def _render_random_line(lines, batsman, bowler, fielder, keeper, runs):
+    if not lines:
+        return None
+    return _render(random.choice(lines), batsman, bowler, fielder, keeper, runs)
+
+
+def _fallback_commentary(event_key, batsman, bowler, fielder, keeper, runs):
+    return _render_random_line(
+        FALLBACK_LINES.get(event_key), batsman, bowler, fielder, keeper, runs)
+
+
+def build_commentary_picker(session):
+    """Return a fast per-ball commentary picker for a full simulated match.
+
+    /sim can call commentary hundreds of times in one handler run. The older
+    path queried CommentaryEntry once per delivery, which made bot replies slow
+    on chats that used longer formats. This helper snapshots all active
+    commentary rows once, then returns a tiny in-memory picker with the same
+    fallback behavior as pick_commentary().
+    """
+    lines_by_event = {}
+    try:
+        rows = (session.query(CommentaryEntry.event_key, CommentaryEntry.text,
+                              CommentaryEntry.weight)
+                .filter(CommentaryEntry.is_active == True).all())
+        for event_key, text, weight in rows:
+            if not text:
+                continue
+            lines_by_event.setdefault(event_key, []).extend(
+                [text] * max(1, int(weight or 1)))
+    except Exception:
+        logger.exception("build_commentary_picker failed")
+        lines_by_event = {}
+
+    def picker(event_key, batsman="", bowler="", fielder=DEFAULT_FIELDER,
+               keeper=DEFAULT_KEEPER, runs=0):
+        line = _render_random_line(
+            lines_by_event.get(event_key), batsman, bowler, fielder, keeper, runs)
+        if line:
+            return line
+        return _fallback_commentary(event_key, batsman, bowler, fielder, keeper, runs)
+
+    return picker
+
+
 def pick_commentary(session, event_key, batsman="", bowler="",
                     fielder=DEFAULT_FIELDER, keeper=DEFAULT_KEEPER, runs=0):
     """Pick a random active commentary line for the given event.
@@ -143,11 +188,7 @@ def pick_commentary(session, event_key, batsman="", bowler="",
     except Exception:
         logger.exception(f"pick_commentary failed for event {event_key}")
 
-    # DB had nothing (or errored) — use the built-in fallback bank.
-    bank = FALLBACK_LINES.get(event_key)
-    if bank:
-        return _render(random.choice(bank), batsman, bowler, fielder, keeper, runs)
-    return None
+    return _fallback_commentary(event_key, batsman, bowler, fielder, keeper, runs)
 
 
 def list_event_keys():
