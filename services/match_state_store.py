@@ -201,6 +201,81 @@ def save_autoplay_users(ctx, mid, user_id, active, max_retries=5):
     return None
 
 
+class CasAbort(Exception):
+    """Raise from an `update_state_cas` mutator to bail out without writing —
+    e.g. validation failed against the freshly-read state, so nothing changed
+    and the row should be left untouched. Carries the result to return as-is."""
+
+    def __init__(self, result):
+        super().__init__("update_state_cas aborted")
+        self.result = result
+
+
+def update_state_cas(ctx, mid, mutator, max_retries=5):
+    """Read-modify-write match state under optimistic concurrency control.
+
+    Generalizes the version-guarded retry pattern used by save_autoplay_users
+    so independent submissions (e.g. the batting side picking openers and the
+    bowling side picking a bowler at the same time) can't silently clobber
+    each other's flags by overwriting a stale whole-state snapshot.
+
+    `mutator(state)` is called with a freshly-read, mutable state dict. It
+    should validate against THIS state (not any older copy), mutate it in
+    place, and return `(result, next_action_or_None)`. Raise `CasAbort(result)`
+    to signal "validation failed — persist nothing" and return `result` as-is.
+
+    Retries up to `max_retries` times if another writer commits between our
+    read and write. Returns the mutator's `result`, or `None` if the match
+    state row is missing or all retries were exhausted on version conflicts.
+    """
+    for attempt in range(max_retries):
+        session = get_session()
+        try:
+            ms = session.query(MatchState).filter(MatchState.match_id == mid).first()
+            if not ms:
+                return None
+
+            version = ms.version or 0
+            state = _deserialize(ms.state_json)
+
+            try:
+                result, next_action = mutator(state)
+            except CasAbort as abort:
+                return abort.result
+
+            values = {
+                MatchState.state_json: _serialize(state),
+                MatchState.version: version + 1,
+                MatchState.last_modified: datetime.utcnow(),
+            }
+            if next_action is not None:
+                values[MatchState.next_action] = next_action
+
+            updated = (session.query(MatchState)
+                       .filter(MatchState.match_id == mid,
+                               MatchState.version == version)
+                       .update(values, synchronize_session=False))
+            if updated:
+                session.commit()
+                ctx.bot_data[_mem_key(mid)] = state
+                return result
+
+            session.rollback()
+            logger.info(
+                "update_state_cas retrying for match %s after version conflict (%s/%s)",
+                mid, attempt + 1, max_retries)
+        except Exception:
+            session.rollback()
+            logger.exception("update_state_cas failed for match %s", mid)
+            return None
+        finally:
+            session.close()
+
+    logger.warning("update_state_cas gave up for match %s after %s retries",
+                   mid, max_retries)
+    return None
+
+
 def set_next_action(ctx, mid, next_action, last_prompt_msg_id=None):
     """Lightweight: update only the next_action pointer (and optionally msg id).
     Use when the state dict hasn't changed but the pointer has."""

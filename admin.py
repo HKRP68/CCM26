@@ -6302,6 +6302,36 @@ def match_rest_select_players():
         db.close()
 
 
+@app.route("/api/match/innings-break/continue", methods=["POST"])
+@csrf_exempt
+def match_rest_continue_innings_break():
+    """POST /api/match/innings-break/continue
+    Body: {userId, matchId?}. Either participant can tap "Continue" to skip
+    the innings-break countdown (target + 1st-innings scorecard) early and
+    move straight on to 2nd-innings team selection. Idempotent — a no-op once
+    the match has already moved past the break (e.g. the auto-advance beat
+    them to it)."""
+    db = get_session()
+    try:
+        data = request.get_json(silent=True) or {}
+        user, match, err = _match_rest_user_and_match(
+            db, data.get("userId") or data.get("user_id"),
+            data.get("matchId") or data.get("match_id"))
+        if err:
+            return err
+        from services.match_webapp_service import continue_past_innings_break
+        ok, msg = continue_past_innings_break(match.id, user.id)
+        if not ok:
+            return {"ok": False, "error": msg, "message": msg}, 400
+        return {"ok": True, "message": msg,
+                "match": _match_rest_full_state(db, match.id, user.id)}
+    except Exception as e:
+        logger.exception("match_rest_continue_innings_break failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/match/impact-player", methods=["POST"])
 @csrf_exempt
 def match_rest_impact_player():
@@ -6741,6 +6771,11 @@ def match_rest_poll():
         # delivers the Match Summary. The broadcast guard dedupes against the
         # action endpoint, so the summary is sent exactly once.
         _finalize_and_broadcast_if_terminal(db, match.id)
+        try:
+            from services.match_webapp_service import advance_innings_break_if_due
+            advance_innings_break_if_due(match.id)
+        except Exception:
+            logger.exception("innings-break auto-advance check failed (non-fatal)")
         try:
             from services.match_webapp_service import auto_play_bot_turns, get_state_is_vsbot
             if get_state_is_vsbot(match.id):

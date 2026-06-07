@@ -23,6 +23,18 @@ class _FakeQuery:
         return self._rows
 
 
+def _fake_update_state_cas(state):
+    """Drive svc.select_openers/select_bowler's CAS mutator against a plain
+    in-memory `state` dict, mirroring update_state_cas's contract without a DB."""
+    def _run(match_id, mutator, max_retries=5):
+        try:
+            result, _next_action = mutator(state)
+        except svc.CasAbort as abort:
+            return abort.result
+        return result
+    return _run
+
+
 class _FakeSession:
     def __init__(self, rows):
         self._rows = rows
@@ -256,7 +268,7 @@ def test_select_players_uses_serialized_batting_xi_indices_after_impact(monkeypa
         "bowler_done": False,
     }
     monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
-    monkeypatch.setattr(svc.mwa, "save_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc.mwa, "update_state_cas", _fake_update_state_cas(state))
 
     ok, started, msg = svc.select_players(99, 1, striker_idx=0, non_striker_idx=2)
 
@@ -281,7 +293,7 @@ def test_select_players_uses_serialized_bowling_xi_indices_after_impact(monkeypa
         "bowler_done": False,
     }
     monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
-    monkeypatch.setattr(svc.mwa, "save_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc.mwa, "update_state_cas", _fake_update_state_cas(state))
 
     ok, started, msg = svc.select_players(99, 2, bowler_idx=2)
 
