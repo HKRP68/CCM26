@@ -102,3 +102,54 @@ def test_chase_stops_at_target():
         # won by wickets — must not have used all 10 wickets unnecessarily nor
         # exceeded the over limit
         assert i2["balls"] <= 10 * 6
+
+
+def test_chase_stops_immediately_when_wide_reaches_target(monkeypatch):
+    home, away = _make_xi("H", 70), _make_xi("A", 70)
+
+    monkeypatch.setattr(
+        "services.sim_match.calculate_outcome",
+        lambda *args, **kwargs: {"type": "wide"},
+    )
+
+    inn = simulate_innings(home, away, 1, "Flat", 2, "Chase", "Def", target=1)
+
+    assert inn["runs"] == 1
+    assert inn["balls"] == 0
+    assert inn["timeline"] == ["WD"]
+
+
+def test_chase_stops_immediately_when_no_ball_reaches_target(monkeypatch):
+    home, away = _make_xi("H", 70), _make_xi("A", 70)
+
+    monkeypatch.setattr(
+        "services.sim_match.calculate_outcome",
+        lambda *args, **kwargs: {"type": "noball", "runs": 0},
+    )
+
+    inn = simulate_innings(home, away, 1, "Flat", 2, "Chase", "Def", target=1)
+
+    assert inn["runs"] == 1
+    assert inn["balls"] == 0
+    assert inn["timeline"] == ["NB"]
+
+
+def test_player_of_match_counts_each_bowler_wicket_impact_once_per_innings():
+    from services.sim_match import _player_of_the_match
+
+    batter = {"name": "Match-winning Batter"}
+    bowler = {"name": "Repeated Bowler"}
+    inn1 = {
+        "order": [batter],
+        "bat_stats": {id(batter): {"runs": 60}},
+        "bowl_plan": [bowler, bowler, bowler, bowler],
+        "bowl_stats": {id(bowler): {"wickets": 2}},
+    }
+    inn2 = {
+        "order": [],
+        "bat_stats": {},
+        "bowl_plan": [],
+        "bowl_stats": {},
+    }
+
+    assert _player_of_the_match(inn1, inn2, {}) == "Match-winning Batter"

@@ -25,6 +25,7 @@ from services.commentary_service import pick_commentary
 from services.sim_match import (
     simulate_match, render_innings_card, render_result,
 )
+from services.sim_team import append_distinct_base_players, distinct_base_players
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +62,24 @@ def _build_bot_xi(session, avg_rating):
                  .order_by(func.random()).limit(n).all())
         return q
 
-    rows = (pick("Batsman", 4) + pick("Wicket Keeper", 1)
-            + pick("All-rounder", 2) + pick("Bowler", 4))
-    return [_player_to_dict(p) for p in rows if p]
+    rows = distinct_base_players(
+        pick("Batsman", 4) + pick("Wicket Keeper", 1)
+        + pick("All-rounder", 2) + pick("Bowler", 4)
+    )
+
+    if len(rows) < 11:
+        near_pool = (session.query(Player)
+                     .filter(Player.is_active == True, Player.rating.between(lo, hi))
+                     .order_by(func.random()).all())
+        append_distinct_base_players(rows, near_pool)
+
+    if len(rows) < 11:
+        full_pool = (session.query(Player)
+                     .filter(Player.is_active == True)
+                     .order_by(func.random()).all())
+        append_distinct_base_players(rows, full_pool)
+
+    return [_player_to_dict(p) for p in rows[:11] if p]
 
 
 def _parse_overs(args):
