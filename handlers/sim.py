@@ -185,6 +185,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         pitch = random.choice(PITCHES)
         toss_winner = random.choice([team_name, opponent_name])
+        toss_decision = random.choice(["bat", "bowl"])
 
         def commentary(event_key, batsman, bowler, fielder, keeper, runs):
             return pick_commentary(session, event_key, batsman=batsman, bowler=bowler,
@@ -192,7 +193,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         match = simulate_match(user_xi, opponent_xi, overs, pitch,
                                team_name, opponent_name, toss_winner=toss_winner,
-                               commentary=commentary)
+                               toss_decision=toss_decision, commentary=commentary)
 
         # Pre-render everything while the session is alive.
         card1 = render_innings_card(match["innings1"])
@@ -204,10 +205,12 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text_settings=cfg.get("scorecard_text_settings"),
             stadium=f"SIM • {pitch} pitch",
         )
+        match_intro = [match["toss"]["text"]] + match["innings1"].get("innings_intro", [])
         feed_payload = {
             "overs": overs,
             "pitch": pitch,
-            "toss": f"{toss_winner} won the toss & batted first",
+            "toss": match["toss"],
+            "match_intro": match_intro,
             "teams": {"home": team_name, "away": opponent_name},
             "result": match["result"]["text"],
             "player_of_the_match": match["potm"],
@@ -215,6 +218,11 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {
                     "innings": match["innings1"]["innings"],
                     "batting_team": match["innings1"]["batting_team"],
+                    "bowling_team": match["innings1"]["bowling_team"],
+                    "openers": match["innings1"].get("openers", []),
+                    "opening_striker": match["innings1"].get("opening_striker", ""),
+                    "opening_bowler": match["innings1"].get("opening_bowler", ""),
+                    "innings_intro": match["innings1"].get("innings_intro", []),
                     "score": f"{match['innings1']['runs']}/{match['innings1']['wickets']}",
                     "overs": match["innings1"]["overs"],
                     "over_summaries": match["innings1"].get("over_summaries", []),
@@ -222,6 +230,11 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {
                     "innings": match["innings2"]["innings"],
                     "batting_team": match["innings2"]["batting_team"],
+                    "bowling_team": match["innings2"]["bowling_team"],
+                    "openers": match["innings2"].get("openers", []),
+                    "opening_striker": match["innings2"].get("opening_striker", ""),
+                    "opening_bowler": match["innings2"].get("opening_bowler", ""),
+                    "innings_intro": match["innings2"].get("innings_intro", []),
                     "score": f"{match['innings2']['runs']}/{match['innings2']['wickets']}",
                     "overs": match["innings2"]["overs"],
                     "over_summaries": match["innings2"].get("over_summaries", []),
@@ -241,7 +254,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         progress = await update.message.reply_text(
             f"🏏 <b>SIM MATCH</b> — {overs} overs\n"
-            f"🪙 {toss_winner} won the toss and chose to bat\n"
+            f"🪙 {match['toss']['text']}\n"
             f"📍 Pitch: {pitch}\n\n⏳ <i>Match in progress…</i>",
             parse_mode="HTML")
         await asyncio.sleep(10)

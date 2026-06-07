@@ -340,10 +340,27 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             # swap strike at end of over
             striker_i, non_striker_i = non_striker_i, striker_i
 
+    opening_bowler_name = plan[0]["name"] if plan else ""
+    opening_striker_name = order[0]["name"] if order else ""
+    opening_non_striker_name = order[1]["name"] if len(order) > 1 else ""
+
     return {
         "innings": innings_no,
         "batting_team": batting_team,
         "bowling_team": bowling_team,
+        "openers": [name for name in (opening_striker_name, opening_non_striker_name) if name],
+        "opening_striker": opening_striker_name,
+        "opening_bowler": opening_bowler_name,
+        "innings_intro": [
+            f"INNINGS {innings_no}",
+            f"Batting {batting_team}",
+            f"Bowling {bowling_team}",
+            (f"{opening_striker_name} and {opening_non_striker_name} will open the attack "
+             f"for {batting_team}. {opening_striker_name} is on strike."
+             if opening_striker_name and opening_non_striker_name else ""),
+            (f"{opening_bowler_name} will bowl the opening over for {bowling_team}"
+             if opening_bowler_name else ""),
+        ],
         "runs": total_runs,
         "wickets": total_wkts,
         "overs": _balls_to_overs(legal_balls),
@@ -363,20 +380,33 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
-                   commentary=None):
+                   toss_decision="bat", commentary=None):
     """Simulate a full two-innings match.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
         bat_rating, bowl_rating, category, bowl_style, bowl_hand, bat_hand.
     Returns a dict with both innings, the result, and a commentary feed.
     """
-    # Toss winner bats first (default: home).
-    if toss_winner == away_name:
-        first_bat, first_bowl = away_xi, home_xi
-        first_name, second_name = away_name, home_name
+    # Toss winner may choose to bat or bowl first (default: bat for backward compatibility).
+    normalized_decision = str(toss_decision or "bat").strip().lower()
+    if normalized_decision not in ("bat", "bowl"):
+        normalized_decision = "bat"
+
+    teams_by_name = {home_name: home_xi, away_name: away_xi}
+    if toss_winner not in teams_by_name:
+        toss_winner = home_name
+
+    toss_winner_is_away = toss_winner == away_name
+    toss_loser_name = home_name if toss_winner_is_away else away_name
+
+    if normalized_decision == "bat":
+        first_name = toss_winner
+        second_name = toss_loser_name
     else:
-        first_bat, first_bowl = home_xi, away_xi
-        first_name, second_name = home_name, away_name
+        first_name = toss_loser_name
+        second_name = toss_winner
+
+    first_bat, first_bowl = teams_by_name[first_name], teams_by_name[second_name]
 
     feed = []
     inn1 = simulate_innings(first_bat, first_bowl, overs, pitch_type,
@@ -395,6 +425,11 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
         "innings2": inn2,
         "target": target,
         "result": result,
+        "toss": {
+            "winner": toss_winner,
+            "decision": normalized_decision,
+            "text": f"{toss_winner} won the toss and elected to {normalized_decision.title()} first",
+        },
         "commentary_feed": feed,
         "potm": _player_of_the_match(inn1, inn2, result),
     }
