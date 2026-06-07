@@ -1,0 +1,712 @@
+{
+  "versionToggle": {
+    "v1": "Current Delivery Engine",
+    "v2": "Uploaded useGameEngine.ts browser port"
+  },
+  "deliveryConfig": {
+    "Fast Bowler": {
+      "mode": "pace",
+      "arms": [
+        "Right",
+        "Left"
+      ],
+      "v2Type": "Fast",
+      "variations": [
+        "Outswing",
+        "Reverse Swing",
+        "Inswing",
+        "Seam Up",
+        "Slower"
+      ],
+      "lengths": [
+        "Hard",
+        "Good",
+        "Full",
+        "Hit the Deck",
+        "Yorker",
+        "Bouncer"
+      ]
+    },
+    "Medium Pacer": {
+      "mode": "pace",
+      "arms": [
+        "Right",
+        "Left"
+      ],
+      "v2Type": "Medium",
+      "variations": [
+        "Leg Cutter",
+        "Off Cutter",
+        "Slower",
+        "Knuckle",
+        "Cross-Seam"
+      ],
+      "lengths": [
+        "Good Length",
+        "Full Length",
+        "Short of Length",
+        "Back of Length",
+        "Yorker"
+      ]
+    },
+    "Right-Arm Off Spinner": {
+      "mode": "spin",
+      "fixedArm": "Right",
+      "v2Type": "Off Spin",
+      "variations": [
+        "Off Break",
+        "Doosra",
+        "Arm Ball",
+        "Top Spinner",
+        "Carrom Ball"
+      ]
+    },
+    "Right-Arm Leg Spinner": {
+      "mode": "spin",
+      "fixedArm": "Right",
+      "v2Type": "Leg Spin",
+      "variations": [
+        "Leg Break",
+        "Googly",
+        "Flipper",
+        "Top Spinner",
+        "Slider",
+        "Surprise"
+      ]
+    },
+    "Left-Arm Off Spinner": {
+      "mode": "spin",
+      "fixedArm": "Left",
+      "v2Type": "Off Spin",
+      "variations": [
+        "Orthodox",
+        "Arm Ball",
+        "Slider",
+        "Top Spinner",
+        "Backspinner",
+        "Carrom Ball",
+        "Surprise"
+      ]
+    },
+    "Left-Arm Leg Spinner": {
+      "mode": "spin",
+      "fixedArm": "Left",
+      "v2Type": "Leg Spin",
+      "variations": [
+        "Chinaman",
+        "Wrong’un",
+        "Flipper",
+        "Slider",
+        "Teesra",
+        "Surprise"
+      ]
+    }
+  },
+  "shots": [
+    "Drive",
+    "Cut",
+    "Pull",
+    "Leg Glance",
+    "Flick",
+    "Sweep",
+    "Switch Hit",
+    "Slog",
+    "Loft",
+    "Leave",
+    "Defend"
+  ],
+  "v2Constants": {
+    "WEATHER_EFFECTS": {
+      "Sunny": {
+        "swing": -0.1,
+        "spin": 0.1,
+        "pace": 0.1
+      },
+      "Cloudy": {
+        "swing": 0.15,
+        "spin": -0.05,
+        "pace": -0.05
+      },
+      "Overcast": {
+        "swing": 0.25,
+        "spin": -0.1,
+        "pace": -0.1
+      },
+      "Humid": {
+        "swing": 0.2,
+        "spin": 0.05,
+        "pace": 0.05
+      },
+      "Dry": {
+        "swing": -0.15,
+        "spin": 0.2,
+        "pace": 0
+      }
+    },
+    "PITCH_EFFECTS": {
+      "Green": {
+        "bounce": 0.15,
+        "spin": -0.15,
+        "pace": 0.25,
+        "carry": 0.15
+      },
+      "Dry": {
+        "bounce": -0.1,
+        "spin": 0.2,
+        "pace": -0.1,
+        "carry": -0.1
+      },
+      "Flat": {
+        "bounce": 0,
+        "spin": 0,
+        "pace": 0,
+        "carry": 0
+      },
+      "Dusty": {
+        "bounce": -0.05,
+        "spin": 0.25,
+        "pace": -0.15,
+        "carry": -0.05
+      },
+      "Cracked": {
+        "bounce": 0.2,
+        "spin": 0.15,
+        "pace": 0.1,
+        "carry": 0.1
+      }
+    },
+    "FORMAT_OVERS": {
+      "T20I": 20,
+      "ODI": 50,
+      "Test": 90
+    }
+  },
+  "commentaryPack": {
+    "dot": [
+      "Excellent variation from {bowler}, keeps {batsman} guessing.",
+      "Pitched perfectly, no run.",
+      "No run. {batsman} plays it back to the bowler.",
+      "Dot ball. Good line from {bowler}, {batsman} can't find the gap.",
+      "No runs off that one. Tidy bowling.",
+      "Well bowled, well played. No run.",
+      "Straight to the fielder. Dot ball.",
+      "Defended safely. No run.",
+      "Beaten! But no edge, no run.",
+      "Finds the fielder. Another dot.",
+      "Can't get it past the infield. No run.",
+      "Plays and misses! But no harm done."
+    ],
+    "one": [
+      "Quick single taken.",
+      "{bowler} drops it short and {batsman} punches the ball for a single.",
+      "Quick single taken! Good running between the wickets.",
+      "Dabs it into the gap and scampers through for one.",
+      "{batsman} pushes it to mid-off and takes a quick single.",
+      "Worked into the leg side for a comfortable single.",
+      "A well-judged single into the covers.",
+      "Taps it to point and they cross for one.",
+      "Nudged behind square for a single.",
+      "{batsman} places it well and picks up a run."
+    ],
+    "two": [
+      "Good running, they come back for two.",
+      "Good placement! {batsman} comes back for two.",
+      "Pushed into the gap, they're back for the second.",
+      "Two runs! Excellent running.",
+      "Finds the gap and picks up a couple.",
+      "Driven wide of mid-off, they get two.",
+      "Turned into the gap between fine leg and square leg for two."
+    ],
+    "three": [
+      "They push hard and get three for it.",
+      "Superb running! Three runs! They pushed hard for the third.",
+      "Excellent placement and even better running! Three!",
+      "The ball slows up in the outfield, they come back for three!",
+      "A rare three! Brilliant awareness from {batsman}.",
+      "Great effort in the field but they get three!"
+    ],
+    "four": [
+      "Finds the gap! That's four.",
+      "Cracking shot to the boundary!",
+      "{batsman} lunges forward and wafts at the ball for a blazing boundary.",
+      "FOUR! {batsman} finds the boundary!",
+      "CRACKING SHOT! Four runs!",
+      "BEAUTIFULLY TIMED! Racing away for four!",
+      "That's gone to the fence! Magnificent shot!",
+      "GLORIOUS! Four runs, no stopping that!",
+      " dispatched to the boundary! Four!",
+      "PERFECT EXECUTION! Four runs!",
+      "That's threaded through the gap for four!",
+      "What a shot! Beating the fielder to the rope!",
+      "ELEGANT! Four runs all along the carpet!"
+    ],
+    "six": [
+      "Massive! That's sailed into the stands for six!",
+      "{batsman} dances down and slams that over long-off for a Sixer!.",
+      "SIX! {batsman} launches it over the ropes!",
+      "MASSIVE! Way into the stands for SIX!",
+      "DISPATCHED! Over the boundary for six!",
+      "THAT'S HUGE! Six runs!",
+      "CLEAN HIT! Sailing over the fence for six!",
+      "What a blow! Maximum! Six!",
+      "UP AND OVER! Six runs!",
+      "MONSTER HIT! That's gone all the way for six!",
+      "INTO THE CROWD! Six runs!",
+      "LAUNCHED! High and handsome for a maximum!"
+    ],
+    "wide": [
+      "That's a wide, umpire signals the extra.",
+      "Too far outside the line, that'll be a wide.",
+      "Wide! That's too far outside off stump.",
+      "Wide called! Way outside the tramline.",
+      "Straying down leg... Wide!",
+      "That's a wide. {bowler} needs to tighten the line."
+    ],
+    "noBall": [
+      "Overstepped! That's a no-ball and a free hit.",
+      "A no-ball has been called.",
+      "No ball! {bowler} oversteps the line!",
+      "FOOT FAULT! It's a no ball!",
+      "The umpire signals no ball! Over the line!",
+      "No ball! And it's a free hit coming up!"
+    ],
+    "bye": [
+      "Swings and misses, they'll run through for a bye.",
+      "{keeper} can't collect, byes taken."
+    ],
+    "legBye": [
+      "Strikes the pad and they run a leg bye.",
+      "Off the pads for a leg bye."
+    ],
+    "wicket_bowled": [
+      "Cleaned him up! Right through the gate.",
+      "Bowled him! The stumps are shattered.",
+      "BOWLED HIM! {bowler} knocks over the stumps! {batsman} is cleaned up!",
+      "CLEAN BOWLED! The stumps are flying! What a delivery from {bowler}!",
+      "BOWLED! Between bat and pad! {batsman} has no answer!",
+      "THE OFF STUMP GOES CARTWHEELING! {bowler} you beauty!",
+      "PLAYS ON! The ball deflects onto the stumps! {batsman} is out bowled!",
+      "DRAGGED ON! An inside edge onto the stumps!",
+      "BOWLED HIM! Knocked him over! {bowler} strikes gold!",
+      "CLEANED UP! The middle stump is uprooted!"
+    ],
+    "wicket_caught_fielder": [
+      "Mistimes the stroke as {batsman} hits off the bottom of the bat. {fielder} takes a simple catch.",
+      "A brilliant catch by the {fielder}!",
+      "CAUGHT! {batsman} edges it and it's safely taken! {bowler} strikes!",
+      "OUT! A leading edge pops up and it's CAUGHT! {bowler} gets the breakthrough!",
+      "CAUGHT BEHIND! A thin edge through to the keeper! {batsman} has to go!",
+      "TAKEN! A regulation catch in the slips! {bowler} is celebrating!",
+      "IN THE AIR... AND CAUGHT! {batsman} departs!",
+      "A false shot, and it's pouched safely! {batsman} is out caught!",
+      "Edged... and taken! A sharp catch in the cordon!",
+      "Sliced in the air... OUT! Caught at cover!",
+      "Lobs it up... and it's taken! A soft dismissal!"
+    ],
+    "wicket_caught_keeper": [
+      "Edged... and taken! The {keeper} makes no mistake.",
+      "A faint nick and {keeper} pouches it safely.",
+      "CAUGHT! {batsman} edges it and it's safely taken! {bowler} strikes!",
+      "OUT! A leading edge pops up and it's CAUGHT! {bowler} gets the breakthrough!",
+      "CAUGHT BEHIND! A thin edge through to the keeper! {batsman} has to go!",
+      "Edged... and taken! A sharp catch in the cordon!"
+    ],
+    "wicket_caughtAndBowled": [
+      "Straight back to the {bowler}! What a reflex catch!",
+      "Caught and bowled! The {bowler} takes it himself."
+    ],
+    "wicket_runOut": [
+      "A moment of madness! {fielder} make no mistake, That's a run out.",
+      "Direct hit! Brilliant fielding, {batsman} is short of his ground!",
+      "RUN OUT! A direct hit! {batsman} is short of his ground!",
+      "OUT! RUN OUT! Terrible mix-up in the middle!",
+      "A brilliant throw from the deep... and he's GONE! Run out!",
+      "The keeper whips off the bails... RUN OUT! {batsman} departs!",
+      "Sharp fielding! They catch him napping! Run out!"
+    ],
+    "wicket_stumped": [
+      "Deceived in the flight, and the {keeper} does the rest. Stumped!",
+      "Out of his crease and the bails are off in a flash!",
+      "STUMPED! {batsman} comes down the track and is beaten!",
+      "OUT STUMPED! The keeper is lightning fast!",
+      "GONE! Beaten in the flight and stumped! {batsman} is out!",
+      "STUMPED! A moment of brilliance from the keeper!"
+    ],
+    "wicket_lbw": [
+      "That looked plumb! The umpire raises the finger.",
+      "Trapped in front, that's LBW.",
+      "L-B-W! The umpire's finger goes up! {batsman} is given out!",
+      "PLUMB! That's hitting middle and leg! {batsman} has to walk back!",
+      "APPEAL... AND GIVEN! LBW! {bowler} gets the wicket!",
+      "DEAD IN FRONT! No doubt about that one! LBW!",
+      "THE UMPIRE'S FINGER GOES UP! {batsman} is out LBW!",
+      "STRAIGHT IN FRONT! Three reds on review! OUT!"
+    ],
+    "wicket_hitWicket": [
+      "Oh dear, {batsman} hit his own stumps! That's hit wicket.",
+      "A bizarre dismissal, out hit wicket."
+    ],
+    "catch_dropped": [
+      "Oh, that's a sitter! {fielder} has put it down!",
+      "A tough chance goes begging. {batsman} gets a life.",
+      "Down! A regulation catch has been dropped by {fielder}."
+    ],
+    "milestone_50": [
+      "A brilliant half-century for {batsman}!",
+      "Fifty up for {batsman}, a fine innings.",
+      "🎉 HALF CENTURY! {batsman} brings up a well-deserved fifty! A terrific knock under pressure!"
+    ],
+    "milestone_100": [
+      "A magnificent century for {batsman}!",
+      "{batsman} raises the bat, a hundred to remember!",
+      "🏆 CENTURY! What a magnificent hundred from {batsman}! The crowd erupts in joy! A truly special innings!"
+    ],
+    "event_over": [
+      "End of the over.",
+      "End of over {over}. {runs} runs and {wickets} wicket{wicketPlural} from it.",
+      "End of over {over}. A tidy over, {runs} runs from it."
+    ],
+    "ballDescriptions": {
+      "variation": {
+        "Outswing": [
+          "a beaut of an outswinger",
+          "the outswinger that curves away late",
+          "the outswinger, moving away from the bat",
+          "a classic outswinger",
+          "the ball nipping away off the seam"
+        ],
+        "Reverse Swing": [
+          "the reverse swinger darting back in",
+          "a vicious reverse swing delivery",
+          "the ball reversing dramatically",
+          "the old ball doing its magic",
+          "a devastating reverse swing"
+        ],
+        "Inswing": [
+          "the inswinger curving back into the pads",
+          "a late inswinger",
+          "the ball coming back in sharply",
+          "a dangerous inswinger",
+          "the inswing delivery"
+        ],
+        "Seam Up": [
+          "the seam-up delivery holding its line",
+          "a seam-up delivery on a good length",
+          "the ball hitting the deck hard",
+          "a probing seam-up ball",
+          "the ball doing just enough off the seam"
+        ],
+        "Slower": [
+          "a cleverly disguised slower ball",
+          "the off-cutter that grips the surface",
+          "a well-deceived slower delivery",
+          "the change of pace",
+          "a cunning slower ball"
+        ],
+        "Leg Cutter": [
+          "the leg-cutter that breaks away",
+          "a sharp leg-cutter",
+          "the leg-cutting delivery",
+          "the ball cutting away off the pitch",
+          "a well-bowled leg-cutter"
+        ],
+        "Off Cutter": [
+          "the off-cutter gripping and turning",
+          "a clever off-cutter",
+          "the ball cutting back into the batsman",
+          "a well-disguised off-cutter",
+          "the off-cutting delivery"
+        ],
+        "Knuckle": [
+          "a perfectly executed knuckle ball",
+          "the knuckle ball that deceives the batsman",
+          "a knuckle delivery with no spin",
+          "the knuckle ball, hard to pick",
+          "a beautifully bowled knuckle ball"
+        ],
+        "Cross-Seam": [
+          "the cross-seam delivery holding its line",
+          "a cross-seam ball that skids through",
+          "the cross-seam delivery",
+          "the ball hitting the deck from cross-seam",
+          "a cross-seam delivery causing problems"
+        ],
+        "Off Break": [
+          "the off-break turning into the right-hander",
+          "a well-flighted off-break",
+          "the off-spinner gripping and turning",
+          "a classical off-break delivery",
+          "the ball spinning from off to leg"
+        ],
+        "Doosra": [
+          "the doosra spinning the other way!",
+          "a beautifully disguised doosra",
+          "the doosra that foxes the batsman",
+          "the other one, the doosra!",
+          "a perfectly executed doosra"
+        ],
+        "Arm Ball": [
+          "the arm ball skidding straight on",
+          "a quick arm ball",
+          "the arm ball that goes straight",
+          "a darted arm ball",
+          "the arm ball with no turn"
+        ],
+        "Top Spinner": [
+          "the top-spinner dipping sharply",
+          "a top-spinner that gets extra bounce",
+          "the top-spin delivery",
+          "a well-bowled top-spinner",
+          "the top-spinner kicking off the surface"
+        ],
+        "Carrom Ball": [
+          "the carrom ball flicked away!",
+          "a carrom ball that skids on",
+          "the carrom ball, beautifully executed",
+          "the flick of the fingers - carrom ball!",
+          "a carrom ball that deceives"
+        ],
+        "Leg Break": [
+          "the leg-break turning away from the bat",
+          "a ripping leg-break",
+          "the leg-spinner turning big",
+          "a classical leg-break",
+          "the ball spinning from leg to off"
+        ],
+        "Googly": [
+          "the googly! The wrong one coming back in!",
+          "a beautifully disguised googly",
+          "the googly that bamboozles the batsman",
+          "the wrong un!",
+          "a perfectly executed googly"
+        ],
+        "Flipper": [
+          "the flipper! Skidding through low!",
+          "a quick flipper under the bat",
+          "the flipper darting through",
+          "a well-disguised flipper",
+          "the flipper keeping low!"
+        ],
+        "Slider": [
+          "the slider going straight on with the arm",
+          "a slider that skids through",
+          "the slider delivery",
+          "a quick slider",
+          "the slider ball"
+        ],
+        "Surprise": [
+          "a surprise delivery!",
+          "something different from the bowler",
+          "a variation that catches the batsman off guard",
+          "an unexpected delivery",
+          "the bowler pulls out a surprise!"
+        ],
+        "Orthodox": [
+          "the orthodox left-arm spin delivery",
+          "a classical orthodox delivery",
+          "the left-arm spinner turning into the right-hander",
+          "a well-flighted orthodox ball",
+          "the orthodox spinner doing its work"
+        ],
+        "Backspinner": [
+          "the backspinner delivery",
+          "a backspinning ball that holds its line",
+          "the backspinner with extra drift",
+          "a well-bowled backspinner",
+          "the ball drifting in with backspin"
+        ],
+        "Chinaman": [
+          "the chinaman! Turning into the right-hander!",
+          "a classic chinaman delivery",
+          "the left-arm wrist spinner turning the other way",
+          "a beautifully bowled chinaman",
+          "the chinaman that spins back in"
+        ],
+        "Wrong'un": [
+          "the wrong'un from the left-armer!",
+          "a beautifully disguised wrong'un",
+          "the wrong'un spinning away!",
+          "the left-armer's googly!",
+          "a perfectly executed wrong'un"
+        ],
+        "Teesra": [
+          "the teesra! What a delivery!",
+          "a teesra that confuses the batsman",
+          "the third variation, the teesra!",
+          "an exotic teesra delivery",
+          "the teesra, beautifully disguised"
+        ]
+      },
+      "length": {
+        "Hard Length": [
+          "on a hard back-of-a-length",
+          "short and rising steeply",
+          "banged in hard into the pitch",
+          "on a hard length, climbing onto the batsman",
+          "a sharp short delivery"
+        ],
+        "Good Length": [
+          "on a good length",
+          "on a probing good length",
+          "at that perfect good length area",
+          "on a nagging good length",
+          "on a good length, just outside off"
+        ],
+        "Full Length": [
+          "full and inviting the drive",
+          "a full delivery in the slot",
+          "over-pitched, full and straight",
+          "a full-length delivery",
+          "full enough to get the front foot forward"
+        ],
+        "Hit the Deck": [
+          "hitting the deck hard",
+          "banged into the surface",
+          "hitting a back-of-a-length",
+          "a skiddy back-of-length delivery",
+          "on a hard length, hitting the deck"
+        ],
+        "Yorker": [
+          "a toe-crushing yorker!",
+          "the perfect yorker at the base of off stump",
+          "a pinpoint yorker",
+          "the yorker, right in the blockhole",
+          "a lethal yorker, full and straight"
+        ],
+        "Bouncer": [
+          "a sharp bouncer! Rising towards the helmet",
+          "the bouncer, well-directed at the body",
+          "a snorter of a bouncer!",
+          "the bumper, rising sharply",
+          "a well-directed bouncer, cramping the batsman"
+        ]
+      }
+    },
+    "shotDescriptions": {
+      "Drive": [
+        "drives elegantly through the covers",
+        "plays a classical cover drive",
+        "drives on the up, confident stroke",
+        "a flowing drive through mid-off",
+        "punches a drive past extra cover",
+        "drives majestically down the ground",
+        "a textbook straight drive"
+      ],
+      "Cut": [
+        "cuts hard behind point",
+        "plays a fierce square cut",
+        "slaps a cut shot through gully",
+        "a controlled cut behind square",
+        "cuts away late, finding the gap",
+        "a classical late cut"
+      ],
+      "Pull": [
+        "pulls emphatically to the boundary",
+        "hooks the short ball away",
+        "a powerful pull shot in front of square",
+        "pulls with authority to deep mid-wicket",
+        "smashes the pull shot for runs"
+      ],
+      "Leg Glance": [
+        "flicks it fine off the pads",
+        "glances it delicately to fine leg",
+        "a deft leg glance",
+        "nudges it off the hips for runs",
+        "works it fine with soft hands"
+      ],
+      "Flick": [
+        "flicks it wristily through mid-wicket",
+        "whips it off the pads",
+        "a beautiful wristy flick",
+        "flicks it off the hip for runs",
+        "works it with a closed face"
+      ],
+      "Sweep": [
+        "sweeps hard in front of square",
+        "plays a paddle sweep",
+        "a classical sweep shot",
+        "slog sweeps over mid-wicket",
+        "reverse sweeps! Clever shot!"
+      ],
+      "Switch Hit": [
+        "switches hands and hits over cover!",
+        "the switch hit! What innovation!",
+        "changes stance and reverse-hits!",
+        "a audacious switch hit!",
+        "switches to left-handed and smashes it!"
+      ],
+      "Slog": [
+        "slogs it across the line!",
+        "has a big heave-ho!",
+        "swings wildly and connects!",
+        "a massive slog sweep attempted",
+        "throws the kitchen sink at it!"
+      ],
+      "Loft": [
+        "lofts it cleanly over the infield",
+        "dances down and lofts over mid-off",
+        "a clean lofted drive for six!",
+        "launches it high into the air!",
+        "lobs it over extra cover"
+      ],
+      "Leave": [
+        "shoulders arms and lets it go",
+        "leaves it alone wisely",
+        "a confident leave outside off",
+        "watches it pass harmlessly",
+        "lets it go through to the keeper"
+      ],
+      "Defend": [
+        "defends with a straight bat",
+        "a solid forward defensive",
+        "pushes it back to the bowler",
+        "a compact back-foot defense",
+        "plays a watchful defensive shot"
+      ]
+    },
+    "buildUpPhrases": [
+      "Here comes the delivery...",
+      "{bowler} steams in...",
+      "{bowler} runs in to bowl...",
+      "The crowd watches in anticipation...",
+      "{bowler} with the ball...",
+      "Next ball coming up..."
+    ],
+    "contextPhrases": [
+      "Under pressure now",
+      "With the run rate climbing",
+      "In this crucial phase",
+      "At this important juncture",
+      "With wickets in hand",
+      "Under the pump"
+    ],
+    "milestone_fifer": [
+      "🎯 FIVE-WICKET HAUL! {bowler} has been absolutely sensational! Five wickets in the innings!"
+    ],
+    "milestone_century_partnership": [
+      "🤝 100-RUN PARTNERSHIP! Excellent batting from both players! A century stand that has steadied the ship!"
+    ],
+    "milestone_hat_trick": [
+      "🎩 HAT-TRICK! UNBELIEVABLE! {bowler} has taken three wickets in three balls! The stadium is going wild!"
+    ],
+    "placeholders": {
+      "batsman": "{batsman}",
+      "bowler": "{bowler}",
+      "fielder": "{fielder}",
+      "keeper": "{keeper}",
+      "shot": "{shot}",
+      "ball": "{ball}",
+      "over": "{over}",
+      "runs": "{runs}",
+      "wickets": "{wickets}"
+    },
+    "sourceNotes": "Merged from uploaded cricket_commentary_file.json and commentary.ts. Outcome arrays are flat for easy engine use; ballDescriptions and shotDescriptions store delivery and shot phrase pools."
+  },
+  "scoreRules": {
+    "bye": "Team +1, Extras +1, Batsman +0, Bowler conceded +0, Legal ball yes",
+    "legBye": "Team +1, Extras +1, Batsman +0, Bowler conceded +0, Legal ball yes",
+    "wide": "Team +1, Extras +1, Bowler +1, Legal ball no",
+    "noBall": "Team +1, Extras +1, Bowler +1, Legal ball no"
+  },
+  "domination": "Batting Rating - Bowling Rating"
+}
