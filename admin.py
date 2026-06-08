@@ -6583,7 +6583,7 @@ def match_rest_autoplay():
         # human opponent's turn), or a per-request ball budget keeps the request
         # short so the UI repaints while the score climbs.
         from services.match_state_store import A_COMPLETED as _DONE
-        MAX_AUTOPLAY_STEPS_PER_REQUEST = 48  # ~a few overs of deliveries+shots
+        MAX_AUTOPLAY_STEPS_PER_REQUEST = 2  # one quick ball + setup handoff per repaint
         is_vsbot = get_state_is_vsbot(match.id)
         user_steps, bot_steps = [], []
         while len(user_steps) + len(bot_steps) < MAX_AUTOPLAY_STEPS_PER_REQUEST:

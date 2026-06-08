@@ -430,8 +430,9 @@ async function fetchState() {
   }
 }
 
-function applyMatchState(nextState) {
+function applyMatchState(nextState, { force = false } = {}) {
   if (!nextState) return;
+  if ((flowActionInFlight || autoplayInFlight) && !force) return;
   const currentRevision = Number(matchState?.ballSeq ?? -1);
   const nextRevision = Number(nextState.ballSeq ?? currentRevision);
   if (Number.isFinite(currentRevision) && Number.isFinite(nextRevision) && nextRevision < currentRevision) return;
@@ -1397,7 +1398,7 @@ async function submitShot(shot) {
   // Collapse the shot sheet immediately so the resolved outcome (and the event
   // box) is fully visible. The per-turn auto-expand re-opens it on the next ball.
   minimizeControlsSheet();
-  showFlowStage('🏏 Shot played', `${shot} selected — outcome incoming…`, 'evt-runs');
+  showFlowStage('🏏 Shot played', `${shot} selected`, 'evt-runs');
   flowActionInFlight = true;
   try {
     const res = await fetch('/api/match/action', {
@@ -1408,10 +1409,9 @@ async function submitShot(shot) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit shot");
     // The response already carries the resolved outcome (server applies it
-    // synchronously) — apply it the instant it arrives instead of holding the
-    // "outcome incoming…" placeholder for a fixed delay. applyMatchState()
-    // reveals the real result via triggerMatchEvent/showEventBoxText.
-    if (data.matchState) applyMatchState(data.matchState);
+    // synchronously) — apply it the instant it arrives and bypass any older
+    // poll response that was still in flight when the shot was tapped.
+    if (data.matchState) applyMatchState(data.matchState, { force: true });
     else { flowActionInFlight = false; fetchState(); }
   } catch (err) {
     alert(err.message);
@@ -1499,7 +1499,7 @@ async function submitDelivery() {
     const stillPendingBatsman = data.matchState?.turnState === 'batting_shot'
       && data.matchState?.isMyTurn === false;
     if (stillPendingBatsman) showFlowStage('🏏 Batsman ready', 'Ready to play the shot', 'evt-dot');
-    if (data.matchState) applyMatchState(data.matchState);
+    if (data.matchState) applyMatchState(data.matchState, { force: true });
     else { flowActionInFlight = false; fetchState(); }
   } catch (err) {
     alert(err.message);
@@ -2411,7 +2411,7 @@ async function runAutoplayAction() {
       body: JSON.stringify({ userId, matchId }),
     });
     const data = await resp.json();
-    if (data && data.matchState) applyMatchState(data.matchState);
+    if (data && data.matchState) applyMatchState(data.matchState, { force: true });
   } catch (e) {
     console.error('[Autoplay] server autoplay failed', e);
   } finally {
@@ -2419,6 +2419,8 @@ async function runAutoplayAction() {
     if (autoplayOffPending) {
       autoplayOffPending = false;
       postAutoplayStatus(false);
+    } else if (autoplayActive) {
+      setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
     }
   }
 }
