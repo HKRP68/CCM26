@@ -458,8 +458,13 @@ function applyMatchState(nextState, { force = false } = {}) {
   }
 
   if (matchState.commentary && matchState.commentary.length > 0) {
-    const latest = matchState.commentary[0];
-    if (latest && (latest.type === 'ball' || latest.runs !== undefined)) {
+    // Find the latest actual delivery. Styled event cards (wicket / new_batsman
+    // / over_complete) can sit ahead of it in the reversed feed, so we must not
+    // assume index 0 is the ball — otherwise wicket/over deliveries skip the
+    // configured outcome GIF/text/haptics.
+    const latest = matchState.commentary.find(
+      c => c && (c.type === 'ball' || c.runs !== undefined));
+    if (latest) {
       const uniqueKey = `${matchState.status}_${matchState.ballSeq ?? latest.over}`;
       const shouldRevealOutcome = lastBallUniqueId
         ? lastBallUniqueId !== uniqueKey
