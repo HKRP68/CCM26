@@ -2338,14 +2338,15 @@ function renderAutoplayQuickCard(kind) {
   const line = displayKind === 'bowling'
     ? `${playerName} bowls ${actionName}`
     : `${playerName} played ${actionName}`;
-  // Show the real, already-known outcome instead of a generic "processing"
-  // label — the burst endpoint resolves balls synchronously, so the result
-  // is sitting in matchState.lastBall by the time this card renders.
-  const lb = matchState.lastBall;
-  const outcomeLine = lb
-    ? (lb.commentary || (lb.isWicket ? '🔴 OUT!' : `${lb.runs ?? 0} run${(lb.runs ?? 0) === 1 ? '' : 's'}`))
-    : 'Selecting automatically — no waiting needed';
-  card.innerHTML = `${line}<span class="muted">${outcomeLine}</span>`;
+  // Note: matchState.lastBall is still the PREVIOUS completed ball here — the
+  // outcome of the action named in `line` isn't known yet (runAutoplayAction
+  // is about to resolve it via the burst endpoint). Pairing `line` with
+  // lastBall would misreport this turn's result, so keep the subtitle neutral
+  // and just communicate that resolution is instant, not "processing".
+  const nextStepLine = displayKind === 'bowling'
+    ? 'Delivery is selected and bowled instantly'
+    : 'Shot is selected and played instantly';
+  card.innerHTML = `${line}<span class="muted">${nextStepLine}</span>`;
   card.style.display = '';
   controls.classList.remove('hidden');
 }
@@ -2711,6 +2712,10 @@ function showEventBoxText(comm) {
   const { box, idle, label } = getEventBoxEls();
   if (!box) return;
   clearTimeout(eventGifTimer);
+  // Outcomes now apply the instant the response arrives, so a still-pending
+  // showFlowStage() auto-hide timer can fire mid-reveal and stomp this box
+  // back to idle. Cancel it whenever we're about to show a real outcome.
+  clearTimeout(flowStageTimer);
   clearEventBoxMedia();
   clearEventBoxParticles(box);
 
@@ -2761,6 +2766,9 @@ function triggerMatchEvent(comm) {
     return;
   }
   clearTimeout(eventGifTimer);
+  // See showEventBoxText: cancel any pending flow-stage auto-hide so it can't
+  // fire mid-load and clear the media src before the GIF/video reveals.
+  clearTimeout(flowStageTimer);
   clearEventBoxParticles(box);
   if (idle) idle.style.display = 'none';
   image.src = '';
