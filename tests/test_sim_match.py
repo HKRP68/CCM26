@@ -5,8 +5,8 @@ import random
 logging.disable(logging.CRITICAL)
 
 from services.sim_match import (
-    simulate_match, simulate_innings, _build_bowling_plan,
-    render_innings_card, render_result,
+    simulate_match, simulate_innings, _build_bowling_plan, _new_bowl_stat,
+    _select_ai_bowler, render_innings_card, render_result,
 )
 
 
@@ -70,6 +70,33 @@ def test_only_bowlers_and_allrounders_bowl_no_consecutive_and_capped():
     # 20% quota: nobody bowls more than 4 in a 20-over innings
     from collections import Counter
     assert max(Counter(names).values()) <= 4
+
+
+def test_ai_bowler_selection_uses_match_form_for_death_overs():
+    death_specialist = {
+        "name": "Death Specialist", "rating": 90, "bat_rating": 20,
+        "bowl_rating": 88, "category": "Bowler",
+    }
+    expensive_star = {
+        "name": "Expensive Star", "rating": 95, "bat_rating": 20,
+        "bowl_rating": 95, "category": "Bowler",
+    }
+    allrounder = {
+        "name": "Support AR", "rating": 80, "bat_rating": 75,
+        "bowl_rating": 80, "category": "All-rounder",
+    }
+    bowlers = [death_specialist, expensive_star, allrounder]
+    stats = {id(p): _new_bowl_stat() for p in bowlers}
+    stats[id(death_specialist)].update({"balls": 12, "runs": 10, "wickets": 2})
+    stats[id(expensive_star)].update({"balls": 12, "runs": 32, "wickets": 0})
+    stats[id(allrounder)].update({"balls": 12, "runs": 18, "wickets": 1})
+
+    picked = _select_ai_bowler(
+        bowlers, stats, over_idx=16, total_overs=20,
+        prev_bowler_id=id(allrounder), max_bowler_overs=4,
+    )
+
+    assert picked is death_specialist
 
 
 def test_result_branches():

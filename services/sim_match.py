@@ -85,31 +85,103 @@ def _pick_delivery(bowler):
             random.choice(opts.get("lengths") or ["Good"]))
 
 
-def _build_bowling_plan(bowling_xi, overs, max_bowler_overs=None):
-    """Pick the over-by-over bowler list (Option B rules).
+def _bowler_overs_bowled(stat):
+    """Return overs as a decimal number for AI selection/economy scoring."""
+    return (stat or {}).get("balls", 0) / 6
 
-    Only Bowlers + All-rounders bowl, sorted by bowl rating. No bowler bowls two
-    overs in a row; each is capped at the format's per-bowler quota
-    (max_bowler_overs), extended only if too few bowlers exist to fill the
-    innings.
-    """
+
+def _bowler_economy(stat):
+    overs_bowled = _bowler_overs_bowled(stat)
+    if overs_bowled <= 0:
+        return 0
+    return (stat or {}).get("runs", 0) / overs_bowled
+
+
+def _eligible_bowlers(bowling_xi):
+    """Prefer real bowling roles, but keep a safe fallback for unusual XIs."""
     eligible = [p for p in bowling_xi
                 if p.get("category") in ("Bowler", "All-rounder")]
-    if not eligible:  # pathological XI — let anyone bowl so the sim never stalls
-        eligible = list(bowling_xi)
-    eligible.sort(key=lambda p: p.get("bowl_rating", 0), reverse=True)
+    return eligible or list(bowling_xi)
 
-    quota = max_bowler_overs or math.ceil(overs / 5)
-    cap = max(quota, math.ceil(overs / len(eligible)))
-    counts = {id(p): 0 for p in eligible}
+
+def _select_ai_bowler(bowling_xi, bowl_stats, over_idx, total_overs,
+                      prev_bowler_id=None, max_bowler_overs=None):
+    """Pick the next /sim bowler using rating, role, economy, wickets and phase.
+
+    The scoring mirrors the requested Sim AI logic while retaining the engine's
+    existing safety behavior: if a format has too few eligible bowlers to fill
+    all overs, the per-bowler cap is extended just enough to finish the innings.
+    """
+    eligible = _eligible_bowlers(bowling_xi)
+    if not eligible:
+        return None
+
+    quota = max_bowler_overs or math.ceil(total_overs / 5)
+    cap = max(quota, math.ceil(total_overs / len(eligible)))
+
+    def under_cap(player):
+        return _bowler_overs_bowled(bowl_stats.get(id(player))) < cap
+
+    available = [p for p in eligible if under_cap(p) and id(p) != prev_bowler_id]
+    if not available:
+        available = [p for p in eligible if under_cap(p)]
+    if not available:
+        available = [p for p in eligible if id(p) != prev_bowler_id] or eligible
+
+    is_powerplay = over_idx < math.ceil(total_overs * 0.3)
+    is_death_over = over_idx >= math.floor(total_overs * 0.75)
+
+    def score(player):
+        stat = bowl_stats.get(id(player), {})
+        rating = player.get("bowl_rating", 0) or 0
+        economy = _bowler_economy(stat)
+        overs_bowled = _bowler_overs_bowled(stat)
+        wickets = stat.get("wickets", 0)
+
+        value = rating * 2.2
+        if player.get("category") == "Bowler":
+            value += 18
+        elif player.get("category") == "All-rounder":
+            value += 10
+
+        if overs_bowled > 0:
+            value += max(0, 10 - economy) * 8
+        else:
+            value += 12
+
+        value += wickets * 14
+
+        if is_death_over:
+            value += rating * 0.8
+            if economy > 10 and overs_bowled > 0:
+                value -= 35
+            if wickets > 0:
+                value += 20
+
+        if is_powerplay:
+            if rating >= 80:
+                value += 20
+            if player.get("category") == "Bowler":
+                value += 10
+
+        value -= (overs_bowled / cap) * 20
+        return value
+
+    return max(available, key=lambda p: (score(p), p.get("bowl_rating", 0), p.get("name", "")))
+
+
+def _build_bowling_plan(bowling_xi, overs, max_bowler_overs=None):
+    """Pick an AI-style over-by-over bowler list for pre-match previews/tests."""
+    eligible = _eligible_bowlers(bowling_xi)
+    bowl_stats = {id(p): _new_bowl_stat() for p in eligible}
     plan, last = [], None
-    for _ in range(overs):
-        cands = [p for p in eligible if counts[id(p)] < cap and id(p) != last]
-        if not cands:
-            cands = [p for p in eligible if id(p) != last] or eligible
-        bowler = max(cands, key=lambda p: p.get("bowl_rating", 0))
+    for over_idx in range(overs):
+        bowler = _select_ai_bowler(
+            eligible, bowl_stats, over_idx, overs, last, max_bowler_overs)
+        if bowler is None:
+            break
         plan.append(bowler)
-        counts[id(bowler)] += 1
+        bowl_stats[id(bowler)]["balls"] += 6
         last = id(bowler)
     return plan
 
@@ -138,12 +210,13 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     from services.match_dynamics import chase_pressure, scenario_boost
     order = sorted(batting_xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
                    reverse=True)
-    plan = _build_bowling_plan(bowling_xi, overs,
-                               (fmt or {}).get("max_bowler_overs"))
+    max_bowler_overs = (fmt or {}).get("max_bowler_overs")
+    eligible_bowlers = _eligible_bowlers(bowling_xi)
+    plan = []
     fielders, keeper = _fielder_keeper(bowling_xi)
 
     bat_stats = {id(p): _new_bat_stat() for p in order}
-    bowl_stats = {id(p): _new_bowl_stat() for p in plan}
+    bowl_stats = {id(p): _new_bowl_stat() for p in eligible_bowlers}
 
     total_runs = 0
     total_wkts = 0
@@ -228,9 +301,17 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             })
 
     legal_balls = 0
-    for over_idx, bowler in enumerate(plan):
+    last_bowler_id = None
+    for over_idx in range(overs):
         if total_wkts >= 10 or chased:
             break
+        bowler = _select_ai_bowler(
+            eligible_bowlers, bowl_stats, over_idx, overs,
+            last_bowler_id, max_bowler_overs)
+        if bowler is None:
+            break
+        plan.append(bowler)
+        last_bowler_id = id(bowler)
         bw = bowl_stats[id(bowler)]
         over_bowler_runs = 0
         over_had_extra = False
