@@ -357,11 +357,36 @@ def serialize_match_state(session, match, viewer_user):
     innings_no = state.get("innings", 1)
     current_innings_idx = innings_no - 1
 
+    # Projected score — extrapolate the current run rate across the remaining
+    # balls of the innings. 1st innings only (2nd innings shows the target bar).
+    total_balls = (state.get("overs", 0) or 0) * 6
+    balls_bowled = cur_overs * 6 + cur_balls
+    projected = None
+    if innings_no == 1 and balls_bowled:
+        projected = round(cur_runs + (cur_runs / balls_bowled) * max(0, total_balls - balls_bowled))
+
     score = {
         "runs": cur_runs, "wickets": cur_wkts,
         "balls": cur_balls, "overs": cur_overs,
         "target": target,
+        "batTeamName": state.get("bat_team_name"),
+        "bowlTeamName": state.get("bowl_team_name"),
+        "projected": projected,
     }
+
+    # Recent-ball timeline → structured chips for the Mini App's doodle row.
+    # Reuses the emoji symbols already maintained in state["timeline"] (SYM dict).
+    _TL_MAP = {
+        "🟥": ("W", "wkt"), "↔️": ("wd", "extra"),
+        "🄽🄱": ("nb", "extra"), "𓂾": ("lb", "extra"),
+        "0️⃣": ("0", "dot"), "1️⃣": ("1", "run"), "2️⃣": ("2", "run"),
+        "3️⃣": ("3", "run"), "4️⃣": ("4", "four"), "5️⃣": ("5", "run"),
+        "6️⃣": ("6", "six"),
+    }
+    timeline_chips = [
+        {"label": _TL_MAP.get(s, (s, "run"))[0], "kind": _TL_MAP.get(s, (s, "run"))[1]}
+        for s in (state.get("timeline") or [])[-10:]
+    ]
 
     # ── innings break (target + 1st-innings scorecard, before 2nd-innings XI
     # picking) — server-clock-driven so both clients count down identically ──
@@ -580,6 +605,7 @@ def serialize_match_state(session, match, viewer_user):
         "innings": innings_arr,
         "inningsBreak": innings_break,
         "score": score,
+        "timeline": timeline_chips,
         "striker": striker,
         "nonStriker": non_striker,
         "bowler": bowler,

@@ -50,6 +50,105 @@ def _player_dict_from_roster(entry, player):
     }
 
 
+def _career_map(session, uid):
+    """Precompute career stat fields (R/SR/W/Eco) per player_id for a user.
+
+    Read once at match init so the live commentary path is pure dict lookups
+    with no per-ball DB hits. Returns {} on any failure (e.g. synthetic teams).
+    """
+    out = {}
+    if session is None or uid is None:
+        return out
+    try:
+        from models import PlayerGameStats
+        rows = (session.query(PlayerGameStats)
+                .filter(PlayerGameStats.user_id == uid).all())
+    except Exception:
+        logger.exception("career stat lookup failed (non-fatal)")
+        return out
+    for g in rows:
+        out[g.player_id] = {
+            "careerR": g.runs or 0,
+            "careerSR": round((g.runs / g.balls_faced) * 100, 1) if g.balls_faced else 0.0,
+            "careerW": g.wickets_taken or 0,
+            "careerEco": round(g.runs_conceded / (g.balls_bowled / 6), 1) if g.balls_bowled else 0.0,
+        }
+    return out
+
+
+def _bat_career_line(p):
+    """'R 514 | SR 189' when career data exists, else 'OVR 84' fallback."""
+    p = p or {}
+    if p.get("careerR") or p.get("careerSR"):
+        return f"R {p.get('careerR', 0)} | SR {p.get('careerSR', 0.0)}"
+    return f"OVR {p.get('bat_rating') or p.get('rating') or 0}"
+
+
+def _bowl_career_line(p):
+    """'W 88 | Eco 6.7' when career data exists, else 'OVR 84' fallback."""
+    p = p or {}
+    if p.get("careerW") or p.get("careerEco"):
+        return f"W {p.get('careerW', 0)} | Eco {p.get('careerEco', 0.0)}"
+    return f"OVR {p.get('bowl_rating') or p.get('rating') or 0}"
+
+
+def _bowl_match_fig(state, p):
+    """This-match bowling figures as 'overs-runs-wickets' (e.g. '3-31-2')."""
+    if not p:
+        return "0-0-0"
+    bws = _stat_row(state.get("bowl_stats"), p.get("roster_id"))
+    ov = bws.get("overs_done", 0)
+    tb = bws.get("this_over_balls", 0)
+    ov_lbl = f"{ov}.{tb}" if tb else f"{ov}"
+    return f"{ov_lbl}-{bws.get('runs', 0)}-{bws.get('wickets', 0)}"
+
+
+def _push_commentary(state, entry):
+    """Append a standalone styled event card to the scrolling commentary feed,
+    capping the log the same way _append_commentary_log does."""
+    log = state.get("commentary_log")
+    if not isinstance(log, list):
+        log = []
+    log.append(entry)
+    if len(log) > 60:
+        log = log[-60:]
+    state["commentary_log"] = log
+
+
+def _emit_new_batsman(state, idx):
+    """Green 'comes in' card when a new striker is installed after a wicket."""
+    order = state.get("batting_order", []) or []
+    if not (0 <= idx < len(order)):
+        return
+    p = order[idx] or {}
+    _push_commentary(state, {
+        "type": "new_batsman",
+        "name": p.get("name"),
+        "text": f"{p.get('name')} comes in. {_bat_career_line(p)}",
+    })
+
+
+def _emit_new_bowler(state, p):
+    """Blue card when a bowler comes on. Shows this-match figures if the bowler
+    has already bowled this innings (returning), else career/basic stats."""
+    if not p:
+        return
+    bws = _stat_row(state.get("bowl_stats"), p.get("roster_id"))
+    already_bowled = (bws.get("balls", 0) > 0) or (bws.get("overs_done", 0) > 0)
+    if already_bowled:
+        _push_commentary(state, {
+            "type": "returning_bowler",
+            "name": p.get("name"),
+            "text": f"{p.get('name')} returns to bowl. {_bowl_match_fig(state, p)}",
+        })
+    else:
+        _push_commentary(state, {
+            "type": "new_bowler",
+            "name": p.get("name"),
+            "text": f"{p.get('name')} comes into attack. {_bowl_career_line(p)}",
+        })
+
+
 def _impact_usage(state):
     impact = state.setdefault("impact_players", {})
     usage = impact.setdefault("usage", {})
@@ -295,7 +394,8 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
         "inPlayer": incoming.get("name"),
         "outPlayer": outgoing.get("name"),
         "over": rec.get("used_at"),
-        "text": f"Impact Player: {incoming.get('name')} replaces {outgoing.get('name')}",
+        "text": f"Impact Player used! {incoming.get('name')} replaces "
+                f"{outgoing.get('name')}. {_bat_career_line(incoming)}",
     })
     mwa.save_state(match_id, state, next_action=mwa.get_next_action(match_id))
     return True, f"Impact Player confirmed: {incoming.get('name')} replaces {outgoing.get('name')}.", rec
@@ -342,12 +442,14 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
                 .join(Player, UserRoster.player_id == Player.id)
                 .filter(UserRoster.user_id == uid)
                 .order_by(UserRoster.order_position).limit(11).all())
+        cmap = _career_map(session, uid)
         return [{
             "roster_id": e.id, "player_id": p.id, "name": p.name,
             "rating": p.rating, "category": p.category,
             "bat_rating": p.bat_rating, "bowl_rating": p.bowl_rating,
             "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand,
             "bat_hand": p.bat_hand,
+            **cmap.get(p.id, {}),
         } for e, p in rows]
 
     bxi = _xi(bu.id)
@@ -458,12 +560,14 @@ def init_match_for_wsp(session, match_id, xi_overrides=None):
                 .join(Player, UserRoster.player_id == Player.id)
                 .filter(UserRoster.user_id == uid)
                 .order_by(UserRoster.order_position).limit(11).all())
+        cmap = _career_map(session, uid)
         return [{
             "roster_id": e.id, "player_id": p.id, "name": p.name,
             "rating": p.rating, "category": p.category,
             "bat_rating": p.bat_rating, "bowl_rating": p.bowl_rating,
             "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand,
             "bat_hand": p.bat_hand,
+            **cmap.get(p.id, {}),
         } for e, p in rows]
 
     bxi = _xi(bu.id)
@@ -1406,6 +1510,7 @@ def select_wicket_batsman(match_id, user_id, index):
 
     # Install as striker; resume the delivery loop.
     state["striker_idx"] = idx
+    _emit_new_batsman(state, idx)
     # Keep next_batsman_idx ahead of the highest used position.
     used = max(idx, state.get("non_striker_idx", 1))
     state["next_batsman_idx"] = max(state.get("next_batsman_idx", 2), used + 1)
@@ -1615,6 +1720,17 @@ def _append_commentary_log(state, res, striker, bowler, text):
         "bowlerName": (bowler.get("name") if bowler else ""),
     })
 
+    # Red OUT card — names the dismissed batsman, his score, and dismissal type.
+    if is_wkt and striker:
+        bs = _stat_row(state.get("bat_stats"), striker.get("roster_id"))
+        how = res.get("how") or "out"
+        bwl = bowler.get("name") if bowler else ""
+        log.append({
+            "type": "wicket",
+            "text": f"OUT! {striker.get('name')} {bs.get('runs', 0)}({bs.get('balls', 0)}) "
+                    f"{how} b {bwl}".strip(),
+        })
+
     def _bat_card(player):
         if not player:
             return None
@@ -1645,6 +1761,13 @@ def _append_commentary_log(state, res, striker, bowler, text):
                 "overs": f"{b_overs_done}.{b_this}" if b_this else f"{b_overs_done}",
             },
         })
+        # Gray one-liner with the bowler's match figures.
+        if bowler:
+            log.append({
+                "type": "over_complete",
+                "name": bowler.get("name"),
+                "text": f"{bowler.get('name')} completes the over. {_bowl_match_fig(state, bowler)}",
+            })
 
     # End-of-innings summary card. Called before the next-action block runs,
     # so state still holds the just-completed innings totals (the transition
@@ -1779,6 +1902,7 @@ def play_shot(match_id, user_id, shot_index):
             if nb < len(state.get("batting_order", [])):
                 state["striker_idx"] = nb
                 state["next_batsman_idx"] = nb + 1
+                _emit_new_batsman(state, nb)
                 next_act = A_PICK_DELIVERY
     elif res["eoo"]:
         next_act = A_PICK_NEW_BOWLER
@@ -1813,6 +1937,7 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     if bowler_rid == state.get("prev_bowler_rid"):
         return False, "Same bowler can't bowl consecutive overs."
     state["current_bowler"] = by_rid[bowler_rid]
+    _emit_new_bowler(state, by_rid[bowler_rid])
     mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
     return True, "New bowler set."
 
@@ -2688,6 +2813,7 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                 if nb < len(state.get("batting_order", [])):
                     state["striker_idx"] = nb
                     state["next_batsman_idx"] = nb + 1
+                    _emit_new_batsman(state, nb)
                 mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
             elif res["eoo"]:
                 mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
@@ -2701,6 +2827,7 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                 _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
                 state["bowl_stats"], state["overs"])
             state["current_bowler"] = new_bowler
+            _emit_new_bowler(state, new_bowler)
             mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
             steps.append({"type": "bot_bowler", "name": new_bowler["name"]})
             continue
@@ -2710,6 +2837,7 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             if nb < len(state.get("batting_order", [])):
                 state["striker_idx"] = nb
                 state["next_batsman_idx"] = nb + 1
+                _emit_new_batsman(state, nb)
             mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
             continue
 
@@ -2869,6 +2997,7 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
                 _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
                 state["bowl_stats"], state["overs"])
             state["current_bowler"] = new_bowler
+            _emit_new_bowler(state, new_bowler)
             mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
             steps.append({"type": "auto_bowler", "name": new_bowler["name"]})
             continue
@@ -2878,6 +3007,7 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
             if nb < len(state.get("batting_order", [])):
                 state["striker_idx"] = nb
                 state["next_batsman_idx"] = nb + 1
+                _emit_new_batsman(state, nb)
             mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
             steps.append({"type": "auto_batsman"})
             continue
