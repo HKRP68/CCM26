@@ -624,10 +624,14 @@ def players_list():
         query = query.order_by(*order_by)
 
         total = query.count()
-        total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
-        page = min(page, total_pages)
+        # Show every filtered player in a single scrollable table. The Players
+        # tab used to paginate by PER_PAGE, which hid most of the roster behind
+        # numbered sub-pages. Keep page metadata at a single page for templates
+        # and URLs that still expect it, but do not slice the filtered query.
+        total_pages = 1
+        page = 1
 
-        players = query.offset((page - 1) * PER_PAGE).limit(PER_PAGE).all()
+        players = query.all()
         for p in players:
             p._tier_css = tier_css(p.rating)
 
@@ -4086,8 +4090,9 @@ def webapp_daily():
 def webapp_players():
     """Browse all players with filters: rating range, category, country, version.
 
-    Different from /search in that it returns paginated results sorted
-    by rating desc, suitable for an infinite-scroll "Browse" tab.
+    The miniapp Browse tab requests all filtered players at once so the user can
+    scroll through the full result set without a separate Load more step.
+    Pagination remains available for older clients that send a numeric per_page.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -4122,7 +4127,9 @@ def webapp_players():
         category = (data.get("category") or "").strip()
         country = (data.get("country") or "").strip()
         page = max(1, int(data.get("page") or 1))
-        per_page = min(50, max(1, int(data.get("per_page") or 20)))
+        raw_per_page = data.get("per_page")
+        show_all = raw_per_page in (None, "", "all")
+        per_page = None if show_all else min(50, max(1, int(raw_per_page or 20)))
         only_unowned = bool(data.get("only_unowned"))
 
         query = db.query(Player).filter(Player.is_active == True)
@@ -4159,21 +4166,25 @@ def webapp_players():
         if country:
             query = query.filter(Player.country == country)
 
-        total = query.count()
-        players = (query.order_by(Player.rating.desc(), Player.name.asc())
-                   .offset((page - 1) * per_page).limit(per_page).all())
-
         from models import UserRoster
         owned_ids = {p[0] for p in (
             db.query(UserRoster.player_id)
               .filter(UserRoster.user_id == user.id).all())}
+        if only_unowned and owned_ids:
+            query = query.filter(~Player.id.in_(owned_ids))
+
+        total = query.count()
+        ordered_query = query.order_by(Player.rating.desc(), Player.name.asc())
+        if per_page is None:
+            players = ordered_query.all()
+        else:
+            players = (ordered_query
+                       .offset((page - 1) * per_page).limit(per_page).all())
 
         results = []
         from config import get_buy_value
         for p in players:
             owned = p.id in owned_ids
-            if only_unowned and owned:
-                continue
             results.append({
                 "id": p.id, "card_url": _player_card_url(p.id),
                 "name": p.name, "rating": p.rating,
@@ -4190,9 +4201,9 @@ def webapp_players():
             "ok": True,
             "results": results,
             "page": page,
-            "per_page": per_page,
+            "per_page": per_page or total,
             "total": total,
-            "has_more": (page * per_page) < total,
+            "has_more": False if per_page is None else (page * per_page) < total,
         }
     except Exception as e:
         logger.exception("webapp_players failed")
