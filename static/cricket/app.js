@@ -495,6 +495,20 @@ function applyMatchState(nextState, { force = false } = {}) {
   setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
 }
 
+// Has the OTHER side already locked in their lineup? Used to keep the setup
+// waiting message honest — once the opponent has submitted we must not keep
+// telling the user we're "waiting for opponent to submit".
+function opponentHasConfirmed() {
+  if (!matchState || !matchState.host) return false;
+  const amHost = matchState.host.telegramId != null &&
+                 matchState.host.telegramId.toString() === userId.toString();
+  if (amHost) {
+    // No guest block means the opponent is the AI, which is always ready.
+    return matchState.guest ? !!matchState.guest.confirmed : true;
+  }
+  return !!matchState.host.confirmed;
+}
+
 // 1. Setup Screen Rendering
 function renderSetupScreen() {
   showScreen('setup-screen');
@@ -674,7 +688,9 @@ function renderSetupScreen() {
   } else if (myConfirmed) {
     submitBtn.classList.add('hidden');
     waitingInd.classList.remove('hidden');
-    waitingInd.querySelector('p').innerText = "Lineup confirmed! Waiting for opponent...";
+    waitingInd.querySelector('p').innerText = opponentHasConfirmed()
+      ? "Both lineups locked in — starting match…"
+      : "Lineup confirmed! Waiting for opponent…";
   } else {
     submitBtn.classList.remove('hidden');
     waitingInd.classList.add('hidden');
@@ -733,7 +749,11 @@ async function submitSetup() {
     if (!res.ok) throw new Error(data.error || "Failed to confirm lineup");
     
     document.getElementById('submit-setup-btn').classList.add('hidden');
-    document.getElementById('setup-waiting').classList.remove('hidden');
+    const waitingEl = document.getElementById('setup-waiting');
+    waitingEl.querySelector('p').innerText = opponentHasConfirmed()
+      ? "Both lineups locked in — starting match…"
+      : "Lineup confirmed! Waiting for opponent…";
+    waitingEl.classList.remove('hidden');
     fetchState();
   } catch (err) {
     alert(err.message);
