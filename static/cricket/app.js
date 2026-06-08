@@ -754,6 +754,26 @@ function renderGameplayScreen() {
   const crr = totalBallsBowled > 0 ? ((matchState.score.runs / totalBallsBowled) * 6).toFixed(1) : "0.0";
   document.getElementById('live-crr').innerText = crr;
 
+  // Batting / bowling team labels in the score box
+  const batLabel = document.getElementById('bat-team-label');
+  const bowlLabel = document.getElementById('bowl-team-label');
+  if (batLabel) batLabel.innerText = (matchState.score.batTeamName || '').toUpperCase();
+  if (bowlLabel) bowlLabel.innerText = matchState.score.bowlTeamName ? `v ${matchState.score.bowlTeamName}` : '';
+
+  // Projected score — 1st innings only (target bar covers the chase)
+  const projBadge = document.getElementById('proj-badge');
+  if (projBadge) {
+    if (matchState.status !== 'innings2' && matchState.score.projected != null) {
+      projBadge.classList.remove('hidden');
+      document.getElementById('live-projected').innerText = matchState.score.projected;
+    } else {
+      projBadge.classList.add('hidden');
+    }
+  }
+
+  // Recent-ball doodle timeline
+  renderBallTimeline();
+
   // Toss/Election Badge
   const tossBadge = document.getElementById('toss-badge-display');
   const dec = matchState.tossDecision === 'bat' ? 'ELECTED TO BAT' : 'ELECTED TO BOWL';
@@ -1786,6 +1806,20 @@ function _enrichCommentaryText(comm) {
   return comm.text || `${comm.runs} run${comm.runs !== 1 ? 's' : ''}`;
 }
 
+// Render the recent-ball timeline as coloured doodle chips.
+function renderBallTimeline() {
+  const el = document.getElementById('ball-timeline');
+  if (!el) return;
+  const tl = matchState.timeline || [];
+  if (!tl.length) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = tl
+    .map(c => `<span class="ball-chip chip-${c.kind || 'run'}">${c.label}</span>`)
+    .join('');
+}
+
 // Render Commentary feed in Cricbuzz style
 function renderCommentaryFeed() {
   const list = document.getElementById('commentary-list');
@@ -1836,10 +1870,22 @@ function renderCommentaryFeed() {
       // Impact Player substitution rows carry no runs/over of their own — render
       // them as a distinct feed card instead of treating them like a ball (which
       // would crash on comm.runs.toString()).
-      item.className = "cricbuzz-impact-row";
+      item.className = "cricbuzz-impact-row comm-event comm-impact";
       const impactText = comm.text
-        || `Impact Player: ${comm.inPlayer || ''} replaces ${comm.outPlayer || ''}`;
-      item.innerHTML = `<div class="impact-feed-text">✨ ${impactText}</div>`;
+        || `Impact Player used! ${comm.inPlayer || ''} replaces ${comm.outPlayer || ''}`;
+      item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${impactText}</span>`;
+    } else if (comm.type === 'wicket') {
+      item.className = "comm-event comm-wicket";
+      item.innerHTML = `<span class="comm-dot">🔴</span><span class="comm-text">${comm.text || ''}</span>`;
+    } else if (comm.type === 'new_batsman') {
+      item.className = "comm-event comm-new-batsman";
+      item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${comm.text || ((comm.name || '') + ' comes in.')}</span>`;
+    } else if (comm.type === 'new_bowler' || comm.type === 'returning_bowler') {
+      item.className = "comm-event comm-new-bowler";
+      item.innerHTML = `<span class="comm-dot">🔵</span><span class="comm-text">${comm.text || ((comm.name || '') + ' to bowl.')}</span>`;
+    } else if (comm.type === 'over_complete') {
+      item.className = "comm-event comm-over-complete";
+      item.innerHTML = `<span class="comm-dot">⚪</span><span class="comm-text">${comm.text || ''}</span>`;
     } else {
       item.className = "cricbuzz-ball-row";
 

@@ -153,18 +153,28 @@
     <section id="gameplay-screen" class="screen">
       <!-- LIVE SCOREBOARD CARD -->
       <div class="scoreboard-section">
+        <!-- BATTING / BOWLING TEAMS -->
+        <div class="team-batting-row">
+          <span id="bat-team-label" class="bat-team-label"></span>
+          <span id="bowl-team-label" class="bowl-team-label"></span>
+        </div>
+
         <div class="score-row">
           <div class="runs-col">
             <div class="live-runs" id="live-runs-display">0/0</div>
             <div class="crr-over-row">
               <span class="crr-badge">CRR: <span id="live-crr">0.0</span></span>
               <span class="overs-display"><span id="live-overs">0.0</span>/<span id="total-overs">1</span> OV</span>
+              <span class="proj-badge hidden" id="proj-badge">PROJ: <span id="live-projected">0</span></span>
             </div>
           </div>
           <div class="toss-col">
             <div class="toss-badge" id="toss-badge-display">⚫ LOADING MATCH DETAILS...</div>
           </div>
         </div>
+
+        <!-- RECENT-BALL DOODLE TIMELINE -->
+        <div class="ball-timeline" id="ball-timeline"></div>
 
         <!-- TARGET DISPLAY FOR INNINGS 2 -->
         <div id="target-display" class="target-bar hidden">
