@@ -73,6 +73,15 @@ class ButtonAccessTests(unittest.TestCase):
         self.assertTrue(button_access.check_callback_owner(cancel_update))
         self.assertTrue(button_access.check_callback_owner(decision_update))
 
+    def test_pbo_invite_buttons_are_shared_for_invitee_validation(self):
+        button_access.register_button_owner(100, 200, 111)
+
+        accept_update = DummyUpdate(DummyQuery(222, "pboacc_1_2_100"))
+        decline_update = DummyUpdate(DummyQuery(222, "pbodec_1_2"))
+
+        self.assertTrue(button_access.check_callback_owner(accept_update))
+        self.assertTrue(button_access.check_callback_owner(decline_update))
+
     def test_unregistered_legacy_buttons_remain_usable(self):
         update = DummyUpdate(DummyQuery(222, "roster_page_2"))
 

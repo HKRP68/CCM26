@@ -49,6 +49,8 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cm_pick_",
     "pbo_accept_",
     "pbo_decline_",
+    "pboacc_",
+    "pbodec_",
     "bopick_",
     "taccept_",
     "treject_",
