@@ -7,6 +7,20 @@
   <base href="/cricket/">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Crickidex Arena</title>
+  <!-- Apply saved theme before CSS loads to prevent a flash of the wrong theme -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('crickidex_theme');
+        if (saved !== 'light' && saved !== 'dark') {
+          saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', saved);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
   <!-- Google Fonts: Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,7 +28,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20260604-12">
+  <link rel="stylesheet" href="style.css?v=20260608-1">
 </head>
 <body>
   <div id="app-container">
@@ -32,7 +46,22 @@
         </div>
         <div class="header-match-id" id="header-match-uuid">MATCH ID: E2265B</div>
       </div>
-      <div class="header-spacer" style="width: 36px; height: 36px;"></div>
+      <button class="header-icon-btn" id="theme-toggle-btn" aria-label="Toggle light/dark theme">
+        <svg class="theme-icon theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4.5"></circle>
+          <line x1="12" y1="1.5" x2="12" y2="4"></line>
+          <line x1="12" y1="20" x2="12" y2="22.5"></line>
+          <line x1="4.2" y1="4.2" x2="5.9" y2="5.9"></line>
+          <line x1="18.1" y1="18.1" x2="19.8" y2="19.8"></line>
+          <line x1="1.5" y1="12" x2="4" y2="12"></line>
+          <line x1="20" y1="12" x2="22.5" y2="12"></line>
+          <line x1="4.2" y1="19.8" x2="5.9" y2="18.1"></line>
+          <line x1="18.1" y1="5.9" x2="19.8" y2="4.2"></line>
+        </svg>
+        <svg class="theme-icon theme-icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path>
+        </svg>
+      </button>
     </header>
 
     <!-- LOADING SCREEN -->
@@ -456,80 +485,88 @@
          XI (auto-advances; "Continue" lets either player skip the wait). -->
     <div id="innings-break-overlay" class="overlay hidden">
       <div class="result-card glass-card">
-        <div class="trophy-emoji">🏏</div>
-        <div class="result-kicker">INNINGS BREAK</div>
-        <h2 id="ib-score-title">0/0 (0.0 ov)</h2>
-        <p class="result-outcome-detail" id="ib-team-line"></p>
-
-        <div class="target-bar" id="ib-target-banner" style="margin: 14px 0;">
-          <span id="ib-target-text"></span>
+        <div class="result-banner">
+          <div class="trophy-emoji">🏏</div>
+          <span class="result-kicker">INNINGS BREAK</span>
+          <h2 id="ib-score-title">0/0 (0.0 ov)</h2>
+          <p class="result-outcome-detail" id="ib-team-line"></p>
         </div>
-
-        <div class="scoreboard-summary">
-          <div class="summary-innings">
-            <span class="label">Top Scorers:</span>
-            <span id="ib-top-batters">-</span>
+        <div class="result-body">
+          <div class="target-bar" id="ib-target-banner">
+            <span id="ib-target-text"></span>
           </div>
-          <div class="summary-innings">
-            <span class="label">Top Wickets:</span>
-            <span id="ib-top-bowlers">-</span>
+
+          <div class="result-score-compare">
+            <div class="result-score-col">
+              <span class="result-score-label">Top Scorers</span>
+              <span class="result-score-value" id="ib-top-batters">-</span>
+            </div>
+            <div class="result-score-divider"></div>
+            <div class="result-score-col">
+              <span class="result-score-label">Top Wickets</span>
+              <span class="result-score-value" id="ib-top-bowlers">-</span>
+            </div>
           </div>
-        </div>
 
-        <p class="reward-sub" id="ib-countdown-text">Team selection begins shortly…</p>
+          <p class="reward-sub" id="ib-countdown-text">Team selection begins shortly…</p>
 
-        <div class="result-buttons" style="display: flex; gap: 10px; width: 100%;">
-          <button id="ib-continue-btn" class="btn btn-primary btn-block btn-green" style="margin-top: 0;">Continue to Team Selection ▶</button>
+          <div class="result-buttons">
+            <button id="ib-continue-btn" class="btn btn-primary btn-block btn-green">Continue to Team Selection ▶</button>
+          </div>
         </div>
       </div>
     </div>
 
     <div id="result-overlay" class="overlay hidden">
       <div class="result-card glass-card">
-        <div class="trophy-emoji">🏆</div>
-        <div class="result-kicker">MATCH SUMMARY</div>
-        <h2 id="result-winner-title">Match Finished!</h2>
-        <p class="result-outcome-detail" id="result-outcome-detail"></p>
-        
-        <div class="reward-section">
-          <div class="coin-badge">
-            <span class="coin-icon">🪙</span>
-            <span id="result-reward-amount">+1,500</span>
+        <div class="result-banner">
+          <div class="trophy-emoji">🏆</div>
+          <span class="result-kicker">MATCH SUMMARY</span>
+          <h2 id="result-winner-title">Match Finished!</h2>
+          <p class="result-outcome-detail" id="result-outcome-detail"></p>
+        </div>
+        <div class="result-body">
+          <div class="reward-section">
+            <div class="coin-badge">
+              <span class="coin-icon">🪙</span>
+              <span id="result-reward-amount">+1,500</span>
+            </div>
+            <p class="reward-sub" id="result-reward-label">coins earned</p>
           </div>
-          <p class="reward-sub" id="result-reward-label">coins earned</p>
-        </div>
 
-        <div class="scoreboard-summary">
-          <div class="summary-innings">
-            <span class="label">1st Innings:</span>
-            <span id="result-inn1-score">0/0 (0.0 ov)</span>
+          <div class="result-score-compare">
+            <div class="result-score-col">
+              <span class="result-score-label">1st Innings</span>
+              <span class="result-score-value" id="result-inn1-score">0/0 (0.0 ov)</span>
+            </div>
+            <div class="result-score-divider"></div>
+            <div class="result-score-col">
+              <span class="result-score-label">2nd Innings</span>
+              <span class="result-score-value" id="result-inn2-score">0/0 (0.0 ov)</span>
+            </div>
           </div>
-          <div class="summary-innings">
-            <span class="label">2nd Innings:</span>
-            <span id="result-inn2-score">0/0 (0.0 ov)</span>
+
+          <div id="result-motm-section" class="motm-spotlight hidden">
+            <div class="motm-badge">🌟 MAN OF THE MATCH 🌟</div>
+            <h3 id="result-motm-name">-</h3>
+            <p id="result-motm-stats">-</p>
           </div>
-        </div>
 
-        <div id="result-motm-section" class="motm-section hidden">
-          <div class="motm-badge">🌟 MAN OF THE MATCH 🌟</div>
-          <h3 id="result-motm-name">-</h3>
-          <p id="result-motm-stats">-</p>
-        </div>
+          <div id="result-impact-section" class="motm-spotlight impact-result-section hidden">
+            <div class="motm-badge">✨ IMPACT PLAYERS ✨</div>
+            <div id="result-impact-list" class="impact-scorecard-list">Not used</div>
+          </div>
 
-        <div id="result-impact-section" class="motm-section impact-result-section hidden">
-          <div class="motm-badge">✨ IMPACT PLAYERS ✨</div>
-          <div id="result-impact-list" class="impact-scorecard-list">Not used</div>
-        </div>
-
-        <div class="result-buttons" style="display: flex; gap: 10px; width: 100%;">
-          <button id="view-match-btn" class="btn btn-secondary btn-block" style="margin-top: 0; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary);">Toggle Scorecard</button>
-          <button id="close-app-btn" class="btn btn-primary btn-block btn-green" style="margin-top: 0;">Back to Telegram</button>
+          <div class="result-buttons">
+            <button id="view-match-btn" class="btn btn-secondary btn-block">Toggle Scorecard</button>
+            <button id="close-app-btn" class="btn btn-primary btn-block btn-green">Back to Telegram</button>
+          </div>
         </div>
       </div>
     </div>
 
   </div>
   
-  <script src="app.js?v=20260604-12"></script>
+  <script src="app.js?v=20260608-1"></script>
 </body>
 </html>

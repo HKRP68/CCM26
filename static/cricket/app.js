@@ -106,7 +106,19 @@ async function init() {
   
   const btnBack = document.getElementById('exit-btn-back');
   if (btnBack) btnBack.addEventListener('click', handleExit);
-  
+
+  // Theme toggle (Light / Dark)
+  const themeToggleBtn = document.getElementById('theme-toggle-btn');
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      const root = document.documentElement;
+      const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('crickidex_theme', next); } catch (e) {}
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    });
+  }
+
   startPolling();
   setupEventListeners();
 }
