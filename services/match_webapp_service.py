@@ -196,30 +196,13 @@ def get_impact_player_options(session, match_id, user_id):
             .all())
     incoming = [_player_dict_from_roster(e, p) for e, p in rows if e.id not in unavailable]
 
-    striker_rid = None
-    non_striker_rid = None
-    current_bowler_rid = (state.get("current_bowler") or {}).get("roster_id")
-    order = state.get("batting_order", []) or []
-    try:
-        striker_rid = order[state.get("striker_idx")].get("roster_id")
-    except Exception:
-        pass
-    try:
-        non_striker_rid = order[state.get("non_striker_idx")].get("roster_id")
-    except Exception:
-        pass
-    replaceable = []
-    for p in active_xi:
-        rid = p.get("roster_id")
-        reason = None
-        if user_id == state.get("bat_team_id") and rid in (striker_rid, non_striker_rid):
-            reason = "At crease"
-        if (user_id == state.get("bowl_team_id") and legal_label == "after wicket"
-                and rid == current_bowler_rid):
-            reason = "Bowling current over"
-        elif user_id == state.get("bowl_team_id") and rid == state.get("prev_bowler_rid"):
-            reason = "Bowled previous over"
-        replaceable.append({**p, "disabled": bool(reason), "disabled_reason": reason})
+    # The Impact Player picker should let the team choose any still-active
+    # member of the current Playing XI as the outgoing player.  Do not hide or
+    # disable contextual players here: after a wicket the dismissed striker is
+    # still the striker_idx until the replacement batter is picked, and between
+    # overs the previous bowler is tracked in prev_bowler_rid.  Both are valid
+    # Impact Player choices.
+    replaceable = [{**p, "disabled": False, "disabled_reason": None} for p in active_xi]
 
     return {
         "ok": True,

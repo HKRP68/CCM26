@@ -102,31 +102,51 @@ def _patch_after_wicket(monkeypatch, state):
     monkeypatch.setattr(svc.mwa, "save_state", lambda *args, **kwargs: None)
 
 
-def test_current_bowler_is_not_replaceable_after_wicket(monkeypatch):
+def test_all_active_bowlers_are_replaceable_after_wicket(monkeypatch):
     state = _after_wicket_state()
     _patch_after_wicket(monkeypatch, state)
 
     opts = svc.get_impact_player_options(_FakeSession([_incoming_row()]), 99, 2)
 
     by_rid = {p["roster_id"]: p for p in opts["replaceable_players"]}
-    assert by_rid[200]["disabled"] is True
-    assert by_rid[200]["disabled_reason"] == "Bowling current over"
-    assert by_rid[201]["disabled"] is True
-    assert by_rid[201]["disabled_reason"] == "Bowled previous over"
+    assert by_rid[200]["disabled"] is False
+    assert by_rid[200]["disabled_reason"] is None
+    assert by_rid[201]["disabled"] is False
+    assert by_rid[201]["disabled_reason"] is None
     assert by_rid[202]["disabled"] is False
+    assert by_rid[202]["disabled_reason"] is None
 
 
-def test_use_impact_player_rejects_current_bowler_after_wicket(monkeypatch):
+def test_use_impact_player_allows_current_bowler_after_wicket(monkeypatch):
     state = _after_wicket_state()
+    state["bowl_stats"] = {
+        "200": {"balls": 3, "runs": 10, "wickets": 1},
+    }
     _patch_after_wicket(monkeypatch, state)
 
     ok, msg, rec = svc.use_impact_player(_FakeSession([_incoming_row()]), 99, 2, 300, 200)
 
-    assert ok is False
-    assert msg == "Bowling current over"
-    assert rec is None
-    assert state["current_bowler"]["roster_id"] == 200
-    assert state["bowl_xi"][0]["roster_id"] == 200
+    assert ok is True
+    assert "Impact Player confirmed" in msg
+    assert rec["out_roster_id"] == 200
+    assert state["current_bowler"]["roster_id"] == 300
+    by_rid = {p["roster_id"]: p for p in state["bowl_xi"]}
+    assert by_rid[200]["active"] is False
+    assert by_rid[300]["active"] is True
+
+
+def test_dismissed_striker_is_replaceable_after_wicket(monkeypatch):
+    state = _after_wicket_state()
+    state["bat_stats"] = {"100": {"out": True, "balls": 1, "runs": 0}}
+    _patch_after_wicket(monkeypatch, state)
+
+    opts = svc.get_impact_player_options(_FakeSession([_incoming_row()]), 99, 1)
+
+    by_rid = {p["roster_id"]: p for p in opts["replaceable_players"]}
+    assert by_rid[100]["disabled"] is False
+    assert by_rid[100]["disabled_reason"] is None
+    assert by_rid[101]["disabled"] is False
+    assert by_rid[101]["disabled_reason"] is None
 
 
 def test_impact_player_preserves_outgoing_identity_when_replaced(monkeypatch):
