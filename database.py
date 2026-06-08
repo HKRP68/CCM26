@@ -63,12 +63,34 @@ def init_db():
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
-        FantasyRoleRule, EventMedia,
+        FantasyRoleRule, EventMedia, ModeLeague,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
+    _seed_mode_leagues(ModeLeague)
     _seed_traits()
     _seed_competition_templates()
+
+
+def _seed_mode_leagues(ModeLeague):
+    """Idempotently seed the Phase 1 /modes league list."""
+    defaults = ("IPL", "BBL", "International T20 League")
+    session = SessionLocal()
+    try:
+        existing = {name for (name,) in session.query(ModeLeague.name).all()}
+        added = 0
+        for idx, name in enumerate(defaults, start=1):
+            if name not in existing:
+                session.add(ModeLeague(
+                    name=name, sort_order=idx * 10, is_active=True,
+                ))
+                added += 1
+        if added:
+            session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def _seed_competition_templates():
@@ -255,6 +277,8 @@ def _migrate_add_columns():
         "maintenance_until": "TIMESTAMP",
         "maintenance_started_at": "TIMESTAMP",
         "maintenance_bypass_ids": "VARCHAR(500)",
+        "modes_banner_image_url": "VARCHAR(500)",
+        "modes_intro_text": "TEXT",
     }
     for col, coltype in new_gameconfig_cols.items():
         _try_add("game_config", col, coltype)

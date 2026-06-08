@@ -76,6 +76,7 @@ from handlers.unscramble import unscramble_handler, join_handler as unscramble_j
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
+from handlers.modes import modes_handler, mode_league_callback
 
 # Match handlers
 from handlers.match import (
@@ -276,6 +277,7 @@ BOT_MENU_COMMANDS = (
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
     ("wpm", "Open a match lobby anyone can join (Mini App)"),
+    ("modes", "Choose a league mode for a replied matchup"),
     ("testwpm", "Test /wpm and /cm completion summary delivery"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
@@ -788,6 +790,7 @@ def main():
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler("wpm", wpm_handler))
         app.add_handler(CommandHandler(["sim", "simmatch"], sim_handler))
+        app.add_handler(CommandHandler("modes", modes_handler))
         app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
@@ -979,6 +982,9 @@ def main():
         app.add_handler(CallbackQueryHandler(botmatch_pick_a_callback, pattern=r"^botmatch_a_"))
         app.add_handler(CallbackQueryHandler(botmatch_pick_b_callback, pattern=r"^botmatch_b_"))
         app.add_handler(CallbackQueryHandler(botmatch_cancel_callback, pattern=r"^botmatch_cancel_"))
+
+        # ── Modes callbacks ─────────────────────────────────────────
+        app.add_handler(CallbackQueryHandler(mode_league_callback, pattern=r"^modeleague:"))
 
         # ── Claim flow callbacks ─────────────────────────────────────
         app.add_handler(CallbackQueryHandler(retain_callback, pattern=r"^retain_"))

@@ -813,6 +813,10 @@ class GameConfig(Base):
     # Mini App match ends. Valid tokens: summary, bat1, bowl1, bat2, bowl2.
     # Empty/None falls back to "summary" (the historical behavior).
     wpm_result_cards = Column(String(120), default="summary")
+    # ── Modes command (/modes) ──
+    modes_banner_image_url = Column(String(500), nullable=True)
+    modes_intro_text = Column(Text, nullable=True)
+
     # ── Maintenance mode ──
     # When is_maintenance is True, all bot commands except those from a
     # bypass user return maintenance_message instead of running. Matches
@@ -1739,3 +1743,20 @@ class FantasyPick(Base):
     __table_args__ = (
         Index("ix_fp_entry_player", "entry_id", "player_id", unique=True),
     )
+
+class ModeLeague(Base):
+    """Admin-managed leagues shown by the /modes command."""
+    __tablename__ = "mode_leagues"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False, unique=True, index=True)
+    image_url = Column(String(500), nullable=True)
+    sort_order = Column(Integer, default=100, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_mode_leagues_active_sort", "is_active", "sort_order"),
+    )
+

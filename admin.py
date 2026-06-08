@@ -23,6 +23,7 @@ load_dotenv()
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
 from services.telegram_user_service import user_lookup_filter
+from services.modes_service import get_modes_config, seed_default_mode_leagues
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog, Match, UserAchievement,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
@@ -33,7 +34,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     NotificationSchedule, NotificationLog,
                     ClaimRarityTier, GameConfig,
                     MessageTemplate,
-                    GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase)
+                    GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
+                    ModeLeague)
 
 app = Flask(__name__)
 
@@ -12390,6 +12392,107 @@ def admin_storage_archive():
     finally:
         db.close()
 
+
+
+
+# ─── Modes System ─────────────────────────────────────────────────────
+
+@app.route("/modes", methods=["GET", "POST"])
+@login_required
+def admin_modes():
+    """Manage the /modes banner and league buttons."""
+    db = get_session()
+    try:
+        cfg = get_modes_config(db)
+        if request.method == "POST":
+            action = (request.form.get("action") or "").strip()
+            if action == "settings":
+                cfg.modes_banner_image_url = (request.form.get("modes_banner_image_url") or "").strip() or None
+                cfg.modes_intro_text = (request.form.get("modes_intro_text") or "").strip() or None
+                db.commit()
+                flash("✅ Modes banner settings updated.", "success")
+            elif action == "add":
+                name = (request.form.get("name") or "").strip()
+                if not name:
+                    flash("League name is required.", "error")
+                else:
+                    max_order = db.query(func.max(ModeLeague.sort_order)).scalar() or 0
+                    league = ModeLeague(
+                        name=name[:120],
+                        image_url=(request.form.get("image_url") or "").strip() or None,
+                        sort_order=max_order + 10,
+                        is_active=True,
+                    )
+                    db.add(league)
+                    db.commit()
+                    flash(f"✅ Added league '{league.name}'.", "success")
+            elif action == "seed":
+                added = seed_default_mode_leagues(db)
+                db.commit()
+                flash(f"✅ Seeded {added} default league(s).", "success")
+            else:
+                flash("Unknown modes action.", "error")
+            return redirect(url_for("admin_modes"))
+
+        leagues = (db.query(ModeLeague)
+                   .order_by(ModeLeague.sort_order.asc(), ModeLeague.name.asc())
+                   .all())
+        return render_template("admin_modes.html", cfg=cfg, leagues=leagues)
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Modes error: {e}", "error")
+        return redirect(url_for("dashboard"))
+    finally:
+        db.close()
+
+
+@app.route("/modes/<int:league_id>/update", methods=["POST"])
+@login_required
+def admin_mode_league_update(league_id):
+    db = get_session()
+    try:
+        league = db.query(ModeLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_modes"))
+        league.name = (request.form.get("name") or league.name).strip()[:120]
+        league.image_url = (request.form.get("image_url") or "").strip() or None
+        try:
+            league.sort_order = int(request.form.get("sort_order") or league.sort_order or 100)
+        except ValueError:
+            league.sort_order = 100
+        league.is_active = request.form.get("is_active") == "on"
+        db.commit()
+        flash(f"✅ Updated league '{league.name}'.", "success")
+        return redirect(url_for("admin_modes"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Update failed: {e}", "error")
+        return redirect(url_for("admin_modes"))
+    finally:
+        db.close()
+
+
+@app.route("/modes/<int:league_id>/delete", methods=["POST"])
+@login_required
+def admin_mode_league_delete(league_id):
+    db = get_session()
+    try:
+        league = db.query(ModeLeague).get(league_id)
+        if not league:
+            flash("League not found.", "error")
+            return redirect(url_for("admin_modes"))
+        name = league.name
+        db.delete(league)
+        db.commit()
+        flash(f"🗑️ Removed league '{name}'.", "success")
+        return redirect(url_for("admin_modes"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Delete failed: {e}", "error")
+        return redirect(url_for("admin_modes"))
+    finally:
+        db.close()
 
 # ─── Referral competitions ─────────────────────────────────────────────
 
