@@ -18,14 +18,14 @@ const POLL_REQUEST_TIMEOUT_MS = 8000;
 const MAX_POLL_FAILURES = 10;
 const MATCH_POLL_INTERVAL_MS = 150;
 const AUTOPLAY_ACTION_DELAY_MS = 0;
-// Fixed ball-by-ball pacing. Each visible transition in the Mini App
-// (delivery reveal, ready-to-shot handoff, and shot-to-outcome reveal) is 0.6s.
-const BALL_FLOW_DELAY_MS = 600;
+// Fast ball-by-ball pacing vs the Bot. The bot's reply (shot/delivery/outcome)
+// is already resolved server-side by the time these timers run, so they're
+// kept just long enough to read the transition label before the next ball.
+const BALL_FLOW_DELAY_MS = 150;
 // How long the ball-outcome event box (GIF/text) lingers before reverting to
-// idle. Kept short so the outcome reads instantly after a shot and the
-// celebratory GIF only flashes briefly instead of holding the screen ~3s.
-// This is a pure UI reveal duration — it has nothing to do with bowling pace.
-const EVENT_FLASH_MS = 900;
+// idle. Kept short so the outcome reads instantly and the screen is ready for
+// the next ball quickly instead of holding on the celebratory GIF/text.
+const EVENT_FLASH_MS = 350;
 
 // Selected actions
 let selectedDelivery = null;
