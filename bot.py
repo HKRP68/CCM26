@@ -236,6 +236,7 @@ from handlers.cartel import (
     cartel_message_handler,
 )
 from handlers.feedback import feedback_handler
+from handlers.forward_broadcast import frwd_grp_handler, frwd_prvt_handler
 
 # Fantasy League handlers
 from handlers.fantasy import (
@@ -796,6 +797,10 @@ def main():
 
         # ── User feedback ────────────────────────────────────────────
         app.add_handler(CommandHandler("report", report_handler))
+
+        # ── Admin reply-forward broadcasts ───────────────────────────
+        app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
+        app.add_handler(CommandHandler("frwd_prvt", frwd_prvt_handler))
 
         # ── Undo command — reverses last /buy or /release within 60s ─
         app.add_handler(CommandHandler("cmuundo", cmuundo_handler))
