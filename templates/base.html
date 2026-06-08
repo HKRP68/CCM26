@@ -594,6 +594,7 @@ hr.pitch-line {
 
     <div class="section-label">Game Content</div>
     <a href="{{ url_for('admin_commands') }}" class="{{ 'active' if request.endpoint == 'admin_commands' }}">🎮 Commands</a>
+    <a href="{{ url_for('admin_modes') }}" class="{{ 'active' if request.endpoint in ('admin_modes','admin_mode_league_update','admin_mode_league_delete') }}">🏏 Modes</a>
     <a href="{{ url_for('admin_quests_list') }}" class="{{ 'active' if request.endpoint in ('admin_quests_list','admin_quest_new','admin_quest_edit') }}">🎯 Quests</a>
     <a href="{{ url_for('admin_traits_list') }}" class="{{ 'active' if request.endpoint in ('admin_traits_list','admin_trait_edit') }}">💎 Traits</a>
     <a href="{{ url_for('admin_packs_list') }}" class="{{ 'active' if request.endpoint in ('admin_packs_list','admin_pack_new','admin_pack_edit') }}">📦 Packs</a>
