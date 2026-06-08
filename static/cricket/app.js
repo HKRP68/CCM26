@@ -382,6 +382,41 @@ function stopPolling() {
   }
 }
 
+// Forced state fetch that bypasses the flowActionInFlight/autoplayInFlight
+// guards in applyMatchState. Used to guarantee the post-setup transition into
+// the match is never swallowed by an in-flight poll/action.
+async function fetchStateForced() {
+  try {
+    const params = new URLSearchParams();
+    if (userId) params.append('userId', userId);
+    if (matchId) params.append('matchId', matchId);
+    const response = await fetchWithTimeout(`/api/match?${params.toString()}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    applyMatchState(data, { force: true });
+  } catch (err) {
+    // Non-fatal — the watcher retries on its next tick.
+  }
+}
+
+// After a lineup is confirmed, actively poll (with force) until the match
+// leaves the XI-selection phase, then stop. Bounded by a safety window so it
+// never polls forever. Idempotent — a re-arm while already watching is a no-op.
+let setupTransitionTimer = null;
+function startSetupTransitionWatcher() {
+  if (setupTransitionTimer) return;
+  const startedAt = Date.now();
+  setupTransitionTimer = setInterval(() => {
+    if (!matchState || matchState.status !== 'xi_selection' ||
+        (Date.now() - startedAt) > 60000) {
+      clearInterval(setupTransitionTimer);
+      setupTransitionTimer = null;
+      return;
+    }
+    fetchStateForced();
+  }, 400);
+}
+
 // API Call - GET state
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();
@@ -555,47 +590,44 @@ function renderSetupScreen() {
         .filter(({ p }) => isActiveXIPlayer(p))
         .sort((a, b) => getBatRating(b.p) - getBatRating(a.p));
 
-      let sSel = strikerContainer.querySelector('.selection-item.selected')?.dataset.index;
-      let nsSel = nonStrikerContainer.querySelector('.selection-item.selected')?.dataset.index;
-
-      if (sSel === undefined && nsSel === undefined && sortedBatting.length >= 2) {
+      // Preserve an in-progress pick across the 150ms re-render; otherwise
+      // default to the two highest-rated batsmen.
+      let sSel = strikerContainer.querySelector('select')?.value;
+      let nsSel = nonStrikerContainer.querySelector('select')?.value;
+      if (!sSel && !nsSel && sortedBatting.length >= 2) {
         sSel = sortedBatting[0].idx.toString();
         nsSel = sortedBatting[1].idx.toString();
       }
 
-      const buildList = (container, currentSel, otherSel, onSelect) => {
-        container.innerHTML = '';
-        sortedBatting.forEach(({ p, idx }) => {
-          const div = document.createElement('div');
-          div.className = 'selection-item';
-          div.dataset.index = idx;
-          
-          const isSelected = currentSel === idx.toString();
-          const isDisabled = otherSel === idx.toString();
-          
-          if (isSelected) div.classList.add('selected');
-          if (isDisabled) div.classList.add('disabled');
-          
-          div.innerHTML = `
-            <span class="selection-item-name">${p.name}</span>
-            <span class="selection-item-meta">${getBatRating(p)} OVR - ${p.role || 'Batsman'}</span>
-          `;
-          
-          if (!isDisabled) {
-            div.onclick = () => {
-              onSelect(idx.toString());
-            };
-          }
-          container.appendChild(div);
-        });
+      // Build (or update in place) a native dropdown. Options are created once;
+      // subsequent ticks only refresh the selected/disabled state so an open
+      // native picker isn't yanked out from under the user.
+      const buildDropdown = (container, currentSel, otherSel, onSelect) => {
+        container.classList.add('is-dropdown');
+        let sel = container.querySelector('select');
+        if (!sel || sel.options.length !== sortedBatting.length) {
+          container.innerHTML = '';
+          sel = document.createElement('select');
+          sel.className = 'selection-dropdown';
+          sortedBatting.forEach(({ p, idx }) => {
+            const opt = document.createElement('option');
+            opt.value = idx.toString();
+            opt.textContent = `${p.name} — ${getBatRating(p)} OVR · ${p.role || 'Batsman'}`;
+            sel.appendChild(opt);
+          });
+          container.appendChild(sel);
+        }
+        Array.from(sel.options).forEach(opt => { opt.disabled = (opt.value === otherSel); });
+        if (currentSel != null && sel.value !== currentSel) sel.value = currentSel;
+        sel.onchange = () => onSelect(sel.value);
       };
 
-      const updateLists = (newStriker, newNonStriker) => {
-        buildList(strikerContainer, newStriker, newNonStriker, (idx) => updateLists(idx, newNonStriker));
-        buildList(nonStrikerContainer, newNonStriker, newStriker, (idx) => updateLists(newStriker, idx));
+      const updateDropdowns = (newStriker, newNonStriker) => {
+        buildDropdown(strikerContainer, newStriker, newNonStriker, (idx) => updateDropdowns(idx, newNonStriker));
+        buildDropdown(nonStrikerContainer, newNonStriker, newStriker, (idx) => updateDropdowns(newStriker, idx));
       };
 
-      updateLists(sSel, nsSel);
+      updateDropdowns(sSel, nsSel);
     }
   } else if (matchState.myRole === 'bowling' && !myConfirmed) {
     bowlingSetup.classList.remove('hidden');
@@ -609,34 +641,28 @@ function renderSetupScreen() {
         .filter(({ p }) => isActiveXIPlayer(p))
         .sort((a, b) => getBowlRating(b.p) - getBowlRating(a.p));
 
-      let currentSel = container.querySelector('.selection-item.selected')?.dataset.index;
-      if (currentSel === undefined && sortedBowling.length > 0) {
+      // Preserve an in-progress pick across the 150ms re-render; otherwise
+      // default to the highest-rated bowler.
+      let currentSel = container.querySelector('select')?.value;
+      if (!currentSel && sortedBowling.length > 0) {
         currentSel = sortedBowling[0].idx.toString();
       }
 
-      const build = (selectedIdx) => {
+      container.classList.add('is-dropdown');
+      let sel = container.querySelector('select');
+      if (!sel || sel.options.length !== sortedBowling.length) {
         container.innerHTML = '';
+        sel = document.createElement('select');
+        sel.className = 'selection-dropdown';
         sortedBowling.forEach(({ p, idx }) => {
-          const div = document.createElement('div');
-          div.className = 'selection-item';
-          div.dataset.index = idx;
-          
-          const isSelected = selectedIdx === idx.toString();
-          if (isSelected) div.classList.add('selected');
-          
-          div.innerHTML = `
-            <span class="selection-item-name">${p.name}</span>
-            <span class="selection-item-meta">${getBowlRating(p)} OVR - ${p.bowler_type || 'Bowler'}</span>
-          `;
-          
-          div.onclick = () => {
-            build(idx.toString());
-          };
-          container.appendChild(div);
+          const opt = document.createElement('option');
+          opt.value = idx.toString();
+          opt.textContent = `${p.name} — ${getBowlRating(p)} OVR · ${p.bowler_type || 'Bowler'}`;
+          sel.appendChild(opt);
         });
-      };
-
-      build(currentSel);
+        container.appendChild(sel);
+      }
+      if (currentSel != null && sel.value !== currentSel) sel.value = currentSel;
     }
   } else {
     // Spectator or already confirmed
@@ -714,14 +740,14 @@ async function submitSetup() {
   const body = { userId };
   
   if (isBatting) {
-    const strikerEl = document.querySelector('#striker-list .selection-item.selected');
-    const nonStrikerEl = document.querySelector('#non-striker-list .selection-item.selected');
-    if (!strikerEl || !nonStrikerEl) {
+    const strikerEl = document.querySelector('#striker-list select');
+    const nonStrikerEl = document.querySelector('#non-striker-list select');
+    if (!strikerEl || !nonStrikerEl || strikerEl.value === '' || nonStrikerEl.value === '') {
       alert("Please select both Striker and Non-Striker!");
       return;
     }
-    const sIdx = parseInt(strikerEl.dataset.index);
-    const nsIdx = parseInt(nonStrikerEl.dataset.index);
+    const sIdx = parseInt(strikerEl.value);
+    const nsIdx = parseInt(nonStrikerEl.value);
     if (sIdx === nsIdx) {
       alert("Striker and Non-Striker cannot be the same player!");
       return;
@@ -729,12 +755,12 @@ async function submitSetup() {
     body.strikerIdx = sIdx;
     body.nonStrikerIdx = nsIdx;
   } else {
-    const bowlerEl = document.querySelector('#bowler-list .selection-item.selected');
-    if (!bowlerEl) {
+    const bowlerEl = document.querySelector('#bowler-list select');
+    if (!bowlerEl || bowlerEl.value === '') {
       alert("Please select opening bowler!");
       return;
     }
-    body.bowlerIdx = parseInt(bowlerEl.dataset.index);
+    body.bowlerIdx = parseInt(bowlerEl.value);
   }
 
   document.getElementById('submit-setup-btn').disabled = true;
@@ -749,11 +775,21 @@ async function submitSetup() {
     if (!res.ok) throw new Error(data.error || "Failed to confirm lineup");
     
     document.getElementById('submit-setup-btn').classList.add('hidden');
+    // Hide the just-submitted picker so the stale dropdown doesn't linger
+    // behind the waiting indicator while we transition into the match.
+    document.getElementById('batting-setup')?.classList.add('hidden');
+    document.getElementById('bowling-setup')?.classList.add('hidden');
     const waitingEl = document.getElementById('setup-waiting');
     waitingEl.querySelector('p').innerText = opponentHasConfirmed()
       ? "Both lineups locked in — starting match…"
       : "Lineup confirmed! Waiting for opponent…";
     waitingEl.classList.remove('hidden');
+    // The passive 150ms poll applies state WITHOUT `force`, so the moment the
+    // server flips xi_selection → innings1 the update can be swallowed by the
+    // flowActionInFlight/autoplayInFlight guard in applyMatchState — leaving the
+    // player stranded on this screen until they reopen the Mini App. Actively
+    // drive the transition with a forced watcher that bypasses those guards.
+    startSetupTransitionWatcher();
     fetchState();
   } catch (err) {
     alert(err.message);

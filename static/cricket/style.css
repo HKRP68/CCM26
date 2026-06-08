@@ -835,6 +835,56 @@ body {
   border-color: rgba(var(--accent-rgb), 0.3);
 }
 
+/* ── Selection Dropdown (openers / opening bowler pickers) ───────── */
+/* When a list container hosts a native <select>, drop the list chrome so we
+   don't double up borders/padding around the dropdown. */
+.selection-list.is-dropdown {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  max-height: none;
+  overflow: visible;
+  margin-bottom: 12px;
+}
+
+.selection-dropdown {
+  width: 100%;
+  padding: 14px 44px 14px 16px;
+  min-height: 56px;
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  transition: var(--transition-smooth);
+}
+
+.selection-dropdown:focus {
+  outline: none;
+  border-color: var(--primary-accent);
+  box-shadow: 0 4px 16px rgba(var(--accent-rgb), 0.16);
+}
+
+.selection-dropdown option {
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.selection-dropdown option:disabled {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
 /* ── Buttons ───────────────────────────────────────────────────── */
 .btn {
   font-family: var(--font-family);
