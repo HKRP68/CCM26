@@ -4348,8 +4348,8 @@ async function doBrowse(append) {
     min_rating: minR,
     max_rating: maxR,
     only_unowned: onlyUnowned,
-    page: browsePage,
-    per_page: 25,
+    page: 1,
+    per_page: 'all',
   };
   if (!isNaN(advMinPrice) && advMinPrice > 0) body.min_price = advMinPrice;
   if (!isNaN(advMaxPrice) && advMaxPrice > 0) body.max_price = advMaxPrice;
@@ -4370,7 +4370,8 @@ async function doBrowse(append) {
       resultsEl.innerHTML = html;
     }
   }
-  summary.textContent = `${data.total || 0} player${data.total === 1 ? '' : 's'} found · showing up to ${browsePage * 25}`;
+  const shown = (data.results || []).length;
+  summary.textContent = `${data.total || 0} player${data.total === 1 ? '' : 's'} found · showing ${shown}`;
   moreBtn.style.display = data.has_more ? 'block' : 'none';
 }
 
