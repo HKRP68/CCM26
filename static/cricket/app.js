@@ -1400,7 +1400,6 @@ async function submitShot(shot) {
   showFlowStage('🏏 Shot played', `${shot} selected — outcome incoming…`, 'evt-runs');
   flowActionInFlight = true;
   try {
-    const flowDelay = delay(BALL_FLOW_DELAY_MS);
     const res = await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1408,7 +1407,10 @@ async function submitShot(shot) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit shot");
-    await flowDelay;
+    // The response already carries the resolved outcome (server applies it
+    // synchronously) — apply it the instant it arrives instead of holding the
+    // "outcome incoming…" placeholder for a fixed delay. applyMatchState()
+    // reveals the real result via triggerMatchEvent/showEventBoxText.
     if (data.matchState) applyMatchState(data.matchState);
     else { flowActionInFlight = false; fetchState(); }
   } catch (err) {
@@ -1462,14 +1464,14 @@ async function submitDelivery() {
     return;
   }
 
-  // Minimize sheet immediately and show the delivery reveal for exactly 0.6s
-  // before handing the screen to the batsman.
+  // Minimize sheet immediately and flash the delivery for tactile feedback —
+  // the response below already carries the resolved outcome (vsbot turns
+  // resolve synchronously on the server), so this must not gate anything.
   minimizeControlsSheet();
   showFlowStage('🎳 Bowler delivers', `${selectedDelivery} at ${selectedSpeed} pace`, 'evt-runs');
   flowActionInFlight = true;
 
   try {
-    const flowDelay = delay(BALL_FLOW_DELAY_MS);
     const res = await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1489,11 +1491,14 @@ async function submitDelivery() {
     document.getElementById('bowler-delivery-select').value = '';
     document.getElementById('bowler-delivery-grid').innerHTML = '';
     document.getElementById('bowler-length-section').classList.add('hidden');
-    await flowDelay;
-    showFlowStage('🏏 Batsman ready', 'Ready to play the shot', 'evt-dot');
-    // Apply the state returned by the action endpoint right away instead of
-    // waiting for the next poll cycle, so the bowler sees the outcome/turn flip
-    // immediately (mirrors submitShot).
+    // Only the human-vs-human case genuinely still has the batsman to come —
+    // vsbot/instant resolution means the response already carries the bot's
+    // shot AND the ball outcome, so showing "Batsman ready" would be stale/
+    // misleading. Reveal the real result immediately via applyMatchState in
+    // that case; keep the legit "waiting on opponent" message for true PvP.
+    const stillPendingBatsman = data.matchState?.turnState === 'batting_shot'
+      && data.matchState?.isMyTurn === false;
+    if (stillPendingBatsman) showFlowStage('🏏 Batsman ready', 'Ready to play the shot', 'evt-dot');
     if (data.matchState) applyMatchState(data.matchState);
     else { flowActionInFlight = false; fetchState(); }
   } catch (err) {
@@ -2333,7 +2338,14 @@ function renderAutoplayQuickCard(kind) {
   const line = displayKind === 'bowling'
     ? `${playerName} bowls ${actionName}`
     : `${playerName} played ${actionName}`;
-  card.innerHTML = `${line}<span class="muted">Autoplay is processing…</span>`;
+  // Show the real, already-known outcome instead of a generic "processing"
+  // label — the burst endpoint resolves balls synchronously, so the result
+  // is sitting in matchState.lastBall by the time this card renders.
+  const lb = matchState.lastBall;
+  const outcomeLine = lb
+    ? (lb.commentary || (lb.isWicket ? '🔴 OUT!' : `${lb.runs ?? 0} run${(lb.runs ?? 0) === 1 ? '' : 's'}`))
+    : 'Selecting automatically — no waiting needed';
+  card.innerHTML = `${line}<span class="muted">${outcomeLine}</span>`;
   card.style.display = '';
   controls.classList.remove('hidden');
 }
@@ -2669,10 +2681,6 @@ function fireEventHaptic(comm) {
   } catch (e) {
     console.warn("Haptic trigger failed:", e);
   }
-}
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function showFlowStage(title, subtitle = '', mod = 'evt-runs') {
