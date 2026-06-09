@@ -1,5 +1,6 @@
 """Two-player challenge mode using the Mini App match flow."""
 
+import json
 import logging
 import random
 import os
@@ -351,6 +352,104 @@ def _challenge_team_players(session, draft, side):
     except Exception:
         logger.exception("Failed to load challenge team players for XI selection")
         return []
+
+
+
+
+def _challenge_xi_selection(draft, side):
+    selections = draft.setdefault("xi_selections", {})
+    return selections.setdefault(side, {"player_ids": [], "confirmed": False})
+
+
+def _challenge_player_details(player):
+    raw = getattr(player, "details_json", None) or ""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _challenge_player_category(player):
+    data = _challenge_player_details(player)
+    value = (data.get("category") or data.get("Category") or data.get("role") or data.get("Role") or "")
+    value = str(value).strip()
+    low = value.lower().replace("-", " ")
+    if low in ("wk", "keeper", "wicketkeeper", "wicket keeper", "wicket keeper batter", "wicket keeper batsman"):
+        return "Wicket Keeper"
+    if low in ("all rounder", "allrounder", "all round", "alr", "all-rounder"):
+        return "All-rounder"
+    if low in ("bowler", "bowl"):
+        return "Bowler"
+    if low in ("batsman", "batter", "bat"):
+        return "Batsman"
+    return value or "Player"
+
+
+def _challenge_is_wicket_keeper(player):
+    category = _challenge_player_category(player).lower()
+    return "wicket" in category or category == "wk"
+
+
+def _challenge_is_bowling_option(player):
+    category = _challenge_player_category(player).lower().replace("-", " ")
+    return "bowler" in category or "all rounder" in category or "allrounder" in category
+
+
+def _challenge_xi_validation(players):
+    if len(players) != 11:
+        return False, "Select exactly 11 players."
+    if not any(_challenge_is_wicket_keeper(player) for player in players):
+        return False, "Wicket Keeper is Must"
+    bowling_options = sum(1 for player in players if _challenge_is_bowling_option(player))
+    if bowling_options < 5:
+        return False, "At least 5 Bowling Option Must (Bowlers + Allrounders)"
+    return True, ""
+
+
+def _challenge_xi_text(draft, side, team_name, players, selected_ids):
+    owner = draft.get(side) or {}
+    selected_set = {int(pid) for pid in selected_ids}
+    selected_players = [player for player in players if int(getattr(player, "id")) in selected_set]
+    selected_players.sort(key=lambda player: selected_ids.index(int(getattr(player, "id"))))
+    lines = [
+        f"🏏 <b>{team_name} Playing XI Selection</b>",
+        f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, select exactly 11 players.",
+        "",
+        f"<b>Selected:</b> {len(selected_ids)}/11",
+        "",
+        "<b>Rules:</b>",
+        "• Wicket Keeper is Must",
+        "• At least 5 Bowling Option Must (Bowlers + Allrounders)",
+        "• Selection order becomes batting order",
+    ]
+    if selected_players:
+        lines.extend(["", "<b>Batting order:</b>"])
+        lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
+    return "\n".join(lines)
+
+
+def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids):
+    selected_set = {int(pid) for pid in selected_ids}
+    rows = []
+    row = []
+    for player in players:
+        player_id = int(getattr(player, "id"))
+        prefix = "✅ " if player_id in selected_set else ""
+        row.append(InlineKeyboardButton(
+            f"{prefix}{player.name}",
+            callback_data=f"cl_pick_{draft_id}_{side}_{player_id}",
+        ))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if len(selected_ids) == 11:
+        rows.append([InlineKeyboardButton("Confirm XI", callback_data=f"cl_confirm_{draft_id}_{side}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _same_team_challenge_enabled(session=None):
@@ -923,7 +1022,7 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Authorize league challenge Playing XI buttons for the selected team owners."""
+    """Show the selected team's full player list as XI selection buttons."""
     query = update.callback_query
     try:
         _, _, draft_id, side = query.data.split("_")
@@ -942,7 +1041,7 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     expected_tg_id = (draft.get(side) or {}).get("tg_id")
     if query.from_user.id != expected_tg_id:
-        await query.answer("This button is not for you", show_alert=True)
+        await query.answer("This XI selection is not for you.", show_alert=True)
         return
 
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
@@ -955,18 +1054,137 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer(f"No players are configured for {team_name} yet.", show_alert=True)
         return
 
+    selection = _challenge_xi_selection(draft, side)
+    selected_ids = selection.setdefault("player_ids", [])
     draft.setdefault("xi_started", {})[side] = True
-    preview = "\n".join(f"{idx}. {player.name}" for idx, player in enumerate(players[:11], start=1))
-    await query.answer(f"Select your {team_name} Playing XI.", show_alert=True)
+    await query.answer(f"Select your {team_name} Playing XI.")
     try:
         await query.message.reply_text(
-            f"🏏 <b>{team_name} Playing XI</b>\n"
-            f"{_mention(expected_tg_id, (draft.get(side) or {}).get('name') or 'Player')}, select 11 players from your challenge team data.\n\n"
-            f"<b>Available players:</b>\n{preview}",
+            _challenge_xi_text(draft, side, team_name, players, selected_ids),
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
+        )
+    except Exception:
+        logger.exception("Failed to send challenge XI player selection buttons")
+
+
+async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Record one player in the owner's XI, preserving click order as batting order."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, side, player_id = query.data.split("_")
+        draft_id = int(draft_id)
+        player_id = int(player_id)
+    except Exception:
+        await query.answer("Invalid player selection.", show_alert=True)
+        return
+    if side not in ("host", "target"):
+        await query.answer("Invalid player selection.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This Playing XI selection is no longer active.", show_alert=True)
+        return
+    expected_tg_id = (draft.get(side) or {}).get("tg_id")
+    if query.from_user.id != expected_tg_id:
+        await query.answer("This XI selection is not for you.", show_alert=True)
+        return
+
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    player_map = {int(getattr(player, "id")): player for player in players}
+    player = player_map.get(player_id)
+    if not player:
+        await query.answer("This player is not available for your team.", show_alert=True)
+        return
+
+    selection = _challenge_xi_selection(draft, side)
+    selected_ids = selection.setdefault("player_ids", [])
+    if selection.get("confirmed"):
+        await query.answer("Your Playing XI is already confirmed.", show_alert=True)
+        return
+    if player_id in selected_ids:
+        await query.answer("A player cannot be selected twice.", show_alert=True)
+        return
+    if len(selected_ids) >= 11:
+        await query.answer("You have already selected 11 players. Confirm XI.", show_alert=True)
+        return
+
+    proposed_ids = selected_ids + [player_id]
+    proposed_players = [player_map[pid] for pid in proposed_ids if pid in player_map]
+    if len(proposed_ids) == 11:
+        valid, error = _challenge_xi_validation(proposed_players)
+        if not valid:
+            await query.answer(error, show_alert=True)
+            return
+
+    selected_ids.append(player_id)
+    await query.answer(f"Selected: {len(selected_ids)}/11")
+    try:
+        await query.edit_message_text(
+            _challenge_xi_text(draft, side, team_name, players, selected_ids),
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
+        )
+    except Exception:
+        logger.exception("Failed to update challenge XI selection message")
+
+
+async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm a valid 11-player XI for the selected challenge team owner."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, side = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid XI confirmation.", show_alert=True)
+        return
+    if side not in ("host", "target"):
+        await query.answer("Invalid XI confirmation.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This Playing XI selection is no longer active.", show_alert=True)
+        return
+    expected_tg_id = (draft.get(side) or {}).get("tg_id")
+    if query.from_user.id != expected_tg_id:
+        await query.answer("This XI selection is not for you.", show_alert=True)
+        return
+
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    player_map = {int(getattr(player, "id")): player for player in players}
+    selection = _challenge_xi_selection(draft, side)
+    selected_ids = selection.setdefault("player_ids", [])
+    selected_players = [player_map[pid] for pid in selected_ids if pid in player_map]
+    valid, error = _challenge_xi_validation(selected_players)
+    if not valid:
+        await query.answer(error, show_alert=True)
+        return
+
+    selection["confirmed"] = True
+    await query.answer("Playing XI confirmed!")
+    batting_order = "\n".join(f"{idx}. {player.name}" for idx, player in enumerate(selected_players, start=1))
+    try:
+        await query.edit_message_text(
+            f"✅ <b>{team_name} Playing XI Confirmed</b>\n"
+            f"<b>Selected:</b> 11/11\n\n"
+            f"<b>Batting order:</b>\n{batting_order}",
             parse_mode="HTML",
         )
     except Exception:
-        logger.exception("Failed to send challenge XI player list")
+        logger.exception("Failed to confirm challenge XI selection message")
+
 
 # Legacy callback kept for safety if old inline buttons are still delivered.
 async def challenge_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
