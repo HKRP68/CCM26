@@ -1607,6 +1607,89 @@ class MatchScorecard(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CHALLENGE MODES — admin-managed Modes > Leagues > Teams > Players
+# ══════════════════════════════════════════════════════════════════════
+
+class ChallengeMode(Base):
+    """Top-level challenge mode grouping for league/team/player data."""
+    __tablename__ = "challenge_modes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    leagues = relationship("ChallengeLeague", back_populates="mode", cascade="all, delete-orphan")
+
+
+class ChallengeLeague(Base):
+    """Admin-created challenge league command metadata."""
+    __tablename__ = "challenge_leagues"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mode_id = Column(Integer, ForeignKey("challenge_modes.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    short_code = Column(String(30), nullable=True, index=True)
+    command = Column(String(60), nullable=True, index=True)
+    image_url = Column(String(500), nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    mode = relationship("ChallengeMode", back_populates="leagues")
+    teams = relationship("ChallengeTeam", back_populates="league", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_challenge_league_mode_name", "mode_id", "name", unique=True),
+    )
+
+
+class ChallengeTeam(Base):
+    """Team roster container inside a challenge league."""
+    __tablename__ = "challenge_teams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    short_name = Column(String(30), nullable=True, index=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    league = relationship("ChallengeLeague", back_populates="teams")
+    players = relationship("ChallengePlayer", back_populates="team", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_challenge_team_league_name", "league_id", "name", unique=True),
+    )
+
+
+class ChallengePlayer(Base):
+    """Simple player entry inside a challenge team, extensible via details_json."""
+    __tablename__ = "challenge_players"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(150), nullable=False)
+    details_json = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("ChallengeTeam", back_populates="players")
+
+    __table_args__ = (
+        Index("ix_challenge_player_team_name", "team_id", "name", unique=True),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # FANTASY LEAGUE — admin-controlled weekly fantasy cricket competition
 # ══════════════════════════════════════════════════════════════════════

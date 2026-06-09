@@ -9,7 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import FantasyLeague, Match, User
+from models import ChallengeLeague, FantasyLeague, Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import (
@@ -66,18 +66,54 @@ def _league_key_from_command(command_name):
 def _challenge_leagues(session):
     leagues = dict(BUILT_IN_CHALLENGE_LEAGUES)
     try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)
+                       .all()):
+            key = normalize_challenge_league(league.short_code or league.name)
+            if key:
+                leagues[key] = league.name.strip()
+    except Exception:
+        logger.exception("Failed to load admin challenge leagues")
+    try:
         for name, in session.query(FantasyLeague.name).all():
             key = normalize_challenge_league(name)
             if key:
-                leagues[key] = name.strip()
+                leagues.setdefault(key, name.strip())
     except Exception:
-        logger.exception("Failed to load dynamic challenge leagues")
+        logger.exception("Failed to load fantasy challenge leagues")
     return leagues
+
+
+def _challenge_league_command_aliases(session):
+    """Return exact command aliases for admin-managed challenge leagues."""
+    aliases = {}
+    try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)
+                       .all()):
+            league_key = normalize_challenge_league(league.short_code or league.name)
+            if not league_key:
+                continue
+            display_name = (league.name or league_key.upper()).strip()
+            command = (league.command or "").strip().lower().lstrip("/").split("@", 1)[0]
+            if command:
+                aliases[command] = (league_key, display_name)
+            short = normalize_challenge_league(league.short_code)
+            if short:
+                aliases.setdefault(f"c{short}", (league_key, display_name))
+                aliases.setdefault(f"challenge{short}", (league_key, display_name))
+    except Exception:
+        logger.exception("Failed to load admin challenge command aliases")
+    return aliases
 
 
 def is_challenge_league_command(command_name, session):
     """Return ``(league_key, display_name)`` for supported challenge league commands."""
-    league_key = _league_key_from_command(command_name)
+    command = (command_name or "").lower().lstrip("/")
+    aliases = _challenge_league_command_aliases(session)
+    if command in aliases:
+        return aliases[command]
+    league_key = _league_key_from_command(command)
     if not league_key:
         return None, None
     leagues = _challenge_leagues(session)

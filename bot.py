@@ -843,7 +843,7 @@ def main():
         app.add_handler(CommandHandler("bal", bal_handler))
         app.add_handler(CommandHandler("cm", challenge_handler))
         app.add_handler(MessageHandler(
-            _filters.Regex(r"^/(?:challenge[A-Za-z0-9_]+|c[A-Za-z0-9_]+)(?:@\w+)?(?:\s|$)"),
+            _filters.Regex(r"^/[A-Za-z0-9_]+(?:@\w+)?(?:\s|$)"),
             challenge_league_handler,
         ), group=1)
         app.add_handler(CallbackQueryHandler(challenge_accept_callback, pattern=r"^cm_accept_"))

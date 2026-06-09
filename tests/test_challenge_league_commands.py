@@ -33,6 +33,9 @@ def _load_challenge_with_stubs():
     models = types.ModuleType("models")
     models.Match = type("Match", (), {})
     models.User = type("User", (), {})
+    class ChallengeLeague:
+        is_active = True
+    models.ChallengeLeague = ChallengeLeague
     models.FantasyLeague = type("FantasyLeague", (), {"name": "name"})
     sys.modules["models"] = models
 
@@ -62,6 +65,9 @@ def _load_challenge_with_stubs():
 
 
 class DummyQuery:
+    def filter(self, *args, **kwargs):
+        return self
+
     def all(self):
         return []
 
@@ -100,6 +106,18 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(challenge.is_challenge_league_command("cbbl", session), ("bbl", "BBL"))
         self.assertEqual(challenge.is_challenge_league_command("challengeINT", session), ("int", "INT"))
         self.assertEqual(challenge.is_challenge_league_command("cint", session), ("int", "INT"))
+
+
+    def test_admin_exact_command_alias_resolves(self):
+        session = DummySession()
+
+        with patch.object(
+            challenge,
+            "_challenge_league_command_aliases",
+            return_value={"csa20": ("sa20", "SA20"), "playt20": ("t20", "International T20")},
+        ):
+            self.assertEqual(challenge.is_challenge_league_command("csa20", session), ("sa20", "SA20"))
+            self.assertEqual(challenge.is_challenge_league_command("playt20", session), ("t20", "International T20"))
 
     def test_dynamic_command_resolves_admin_created_league_name(self):
         session = DummySession()
