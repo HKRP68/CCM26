@@ -58,6 +58,7 @@ DEFAULTS = {
     # webapp opts every newly started match into the Mini App board.
     "match_style": "telegram",
     "challenge_max_overs": 2,
+    "allow_same_team_challenge": False,
     # Player card rendering style + admin-uploaded template settings
     "card_style": "tier",
     "card_template_image_path": None,
@@ -99,6 +100,11 @@ def get_challenge_max_overs(session=None):
         return max(1, min(20, int(_refresh(session).get("challenge_max_overs", 2))))
     except (TypeError, ValueError):
         return 2
+
+
+def get_allow_same_team_challenge(session=None):
+    """Return whether league challenges may use the same team for both players."""
+    return bool(_refresh(session).get("allow_same_team_challenge", False))
 
 
 def get_card_style(session=None):

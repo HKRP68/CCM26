@@ -36,6 +36,13 @@
   <input type="number" name="challenge_max_overs" min="1" max="20" value="{{ cfg.challenge_max_overs or 2 }}" style="max-width:120px; margin-bottom:1.2rem;">
   <p style="color:var(--muted); margin:-.7rem 0 1.2rem;">Used by new <code>/cm @user</code> matches. Challenge innings always end after two wickets.</p>
 
+  <label style="display:block; margin:1rem 0 1.2rem;">
+    <input type="checkbox" name="allow_same_team_challenge" value="on"
+           {% if cfg.allow_same_team_challenge %}checked{% endif %}>
+    <strong>Allow same-team league challenges</strong>
+    <span style="display:block; color:var(--muted); margin:.25rem 0 0 1.5rem;">When disabled, the second player must choose a different IPL/league team.</span>
+  </label>
+
   <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.8rem 1rem; margin-bottom:1.2rem; color:var(--muted); font-size:.85rem;">
     ℹ️ Saving changes the default for matches started afterward. Matches already in progress keep their current flow.
   </div>
