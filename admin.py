@@ -10983,7 +10983,7 @@ def _ensure_default_challenge_mode(db):
               .first())
     if mode:
         return mode
-    mode = ChallengeMode(name="Challenge Mode", description="Default challenge-mode data", sort_order=0)
+    mode = ChallengeMode(name="League Battles", description="Default league battle data", sort_order=0)
     db.add(mode)
     db.flush()
     return mode
