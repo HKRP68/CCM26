@@ -1,0 +1,197 @@
+# SimCricketX Ground Conditions Configuration
+# Edit via Ground Conditions UI or directly in this file
+# All scoring_matrix values must sum to 1.0
+
+version: 1
+
+# Active game mode (multiplier layer on top of pitch profiles)
+active_game_mode: "natural_game"
+
+# ─── PITCH PROFILES ───
+pitch_profiles:
+  Green:
+    description: "Seamer-friendly surface with lateral movement — pace bowlers dominate, low scoring"
+    scoring_matrix:
+      Dot: 0.35
+      Single: 0.365
+      Double: 0.085
+      Three: 0.005
+      Four: 0.07
+      Six: 0.025
+      Wicket: 0.065
+      Extras: 0.04
+    run_factor: 0.85
+    wicket_factors:
+      Fast: 1.40
+      Fast-medium: 1.20
+      Medium-fast: 1.15
+      default: 0.55
+
+  Dry:
+    description: "Spin-friendly surface with variable bounce — spinners thrive, tough to score"
+    scoring_matrix:
+      Dot: 0.33
+      Single: 0.367
+      Double: 0.088
+      Three: 0.008
+      Four: 0.07
+      Six: 0.03
+      Wicket: 0.06
+      Extras: 0.04
+    run_factor: 0.85
+    wicket_factors:
+      Leg spin: 1.40
+      Wrist spin: 1.35
+      Off spin: 1.30
+      Finger spin: 1.20
+      default: 0.60
+
+  Hard:
+    description: "True bounce with carry — balanced contest with slight batting edge"
+    scoring_matrix:
+      Dot: 0.28
+      Single: 0.345
+      Double: 0.12
+      Three: 0.008
+      Four: 0.10
+      Six: 0.06
+      Wicket: 0.04
+      Extras: 0.04
+    run_factor: 1.10
+    wicket_factors:
+      Fast: 1.10
+      Fast-medium: 1.05
+      Medium-fast: 1.00
+      default: 0.90
+
+  Flat:
+    description: "True surface with even bounce — batting paradise, bowlers need skill"
+    scoring_matrix:
+      Dot: 0.24
+      Single: 0.335
+      Double: 0.14
+      Three: 0.008
+      Four: 0.13
+      Six: 0.08
+      Wicket: 0.055
+      Extras: 0.025
+    run_factor: 1.08
+    wicket_factors:
+      default: 0.85
+
+  Dead:
+    description: "Lifeless track with nothing for bowlers — batting festival guaranteed"
+    scoring_matrix:
+      Dot: 0.20
+      Single: 0.325
+      Double: 0.145
+      Three: 0.005
+      Four: 0.17
+      Six: 0.09
+      Wicket: 0.035
+      Extras: 0.025
+    run_factor: 1.30
+    wicket_factors:
+      Fast: 0.60
+      Fast-medium: 0.60
+      Medium-fast: 0.60
+      Off spin: 0.60
+      Leg spin: 0.60
+      Finger spin: 0.60
+      Wrist spin: 0.60
+      default: 0.60
+
+# ─── PHASE BOOSTS ───
+phase_boosts:
+  powerplay:
+    boundary_multiplier: 1.25
+    overs_start: 0
+    overs_end: 5
+  death_overs:
+    overs_start: 16
+    overs_end: 19
+    boundary_boost_batting_pitch: 2.2
+    boundary_boost_bowling_pitch: 1.8
+    wicket_boost: 1.6
+  second_innings_death:
+    scoring_boost: 1.15
+    wicket_boost: 1.1
+
+# ─── GAME MODES ───
+# Each mode applies multipliers on top of the pitch profile.
+# Values are multipliers: 1.0 = no change. After applying, probabilities are re-normalized to 1.0.
+game_modes:
+  natural_game:
+    label: "Natural Game"
+    description: "Balanced, realistic T20 cricket simulation"
+    icon: "fa-cricket-bat-ball"
+    modifiers:
+      dot_mult: 1.0
+      single_mult: 1.0
+      double_mult: 1.0
+      three_mult: 1.0
+      four_mult: 1.0
+      six_mult: 1.0
+      wicket_mult: 1.0
+      extras_mult: 1.0
+
+  aggressive:
+    label: "Aggressive"
+    description: "Higher boundaries, higher wickets — high risk, high reward"
+    icon: "fa-bolt"
+    modifiers:
+      dot_mult: 0.85
+      single_mult: 0.81
+      double_mult: 0.90
+      three_mult: 0.90
+      four_mult: 1.17
+      six_mult: 1.26
+      wicket_mult: 1.375
+      extras_mult: 0.99
+
+  defensive:
+    label: "Defensive"
+    description: "More dots and singles, fewer boundaries, moderate wickets"
+    icon: "fa-shield-halved"
+    modifiers:
+      dot_mult: 1.20
+      single_mult: 1.15
+      double_mult: 1.05
+      three_mult: 1.0
+      four_mult: 0.75
+      six_mult: 0.60
+      wicket_mult: 0.90
+      extras_mult: 1.0
+
+  flat_track_bully:
+    label: "Flat Track Bully"
+    description: "Batting paradise — minimal wickets, boundary bonanza"
+    icon: "fa-fire"
+    modifiers:
+      dot_mult: 0.80
+      single_mult: 0.86
+      double_mult: 0.99
+      three_mult: 0.90
+      four_mult: 1.22
+      six_mult: 1.35
+      wicket_mult: 0.69
+      extras_mult: 0.81
+
+  bowlers_day:
+    label: "Bowler's Day"
+    description: "High dot rates, high wickets, low boundaries"
+    icon: "fa-bowling-ball"
+    modifiers:
+      dot_mult: 1.30
+      single_mult: 1.05
+      double_mult: 0.90
+      three_mult: 0.90
+      four_mult: 0.65
+      six_mult: 0.50
+      wicket_mult: 1.50
+      extras_mult: 1.10
+
+# ─── BLENDING WEIGHTS ───
+blending:
+  pitch_weight: 0.6
+  skill_weight: 0.4

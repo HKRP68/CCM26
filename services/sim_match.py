@@ -1,30 +1,35 @@
 """Auto-simulated cricket match engine (the /sim command).
 
-Unlike the interactive engine (services/match_engine.py + the Mini App, where the
-user picks every delivery and shot), this module simulates an entire match
-server-side in one call and returns a fully resolved result with a ball-by-ball
-commentary feed. It reuses the existing ball-outcome model
-(services.probability_engine.calculate_outcome) so scoring stays consistent with
-/wpm and /cm, and the commentary system (services.commentary_service) for text.
+Uses the SimCricketX engine (engine/) which provides:
+  - Momentum & par-score curves (game_state_engine)
+  - Psychological pressure factors (pressure_engine)
+  - Realistic ball outcomes keyed to pitch profiles (ball_outcome / ground_config)
+  - Format-aware bowler rotation (bowler_manager / format_config)
 
-Team setup is deliberately simple (the "/sim" design choice):
+Team setup:
   - Batting order  = highest batting rating to lowest.
-  - Bowling        = only Bowlers and All-rounders bowl, rotated with no bowler
-                     bowling consecutive overs and a per-bowler over cap.
+  - Bowling        = Bowlers and All-rounders bowl; BowlerManager enforces quota
+                     and no-consecutive-overs rule automatically.
 
-The module is pure (no Telegram / asyncio). The handler layer drives it and
-handles message sending and the suspense delay.
+The module is pure (no Telegram / asyncio). The handler layer drives it.
 """
 
 import math
 import random
 from datetime import datetime
 
-from services.probability_engine import calculate_outcome
-from services.bowling_service import get_delivery_options, AVAILABLE_SHOTS
+from engine.ball_outcome import calculate_outcome
+from engine.pressure_engine import PressureEngine
+from engine.game_state_engine import (
+    make_ball_event,
+    compute_game_state_vector,
+    BALL_HISTORY_WINDOW,
+)
+from engine.format_config import get_format, FORMAT_REGISTRY, FormatConfig, Phase
+from engine.bowler_manager import BowlerManager
 
-# Wicket "how" (from probability_engine) → commentary event key.
-_HOW_TO_EVENT = {
+# Wicket type → commentary event key.
+_WICKET_EVENT = {
     "Bowled": "wicket_bowled",
     "LBW": "wicket_lbw",
     "Stumped": "wicket_stumped",
@@ -36,10 +41,113 @@ _HOW_TO_EVENT = {
 
 _RUNS_TO_EVENT = {0: "dot", 1: "one", 2: "two", 3: "three", 4: "four", 6: "six"}
 
-# Phase-based shot pools for the auto-batsman.
+# Re-export constants used by services/match_dynamics.py (super-over helper).
+_HOW_TO_EVENT = _WICKET_EVENT   # alias
+_RUNS_TO_EVENT = {0: "dot", 1: "one", 2: "two", 3: "three", 4: "four", 6: "six"}
 _ATTACK = ["Drive", "Loft", "Slog", "Pull", "Slog Sweep", "Square Cut", "Hook", "Cut"]
 _NORMAL = ["Drive", "Cut", "Flick", "Leg Glance", "On Drive", "Off Drive", "Glance", "Pull"]
 _DEFENSIVE = ["Defend", "Leave", "Glance", "Leg Glance", "Flick"]
+
+# Bowl-style name map: CCM26 style strings → engine bowling_type strings
+_BOWL_TYPE_MAP = {
+    "Fast": "Fast",
+    "Fast-medium": "Fast-medium",
+    "Fast Medium": "Fast-medium",
+    "Medium-fast": "Medium-fast",
+    "Medium Fast": "Medium-fast",
+    "Medium": "Medium-fast",
+    "Off spin": "Off spin",
+    "Off Spin": "Off spin",
+    "Off Break": "Off spin",
+    "Leg spin": "Leg spin",
+    "Leg Spin": "Leg spin",
+    "Leg Break": "Leg spin",
+    "Finger spin": "Finger spin",
+    "Finger Spin": "Finger spin",
+    "Wrist spin": "Wrist spin",
+    "Wrist Spin": "Wrist spin",
+    "Left-arm spin": "Finger spin",
+    "Left Arm Spin": "Finger spin",
+    "Slow Left Arm": "Finger spin",
+    "Swing": "Fast-medium",
+    "": "Medium-fast",
+}
+
+
+def _adapt_player(p):
+    """Convert a CCM26 player dict to the format expected by the engine."""
+    bowl_style = p.get("bowl_style") or p.get("bowling_type") or ""
+    bowling_type = _BOWL_TYPE_MAP.get(bowl_style, "Medium-fast")
+    category = p.get("category", "")
+    will_bowl = (
+        p.get("will_bowl", False)
+        or category in ("Bowler", "All-rounder")
+    )
+    return {
+        **p,
+        "batting_rating": float(
+            p.get("bat_rating") or p.get("batting_rating") or p.get("rating") or 50
+        ),
+        "bowling_rating": float(
+            p.get("bowl_rating") or p.get("bowling_rating") or 40
+        ),
+        "fielding_rating": float(
+            p.get("fielding_rating") or p.get("field_rating") or 65
+        ),
+        "batting_hand": p.get("bat_hand") or p.get("batting_hand") or "Right",
+        "bowling_hand": p.get("bowl_hand") or p.get("bowling_hand") or "Right",
+        "bowling_type": bowling_type,
+        "will_bowl": will_bowl,
+    }
+
+
+def _fmt_to_engine_fmt(fmt_dict, overs):
+    """Return an engine FormatConfig for the given fmt dict / overs count.
+
+    Builds a custom FormatConfig when the label isn't in FORMAT_REGISTRY so
+    that non-standard formats (T10, custom over counts) respect their
+    max_bowler_overs and phase windows.
+    """
+    if fmt_dict is not None:
+        label = fmt_dict.get("label", "") or fmt_dict.get("name", "") or ""
+        if label in FORMAT_REGISTRY:
+            return FORMAT_REGISTRY[label]
+        fmt_overs = int(fmt_dict.get("overs", overs))
+        max_q = int(fmt_dict.get("max_bowler_overs") or max(1, -(-fmt_overs // 5)))
+        pp_end = int(fmt_dict.get("powerplay_end", max(1, round(fmt_overs * 0.3))))
+        death_start = int(fmt_dict.get("death_start", fmt_overs - max(1, round(fmt_overs * 0.2)) + 1))
+    else:
+        fmt_overs = int(overs)
+        max_q = max(1, -(-fmt_overs // 5))
+        pp_end = max(1, round(fmt_overs * 0.3))
+        death_start = fmt_overs - max(1, round(fmt_overs * 0.2)) + 1
+        label = "T20" if fmt_overs <= 20 else "ListA"
+        if label in FORMAT_REGISTRY:
+            return FORMAT_REGISTRY[label]
+
+    # Build a lightweight FormatConfig from the services.match_formats dict
+    pp_phase = Phase(name="Powerplay", start=0, end=pp_end - 1)
+    mid_phase = Phase(name="Middle", start=pp_end, end=death_start - 2)
+    death_phase = Phase(name="Death", start=death_start - 1, end=fmt_overs - 1)
+
+    base = FORMAT_REGISTRY["T20"]
+    return FormatConfig(
+        name=label or f"{fmt_overs}ov",
+        overs=fmt_overs,
+        max_bowler_overs=max_q,
+        allow_consecutive_overs=False,
+        powerplay_phases=[pp_phase],
+        middle_phase=mid_phase,
+        death_phase=death_phase,
+        par_scores=base.par_scores,
+        pitch_par_factors=base.pitch_par_factors,
+        expected_rr=base.expected_rr,
+        extras_per_innings=base.extras_per_innings,
+        target_scores=base.target_scores,
+        correct_toss_choice=base.correct_toss_choice,
+        correct_toss_choice_dn=base.correct_toss_choice_dn,
+        rrr_baseline=base.rrr_baseline,
+    )
 
 
 def _new_bat_stat():
@@ -51,66 +159,29 @@ def _new_bowl_stat():
     return {"balls": 0, "runs": 0, "wickets": 0, "maidens": 0}
 
 
-def _pick_shot(over, total_overs, wickets, phase="Middle", run_factor=1.0):
-    """Choose a shot for the auto-batsman based on phase, wickets, and pitch.
-
-    phase: 'Powerplay' | 'Middle' | 'Death' (format-aware).
-    run_factor: pitch run factor (<1 bowling-friendly → more conservative;
-                >1 batting-friendly → more aggressive).
-    """
-    # Base aggression weights per pool: [attack, normal, defend].
-    if wickets >= 7:
-        w = [1, 3, 3]
-    elif phase in ("Powerplay", "Death"):
-        w = [5, 3, 1]
-    else:
-        w = [2, 4, 2]
-
-    # Pitch tilt: shift weight toward attack on batting pitches, toward defence
-    # on bowling pitches.
-    tilt = run_factor - 1.0  # roughly -0.15 .. +0.30
-    w[0] = max(0.2, w[0] * (1 + tilt * 2))
-    w[2] = max(0.2, w[2] * (1 - tilt * 2))
-
-    pool = random.choices([_ATTACK, _NORMAL, _DEFENSIVE], weights=w, k=1)[0]
-    return random.choice(pool)
-
-
-def _pick_delivery(bowler):
-    """Return (variation, length) for the bowler's profile."""
-    opts = get_delivery_options(bowler.get("bowl_style"), bowler.get("bowl_hand"))
-    if opts.get("is_spinner"):
-        return random.choice(opts.get("deliveries") or ["Off Break"]), None
-    return (random.choice(opts.get("variations") or ["Seam Up"]),
-            random.choice(opts.get("lengths") or ["Good"]))
+def _eligible_bowlers(bowling_xi):
+    eligible = [p for p in bowling_xi if p.get("will_bowl", False)
+                or p.get("category") in ("Bowler", "All-rounder")]
+    return eligible or list(bowling_xi)
 
 
 def _bowler_overs_bowled(stat):
-    """Return overs as a decimal number for AI selection/economy scoring."""
     return (stat or {}).get("balls", 0) / 6
 
 
 def _bowler_economy(stat):
-    overs_bowled = _bowler_overs_bowled(stat)
-    if overs_bowled <= 0:
+    overs = _bowler_overs_bowled(stat)
+    if overs <= 0:
         return 0
-    return (stat or {}).get("runs", 0) / overs_bowled
-
-
-def _eligible_bowlers(bowling_xi):
-    """Prefer real bowling roles, but keep a safe fallback for unusual XIs."""
-    eligible = [p for p in bowling_xi
-                if p.get("category") in ("Bowler", "All-rounder")]
-    return eligible or list(bowling_xi)
+    return (stat or {}).get("runs", 0) / overs
 
 
 def _select_ai_bowler(bowling_xi, bowl_stats, over_idx, total_overs,
                       prev_bowler_id=None, max_bowler_overs=None):
     """Pick the next /sim bowler using rating, role, economy, wickets and phase.
 
-    The scoring mirrors the requested Sim AI logic while retaining the engine's
-    existing safety behavior: if a format has too few eligible bowlers to fill
-    all overs, the per-bowler cap is extended just enough to finish the innings.
+    Kept for backward compatibility (tests import this directly).
+    bowl_stats is keyed by id(player).
     """
     eligible = _eligible_bowlers(bowling_xi)
     if not eligible:
@@ -133,7 +204,7 @@ def _select_ai_bowler(bowling_xi, bowl_stats, over_idx, total_overs,
 
     def score(player):
         stat = bowl_stats.get(id(player), {})
-        rating = player.get("bowl_rating", 0) or 0
+        rating = player.get("bowl_rating", 0) or player.get("bowling_rating", 0) or 0
         economy = _bowler_economy(stat)
         overs_bowled = _bowler_overs_bowled(stat)
         wickets = stat.get("wickets", 0)
@@ -143,35 +214,35 @@ def _select_ai_bowler(bowling_xi, bowl_stats, over_idx, total_overs,
             value += 18
         elif player.get("category") == "All-rounder":
             value += 10
-
         if overs_bowled > 0:
             value += max(0, 10 - economy) * 8
         else:
             value += 12
-
         value += wickets * 14
-
         if is_death_over:
             value += rating * 0.8
             if economy > 10 and overs_bowled > 0:
                 value -= 35
             if wickets > 0:
                 value += 20
-
         if is_powerplay:
             if rating >= 80:
                 value += 20
             if player.get("category") == "Bowler":
                 value += 10
-
         value -= (overs_bowled / cap) * 20
         return value
 
-    return max(available, key=lambda p: (score(p), p.get("bowl_rating", 0), p.get("name", "")))
+    return max(available, key=lambda p: (score(p),
+                                         p.get("bowl_rating") or p.get("bowling_rating") or 0,
+                                         p.get("name", "")))
 
 
 def _build_bowling_plan(bowling_xi, overs, max_bowler_overs=None):
-    """Pick an AI-style over-by-over bowler list for pre-match previews/tests."""
+    """Pick an AI-style over-by-over bowler list for pre-match previews/tests.
+
+    Kept for backward compatibility (tests import this directly).
+    """
     eligible = _eligible_bowlers(bowling_xi)
     bowl_stats = {id(p): _new_bowl_stat() for p in eligible}
     plan, last = [], None
@@ -186,9 +257,81 @@ def _build_bowling_plan(bowling_xi, overs, max_bowler_overs=None):
     return plan
 
 
+def _normalize_outcome(oc):
+    """Normalise a ball outcome dict to the new-engine format.
+
+    Handles both new-engine format (type='run'/'wicket'/'extra') and the
+    legacy probability_engine format (type='runs'/'wicket'/'wide'/'noball'/
+    'legbye') so that monkeypatched tests still work.
+    """
+    otype = oc.get("type", "")
+    # Already new-engine format
+    if otype in ("run", "wicket", "extra"):
+        return oc
+    # Legacy format → new format
+    if otype == "wide":
+        return {"type": "extra", "is_extra": True, "extra_type": "Wide",
+                "runs": oc.get("runs", 0), "batter_out": False, "wicket_type": None}
+    if otype == "noball":
+        return {"type": "extra", "is_extra": True, "extra_type": "No Ball",
+                "runs": oc.get("runs", 0), "batter_out": False, "wicket_type": None}
+    if otype == "legbye":
+        return {"type": "extra", "is_extra": True, "extra_type": "LegByes",
+                "runs": oc.get("runs", 1), "batter_out": False, "wicket_type": None}
+    if otype == "runs":
+        return {"type": "run", "is_extra": False,
+                "runs": oc.get("runs", 0), "batter_out": False, "wicket_type": None}
+    # Wicket: both old and new use type='wicket', but old uses 'how' not 'wicket_type'
+    if otype == "wicket":
+        return {"type": "wicket", "is_extra": False,
+                "runs": oc.get("runs", 0),
+                "batter_out": True,
+                "wicket_type": oc.get("wicket_type") or oc.get("how", "Caught"),
+                "extra_type": ""}
+    return oc
+
+
+def _select_fallback_bowler(eligible, bowl_stats_by_name, over_idx, total_overs,
+                             prev_bowler_name=None, max_bowler_overs=None):
+    """Fallback bowler selection when BowlerManager returns empty."""
+    if not eligible:
+        return None
+    quota = max_bowler_overs or math.ceil(total_overs / 5)
+    cap = max(quota, math.ceil(total_overs / len(eligible)))
+    is_powerplay = over_idx < math.ceil(total_overs * 0.3)
+    is_death = over_idx >= math.floor(total_overs * 0.75)
+
+    def score(p):
+        stat = bowl_stats_by_name.get(p.get("name", ""), {})
+        overs_done = stat.get("balls", 0) / 6
+        rating = p.get("bowling_rating", 0)
+        value = rating * 2.2
+        if overs_done > 0:
+            economy = stat.get("runs", 0) / overs_done
+            value += max(0, 10 - economy) * 8
+        value += stat.get("wickets", 0) * 14
+        if is_death:
+            value += rating * 0.8
+        if is_powerplay and rating >= 80:
+            value += 20
+        value -= (overs_done / cap) * 20
+        return value
+
+    available = [
+        p for p in eligible
+        if (bowl_stats_by_name.get(p.get("name", ""), {}).get("balls", 0) / 6) < cap
+        and p.get("name") != prev_bowler_name
+    ]
+    if not available:
+        available = eligible
+    return max(available, key=lambda p: (score(p), p.get("bowling_rating", 0)))
+
+
 def _fielder_keeper(bowling_xi):
-    keeper = next((p["name"] for p in bowling_xi
-                   if p.get("category") == "Wicket Keeper"), "the keeper")
+    keeper = next(
+        (p["name"] for p in bowling_xi if p.get("category") == "Wicket Keeper"),
+        "the keeper",
+    )
     fielders = [p["name"] for p in bowling_xi] or ["the fielder"]
     return fielders, keeper
 
@@ -199,37 +342,69 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                      fmt=None, run_factor=1.0, scenario=False):
     """Simulate one innings and return its result dict.
 
+    Uses the SimCricketX engine (pressure_engine, game_state_engine,
+    ball_outcome, bowler_manager) for realistic ball-by-ball simulation.
+
     commentary: optional callable(event_key, batsman, bowler, fielder, keeper,
                 runs) -> str|None used to render a line per ball.
     feed: optional list to append ball-by-ball commentary entries to.
-    fmt: optional format config (services.match_formats) controlling the bowler
-         quota and phase windows.
-    run_factor: pitch run factor used to tune batting aggression.
+    fmt: optional services.match_formats format dict (or None).
+    run_factor: pitch run factor (kept for API compatibility; engine uses
+                ground_config's pitch scoring matrix directly).
     """
-    from services.match_formats import phase_for
-    from services.match_dynamics import chase_pressure, scenario_boost
-    order = sorted(batting_xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
-                   reverse=True)
-    max_bowler_overs = (fmt or {}).get("max_bowler_overs")
-    eligible_bowlers = _eligible_bowlers(bowling_xi)
-    plan = []
-    fielders, keeper = _fielder_keeper(bowling_xi)
+    # -- Player adaptation --
+    batting_order = sorted(
+        [_adapt_player(p) for p in batting_xi],
+        key=lambda p: p.get("bat_rating") or p.get("batting_rating") or p.get("rating") or 0,
+        reverse=True,
+    )
+    bowling_adapted = [_adapt_player(p) for p in bowling_xi]
 
-    bat_stats = {id(p): _new_bat_stat() for p in order}
-    bowl_stats = {id(p): _new_bowl_stat() for p in eligible_bowlers}
+    # Ensure we always have enough bowlers: promote batters/keepers if needed
+    eligible = _eligible_bowlers(bowling_adapted)
+    if len(eligible) < max(3, math.ceil(overs / 4)):
+        for p in bowling_adapted:
+            if not p.get("will_bowl"):
+                p["will_bowl"] = True
+            if len(_eligible_bowlers(bowling_adapted)) >= max(3, math.ceil(overs / 4)):
+                break
+
+    # -- Engine format config --
+    engine_fmt = _fmt_to_engine_fmt(fmt, overs)
+
+    # -- BowlerManager for quota + consecutive enforcement --
+    bowler_mgr = BowlerManager(bowling_adapted, engine_fmt)
+
+    # -- PressureEngine for psychological pressure --
+    pressure_eng = PressureEngine(format_config=engine_fmt)
+
+    # -- Misc state --
+    fielders, keeper = _fielder_keeper(bowling_adapted)
+    bat_stats = {id(p): _new_bat_stat() for p in batting_order}
+    bowl_stats_by_name = {}   # name → _new_bowl_stat()
+    bowl_stats_by_id = {}     # id(p) → same dict (for legacy scorecard rendering)
+    for p in bowling_adapted:
+        d = _new_bowl_stat()
+        bowl_stats_by_name[p["name"]] = d
+        bowl_stats_by_id[id(p)] = d
 
     total_runs = 0
     total_wkts = 0
     extras = {"wides": 0, "noballs": 0, "legbyes": 0}
-    fow = []  # [(runs, wkts, name, over_str)]
+    fow = []
     timeline = []
     over_summaries = []
+    plan = []
+
+    # GSME ball history
+    ball_history = []
+    batter_streaks = {}    # name → {"boundaries": int}
 
     striker_i, non_striker_i, next_i = 0, 1, 2
     free_hit = False
     chased = False
-    recent_runs_window = []   # batting runs over the last ~12 balls (momentum)
-    consec_wickets = 0        # wickets in a row for the bowling side (momentum)
+    legal_balls = 0
+    last_bowler_name = None
 
     def _balls_to_overs(b):
         return f"{b // 6}.{b % 6}"
@@ -237,9 +412,9 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     def _batting_snapshot():
         active = []
         for idx in (striker_i, non_striker_i):
-            if idx >= len(order):
+            if idx >= len(batting_order):
                 continue
-            p = order[idx]
+            p = batting_order[idx]
             bs = bat_stats[id(p)]
             active.append({
                 "name": p["name"],
@@ -252,26 +427,26 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             })
         return active
 
-    def _emit(event_key, batsman, bowler, runs, legal_balls):
+    def _emit(event_key, batsman, bowler_name, runs, lb):
         line = None
         if commentary:
             try:
-                line = commentary(event_key, batsman, bowler,
+                line = commentary(event_key, batsman, bowler_name,
                                   random.choice(fielders), keeper, runs)
             except Exception:
                 line = None
         if feed is not None:
             feed.append({
                 "innings": innings_no,
-                "over": _balls_to_overs(legal_balls),
+                "over": _balls_to_overs(lb),
                 "score": f"{total_runs}/{total_wkts}",
                 "striker": batsman,
-                "bowler": bowler,
+                "bowler": bowler_name,
                 "event": event_key,
                 "text": line or "",
             })
 
-    def _record_over_summary(over_no, bowler, over_timeline, completed_balls):
+    def _record_over_summary(over_no, bowler_name, over_timeline, completed_balls):
         summary = {
             "innings": innings_no,
             "over": over_no,
@@ -280,18 +455,19 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             "bowling_team": bowling_team,
             "team_score": f"{total_runs}/{total_wkts}",
             "batsmen_score": _batting_snapshot(),
-            "bowler": bowler["name"],
+            "bowler": bowler_name,
             "over_timeline": list(over_timeline),
         }
         over_summaries.append(summary)
         if feed is not None:
-            current_striker = order[striker_i]["name"] if striker_i < len(order) else ""
+            current_striker = (batting_order[striker_i]["name"]
+                               if striker_i < len(batting_order) else "")
             feed.append({
                 "innings": innings_no,
                 "over": _balls_to_overs(completed_balls),
                 "score": summary["team_score"],
                 "striker": current_striker,
-                "bowler": bowler["name"],
+                "bowler": bowler_name,
                 "event": "end_of_over",
                 "team_score": summary["team_score"],
                 "batsmen_score": summary["batsmen_score"],
@@ -300,188 +476,279 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                          f"{summary['team_score']}"),
             })
 
-    legal_balls = 0
-    last_bowler_id = None
+    # -- Main simulation loop --
     for over_idx in range(overs):
         if total_wkts >= 10 or chased:
             break
-        bowler = _select_ai_bowler(
-            eligible_bowlers, bowl_stats, over_idx, overs,
-            last_bowler_id, max_bowler_overs)
-        if bowler is None:
-            break
+
+        # Select bowler via BowlerManager
+        overs_remaining_in_innings = overs - over_idx
+        eligible_now = bowler_mgr.get_eligible_bowlers(over_idx, overs_remaining_in_innings)
+        if not eligible_now:
+            # Fallback: use old rating-based selector
+            eligible_now = [
+                _select_fallback_bowler(
+                    _eligible_bowlers(bowling_adapted),
+                    bowl_stats_by_name,
+                    over_idx, overs,
+                    last_bowler_name,
+                    engine_fmt.max_bowler_overs,
+                )
+            ]
+            if not eligible_now or eligible_now[0] is None:
+                break
+
+        # Pick highest-rated eligible bowler, avoiding consecutive same bowler
+        def _bowler_score(p):
+            stat = bowl_stats_by_name.get(p.get("name", ""), {})
+            rating = p.get("bowling_rating", 0)
+            overs_done = stat.get("balls", 0) / 6
+            wickets = stat.get("wickets", 0)
+            is_death = engine_fmt.is_death(over_idx)
+            is_pp = engine_fmt.is_powerplay(over_idx)
+            v = rating * 2.0 + wickets * 12
+            if overs_done > 0:
+                economy = stat.get("runs", 0) / overs_done
+                v += max(0, 10 - economy) * 6
+            if is_death:
+                v += rating * 0.5
+            if is_pp and rating >= 80:
+                v += 15
+            return v
+
+        bowler = max(eligible_now, key=_bowler_score)
         plan.append(bowler)
-        last_bowler_id = id(bowler)
-        bw = bowl_stats[id(bowler)]
+        last_bowler_name = bowler.get("name")
+        bw = bowl_stats_by_name[last_bowler_name]
+
         over_bowler_runs = 0
         over_had_extra = False
         balls_this_over = 0
         over_timeline = []
+
         while balls_this_over < 6:
             if total_wkts >= 10 or chased:
                 break
-            striker = order[striker_i]
+
+            striker = batting_order[striker_i]
             bs = bat_stats[id(striker)]
-            phase = phase_for(over_idx + 1, fmt) if fmt else "Middle"
-            shot = _pick_shot(over_idx + 1, overs, total_wkts, phase, run_factor)
-            variation, length = _pick_delivery(bowler)
-            # Chase pressure (+ optional scenario drama for sim/bot turns).
-            pressure = chase_pressure(innings_no, target, total_runs,
-                                      legal_balls, overs, total_wkts)
-            if scenario:
-                pressure = min(1.0, pressure + scenario_boost(
-                    innings_no, target, total_runs, legal_balls, overs, True))
-            oc = calculate_outcome(
-                bowler.get("bowl_style"), bowler.get("bowl_hand"),
-                variation, length, pitch_type,
-                over_idx + 1, overs, shot,
-                striker.get("bat_rating", 0) or striker.get("rating", 0),
-                bowler.get("bowl_rating", 0),
-                free_hit=free_hit,
-                recent_runs=sum(recent_runs_window),
-                consec_wickets=consec_wickets,
-                pressure=pressure,
+            striker_name = striker["name"]
+            batting_position = striker_i + 1
+
+            # Build match_state for pressure engine
+            balls_left = overs * 6 - legal_balls
+            required_rr = 0.0
+            if target is not None and balls_left > 0:
+                needed = max(0, target - total_runs)
+                required_rr = needed / balls_left * 6.0
+            match_state = {
+                "innings": innings_no,
+                "current_over": over_idx,
+                "score": total_runs,
+                "wickets": total_wkts,
+                "required_run_rate": required_rr,
+                "overs_remaining": overs_remaining_in_innings,
+            }
+
+            # Pressure score (0-100 scale) from unified risk factor
+            risk_factor = pressure_eng.calculate_unified_risk_factor(match_state)
+            pressure_score = min(100.0, max(0.0, (risk_factor - 1.0) * 50.0))
+            pressure_effects = pressure_eng.get_pressure_effects(
+                pressure_score,
+                striker.get("batting_rating", 50),
+                bowler.get("bowling_rating", 50),
+                pitch_type,
             )
-            otype = oc["type"]
 
-            if otype == "wide":
-                total_runs += 1
-                bw["runs"] += 1
-                extras["wides"] += 1
-                over_bowler_runs += 1
-                over_had_extra = True
-                timeline.append("WD")
-                over_timeline.append("WD")
-                _emit("wide", striker["name"], bowler["name"], 0, legal_balls)
-                if target is not None and total_runs >= target:
-                    chased = True
-                continue  # not a legal ball, no strike change
+            # GSME game state
+            game_state = compute_game_state_vector(
+                ball_history=ball_history[-BALL_HISTORY_WINDOW:],
+                score=total_runs,
+                current_over=over_idx,
+                current_ball=balls_this_over,
+                wickets=total_wkts,
+                innings=innings_no,
+                target=target or 0,
+                pitch=pitch_type,
+                format_config=engine_fmt,
+            )
 
-            if otype == "noball":
-                runs = oc.get("runs", 0)
+            # Batter form/streak
+            streak = batter_streaks.get(striker_name, {"boundaries": 0})
+            batter_with_form = dict(striker)
+
+            # Bowler effectiveness with fatigue
+            fatigue = bowler_mgr.get_fatigue_mult(last_bowler_name)
+            bowler_effective = dict(bowler)
+            bowler_effective["bowling_rating"] = bowler.get("bowling_rating", 40) * fatigue
+
+            # pitch_wear: fraction of balls bowled this innings
+            total_balls = overs * 6
+            pitch_wear = min(1.0, legal_balls / max(1, total_balls))
+
+            oc = _normalize_outcome(calculate_outcome(
+                batter=batter_with_form,
+                bowler=bowler_effective,
+                pitch=pitch_type,
+                streak=streak,
+                over_number=over_idx,
+                batter_runs=bs["runs"],
+                innings=innings_no,
+                pressure_effects=pressure_effects,
+                allow_extras=True,
+                free_hit=free_hit,
+                balls_faced=bs["balls"],
+                game_state=game_state,
+                pitch_wear=pitch_wear,
+                batting_position=batting_position,
+                format_config=engine_fmt,
+            ))
+
+            otype = oc.get("type")        # "run" | "wicket" | "extra"
+            runs = oc.get("runs", 0)
+            is_extra = oc.get("is_extra", False)
+            extra_type = oc.get("extra_type", "")
+            batter_out = oc.get("batter_out", False)
+            wicket_type = oc.get("wicket_type")
+
+            # -- Extra deliveries (Wide, No Ball) are not legal balls --
+            if is_extra and extra_type in ("Wide", "No Ball"):
                 total_runs += 1 + runs
                 bw["runs"] += 1 + runs
-                extras["noballs"] += 1
                 over_bowler_runs += 1 + runs
                 over_had_extra = True
-                if runs:
-                    bs["runs"] += runs
-                    if runs == 4:
-                        bs["fours"] += 1
-                    elif runs == 6:
-                        bs["sixes"] += 1
-                timeline.append("NB")
-                over_timeline.append("NB")
-                _emit("no_ball", striker["name"], bowler["name"], runs, legal_balls)
+
+                if extra_type == "Wide":
+                    extras["wides"] += 1
+                    timeline.append("WD")
+                    over_timeline.append("WD")
+                    _emit("wide", striker_name, last_bowler_name, 0, legal_balls)
+                else:  # No Ball
+                    extras["noballs"] += 1
+                    if runs:
+                        bs["runs"] += runs
+                        if runs == 4:
+                            bs["fours"] += 1
+                        elif runs == 6:
+                            bs["sixes"] += 1
+                    timeline.append("NB")
+                    over_timeline.append("NB")
+                    _emit("no_ball", striker_name, last_bowler_name, runs, legal_balls)
+                    free_hit = True
+                    if runs % 2 == 1:
+                        striker_i, non_striker_i = non_striker_i, striker_i
+
+                ball_history.append(make_ball_event(oc))
                 if target is not None and total_runs >= target:
                     chased = True
-                free_hit = True
-                if runs % 2 == 1:
-                    striker_i, non_striker_i = non_striker_i, striker_i
                 continue  # not a legal ball
 
-            # ---- legal ball from here ----
+            # -- Legal ball --
             balls_this_over += 1
             legal_balls += 1
             bw["balls"] += 1
             bs["balls"] += 1
 
-            if otype == "legbye":
-                runs = oc.get("runs", 1)
+            if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
+                # Leg byes / byes: runs to team, not to bowler, not to batter
                 total_runs += runs
-                extras["legbyes"] += runs  # not charged to bowler
+                extras["legbyes"] += runs
                 over_had_extra = True
                 timeline.append("LB")
                 over_timeline.append("LB")
-                _emit("extras", striker["name"], bowler["name"], runs, legal_balls)
+                _emit("extras", striker_name, last_bowler_name, runs, legal_balls)
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
 
-            elif otype == "wicket":
-                how = oc.get("how", "Caught")
-                runs = oc.get("runs", 0)  # run-out can have completed runs
-                if runs:
-                    total_runs += runs
-                    bs["runs"] += runs
-                    over_bowler_runs += runs
-                    bw["runs"] += runs
+            elif otype == "wicket" or batter_out:
+                wtype = wicket_type or "Caught"
+                bat_runs = runs  # any completed runs on a run-out
+                if bat_runs:
+                    total_runs += bat_runs
+                    bs["runs"] += bat_runs
+                    over_bowler_runs += bat_runs
+                    bw["runs"] += bat_runs
                 total_wkts += 1
                 bs["out"] = True
-                bs["how"] = how
-                bs["bowler"] = bowler["name"]
-                if how != "Run Out":
+                bs["how"] = wtype
+                bs["bowler"] = last_bowler_name
+                if wtype != "Run Out":
                     bw["wickets"] += 1
                 timeline.append("W")
                 over_timeline.append("W")
-                fow.append((total_runs, total_wkts, striker["name"],
+                fow.append((total_runs, total_wkts, striker_name,
                             _balls_to_overs(legal_balls)))
-                _emit(_HOW_TO_EVENT.get(how, "wicket_caught_fielder"),
-                      striker["name"], bowler["name"], 0, legal_balls)
+                event_key = _WICKET_EVENT.get(wtype, "wicket_caught_fielder")
+                _emit(event_key, striker_name, last_bowler_name, 0, legal_balls)
                 free_hit = False
-                # Next batsman comes in at the striker's end. When nobody is
-                # left to partner, the side is all out.
-                if next_i < len(order):
+                batter_streaks.pop(striker_name, None)
+                if next_i < len(batting_order):
                     striker_i = next_i
                     next_i += 1
                 else:
-                    total_wkts = 10  # all out
-            else:  # runs
-                runs = oc.get("runs", 0)
+                    total_wkts = 10
+
+            else:  # run outcome
                 total_runs += runs
                 bs["runs"] += runs
                 over_bowler_runs += runs
                 bw["runs"] += runs
                 if runs == 4:
                     bs["fours"] += 1
+                    cur = batter_streaks.get(striker_name, {"boundaries": 0})
+                    batter_streaks[striker_name] = {"boundaries": cur["boundaries"] + 1}
                 elif runs == 6:
                     bs["sixes"] += 1
+                    cur = batter_streaks.get(striker_name, {"boundaries": 0})
+                    batter_streaks[striker_name] = {"boundaries": cur["boundaries"] + 1}
+                else:
+                    batter_streaks[striker_name] = {"boundaries": 0}
                 timeline.append(str(runs))
                 over_timeline.append(str(runs))
                 _emit(_RUNS_TO_EVENT.get(runs, "general"),
-                      striker["name"], bowler["name"], runs, legal_balls)
-                free_hit = False
+                      striker_name, last_bowler_name, runs, legal_balls)
+                if runs != 4 and runs != 6:
+                    free_hit = False
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
 
-            # Momentum bookkeeping (per legal ball): wickets in a row build
-            # bowling momentum; a run glut builds batting momentum.
-            if otype == "wicket":
-                consec_wickets += 1
-                recent_runs_window.append(0)
-            else:
-                consec_wickets = 0
-                recent_runs_window.append(runs if otype == "runs" else 0)
-            if len(recent_runs_window) > 12:
-                recent_runs_window = recent_runs_window[-12:]
+            ball_history.append(make_ball_event(oc))
+            if len(ball_history) > BALL_HISTORY_WINDOW:
+                ball_history = ball_history[-BALL_HISTORY_WINDOW:]
 
             if target is not None and total_runs >= target:
                 chased = True
 
-        # end of over
+        # End of over
         if balls_this_over >= 6:
             if over_bowler_runs == 0 and not over_had_extra:
                 bw["maidens"] += 1
-            _record_over_summary(over_idx + 1, bowler, over_timeline, legal_balls)
-            # swap strike at end of over
+            bowler_mgr.record_over_completion(last_bowler_name, over_bowler_runs)
+            _record_over_summary(over_idx + 1, last_bowler_name, over_timeline, legal_balls)
             striker_i, non_striker_i = non_striker_i, striker_i
 
     opening_bowler_name = plan[0]["name"] if plan else ""
-    opening_striker_name = order[0]["name"] if order else ""
-    opening_non_striker_name = order[1]["name"] if len(order) > 1 else ""
+    opening_striker_name = batting_order[0]["name"] if batting_order else ""
+    opening_non_striker_name = batting_order[1]["name"] if len(batting_order) > 1 else ""
+
+    # Build bowl_stats keyed by player id for backward-compatible scorecard rendering
+    final_bowl_stats = {}
+    for p in bowling_adapted:
+        final_bowl_stats[id(p)] = bowl_stats_by_id[id(p)]
 
     return {
         "innings": innings_no,
         "batting_team": batting_team,
         "bowling_team": bowling_team,
-        "openers": [name for name in (opening_striker_name, opening_non_striker_name) if name],
+        "openers": [n for n in (opening_striker_name, opening_non_striker_name) if n],
         "opening_striker": opening_striker_name,
         "opening_bowler": opening_bowler_name,
         "innings_intro": [
             f"INNINGS {innings_no}",
             f"Batting {batting_team}",
             f"Bowling {bowling_team}",
-            (f"{opening_striker_name} and {opening_non_striker_name} will open the batting "
-             f"for {batting_team}. {opening_striker_name} is on strike."
+            (f"{opening_striker_name} and {opening_non_striker_name} will open "
+             f"the batting for {batting_team}. {opening_striker_name} is on strike."
              if opening_striker_name and opening_non_striker_name else ""),
             (f"{opening_bowler_name} will bowl the opening over for {bowling_team}"
              if opening_bowler_name else ""),
@@ -495,36 +762,30 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         "fow": fow,
         "timeline": timeline,
         "over_summaries": over_summaries,
-        "order": order,
-        "bat_stats": {id(p): bat_stats[id(p)] for p in order},
+        "order": batting_order,
+        "bat_stats": {id(p): bat_stats[id(p)] for p in batting_order},
         "bowl_plan": plan,
-        "bowl_stats": bowl_stats,
-        "_order_objs": order,
+        "bowl_stats": final_bowl_stats,
+        "_order_objs": batting_order,
     }
 
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
                    toss_decision=None, commentary=None, fmt=None, scenario=True):
-    """Simulate a full two-innings match.
+    """Simulate a full two-innings match using the SimCricketX engine.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
         bat_rating, bowl_rating, category, bowl_style, bowl_hand, bat_hand.
-    fmt: optional format config (services.match_formats.get_format/custom_format).
-         If omitted, a custom format is derived from ``overs``.
+    fmt: optional services.match_formats format dict.
+         If omitted, a format is derived from ``overs``.
     Returns a dict with both innings, the result, and a commentary feed.
     """
-    from services.match_formats import custom_format
     from services.ground_conditions import get_pitch_meta
 
-    if fmt is None:
-        fmt = custom_format(overs)
-    overs = fmt["overs"]
     pitch_meta = get_pitch_meta(pitch_type)
     run_factor = pitch_meta.get("run_factor", 1.0)
 
-    # Toss decision: an explicit bat/bowl choice is honoured; when omitted the
-    # toss winner makes the pitch-correct call (batting-friendly pitch → bat).
     teams_by_name = {home_name: home_xi, away_name: away_xi}
     if toss_winner not in teams_by_name:
         toss_winner = home_name
@@ -561,7 +822,7 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
 
     result = _compute_result(inn1, inn2, target)
 
-    # Tie → resolve with an auto super over (reusing the shared dynamics engine).
+    # Tie → resolve with an auto super over (reusing existing dynamics engine).
     super_over = None
     if result["margin_type"] == "tie":
         from services.match_dynamics import resolve_super_over
@@ -578,11 +839,15 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
             result = {"winner": None, "loser": None, "margin_type": "tie",
                       "margin": 0, "text": super_over["text"]}
 
+    # Derive fmt label for output
+    engine_fmt = _fmt_to_engine_fmt(fmt, overs)
+    fmt_label = (fmt.get("label") if fmt and isinstance(fmt, dict) else None) or engine_fmt.name
+
     return {
         "overs": overs,
         "pitch": pitch_type,
         "pitch_meta": pitch_meta,
-        "format": fmt["label"],
+        "format": fmt_label,
         "toss": {
             "winner": toss_winner,
             "decision": normalized_decision,
@@ -597,6 +862,10 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
         "potm": _player_of_the_match(inn1, inn2, result),
     }
 
+
+# ---------------------------------------------------------------------------
+# Scorecard rendering helpers (unchanged API, kept for the handler layer)
+# ---------------------------------------------------------------------------
 
 def _esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
@@ -642,7 +911,7 @@ def render_innings_card(inn):
         if id(bp) in seen:
             continue
         seen.add(id(bp))
-        bw = inn["bowl_stats"][id(bp)]
+        bw = inn["bowl_stats"].get(id(bp), _new_bowl_stat())
         ov = f"{bw['balls'] // 6}.{bw['balls'] % 6}"
         econ = round(bw["runs"] / (bw["balls"] / 6), 2) if bw["balls"] else 0.0
         brows.append(
@@ -703,7 +972,7 @@ def _top_bowlers(inn, limit=4):
         if id(bp) in seen:
             continue
         seen.add(id(bp))
-        bw = inn["bowl_stats"][id(bp)]
+        bw = inn["bowl_stats"].get(id(bp), _new_bowl_stat())
         if bw["balls"] == 0:
             continue
         rows.append({
@@ -730,7 +999,7 @@ def _potm_stats(match):
                 continue
             seen.add(id(bp))
             if bp["name"] == name:
-                wickets += inn["bowl_stats"][id(bp)]["wickets"]
+                wickets += inn["bowl_stats"].get(id(bp), {}).get("wickets", 0)
     bits = []
     if runs:
         bits.append(f"{runs} runs")
@@ -804,7 +1073,6 @@ def _compute_result(inn1, inn2, target):
 
 def _player_of_the_match(inn1, inn2, result):
     """Highest impact player by runs + wickets*25 across both innings."""
-    # Aggregate runs (from batting) and wickets (from bowling) per name.
     impact = {}
     for inn in (inn1, inn2):
         for p in inn["order"]:
@@ -816,7 +1084,7 @@ def _player_of_the_match(inn1, inn2, result):
                 continue
             seen_bowlers.add(id(bp))
             impact.setdefault(bp["name"], 0)
-            impact[bp["name"]] += inn["bowl_stats"][id(bp)]["wickets"] * 25
+            impact[bp["name"]] += inn["bowl_stats"].get(id(bp), {}).get("wickets", 0) * 25
     if not impact:
         return None
     return max(impact.items(), key=lambda kv: kv[1])[0]
