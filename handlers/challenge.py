@@ -409,20 +409,27 @@ def _challenge_xi_validation(players):
     return True, ""
 
 
+def _challenge_rule_checkbox(passed):
+    return "☑️" if passed else "☐"
+
+
 def _challenge_xi_text(draft, side, team_name, players, selected_ids):
     owner = draft.get(side) or {}
     selected_set = {int(pid) for pid in selected_ids}
     selected_players = [player for player in players if int(getattr(player, "id")) in selected_set]
     selected_players.sort(key=lambda player: selected_ids.index(int(getattr(player, "id"))))
+    keeper_count = sum(1 for player in selected_players if _challenge_is_wicket_keeper(player))
+    bowling_options = sum(1 for player in selected_players if _challenge_is_bowling_option(player))
     lines = [
         f"🏏 <b>{team_name} Playing XI Selection</b>",
         f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, select exactly 11 players.",
+        "Tap a checked player again to remove them from your XI.",
         "",
         f"<b>Selected:</b> {len(selected_ids)}/11",
         "",
         "<b>Rules:</b>",
-        "• Wicket Keeper is Must",
-        "• At least 5 Bowling Option Must (Bowlers + Allrounders)",
+        f"{_challenge_rule_checkbox(keeper_count >= 1)} 1 Wicket Keeper ({keeper_count}/1)",
+        f"{_challenge_rule_checkbox(bowling_options >= 5)} At least 5 Bowling Options ({bowling_options}/5)",
         "• Selection order becomes batting order",
     ]
     if selected_players:
@@ -1069,7 +1076,7 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Record one player in the owner's XI, preserving click order as batting order."""
+    """Toggle one player in the owner's XI, preserving click order as batting order."""
     query = update.callback_query
     try:
         _, _, draft_id, side, player_id = query.data.split("_")
@@ -1109,22 +1116,23 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
         await query.answer("Your Playing XI is already confirmed.", show_alert=True)
         return
     if player_id in selected_ids:
-        await query.answer("A player cannot be selected twice.", show_alert=True)
-        return
-    if len(selected_ids) >= 11:
-        await query.answer("You have already selected 11 players. Confirm XI.", show_alert=True)
-        return
-
-    proposed_ids = selected_ids + [player_id]
-    proposed_players = [player_map[pid] for pid in proposed_ids if pid in player_map]
-    if len(proposed_ids) == 11:
-        valid, error = _challenge_xi_validation(proposed_players)
-        if not valid:
-            await query.answer(error, show_alert=True)
+        selected_ids.remove(player_id)
+        await query.answer(f"Removed: {len(selected_ids)}/11")
+    else:
+        if len(selected_ids) >= 11:
+            await query.answer("You have already selected 11 players. Tap a checked player to remove one.", show_alert=True)
             return
 
-    selected_ids.append(player_id)
-    await query.answer(f"Selected: {len(selected_ids)}/11")
+        proposed_ids = selected_ids + [player_id]
+        proposed_players = [player_map[pid] for pid in proposed_ids if pid in player_map]
+        if len(proposed_ids) == 11:
+            valid, error = _challenge_xi_validation(proposed_players)
+            if not valid:
+                await query.answer(error, show_alert=True)
+                return
+
+        selected_ids.append(player_id)
+        await query.answer(f"Selected: {len(selected_ids)}/11")
     try:
         await query.edit_message_text(
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
