@@ -263,11 +263,33 @@ def _league_teams(session, league_key, league_record=None):
     return teams
 
 
-def _team_keyboard(draft_id, teams):
+def _team_keyboard(draft_id, teams, unavailable_teams=None):
+    unavailable = {team for team in (unavailable_teams or []) if team}
     rows = []
     for idx, team in enumerate(teams):
+        if team in unavailable:
+            continue
         rows.append([InlineKeyboardButton(team, callback_data=f"cl_team_{draft_id}_{idx}")])
     return InlineKeyboardMarkup(rows)
+
+
+def _team_selection_status(draft):
+    lines = []
+    host_team = draft.get("host_team")
+    target_team = draft.get("target_team")
+    if host_team:
+        host = draft.get("host") or {}
+        lines.append(
+            f"✅ {_mention(host.get('tg_id'), host.get('name') or 'User 1')} "
+            f"selected <b>{host_team}</b>."
+        )
+    if target_team:
+        target = draft.get("target") or {}
+        lines.append(
+            f"✅ {_mention(target.get('tg_id'), target.get('name') or 'User 2')} "
+            f"selected <b>{target_team}</b>."
+        )
+    return lines
 
 
 def _challenge_xi_keyboard(draft_id, draft):
@@ -477,11 +499,15 @@ def _team_picker_prompt(draft, player_key):
     league_name = draft.get("league_name")
     player = draft.get(player_key) or {}
     mention = _mention(player.get("tg_id"), player.get("name") or "Player")
-    return (
-        f"🏆 <b>{_league_battle_title(league_name)}</b>\n"
-        "═════════════════════════════\n"
-        f"{mention}, please select your {league_name} team."
-    )
+    lines = [
+        f"🏆 <b>{_league_battle_title(league_name)}</b>",
+        "═════════════════════════════",
+    ]
+    lines.extend(_team_selection_status(draft))
+    if len(lines) > 2:
+        lines.append("")
+    lines.append(f"{mention}, please select your {league_name} team.")
+    return "\n".join(lines)
 
 
 def _local_static_path(image_url):
@@ -724,19 +750,11 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
     if expected_tg_id is None:
         expected_tg_id = draft.get("host_tg_id") if turn == "host" else draft.get("target_tg_id")
     if query.from_user.id != expected_tg_id:
-        await query.answer("This button is not for you.", show_alert=True)
+        await query.answer("This button is not for you. Please use your own command", show_alert=True)
         return
 
     selected_team = teams[team_idx]
-    same_team_allowed = _same_team_challenge_enabled(None)
-    session = get_session()
-    try:
-        same_team_allowed = _same_team_challenge_enabled(session, draft.get("league_key"))
-    finally:
-        session.close()
-    if (turn == "target"
-            and not same_team_allowed
-            and selected_team == draft.get("host_team")):
+    if turn == "target" and selected_team == draft.get("host_team"):
         await query.answer("This team is already selected. Please choose another team.", show_alert=True)
         return
 
@@ -749,20 +767,26 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         draft["target_team"] = selected_team
         draft["turn"] = "complete"
         await query.answer(f"Selected {selected_team}")
-        host_name = (draft.get("host") or {}).get("name") or "User 1"
-        target_name = (draft.get("target") or {}).get("name") or "User 2"
-        message = (
-            f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
-            "═════════════════════════════\n"
-            f"✅ <b>{host_name}</b> selected <b>{draft.get('host_team')}</b>.\n"
-            f"✅ <b>{target_name}</b> selected <b>{selected_team}</b>."
-        )
+        lines = [
+            f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>",
+            "═════════════════════════════",
+        ]
+        lines.extend(_team_selection_status(draft))
+        message = "\n".join(lines)
 
     try:
-        await query.edit_message_caption(caption=message, parse_mode="HTML", reply_markup=_team_keyboard(draft_id, teams))
+        await query.edit_message_caption(
+            caption=message,
+            parse_mode="HTML",
+            reply_markup=_team_keyboard(draft_id, teams, [draft.get("host_team")]),
+        )
     except Exception:
         try:
-            await query.edit_message_text(message, parse_mode="HTML", reply_markup=_team_keyboard(draft_id, teams))
+            await query.edit_message_text(
+                message,
+                parse_mode="HTML",
+                reply_markup=_team_keyboard(draft_id, teams, [draft.get("host_team")]),
+            )
         except Exception:
             logger.exception("Failed to update league team picker message")
 
