@@ -365,7 +365,97 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         await challenge.challenge_xi_callback(update, context)
 
-        query.answer.assert_awaited_once_with("This button is not for you", show_alert=True)
+        query.answer.assert_awaited_once_with("This XI selection is not for you.", show_alert=True)
+
+
+    async def test_xi_button_shows_all_team_players_as_selectable_buttons(self):
+        players = [SimpleNamespace(id=i, name=f"MI Player {i}", details_json='{"category":"Batsman"}') for i in range(1, 13)]
+        message = DummyMessage("xi")
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_xi_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            message=message,
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_callback(update, context)
+
+        self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
+        buttons = [button for row in message.replies[0][1]["reply_markup"].inline_keyboard for button in row]
+        self.assertEqual(len(buttons), 12)
+        self.assertEqual(buttons[0].text, "MI Player 1")
+        self.assertEqual(buttons[0].callback_data, "cl_pick_123456_host_1")
+
+    async def test_xi_selection_enforces_order_count_and_confirm_button(self):
+        categories = ["Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder"] + ["Batsman"] * 5
+        players = [
+            SimpleNamespace(id=i, name=f"Player {i}", details_json=f'{{"category":"{category}"}}')
+            for i, category in enumerate(categories, start=1)
+        ]
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            for player_id in range(1, 12):
+                query = SimpleNamespace(
+                    data=f"cl_pick_123456_host_{player_id}",
+                    from_user=SimpleNamespace(id=1),
+                    answer=AsyncMock(),
+                    edit_message_text=AsyncMock(),
+                )
+                await challenge.challenge_xi_pick_callback(SimpleNamespace(callback_query=query), context)
+
+        selected = context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"]
+        self.assertEqual(selected, list(range(1, 12)))
+        final_markup = query.edit_message_text.await_args.kwargs["reply_markup"].inline_keyboard
+        self.assertEqual(final_markup[-1][0].text, "Confirm XI")
+        self.assertIn("11. Player 11", query.edit_message_text.await_args.args[0])
+
+    async def test_xi_selection_rejects_invalid_eleventh_player_without_wicket_keeper(self):
+        players = [SimpleNamespace(id=i, name=f"Player {i}", details_json='{"category":"Batsman"}') for i in range(1, 12)]
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+                "xi_selections": {"host": {"player_ids": list(range(1, 11)), "confirmed": False}},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_pick_123456_host_11",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_pick_callback(SimpleNamespace(callback_query=query), context)
+
+        query.answer.assert_awaited_once_with("Wicket Keeper is Must", show_alert=True)
+        self.assertEqual(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"], list(range(1, 11)))
 
 
 if __name__ == "__main__":
