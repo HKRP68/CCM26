@@ -36,6 +36,7 @@ def _load_challenge_with_stubs():
     class ChallengeLeague:
         is_active = True
     models.ChallengeLeague = ChallengeLeague
+    models.ChallengeTeam = type("ChallengeTeam", (), {"league_id": "league_id", "sort_order": "sort_order", "name": "name"})
     models.FantasyLeague = type("FantasyLeague", (), {"name": "name"})
     sys.modules["models"] = models
 
@@ -91,6 +92,10 @@ class DummyMessage:
             SimpleNamespace(from_user=reply_user) if reply_user is not None else None
         )
         self.replies = []
+        self.photos = []
+
+    async def reply_photo(self, **kwargs):
+        self.photos.append(kwargs)
 
     async def reply_text(self, text, **kwargs):
         self.replies.append((text, kwargs))
@@ -172,6 +177,50 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(message.replies[0][0], "❌ Bot accounts cannot be challenged.")
         start.assert_not_called()
+
+    async def test_league_command_sends_ipl_team_buttons_for_host_selection(self):
+        reply_user = SimpleNamespace(id=2, is_bot=False)
+        message = DummyMessage("/cipl", reply_user=reply_user)
+        update = SimpleNamespace(
+            effective_message=message,
+            message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        host = SimpleNamespace(id=10, telegram_id=1)
+        target = SimpleNamespace(id=20, telegram_id=2)
+        context = SimpleNamespace(bot_data={})
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "sync_telegram_user", side_effect=[target, host]):
+            await challenge.challenge_league_handler(update, context)
+
+        self.assertEqual(len(message.replies), 1)
+        text, kwargs = message.replies[0]
+        self.assertIn("League Battles · IPL", text)
+        keyboard = kwargs["reply_markup"].inline_keyboard
+        labels = [row[0].text for row in keyboard]
+        self.assertEqual(labels, challenge.IPL_TEAM_NAMES)
+        self.assertTrue(next(iter(context.bot_data)).startswith("challenge_team_draft_"))
+
+    async def test_team_button_rejects_non_host_with_alert(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "host_tg_id": 1,
+                "league_name": "IPL",
+                "teams": challenge.IPL_TEAM_NAMES,
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_team_123456_0",
+            from_user=SimpleNamespace(id=99),
+            answer=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_team_callback(update, context)
+
+        query.answer.assert_awaited_once_with("This button is not for you.", show_alert=True)
 
 
 if __name__ == "__main__":

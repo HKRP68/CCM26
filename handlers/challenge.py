@@ -2,6 +2,7 @@
 
 import logging
 import random
+import os
 import re
 from datetime import datetime, timedelta
 
@@ -9,7 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import ChallengeLeague, FantasyLeague, Match, User
+from models import ChallengeLeague, ChallengeTeam, FantasyLeague, Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import (
@@ -32,6 +33,31 @@ BUILT_IN_CHALLENGE_LEAGUES = {
     "bbl": "BBL",
     "int": "INT",
 }
+
+IPL_TEAM_NAMES = [
+    "Mumbai Indians",
+    "Chennai Super Kings",
+    "Royal Challengers Bengaluru",
+    "Kolkata Knight Riders",
+    "Rajasthan Royals",
+    "Sunrisers Hyderabad",
+    "Delhi Capitals",
+    "Gujarat Titans",
+    "Punjab Kings",
+    "Lucknow Super Giants",
+]
+
+BUILT_IN_CHALLENGE_TEAMS = {
+    "ipl": IPL_TEAM_NAMES,
+}
+
+
+def _challenge_team_draft_key(draft_id):
+    return f"challenge_team_draft_{draft_id}"
+
+
+def _league_battle_title(league_name):
+    return f"League Battles · {league_name}" if league_name else "League Battles"
 
 
 def normalize_challenge_league(value):
@@ -185,6 +211,98 @@ def _validate_user_xi(session, user_id):
     return valid, errors, len(roster)
 
 
+def _get_challenge_league_record(session, league_key):
+    if not league_key:
+        return None
+    try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)
+                       .all()):
+            if normalize_challenge_league(league.short_code or league.name) == league_key:
+                return league
+            command = (league.command or "").strip().lower().lstrip("/").split("@", 1)[0]
+            if command and is_challenge_league_command(command, session)[0] == league_key:
+                return league
+    except Exception:
+        logger.exception("Failed to load challenge league record")
+    return None
+
+
+def _league_image_url(league_record):
+    return (getattr(league_record, "image_url", None) or "").strip() or None
+
+
+def _league_teams(session, league_key, league_record=None):
+    teams = []
+    if league_record is not None:
+        try:
+            teams = [team.name for team in (session.query(ChallengeTeam)
+                                            .filter(ChallengeTeam.league_id == league_record.id)
+                                            .order_by(ChallengeTeam.sort_order, ChallengeTeam.name)
+                                            .all()) if (team.name or "").strip()]
+        except Exception:
+            logger.exception("Failed to load challenge teams for league %s", league_key)
+    if not teams:
+        teams = BUILT_IN_CHALLENGE_TEAMS.get(league_key, [])
+    return teams
+
+
+def _team_keyboard(draft_id, teams):
+    rows = []
+    for idx, team in enumerate(teams):
+        rows.append([InlineKeyboardButton(team, callback_data=f"cl_team_{draft_id}_{idx}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _local_static_path(image_url):
+    if not image_url or not image_url.startswith("/static/"):
+        return None
+    candidate = os.path.abspath(os.path.join(os.getcwd(), image_url.lstrip("/")))
+    static_root = os.path.abspath(os.path.join(os.getcwd(), "static"))
+    if candidate.startswith(static_root + os.sep) and os.path.exists(candidate):
+        return candidate
+    return None
+
+
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams):
+    draft_id = random.randint(100000, 999999)
+    while context.bot_data.get(_challenge_team_draft_key(draft_id)):
+        draft_id = random.randint(100000, 999999)
+    context.bot_data[_challenge_team_draft_key(draft_id)] = {
+        "draft_id": draft_id,
+        "chat_id": update.effective_chat.id,
+        "host_user_id": challenger.id,
+        "host_tg_id": challenger.telegram_id,
+        "target_user_id": target.id,
+        "target_tg_id": target.telegram_id,
+        "league_key": league_key,
+        "league_name": league_name,
+        "teams": teams,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    caption = (
+        f"🏆 <b>{_league_battle_title(league_name)}</b>\n"
+        "═════════════════════════════\n"
+        f"• <b>Host:</b> {_user_label(challenger)}\n"
+        f"• <b>Guest:</b> {_user_label(target)}\n\n"
+        "Host, select your first team:"
+    )
+    markup = _team_keyboard(draft_id, teams)
+    image_url = _league_image_url(league_record)
+    local_path = _local_static_path(image_url)
+    if image_url:
+        try:
+            if local_path:
+                with open(local_path, "rb") as photo:
+                    await update.message.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
+            else:
+                await update.message.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+            return
+        except Exception:
+            logger.exception("Failed to send league image for %s; falling back to text", league_key)
+    await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+
+
 async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                  target: User, league_key=None, league_name=None):
     """Create a targeted challenge lobby once host/guest validation has passed."""
@@ -322,9 +440,64 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         if not target:
             await update.message.reply_text("❌ User not found. They need to use /debut first.")
             return
-        await _start_challenge_lobby(update, context, target, league_key, league_name)
+
+        challenger = sync_telegram_user(session, update.effective_user)
+        if not challenger:
+            await update.message.reply_text("❌ Use /debut first.")
+            return
+
+        league_record = _get_challenge_league_record(session, league_key)
+        teams = _league_teams(session, league_key, league_record)
+        if not teams:
+            await update.message.reply_text(f"❌ No teams configured for {league_name} yet.")
+            return
+        await _send_league_team_picker(
+            update, context, challenger=challenger, target=target,
+            league_key=league_key, league_name=league_name,
+            league_record=league_record, teams=teams,
+        )
     finally:
         session.close()
+
+
+async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        _, _, draft_id, team_idx = query.data.split("_")
+        draft_id = int(draft_id)
+        team_idx = int(team_idx)
+    except Exception:
+        await query.answer("Invalid team selection.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft:
+        await query.answer("This team selection is no longer active.", show_alert=True)
+        return
+    if query.from_user.id != draft.get("host_tg_id"):
+        await query.answer("This button is not for you.", show_alert=True)
+        return
+    teams = draft.get("teams") or []
+    if team_idx < 0 or team_idx >= len(teams):
+        await query.answer("Invalid team selection.", show_alert=True)
+        return
+
+    selected_team = teams[team_idx]
+    draft["host_team"] = selected_team
+    await query.answer(f"Selected {selected_team}")
+    message = (
+        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
+        "═════════════════════════════\n"
+        f"✅ Host selected <b>{selected_team}</b>.\n\n"
+        "Guest team selection will be added in the next phase."
+    )
+    try:
+        await query.edit_message_caption(caption=message, parse_mode="HTML")
+    except Exception:
+        try:
+            await query.edit_message_text(message, parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to update league team picker message")
 
 
 async def _expire_cm_lobby(ctx):
