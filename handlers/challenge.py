@@ -398,13 +398,23 @@ def _challenge_match_ready_text(draft):
     league_name = draft.get("league_name") or "IPL"
     host_team = draft.get("host_team") or "Host XI"
     target_team = draft.get("target_team") or "Guest XI"
+    host_code = _team_short_code(host_team, draft.get("league_key")) or host_team
+    target_code = _team_short_code(target_team, draft.get("league_key")) or target_team
+    game_mode = draft.get("game_mode") or "Classic Challenge"
+    pitch_profile = draft.get("pitch_profile") or draft.get("pitch_type") or "Balanced Pitch"
+    if pitch_profile and not str(pitch_profile).lower().endswith("pitch"):
+        pitch_profile = f"{pitch_profile} Pitch"
     return (
-        "✅ <b>Playing XI Confirmed!</b>\n"
-        f"🏏 <b>{league_name} Match Ready</b>\n"
-        f"👑 {_mention(host.get('tg_id'), host.get('name') or 'User 1')} — <b>{host_team}</b>\n"
-        f"⚔️ {_mention(target.get('tg_id'), target.get('name') or 'User 2')} — <b>{target_team}</b>\n"
-        "Both teams are ready.\n"
-        "Now start the match."
+        "🏏 <b>MATCH READY!</b>\n\n"
+        f"⚔️ <b>Challenge Mode:</b> {league_name}\n\n"
+        f"{_team_emoji(host_team)} <b>Host Team:</b> {host_team}\n"
+        f"👤 <b>Host:</b> {_mention(host.get('tg_id'), host.get('name') or 'Host')}\n\n"
+        f"{_team_emoji(target_team)} <b>Guest Team:</b> {target_team}\n"
+        f"👤 <b>Guest:</b> {_mention(target.get('tg_id'), target.get('name') or 'Guest')}\n\n"
+        f"🎮 <b>Game Mode:</b> {game_mode}\n"
+        f"🌱 <b>Pitch Profile:</b> {pitch_profile}\n\n"
+        f"🔥 {host_code} vs {target_code} is ready to begin!\n"
+        f"🟢 {_mention(host.get('tg_id'), host.get('name') or 'Host')} Click on Start Match"
     )
 
 

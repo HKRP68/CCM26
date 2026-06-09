@@ -492,9 +492,14 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["target"]["confirmed"])
         ready_text, kwargs = message.replies[0]
-        self.assertIn("✅ <b>Playing XI Confirmed!</b>", ready_text)
-        self.assertIn("🏏 <b>IPL Match Ready</b>", ready_text)
-        self.assertIn("Both teams are ready.", ready_text)
+        self.assertIn("🏏 <b>MATCH READY!</b>", ready_text)
+        self.assertIn("⚔️ <b>Challenge Mode:</b> IPL", ready_text)
+        self.assertIn("🔵 <b>Host Team:</b> Mumbai Indians", ready_text)
+        self.assertIn("🟡 <b>Guest Team:</b> Chennai Super Kings", ready_text)
+        self.assertIn("🎮 <b>Game Mode:</b> Classic Challenge", ready_text)
+        self.assertIn("🌱 <b>Pitch Profile:</b> Balanced Pitch", ready_text)
+        self.assertIn("🔥 MI vs CSK is ready to begin!", ready_text)
+        self.assertIn("🟢 @user Click on Start Match", ready_text)
         self.assertEqual(kwargs["reply_markup"].inline_keyboard[0][0].text, "Start Match")
         self.assertEqual(kwargs["reply_markup"].inline_keyboard[0][0].callback_data, "cl_start_123456")
 
