@@ -1107,8 +1107,10 @@ def player_edit(player_id):
             detail = "; ".join(changes) if changes else "Edit"
             log_admin(db, "player_edit", target_type="player", target_id=player.id,
                       target_name=player.name, detail=detail)
+            # Clear cached generated-card file_id so the next send re-renders.
+            player.card_file_id = None
             db.commit()
-            # Bust caches — the player row changed
+            # Bust in-memory caches — the player row changed
             try:
                 from services.player_cache import invalidate as _inv_pc
                 from services.card_generator import invalidate_card_cache

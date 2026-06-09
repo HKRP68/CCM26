@@ -96,9 +96,9 @@ async def send_player_card(
     if reply_to_message_id is not None:
         common_kwargs["reply_to_message_id"] = reply_to_message_id
 
-    # ── Strategy 1: Cached file_id ──
-    # Need a session to look it up. If caller didn't pass one, we open one
-    # just for the lookup (cheap, single-row select on indexed col).
+    # ── Strategy 1: Cached file_id (custom image) ──
+    # Check PlayerImage.tg_file_id first (admin-uploaded custom card).
+    # If no session, open a short one just for the lookup.
     cached_file_id = None
     if session is not None:
         try:
@@ -113,12 +113,17 @@ async def send_player_card(
         except Exception:
             pass
 
+    # ── Strategy 1.5: Cached file_id (generated card) ──
+    # Player.card_file_id holds the file_id from the last auto-generated send.
+    if not cached_file_id:
+        cached_file_id = getattr(player, "card_file_id", None)
+
     if cached_file_id:
         try:
             return await bot.send_photo(photo=cached_file_id, **common_kwargs)
         except Exception as e:
             # file_id might be stale (e.g. channel deleted, file rotated).
-            # Clear the cache and fall through.
+            # Clear whichever cache held it and fall through.
             logger.warning(f"file_id send failed ({e!r}), falling back")
             try:
                 from models import PlayerImage
@@ -127,6 +132,9 @@ async def send_player_card(
                            .filter(PlayerImage.player_id == player.id).first())
                     if row:
                         row.tg_file_id = None
+                    if getattr(player, "card_file_id", None) == cached_file_id:
+                        player.card_file_id = None
+                        session.flush()
             except Exception:
                 pass
 
@@ -169,8 +177,28 @@ async def send_player_card(
 
     if gen_bytes:
         try:
-            return await bot.send_photo(
+            gen_msg = await bot.send_photo(
                 photo=io.BytesIO(gen_bytes), **common_kwargs)
+            # Cache the returned file_id so future sends skip the upload.
+            try:
+                if gen_msg and gen_msg.photo and not getattr(player, "card_file_id", None):
+                    new_fid = gen_msg.photo[-1].file_id
+                    if session is not None:
+                        player.card_file_id = new_fid
+                        session.flush()
+                    else:
+                        from database import SessionLocal
+                        from models import Player as _Player
+                        with SessionLocal() as _s:
+                            _p = _s.query(_Player).get(player.id)
+                            if _p and not _p.card_file_id:
+                                _p.card_file_id = new_fid
+                                _s.commit()
+                        player.card_file_id = new_fid  # update in-memory obj too
+                    logger.info(f"Cached generated card file_id for player {player.id}")
+            except Exception:
+                logger.exception("Generated card file_id capture failed (non-fatal)")
+            return gen_msg
         except Exception:
             logger.warning("Generated card send failed, trying basic card fallback")
 
