@@ -87,14 +87,15 @@
     <div style="display:flex;flex-direction:column;gap:.75rem;">
       {% for league in leagues %}
       <div style="border:1px solid var(--border);border-radius:10px;padding:.75rem;">
-        <a href="{{ url_for('admin_challenge_data', mode_id=selected_mode.id, league_id=league.id) }}" style="display:flex;gap:.75rem;align-items:center;color:var(--text);text-decoration:none;margin-bottom:.65rem;">
+        <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:.65rem;">
           {% if league.image_url %}<img src="{{ league.image_url }}" alt="" style="width:46px;height:46px;object-fit:cover;border-radius:8px;">{% else %}<div style="width:46px;height:46px;border-radius:8px;background:var(--bg-soft);display:grid;place-items:center;">🏆</div>{% endif %}
           <div style="flex:1;">
             <strong>{{ league.name }}</strong>
             <div style="color:var(--muted);font-size:.82rem;">{{ league.short_code or 'No code' }} · {{ league.command or 'No command' }} · {{ 'Active' if league.is_active else 'Inactive' }}</div>
           </div>
+          <a class="btn btn-primary btn-sm" href="{{ url_for('admin_challenge_data', mode_id=selected_mode.id, league_id=league.id) }}">Enter</a>
           {% if selected_league and selected_league.id == league.id %}<span class="badge badge-green">Selected</span>{% endif %}
-        </a>
+        </div>
         <details {% if selected_league and selected_league.id == league.id %}open{% endif %}>
           <summary style="cursor:pointer;color:var(--accent);">Edit league</summary>
           <form method="POST" enctype="multipart/form-data" style="margin-top:.75rem;">
@@ -131,6 +132,16 @@
   <section class="card" style="padding:1rem;">
     {% if selected_league %}
     <h3 style="margin:0 0 .75rem;">Teams & Players — {{ selected_league.name }}</h3>
+    <form method="GET" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
+      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+      <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+      <label>Search player data to add into teams</label>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:.5rem;">
+        <input name="player_search" value="{{ player_search }}" placeholder="Search existing player data, e.g. Virat Kohli">
+        <button class="btn btn-ghost" type="submit">Search</button>
+      </div>
+      <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;">Use each team's <b>Add Players</b> option below, then select a result from this search list.</p>
+    </form>
     <form method="POST" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add_team">
@@ -172,17 +183,29 @@
         </details>
       </div>
 
-      <form method="POST" style="display:grid;grid-template-columns:1fr minmax(140px,.6fr) 80px auto;gap:.5rem;align-items:end;margin:1rem 0;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="action" value="add_player">
-        <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-        <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-        <input type="hidden" name="team_id" value="{{ team.id }}">
-        <div><label>Player name</label><input name="player_name" placeholder="Virat Kohli" required></div>
-        <div><label>Details (optional)</label><input name="details_json" placeholder='{"role":"BAT"}'></div>
-        <div><label>Sort</label><input type="number" name="player_sort_order" value="0"></div>
-        <button class="btn btn-primary btn-sm" type="submit">+ Add</button>
-      </form>
+      <details style="margin:1rem 0;">
+        <summary class="btn btn-primary btn-sm" style="cursor:pointer;display:inline-flex;">Add Players</summary>
+        <form method="POST" style="display:grid;grid-template-columns:1fr minmax(180px,.7fr) 80px auto;gap:.5rem;align-items:end;margin-top:.75rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="add_player">
+          <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+          <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+          <input type="hidden" name="team_id" value="{{ team.id }}">
+          <div>
+            <label>Search result / player data</label>
+            <select name="source_player_id">
+              <option value="">Manual player name</option>
+              {% for source_player in player_options %}
+              <option value="{{ source_player.id }}">{{ source_player.name }} — {{ source_player.version }} · {{ source_player.rating }} · {{ source_player.country }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div><label>Manual name</label><input name="player_name" placeholder="Use when no search result is selected"></div>
+          <div><label>Sort</label><input type="number" name="player_sort_order" value="0"></div>
+          <button class="btn btn-primary btn-sm" type="submit">+ Add</button>
+          <div style="grid-column:1 / -1;"><label>Details override (optional)</label><input name="details_json" placeholder='Leave blank to store selected player id/rating/category/country'></div>
+        </form>
+      </details>
 
       <div style="display:flex;flex-direction:column;gap:.45rem;">
         {% for player in team._players %}

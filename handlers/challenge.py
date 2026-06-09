@@ -10,7 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import ChallengeLeague, ChallengeTeam, FantasyLeague, Match, User
+from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import (
@@ -49,6 +49,20 @@ IPL_TEAM_NAMES = [
 
 BUILT_IN_CHALLENGE_TEAMS = {
     "ipl": IPL_TEAM_NAMES,
+}
+
+
+IPL_TEAM_META = {
+    "Mumbai Indians": ("MI", "🔵"),
+    "Chennai Super Kings": ("CSK", "🟡"),
+    "Royal Challengers Bengaluru": ("RCB", "🔴"),
+    "Kolkata Knight Riders": ("KKR", "🟣"),
+    "Rajasthan Royals": ("RR", "🩷"),
+    "Sunrisers Hyderabad": ("SRH", "🟠"),
+    "Delhi Capitals": ("DC", "🔷"),
+    "Gujarat Titans": ("GT", "🔵"),
+    "Punjab Kings": ("PBKS", "🔴"),
+    "Lucknow Super Giants": ("LSG", "🔷"),
 }
 
 
@@ -252,6 +266,91 @@ def _team_keyboard(draft_id, teams):
     for idx, team in enumerate(teams):
         rows.append([InlineKeyboardButton(team, callback_data=f"cl_team_{draft_id}_{idx}")])
     return InlineKeyboardMarkup(rows)
+
+
+def _challenge_xi_keyboard(draft_id, draft):
+    host_label = _team_button_label("Select", draft.get("host_team"))
+    target_label = _team_button_label("Select", draft.get("target_team"))
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(host_label, callback_data=f"cl_xi_{draft_id}_host"),
+        InlineKeyboardButton(target_label, callback_data=f"cl_xi_{draft_id}_target"),
+    ]])
+
+
+def _team_button_label(prefix, team_name):
+    code = _team_short_code(team_name)
+    return f"{prefix} {code} XI" if code else f"{prefix} XI"
+
+
+def _team_short_code(team_name, league_key=None, session=None):
+    team_name = (team_name or "").strip()
+    if not team_name:
+        return ""
+    if team_name in IPL_TEAM_META:
+        return IPL_TEAM_META[team_name][0]
+    if session is not None:
+        try:
+            query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
+            if league_key:
+                league = _get_challenge_league_record(session, league_key)
+                if league is not None:
+                    query = query.filter(ChallengeTeam.league_id == league.id)
+            team = query.first()
+            short = (getattr(team, "short_name", None) or "").strip() if team else ""
+            if short:
+                return short.upper()
+        except Exception:
+            logger.exception("Failed to load challenge team short code for %s", team_name)
+    words = re.findall(r"[A-Za-z0-9]+", team_name)
+    if len(words) > 1:
+        return "".join(word[0] for word in words[:4]).upper()
+    return team_name[:4].upper()
+
+
+def _team_emoji(team_name):
+    return IPL_TEAM_META.get((team_name or "").strip(), (None, "🏏"))[1]
+
+
+def _challenge_created_text(draft, session=None):
+    host = draft.get("host") or {}
+    target = draft.get("target") or {}
+    host_team = draft.get("host_team") or "Host XI"
+    target_team = draft.get("target_team") or "Guest XI"
+    host_code = _team_short_code(host_team, draft.get("league_key"), session)
+    target_code = _team_short_code(target_team, draft.get("league_key"), session)
+    host_team_line = f"{_team_emoji(host_team)} <b>{host_team}</b> ({host_code})" if host_code else f"{_team_emoji(host_team)} <b>{host_team}</b>"
+    target_team_line = f"{_team_emoji(target_team)} <b>{target_team}</b> ({target_code})" if target_code else f"{_team_emoji(target_team)} <b>{target_team}</b>"
+    return (
+        f"🏏 <b>{draft.get('league_name') or 'IPL'} Challenge Created!</b>\n"
+        f"👑 <b>Host:</b> {_mention(host.get('tg_id'), host.get('name') or 'User 1')}\n"
+        f"⚔️ <b>Guest:</b> {_mention(target.get('tg_id'), target.get('name') or 'User 2')}\n"
+        f"{host_team_line}\n"
+        "vs\n"
+        f"{target_team_line}\n"
+        "🔥 The battle is ready!\n\n"
+        "Now both players must select their Playing XI."
+    )
+
+
+def _challenge_team_players(session, draft, side):
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    if not team_name:
+        return []
+    try:
+        query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
+        league = _get_challenge_league_record(session, draft.get("league_key"))
+        if league is not None:
+            query = query.filter(ChallengeTeam.league_id == league.id)
+        team = query.first()
+        if not team:
+            return []
+        return (session.query(ChallengePlayer)
+                .filter(ChallengePlayer.team_id == team.id)
+                .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
+                .all())
+    except Exception:
+        logger.exception("Failed to load challenge team players for XI selection")
+        return []
 
 
 def _same_team_challenge_enabled(session=None):
@@ -550,6 +649,24 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             logger.exception("Failed to update league team picker message")
 
+    if draft.get("turn") == "complete" and not draft.get("challenge_created_sent"):
+        draft["challenge_created_sent"] = True
+        session = get_session()
+        try:
+            created_message = _challenge_created_text(draft, session)
+        finally:
+            session.close()
+        message_obj = getattr(query, "message", None)
+        if message_obj is not None:
+            try:
+                await message_obj.reply_text(
+                    created_message,
+                    parse_mode="HTML",
+                    reply_markup=_challenge_xi_keyboard(draft_id, draft),
+                )
+            except Exception:
+                logger.exception("Failed to send challenge created Playing XI message")
+
 
 async def _expire_cm_lobby(ctx):
     lobby_id = ctx.job.data["lobby_id"]
@@ -804,6 +921,52 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
     finally:
         session.close()
 
+
+async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Authorize league challenge Playing XI buttons for the selected team owners."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, side = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid Playing XI button.", show_alert=True)
+        return
+    if side not in ("host", "target"):
+        await query.answer("Invalid Playing XI button.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This Playing XI selection is no longer active.", show_alert=True)
+        return
+
+    expected_tg_id = (draft.get(side) or {}).get("tg_id")
+    if query.from_user.id != expected_tg_id:
+        await query.answer("This button is not for you", show_alert=True)
+        return
+
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    if not players:
+        await query.answer(f"No players are configured for {team_name} yet.", show_alert=True)
+        return
+
+    draft.setdefault("xi_started", {})[side] = True
+    preview = "\n".join(f"{idx}. {player.name}" for idx, player in enumerate(players[:11], start=1))
+    await query.answer(f"Select your {team_name} Playing XI.", show_alert=True)
+    try:
+        await query.message.reply_text(
+            f"🏏 <b>{team_name} Playing XI</b>\n"
+            f"{_mention(expected_tg_id, (draft.get(side) or {}).get('name') or 'Player')}, select 11 players from your challenge team data.\n\n"
+            f"<b>Available players:</b>\n{preview}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("Failed to send challenge XI player list")
 
 # Legacy callback kept for safety if old inline buttons are still delivered.
 async def challenge_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
