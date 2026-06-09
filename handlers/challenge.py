@@ -1,14 +1,15 @@
-"""Two-player /cm challenge mode using the Mini App match flow."""
+"""Two-player challenge mode using the Mini App match flow."""
 
 import logging
 import random
+import re
 from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import Match, User
+from models import FantasyLeague, Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import (
@@ -24,6 +25,72 @@ from handlers.match import (
 logger = logging.getLogger(__name__)
 
 CM_LOBBY_EXPIRE = 75
+
+CHALLENGE_REPLY_REQUIRED_MESSAGE = "Please reply to a user’s message to challenge them."
+BUILT_IN_CHALLENGE_LEAGUES = {
+    "ipl": "IPL",
+    "bbl": "BBL",
+    "int": "INT",
+}
+
+
+def normalize_challenge_league(value):
+    """Return a command-safe league key using only letters and digits."""
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def _league_display_from_key(league_key, known_leagues=None):
+    if known_leagues and league_key in known_leagues:
+        return known_leagues[league_key]
+    return BUILT_IN_CHALLENGE_LEAGUES.get(league_key, league_key.upper())
+
+
+def _challenge_command_name(update):
+    message = getattr(update, "effective_message", None) or getattr(update, "message", None)
+    text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    if not text.startswith("/"):
+        return ""
+    token = text.split(maxsplit=1)[0][1:]
+    return token.split("@", 1)[0].lower()
+
+
+def _league_key_from_command(command_name):
+    command = (command_name or "").lower()
+    if command.startswith("challenge") and len(command) > len("challenge"):
+        return normalize_challenge_league(command[len("challenge"):])
+    if command.startswith("c") and len(command) > 1:
+        return normalize_challenge_league(command[1:])
+    return None
+
+
+def _challenge_leagues(session):
+    leagues = dict(BUILT_IN_CHALLENGE_LEAGUES)
+    try:
+        for name, in session.query(FantasyLeague.name).all():
+            key = normalize_challenge_league(name)
+            if key:
+                leagues[key] = name.strip()
+    except Exception:
+        logger.exception("Failed to load dynamic challenge leagues")
+    return leagues
+
+
+def is_challenge_league_command(command_name, session):
+    """Return ``(league_key, display_name)`` for supported challenge league commands."""
+    league_key = _league_key_from_command(command_name)
+    if not league_key:
+        return None, None
+    leagues = _challenge_leagues(session)
+    if league_key not in leagues:
+        return None, None
+    return league_key, _league_display_from_key(league_key, leagues)
+
+
+def _reply_target_telegram_user(update):
+    message = getattr(update, "effective_message", None) or getattr(update, "message", None)
+    reply = getattr(message, "reply_to_message", None) if message is not None else None
+    return getattr(reply, "from_user", None) if reply is not None else None
+
 
 
 def _max_overs(session=None):
@@ -82,9 +149,92 @@ def _validate_user_xi(session, user_id):
     return valid, errors, len(roster)
 
 
-async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Create a targeted /cm lobby, mirroring /wpm until launch."""
+async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                 target: User, league_key=None, league_name=None):
+    """Create a targeted challenge lobby once host/guest validation has passed."""
     cid = update.effective_chat.id
+    session = get_session()
+    try:
+        challenger = sync_telegram_user(session, update.effective_user)
+        if not challenger:
+            await update.message.reply_text("❌ Use /debut first.")
+            return
+        target = session.merge(target)
+        if target.id == challenger.id:
+            await update.message.reply_text("❌ You cannot challenge yourself.")
+            return
+
+        valid, errors, count = _validate_user_xi(session, challenger.id)
+        if not valid:
+            await update.message.reply_text(_xi_error(errors if errors else count), parse_mode="HTML")
+            return
+
+        existing = _active_match_in_chat(session, cid) or _active_cric_match_in_chat(session, cid)
+        if existing:
+            await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
+            return
+        if (_active_cric_match_for_user(session, challenger.id)
+                or _cric_lobby_for_user(context.bot_data, challenger.id)
+                or _cm_user_lobby(context.bot_data, challenger.id)):
+            await update.message.reply_text("⚠️ You already have an active match or lobby!")
+            return
+        if context.bot_data.get(_cm_chat_key(cid)):
+            await update.message.reply_text("⚠️ There is already a challenge waiting in this chat!")
+            return
+
+        league_key = normalize_challenge_league(league_key) if league_key else None
+        league_name = (league_name or _league_display_from_key(league_key) if league_key else "Challenge Mode")
+        lobby_title = f"{league_name} CHALLENGE MODE" if league_key else "CHALLENGE MODE LOBBY"
+        lobby_id = random.randint(100000, 999999)
+        while context.bot_data.get(_cm_lobby_key(lobby_id)):
+            lobby_id = random.randint(100000, 999999)
+        context.bot_data[_cm_lobby_key(lobby_id)] = {
+            "lobby_id": lobby_id,
+            "chat_id": cid,
+            "original_lobby_chat_id": cid,
+            "challenger_user_id": challenger.id,
+            "challenger_tg_id": challenger.telegram_id,
+            "target_user_id": target.id,
+            "target_tg_id": target.telegram_id,
+            "league_key": league_key,
+            "league_name": league_name,
+            "overs": min(_max_overs(session), 2),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        context.bot_data[_cm_chat_key(cid)] = lobby_id
+        msg = await update.message.reply_text(
+            f"⚔️ <b>{lobby_title}</b>\n"
+            "═════════════════════════════\n"
+            f"• <b>Host:</b> {_user_label(challenger)}\n"
+            f"• <b>Guest:</b> {_user_label(target)}\n"
+            f"• <b>Rules:</b> 2 wickets per innings · up to {min(_max_overs(session), 2)} over(s)\n"
+            "• <b>Flow:</b> fast /wpm-style Mini App gameplay with live spectating\n\n"
+            "The guest accepts, toss winner chooses, then everyone opens the same live board.\n"
+            f"⏳ <i>Expires in {CM_LOBBY_EXPIRE} seconds if unanswered.</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Accept", callback_data=f"cm_accept_{lobby_id}_{target.id}"),
+                InlineKeyboardButton("❌ Deny", callback_data=f"cm_deny_{lobby_id}_{target.id}"),
+            ], [
+                InlineKeyboardButton("❌ Cancel Lobby", callback_data=f"cm_cancel_{lobby_id}_{challenger.id}"),
+            ]]),
+        )
+        context.bot_data[_cm_lobby_key(lobby_id)]["lobby_msg_id"] = msg.message_id
+        try:
+            if context.job_queue:
+                context.job_queue.run_once(
+                    _expire_cm_lobby, CM_LOBBY_EXPIRE,
+                    name=f"cm_lobby_{lobby_id}",
+                    data={"lobby_id": lobby_id, "chat_id": cid, "message_id": msg.message_id},
+                )
+        except Exception:
+            logger.exception("Failed to schedule challenge lobby expiry")
+    finally:
+        session.close()
+
+
+async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create a targeted /cm lobby, preserving legacy mention/reply targeting."""
     session = get_session()
     try:
         challenger = sync_telegram_user(session, update.effective_user)
@@ -107,70 +257,36 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ User not found. They need to use /debut first; if they changed or "
                     "don't have a username, reply to their message and run /cm.")
             return
-        if target.id == challenger.id:
+        await _start_challenge_lobby(update, context, target)
+    finally:
+        session.close()
+
+
+async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start built-in or admin-created league challenge commands from replies."""
+    command_name = _challenge_command_name(update)
+    session = get_session()
+    try:
+        league_key, league_name = is_challenge_league_command(command_name, session)
+        if not league_key:
+            return
+
+        target_tg = _reply_target_telegram_user(update)
+        if not target_tg:
+            await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
+            return
+        if getattr(target_tg, "is_bot", False):
+            await update.message.reply_text("❌ Bot accounts cannot be challenged.")
+            return
+        if update.effective_user and target_tg.id == update.effective_user.id:
             await update.message.reply_text("❌ You cannot challenge yourself.")
             return
 
-        valid, errors, count = _validate_user_xi(session, challenger.id)
-        if not valid:
-            await update.message.reply_text(_xi_error(errors if errors else count), parse_mode="HTML")
+        target = sync_telegram_user(session, target_tg)
+        if not target:
+            await update.message.reply_text("❌ User not found. They need to use /debut first.")
             return
-
-        existing = _active_match_in_chat(session, cid) or _active_cric_match_in_chat(session, cid)
-        if existing:
-            await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
-            return
-        if (_active_cric_match_for_user(session, challenger.id)
-                or _cric_lobby_for_user(context.bot_data, challenger.id)
-                or _cm_user_lobby(context.bot_data, challenger.id)):
-            await update.message.reply_text("⚠️ You already have an active match or lobby!")
-            return
-        if context.bot_data.get(_cm_chat_key(cid)):
-            await update.message.reply_text("⚠️ There is already a /cm challenge waiting in this chat!")
-            return
-
-        lobby_id = random.randint(100000, 999999)
-        while context.bot_data.get(_cm_lobby_key(lobby_id)):
-            lobby_id = random.randint(100000, 999999)
-        context.bot_data[_cm_lobby_key(lobby_id)] = {
-            "lobby_id": lobby_id,
-            "chat_id": cid,
-            "original_lobby_chat_id": cid,
-            "challenger_user_id": challenger.id,
-            "challenger_tg_id": challenger.telegram_id,
-            "target_user_id": target.id,
-            "target_tg_id": target.telegram_id,
-            "overs": min(_max_overs(session), 2),
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        context.bot_data[_cm_chat_key(cid)] = lobby_id
-        msg = await update.message.reply_text(
-            f"⚔️ <b>CHALLENGE MODE LOBBY</b>\n"
-            "═════════════════════════════\n"
-            f"• <b>Challenger:</b> {_user_label(challenger)}\n"
-            f"• <b>Invited:</b> {_user_label(target)}\n"
-            f"• <b>Rules:</b> 2 wickets per innings · up to {min(_max_overs(session), 2)} over(s)\n"
-            "• <b>Flow:</b> fast /wpm-style Mini App gameplay with live spectating\n\n"
-            "The invited player accepts, toss winner chooses, then everyone opens the same live board.\n"
-            f"⏳ <i>Expires in {CM_LOBBY_EXPIRE} seconds if unanswered.</i>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Accept", callback_data=f"cm_accept_{lobby_id}_{target.id}"),
-                InlineKeyboardButton("❌ Deny", callback_data=f"cm_deny_{lobby_id}_{target.id}"),
-            ], [
-                InlineKeyboardButton("❌ Cancel Lobby", callback_data=f"cm_cancel_{lobby_id}_{challenger.id}"),
-            ]]),
-        )
-        context.bot_data[_cm_lobby_key(lobby_id)]["lobby_msg_id"] = msg.message_id
-        try:
-            if context.job_queue:
-                context.job_queue.run_once(
-                    _expire_cm_lobby, CM_LOBBY_EXPIRE,
-                    name=f"cm_lobby_{lobby_id}",
-                    data={"lobby_id": lobby_id, "chat_id": cid, "message_id": msg.message_id},
-                )
-        except Exception:
-            logger.exception("Failed to schedule /cm lobby expiry")
+        await _start_challenge_lobby(update, context, target, league_key, league_name)
     finally:
         session.close()
 

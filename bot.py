@@ -71,7 +71,11 @@ from handlers.bowlout import (
     bowlout_pick_callback,
 )
 from handlers.catch import bal_handler, catch_handler
-from handlers.challenge import challenge_handler, challenge_accept_callback, challenge_cancel_callback, challenge_deny_callback, challenge_coin_callback, challenge_toss_callback, challenge_pick_callback
+from handlers.challenge import (
+    challenge_handler, challenge_league_handler, challenge_accept_callback,
+    challenge_cancel_callback, challenge_deny_callback, challenge_coin_callback,
+    challenge_toss_callback, challenge_pick_callback,
+)
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
@@ -290,6 +294,9 @@ BOT_MENU_COMMANDS = (
     ("pbo", "Start a player bowl-out"),
     ("catch", "Catch coins using your purse"),
     ("cm", "Start a two-wicket challenge match"),
+    ("challengeipl", "Challenge another user to an IPL match"),
+    ("challengebbl", "Challenge another user to a BBL match"),
+    ("challengeint", "Challenge another user to an international match"),
     ("unscramble", "Create an Unscramble Player lobby"),
     ("traits", "View your traits and inventory"),
     ("traitshop", "Browse the daily trait shop"),
@@ -478,6 +485,9 @@ async def start_handler(update, context):
         "/purse /p - Check balance\n"
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
+        "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
+        "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
+        "/challengeINT /cint - Reply to a user to start an international challenge\n"
         "/unscramble - Create an Unscramble Player lobby\n"
         "/release /rel [name|pos] - Release for coins\n"
         "/releasemultiple /relm [from] [to] - Range release\n"
@@ -832,6 +842,10 @@ def main():
         app.add_handler(CommandHandler("catch", catch_handler))
         app.add_handler(CommandHandler("bal", bal_handler))
         app.add_handler(CommandHandler("cm", challenge_handler))
+        app.add_handler(MessageHandler(
+            _filters.Regex(r"^/(?:challenge[A-Za-z0-9_]+|c[A-Za-z0-9_]+)(?:@\w+)?(?:\s|$)"),
+            challenge_league_handler,
+        ), group=1)
         app.add_handler(CallbackQueryHandler(challenge_accept_callback, pattern=r"^cm_accept_"))
         app.add_handler(CallbackQueryHandler(challenge_deny_callback, pattern=r"^cm_deny_"))
         app.add_handler(CallbackQueryHandler(challenge_cancel_callback, pattern=r"^cm_cancel_"))
