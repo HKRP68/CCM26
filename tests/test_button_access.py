@@ -93,6 +93,7 @@ class ButtonAccessTests(unittest.TestCase):
             "cl_pick_123456_target_84",
             "cl_confirm_123456_host",
             "cl_confirm_123456_target",
+            "cl_start_123456",
         ]
         for callback_data in callbacks:
             with self.subTest(callback_data=callback_data):

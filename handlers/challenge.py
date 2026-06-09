@@ -384,6 +384,36 @@ def _challenge_xi_selection(draft, side):
     return selections.setdefault(side, {"player_ids": [], "confirmed": False})
 
 
+def _challenge_xi_ready(draft):
+    selections = draft.get("xi_selections") or {}
+    return bool(
+        selections.get("host", {}).get("confirmed")
+        and selections.get("target", {}).get("confirmed")
+    )
+
+
+def _challenge_match_ready_text(draft):
+    host = draft.get("host") or {}
+    target = draft.get("target") or {}
+    league_name = draft.get("league_name") or "IPL"
+    host_team = draft.get("host_team") or "Host XI"
+    target_team = draft.get("target_team") or "Guest XI"
+    return (
+        "✅ <b>Playing XI Confirmed!</b>\n"
+        f"🏏 <b>{league_name} Match Ready</b>\n"
+        f"👑 {_mention(host.get('tg_id'), host.get('name') or 'User 1')} — <b>{host_team}</b>\n"
+        f"⚔️ {_mention(target.get('tg_id'), target.get('name') or 'User 2')} — <b>{target_team}</b>\n"
+        "Both teams are ready.\n"
+        "Now start the match."
+    )
+
+
+def _challenge_start_match_keyboard(draft_id):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Start Match", callback_data=f"cl_start_{draft_id}"),
+    ]])
+
+
 def _challenge_player_details(player):
     raw = getattr(player, "details_json", None) or ""
     if not raw:
@@ -1222,6 +1252,10 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
     player_map = {int(getattr(player, "id")): player for player in players}
     selection = _challenge_xi_selection(draft, side)
     selected_ids = selection.setdefault("player_ids", [])
+    if selection.get("confirmed"):
+        await query.answer("Your Playing XI is already confirmed.", show_alert=True)
+        return
+
     selected_players = [player_map[pid] for pid in selected_ids if pid in player_map]
     valid, error = _challenge_xi_validation(selected_players)
     if not valid:
@@ -1240,6 +1274,55 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         )
     except Exception:
         logger.exception("Failed to confirm challenge XI selection message")
+
+    if _challenge_xi_ready(draft) and not draft.get("match_ready_sent"):
+        draft["match_ready_sent"] = True
+        message_obj = getattr(query, "message", None)
+        if message_obj is not None:
+            try:
+                await message_obj.reply_text(
+                    _challenge_match_ready_text(draft),
+                    parse_mode="HTML",
+                    reply_markup=_challenge_start_match_keyboard(draft_id),
+                )
+            except Exception:
+                logger.exception("Failed to send challenge match-ready message")
+
+
+async def challenge_start_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow only the host to start a challenge league match after both XIs are confirmed."""
+    query = update.callback_query
+    try:
+        _, _, draft_id = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid match start button.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This match is no longer active.", show_alert=True)
+        return
+    host_tg_id = (draft.get("host") or {}).get("tg_id") or draft.get("host_tg_id")
+    if query.from_user.id != host_tg_id:
+        await query.answer("Only the Host can start this match.", show_alert=True)
+        return
+    if not _challenge_xi_ready(draft):
+        await query.answer("Both players must confirm their Playing XI first.", show_alert=True)
+        return
+    if draft.get("match_started"):
+        await query.answer("Match already started.", show_alert=True)
+        return
+
+    draft["match_started"] = True
+    await query.answer("Match started!")
+    try:
+        await query.edit_message_text(
+            f"{_challenge_match_ready_text(draft)}\n\n🏁 <b>Match started!</b>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("Failed to update challenge start match message")
 
 
 # Legacy callback kept for safety if old inline buttons are still delivered.

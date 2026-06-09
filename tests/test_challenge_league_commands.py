@@ -457,6 +457,102 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         query.answer.assert_awaited_once_with("Wicket Keeper is Must", show_alert=True)
         self.assertEqual(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"], list(range(1, 11)))
 
+    async def test_both_xi_confirmations_send_match_ready_start_button(self):
+        categories = ["Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder"] + ["Batsman"] * 5
+        players = [
+            SimpleNamespace(id=i, name=f"Player {i}", details_json=f'{{"category":"{category}"}}')
+            for i, category in enumerate(categories, start=1)
+        ]
+        message = DummyMessage("confirm")
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "league_name": "IPL",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+                "xi_selections": {
+                    "host": {"player_ids": list(range(1, 12)), "confirmed": True},
+                    "target": {"player_ids": list(range(1, 12)), "confirmed": False},
+                },
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_confirm_123456_target",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            message=message,
+        )
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_confirm_callback(SimpleNamespace(callback_query=query), context)
+
+        self.assertTrue(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["target"]["confirmed"])
+        ready_text, kwargs = message.replies[0]
+        self.assertIn("✅ <b>Playing XI Confirmed!</b>", ready_text)
+        self.assertIn("🏏 <b>IPL Match Ready</b>", ready_text)
+        self.assertIn("Both teams are ready.", ready_text)
+        self.assertEqual(kwargs["reply_markup"].inline_keyboard[0][0].text, "Start Match")
+        self.assertEqual(kwargs["reply_markup"].inline_keyboard[0][0].callback_data, "cl_start_123456")
+
+    async def test_start_match_rejects_non_host_with_requested_alert(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "league_name": "IPL",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+                "xi_selections": {
+                    "host": {"player_ids": list(range(1, 12)), "confirmed": True},
+                    "target": {"player_ids": list(range(1, 12)), "confirmed": True},
+                },
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_start_123456",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+
+        await challenge.challenge_start_match_callback(SimpleNamespace(callback_query=query), context)
+
+        query.answer.assert_awaited_once_with("Only the Host can start this match.", show_alert=True)
+        query.edit_message_text.assert_not_awaited()
+
+    async def test_host_can_start_match_after_both_xi_confirmed(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "league_name": "IPL",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+                "xi_selections": {
+                    "host": {"player_ids": list(range(1, 12)), "confirmed": True},
+                    "target": {"player_ids": list(range(1, 12)), "confirmed": True},
+                },
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_start_123456",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+
+        await challenge.challenge_start_match_callback(SimpleNamespace(callback_query=query), context)
+
+        self.assertTrue(context.bot_data[challenge._challenge_team_draft_key(123456)]["match_started"])
+        query.answer.assert_awaited_once_with("Match started!")
+        self.assertIn("🏁 <b>Match started!</b>", query.edit_message_text.await_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()
