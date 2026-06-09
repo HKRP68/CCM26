@@ -1,255 +1,233 @@
 {% extends "base.html" %}
-{% block title %}Challenge Data{% endblock %}
+{% block title %}{% if page == 'league' %}{{ league.name }} League Settings{% elif page == 'team' %}{{ team.name }} Team Settings{% else %}Challenge Mode Leagues{% endif %}{% endblock %}
 
 {% block content %}
-<div class="page-head" style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:1rem;flex-wrap:wrap;">
-  <div>
-    <h2 style="margin:0 0 .25rem;">⚔️ Challenge Mode Data</h2>
-    <p style="color:var(--muted);margin:0;">Manage the full hierarchy: Modes → Leagues → Teams → Players.</p>
-  </div>
-  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
-    <span class="badge">{{ total_leagues }} leagues</span>
-    <span class="badge">{{ total_teams }} teams</span>
-    <span class="badge">{{ total_players }} players</span>
-  </div>
-</div>
+<style>
+.challenge-shell { display:flex; flex-direction:column; gap:1rem; }
+.challenge-head { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; flex-wrap:wrap; }
+.challenge-kpis { display:flex; gap:.5rem; flex-wrap:wrap; }
+.breadcrumbs { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin-bottom:.35rem; }
+.breadcrumbs a { color:var(--accent); text-decoration:none; }
+.cm-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1rem; }
+.cm-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
+.cm-card-soft { background:var(--bg-soft); border:1px solid var(--border); border-radius:14px; padding:1rem; }
+.cm-row { display:grid; grid-template-columns:72px minmax(180px,1fr) auto; gap:1rem; align-items:center; }
+.cm-image { width:72px; height:72px; border-radius:14px; object-fit:cover; border:1px solid var(--border); background:linear-gradient(135deg, rgba(212,168,42,.18), rgba(255,255,255,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); font-weight:800; }
+.cm-title { margin:0; font-size:1.1rem; }
+.cm-meta { color:var(--muted); font-size:.86rem; margin-top:.2rem; display:flex; gap:.45rem; flex-wrap:wrap; }
+.cm-actions { display:flex; gap:.45rem; flex-wrap:wrap; justify-content:flex-end; }
+.cm-form-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:.8rem; align-items:end; }
+.cm-form-grid label, .player-filters label { color:var(--muted); display:block; font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.25rem; }
+.cm-form-grid input, .cm-form-grid select, .player-filters input, .player-filters select { width:100%; }
+.status-pill { border-radius:999px; padding:.22rem .55rem; font-size:.76rem; font-weight:700; border:1px solid var(--border); }
+.status-pill.active { color:#86efac; border-color:rgba(134,239,172,.4); background:rgba(34,197,94,.12); }
+.status-pill.inactive { color:#fca5a5; border-color:rgba(252,165,165,.4); background:rgba(239,68,68,.12); }
+.empty-state { border:1px dashed var(--border); border-radius:16px; padding:2rem; text-align:center; color:var(--muted); background:rgba(255,255,255,.025); }
+.save-bar { position:sticky; top:70px; z-index:10; display:flex; gap:.5rem; justify-content:flex-end; flex-wrap:wrap; background:rgba(14,22,18,.88); backdrop-filter:blur(8px); border:1px solid var(--border); border-radius:14px; padding:.7rem; }
+.team-swatch { display:inline-block; width:14px; height:14px; border-radius:50%; border:1px solid var(--border); vertical-align:middle; margin-right:.2rem; }
+.player-toolbar { display:flex; justify-content:space-between; gap:.75rem; flex-wrap:wrap; align-items:center; margin:.75rem 0; }
+.player-filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:.7rem; }
+.player-list { max-height:720px; overflow:auto; display:flex; flex-direction:column; gap:.45rem; padding-right:.25rem; }
+.player-option, .assigned-player { display:grid; grid-template-columns:auto minmax(180px,1fr) repeat(4, minmax(70px,auto)); gap:.7rem; align-items:center; background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.7rem; }
+.player-option.disabled { opacity:.55; }
+.player-rating { font-weight:800; color:var(--accent); }
+@media (max-width: 900px) { .cm-row, .player-option, .assigned-player { grid-template-columns:1fr; } .cm-actions { justify-content:flex-start; } }
+</style>
 
-<div class="grid" style="display:grid;grid-template-columns:minmax(240px,.8fr) minmax(320px,1fr) minmax(420px,1.6fr);gap:1rem;align-items:start;">
-  <section class="card" style="padding:1rem;">
-    <h3 style="margin:0 0 .75rem;">Modes</h3>
-    <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem;">
-      {% for mode in modes %}
-      <a href="{{ url_for('admin_challenge_data', mode_id=mode.id) }}"
-         class="btn {{ 'btn-primary' if mode.id == selected_mode.id else 'btn-ghost' }}"
-         style="justify-content:space-between;">
-        <span>{{ mode.name }}</span>
-        {% if not mode.is_active %}<small>Off</small>{% endif %}
-      </a>
-      {% endfor %}
+<div class="challenge-shell">
+  <div class="challenge-head">
+    <div>
+      <div class="breadcrumbs">
+        <a href="{{ url_for('admin_challenge_data') }}">Challenge Mode</a>
+        <span>›</span><a href="{{ url_for('admin_challenge_data') }}">Leagues</a>
+        {% if page in ['league', 'team'] %}<span>›</span><a href="{{ url_for('admin_challenge_league_detail', league_id=league.id) }}">{{ league.name }}</a>{% endif %}
+        {% if page == 'team' %}<span>›</span><span>{{ team.name }}</span>{% endif %}
+      </div>
+      <h2 style="margin:0;">{% if page == 'league' %}{{ league.name }} League Settings{% elif page == 'team' %}{{ team.name }} Team Settings{% else %}Challenge Mode Leagues{% endif %}</h2>
+      <p style="color:var(--muted); margin:.25rem 0 0;">Challenge Mode Data &gt; League Details &gt; Team Details &gt; Player Selection</p>
     </div>
+    <div class="challenge-kpis">
+      <span class="badge">{{ total_leagues }} league{{ '' if total_leagues == 1 else 's' }}</span>
+      <span class="badge">{{ total_teams }} team{{ '' if total_teams == 1 else 's' }}</span>
+      <span class="badge">{{ total_players }} player{{ '' if total_players == 1 else 's' }}</span>
+    </div>
+  </div>
 
-    <form method="POST" style="border-top:1px solid var(--border);padding-top:1rem;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="add_mode">
-      <label>New mode name</label>
-      <input name="mode_name" placeholder="Challenge Mode" required>
-      <label>Description</label>
-      <textarea name="mode_description" rows="2" placeholder="Optional notes"></textarea>
-      <label>Sort order</label>
-      <input name="mode_sort_order" type="number" value="0">
-      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;width:100%;">+ Add Mode</button>
-    </form>
-
-    {% if selected_mode %}
-    <form method="POST" style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="edit_mode">
-      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-      <label>Edit selected mode</label>
-      <input name="mode_name" value="{{ selected_mode.name }}" required>
-      <label>Description</label>
-      <textarea name="mode_description" rows="2">{{ selected_mode.description or '' }}</textarea>
-      <label>Sort order</label>
-      <input name="mode_sort_order" type="number" value="{{ selected_mode.sort_order }}">
-      <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem;">
-        <input type="checkbox" name="mode_is_active" {% if selected_mode.is_active %}checked{% endif %}> Active
-      </label>
-      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;">Save Mode</button>
-    </form>
-    <form method="POST" onsubmit="return confirm('Delete this mode and all leagues/teams/players under it?');" style="margin-top:.5rem;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="delete_mode">
-      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-      <button class="btn btn-red" type="submit">Remove Mode</button>
-    </form>
-    {% endif %}
-  </section>
-
-  <section class="card" style="padding:1rem;">
-    <h3 style="margin:0 0 .75rem;">Leagues in {{ selected_mode.name }}</h3>
-
-    <form method="POST" enctype="multipart/form-data" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
+  {% if page == 'leagues' %}
+  <section class="cm-card">
+    <h3 style="margin-top:0;">Add a new league</h3>
+    <form method="POST" enctype="multipart/form-data" class="cm-form-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add_league">
-      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-      <div style="display:grid;grid-template-columns:1fr 110px;gap:.5rem;">
-        <div><label>League name</label><input name="league_name" placeholder="Indian Premier League" required></div>
-        <div><label>Short code</label><input name="short_code" placeholder="IPL"></div>
-      </div>
-      <label>Command</label>
-      <input name="command" placeholder="/cipl">
-      <label>League image</label>
-      <input type="file" name="league_image" accept="image/png,image/jpeg,image/webp,image/gif">
-      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;width:100%;">+ Add League</button>
-      <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;">Examples: IPL → /cipl, BBL → /cbbl, International T20 → /cint, SA20 → /csa20.</p>
+      <div><label>League name</label><input name="league_name" placeholder="IPL" required></div>
+      <div><label>Short code</label><input name="short_code" placeholder="IPL"></div>
+      <div><label>Command</label><input name="command" placeholder="/cipl"></div>
+      <div><label>Sort</label><input type="number" name="league_sort_order" value="0"></div>
+      <div><label>League image</label><input type="file" name="league_image" accept="image/*"></div>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" checked style="width:auto;"> Active</label>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" checked style="width:auto;"> Same-team allowed</label>
+      <button class="btn btn-primary" type="submit">+ Add League</button>
     </form>
+  </section>
 
-    <div style="display:flex;flex-direction:column;gap:.75rem;">
-      {% for league in leagues %}
-      <div style="border:1px solid var(--border);border-radius:10px;padding:.75rem;">
-        <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:.65rem;">
-          {% if league.image_url %}<img src="{{ league.image_url }}" alt="" style="width:46px;height:46px;object-fit:cover;border-radius:8px;">{% else %}<div style="width:46px;height:46px;border-radius:8px;background:var(--bg-soft);display:grid;place-items:center;">🏆</div>{% endif %}
-          <div style="flex:1;">
-            <strong>{{ league.name }}</strong>
-            <div style="color:var(--muted);font-size:.82rem;">{{ league.short_code or 'No code' }} · {{ league.command or 'No command' }} · {{ 'Active' if league.is_active else 'Inactive' }}</div>
-          </div>
-          <a class="btn btn-primary btn-sm" href="{{ url_for('admin_challenge_data', mode_id=selected_mode.id, league_id=league.id) }}">Enter</a>
-          {% if selected_league and selected_league.id == league.id %}<span class="badge badge-green">Selected</span>{% endif %}
+  <section class="cm-grid">
+    {% for league in leagues %}
+    <article class="cm-card cm-row">
+      {% if league.image_url %}<img class="cm-image" src="{{ league.image_url }}" alt="{{ league.name }} image">{% else %}<div class="cm-image">{{ (league.short_code or league.name)[:3] }}</div>{% endif %}
+      <div>
+        <h3 class="cm-title">{{ league.name }}</h3>
+        <div class="cm-meta">
+          <span>{{ league.short_code or 'No short code' }}</span>
+          <span>·</span><span>{{ league.command or 'No command' }}</span>
+          <span>·</span><span>{{ league._team_count }} teams</span>
+          <span>·</span><span>{{ league._player_count }} players</span>
         </div>
-        <details {% if selected_league and selected_league.id == league.id %}open{% endif %}>
-          <summary style="cursor:pointer;color:var(--accent);">Edit league</summary>
-          <form method="POST" enctype="multipart/form-data" style="margin-top:.75rem;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="edit_league">
-            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-            <input type="hidden" name="league_id" value="{{ league.id }}">
-            <label>Name</label><input name="league_name" value="{{ league.name }}" required>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
-              <div><label>Short code</label><input name="short_code" value="{{ league.short_code or '' }}"></div>
-              <div><label>Command</label><input name="command" value="{{ league.command or '' }}"></div>
-            </div>
-            <label>Replace image</label><input type="file" name="league_image" accept="image/png,image/jpeg,image/webp,image/gif">
-            {% if league.image_url %}<label style="display:flex;gap:.4rem;align-items:center;"><input type="checkbox" name="remove_league_image" value="1"> Remove current image</label>{% endif %}
-            <label>Sort order</label><input name="league_sort_order" type="number" value="{{ league.sort_order }}">
-            <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem;"><input type="checkbox" name="league_is_active" {% if league.is_active %}checked{% endif %}> Active</label>
-            <button class="btn btn-primary btn-sm" type="submit" style="margin-top:.6rem;">Save League</button>
-          </form>
-          <form method="POST" onsubmit="return confirm('Delete {{ league.name }} and all teams/players?');" style="margin-top:.5rem;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="delete_league">
-            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-            <input type="hidden" name="league_id" value="{{ league.id }}">
-            <button class="btn btn-red btn-sm" type="submit">Remove League</button>
-          </form>
-        </details>
+        <div style="margin-top:.55rem;"><span class="status-pill {{ 'active' if league.is_active else 'inactive' }}">{{ 'Active' if league.is_active else 'Inactive' }}</span></div>
+      </div>
+      <div class="cm-actions">
+        <a class="btn btn-primary btn-sm" href="{{ url_for('admin_challenge_league_detail', league_id=league.id) }}" target="_blank" rel="noopener">Enter</a>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('admin_challenge_league_detail', league_id=league.id) }}">Edit</a>
+        <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="toggle_league"><input type="hidden" name="league_id" value="{{ league.id }}"><button class="btn btn-ghost btn-sm" type="submit">{{ 'Deactivate' if league.is_active else 'Activate' }}</button></form>
+        {% if league.image_url %}<form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_league_image"><input type="hidden" name="league_id" value="{{ league.id }}"><button class="btn btn-ghost btn-sm" type="submit">Remove image</button></form>{% endif %}
+        <form method="POST" onsubmit="return confirm('Delete {{ league.name }} and all teams/players?');" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_league"><input type="hidden" name="league_id" value="{{ league.id }}"><button class="btn btn-red btn-sm" type="submit">Delete</button></form>
+      </div>
+    </article>
+    {% else %}
+    <div class="empty-state">No leagues added yet. Create your first league.</div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if page == 'league' %}
+  <form method="POST" enctype="multipart/form-data" class="cm-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_league">
+    <div class="save-bar"><a class="btn btn-ghost" href="{{ url_for('admin_challenge_data') }}">Back to Leagues</a><button class="btn btn-primary" type="submit">Save Changes</button></div>
+    <div class="cm-form-grid" style="margin-top:1rem;">
+      <div><label>League name</label><input name="league_name" value="{{ league.name }}" required></div>
+      <div><label>Short code</label><input name="short_code" value="{{ league.short_code or '' }}"></div>
+      <div><label>Command</label><input name="command" value="{{ league.command or '' }}" placeholder="/cipl"></div>
+      <div><label>Sort</label><input type="number" name="league_sort_order" value="{{ league.sort_order }}"></div>
+      <div><label>League image</label><input type="file" name="league_image" accept="image/*"></div>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" {{ 'checked' if league.is_active else '' }} style="width:auto;"> Active</label>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" {{ 'checked' if league.same_team_allowed else '' }} style="width:auto;"> Same-team challenge allowed</label>
+      {% if league.image_url %}<label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="remove_image" style="width:auto;"> Remove current image</label>{% endif %}
+    </div>
+  </form>
+
+  <section class="cm-card">
+    <h3 style="margin-top:0;">Add Team</h3>
+    <form method="POST" enctype="multipart/form-data" class="cm-form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_team">
+      <div><label>Team name</label><input name="team_name" placeholder="Mumbai Indians" required></div>
+      <div><label>Short name</label><input name="short_name" placeholder="MI"></div>
+      <div><label>Logo/image</label><input type="file" name="team_logo" accept="image/*"></div>
+      <div><label>Primary color</label><input type="color" name="primary_color" value="#1d4ed8"></div>
+      <div><label>Secondary color</label><input type="color" name="secondary_color" value="#facc15"></div>
+      <div><label>Sort</label><input type="number" name="team_sort_order" value="0"></div>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="team_is_active" checked style="width:auto;"> Active</label>
+      <button class="btn btn-primary" type="submit">+ Add Team</button>
+    </form>
+  </section>
+
+  <section class="cm-grid">
+    {% for team in teams %}
+    <article class="cm-card cm-row">
+      {% if team.logo_url %}<img class="cm-image" src="{{ team.logo_url }}" alt="{{ team.name }} logo">{% else %}<div class="cm-image">{{ (team.short_name or team.name)[:3] }}</div>{% endif %}
+      <div>
+        <h3 class="cm-title">{{ team.name }} <span style="color:var(--muted);font-weight:400;">{{ team.short_name or '' }}</span></h3>
+        <div class="cm-meta"><span>{{ team._player_count }} players</span>{% if team.primary_color %}<span>·</span><span><i class="team-swatch" style="background:{{ team.primary_color }}"></i>{{ team.primary_color }}</span>{% endif %}</div>
+        <div style="margin-top:.55rem;"><span class="status-pill {{ 'active' if team.is_active else 'inactive' }}">{{ 'Active' if team.is_active else 'Inactive' }}</span></div>
+      </div>
+      <div class="cm-actions">
+        <a class="btn btn-primary btn-sm" href="{{ url_for('admin_challenge_team_detail', league_id=league.id, team_id=team.id) }}" target="_blank" rel="noopener">Enter</a>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('admin_challenge_team_detail', league_id=league.id, team_id=team.id) }}">Edit</a>
+        <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="toggle_team"><input type="hidden" name="team_id" value="{{ team.id }}"><button class="btn btn-ghost btn-sm" type="submit">{{ 'Deactivate' if team.is_active else 'Activate' }}</button></form>
+        <form method="POST" onsubmit="return confirm('Delete {{ team.name }} and its players?');" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_team"><input type="hidden" name="team_id" value="{{ team.id }}"><button class="btn btn-red btn-sm" type="submit">Delete</button></form>
+      </div>
+    </article>
+    {% else %}
+    <div class="empty-state">No teams added in {{ league.name }} yet.</div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if page == 'team' %}
+  <form method="POST" enctype="multipart/form-data" class="cm-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_team">
+    <div class="save-bar"><a class="btn btn-ghost" href="{{ url_for('admin_challenge_league_detail', league_id=league.id) }}">Back to {{ league.name }}</a><a class="btn btn-primary" href="#add-players">Add Players</a><button class="btn btn-primary" type="submit">Save Changes</button></div>
+    <div class="cm-form-grid" style="margin-top:1rem;">
+      <div><label>Team name</label><input name="team_name" value="{{ team.name }}" required></div>
+      <div><label>Short name</label><input name="short_name" value="{{ team.short_name or '' }}"></div>
+      <div><label>Logo/image</label><input type="file" name="team_logo" accept="image/*"></div>
+      <div><label>Primary color</label><input type="color" name="primary_color" value="{{ team.primary_color or '#1d4ed8' }}"></div>
+      <div><label>Secondary color</label><input type="color" name="secondary_color" value="{{ team.secondary_color or '#facc15' }}"></div>
+      <div><label>Sort</label><input type="number" name="team_sort_order" value="{{ team.sort_order }}"></div>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="team_is_active" {{ 'checked' if team.is_active else '' }} style="width:auto;"> Active</label>
+      {% if team.logo_url %}<label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="remove_logo" style="width:auto;"> Remove current logo</label>{% endif %}
+    </div>
+  </form>
+
+  <section class="cm-card">
+    <h3 style="margin-top:0;">Players in {{ team.name }}</h3>
+    <div style="display:flex;flex-direction:column;gap:.55rem;">
+      {% for cp in challenge_players %}
+      {% set src = cp.source_player %}
+      <div class="assigned-player">
+        <strong>{{ cp.name }}</strong>
+        <span>{{ src.country if src else 'Master player missing' }}</span>
+        <span>{{ src.category if src else '—' }}</span>
+        <span>Bat <b>{{ src.bat_rating if src else '—' }}</b></span>
+        <span>Bowl <b>{{ src.bowl_rating if src else '—' }}</b></span>
+        <span>OVR <b class="player-rating">{{ src.rating if src else '—' }}</b></span>
+        <form method="POST" onsubmit="return confirm('Remove {{ cp.name }} from {{ team.name }}?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_player"><input type="hidden" name="player_id" value="{{ cp.id }}"><button class="btn btn-red btn-sm" type="submit">Remove</button></form>
       </div>
       {% else %}
-      <p style="color:var(--muted);">No leagues yet. Add one above.</p>
+      <div class="empty-state">No players added to {{ team.name }} yet.</div>
       {% endfor %}
     </div>
   </section>
 
-  <section class="card" style="padding:1rem;">
-    {% if selected_league %}
-    <h3 style="margin:0 0 .75rem;">Teams & Players — {{ selected_league.name }}</h3>
-    <form method="GET" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
-      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-      <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-      <label>Search player data to add into teams</label>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:.5rem;">
-        <input name="player_search" value="{{ player_search }}" placeholder="Search existing player data, e.g. Virat Kohli">
-        <button class="btn btn-ghost" type="submit">Search</button>
-      </div>
-      <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;">Use each team's <b>Add Players</b> option below, then select a result from this search list.</p>
+  <section class="cm-card" id="add-players">
+    <h3 style="margin-top:0;">Add Players from Master Player Data</h3>
+    <p style="color:var(--muted);margin-top:-.4rem;">Search and filter existing Player Data. Already added players are selected/disabled. No duplicate challenge-only players are created.</p>
+    <form method="GET" class="player-filters">
+      <div><label>Search name</label><input name="q" value="{{ filters.q }}" placeholder="Player name"></div>
+      <div><label>Country</label><select name="country"><option value="">All countries</option>{% for country in filter_options.countries %}<option value="{{ country }}" {{ 'selected' if filters.country == country else '' }}>{{ country }}</option>{% endfor %}</select></div>
+      <div><label>Role/category</label><select name="role"><option value="">All roles</option>{% for role in filter_options.roles %}<option value="{{ role }}" {{ 'selected' if filters.role == role else '' }}>{{ role }}</option>{% endfor %}</select></div>
+      <div><label>Overall rating</label><select name="rating"><option value="">All ratings</option>{% for rating in filter_options.ratings %}<option value="{{ rating }}" {{ 'selected' if filters.rating|string == rating|string else '' }}>{{ rating }}</option>{% endfor %}</select></div>
+      <div><label>Batting rating</label><select name="bat_rating"><option value="">All ratings</option>{% for rating in filter_options.ratings %}<option value="{{ rating }}" {{ 'selected' if filters.bat_rating|string == rating|string else '' }}>{{ rating }}</option>{% endfor %}</select></div>
+      <div><label>Bowling rating</label><select name="bowl_rating"><option value="">All ratings</option>{% for rating in filter_options.ratings %}<option value="{{ rating }}" {{ 'selected' if filters.bowl_rating|string == rating|string else '' }}>{{ rating }}</option>{% endfor %}</select></div>
+      <div><label>Batting style</label><select name="bat_hand"><option value="">All styles</option>{% for hand in filter_options.bat_hands %}<option value="{{ hand }}" {{ 'selected' if filters.bat_hand == hand else '' }}>{{ hand }}</option>{% endfor %}</select></div>
+      <div><label>Bowling style</label><select name="bowl_style"><option value="">All styles</option>{% for style in filter_options.bowl_styles %}<option value="{{ style }}" {{ 'selected' if filters.bowl_style == style else '' }}>{{ style }}</option>{% endfor %}</select></div>
+      <button class="btn btn-primary" type="submit">Apply Filters</button>
+      <a class="btn btn-ghost" href="{{ url_for('admin_challenge_team_detail', league_id=league.id, team_id=team.id) }}#add-players">Clear</a>
     </form>
-    <form method="POST" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
+
+    <form method="POST" style="margin-top:1rem;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="add_team">
-      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-      <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-      <div style="display:grid;grid-template-columns:1fr 120px 90px;gap:.5rem;">
-        <div><label>Team name</label><input name="team_name" placeholder="Mumbai Indians" required></div>
-        <div><label>Short name</label><input name="short_name" placeholder="MI"></div>
-        <div><label>Sort</label><input type="number" name="team_sort_order" value="0"></div>
-      </div>
-      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;">+ Add Team</button>
-    </form>
-
-    {% for team in teams %}
-    <div style="border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem;">
-      <div style="display:flex;justify-content:space-between;gap:.75rem;align-items:flex-start;flex-wrap:wrap;">
-        <div><h4 style="margin:0;">{{ team.name }} <span style="color:var(--muted);font-weight:400;">{{ team.short_name or '' }}</span></h4><small style="color:var(--muted);">{{ team._players|length }} players</small></div>
-        <details>
-          <summary class="btn btn-ghost btn-sm" style="cursor:pointer;">Edit Team</summary>
-          <form method="POST" style="margin-top:.75rem;min-width:280px;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="edit_team">
-            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-            <input type="hidden" name="team_id" value="{{ team.id }}">
-            <label>Name</label><input name="team_name" value="{{ team.name }}" required>
-            <label>Short name</label><input name="short_name" value="{{ team.short_name or '' }}">
-            <label>Sort order</label><input type="number" name="team_sort_order" value="{{ team.sort_order }}">
-            <button class="btn btn-primary btn-sm" type="submit" style="margin-top:.5rem;">Save Team</button>
-          </form>
-          <form method="POST" onsubmit="return confirm('Delete {{ team.name }} and its players?');" style="margin-top:.5rem;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="delete_team">
-            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-            <input type="hidden" name="team_id" value="{{ team.id }}">
-            <button class="btn btn-red btn-sm" type="submit">Remove Team</button>
-          </form>
-        </details>
-      </div>
-
-      <details style="margin:1rem 0;">
-        <summary class="btn btn-primary btn-sm" style="cursor:pointer;display:inline-flex;">Add Players</summary>
-        <form method="POST" style="display:grid;grid-template-columns:1fr minmax(180px,.7fr) 80px auto;gap:.5rem;align-items:end;margin-top:.75rem;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="add_player">
-          <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-          <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-          <input type="hidden" name="team_id" value="{{ team.id }}">
-          <div>
-            <label>Search result / player data</label>
-            <select name="source_player_id">
-              <option value="">Manual player name</option>
-              {% for source_player in player_options %}
-              <option value="{{ source_player.id }}">{{ source_player.name }} — {{ source_player.version }} · {{ source_player.rating }} · {{ source_player.country }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div><label>Manual name</label><input name="player_name" placeholder="Use when no search result is selected"></div>
-          <div><label>Sort</label><input type="number" name="player_sort_order" value="0"></div>
-          <button class="btn btn-primary btn-sm" type="submit">+ Add</button>
-          <div style="grid-column:1 / -1;"><label>Details override (optional)</label><input name="details_json" placeholder='Leave blank to store selected player id/rating/category/country'></div>
-        </form>
-      </details>
-
-      <div style="display:flex;flex-direction:column;gap:.45rem;">
-        {% for player in team._players %}
-        <details style="background:var(--bg-soft);border-radius:8px;padding:.55rem .7rem;">
-          <summary style="cursor:pointer;"><strong>{{ player.name }}</strong>{% if player.details_json %}<small style="color:var(--muted);"> — {{ player.details_json }}</small>{% endif %}</summary>
-          <form method="POST" style="display:grid;grid-template-columns:1fr minmax(160px,.8fr) 80px auto;gap:.5rem;align-items:end;margin-top:.6rem;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="edit_player">
-            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-            <input type="hidden" name="team_id" value="{{ team.id }}">
-            <input type="hidden" name="player_id" value="{{ player.id }}">
-            <div><label>Name</label><input name="player_name" value="{{ player.name }}" required></div>
-            <div><label>Details</label><input name="details_json" value="{{ player.details_json or '' }}"></div>
-            <div><label>Sort</label><input type="number" name="player_sort_order" value="{{ player.sort_order }}"></div>
-            <button class="btn btn-primary btn-sm" type="submit">Save</button>
-          </form>
-          <form method="POST" onsubmit="return confirm('Remove {{ player.name }}?');" style="margin-top:.45rem;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="delete_player">
-            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
-            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
-            <input type="hidden" name="team_id" value="{{ team.id }}">
-            <input type="hidden" name="player_id" value="{{ player.id }}">
-            <button class="btn btn-red btn-sm" type="submit">Remove Player</button>
-          </form>
-        </details>
+      <input type="hidden" name="action" value="add_selected_players">
+      <div class="player-toolbar"><strong>{{ master_players|length }} master players shown</strong><button class="btn btn-primary" type="submit">Add Selected Players</button></div>
+      <div class="player-list">
+        {% for player in master_players %}
+        {% set already_added = player.id in added_source_ids %}
+        <label class="player-option {{ 'disabled' if already_added else '' }}">
+          <input type="checkbox" name="source_player_ids" value="{{ player.id }}" {{ 'checked disabled' if already_added else '' }}>
+          <span><strong>{{ player.name }}</strong><br><small style="color:var(--muted);">{{ player.version }} · {{ player.bat_hand }} bat · {{ player.bowl_style }}</small></span>
+          <span>{{ player.country }}</span>
+          <span>{{ player.category }}</span>
+          <span>Bat <b>{{ player.bat_rating }}</b></span>
+          <span>Bowl <b>{{ player.bowl_rating }}</b></span>
+          <span>OVR <b class="player-rating">{{ player.rating }}</b></span>
+        </label>
         {% else %}
-        <p style="color:var(--muted);font-size:.9rem;">No players yet.</p>
+        <div class="empty-state">No master players match these filters.</div>
         {% endfor %}
       </div>
-    </div>
-    {% else %}
-    <p style="color:var(--muted);">No teams yet. Add one above.</p>
-    {% endfor %}
-    {% else %}
-    <p style="color:var(--muted);">Select or add a league to manage teams and players.</p>
-    {% endif %}
+    </form>
   </section>
+  {% endif %}
 </div>
-
-<style>
-@media (max-width: 1100px) {
-  .grid { grid-template-columns: 1fr !important; }
-}
-</style>
 {% endblock %}

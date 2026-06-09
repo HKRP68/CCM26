@@ -1641,6 +1641,7 @@ class ChallengeLeague(Base):
     image_url = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    same_team_allowed = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1660,7 +1661,11 @@ class ChallengeTeam(Base):
     league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(120), nullable=False)
     short_name = Column(String(30), nullable=True, index=True)
+    logo_url = Column(String(500), nullable=True)
+    primary_color = Column(String(9), nullable=True)
+    secondary_color = Column(String(9), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1673,11 +1678,12 @@ class ChallengeTeam(Base):
 
 
 class ChallengePlayer(Base):
-    """Simple player entry inside a challenge team, extensible via details_json."""
+    """Player assignment inside a challenge team, linked to master Player data."""
     __tablename__ = "challenge_players"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(150), nullable=False)
     details_json = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
@@ -1685,6 +1691,7 @@ class ChallengePlayer(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     team = relationship("ChallengeTeam", back_populates="players")
+    source_player = relationship("Player")
 
     __table_args__ = (
         Index("ix_challenge_player_team_name", "team_id", "name", unique=True),

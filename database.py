@@ -344,6 +344,14 @@ def _migrate_add_columns():
     # Fantasy league auto-lock time (stored UTC; admin enters IST)
     _try_add("fantasy_leagues", "lock_at", "TIMESTAMP")
 
+    # Challenge Mode hierarchy/admin UI additions.
+    _try_add("challenge_leagues", "same_team_allowed", "BOOLEAN DEFAULT TRUE")
+    _try_add("challenge_teams", "logo_url", "VARCHAR(500)")
+    _try_add("challenge_teams", "primary_color", "VARCHAR(9)")
+    _try_add("challenge_teams", "secondary_color", "VARCHAR(9)")
+    _try_add("challenge_teams", "is_active", "BOOLEAN DEFAULT TRUE")
+    _try_add("challenge_players", "source_player_id", "INTEGER")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by default
     for sql in (
         "UPDATE user_quest_progress SET assigned = TRUE WHERE assigned IS NULL",

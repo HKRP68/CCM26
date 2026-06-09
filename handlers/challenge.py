@@ -251,10 +251,11 @@ def _league_teams(session, league_key, league_record=None):
     teams = []
     if league_record is not None:
         try:
-            teams = [team.name for team in (session.query(ChallengeTeam)
-                                            .filter(ChallengeTeam.league_id == league_record.id)
-                                            .order_by(ChallengeTeam.sort_order, ChallengeTeam.name)
-                                            .all()) if (team.name or "").strip()]
+            query = session.query(ChallengeTeam).filter(ChallengeTeam.league_id == league_record.id)
+            if hasattr(ChallengeTeam, "is_active"):
+                query = query.filter(ChallengeTeam.is_active == True)
+            teams = [team.name for team in (query.order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all())
+                     if (team.name or "").strip()]
         except Exception:
             logger.exception("Failed to load challenge teams for league %s", league_key)
     if not teams:
@@ -459,8 +460,12 @@ def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids):
     return InlineKeyboardMarkup(rows)
 
 
-def _same_team_challenge_enabled(session=None):
+def _same_team_challenge_enabled(session=None, league_key=None):
     try:
+        if session is not None and league_key:
+            league = _get_challenge_league_record(session, league_key)
+            if league is not None and hasattr(league, "same_team_allowed"):
+                return bool(league.same_team_allowed)
         from services.config_service import get_allow_same_team_challenge
         return bool(get_allow_same_team_challenge(session))
     except Exception:
@@ -723,8 +728,14 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     selected_team = teams[team_idx]
+    same_team_allowed = _same_team_challenge_enabled(None)
+    session = get_session()
+    try:
+        same_team_allowed = _same_team_challenge_enabled(session, draft.get("league_key"))
+    finally:
+        session.close()
     if (turn == "target"
-            and not _same_team_challenge_enabled()
+            and not same_team_allowed
             and selected_team == draft.get("host_team")):
         await query.answer("This team is already selected. Please choose another team.", show_alert=True)
         return

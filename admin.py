@@ -10953,7 +10953,7 @@ def _format_cooldown(seconds):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# CHALLENGE DATA — Modes > Leagues > Teams > Players admin panel
+# CHALLENGE DATA — Leagues > Teams > Players admin panel
 # ═══════════════════════════════════════════════════════════════════════
 
 _CHALLENGE_IMAGE_DIR = os.path.join(app.root_path, "static", "challenge_leagues")
@@ -10967,19 +10967,40 @@ def _normalize_admin_command(value):
     return command[:60]
 
 
-def _save_challenge_league_image(file_storage):
+def _checked(name, default=False):
+    if name in request.form:
+        return request.form.get(name) == "on"
+    return bool(default)
+
+
+def _int_form(name, default=0):
+    try:
+        return int(request.form.get(name) or default or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _save_challenge_image(file_storage, prefix="image"):
     if not file_storage or not getattr(file_storage, "filename", ""):
         return None
     filename = file_storage.filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in _ALLOWED_CHALLENGE_IMAGE_EXTS:
-        raise ValueError("League image must be PNG, JPG, WEBP, or GIF.")
+        raise ValueError("Challenge images must be PNG, JPG, WEBP, or GIF.")
     import uuid
     os.makedirs(_CHALLENGE_IMAGE_DIR, exist_ok=True)
-    safe_name = f"league_{uuid.uuid4().hex}.{ext}"
+    safe_name = f"{prefix}_{uuid.uuid4().hex}.{ext}"
     dest = os.path.join(_CHALLENGE_IMAGE_DIR, safe_name)
     file_storage.save(dest)
     return url_for("static", filename=f"challenge_leagues/{safe_name}")
+
+
+def _save_challenge_league_image(file_storage):
+    return _save_challenge_image(file_storage, "league")
+
+
+def _save_challenge_team_logo(file_storage):
+    return _save_challenge_image(file_storage, "team")
 
 
 def _ensure_default_challenge_mode(db):
@@ -10994,265 +11015,357 @@ def _ensure_default_challenge_mode(db):
     return mode
 
 
+def _challenge_player_details_from_source(player):
+    return json.dumps({
+        "source_player_id": player.id,
+        "name": player.name,
+        "version": player.version,
+        "country": player.country,
+        "category": player.category,
+        "role": player.category,
+        "rating": player.rating,
+        "bat_rating": player.bat_rating or 0,
+        "bowl_rating": player.bowl_rating or 0,
+        "bat_hand": player.bat_hand,
+        "bowl_hand": player.bowl_hand,
+        "bowl_style": player.bowl_style,
+    }, separators=(",", ":"))
+
+
+def _challenge_filters():
+    return {
+        "q": (request.args.get("q") or "").strip(),
+        "country": (request.args.get("country") or "").strip(),
+        "role": (request.args.get("role") or "").strip(),
+        "rating": (request.args.get("rating") or "").strip(),
+        "bat_rating": (request.args.get("bat_rating") or "").strip(),
+        "bowl_rating": (request.args.get("bowl_rating") or "").strip(),
+        "bat_hand": (request.args.get("bat_hand") or "").strip(),
+        "bowl_style": (request.args.get("bowl_style") or "").strip(),
+    }
+
+
+def _filtered_master_players(db):
+    filters = _challenge_filters()
+    query = db.query(Player).filter(Player.is_active == True)
+    if filters["q"]:
+        like = f"%{filters['q']}%"
+        query = query.filter(Player.name.ilike(like))
+    if filters["country"]:
+        query = query.filter(Player.country == filters["country"])
+    if filters["role"]:
+        query = query.filter(Player.category == filters["role"])
+    for key, col in (("rating", Player.rating), ("bat_rating", Player.bat_rating), ("bowl_rating", Player.bowl_rating)):
+        if filters[key]:
+            try:
+                query = query.filter(col == int(filters[key]))
+            except ValueError:
+                pass
+    if filters["bat_hand"]:
+        query = query.filter(Player.bat_hand == filters["bat_hand"])
+    if filters["bowl_style"]:
+        query = query.filter(Player.bowl_style == filters["bowl_style"])
+    return (query.order_by(Player.rating.desc(), Player.name.asc(), Player.version.asc()).all(), filters)
+
+
+def _challenge_filter_options(db):
+    def values(column):
+        return [row[0] for row in db.query(column).filter(column.isnot(None)).distinct().order_by(column).all() if row[0]]
+    return {
+        "countries": values(Player.country),
+        "roles": values(Player.category),
+        "bat_hands": values(Player.bat_hand),
+        "bowl_styles": values(Player.bowl_style),
+        "ratings": list(range(100, 29, -1)),
+    }
+
+
+def _hydrate_league_counts(db, leagues):
+    for league in leagues:
+        teams = getattr(league, "teams", [])
+        league._team_count = len(teams)
+        league._player_count = sum(len(getattr(team, "players", [])) for team in teams)
+    return leagues
+
+
+def _hydrate_team_counts(teams):
+    for team in teams:
+        team._player_count = len(getattr(team, "players", []))
+    return teams
+
+
+def _get_league_or_404(db, league_id):
+    league = db.query(ChallengeLeague).get(int(league_id))
+    if not league:
+        flash("League not found.", "error")
+        return None
+    return league
+
+
+def _get_team_or_404(db, league_id, team_id):
+    team = (db.query(ChallengeTeam)
+              .filter(ChallengeTeam.id == int(team_id), ChallengeTeam.league_id == int(league_id))
+              .first())
+    if not team:
+        flash("Team not found.", "error")
+        return None
+    return team
+
+
 @app.route("/challenge-data", methods=["GET", "POST"])
 @login_required
 def admin_challenge_data():
     db = get_session()
     try:
+        mode = _ensure_default_challenge_mode(db)
         if request.method == "POST":
             action = request.form.get("action", "")
             try:
-                mode = _ensure_default_challenge_mode(db)
-
-                if action == "add_mode":
-                    name = (request.form.get("mode_name") or "").strip()
-                    if not name:
-                        flash("Mode name is required.", "error")
-                    else:
-                        new_mode = ChallengeMode(
-                            name=name[:120],
-                            description=(request.form.get("mode_description") or "").strip()[:1000] or None,
-                            sort_order=int(request.form.get("mode_sort_order") or 0),
-                        )
-                        db.add(new_mode)
-                        db.flush()
-                        log_admin(db, "challenge_mode_add", "challenge_mode", new_mode.id, new_mode.name)
-                        flash(f"✅ Added mode {new_mode.name}.", "success")
-
-                elif action == "edit_mode":
-                    mode_obj = db.query(ChallengeMode).get(int(request.form.get("mode_id") or 0))
-                    if not mode_obj:
-                        flash("Mode not found.", "error")
-                    else:
-                        mode_obj.name = (request.form.get("mode_name") or mode_obj.name).strip()[:120]
-                        mode_obj.description = (request.form.get("mode_description") or "").strip()[:1000] or None
-                        mode_obj.is_active = request.form.get("mode_is_active") == "on"
-                        mode_obj.sort_order = int(request.form.get("mode_sort_order") or 0)
-                        log_admin(db, "challenge_mode_edit", "challenge_mode", mode_obj.id, mode_obj.name)
-                        flash(f"✅ Updated mode {mode_obj.name}.", "success")
-
-                elif action == "delete_mode":
-                    mode_obj = db.query(ChallengeMode).get(int(request.form.get("mode_id") or 0))
-                    if not mode_obj:
-                        flash("Mode not found.", "error")
-                    elif db.query(ChallengeMode).count() <= 1:
-                        flash("At least one challenge mode must remain.", "error")
-                    else:
-                        name = mode_obj.name
-                        db.delete(mode_obj)
-                        log_admin(db, "challenge_mode_delete", "challenge_mode", mode_obj.id, name)
-                        flash(f"Removed mode {name}.", "info")
-
-                elif action == "add_league":
-                    mode_id = int(request.form.get("mode_id") or mode.id)
+                if action == "add_league":
                     name = (request.form.get("league_name") or "").strip()
                     if not name:
                         flash("League name is required.", "error")
                     else:
                         league = ChallengeLeague(
-                            mode_id=mode_id,
+                            mode_id=mode.id,
                             name=name[:120],
                             short_code=(request.form.get("short_code") or "").strip().upper()[:30] or None,
                             command=_normalize_admin_command(request.form.get("command")),
-                            sort_order=int(request.form.get("league_sort_order") or 0),
-                            is_active=request.form.get("league_is_active", "on") == "on",
+                            sort_order=_int_form("league_sort_order"),
+                            is_active=_checked("league_is_active", True),
+                            same_team_allowed=_checked("same_team_allowed", True),
                         )
                         image_url = _save_challenge_league_image(request.files.get("league_image"))
                         if image_url:
                             league.image_url = image_url
                         db.add(league)
                         db.flush()
-                        log_admin(db, "challenge_league_add", "challenge_league", league.id, league.name,
-                                  f"command={league.command or ''} short_code={league.short_code or ''}")
+                        log_admin(db, "challenge_league_add", "challenge_league", league.id, league.name)
                         flash(f"✅ Added league {league.name}.", "success")
-
-                elif action == "edit_league":
-                    league = db.query(ChallengeLeague).get(int(request.form.get("league_id") or 0))
+                elif action in {"toggle_league", "delete_league", "remove_league_image"}:
+                    league = db.query(ChallengeLeague).get(_int_form("league_id"))
                     if not league:
                         flash("League not found.", "error")
-                    else:
-                        league.name = (request.form.get("league_name") or league.name).strip()[:120]
-                        league.short_code = (request.form.get("short_code") or "").strip().upper()[:30] or None
-                        league.command = _normalize_admin_command(request.form.get("command")) or None
-                        league.sort_order = int(request.form.get("league_sort_order") or 0)
-                        league.is_active = request.form.get("league_is_active") == "on"
-                        if request.form.get("remove_league_image") == "1":
-                            league.image_url = None
-                        image_url = _save_challenge_league_image(request.files.get("league_image"))
-                        if image_url:
-                            league.image_url = image_url
-                        log_admin(db, "challenge_league_edit", "challenge_league", league.id, league.name,
-                                  f"command={league.command or ''} short_code={league.short_code or ''}")
-                        flash(f"✅ Updated league {league.name}.", "success")
-
-                elif action == "delete_league":
-                    league = db.query(ChallengeLeague).get(int(request.form.get("league_id") or 0))
-                    if not league:
-                        flash("League not found.", "error")
+                    elif action == "toggle_league":
+                        league.is_active = not bool(league.is_active)
+                        log_admin(db, "challenge_league_toggle", "challenge_league", league.id, league.name)
+                        flash(f"{league.name} is now {'active' if league.is_active else 'inactive'}.", "info")
+                    elif action == "remove_league_image":
+                        league.image_url = None
+                        log_admin(db, "challenge_league_image_remove", "challenge_league", league.id, league.name)
+                        flash(f"Removed image for {league.name}.", "info")
                     else:
                         name = league.name
                         db.delete(league)
                         log_admin(db, "challenge_league_delete", "challenge_league", league.id, name)
                         flash(f"Removed league {name}.", "info")
+                else:
+                    flash("Unknown Challenge Mode action.", "error")
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.exception("challenge league mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_challenge_data"))
 
+        leagues = (db.query(ChallengeLeague)
+                     .filter(ChallengeLeague.mode_id == mode.id)
+                     .order_by(ChallengeLeague.sort_order, ChallengeLeague.name)
+                     .all())
+        _hydrate_league_counts(db, leagues)
+        return render_template(
+            "admin_challenge_data.html",
+            page="leagues",
+            mode=mode,
+            leagues=leagues,
+            total_leagues=len(leagues),
+            total_teams=sum(league._team_count for league in leagues),
+            total_players=sum(league._player_count for league in leagues),
+        )
+    finally:
+        db.close()
+
+
+@app.route("/challenge-data/leagues/<int:league_id>", methods=["GET", "POST"])
+@login_required
+def admin_challenge_league_detail(league_id):
+    db = get_session()
+    try:
+        league = _get_league_or_404(db, league_id)
+        if not league:
+            return redirect(url_for("admin_challenge_data"))
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "save_league":
+                    league.name = (request.form.get("league_name") or league.name).strip()[:120]
+                    league.short_code = (request.form.get("short_code") or "").strip().upper()[:30] or None
+                    league.command = _normalize_admin_command(request.form.get("command")) or None
+                    league.sort_order = _int_form("league_sort_order")
+                    league.is_active = _checked("league_is_active")
+                    league.same_team_allowed = _checked("same_team_allowed")
+                    if request.form.get("remove_image") == "on":
+                        league.image_url = None
+                    image_url = _save_challenge_league_image(request.files.get("league_image"))
+                    if image_url:
+                        league.image_url = image_url
+                    log_admin(db, "challenge_league_edit", "challenge_league", league.id, league.name)
+                    flash(f"✅ Saved {league.name} settings.", "success")
                 elif action == "add_team":
-                    league_id = int(request.form.get("league_id") or 0)
                     name = (request.form.get("team_name") or "").strip()
                     if not name:
                         flash("Team name is required.", "error")
                     else:
                         team = ChallengeTeam(
-                            league_id=league_id,
+                            league_id=league.id,
                             name=name[:120],
                             short_name=(request.form.get("short_name") or "").strip().upper()[:30] or None,
-                            sort_order=int(request.form.get("team_sort_order") or 0),
+                            sort_order=_int_form("team_sort_order"),
+                            is_active=_checked("team_is_active", True),
+                            primary_color=(request.form.get("primary_color") or "").strip()[:9] or None,
+                            secondary_color=(request.form.get("secondary_color") or "").strip()[:9] or None,
                         )
+                        logo_url = _save_challenge_team_logo(request.files.get("team_logo"))
+                        if logo_url:
+                            team.logo_url = logo_url
                         db.add(team)
                         db.flush()
                         log_admin(db, "challenge_team_add", "challenge_team", team.id, team.name)
                         flash(f"✅ Added team {team.name}.", "success")
+                elif action in {"save_team", "toggle_team", "delete_team"}:
+                    team = _get_team_or_404(db, league.id, _int_form("team_id"))
+                    if team:
+                        if action == "save_team":
+                            team.name = (request.form.get("team_name") or team.name).strip()[:120]
+                            team.short_name = (request.form.get("short_name") or "").strip().upper()[:30] or None
+                            team.sort_order = _int_form("team_sort_order")
+                            team.is_active = _checked("team_is_active")
+                            logo_url = _save_challenge_team_logo(request.files.get("team_logo"))
+                            if logo_url:
+                                team.logo_url = logo_url
+                            log_admin(db, "challenge_team_edit", "challenge_team", team.id, team.name)
+                            flash(f"✅ Saved team {team.name}.", "success")
+                        elif action == "toggle_team":
+                            team.is_active = not bool(team.is_active)
+                            log_admin(db, "challenge_team_toggle", "challenge_team", team.id, team.name)
+                            flash(f"{team.name} is now {'active' if team.is_active else 'inactive'}.", "info")
+                        else:
+                            name = team.name
+                            db.delete(team)
+                            log_admin(db, "challenge_team_delete", "challenge_team", team.id, name)
+                            flash(f"Removed team {name}.", "info")
+                else:
+                    flash("Unknown league action.", "error")
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.exception("challenge league detail mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_challenge_league_detail", league_id=league.id))
 
-                elif action == "edit_team":
-                    team = db.query(ChallengeTeam).get(int(request.form.get("team_id") or 0))
-                    if not team:
-                        flash("Team not found.", "error")
-                    else:
-                        team.name = (request.form.get("team_name") or team.name).strip()[:120]
-                        team.short_name = (request.form.get("short_name") or "").strip().upper()[:30] or None
-                        team.sort_order = int(request.form.get("team_sort_order") or 0)
-                        log_admin(db, "challenge_team_edit", "challenge_team", team.id, team.name)
-                        flash(f"✅ Updated team {team.name}.", "success")
+        teams = (db.query(ChallengeTeam)
+                   .filter(ChallengeTeam.league_id == league.id)
+                   .order_by(ChallengeTeam.sort_order, ChallengeTeam.name)
+                   .all())
+        _hydrate_team_counts(teams)
+        return render_template(
+            "admin_challenge_data.html",
+            page="league",
+            league=league,
+            teams=teams,
+            total_leagues=1,
+            total_teams=len(teams),
+            total_players=sum(team._player_count for team in teams),
+        )
+    finally:
+        db.close()
 
-                elif action == "delete_team":
-                    team = db.query(ChallengeTeam).get(int(request.form.get("team_id") or 0))
-                    if not team:
-                        flash("Team not found.", "error")
-                    else:
-                        name = team.name
-                        db.delete(team)
-                        log_admin(db, "challenge_team_delete", "challenge_team", team.id, name)
-                        flash(f"Removed team {name}.", "info")
 
-                elif action == "add_player":
-                    team_id = int(request.form.get("team_id") or 0)
-                    source_player_id = int(request.form.get("source_player_id") or 0)
-                    source_player = db.query(Player).get(source_player_id) if source_player_id else None
-                    name = (request.form.get("player_name") or "").strip()
-                    if source_player:
-                        name = source_player.name
-                    if not name:
-                        flash("Player name is required. Search and select a player, or type a manual name.", "error")
-                    else:
-                        details_json = (request.form.get("details_json") or "").strip() or None
-                        if source_player and not details_json:
-                            details_json = json.dumps({
-                                "player_id": source_player.id,
-                                "version": source_player.version,
-                                "rating": source_player.rating,
-                                "category": source_player.category,
-                                "country": source_player.country,
-                            })
-                        player = ChallengePlayer(
-                            team_id=team_id,
-                            name=name[:150],
-                            details_json=details_json,
-                            sort_order=int(request.form.get("player_sort_order") or 0),
-                        )
-                        db.add(player)
-                        db.flush()
-                        log_admin(db, "challenge_player_add", "challenge_player", player.id, player.name)
-                        flash(f"✅ Added player {player.name}.", "success")
-
-                elif action == "edit_player":
-                    player = db.query(ChallengePlayer).get(int(request.form.get("player_id") or 0))
-                    if not player:
-                        flash("Player not found.", "error")
-                    else:
-                        player.name = (request.form.get("player_name") or player.name).strip()[:150]
-                        player.details_json = (request.form.get("details_json") or "").strip() or None
-                        player.sort_order = int(request.form.get("player_sort_order") or 0)
-                        log_admin(db, "challenge_player_edit", "challenge_player", player.id, player.name)
-                        flash(f"✅ Updated player {player.name}.", "success")
-
+@app.route("/challenge-data/leagues/<int:league_id>/teams/<int:team_id>", methods=["GET", "POST"])
+@login_required
+def admin_challenge_team_detail(league_id, team_id):
+    db = get_session()
+    try:
+        league = _get_league_or_404(db, league_id)
+        team = _get_team_or_404(db, league_id, team_id) if league else None
+        if not league or not team:
+            return redirect(url_for("admin_challenge_data"))
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "save_team":
+                    team.name = (request.form.get("team_name") or team.name).strip()[:120]
+                    team.short_name = (request.form.get("short_name") or "").strip().upper()[:30] or None
+                    team.primary_color = (request.form.get("primary_color") or "").strip()[:9] or None
+                    team.secondary_color = (request.form.get("secondary_color") or "").strip()[:9] or None
+                    team.sort_order = _int_form("team_sort_order")
+                    team.is_active = _checked("team_is_active")
+                    if request.form.get("remove_logo") == "on":
+                        team.logo_url = None
+                    logo_url = _save_challenge_team_logo(request.files.get("team_logo"))
+                    if logo_url:
+                        team.logo_url = logo_url
+                    log_admin(db, "challenge_team_edit", "challenge_team", team.id, team.name)
+                    flash(f"✅ Saved {team.name} settings.", "success")
+                elif action == "add_selected_players":
+                    selected_ids = [int(pid) for pid in request.form.getlist("source_player_ids") if str(pid).isdigit()]
+                    existing_ids = {row[0] for row in db.query(ChallengePlayer.source_player_id).filter(ChallengePlayer.team_id == team.id, ChallengePlayer.source_player_id.isnot(None)).all()}
+                    added = 0
+                    max_sort = db.query(func.max(ChallengePlayer.sort_order)).filter(ChallengePlayer.team_id == team.id).scalar() or 0
+                    for source in db.query(Player).filter(Player.id.in_(selected_ids)).all():
+                        if source.id in existing_ids:
+                            continue
+                        max_sort += 1
+                        db.add(ChallengePlayer(
+                            team_id=team.id,
+                            source_player_id=source.id,
+                            name=source.name[:150],
+                            details_json=_challenge_player_details_from_source(source),
+                            sort_order=max_sort,
+                        ))
+                        added += 1
+                    log_admin(db, "challenge_player_bulk_add", "challenge_team", team.id, team.name, f"added={added}")
+                    flash(f"✅ Added {added} selected player{'s' if added != 1 else ''} to {team.name}.", "success")
                 elif action == "delete_player":
-                    player = db.query(ChallengePlayer).get(int(request.form.get("player_id") or 0))
+                    player = (db.query(ChallengePlayer)
+                                .filter(ChallengePlayer.id == _int_form("player_id"), ChallengePlayer.team_id == team.id)
+                                .first())
                     if not player:
-                        flash("Player not found.", "error")
+                        flash("Player assignment not found.", "error")
                     else:
                         name = player.name
                         db.delete(player)
                         log_admin(db, "challenge_player_delete", "challenge_player", player.id, name)
-                        flash(f"Removed player {name}.", "info")
-
+                        flash(f"Removed {name} from {team.name}.", "info")
+                else:
+                    flash("Unknown team action.", "error")
                 db.commit()
             except Exception as e:
                 db.rollback()
-                logger.exception("challenge data mutation failed")
+                logger.exception("challenge team detail mutation failed")
                 flash(f"Error: {e}", "error")
-            return redirect(url_for(
-                "admin_challenge_data",
-                mode_id=request.form.get("mode_id") or request.args.get("mode_id"),
-                league_id=request.form.get("league_id") or request.args.get("league_id"),
-            ))
+            return redirect(url_for("admin_challenge_team_detail", league_id=league.id, team_id=team.id))
 
-        mode = _ensure_default_challenge_mode(db)
-        db.commit()
-        modes = (db.query(ChallengeMode)
-                   .order_by(ChallengeMode.sort_order, ChallengeMode.name)
-                   .all())
-        selected_mode_id = request.args.get("mode_id", type=int) or mode.id
-        selected_mode = db.query(ChallengeMode).get(selected_mode_id) or mode
-        leagues = (db.query(ChallengeLeague)
-                     .filter(ChallengeLeague.mode_id == selected_mode.id)
-                     .order_by(ChallengeLeague.sort_order, ChallengeLeague.name)
+        players = (db.query(ChallengePlayer)
+                     .filter(ChallengePlayer.team_id == team.id)
+                     .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
                      .all())
-        selected_league_id = request.args.get("league_id", type=int)
-        selected_league = None
-        if selected_league_id:
-            selected_league = (db.query(ChallengeLeague)
-                                 .filter(ChallengeLeague.id == selected_league_id,
-                                         ChallengeLeague.mode_id == selected_mode.id)
-                                 .first())
-        if not selected_league and leagues:
-            selected_league = leagues[0]
-        player_search = (request.args.get("player_search") or "").strip()
-        player_options = []
-        if player_search:
-            like = f"%{player_search}%"
-            player_options = (db.query(Player)
-                                .filter(Player.name.ilike(like), Player.is_active == True)
-                                .order_by(Player.rating.desc(), Player.name)
-                                .limit(40)
-                                .all())
-        else:
-            player_options = (db.query(Player)
-                                .filter(Player.is_active == True)
-                                .order_by(Player.rating.desc(), Player.name)
-                                .limit(20)
-                                .all())
-        teams = []
-        if selected_league:
-            teams = (db.query(ChallengeTeam)
-                       .filter(ChallengeTeam.league_id == selected_league.id)
-                       .order_by(ChallengeTeam.sort_order, ChallengeTeam.name)
-                       .all())
-            for team in teams:
-                team._players = (db.query(ChallengePlayer)
-                                   .filter(ChallengePlayer.team_id == team.id)
-                                   .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
-                                   .all())
+        master_players, filters = _filtered_master_players(db)
+        filter_options = _challenge_filter_options(db)
+        added_source_ids = {p.source_player_id for p in players if p.source_player_id}
         return render_template(
             "admin_challenge_data.html",
-            modes=modes,
-            selected_mode=selected_mode,
-            leagues=leagues,
-            selected_league=selected_league,
-            teams=teams,
-            player_search=player_search,
-            player_options=player_options,
-            total_leagues=len(leagues),
-            total_teams=len(teams),
-            total_players=sum(len(getattr(t, "_players", [])) for t in teams),
+            page="team",
+            league=league,
+            team=team,
+            challenge_players=players,
+            master_players=master_players,
+            added_source_ids=added_source_ids,
+            filters=filters,
+            filter_options=filter_options,
+            total_leagues=1,
+            total_teams=1,
+            total_players=len(players),
         )
     finally:
         db.close()
