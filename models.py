@@ -828,6 +828,7 @@ class GameConfig(Base):
     # callback buttons (default) or the optional Mini App live board.
     match_style = Column(String(20), default="telegram", nullable=False)
     challenge_max_overs = Column(Integer, default=2, nullable=False)
+    allow_same_team_challenge = Column(Boolean, default=False, nullable=False)
     # ── Player card rendering (admin-editable from /card-template page) ──
     # Which card design is active for all players: the built-in procedural
     # tier card ("tier") or the admin-uploaded template card ("template").

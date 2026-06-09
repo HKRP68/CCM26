@@ -56,7 +56,7 @@ def _load_challenge_with_stubs():
     handlers_match._active_match_in_chat = lambda *args, **kwargs: None
     handlers_match._chat_busy_message = lambda *args, **kwargs: "busy"
     handlers_match._cric_lobby_for_user = lambda *args, **kwargs: None
-    handlers_match._mention = lambda user: "@user"
+    handlers_match._mention = lambda user, fallback_name=None: "@user"
     handlers_match._user_label = lambda user: "User"
     sys.modules["handlers.match"] = handlers_match
 
@@ -221,6 +221,94 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         await challenge.challenge_team_callback(update, context)
 
         query.answer.assert_awaited_once_with("This button is not for you.", show_alert=True)
+
+    async def test_host_selection_prompts_replied_user_next(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "host_tg_id": 1,
+                "target_tg_id": 2,
+                "league_name": "IPL",
+                "teams": challenge.IPL_TEAM_NAMES,
+                "turn": "host",
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_team_123456_0",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_caption=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_team_callback(update, context)
+
+        draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
+        self.assertEqual(draft["host_team"], challenge.IPL_TEAM_NAMES[0])
+        self.assertEqual(draft["turn"], "target")
+        query.edit_message_caption.assert_awaited_once()
+        self.assertIn("please select your IPL team", query.edit_message_caption.await_args.kwargs["caption"])
+
+    async def test_target_cannot_choose_host_team_when_same_team_disabled(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "host_tg_id": 1,
+                "target_tg_id": 2,
+                "league_name": "IPL",
+                "teams": challenge.IPL_TEAM_NAMES,
+                "turn": "target",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_team_123456_0",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_caption=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        with patch.object(challenge, "_same_team_challenge_enabled", return_value=False):
+            await challenge.challenge_team_callback(update, context)
+
+        query.answer.assert_awaited_once_with(
+            "This team is already selected. Please choose another team.", show_alert=True
+        )
+        self.assertNotIn("target_team", context.bot_data[challenge._challenge_team_draft_key(123456)])
+
+    async def test_target_can_choose_host_team_when_same_team_enabled(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "host_tg_id": 1,
+                "target_tg_id": 2,
+                "league_name": "IPL",
+                "teams": challenge.IPL_TEAM_NAMES,
+                "turn": "target",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_team_123456_0",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_caption=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        with patch.object(challenge, "_same_team_challenge_enabled", return_value=True):
+            await challenge.challenge_team_callback(update, context)
+
+        draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
+        self.assertEqual(draft["target_team"], challenge.IPL_TEAM_NAMES[0])
+        self.assertEqual(draft["turn"], "complete")
 
 
 if __name__ == "__main__":

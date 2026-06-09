@@ -277,6 +277,7 @@ def _migrate_add_columns():
     # Global gameplay style: preserve the original in-chat bot flow by default.
     _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     _try_add("game_config", "challenge_max_overs", "INTEGER DEFAULT 2 NOT NULL")
+    _try_add("game_config", "allow_same_team_challenge", "BOOLEAN DEFAULT FALSE NOT NULL")
     # Player card rendering — alternate admin-uploaded template card style
     _try_add("game_config", "card_style", "VARCHAR(20) DEFAULT 'tier' NOT NULL")
     _try_add("game_config", "card_template_image_path", "VARCHAR(300)")

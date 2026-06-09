@@ -10183,11 +10183,16 @@ def admin_match_settings():
             except ValueError:
                 flash("Challenge max overs must be a whole number from 1 to 20.", "error")
                 return redirect(url_for("admin_match_settings"))
-            save_config(db, {"match_style": match_style, "challenge_max_overs": challenge_max_overs},
-                        updated_by=session.get("admin_user", "admin"))
+            allow_same_team_challenge = request.form.get("allow_same_team_challenge") == "on"
+            save_config(db, {
+                "match_style": match_style,
+                "challenge_max_overs": challenge_max_overs,
+                "allow_same_team_challenge": allow_same_team_challenge,
+            }, updated_by=session.get("admin_user", "admin"))
             db.commit()
             log_admin(db, "match_style_save", "config", 0, "matches",
-                      f"match_style={match_style} challenge_max_overs={challenge_max_overs}")
+                      f"match_style={match_style} challenge_max_overs={challenge_max_overs} "
+                      f"allow_same_team_challenge={allow_same_team_challenge}")
             db.commit()
             flash("✅ Match gameplay style saved for all new matches.", "info")
             return redirect(url_for("admin_match_settings"))
