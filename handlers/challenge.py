@@ -495,6 +495,14 @@ def _same_team_challenge_enabled(session=None, league_key=None):
         return False
 
 
+def _same_team_allowed_for_draft(draft):
+    session = get_session()
+    try:
+        return _same_team_challenge_enabled(session, draft.get("league_key"))
+    finally:
+        session.close()
+
+
 def _team_picker_prompt(draft, player_key):
     league_name = draft.get("league_name")
     player = draft.get(player_key) or {}
@@ -750,11 +758,12 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
     if expected_tg_id is None:
         expected_tg_id = draft.get("host_tg_id") if turn == "host" else draft.get("target_tg_id")
     if query.from_user.id != expected_tg_id:
-        await query.answer("This button is not for you. Please use your own command", show_alert=True)
+        await query.answer("This button is not for you. Please use your own command.", show_alert=True)
         return
 
     selected_team = teams[team_idx]
-    if turn == "target" and selected_team == draft.get("host_team"):
+    same_team_allowed = _same_team_allowed_for_draft(draft)
+    if turn == "target" and selected_team == draft.get("host_team") and not same_team_allowed:
         await query.answer("This team is already selected. Please choose another team.", show_alert=True)
         return
 
@@ -778,14 +787,18 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_caption(
             caption=message,
             parse_mode="HTML",
-            reply_markup=_team_keyboard(draft_id, teams, [draft.get("host_team")]),
+            reply_markup=_team_keyboard(
+                draft_id, teams, [] if same_team_allowed else [draft.get("host_team")]
+            ),
         )
     except Exception:
         try:
             await query.edit_message_text(
                 message,
                 parse_mode="HTML",
-                reply_markup=_team_keyboard(draft_id, teams, [draft.get("host_team")]),
+                reply_markup=_team_keyboard(
+                    draft_id, teams, [] if same_team_allowed else [draft.get("host_team")]
+                ),
             )
         except Exception:
             logger.exception("Failed to update league team picker message")
