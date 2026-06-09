@@ -33,7 +33,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     NotificationSchedule, NotificationLog,
                     ClaimRarityTier, GameConfig,
                     MessageTemplate,
-                    GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase)
+                    GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
+                    ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer)
 
 app = Flask(__name__)
 
@@ -10943,6 +10944,283 @@ def _format_cooldown(seconds):
     if seconds < 3600: return f"{seconds // 60}m"
     if seconds < 86400: return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CHALLENGE DATA — Modes > Leagues > Teams > Players admin panel
+# ═══════════════════════════════════════════════════════════════════════
+
+_CHALLENGE_IMAGE_DIR = os.path.join(app.root_path, "static", "challenge_leagues")
+_ALLOWED_CHALLENGE_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}
+
+
+def _normalize_admin_command(value):
+    command = (value or "").strip().lower()
+    if command and not command.startswith("/"):
+        command = "/" + command
+    return command[:60]
+
+
+def _save_challenge_league_image(file_storage):
+    if not file_storage or not getattr(file_storage, "filename", ""):
+        return None
+    filename = file_storage.filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in _ALLOWED_CHALLENGE_IMAGE_EXTS:
+        raise ValueError("League image must be PNG, JPG, WEBP, or GIF.")
+    import uuid
+    os.makedirs(_CHALLENGE_IMAGE_DIR, exist_ok=True)
+    safe_name = f"league_{uuid.uuid4().hex}.{ext}"
+    dest = os.path.join(_CHALLENGE_IMAGE_DIR, safe_name)
+    file_storage.save(dest)
+    return url_for("static", filename=f"challenge_leagues/{safe_name}")
+
+
+def _ensure_default_challenge_mode(db):
+    mode = (db.query(ChallengeMode)
+              .order_by(ChallengeMode.sort_order, ChallengeMode.id)
+              .first())
+    if mode:
+        return mode
+    mode = ChallengeMode(name="Challenge Mode", description="Default challenge-mode data", sort_order=0)
+    db.add(mode)
+    db.flush()
+    return mode
+
+
+@app.route("/challenge-data", methods=["GET", "POST"])
+@login_required
+def admin_challenge_data():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                mode = _ensure_default_challenge_mode(db)
+
+                if action == "add_mode":
+                    name = (request.form.get("mode_name") or "").strip()
+                    if not name:
+                        flash("Mode name is required.", "error")
+                    else:
+                        new_mode = ChallengeMode(
+                            name=name[:120],
+                            description=(request.form.get("mode_description") or "").strip()[:1000] or None,
+                            sort_order=int(request.form.get("mode_sort_order") or 0),
+                        )
+                        db.add(new_mode)
+                        db.flush()
+                        log_admin(db, "challenge_mode_add", "challenge_mode", new_mode.id, new_mode.name)
+                        flash(f"✅ Added mode {new_mode.name}.", "success")
+
+                elif action == "edit_mode":
+                    mode_obj = db.query(ChallengeMode).get(int(request.form.get("mode_id") or 0))
+                    if not mode_obj:
+                        flash("Mode not found.", "error")
+                    else:
+                        mode_obj.name = (request.form.get("mode_name") or mode_obj.name).strip()[:120]
+                        mode_obj.description = (request.form.get("mode_description") or "").strip()[:1000] or None
+                        mode_obj.is_active = request.form.get("mode_is_active") == "on"
+                        mode_obj.sort_order = int(request.form.get("mode_sort_order") or 0)
+                        log_admin(db, "challenge_mode_edit", "challenge_mode", mode_obj.id, mode_obj.name)
+                        flash(f"✅ Updated mode {mode_obj.name}.", "success")
+
+                elif action == "delete_mode":
+                    mode_obj = db.query(ChallengeMode).get(int(request.form.get("mode_id") or 0))
+                    if not mode_obj:
+                        flash("Mode not found.", "error")
+                    elif db.query(ChallengeMode).count() <= 1:
+                        flash("At least one challenge mode must remain.", "error")
+                    else:
+                        name = mode_obj.name
+                        db.delete(mode_obj)
+                        log_admin(db, "challenge_mode_delete", "challenge_mode", mode_obj.id, name)
+                        flash(f"Removed mode {name}.", "info")
+
+                elif action == "add_league":
+                    mode_id = int(request.form.get("mode_id") or mode.id)
+                    name = (request.form.get("league_name") or "").strip()
+                    if not name:
+                        flash("League name is required.", "error")
+                    else:
+                        league = ChallengeLeague(
+                            mode_id=mode_id,
+                            name=name[:120],
+                            short_code=(request.form.get("short_code") or "").strip().upper()[:30] or None,
+                            command=_normalize_admin_command(request.form.get("command")),
+                            sort_order=int(request.form.get("league_sort_order") or 0),
+                            is_active=request.form.get("league_is_active", "on") == "on",
+                        )
+                        image_url = _save_challenge_league_image(request.files.get("league_image"))
+                        if image_url:
+                            league.image_url = image_url
+                        db.add(league)
+                        db.flush()
+                        log_admin(db, "challenge_league_add", "challenge_league", league.id, league.name,
+                                  f"command={league.command or ''} short_code={league.short_code or ''}")
+                        flash(f"✅ Added league {league.name}.", "success")
+
+                elif action == "edit_league":
+                    league = db.query(ChallengeLeague).get(int(request.form.get("league_id") or 0))
+                    if not league:
+                        flash("League not found.", "error")
+                    else:
+                        league.name = (request.form.get("league_name") or league.name).strip()[:120]
+                        league.short_code = (request.form.get("short_code") or "").strip().upper()[:30] or None
+                        league.command = _normalize_admin_command(request.form.get("command")) or None
+                        league.sort_order = int(request.form.get("league_sort_order") or 0)
+                        league.is_active = request.form.get("league_is_active") == "on"
+                        if request.form.get("remove_league_image") == "1":
+                            league.image_url = None
+                        image_url = _save_challenge_league_image(request.files.get("league_image"))
+                        if image_url:
+                            league.image_url = image_url
+                        log_admin(db, "challenge_league_edit", "challenge_league", league.id, league.name,
+                                  f"command={league.command or ''} short_code={league.short_code or ''}")
+                        flash(f"✅ Updated league {league.name}.", "success")
+
+                elif action == "delete_league":
+                    league = db.query(ChallengeLeague).get(int(request.form.get("league_id") or 0))
+                    if not league:
+                        flash("League not found.", "error")
+                    else:
+                        name = league.name
+                        db.delete(league)
+                        log_admin(db, "challenge_league_delete", "challenge_league", league.id, name)
+                        flash(f"Removed league {name}.", "info")
+
+                elif action == "add_team":
+                    league_id = int(request.form.get("league_id") or 0)
+                    name = (request.form.get("team_name") or "").strip()
+                    if not name:
+                        flash("Team name is required.", "error")
+                    else:
+                        team = ChallengeTeam(
+                            league_id=league_id,
+                            name=name[:120],
+                            short_name=(request.form.get("short_name") or "").strip().upper()[:30] or None,
+                            sort_order=int(request.form.get("team_sort_order") or 0),
+                        )
+                        db.add(team)
+                        db.flush()
+                        log_admin(db, "challenge_team_add", "challenge_team", team.id, team.name)
+                        flash(f"✅ Added team {team.name}.", "success")
+
+                elif action == "edit_team":
+                    team = db.query(ChallengeTeam).get(int(request.form.get("team_id") or 0))
+                    if not team:
+                        flash("Team not found.", "error")
+                    else:
+                        team.name = (request.form.get("team_name") or team.name).strip()[:120]
+                        team.short_name = (request.form.get("short_name") or "").strip().upper()[:30] or None
+                        team.sort_order = int(request.form.get("team_sort_order") or 0)
+                        log_admin(db, "challenge_team_edit", "challenge_team", team.id, team.name)
+                        flash(f"✅ Updated team {team.name}.", "success")
+
+                elif action == "delete_team":
+                    team = db.query(ChallengeTeam).get(int(request.form.get("team_id") or 0))
+                    if not team:
+                        flash("Team not found.", "error")
+                    else:
+                        name = team.name
+                        db.delete(team)
+                        log_admin(db, "challenge_team_delete", "challenge_team", team.id, name)
+                        flash(f"Removed team {name}.", "info")
+
+                elif action == "add_player":
+                    team_id = int(request.form.get("team_id") or 0)
+                    name = (request.form.get("player_name") or "").strip()
+                    if not name:
+                        flash("Player name is required.", "error")
+                    else:
+                        player = ChallengePlayer(
+                            team_id=team_id,
+                            name=name[:150],
+                            details_json=(request.form.get("details_json") or "").strip() or None,
+                            sort_order=int(request.form.get("player_sort_order") or 0),
+                        )
+                        db.add(player)
+                        db.flush()
+                        log_admin(db, "challenge_player_add", "challenge_player", player.id, player.name)
+                        flash(f"✅ Added player {player.name}.", "success")
+
+                elif action == "edit_player":
+                    player = db.query(ChallengePlayer).get(int(request.form.get("player_id") or 0))
+                    if not player:
+                        flash("Player not found.", "error")
+                    else:
+                        player.name = (request.form.get("player_name") or player.name).strip()[:150]
+                        player.details_json = (request.form.get("details_json") or "").strip() or None
+                        player.sort_order = int(request.form.get("player_sort_order") or 0)
+                        log_admin(db, "challenge_player_edit", "challenge_player", player.id, player.name)
+                        flash(f"✅ Updated player {player.name}.", "success")
+
+                elif action == "delete_player":
+                    player = db.query(ChallengePlayer).get(int(request.form.get("player_id") or 0))
+                    if not player:
+                        flash("Player not found.", "error")
+                    else:
+                        name = player.name
+                        db.delete(player)
+                        log_admin(db, "challenge_player_delete", "challenge_player", player.id, name)
+                        flash(f"Removed player {name}.", "info")
+
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.exception("challenge data mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for(
+                "admin_challenge_data",
+                mode_id=request.form.get("mode_id") or request.args.get("mode_id"),
+                league_id=request.form.get("league_id") or request.args.get("league_id"),
+            ))
+
+        mode = _ensure_default_challenge_mode(db)
+        db.commit()
+        modes = (db.query(ChallengeMode)
+                   .order_by(ChallengeMode.sort_order, ChallengeMode.name)
+                   .all())
+        selected_mode_id = request.args.get("mode_id", type=int) or mode.id
+        selected_mode = db.query(ChallengeMode).get(selected_mode_id) or mode
+        leagues = (db.query(ChallengeLeague)
+                     .filter(ChallengeLeague.mode_id == selected_mode.id)
+                     .order_by(ChallengeLeague.sort_order, ChallengeLeague.name)
+                     .all())
+        selected_league_id = request.args.get("league_id", type=int)
+        selected_league = None
+        if selected_league_id:
+            selected_league = (db.query(ChallengeLeague)
+                                 .filter(ChallengeLeague.id == selected_league_id,
+                                         ChallengeLeague.mode_id == selected_mode.id)
+                                 .first())
+        if not selected_league and leagues:
+            selected_league = leagues[0]
+        teams = []
+        if selected_league:
+            teams = (db.query(ChallengeTeam)
+                       .filter(ChallengeTeam.league_id == selected_league.id)
+                       .order_by(ChallengeTeam.sort_order, ChallengeTeam.name)
+                       .all())
+            for team in teams:
+                team._players = (db.query(ChallengePlayer)
+                                   .filter(ChallengePlayer.team_id == team.id)
+                                   .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
+                                   .all())
+        return render_template(
+            "admin_challenge_data.html",
+            modes=modes,
+            selected_mode=selected_mode,
+            leagues=leagues,
+            selected_league=selected_league,
+            teams=teams,
+            total_leagues=len(leagues),
+            total_teams=len(teams),
+            total_players=sum(len(getattr(t, "_players", [])) for t in teams),
+        )
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════

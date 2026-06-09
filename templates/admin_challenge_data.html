@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Challenge Data{% endblock %}
+
+{% block content %}
+<div class="page-head" style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:1rem;flex-wrap:wrap;">
+  <div>
+    <h2 style="margin:0 0 .25rem;">⚔️ Challenge Mode Data</h2>
+    <p style="color:var(--muted);margin:0;">Manage the full hierarchy: Modes → Leagues → Teams → Players.</p>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <span class="badge">{{ total_leagues }} leagues</span>
+    <span class="badge">{{ total_teams }} teams</span>
+    <span class="badge">{{ total_players }} players</span>
+  </div>
+</div>
+
+<div class="grid" style="display:grid;grid-template-columns:minmax(240px,.8fr) minmax(320px,1fr) minmax(420px,1.6fr);gap:1rem;align-items:start;">
+  <section class="card" style="padding:1rem;">
+    <h3 style="margin:0 0 .75rem;">Modes</h3>
+    <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem;">
+      {% for mode in modes %}
+      <a href="{{ url_for('admin_challenge_data', mode_id=mode.id) }}"
+         class="btn {{ 'btn-primary' if mode.id == selected_mode.id else 'btn-ghost' }}"
+         style="justify-content:space-between;">
+        <span>{{ mode.name }}</span>
+        {% if not mode.is_active %}<small>Off</small>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+
+    <form method="POST" style="border-top:1px solid var(--border);padding-top:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_mode">
+      <label>New mode name</label>
+      <input name="mode_name" placeholder="Challenge Mode" required>
+      <label>Description</label>
+      <textarea name="mode_description" rows="2" placeholder="Optional notes"></textarea>
+      <label>Sort order</label>
+      <input name="mode_sort_order" type="number" value="0">
+      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;width:100%;">+ Add Mode</button>
+    </form>
+
+    {% if selected_mode %}
+    <form method="POST" style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="edit_mode">
+      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+      <label>Edit selected mode</label>
+      <input name="mode_name" value="{{ selected_mode.name }}" required>
+      <label>Description</label>
+      <textarea name="mode_description" rows="2">{{ selected_mode.description or '' }}</textarea>
+      <label>Sort order</label>
+      <input name="mode_sort_order" type="number" value="{{ selected_mode.sort_order }}">
+      <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem;">
+        <input type="checkbox" name="mode_is_active" {% if selected_mode.is_active %}checked{% endif %}> Active
+      </label>
+      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;">Save Mode</button>
+    </form>
+    <form method="POST" onsubmit="return confirm('Delete this mode and all leagues/teams/players under it?');" style="margin-top:.5rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="delete_mode">
+      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+      <button class="btn btn-red" type="submit">Remove Mode</button>
+    </form>
+    {% endif %}
+  </section>
+
+  <section class="card" style="padding:1rem;">
+    <h3 style="margin:0 0 .75rem;">Leagues in {{ selected_mode.name }}</h3>
+
+    <form method="POST" enctype="multipart/form-data" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_league">
+      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+      <div style="display:grid;grid-template-columns:1fr 110px;gap:.5rem;">
+        <div><label>League name</label><input name="league_name" placeholder="Indian Premier League" required></div>
+        <div><label>Short code</label><input name="short_code" placeholder="IPL"></div>
+      </div>
+      <label>Command</label>
+      <input name="command" placeholder="/cipl">
+      <label>League image</label>
+      <input type="file" name="league_image" accept="image/png,image/jpeg,image/webp,image/gif">
+      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;width:100%;">+ Add League</button>
+      <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;">Examples: IPL → /cipl, BBL → /cbbl, International T20 → /cint, SA20 → /csa20.</p>
+    </form>
+
+    <div style="display:flex;flex-direction:column;gap:.75rem;">
+      {% for league in leagues %}
+      <div style="border:1px solid var(--border);border-radius:10px;padding:.75rem;">
+        <a href="{{ url_for('admin_challenge_data', mode_id=selected_mode.id, league_id=league.id) }}" style="display:flex;gap:.75rem;align-items:center;color:var(--text);text-decoration:none;margin-bottom:.65rem;">
+          {% if league.image_url %}<img src="{{ league.image_url }}" alt="" style="width:46px;height:46px;object-fit:cover;border-radius:8px;">{% else %}<div style="width:46px;height:46px;border-radius:8px;background:var(--bg-soft);display:grid;place-items:center;">🏆</div>{% endif %}
+          <div style="flex:1;">
+            <strong>{{ league.name }}</strong>
+            <div style="color:var(--muted);font-size:.82rem;">{{ league.short_code or 'No code' }} · {{ league.command or 'No command' }} · {{ 'Active' if league.is_active else 'Inactive' }}</div>
+          </div>
+          {% if selected_league and selected_league.id == league.id %}<span class="badge badge-green">Selected</span>{% endif %}
+        </a>
+        <details {% if selected_league and selected_league.id == league.id %}open{% endif %}>
+          <summary style="cursor:pointer;color:var(--accent);">Edit league</summary>
+          <form method="POST" enctype="multipart/form-data" style="margin-top:.75rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="edit_league">
+            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+            <input type="hidden" name="league_id" value="{{ league.id }}">
+            <label>Name</label><input name="league_name" value="{{ league.name }}" required>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
+              <div><label>Short code</label><input name="short_code" value="{{ league.short_code or '' }}"></div>
+              <div><label>Command</label><input name="command" value="{{ league.command or '' }}"></div>
+            </div>
+            <label>Replace image</label><input type="file" name="league_image" accept="image/png,image/jpeg,image/webp,image/gif">
+            {% if league.image_url %}<label style="display:flex;gap:.4rem;align-items:center;"><input type="checkbox" name="remove_league_image" value="1"> Remove current image</label>{% endif %}
+            <label>Sort order</label><input name="league_sort_order" type="number" value="{{ league.sort_order }}">
+            <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem;"><input type="checkbox" name="league_is_active" {% if league.is_active %}checked{% endif %}> Active</label>
+            <button class="btn btn-primary btn-sm" type="submit" style="margin-top:.6rem;">Save League</button>
+          </form>
+          <form method="POST" onsubmit="return confirm('Delete {{ league.name }} and all teams/players?');" style="margin-top:.5rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="delete_league">
+            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+            <input type="hidden" name="league_id" value="{{ league.id }}">
+            <button class="btn btn-red btn-sm" type="submit">Remove League</button>
+          </form>
+        </details>
+      </div>
+      {% else %}
+      <p style="color:var(--muted);">No leagues yet. Add one above.</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="card" style="padding:1rem;">
+    {% if selected_league %}
+    <h3 style="margin:0 0 .75rem;">Teams & Players — {{ selected_league.name }}</h3>
+    <form method="POST" style="background:var(--bg-soft);padding:.85rem;border-radius:10px;margin-bottom:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_team">
+      <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+      <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+      <div style="display:grid;grid-template-columns:1fr 120px 90px;gap:.5rem;">
+        <div><label>Team name</label><input name="team_name" placeholder="Mumbai Indians" required></div>
+        <div><label>Short name</label><input name="short_name" placeholder="MI"></div>
+        <div><label>Sort</label><input type="number" name="team_sort_order" value="0"></div>
+      </div>
+      <button class="btn btn-primary" type="submit" style="margin-top:.75rem;">+ Add Team</button>
+    </form>
+
+    {% for team in teams %}
+    <div style="border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem;">
+      <div style="display:flex;justify-content:space-between;gap:.75rem;align-items:flex-start;flex-wrap:wrap;">
+        <div><h4 style="margin:0;">{{ team.name }} <span style="color:var(--muted);font-weight:400;">{{ team.short_name or '' }}</span></h4><small style="color:var(--muted);">{{ team._players|length }} players</small></div>
+        <details>
+          <summary class="btn btn-ghost btn-sm" style="cursor:pointer;">Edit Team</summary>
+          <form method="POST" style="margin-top:.75rem;min-width:280px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="edit_team">
+            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+            <input type="hidden" name="team_id" value="{{ team.id }}">
+            <label>Name</label><input name="team_name" value="{{ team.name }}" required>
+            <label>Short name</label><input name="short_name" value="{{ team.short_name or '' }}">
+            <label>Sort order</label><input type="number" name="team_sort_order" value="{{ team.sort_order }}">
+            <button class="btn btn-primary btn-sm" type="submit" style="margin-top:.5rem;">Save Team</button>
+          </form>
+          <form method="POST" onsubmit="return confirm('Delete {{ team.name }} and its players?');" style="margin-top:.5rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="delete_team">
+            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+            <input type="hidden" name="team_id" value="{{ team.id }}">
+            <button class="btn btn-red btn-sm" type="submit">Remove Team</button>
+          </form>
+        </details>
+      </div>
+
+      <form method="POST" style="display:grid;grid-template-columns:1fr minmax(140px,.6fr) 80px auto;gap:.5rem;align-items:end;margin:1rem 0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="add_player">
+        <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+        <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+        <input type="hidden" name="team_id" value="{{ team.id }}">
+        <div><label>Player name</label><input name="player_name" placeholder="Virat Kohli" required></div>
+        <div><label>Details (optional)</label><input name="details_json" placeholder='{"role":"BAT"}'></div>
+        <div><label>Sort</label><input type="number" name="player_sort_order" value="0"></div>
+        <button class="btn btn-primary btn-sm" type="submit">+ Add</button>
+      </form>
+
+      <div style="display:flex;flex-direction:column;gap:.45rem;">
+        {% for player in team._players %}
+        <details style="background:var(--bg-soft);border-radius:8px;padding:.55rem .7rem;">
+          <summary style="cursor:pointer;"><strong>{{ player.name }}</strong>{% if player.details_json %}<small style="color:var(--muted);"> — {{ player.details_json }}</small>{% endif %}</summary>
+          <form method="POST" style="display:grid;grid-template-columns:1fr minmax(160px,.8fr) 80px auto;gap:.5rem;align-items:end;margin-top:.6rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="edit_player">
+            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+            <input type="hidden" name="team_id" value="{{ team.id }}">
+            <input type="hidden" name="player_id" value="{{ player.id }}">
+            <div><label>Name</label><input name="player_name" value="{{ player.name }}" required></div>
+            <div><label>Details</label><input name="details_json" value="{{ player.details_json or '' }}"></div>
+            <div><label>Sort</label><input type="number" name="player_sort_order" value="{{ player.sort_order }}"></div>
+            <button class="btn btn-primary btn-sm" type="submit">Save</button>
+          </form>
+          <form method="POST" onsubmit="return confirm('Remove {{ player.name }}?');" style="margin-top:.45rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="delete_player">
+            <input type="hidden" name="mode_id" value="{{ selected_mode.id }}">
+            <input type="hidden" name="league_id" value="{{ selected_league.id }}">
+            <input type="hidden" name="team_id" value="{{ team.id }}">
+            <input type="hidden" name="player_id" value="{{ player.id }}">
+            <button class="btn btn-red btn-sm" type="submit">Remove Player</button>
+          </form>
+        </details>
+        {% else %}
+        <p style="color:var(--muted);font-size:.9rem;">No players yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <p style="color:var(--muted);">No teams yet. Add one above.</p>
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--muted);">Select or add a league to manage teams and players.</p>
+    {% endif %}
+  </section>
+</div>
+
+<style>
+@media (max-width: 1100px) {
+  .grid { grid-template-columns: 1fr !important; }
+}
+</style>
+{% endblock %}
