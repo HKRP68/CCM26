@@ -343,6 +343,8 @@ def _migrate_add_columns():
 
     # Fantasy league auto-lock time (stored UTC; admin enters IST)
     _try_add("fantasy_leagues", "lock_at", "TIMESTAMP")
+    # Generated card Telegram file_id cache — avoids re-uploading unchanged cards
+    _try_add("players", "card_file_id", "VARCHAR(200)")
 
     # Challenge Mode hierarchy/admin UI additions.
     _try_add("challenge_leagues", "same_team_allowed", "BOOLEAN DEFAULT TRUE")

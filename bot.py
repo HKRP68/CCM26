@@ -242,6 +242,7 @@ from handlers.cartel import (
 )
 from handlers.feedback import feedback_handler
 from handlers.forward_broadcast import frwd_grp_handler, frwd_prvt_handler
+from handlers.setcardid import setcardid_handler
 
 # Fantasy League handlers
 from handlers.fantasy import (
@@ -812,6 +813,9 @@ def main():
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
         app.add_handler(CommandHandler("frwd_prvt", frwd_prvt_handler))
+
+        # ── Admin: manually seed a player card file_id ───────────────
+        app.add_handler(CommandHandler("setcardid", setcardid_handler))
 
         # ── Undo command — reverses last /buy or /release within 60s ─
         app.add_handler(CommandHandler("cmuundo", cmuundo_handler))

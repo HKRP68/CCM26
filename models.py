@@ -96,6 +96,9 @@ class Player(Base):
     # available via player market, packs, trades, debut grants, etc.
     restricted_from_buypl = Column(Boolean, default=False, nullable=False)
     image_url = Column(String(500), nullable=True)
+    # Telegram file_id of the last-sent generated card. Set opportunistically
+    # after the first organic send; cleared when admin edits the player.
+    card_file_id = Column(String(200), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (

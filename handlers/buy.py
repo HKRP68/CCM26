@@ -184,8 +184,30 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     )
 
     if edit_query is not None:
-        # Edit existing message: try edit_message_media for photo, fall back to caption-only.
-        # Pillow render is CPU-bound — run off the event loop so Prev/Next stays snappy.
+        # Edit existing message: prefer cached file_id (instant, no PIL/upload).
+        from services.player_image_service import get_tg_file_id
+        cached_fid = get_tg_file_id(session, player.id) or getattr(player, "card_file_id", None)
+        if cached_fid and edit_query.message.photo:
+            try:
+                from telegram import InputMediaPhoto
+                await edit_query.edit_message_media(
+                    media=InputMediaPhoto(
+                        media=cached_fid,
+                        caption=caption, parse_mode="HTML",
+                    ),
+                    reply_markup=keyboard,
+                )
+                return
+            except Exception:
+                # Stale file_id — clear it and fall through to regenerate.
+                if cached_fid == getattr(player, "card_file_id", None):
+                    player.card_file_id = None
+                    try:
+                        session.flush()
+                    except Exception:
+                        pass
+
+        # Fallback: Pillow render (CPU-bound — run off the event loop).
         card_bytes = await asyncio.to_thread(generate_card, player)
         try:
             if card_bytes and edit_query.message.photo:
@@ -211,13 +233,13 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
             logger.exception("edit_version_page failed")
         return
 
-    # New message
+    # New message — pass session so file_ids can be written back after first send.
     from services.card_sender import send_player_card
     chat_id = (send_to.chat_id if hasattr(send_to, 'chat_id')
                else send_to.chat.id)
     sent = await send_player_card(
         bot=context.bot, chat_id=chat_id, player=player,
-        caption=caption, reply_markup=keyboard, session=None,
+        caption=caption, reply_markup=keyboard, session=session,
     )
     if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
