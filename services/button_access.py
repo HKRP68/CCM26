@@ -47,6 +47,13 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cm_deny_",
     "cm_toss_",
     "cm_pick_",
+    # Challenge League team and Playing XI buttons are shared prompts: the
+    # same message is used by both host and guest, and challenge.py validates
+    # which side may press each button based on the draft state.
+    "cl_team_",
+    "cl_xi_",
+    "cl_pick_",
+    "cl_confirm_",
     "pbo_accept_",
     "pbo_decline_",
     "pboacc_",

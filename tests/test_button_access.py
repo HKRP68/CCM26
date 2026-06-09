@@ -82,6 +82,23 @@ class ButtonAccessTests(unittest.TestCase):
         self.assertTrue(button_access.check_callback_owner(accept_update))
         self.assertTrue(button_access.check_callback_owner(decline_update))
 
+    def test_challenge_league_buttons_are_shared_for_host_and_guest_validation(self):
+        button_access.register_button_owner(100, 200, 111)
+
+        callbacks = [
+            "cl_team_123456_0",
+            "cl_xi_123456_host",
+            "cl_xi_123456_target",
+            "cl_pick_123456_host_42",
+            "cl_pick_123456_target_84",
+            "cl_confirm_123456_host",
+            "cl_confirm_123456_target",
+        ]
+        for callback_data in callbacks:
+            with self.subTest(callback_data=callback_data):
+                update = DummyUpdate(DummyQuery(222, callback_data))
+                self.assertTrue(button_access.check_callback_owner(update))
+
     def test_unregistered_legacy_buttons_remain_usable(self):
         update = DummyUpdate(DummyQuery(222, "roster_page_2"))
 

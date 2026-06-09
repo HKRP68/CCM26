@@ -221,7 +221,7 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         await challenge.challenge_team_callback(update, context)
 
-        query.answer.assert_awaited_once_with("This button is not for you.", show_alert=True)
+        query.answer.assert_awaited_once_with("This button is not for you. Please use your own command.", show_alert=True)
 
     async def test_host_selection_prompts_replied_user_next(self):
         context = SimpleNamespace(bot_data={
