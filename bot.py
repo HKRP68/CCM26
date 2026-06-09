@@ -74,7 +74,7 @@ from handlers.catch import bal_handler, catch_handler
 from handlers.challenge import (
     challenge_handler, challenge_league_handler, challenge_accept_callback,
     challenge_cancel_callback, challenge_deny_callback, challenge_coin_callback,
-    challenge_toss_callback, challenge_pick_callback, challenge_team_callback,
+    challenge_toss_callback, challenge_pick_callback, challenge_team_callback, challenge_xi_callback,
 )
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
@@ -853,6 +853,7 @@ def main():
         app.add_handler(CallbackQueryHandler(challenge_toss_callback, pattern=r"^cm_toss_"))
         app.add_handler(CallbackQueryHandler(challenge_pick_callback, pattern=r"^cm_pick_"))
         app.add_handler(CallbackQueryHandler(challenge_team_callback, pattern=r"^cl_team_"))
+        app.add_handler(CallbackQueryHandler(challenge_xi_callback, pattern=r"^cl_xi_"))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))

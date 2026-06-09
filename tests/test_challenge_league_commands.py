@@ -37,6 +37,7 @@ def _load_challenge_with_stubs():
         is_active = True
     models.ChallengeLeague = ChallengeLeague
     models.ChallengeTeam = type("ChallengeTeam", (), {"league_id": "league_id", "sort_order": "sort_order", "name": "name"})
+    models.ChallengePlayer = type("ChallengePlayer", (), {"team_id": "team_id", "sort_order": "sort_order", "name": "name"})
     models.FantasyLeague = type("FantasyLeague", (), {"name": "name"})
     sys.modules["models"] = models
 
@@ -309,6 +310,62 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
         self.assertEqual(draft["target_team"], challenge.IPL_TEAM_NAMES[0])
         self.assertEqual(draft["turn"], "complete")
+
+
+    async def test_target_selection_sends_challenge_created_xi_buttons(self):
+        message = DummyMessage("picker")
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "host_tg_id": 1,
+                "target_tg_id": 2,
+                "league_name": "IPL",
+                "teams": challenge.IPL_TEAM_NAMES,
+                "turn": "target",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_team_123456_1",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_caption=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            message=message,
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        with patch.object(challenge, "_same_team_challenge_enabled", return_value=False), \
+             patch.object(challenge, "_challenge_created_text", return_value="created"):
+            await challenge.challenge_team_callback(update, context)
+
+        self.assertEqual(message.replies[0][0], "created")
+        keyboard = message.replies[0][1]["reply_markup"].inline_keyboard
+        self.assertEqual([button.text for button in keyboard[0]], ["Select MI XI", "Select CSK XI"])
+        self.assertEqual(keyboard[0][0].callback_data, "cl_xi_123456_host")
+        self.assertEqual(keyboard[0][1].callback_data, "cl_xi_123456_target")
+
+    async def test_xi_button_rejects_wrong_user_with_requested_alert(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_xi_123456_host",
+            from_user=SimpleNamespace(id=99),
+            answer=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_xi_callback(update, context)
+
+        query.answer.assert_awaited_once_with("This button is not for you", show_alert=True)
 
 
 if __name__ == "__main__":

@@ -11135,14 +11135,27 @@ def admin_challenge_data():
 
                 elif action == "add_player":
                     team_id = int(request.form.get("team_id") or 0)
+                    source_player_id = int(request.form.get("source_player_id") or 0)
+                    source_player = db.query(Player).get(source_player_id) if source_player_id else None
                     name = (request.form.get("player_name") or "").strip()
+                    if source_player:
+                        name = source_player.name
                     if not name:
-                        flash("Player name is required.", "error")
+                        flash("Player name is required. Search and select a player, or type a manual name.", "error")
                     else:
+                        details_json = (request.form.get("details_json") or "").strip() or None
+                        if source_player and not details_json:
+                            details_json = json.dumps({
+                                "player_id": source_player.id,
+                                "version": source_player.version,
+                                "rating": source_player.rating,
+                                "category": source_player.category,
+                                "country": source_player.country,
+                            })
                         player = ChallengePlayer(
                             team_id=team_id,
                             name=name[:150],
-                            details_json=(request.form.get("details_json") or "").strip() or None,
+                            details_json=details_json,
                             sort_order=int(request.form.get("player_sort_order") or 0),
                         )
                         db.add(player)
@@ -11202,6 +11215,21 @@ def admin_challenge_data():
                                  .first())
         if not selected_league and leagues:
             selected_league = leagues[0]
+        player_search = (request.args.get("player_search") or "").strip()
+        player_options = []
+        if player_search:
+            like = f"%{player_search}%"
+            player_options = (db.query(Player)
+                                .filter(Player.name.ilike(like), Player.is_active == True)
+                                .order_by(Player.rating.desc(), Player.name)
+                                .limit(40)
+                                .all())
+        else:
+            player_options = (db.query(Player)
+                                .filter(Player.is_active == True)
+                                .order_by(Player.rating.desc(), Player.name)
+                                .limit(20)
+                                .all())
         teams = []
         if selected_league:
             teams = (db.query(ChallengeTeam)
@@ -11220,6 +11248,8 @@ def admin_challenge_data():
             leagues=leagues,
             selected_league=selected_league,
             teams=teams,
+            player_search=player_search,
+            player_options=player_options,
             total_leagues=len(leagues),
             total_teams=len(teams),
             total_players=sum(len(getattr(t, "_players", [])) for t in teams),
