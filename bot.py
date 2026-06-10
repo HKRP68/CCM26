@@ -862,6 +862,16 @@ def main():
         app.add_handler(CallbackQueryHandler(challenge_xi_pick_callback, pattern=r"^cl_pick_"))
         app.add_handler(CallbackQueryHandler(challenge_xi_confirm_callback, pattern=r"^cl_confirm_"))
         app.add_handler(CallbackQueryHandler(challenge_start_match_callback, pattern=r"^cl_start_"))
+        # Challenge League over-by-over "approach" match flow
+        from handlers.cipl_play import (
+            cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
+            cipl_bowlapp_callback, cipl_batapp_callback,
+        )
+        app.add_handler(CallbackQueryHandler(cipl_coin_callback, pattern=r"^cipl_coin_"))
+        app.add_handler(CallbackQueryHandler(cipl_toss_callback, pattern=r"^cipl_toss_"))
+        app.add_handler(CallbackQueryHandler(cipl_bowler_callback, pattern=r"^cipl_bowler_"))
+        app.add_handler(CallbackQueryHandler(cipl_bowlapp_callback, pattern=r"^cipl_bowlapp_"))
+        app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))

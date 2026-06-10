@@ -745,6 +745,8 @@ def calculate_outcome(
     ground_config_override: dict = None,
     format_config: Optional[FormatConfig] = None,
     is_day_night: bool = False,
+    batting_approach: str = None,
+    bowling_approach: str = None,
 ) -> dict:
     """
     Determines the outcome of a single delivery.
@@ -1059,6 +1061,15 @@ def calculate_outcome(
     if free_hit and "Four" in raw_weights and "Six" in raw_weights:
         raw_weights["Four"] *= FREE_HIT_BOUNDARY_BOOST
         raw_weights["Six"] *= FREE_HIT_BOUNDARY_BOOST
+        total_weight = sum(raw_weights.values())
+
+    # 4b) Approach modifiers (Challenge League over-by-over mode). No-op when
+    # both approaches are None/Balanced, so existing callers are unaffected.
+    if batting_approach is not None or bowling_approach is not None:
+        from engine.approach_modifiers import apply_approach_modifiers
+        raw_weights = apply_approach_modifiers(
+            raw_weights, batting_approach, bowling_approach,
+            bowler_rating=bowling)
         total_weight = sum(raw_weights.values())
 
     # 5) Normalize weights into probabilities
