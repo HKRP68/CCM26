@@ -100,6 +100,38 @@ class ButtonAccessTests(unittest.TestCase):
                 update = DummyUpdate(DummyQuery(222, callback_data))
                 self.assertTrue(button_access.check_callback_owner(update))
 
+    def test_playmatch_flow_buttons_are_shared_for_both_players(self):
+        # The invited player (and, downstream, the other player on alternating
+        # turns) clicks buttons on a message "owned" by the command sender, so
+        # the whole /playmatch handshake must bypass the owner guard.
+        button_access.register_button_owner(100, 200, 111)
+        callbacks = [
+            "matchacc_5_42", "matchdeny_5_42",
+            "oversset_5_42_10", "overscustom_5_42",
+            "toss_bat_5_42", "toss_bowl_5_42",
+            "op1_5_42", "op2_5_42", "selbowl_5_42",
+            "bvar_5_3", "blen_5_3", "bspin_5_3", "bshot_5_3",
+            "nbowl_5_42", "newbat_5_42",
+        ]
+        for callback_data in callbacks:
+            with self.subTest(callback_data=callback_data):
+                update = DummyUpdate(DummyQuery(222, callback_data))
+                self.assertTrue(button_access.check_callback_owner(update))
+
+    def test_cipl_flow_buttons_are_shared_for_both_captains(self):
+        # /cipl over-by-over buttons are validated against bowl_user_tg /
+        # bat_user_tg inside the handler, so the owner guard must let the
+        # non-owner captain through (the reported "not for you" bug).
+        button_access.register_button_owner(100, 200, 111)
+        callbacks = [
+            "cipl_coin_heads_99", "cipl_toss_bat_99_target",
+            "cipl_bowler_5_42", "cipl_bowlapp_5_2", "cipl_batapp_5_3",
+        ]
+        for callback_data in callbacks:
+            with self.subTest(callback_data=callback_data):
+                update = DummyUpdate(DummyQuery(222, callback_data))
+                self.assertTrue(button_access.check_callback_owner(update))
+
     def test_unregistered_legacy_buttons_remain_usable(self):
         update = DummyUpdate(DummyQuery(222, "roster_page_2"))
 

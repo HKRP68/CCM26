@@ -40,6 +40,32 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "match_deny_",
     "pm_accept_",
     "pm_deny_",
+    # /playmatch (/pm) in-chat flow: invite response + the whole two-player
+    # setup/gameplay handshake. Each handler validates the clicker by
+    # telegram_id / live match state, so the same message is intentionally
+    # driven by both players in turn (the owner guard must not block them).
+    "matchacc_",
+    "matchdeny_",
+    "oversset_",
+    "overscustom_",
+    "toss_",
+    "op1_",
+    "op2_",
+    "selbowl_",
+    "bvar_",
+    "blen_",
+    "bspin_",
+    "bshot_",
+    "nbowl_",
+    "newbat_",
+    # /cipl (Challenge League) over-by-over flow: coin call, toss decision, and
+    # the per-over bowler/approach buttons. cipl_play.py validates each click
+    # against bowl_user_tg / bat_user_tg, so these are shared prompts too.
+    "cipl_coin_",
+    "cipl_toss_",
+    "cipl_bowler_",
+    "cipl_bowlapp_",
+    "cipl_batapp_",
     "wsp_join",
     "wsp_decision:",
     "wsp_cancel",

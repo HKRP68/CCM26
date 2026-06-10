@@ -2207,7 +2207,8 @@ async def match_accept_callback(update: Update, context: ContextTypes.DEFAULT_TY
             for j in context.job_queue.get_jobs_by_name(f"match_{mid}"): j.schedule_removal()
         except Exception: pass
         u1 = session.query(User).get(m.user1_id); u2 = session.query(User).get(m.user2_id)
-        t1 = u1.team_name or f"@{u1.username}'s XI"; t2 = u2.team_name or f"@{u2.username}'s XI"
+        t1 = u1.team_name or f"{('@' + u1.username) if u1.username else (u1.first_name or 'Player')}'s XI"
+        t2 = u2.team_name or f"{('@' + u2.username) if u2.username else (u2.first_name or 'Player')}'s XI"
         # Inline overs picker — far more reliable than a free-text reply in busy
         # groups. "✍️ Custom" falls back to the typed-number path below.
         overs_kb = InlineKeyboardMarkup([
@@ -2312,7 +2313,8 @@ async def _confirm_overs(context, cid, mid, overs):
         if not m or m.status != "accepted": return
         m.overs = overs; m.status = "toss"; session.commit()
         u1 = session.query(User).get(m.user1_id); u2 = session.query(User).get(m.user2_id)
-        t1 = u1.team_name or f"@{u1.username}'s XI"; t2 = u2.team_name or f"@{u2.username}'s XI"
+        t1 = u1.team_name or f"{('@' + u1.username) if u1.username else (u1.first_name or 'Player')}'s XI"
+        t2 = u2.team_name or f"{('@' + u2.username) if u2.username else (u2.first_name or 'Player')}'s XI"
 
         w_coins = overs * 300; l_coins = overs * 150
         await context.bot.send_message(cid,

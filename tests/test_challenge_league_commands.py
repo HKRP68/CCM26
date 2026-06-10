@@ -556,7 +556,12 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(context.bot_data[challenge._challenge_team_draft_key(123456)]["match_started"])
         query.answer.assert_awaited_once_with("Match started!")
-        self.assertIn("🏁 <b>Match started!</b>", query.edit_message_text.await_args.args[0])
+        # Starting the match now launches the toss "exactly like the current system":
+        # the guest is prompted to call the coin before the over-by-over chat match begins.
+        self.assertIn("🪙 <b>TOSS</b>", query.edit_message_text.await_args.args[0])
+        markup = query.edit_message_text.await_args.kwargs["reply_markup"]
+        coin_callbacks = {btn.callback_data for row in markup.inline_keyboard for btn in row}
+        self.assertEqual(coin_callbacks, {"cipl_coin_heads_123456", "cipl_coin_tails_123456"})
 
 
 if __name__ == "__main__":
