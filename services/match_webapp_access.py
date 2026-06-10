@@ -3,15 +3,17 @@
 The bot drives matches through services.match_state_store using its PTB
 `context` (which carries an in-memory cache in ctx.bot_data). Flask has no
 such context, so this module provides a lightweight dummy-ctx shim whose
-`bot_data` is a throwaway dict. All reads/writes therefore go straight to the
-DB-backed match_state table — which is exactly what we want for the Mini App,
-since the DB is the single source of truth shared by both processes.
+`bot_data` is a throwaway dict. Reads/writes therefore land on the store's
+process-wide shared cache (Flask runs as a thread inside the bot process)
+with the DB-backed match_state table as the durable source of truth — every
+save still commits synchronously, and cache entries revalidate against the
+DB after a short TTL (MATCH_STATE_CACHE_TTL, 0 = disable caching).
 
-IMPORTANT: when Flask saves state, the bot's in-memory cache for that match
-becomes stale. The bot already guards against this by falling back to the DB
-on cache miss, but to be safe the bot's heartbeat / handlers re-read from the
-store before acting. For Mini-App-driven turns we bump `version` and
-`ball_seq` so the bot can detect external changes.
+IMPORTANT: when Flask saves state, the bot's per-ctx cache for that match
+becomes stale. The bot already guards against this by falling back to the
+shared cache/DB on miss, but to be safe the bot's heartbeat / handlers
+re-read from the store before acting. For Mini-App-driven turns we bump
+`version` and `ball_seq` so the bot can detect external changes.
 """
 
 import logging
@@ -43,12 +45,15 @@ def get_next_action(mid):
     return _store.get_next_action(_DummyCtx(), mid)
 
 
-def save_state(mid, state, next_action=None, last_prompt_msg_id=None):
-    """Persist state to the DB. A throwaway ctx means only the DB is updated;
-    the bot will pick up changes via its DB fallback."""
-    _store.save_state(_DummyCtx(), mid, state,
-                      next_action=next_action,
-                      last_prompt_msg_id=last_prompt_msg_id)
+def save_state(mid, state, next_action=None, last_prompt_msg_id=None,
+               bump_ball_seq=False):
+    """Persist state to the DB + shared cache; the bot picks up changes via
+    the store's shared-cache/DB fallback. Returns the new ball_seq when
+    bump_ball_seq is True (single-commit alternative to bump_ball_seq())."""
+    return _store.save_state(_DummyCtx(), mid, state,
+                             next_action=next_action,
+                             last_prompt_msg_id=last_prompt_msg_id,
+                             bump_ball_seq=bump_ball_seq)
 
 
 def save_autoplay_users(mid, user_id, active):

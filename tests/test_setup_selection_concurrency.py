@@ -24,6 +24,7 @@ class _FakeRow:
         self.state_json = json.dumps(state)
         self.version = version
         self.next_action = next_action
+        self.ball_seq = 0
         self.last_modified = None
 
 
@@ -80,6 +81,7 @@ class _DummyCtx:
 
 def _patch_store(monkeypatch, table):
     import services.match_state_store as store
+    store.clear_cache()  # don't leak shared-cache entries across tests
     monkeypatch.setattr(store, "get_session", lambda: _FakeSession(table))
 
 

@@ -981,6 +981,17 @@ def advance_innings_break_if_due(match_id):
     same server clock — no per-user "I'm ready" handshake (which would just
     reintroduce a "waiting for opponent" style stall).
     """
+    # Cheap pre-gate: this runs on every poll, so skip the CAS read-modify-
+    # write (a guaranteed DB round-trip) unless the cached state says the
+    # match is actually sitting on an elapsed innings break. The CAS mutator
+    # below re-validates against fresh DB state, so a stale gate can only
+    # delay the transition by a cache-TTL tick, never corrupt it.
+    st = mwa.get_state(match_id)
+    if not st or st.get("setup") != SETUP_INNINGS_BREAK:
+        return False
+    if (_time.time() - (st.get("innings_break_started_at") or 0)) < INNINGS_BREAK_SECONDS:
+        return False
+
     def _mutate(state):
         if state.get("setup") != SETUP_INNINGS_BREAK:
             raise CasAbort(False)
@@ -1349,6 +1360,41 @@ def _set_processing(state, on=True):
     state["action_processing_at"] = _time.time() if on else None
 
 
+# In-process per-match action guard. Replaces the persisted processing-flag
+# round-trips (save flag → act → save cleared flag) on the Mini App hot path:
+# bot + Flask share one process, so a lock-guarded dict gives the same
+# double-tap protection without two extra DB commits per ball. The TTL
+# self-heals a claim abandoned by a crashed request thread.
+import threading as _threading
+_ACTION_GUARD_TTL = _ACTION_LOCK_SECONDS
+_ACTION_GUARD_LOCK = _threading.Lock()
+_ACTION_GUARD = {}  # match_id -> claimed_at (time.monotonic)
+
+
+def _claim_action(match_id):
+    """Atomically claim the per-match action slot. False if a live claim
+    (younger than the TTL) already exists."""
+    now = _time.monotonic()
+    with _ACTION_GUARD_LOCK:
+        claimed_at = _ACTION_GUARD.get(match_id)
+        if claimed_at is not None and (now - claimed_at) < _ACTION_GUARD_TTL:
+            return False
+        _ACTION_GUARD[match_id] = now
+        return True
+
+
+def _release_action(match_id):
+    with _ACTION_GUARD_LOCK:
+        _ACTION_GUARD.pop(match_id, None)
+
+
+def action_in_progress(match_id):
+    """Read-only view of the guard (surfaced as isProcessing to clients)."""
+    with _ACTION_GUARD_LOCK:
+        claimed_at = _ACTION_GUARD.get(match_id)
+    return claimed_at is not None and (_time.monotonic() - claimed_at) < _ACTION_GUARD_TTL
+
+
 # ── Speed: qualitative → km/h (bowler-type aware) ────────────────────
 def _speed_to_kmh(speed_label, bowler):
     """Map slow/medium/fast to a realistic km/h, modulated by bowler type and
@@ -1395,17 +1441,22 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
     if not ok_norm:
         return False, msg_norm, None
 
-    _set_processing(state, True)
-    bowler = state.get("current_bowler") or {}
-    kmh = _speed_to_kmh(speed, bowler)
+    if not _claim_action(match_id):
+        return False, "Previous action still processing — hold on.", None
+    try:
+        _set_processing(state, True)
+        bowler = state.get("current_bowler") or {}
+        kmh = _speed_to_kmh(speed, bowler)
 
-    state["current_delivery"] = info["delivery"]
-    state["current_speed"] = (speed or "medium")
-    state["last_speed"] = kmh          # km/h, surfaced to clients
-    state["selected_variation"] = info["variation"]
-    state["selected_length"] = info.get("length")
-    _set_processing(state, False)
-    mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
+        state["current_delivery"] = info["delivery"]
+        state["current_speed"] = (speed or "medium")
+        state["last_speed"] = kmh          # km/h, surfaced to clients
+        state["selected_variation"] = info["variation"]
+        state["selected_length"] = info.get("length")
+        _set_processing(state, False)
+        mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
+    finally:
+        _release_action(match_id)
     return True, "Delivery on its way — batsman to play.", {
         "delivery": info["delivery"],
         "variation": info["variation"],
@@ -1458,14 +1509,16 @@ def set_shot_action(match_id, user_id, shot):
     from services.bowling_service import AVAILABLE_SHOTS
     state["current_shot"] = AVAILABLE_SHOTS[idx]
     state["manual_batsman"] = True   # envelope flow: player picks next batsman
-    _set_processing(state, True)
-    mwa.save_state(match_id, state)
-    ok, res = play_shot(match_id, user_id, idx)
-    # play_shot saves state; clear the lock afterward.
-    st2 = mwa.get_state(match_id)
-    if st2:
-        _set_processing(st2, False)
-        mwa.save_state(match_id, st2)
+    # In-process guard instead of persisting a processing flag: skips two DB
+    # commits per ball while keeping the same 1.5s double-tap window. The
+    # mutated local state (current_shot/manual_batsman) rides into play_shot
+    # directly and is persisted by its single post-ball save.
+    if not _claim_action(match_id):
+        return False, "Previous action still processing — hold on.", None
+    try:
+        ok, res = play_shot(match_id, user_id, idx, state=state)
+    finally:
+        _release_action(match_id)
     if not ok:
         return False, res, None
     return True, res, {"shot": AVAILABLE_SHOTS[idx]}
@@ -1791,13 +1844,17 @@ def _append_commentary_log(state, res, striker, bowler, text):
     state["commentary_log"] = log
 
 
-def play_shot(match_id, user_id, shot_index):
+def play_shot(match_id, user_id, shot_index, state=None):
     """Batsman plays a shot. Resolves the ball through the engine, mutates
-    state, advances the loop. Returns (ok, result_dict|msg)."""
+    state, advances the loop. Returns (ok, result_dict|msg).
+
+    `state` lets set_shot_action pass its already-validated, already-mutated
+    copy so the ball resolves and persists in a single save."""
     from services.match_state_store import get_match_lock
     import handlers.match as _bm  # for the shared _calc outcome engine
 
-    state = mwa.get_state(match_id)
+    if state is None:
+        state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
     if user_id != state.get("bat_team_id"):
@@ -1909,8 +1966,7 @@ def play_shot(match_id, user_id, shot_index):
     else:
         next_act = A_PICK_DELIVERY
 
-    mwa.save_state(match_id, state, next_action=next_act)
-    mwa.bump_ball_seq(match_id)
+    mwa.save_state(match_id, state, next_action=next_act, bump_ball_seq=True)
 
     res["shot"] = shot
     res["delivery"] = delivery
