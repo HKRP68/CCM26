@@ -7957,7 +7957,9 @@ def _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_ma
             return ok
 
         async def _send():
-            sent_any = await _send_photos()
+            # Win/result message goes FIRST, then the Match Summary image(s),
+            # so the chat reads "who won" before the summary card.
+            sent_any = False
             try:
                 await bot.send_message(
                     chat_id=chat_id, text=fallback_text, parse_mode="HTML",
@@ -7965,6 +7967,8 @@ def _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_ma
                 sent_any = True
             except Exception:
                 logger.exception("bot-loop completed-match message send failed")
+            if await _send_photos():
+                sent_any = True
             return sent_any
 
         future = _asyncio.run_coroutine_threadsafe(_send(), loop)
@@ -8015,6 +8019,17 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
                 return False
             return True
 
+        # Win/result message goes FIRST, then the Match Summary image(s).
+        payload = {"chat_id": chat_id, "text": fallback_text,
+                   "parse_mode": "HTML", "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = _json.dumps(reply_markup)
+        resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
+        if resp.ok:
+            sent_any = True
+        else:
+            logger.warning("completed match result message send failed: %s", resp.text)
+
         if len(cards) == 1:
             sent_any = _send_photo(cards[0]) or sent_any
         elif len(cards) >= 2:
@@ -8038,15 +8053,6 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
                 for card in cards[:10]:
                     sent_any = _send_photo(card) or sent_any
 
-        payload = {"chat_id": chat_id, "text": fallback_text,
-                   "parse_mode": "HTML", "disable_web_page_preview": True}
-        if reply_markup:
-            payload["reply_markup"] = _json.dumps(reply_markup)
-        resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
-        if resp.ok:
-            sent_any = True
-        else:
-            logger.warning("completed match result message send failed: %s", resp.text)
         return sent_any
     except Exception:
         logger.exception("completed match Telegram flow failed")

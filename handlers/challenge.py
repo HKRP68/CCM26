@@ -1098,8 +1098,8 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
             "Opening the Challenge Mode Mini App…")
         bat_user = session.query(User).get(match.batting_first_id)
         bowl_user = session.query(User).get(match.bowling_first_id)
-        bat_team = bat_user.team_name or f"@{bat_user.username}'s XI"
-        bowl_team = bowl_user.team_name or f"@{bowl_user.username}'s XI"
+        bat_team = bat_user.team_name or f"{('@' + bat_user.username) if bat_user.username else (bat_user.first_name or 'Player')}'s XI"
+        bowl_team = bowl_user.team_name or f"{('@' + bowl_user.username) if bowl_user.username else (bowl_user.first_name or 'Player')}'s XI"
         toss_note = (f"{_user_label(user)} won & chose to "
                      f"{'bat' if decision == 'bat' else 'bowl'}")
         from services.match_broadcast import send_match_ready_message
