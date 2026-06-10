@@ -22,6 +22,7 @@ load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
 from database import get_session, init_db
+from services.perf_log import perf_span as _perf_span, perf_timed as _perf_timed
 from services.telegram_user_service import user_lookup_filter
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog, Match, UserAchievement,
@@ -6386,6 +6387,7 @@ def match_rest_impact_player():
 
 @app.route("/api/match/action", methods=["POST"])
 @csrf_exempt
+@_perf_timed("match_rest_action")
 def match_rest_action():
     """POST /api/match/action
     Body for bowler: {userId, matchId?, delivery_type/variation, length?, speed?}
@@ -6764,6 +6766,7 @@ def match_rest_autoplay_status():
 
 @app.route("/api/match", methods=["GET"])
 @csrf_exempt
+@_perf_timed("match_rest_poll")
 def match_rest_poll():
     """GET /api/match?userId=<telegram_id>[&matchId=<id>]
     Crickidex Arena polling endpoint. Returns the full UnderCover-style
@@ -8476,6 +8479,11 @@ def _finalize_and_broadcast_if_terminal(db, match_id):
     /cm cannot get stuck after a completed chase/second innings if the request
     that delivered the final ball returns before the broadcast is queued.
     """
+    with _perf_span("finalize_and_broadcast_if_terminal", match_id):
+        return _finalize_and_broadcast_if_terminal_impl(db, match_id)
+
+
+def _finalize_and_broadcast_if_terminal_impl(db, match_id):
     try:
         from services.match_webapp_service import ensure_webapp_match_completed
         fin = ensure_webapp_match_completed(db, match_id)

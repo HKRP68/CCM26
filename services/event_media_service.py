@@ -17,6 +17,8 @@ import random
 import time
 from sqlalchemy import and_
 
+from services.perf_log import perf_timed
+
 logger = logging.getLogger(__name__)
 
 # All event keys we know about. Order matters for admin UI grouping.
@@ -188,6 +190,7 @@ def miniapp_event_gifs(rows):
 _miniapp_cache = {"expires": 0, "payload": {}}
 
 
+@perf_timed("get_miniapp_event_gifs")
 def get_miniapp_event_gifs(session, ttl_seconds=5):
     """Return enabled MiniApp GIF settings with a short poll-friendly cache."""
     now = time.time()

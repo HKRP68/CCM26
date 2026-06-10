@@ -23,15 +23,56 @@ No Flask/Telegram imports here — just data mapping, so it stays testable.
 """
 
 import logging
+import threading
 import time as _time
 
 from services import match_webapp_access as mwa
 from services.match_webapp_service import (
     role_for, phase_status, turn_state_name, whose_turn,
     SETUP_INNINGS_BREAK, INNINGS_BREAK_SECONDS,
+    _is_processing, action_in_progress,
 )
+from services.perf_log import perf_span
 
 logger = logging.getLogger(__name__)
+
+
+# ── participant identity cache ───────────────────────────────────────
+# serialize_match_state runs on every 150ms poll and only needs four stable
+# fields per participant; skip the two User queries per request. Identity
+# changes (e.g. /teamname mid-match) surface within the TTL.
+
+_USER_CACHE_TTL = 30.0
+_USER_CACHE_LOCK = threading.Lock()
+_USER_CACHE = {}  # user_id -> (fetched_at_monotonic, _UserLite)
+
+
+class _UserLite:
+    __slots__ = ("id", "telegram_id", "username", "team_name")
+
+    def __init__(self, u):
+        self.id = u.id
+        self.telegram_id = u.telegram_id
+        self.username = u.username
+        self.team_name = u.team_name
+
+
+def _user_lite(session, user_id):
+    if not user_id:
+        return None
+    now = _time.monotonic()
+    with _USER_CACHE_LOCK:
+        hit = _USER_CACHE.get(user_id)
+        if hit and (now - hit[0]) <= _USER_CACHE_TTL:
+            return hit[1]
+    from models import User
+    u = session.query(User).get(user_id)
+    if not u:
+        return None
+    lite = _UserLite(u)
+    with _USER_CACHE_LOCK:
+        _USER_CACHE[user_id] = (now, lite)
+    return lite
 
 
 # ── tiny helpers ─────────────────────────────────────────────────────
@@ -271,8 +312,11 @@ def serialize_match_state(session, match, viewer_user):
     """Build the UnderCover ``serializeMatchState`` payload from CCM26's live
     state. ``viewer_user`` may be None (spectator). Returns dict or None if the
     match has no live state."""
-    from models import User
+    with perf_span("serialize_match_state", match.id):
+        return _serialize_match_state_impl(session, match, viewer_user)
 
+
+def _serialize_match_state_impl(session, match, viewer_user):
     match_id = match.id
     state = mwa.get_state(match_id)
     completed_snapshot = False
@@ -304,8 +348,8 @@ def serialize_match_state(session, match, viewer_user):
 
     # Telegram-id map for the two participants (battingId/bowlingId fields use
     # telegram ids in the UnderCover shape).
-    u1 = session.query(User).get(match.user1_id) if match.user1_id else None
-    u2 = session.query(User).get(match.user2_id) if match.user2_id else None
+    u1 = _user_lite(session, match.user1_id)
+    u2 = _user_lite(session, match.user2_id)
     tg_of = {}
     if u1:
         tg_of[u1.id] = u1.telegram_id
@@ -593,7 +637,10 @@ def serialize_match_state(session, match, viewer_user):
         # Free hit armed for the upcoming legal ball (UnderCover /cric parity)
         "freeHit": bool(state.get("free_hit")),
         "ballSeq": mwa.get_ball_seq(match_id),
-        "isProcessing": bool(state.get("action_processing_at")),
+        # TTL-aware persisted-flag check (legacy in-flight matches) OR the
+        # live in-process action guard — keeps app.js's autoplay gating
+        # behavior while the flag is no longer persisted per ball.
+        "isProcessing": _is_processing(state) or action_in_progress(match_id),
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
         "result": result,
