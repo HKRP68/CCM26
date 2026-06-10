@@ -156,16 +156,6 @@ async def _edit_action_message(context, state, text, keyboard):
     await _new_action_message(context, state, text, keyboard)
 
 
-async def _post_tracked(context, state, text, keyboard=None):
-    """Post an over message (e.g. the summary) tracked for deletion next over."""
-    sent = await context.bot.send_message(
-        state["chat_id"], text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
-    if sent and getattr(sent, "message_id", None):
-        state.setdefault("over_msg_ids", []).append(sent.message_id)
-    return sent
-
-
 def _miniapp_row(state):
     """The "View Match" button opens the SAME cricket arena Mini App used by
     /wpm and /wpmbot (scorecard, over-by-over commentary, playing XI), targeting
@@ -340,8 +330,9 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                bowl_user.username, bowl_user.first_name)
         winner_tg_val = winner.telegram_id
 
-        from services.config_service import get_challenge_max_overs
-        overs = get_challenge_max_overs(session)
+        # Every Challenge League / League Battle match is a fixed 20 overs
+        # (intentionally overrides the admin challenge_max_overs config).
+        overs = 20
         settings = random_match_settings()
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
@@ -571,6 +562,15 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def _run_over(context, mid, state):
     _cancel_timer(context, mid)
+    # The first ball of the 2nd innings has been bowled — the Innings Break
+    # message has served its purpose, so remove it to keep the chat clean.
+    brk = state.pop("innings_break_msg_id", None)
+    if brk:
+        try:
+            await context.bot.delete_message(state["chat_id"], brk)
+        except Exception:
+            pass
+
     bowler_name = state["current_bowler"]["name"]
     await _edit_action_message(
         context, state,
@@ -580,8 +580,11 @@ async def _run_over(context, mid, state):
     summary = cipl_match.simulate_over(state)
     _ss(context, mid, state)
 
-    await _post_tracked(context, state, _render_over_summary(state, summary),
-                        keyboard=_miniapp_row(state))
+    # One message per over: morph the same action message into the over summary
+    # instead of posting a separate card, so the chat shows exactly one tracked
+    # message per over (deleted when the next over / innings break / result lands).
+    await _edit_action_message(context, state, _render_over_summary(state, summary),
+                               None)
 
     if cipl_match.is_innings_over(state):
         if state["innings"] == 1:
@@ -639,6 +642,8 @@ def _bat_line(player, bat_stats):
 
 
 async def _innings_break(context, mid, state):
+    # Innings-1's final over message is history — delete it before the break.
+    await _delete_prev_over(context, state)
     summary_text = _innings_scorecard(state, innings_label="1st Innings")
     cipl_match.end_first_innings(state)
     _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
@@ -646,16 +651,22 @@ async def _innings_break(context, mid, state):
     text = (f"🛑 <b>Innings Break</b>\n\n{summary_text}\n\n"
             f"🎯 <b>{state['bat_team_name']}</b> need <b>{target}</b> to win "
             f"in {state['overs']} overs.")
-    await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
-                                   reply_markup=InlineKeyboardMarkup(_miniapp_row(state))
-                                   if _miniapp_row(state) else None)
-    # Innings-1 messages are now history; start innings 2 with a clean slate.
+    sent = await context.bot.send_message(
+        state["chat_id"], text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(_miniapp_row(state))
+        if _miniapp_row(state) else None)
+    # Tracked on its own (NOT in over_msg_ids) so it survives the first bowler
+    # prompt and is removed once the 2nd innings' first ball is bowled (_run_over).
+    state["innings_break_msg_id"] = sent.message_id if sent else None
     state["over_msg_ids"] = []
     state["action_msg_id"] = None
     await _prompt_bowler(context, mid, state, first=True)
 
 
 async def _complete_match(context, mid, state):
+    # Remove the final over message (even on a mid-over win) so the chat ends on
+    # just the Win message + Match Summary card.
+    await _delete_prev_over(context, state)
     result = cipl_match.compute_result(state)
     # Persist career stats + finalize Match row.
     session = get_session()
