@@ -15,6 +15,7 @@ and only then does the over-by-over flow begin in the chat.
 
 import logging
 from datetime import datetime, timedelta
+from io import BytesIO
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -34,7 +35,6 @@ from services.match_state_store import (
     A_PICK_BAT_APPROACH,
     A_COMPLETED,
 )
-from services.miniapp_buttons import miniapp_button
 from services import cipl_match
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES,
@@ -121,10 +121,20 @@ async def _delete_prev_over(context, state):
     state["action_msg_id"] = None
 
 
+def _with_view_match(state, keyboard):
+    """Append the View Match row so EVERY over message carries the link."""
+    kb = list(keyboard or [])
+    extra = _miniapp_row(state)
+    if extra:
+        kb += extra
+    return kb
+
+
 async def _new_action_message(context, state, text, keyboard):
+    kb = _with_view_match(state, keyboard)
     sent = await context.bot.send_message(
         state["chat_id"], text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None)
     if sent and getattr(sent, "message_id", None):
         state["action_msg_id"] = sent.message_id
         state.setdefault("over_msg_ids", []).append(sent.message_id)
@@ -133,7 +143,8 @@ async def _new_action_message(context, state, text, keyboard):
 
 async def _edit_action_message(context, state, text, keyboard):
     mid_msg = state.get("action_msg_id")
-    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    kb = _with_view_match(state, keyboard)
+    markup = InlineKeyboardMarkup(kb) if kb else None
     if mid_msg:
         try:
             await context.bot.edit_message_text(
@@ -156,10 +167,19 @@ async def _post_tracked(context, state, text, keyboard=None):
 
 
 def _miniapp_row(state):
-    btn = miniapp_button("📊 View Match", "scorecard",
-                         is_private=bool(state.get("is_private")),
-                         origin_chat_id=state.get("chat_id"))
-    return [[btn]] if btn else None
+    """The "View Match" button opens the SAME cricket arena Mini App used by
+    /wpm and /wpmbot (scorecard, over-by-over commentary, playing XI), targeting
+    THIS match_id — not just the bare app — so spectators land on the right board.
+    """
+    try:
+        from services.match_broadcast import play_match_keyboard
+        kb = play_match_keyboard(
+            state["match_id"], chat_id=state.get("chat_id"),
+            is_private=bool(state.get("is_private")), label="📊 View Match")
+        return kb.inline_keyboard if kb else None
+    except Exception:
+        logger.exception("cipl view-match button build failed")
+        return None
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -675,15 +695,92 @@ async def _complete_match(context, mid, state):
     else:
         result_line = (f"🏆 <b>{result['winner']}</b> beat {result['loser']} "
                        f"by {result['margin']} {result['margin_type']}!")
+
+    # Win/result message FIRST, then the Match Summary image — same order and
+    # card as /wpm, /wpmbot and /cm.
     text = (f"🏁 <b>Match Over</b>\n\n"
             f"{_innings_scorecard(state, innings_label='2nd Innings')}\n\n"
             f"{result_line}")
     await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
                                    reply_markup=InlineKeyboardMarkup(_miniapp_row(state))
                                    if _miniapp_row(state) else None)
+    try:
+        img = _build_cipl_summary_image(state, result)
+        if img:
+            await context.bot.send_photo(
+                state["chat_id"], photo=BytesIO(img),
+                caption=f"🏆 <b>Match Summary</b> — {result_line}",
+                parse_mode="HTML")
+    except Exception:
+        logger.exception("cipl match summary image failed for match %s", mid)
+
     _ss(context, mid, state, next_action=A_COMPLETED)
     cleanup_state(context, mid)
     release_match_lock(mid)
+
+
+def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi):
+    """Top batters/bowlers for one innings, in the match-summary card format."""
+    bats = []
+    for p in bat_xi or []:
+        st = bat_stats.get(str(p["roster_id"]), {})
+        if st.get("balls", 0) > 0 or st.get("out"):
+            bats.append({"name": p["name"], "runs": st.get("runs", 0),
+                         "balls": st.get("balls", 0), "out": st.get("out", False)})
+    bats.sort(key=lambda b: b["runs"], reverse=True)
+    bowls = []
+    for p in bowl_xi or []:
+        st = bowl_stats.get(str(p["roster_id"]), {})
+        balls = st.get("balls", 0)
+        if balls > 0:
+            bowls.append({"name": p["name"], "wickets": st.get("wickets", 0),
+                          "runs": st.get("runs", 0),
+                          "overs": f"{balls // 6}.{balls % 6}"})
+    bowls.sort(key=lambda b: b["wickets"], reverse=True)
+    return bats[:4], bowls[:4]
+
+
+def _build_cipl_summary_image(state, result):
+    """Render the shared post-match summary card from the finished /cipl state."""
+    try:
+        from services.match_summary_card import generate_match_summary
+    except Exception:
+        logger.exception("match summary card unavailable for cipl")
+        return None
+
+    inn1_bats, inn1_bowls = _summary_rows(
+        state.get("inn1_bat_stats", {}), state.get("inn1_bat_xi", []),
+        state.get("inn1_bowl_stats", {}), state.get("inn1_bowl_xi", []))
+    inn2_bats, inn2_bowls = _summary_rows(
+        state.get("bat_stats", {}), state.get("bat_xi", []),
+        state.get("bowl_stats", {}), state.get("bowl_xi", []))
+
+    if result["tie"]:
+        winner_name, margin_text = "Match Tied", "Match Tied"
+    else:
+        winner_name = result["winner"]
+        margin_text = f"won by {result['margin']} {result['margin_type']}"
+
+    inn1_team = state.get("inn1_bat_team", state.get("bowl_team_name", "Team 1"))
+    inn2_team = state.get("bat_team_name", "Team 2")
+    return generate_match_summary(
+        inn1_team=inn1_team,
+        inn1_runs=state.get("inn1_runs", 0),
+        inn1_wickets=state.get("inn1_wickets", 0),
+        inn1_overs=state.get("inn1_overs", "0.0"),
+        inn2_team=inn2_team,
+        inn2_runs=state.get("total_runs", 0),
+        inn2_wickets=state.get("total_wickets", 0),
+        inn2_overs=cipl_match.format_overs(state),
+        winner_name=winner_name,
+        win_margin_text=margin_text,
+        overs_total=state.get("overs", 0),
+        stadium=state.get("stadium"),
+        top_per_team={
+            "inn1": {"team": inn1_team, "batters": inn1_bats, "bowlers": inn1_bowls},
+            "inn2": {"team": inn2_team, "batters": inn2_bats, "bowlers": inn2_bowls},
+        },
+    )
 
 
 def _innings_scorecard(state, innings_label=""):
