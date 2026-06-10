@@ -1,0 +1,148 @@
+"""Tests for the Challenge League over-by-over Approach simulation.
+
+Covers engine/approach_modifiers.py and services/cipl_match.py — both pure
+Python (no Telegram / SQLAlchemy needed), so they run under plain unittest.
+"""
+
+import random
+import unittest
+
+from engine import approach_modifiers as am
+from services import cipl_match as cm
+
+
+BASE_WEIGHTS = {
+    "Dot": 20.0, "Single": 33.0, "Double": 10.0, "Three": 3.0,
+    "Four": 16.0, "Six": 10.0, "Wicket": 4.0, "Extras": 2.0,
+}
+
+
+class ApproachModifierTests(unittest.TestCase):
+    def test_balanced_is_neutral(self):
+        out = am.apply_approach_modifiers(BASE_WEIGHTS, "balanced", "balanced")
+        self.assertEqual(out, BASE_WEIGHTS)
+
+    def test_unknown_keys_fall_back_to_balanced(self):
+        out = am.apply_approach_modifiers(BASE_WEIGHTS, "nonsense", "garbage")
+        self.assertEqual(out, BASE_WEIGHTS)
+
+    def test_defensive_batting_lowers_boundaries_and_wickets(self):
+        out = am.apply_approach_modifiers(BASE_WEIGHTS, "defensive", "balanced")
+        self.assertLess(out["Four"], BASE_WEIGHTS["Four"])
+        self.assertLess(out["Six"], BASE_WEIGHTS["Six"])
+        self.assertLess(out["Wicket"], BASE_WEIGHTS["Wicket"])
+        self.assertGreater(out["Dot"], BASE_WEIGHTS["Dot"])
+
+    def test_ultra_batting_raises_six_and_wicket(self):
+        out = am.apply_approach_modifiers(BASE_WEIGHTS, "ultra", "balanced")
+        self.assertGreater(out["Six"], BASE_WEIGHTS["Six"])
+        self.assertGreater(out["Wicket"], BASE_WEIGHTS["Wicket"])
+
+    def test_aggressive_bowling_raises_wickets(self):
+        out = am.apply_approach_modifiers(BASE_WEIGHTS, "balanced", "aggressive")
+        self.assertGreater(out["Wicket"], BASE_WEIGHTS["Wicket"])
+
+    def test_mixed_six_suppression_scales_with_rating(self):
+        hi = am.apply_approach_modifiers(BASE_WEIGHTS, "balanced", "mixed", bowler_rating=85)
+        lo = am.apply_approach_modifiers(BASE_WEIGHTS, "balanced", "mixed", bowler_rating=45)
+        self.assertLess(hi["Six"], lo["Six"])  # high-rated bowler concedes fewer sixes
+
+    def test_combined_multipliers(self):
+        out = am.apply_approach_modifiers(BASE_WEIGHTS, "ultra", "aggressive")
+        # ultra Six 2.2 * aggressive Six 1.2 = 2.64
+        self.assertAlmostEqual(out["Six"], BASE_WEIGHTS["Six"] * 2.2 * 1.2, places=5)
+
+    def test_no_negative_weights(self):
+        weird = dict(BASE_WEIGHTS, Six=-5.0)
+        out = am.apply_approach_modifiers(weird, "defensive", "defensive")
+        self.assertGreaterEqual(out["Six"], 0.0)
+
+
+def _mk(rid, name, cat, bat, bowl, style="Fast"):
+    return {"roster_id": rid, "player_id": rid, "name": name, "rating": max(bat, bowl),
+            "category": cat, "bat_rating": bat, "bowl_rating": bowl,
+            "bowl_style": style, "bowl_hand": "Right", "bat_hand": "Right"}
+
+
+def _make_state(overs=5):
+    bat_xi = ([_mk(i, "Bat%d" % i, "Batsman", 80 - i, 30) for i in range(1, 8)]
+              + [_mk(i, "AR%d" % i, "All-rounder", 60, 70, "Off spin") for i in range(8, 12)])
+    bowl_xi = ([_mk(100 + i, "Bwl%d" % i, "Bowler", 30, 80 - i, "Fast") for i in range(1, 7)]
+               + [_mk(100 + i, "BAR%d" % i, "All-rounder", 60, 70, "Leg spin") for i in range(7, 12)])
+    return cm.build_cipl_state(1, overs, 10, 20, 111, 222, bat_xi, bowl_xi,
+                               "Team A", "Team B", -100, "Hard", False)
+
+
+class CiplMatchTests(unittest.TestCase):
+    def test_eligible_bowlers_only_bowlers_and_allrounders(self):
+        s = _make_state()
+        names = {p["category"] for p in cm.eligible_bowlers(s)}
+        self.assertTrue(names.issubset({"Bowler", "All-rounder"}))
+
+    def test_eligible_bowlers_excludes_previous_over_bowler(self):
+        s = _make_state()
+        first = cm.eligible_bowlers(s)[0]
+        s["prev_bowler_rid"] = first["roster_id"]
+        self.assertNotIn(first["roster_id"],
+                         [p["roster_id"] for p in cm.eligible_bowlers(s)])
+
+    def test_bowler_quota_enforced(self):
+        s = _make_state(overs=5)  # quota = ceil(5/5) = 1 over each
+        bowler = cm.eligible_bowlers(s)[0]
+        # Pretend the bowler already bowled a full over.
+        s["bowl_stats"][str(bowler["roster_id"])]["balls"] = 6
+        self.assertNotIn(bowler["roster_id"],
+                         [p["roster_id"] for p in cm.eligible_bowlers(s)])
+
+    def test_simulate_over_consumes_six_legal_balls(self):
+        random.seed(1)
+        s = _make_state()
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "balanced"
+        s["batting_approach"] = "balanced"
+        summary = cm.simulate_over(s)
+        legal = [t for t in summary["over_timeline"] if t not in ("WD", "NB")]
+        # Either six legal balls, or fewer if all out / innings ended.
+        self.assertTrue(len(legal) == 6 or s["total_wickets"] >= s["wicket_limit"])
+
+    def test_full_match_runs_and_produces_result(self):
+        random.seed(42)
+        s = _make_state(overs=5)
+        guard = 0
+        while not cm.is_innings_over(s) and guard < 50:
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "aggressive"
+            s["batting_approach"] = "balanced"
+            cm.simulate_over(s)
+            guard += 1
+        self.assertEqual(s["innings"], 1)
+        cm.end_first_innings(s)
+        self.assertEqual(s["innings"], 2)
+        self.assertEqual(s["target"], s["inn1_runs"] + 1)
+        guard = 0
+        while not cm.is_innings_over(s) and guard < 50:
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "defensive"
+            s["batting_approach"] = "ultra"
+            cm.simulate_over(s)
+            guard += 1
+        result = cm.compute_result(s)
+        self.assertIn(result["margin_type"], ("runs", "wickets", "tie"))
+
+    def test_stats_totals_are_consistent(self):
+        random.seed(7)
+        s = _make_state()
+        while not cm.is_innings_over(s):
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "balanced"
+            s["batting_approach"] = "aggressive"
+            cm.simulate_over(s)
+        # Bowler-conceded runs + extras should not exceed the team total
+        # (extras are tracked separately from bowler figures for leg byes).
+        bowl_runs = sum(v["runs"] for v in s["bowl_stats"].values())
+        self.assertLessEqual(bowl_runs, s["total_runs"])
+        self.assertGreaterEqual(s["total_wickets"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -255,3 +255,46 @@ Momentum shift
 Short commentary summary
 
 Then continue to the next over with bowler selection again.
+
+---
+
+## Implementation Suggestions (added during build)
+
+These are the engineering decisions made while implementing the feature. They
+fill gaps the spec left open and keep the new mode isolated from existing flows.
+
+1. **Scope** — The over-by-over Approach flow is wired into `/cipl` and every
+   admin-created Challenge League command (the `challenge_league_handler` path).
+   `/cm` and `/playmatch` (`/wpm`) are intentionally left unchanged.
+
+2. **Toss first, then play in chat** — After the host clicks *Start Match*, the
+   guest calls heads/tails and the winner elects bat/bowl using the existing
+   `run_coin_toss` animation. Only then does the over-by-over flow begin, played
+   entirely in the Telegram chat. The Mini App link in each over message is a
+   **read-only** scorecard/commentary view.
+
+3. **No mid-over batsman selection** — Because the batting order is fixed during
+   Playing XI selection, new batsmen come in automatically (in order) when a
+   wicket falls, so an over is simulated as one atomic unit.
+
+4. **Approach effects as weight multipliers** — Approaches scale the engine's raw
+   outcome weights right before the delivery is sampled (`engine/approach_modifiers.py`),
+   so results still respect ratings, pitch, momentum, pressure and scenario logic.
+   Canonical keys: batting `defensive/rotate/balanced/aggressive/ultra`; bowling
+   `defensive/balanced/mixed/aggressive/variation`. `Balanced` is neutral.
+   *Mixed* bowling suppresses sixes more when the bowler is highly rated.
+
+5. **Auto-pick on timeout** — If a captain doesn't pick within 90s, the match
+   continues automatically: the bowling captain's idle approach defaults to
+   *Balanced* (and an idle bowler pick defaults to the top-rated eligible bowler),
+   the batting captain's idle approach defaults to *Balanced*. No forfeit.
+
+6. **Per-over message cleanup** — Each over uses one editable action message plus
+   one summary message; both are deleted when the next over begins.
+
+7. **Bowler quota** — A bowler may bowl at most `ceil(overs / 5)` overs and never
+   two overs in a row, matching standard limited-overs rules.
+
+8. **Reuse over rewrite** — Stats persistence reuses `player_stats_service`,
+   the SimCricketX engine (`engine/`) and `services/sim_match` adapters are reused
+   rather than duplicated, and match state reuses the existing `match_state` store.

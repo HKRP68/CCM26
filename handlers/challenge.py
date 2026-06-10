@@ -1326,13 +1326,22 @@ async def challenge_start_match_callback(update: Update, context: ContextTypes.D
 
     draft["match_started"] = True
     await query.answer("Match started!")
+    # Toss happens exactly like the current system: the guest calls heads/tails,
+    # the winner elects bat/bowl, then the over-by-over match begins in chat.
+    target = draft.get("target") or {}
     try:
         await query.edit_message_text(
-            f"{_challenge_match_ready_text(draft)}\n\n🏁 <b>Match started!</b>",
+            f"🪙 <b>TOSS</b>\n"
+            f"{_mention(target.get('tg_id'), target.get('name') or 'Guest')}, "
+            f"call the coin:",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Heads", callback_data=f"cipl_coin_heads_{draft_id}"),
+                InlineKeyboardButton("Tails", callback_data=f"cipl_coin_tails_{draft_id}"),
+            ]]),
         )
     except Exception:
-        logger.exception("Failed to update challenge start match message")
+        logger.exception("Failed to start challenge toss")
 
 
 # Legacy callback kept for safety if old inline buttons are still delivered.

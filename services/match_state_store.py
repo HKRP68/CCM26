@@ -49,6 +49,11 @@ A_PICK_NEW_BOWLER = "PICK_NEW_BOWLER"
 A_INNINGS_BREAK = "INNINGS_BREAK"
 A_COMPLETED = "COMPLETED"
 
+# Challenge League over-by-over "approach" mode actions
+A_PICK_CIPL_BOWLER = "PICK_CIPL_BOWLER"      # bowling side picks bowler for the over
+A_PICK_BOWL_APPROACH = "PICK_BOWL_APPROACH"  # bowling side picks bowling approach
+A_PICK_BAT_APPROACH = "PICK_BAT_APPROACH"    # batting side picks batting approach
+
 
 def _mem_key(mid):
     return f"ms_{mid}"
