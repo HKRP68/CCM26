@@ -14,6 +14,7 @@ mid-over batsman pick is required (per New Features.md).
 
 import json
 import logging
+import random
 
 from engine.ball_outcome import calculate_outcome
 from engine.pressure_engine import PressureEngine
@@ -137,7 +138,8 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "ball_history": [], "batter_streaks": {},
         "free_hit": False,
         # Narrative inputs for the commentary engine.
-        "partnership_runs": 0, "wkt_marks": [],
+        "partnership_runs": 0, "partnership_balls": 0,
+        "partnership_history": [], "wkt_marks": [],
         "momentum_prev": 0.0,
         "over_msg_ids": [],
         "commentary_log": [],
@@ -360,7 +362,8 @@ def simulate_over(state):
                 over_timeline.append("WD")
                 over_events.append({"sym": "WD", "text": f"Wide ({striker_name})"})
                 _push_commentary(state, "extra", striker_name,
-                                 _ec() or f"Wide. {bowler['name']} strays down leg.")
+                                 _ec() or f"Wide. {bowler['name']} strays down leg.",
+                                 runs=1 + runs, event_key="wide")
             else:
                 if runs:
                     bs["runs"] += runs
@@ -371,7 +374,8 @@ def simulate_over(state):
                 over_timeline.append("NB")
                 over_events.append({"sym": "NB", "text": f"No ball +{runs}"})
                 _push_commentary(state, "extra", striker_name,
-                                 _ec() or "No ball! Free hit coming up.")
+                                 _ec() or "No ball! Free hit coming up.",
+                                 runs=1 + runs, event_key="no_ball")
                 free_hit = True
                 if runs % 2 == 1:
                     _swap_strike(state)
@@ -386,6 +390,8 @@ def simulate_over(state):
         bws["balls"] += 1
         bws["this_over_balls"] += 1
         bs["balls"] += 1
+        # Legal ball faced by the current pair → counts toward the partnership.
+        state["partnership_balls"] = state.get("partnership_balls", 0) + 1
 
         if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
             state["total_runs"] += runs
@@ -394,7 +400,8 @@ def simulate_over(state):
             over_timeline.append("LB")
             over_events.append({"sym": "LB", "text": f"Leg byes +{runs}"})
             _push_commentary(state, "extra", striker_name,
-                             _ec() or f"Leg byes, {runs} run(s).")
+                             _ec() or f"Leg byes, {runs} run(s).",
+                             runs=runs, event_key="legbye")
             if runs % 2 == 1:
                 _swap_strike(state)
 
@@ -405,20 +412,42 @@ def simulate_over(state):
                 bs["runs"] += runs
                 bws["runs"] += runs
                 bws["this_over_runs"] += runs
+                state["partnership_runs"] = partnership_before + runs
             state["total_wickets"] += 1
             bs["out"] = True
             bs["how_out"] = wtype
             bs["bowled_by"] = bowler["name"]
+            # Attribute a fielder so the scorecard shows a full dismissal line
+            # (c <fielder> b <bowler> / run out (<fielder>) / st <keeper> ...).
+            needs_fielder = wtype.lower() in ("caught", "run out", "stumped")
+            fielder = _pick_fielder(state, bowler,
+                                    allow_bowler=(wtype.lower() == "run out")) if needs_fielder else ""
+            bs["fielder"] = fielder
+            bs["dismissal"] = _dismissal_text(wtype, bowler["name"], fielder)
             if wtype != "Run Out":
                 bws["wickets"] += 1
             over_timeline.append("W")
             over_events.append({"sym": "W", "text": f"WICKET! {striker_name} {wtype}"})
             state["fow"].append([state["total_runs"], state["total_wickets"],
                                  striker_name, format_overs(state)])
-            _push_commentary(state, "wicket", striker_name,
-                             _ec() or f"OUT! {striker_name} {wtype} b {bowler['name']}.")
-            # Reset partnership; record the ball index for the collapse narrative.
+            # Ball row (paints the W badge in the over column) + the red OUT card.
+            _wkt_line = _ec() or f"OUT! {striker_name} {bs['dismissal']}."
+            _push_commentary(state, "ball", striker_name, _wkt_line,
+                             runs=runs, is_wicket=True, event_key="wicket")
+            non_striker = state["batting_order"][state["non_striker_idx"]]
+            _push_commentary(
+                state, "wicket", striker_name,
+                f"OUT! {striker_name} {bs['runs']}({bs['balls']}) {bs['dismissal']}")
+            # Record the completed partnership for the Partnership tab, then reset.
+            state.setdefault("partnership_history", []).append({
+                "wicket": state["total_wickets"],
+                "batsman1": striker_name,
+                "batsman2": non_striker.get("name", ""),
+                "runs": state.get("partnership_runs", 0),
+                "balls": state.get("partnership_balls", 0),
+            })
             state["partnership_runs"] = 0
+            state["partnership_balls"] = 0
             state.setdefault("wkt_marks", []).append(balls_bowled(state))
             free_hit = False
             streaks.pop(srid, None)
@@ -447,9 +476,12 @@ def simulate_over(state):
             over_events.append({"sym": str(runs), "text": _run_text(runs, striker_name, bowler["name"])})
             # Maiden = full over of dots with no runs off it yet.
             _maiden = (balls_this_over >= 6 and over_runs_before == 0 and runs == 0)
+            _run_key = ("dot_ball" if runs == 0 else "four" if runs == 4
+                        else "six" if runs == 6 else None)
             _push_commentary(state, _run_event(runs), striker_name,
                              _ec(is_maiden=_maiden)
-                             or _run_text(runs, striker_name, bowler["name"]))
+                             or _run_text(runs, striker_name, bowler["name"]),
+                             runs=runs, event_key=_run_key)
             if runs not in (4, 6):
                 free_hit = False
             if runs % 2 == 1:
@@ -588,13 +620,71 @@ def _engine_text(state, oc, striker, bowler, over_idx, innings, target,
         return None
 
 
-def _push_commentary(state, ctype, name, text):
+def _push_commentary(state, ctype, name, text, *, runs=None,
+                     is_wicket=False, event_key=None):
+    """Append a commentary entry the Mini App feed can render.
+
+    Ball rows (``ctype`` not one of the special card types) need ``runs`` /
+    ``isWicket`` / ``eventKey`` so static/cricket/app.js can paint the outcome
+    badge (run count, ``W`` for a wicket, ``Wd``/``Nb``/``Lb`` for extras)
+    instead of defaulting to ``0``.
+    """
     log = state.setdefault("commentary_log", [])
-    log.append({"type": ctype, "name": name, "text": text,
-                "over": format_overs(state), "score": format_score(state)})
+    entry = {"type": ctype, "name": name, "text": text,
+             "over": format_overs(state), "score": format_score(state),
+             "isWicket": bool(is_wicket)}
+    if runs is not None:
+        entry["runs"] = runs
+    if event_key:
+        entry["eventKey"] = event_key
+    log.append(entry)
     # Keep the log bounded so the JSON state stays small.
     if len(log) > 240:
         del log[:len(log) - 240]
+
+
+def _pick_fielder(state, bowler, allow_bowler=False):
+    """Pick a plausible fielder name from the bowling XI for the scorecard
+    dismissal line. The engine only emits a wicket *type*, not a fielder, so
+    we attribute the catch/run-out to a random fieldsman."""
+    xi = state.get("bowl_xi") or []
+    bowler_rid = bowler.get("roster_id") if bowler else None
+    pool = [p for p in xi
+            if allow_bowler or p.get("roster_id") != bowler_rid]
+    if not pool:
+        pool = list(xi)
+    if not pool:
+        return ""
+    return random.choice(pool).get("name", "")
+
+
+def _dismissal_text(how_out, bowler_name, fielder=""):
+    """Render a full cricket-scorecard dismissal line, e.g. ``c Kohli b Bumrah``,
+    ``lbw b Shami``, ``b Boult``, ``run out (Jadeja)``."""
+    how = (how_out or "").strip()
+    low = how.lower()
+    bwl = bowler_name or ""
+    fld = fielder or ""
+    if low in ("bowled", "b"):
+        return f"b {bwl}".strip()
+    if low == "lbw":
+        return f"lbw b {bwl}".strip()
+    if low in ("caught", "c"):
+        if fld and bwl and fld == bwl:
+            return f"c & b {bwl}".strip()
+        if fld:
+            return f"c {fld} b {bwl}".strip()
+        return f"c b {bwl}".strip()
+    if low in ("caught and bowled", "c&b", "caught & bowled"):
+        return f"c & b {bwl}".strip()
+    if low == "stumped":
+        return f"st {fld} b {bwl}".strip() if fld else f"st b {bwl}".strip()
+    if low in ("run out", "runout"):
+        return f"run out ({fld})".strip() if fld else "run out"
+    if low == "hit wicket":
+        return f"hit wicket b {bwl}".strip()
+    # Unknown type — show it as-is so nothing is lost.
+    return how or "out"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -619,7 +709,25 @@ def end_first_innings(state):
     state["inn1_bowl_xi"] = state["bowl_xi"]
     state["inn1_fow"] = state["fow"]
     state["inn1_timeline"] = state["timeline"]
+    state["inn1_over_runs"] = list(state.get("over_runs") or [])
     state["target"] = state["total_runs"] + 1
+
+    # Record the unbroken closing partnership, then freeze the 1st-innings
+    # partnership list for the Mini App "Partnership" tab.
+    if state.get("partnership_balls") or state.get("partnership_runs"):
+        order = state.get("batting_order", []) or []
+        s_idx, ns_idx = state.get("striker_idx", 0), state.get("non_striker_idx", 1)
+        b1 = order[s_idx].get("name", "") if s_idx < len(order) else ""
+        b2 = order[ns_idx].get("name", "") if ns_idx < len(order) else ""
+        state.setdefault("partnership_history", []).append({
+            "wicket": state["total_wickets"] + 1,
+            "batsman1": b1, "batsman2": b2,
+            "runs": state.get("partnership_runs", 0),
+            "balls": state.get("partnership_balls", 0),
+            "notout": True,
+        })
+    state["inn1_partnership_history"] = list(state.get("partnership_history") or [])
+    state["partnership_history"] = []
 
     # Swap sides for innings 2
     state["bat_team_id"], state["bowl_team_id"] = state["bowl_team_id"], state["bat_team_id"]
@@ -653,6 +761,7 @@ def end_first_innings(state):
     state["batter_streaks"] = {}
     state["free_hit"] = False
     state["partnership_runs"] = 0
+    state["partnership_balls"] = 0
     state["wkt_marks"] = []
     state["momentum_prev"] = 0.0
     # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.

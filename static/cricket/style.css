@@ -1839,6 +1839,13 @@ body {
   border: 1px solid rgba(var(--info-rgb), 0.3);
 }
 
+.ball-outcome-badge.outcome-extra {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--primary-accent);
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  font-size: 9px;
+}
+
 .ball-comm-text {
   color: var(--text-primary);
   flex: 1;
