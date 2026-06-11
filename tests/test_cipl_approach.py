@@ -168,6 +168,48 @@ class CiplMatchTests(unittest.TestCase):
             self.assertIn("text", e)
 
 
+class MiniAppSpectateOnlyTests(unittest.TestCase):
+    """The /cipl Mini App must be spectate-only: the over-by-over Approach game
+    is driven from the Telegram chat, so the Mini App never lets anyone (not even
+    the two captains) bowl, bat, pick players, or use the Impact Player."""
+
+    def test_cipl_state_is_flagged_view_only(self):
+        from services.match_webapp_service import is_view_only_match
+        s = _make_state()
+        self.assertEqual(s.get("mode"), "cipl_approach")
+        self.assertTrue(is_view_only_match(s))
+
+    def test_non_cipl_state_is_interactive(self):
+        from services.match_webapp_service import is_view_only_match
+        self.assertFalse(is_view_only_match({"mode": "something_else"}))
+        self.assertFalse(is_view_only_match({}))
+        self.assertFalse(is_view_only_match(None))
+
+    def test_gameplay_mutators_reject_cipl_matches(self):
+        # Each mutator must refuse a /cipl match. They short-circuit on the
+        # view-only guard before touching the DB-backed store, so a captain id
+        # is accepted as the caller and the rejection is purely mode-driven.
+        from unittest import mock
+        from services import match_webapp_service as mws
+
+        s = _make_state()
+        bat_uid = s["bat_team_id"]
+        bowl_uid = s["bowl_team_id"]
+        msg = mws.VIEW_ONLY_MESSAGE
+
+        with mock.patch.object(mws.mwa, "get_state", return_value=s):
+            self.assertEqual(mws.set_delivery(1, bowl_uid, "yorker"), (False, msg))
+            self.assertEqual(mws.set_delivery_action(1, bowl_uid, "yorker"),
+                             (False, msg, None))
+            self.assertEqual(mws.set_shot_action(1, bat_uid, "pull"),
+                             (False, msg, None))
+            self.assertEqual(mws.play_shot(1, bat_uid, 0), (False, msg))
+            self.assertEqual(mws.select_wicket_batsman(1, bat_uid, 2),
+                             (False, msg, None))
+            self.assertEqual(mws.select_new_bowler(1, bowl_uid, 101),
+                             (False, msg))
+
+
 class ScenarioEngineIntegrationTests(unittest.TestCase):
     """The dramatic-finish ScenarioEngine is wired into the 2nd-innings chase
     as an optional realism layer, gated to 20-over matches."""

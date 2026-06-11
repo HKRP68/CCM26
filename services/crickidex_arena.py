@@ -385,6 +385,17 @@ def _serialize_match_state_impl(session, match, viewer_user):
     role = role_for(state, viewer_uid) if viewer_uid else "spectator"
     my_role = {"batsman": "batting", "bowler": "bowling"}.get(role, "spectator")
 
+    # Challenge League (/cipl) matches are played over-by-over entirely in the
+    # Telegram chat (bowler/approach inline buttons in cipl_play.py). The Mini
+    # App is a spectate-only board for EVERYONE — including the two captains — so
+    # force the read-only spectator view: no batting/bowling controls, no "your
+    # turn" prompts, no Impact Player picker. The action endpoints reject manual
+    # submissions too (services.match_webapp_service.is_view_only_match).
+    cipl_view_only = state.get("mode") == "cipl_approach"
+    if cipl_view_only:
+        role = "spectator"
+        my_role = "spectator"
+
     # Telegram-id map for the two participants (battingId/bowlingId fields use
     # telegram ids in the UnderCover shape).
     u1 = _user_lite(session, match.user1_id)
@@ -410,6 +421,12 @@ def _serialize_match_state_impl(session, match, viewer_user):
             is_my_turn = False
     else:
         _, is_my_turn = whose_turn(state, next_action, viewer_uid) if viewer_uid else (None, False)
+
+    # CIPL: a captain is still bat_team_id/bowl_team_id in state, so whose_turn
+    # would otherwise hand them the turn. Spectate-only means it's never "my
+    # turn" in the Mini App.
+    if cipl_view_only:
+        is_my_turn = False
 
     # ── host / guest blocks (stable: host=user1, guest=user2) ──
     def _team_block(u):
@@ -621,7 +638,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
 
     # ── Impact Player availability/summary ──
     impact_player = {"canUse": False, "used": False, "summary": _impact_summary_for_result(state)}
-    if viewer_uid and status != "completed":
+    if viewer_uid and status != "completed" and not cipl_view_only:
         try:
             from services.match_webapp_service import get_impact_player_options
             opts = get_impact_player_options(session, match_id, viewer_uid)
