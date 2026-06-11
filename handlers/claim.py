@@ -14,6 +14,7 @@ from services.cooldown_service import check_cooldown, format_remaining
 from services.card_generator import generate_card
 from services.activity_service import log_activity
 from services.flags import get_flag
+from services.fancy_text import compact_value
 from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value, get_buy_value
 
 logger = logging.getLogger(__name__)
@@ -40,24 +41,26 @@ def _cancel_timer(context, user_id):
         pass
 
 
-def _build_card_text(p):
-    """Build player card text from a dict (not ORM object)."""
+def _build_card_text(p, coin_reward=0, mention=None):
+    """Build the stylised /claim caption from a dict (not ORM object)."""
     flag = get_flag(p["country"])
-    return (
-        f"📛 <b>{p['name']}</b>\n"
-        f"⭐ Rating: {p['rating']} OVR\n"
-        f"📊 Batting Rating: {p['bat_rating']}\n"
-        f"📊 Bowling Rating: {p['bowl_rating']}\n\n"
-        f"👤 <b>Bio:</b>\n"
-        f"🎯 Category: {p['category']}\n"
-        f"🏏 Bat Hand: {p['bat_hand']}\n"
-        f"🎳 Bowl Hand: {p['bowl_hand']}\n"
-        f"🌀 Bowl Style: {p['bowl_style']}\n"
-        f"🌍 Country: {p['country']} {flag}\n"
-        f"📋 Version: {p['version']}\n\n"
-        f"💰 Buy Value: {get_buy_value(p['rating']):,} 🪙\n"
-        f"💸 Sell Value: {get_sell_value(p['rating']):,} 🪙"
-    )
+    buy = compact_value(get_buy_value(p["rating"]))
+    sell = compact_value(get_sell_value(p["rating"]))
+    bat_hand = f"{p['bat_hand']} Hand Batsman" if p.get("bat_hand") else "—"
+
+    lines = [
+        f"<blockquote>👤 <b>{p['name']}</b>  {flag}</blockquote>",
+        f"⭐{p['rating']} 🏏{p['bat_rating']} 🎯{p['bowl_rating']}",
+        f"| {p['category']} | {bat_hand} | {p['bowl_style']}",
+        "",
+        f"|💰 B:{buy} | S:{sell} 🪙",
+    ]
+    if coin_reward:
+        lines.append(f"|💰 +{coin_reward:,} Coin Added")
+    lines.append("")
+    who = mention or "You"
+    lines.append(f"{who} Click 🟢 to retain or 🔴 to release")
+    return "\n".join(lines)
 
 
 def _player_to_dict(player):
@@ -214,7 +217,8 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.commit()
 
         # Build text from dict (safe after commit)
-        text = _build_card_text(p) + f"\n\n💰 +{coin_reward:,} coins added!"
+        mention = f"@{tg_user.username}" if tg_user.username else (tg_user.first_name or "You")
+        text = _build_card_text(p, coin_reward=coin_reward, mention=mention)
 
         # Build buttons
         buttons = [
@@ -330,18 +334,20 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_activity(session, user.id, "retain", f"Retained {name}", player_name=name)
         session.commit()
 
-        username = tg_user.username or tg_user.first_name
+        mention = f"@{tg_user.username}" if tg_user.username else (tg_user.first_name or "")
         await context.bot.send_message(chat_id=chat_id,
-            text=(f"🏏 {name} has been added to your squad. @{username}\n\n"
+            text=(f"🏏 {name} has been added to your squad. {mention}\n"
                   f"━━━━━━━━━━━━━━\n"
+                  f"<blockquote expandable>"
                   f"👤 Category: {category}\n"
                   f"⭐ Rating: {rating}\n"
                   f"📊 Bat Rating: {bat_rating}\n"
                   f"📊 Bowl Rating: {bowl_rating}\n"
                   f"🏏 Bat: {bat_hand}\n"
-                  f"🎯 Bowl: {bowl_style}\n"
-                  f"━━━━━━━━━━━━━━\n\n"
-                  f"✅ Your Squad Size: {new_count}/25"),
+                  f"🎯 Bowl: {bowl_style}"
+                  f"</blockquote>\n"
+                  f"━━━━━━━━━━━━━━\n"
+                  f"✅ Your Squad Size: {new_count}/{MAX_ROSTER}"),
             parse_mode="HTML")
 
         # Achievement check (post-commit so it sees fresh roster_count)

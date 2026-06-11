@@ -2619,8 +2619,8 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         bt = bu.team_name or f"@{bu.username}'s XI"; bwt = bwu.team_name or f"@{bwu.username}'s XI"
         bat_r = (session.query(UserRoster, Player).join(Player).filter(UserRoster.user_id == bu.id).order_by(UserRoster.order_position).limit(11).all())
         bowl_r = (session.query(UserRoster, Player).join(Player).filter(UserRoster.user_id == bwu.id).order_by(UserRoster.order_position).limit(11).all())
-        await context.bot.send_message(cid, format_xi_text(bat_r, f"🏏 {bt} (Batting)", bu.captain_roster_id), parse_mode="HTML")
-        await context.bot.send_message(cid, format_xi_text(bowl_r, f"🎳 {bwt} (Bowling)", bwu.captain_roster_id), parse_mode="HTML")
+        await context.bot.send_message(cid, format_xi_text(bat_r, f"🏏 {bt} (Batting)", bu.captain_roster_id), parse_mode="HTML", disable_web_page_preview=True)
+        await context.bot.send_message(cid, format_xi_text(bowl_r, f"🎳 {bwt} (Bowling)", bwu.captain_roster_id), parse_mode="HTML", disable_web_page_preview=True)
         context.bot_data[f"bat_xi_{mid}"] = bxi; context.bot_data[f"bowl_xi_{mid}"] = bwxi
         context.bot_data[f"bat_uname_{mid}"] = bu.username; context.bot_data[f"bowl_uname_{mid}"] = bwu.username
         context.bot_data[f"bat_uid_{mid}"] = bu.id; context.bot_data[f"bowl_uid_{mid}"] = bwu.id

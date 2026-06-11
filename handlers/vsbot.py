@@ -508,8 +508,8 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
         else:
             bowl_render = _format_bot_xi_text(bowl_xi, f"🎳 {bowl_team_name} (Bowling)")
 
-        await context.bot.send_message(chat_id, bat_render, parse_mode="HTML")
-        await context.bot.send_message(chat_id, bowl_render, parse_mode="HTML")
+        await context.bot.send_message(chat_id, bat_render, parse_mode="HTML", disable_web_page_preview=True)
+        await context.bot.send_message(chat_id, bowl_render, parse_mode="HTML", disable_web_page_preview=True)
 
         # Match style is global: keep the original Telegram gameplay unless
         # the admin has explicitly enabled the optional Mini App live board.

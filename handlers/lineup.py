@@ -10,6 +10,8 @@ from services.activity_service import log_activity
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.flags import get_flag
 from services.bowling_service import is_spinner as _is_spin, get_bowler_profile_key
+from services.fancy_text import small_caps, bold_digits, bold_serif, circled
+from services.miniapp_buttons import miniapp_deep_link
 
 logger = logging.getLogger(__name__)
 
@@ -64,17 +66,28 @@ def _build_display_order(roster_list):
     return batsmen + keepers + allrounders + pacers + spinners + bench
 
 
-def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False):
-    """Build the 5-section Playing XI text.
+def _xi_player_line(serial, entry, player, captain_rid):
+    """One stylised XI line: ① ɴᴀᴍᴇ  🇮🇳  𝟗𝟗 | 𝟗𝟗 | 𝟐𝟑."""
+    flag = get_flag(player.country)
+    cap = " 👑" if captain_rid is not None and entry.id == captain_rid else ""
+    stats = f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)} | {bold_digits(player.bowl_rating)}"
+    return f"{circled(serial)} {small_caps(player.name)}  {flag}  {stats}{cap}"
+
+
+def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
+                   origin_chat_id=None):
+    """Build the stylised Playing XI text.
+
     roster_list: list of (UserRoster, Player).
-    Only first 11 shown as XI with serial 1-11.
-    Bench only shown if show_bench=True.
+    Only first 11 shown as XI with a continuous serial 1-11.
+    Bench only shown if show_bench=True (rendered in an expandable quote).
     """
     top_11 = roster_list[:11]
     bench = roster_list[11:]
     count = len(top_11)
 
-    # First pass: categorize
+    # First pass: categorize. Bowlers (pacers + spinners) share one section,
+    # but pacers stay ahead of spinners to match /swap display ordering.
     batsmen_raw, keepers_raw, allrounders_raw, pacers_raw, spinners_raw = [], [], [], [], []
     total_ovr = 0
     for entry, player in top_11:
@@ -95,73 +108,65 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False):
         else:
             batsmen_raw.append(pair)
 
-    # Second pass: number in display order (batsmen → keepers → allrounders → pacers → spinners)
-    def _fmt(entry, player, serial):
-        flag = get_flag(player.country)
-        cap = " ©️" if entry.id == captain_rid else ""
-        return f"{serial}. {player.name} | {player.rating} | {player.bat_rating} | {player.bowl_rating} | {flag}{cap}"
-
-    batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
-    serial = 0
-    for pair in batsmen_raw:
-        serial += 1; batsmen.append(_fmt(pair[0], pair[1], serial))
-    for pair in keepers_raw:
-        serial += 1; keepers.append(_fmt(pair[0], pair[1], serial))
-    for pair in allrounders_raw:
-        serial += 1; allrounders.append(_fmt(pair[0], pair[1], serial))
-    for pair in pacers_raw:
-        serial += 1; pacers.append(_fmt(pair[0], pair[1], serial))
-    for pair in spinners_raw:
-        serial += 1; spinners.append(_fmt(pair[0], pair[1], serial))
-
+    bowlers_raw = pacers_raw + spinners_raw
     avg_ovr = round(total_ovr / count, 1) if count else 0
 
     lines = [
-        f"🏏 <b>PLAYING XI</b>\n",
-        f"👑 <b>{team_name}</b>",
-        f"⭐ Avg Rating: {avg_ovr}\n",
-        "━━━━━━━━━━━━━━━━━━━\n",
+        f"👑 {team_name}'s <b>PLAYING XI</b>",
+        f"⭐ AVG: {avg_ovr}\n",
     ]
 
-    if batsmen:
-        lines.append("🏏 <b>BATSMEN</b>")
-        lines.append("<blockquote>" + "\n".join(batsmen) + "</blockquote>\n")
-    if keepers:
-        lines.append("🧤 <b>WICKET-KEEPERS</b>")
-        lines.append("<blockquote>" + "\n".join(keepers) + "</blockquote>\n")
-    if allrounders:
-        lines.append("👥 <b>ALL-ROUNDERS</b>")
-        lines.append("<blockquote>" + "\n".join(allrounders) + "</blockquote>\n")
-    if pacers:
-        lines.append("🔥 <b>PACERS</b>")
-        lines.append("<blockquote>" + "\n".join(pacers) + "</blockquote>\n")
-    if spinners:
-        lines.append("🌀 <b>SPINNERS</b>")
-        lines.append("<blockquote>" + "\n".join(spinners) + "</blockquote>\n")
+    # Continuous serial across all sections (1..11)
+    serial = 0
 
-    lines.append("━━━━━━━━━━━━━━━━━━━\n")
-    lines.append(f"⚡ Total OVR: {total_ovr}")
-    lines.append(f"📈 Avg per Player: {avg_ovr}")
+    def _section(emoji, title, pairs):
+        nonlocal serial
+        if not pairs:
+            return
+        body = []
+        for entry, player in pairs:
+            serial += 1
+            body.append(_xi_player_line(serial, entry, player, captain_rid))
+        lines.append(f"{emoji} <b>{bold_serif(title)}</b>")
+        lines.append("<blockquote>" + "\n".join(body) + "</blockquote>")
+
+    _section("🏏", "BATSMEN", batsmen_raw)
+    _section("🧤", "WICKET-KEEPER", keepers_raw)
+    _section("⚡", "ALL-ROUNDERS", allrounders_raw)
+    _section("🎯", "BOWLERS", bowlers_raw)
+
+    lines.append(f"\n▫️⚡ <b>{bold_serif('TOTAL OVR')}: {bold_digits(total_ovr)}</b> ▫️")
+
+    link = miniapp_deep_link("xi", origin_chat_id=origin_chat_id)
+    if link:
+        lines.append(f'<a href="{link}">~ VIEW PLAYING XI IN MINIAPP ~</a>')
 
     if show_bench and bench:
-        lines.append(f"\n📋 <b>Bench ({len(bench)}):</b>")
+        bench_lines = []
         for entry, player in bench:
             flag = get_flag(player.country)
-            lines.append(f"  {entry.order_position}. {player.name} | {player.rating} | {flag}")
+            stats = (f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)}"
+                     f" | {bold_digits(player.bowl_rating)}")
+            bench_lines.append(f"{circled(entry.order_position)} {small_caps(player.name)}  {flag}  {stats}")
+        lines.append(f"\n📋 <b>{bold_serif('BENCH')}</b> ({len(bench)})")
+        lines.append("<blockquote expandable>" + "\n".join(bench_lines) + "</blockquote>")
 
     return "\n".join(lines)
 
 
 def format_bench_text(roster_list):
-    """Format bench players."""
+    """Format bench players inside an expandable quote."""
     bench = roster_list[11:]
     if not bench:
-        return "📋 <b>BENCH</b>\n\nNo bench players."
-    lines = [f"📋 <b>BENCH ({len(bench)} players)</b>\n"]
+        return f"📋 <b>{bold_serif('BENCH')}</b>\n\nNo bench players."
+    body = []
     for entry, player in bench:
         flag = get_flag(player.country)
-        lines.append(f"{entry.order_position}. {player.name} | {player.rating} | {player.bat_rating} | {player.bowl_rating} | {flag}")
-    return "\n".join(lines)
+        stats = (f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)}"
+                 f" | {bold_digits(player.bowl_rating)}")
+        body.append(f"{circled(entry.order_position)} {small_caps(player.name)}  {flag}  {stats}")
+    return (f"📋 <b>{bold_serif('BENCH')}</b> ({len(bench)})\n"
+            "<blockquote expandable>" + "\n".join(body) + "</blockquote>")
 
 
 # ── XI Validation ────────────────────────────────────────────────────
@@ -286,8 +291,10 @@ async def playingxi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ {name} has no players!")
             return
 
-        team_name = view_user.team_name or f"@{view_user.username or view_user.first_name}'s XI"
-        text = format_xi_text(roster, team_name, view_user.captain_roster_id, show_bench=False)
+        # Header shows the @handle (matching the new design); team_name is the fallback.
+        handle = f"@{view_user.username}" if view_user.username else (view_user.team_name or view_user.first_name)
+        text = format_xi_text(roster, handle, view_user.captain_roster_id,
+                              show_bench=False, origin_chat_id=update.effective_chat.id)
 
         # Add bench button only for own XI
         bench = roster[11:]
@@ -295,9 +302,11 @@ async def playingxi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(f"📋 View Bench ({len(bench)})", callback_data=f"viewbench_{view_user.id}")
             ]])
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb,
+                                            disable_web_page_preview=True)
         else:
-            await update.message.reply_text(text, parse_mode="HTML")
+            await update.message.reply_text(text, parse_mode="HTML",
+                                            disable_web_page_preview=True)
 
     except Exception:
         logger.exception("PlayingXI error")
@@ -327,7 +336,7 @@ async def bench_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = format_bench_text(roster)
         await q.edit_message_text(
             q.message.text_html + "\n\n" + text if q.message.text_html else text,
-            parse_mode="HTML")
+            parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
         logger.exception("Bench err")
     finally:

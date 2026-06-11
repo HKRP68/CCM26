@@ -38,5 +38,29 @@ def miniapp_button(label, tab, *, is_private=True, origin_chat_id=None):
     return InlineKeyboardButton(label, url=deep_link)
 
 
+def miniapp_deep_link(tab, *, origin_chat_id=None):
+    """Return a t.me deep link (string) that opens the Mini App on ``tab``.
+
+    Unlike :func:`miniapp_button`, this returns a plain URL suitable for an
+    HTML ``<a href>`` text link inside a message. Returns ``None`` when
+    BOT_USERNAME is not configured.
+    """
+    bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+    if not bot_username:
+        return None
+
+    start_param = tab
+    try:
+        if origin_chat_id is not None and int(origin_chat_id) < 0:
+            start_param = f"{tab}_c{int(origin_chat_id)}"
+    except (ValueError, TypeError):
+        pass
+
+    miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
+    if miniapp_name:
+        return f"https://t.me/{bot_username}/{miniapp_name}?startapp={start_param}"
+    return f"https://t.me/{bot_username}?startapp={start_param}"
+
+
 def has_miniapp_url():
     return os.getenv("WEBAPP_URL", "").strip().startswith("https://")
