@@ -206,6 +206,18 @@
     </form>
   </section>
 
+  <section class="cm-card">
+    <h3 style="margin-top:0;">📥 Bulk Add Players</h3>
+    <p style="color:var(--muted);margin-top:-.4rem;">Write one player name or Player ID per line, just like Bot Teams. Exact and partial name matches are supported; duplicates are skipped.</p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="bulk_add_players">
+      <textarea name="bulk_text" rows="8" placeholder="One player name per line, e.g.:&#10;Virat Kohli&#10;Rohit Sharma&#10;Jasprit Bumrah" style="width:100%;padding:.7rem;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:monospace;resize:vertical;"></textarea>
+      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Add All</button>
+      <small style="color:var(--muted);display:block;margin-top:.45rem;">Tip: Use the current search/filter picker below when you prefer selecting from the full player table.</small>
+    </form>
+  </section>
+
   <section class="cm-card" id="add-players">
     <h3 style="margin-top:0;">Add Players from Master Player Data</h3>
     <p style="color:var(--muted);margin-top:-.4rem;">Search and filter existing Player Data. Already added players are selected/disabled. No duplicate challenge-only players are created.</p>
