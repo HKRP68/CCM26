@@ -6189,6 +6189,19 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
     return user, match, None
 
 
+def _match_rest_view_only_block(match_id):
+    """For Challenge League (/cipl) matches the Mini App is spectate-only: the
+    over-by-over approach game is driven entirely from the Telegram chat, so any
+    manual gameplay action from the Mini App is rejected here. Returns a JSON
+    error response tuple to short-circuit on, or None for interactive matches."""
+    from services.match_webapp_service import is_view_only_match
+    from services.match_webapp_access import get_state
+    if is_view_only_match(get_state(match_id)):
+        from services.match_webapp_service import VIEW_ONLY_MESSAGE
+        return ({"ok": False, "error": "view_only", "message": VIEW_ONLY_MESSAGE}, 400)
+    return None
+
+
 def _match_rest_full_state(db, match_id, user_id):
     import copy as _copy
     from services.match_webapp_service import (
@@ -6285,6 +6298,9 @@ def match_rest_select_players():
         state = get_state(match.id)
         if not state:
             return {"ok": False, "error": "no_match"}, 404
+        vo = _match_rest_view_only_block(match.id)
+        if vo:
+            return vo
         role = role_for(state, user.id)
         messages = []
         started = False
@@ -6360,6 +6376,9 @@ def match_rest_continue_innings_break():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
+        vo = _match_rest_view_only_block(match.id)
+        if vo:
+            return vo
         from services.match_webapp_service import continue_past_innings_break
         ok, msg = continue_past_innings_break(match.id, user.id)
         if not ok:
@@ -6388,6 +6407,9 @@ def match_rest_impact_player():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
+        vo = _match_rest_view_only_block(match.id)
+        if vo:
+            return vo
         try:
             in_rid = int(data.get("inRosterId") or data.get("in_roster_id") or 0)
             out_rid = int(data.get("outRosterId") or data.get("out_roster_id") or 0)
@@ -6435,6 +6457,9 @@ def match_rest_action():
         if state.get("played_via") == "wsp":
             return {"ok": False, "error": "auto_simulated",
                     "message": "This match is auto-simulated — no manual actions allowed."}, 400
+        vo = _match_rest_view_only_block(match.id)
+        if vo:
+            return vo
         role = role_for(state, user.id)
 
         def _should_refresh_live_scorecard(res, action_type):
@@ -6604,6 +6629,9 @@ def match_rest_autoplay():
         state = get_state(match.id)
         if not state:
             return {"ok": False, "error": "no_match"}, 404
+        vo = _match_rest_view_only_block(match.id)
+        if vo:
+            return vo
         # Spectators can't be autoplayed.
         from services.match_webapp_service import role_for
         if role_for(state, user.id) not in ("batsman", "bowler"):

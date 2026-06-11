@@ -33,6 +33,23 @@ SETUP_DONE = "DONE"
 SETUP_INNINGS_BREAK = "INNINGS_BREAK"
 INNINGS_BREAK_SECONDS = 8
 
+# Message returned when a manual Mini-App action is rejected because the match is
+# spectate-only (see is_view_only_match).
+VIEW_ONLY_MESSAGE = ("Challenge League matches are played in chat — "
+                     "the Mini App is view-only (spectate).")
+
+
+def is_view_only_match(state):
+    """True when the live match must not be driven from the Mini App.
+
+    Challenge League (/cipl) matches run as an over-by-over "Approach" game that
+    is played entirely from the Telegram chat (coin call, toss, per-over
+    bowler/approach inline buttons in cipl_play.py). For those matches the Mini
+    App is a read-only spectate board for EVERYONE — including the two captains —
+    so every gameplay mutator below refuses to act on them.
+    """
+    return bool(state) and state.get("mode") == "cipl_approach"
+
 
 
 def _player_dict_from_roster(entry, player):
@@ -321,6 +338,8 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE, None
     if user_id not in (state.get("bat_team_id"), state.get("bowl_team_id")):
         return False, "Spectators cannot use Impact Player.", None
     if not _impact_is_legal_break(state):
@@ -1013,6 +1032,8 @@ def continue_past_innings_break(match_id, user_id):
     side may call this — it's just a UI gate, not a competitive action — and
     it's idempotent (a no-op once the match has already moved on)."""
     def _mutate(state):
+        if is_view_only_match(state):
+            raise CasAbort((False, VIEW_ONLY_MESSAGE))
         if user_id not in (state.get("bat_team_id"), state.get("bowl_team_id")):
             raise CasAbort((False, "Spectators can't skip the innings break."))
         if state.get("setup") != SETUP_INNINGS_BREAK:
@@ -1036,6 +1057,8 @@ def select_openers(match_id, user_id, striker_rid, non_striker_rid):
     retry attempt, instead of racing two independent whole-state overwrites.
     """
     def _mutate(state):
+        if is_view_only_match(state):
+            raise CasAbort((False, False, VIEW_ONLY_MESSAGE))
         if user_id != state.get("bat_team_id"):
             raise CasAbort((False, False, "Only the batting side picks openers."))
         if not _in_setup(state) or state.get("openers_done"):
@@ -1079,6 +1102,8 @@ def select_bowler(match_id, user_id, bowler_rid):
     concurrent openers pick from the batting side.
     """
     def _mutate(state):
+        if is_view_only_match(state):
+            raise CasAbort((False, False, VIEW_ONLY_MESSAGE))
         if user_id != state.get("bowl_team_id"):
             raise CasAbort((False, False, "Only the bowling side picks the bowler."))
         if not _in_setup(state) or state.get("bowler_done"):
@@ -1303,6 +1328,8 @@ def set_delivery(match_id, user_id, variation, length=None):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE
     if user_id != state.get("bowl_team_id"):
         return False, "Only the bowling side delivers."
     na = mwa.get_next_action(match_id)
@@ -1430,6 +1457,8 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE, None
     # user must be in the match and NOT batting (i.e. must be the bowler)
     if user_id != state.get("bowl_team_id"):
         return False, "Only the bowling side delivers.", None
@@ -1497,6 +1526,8 @@ def set_shot_action(match_id, user_id, shot):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE, None
     if user_id != state.get("bat_team_id"):
         return False, "Only the batting side plays shots.", None
     na = mwa.get_next_action(match_id)
@@ -1541,6 +1572,8 @@ def select_wicket_batsman(match_id, user_id, index):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE, None
     if user_id != state.get("bat_team_id"):
         return False, "Only the batting side selects the next batsman.", None
     na = mwa.get_next_action(match_id)
@@ -1854,13 +1887,12 @@ def play_shot(match_id, user_id, shot_index, state=None):
 
     `state` lets set_shot_action pass its already-validated, already-mutated
     copy so the ball resolves and persists in a single save."""
-    from services.match_state_store import get_match_lock
-    import handlers.match as _bm  # for the shared _calc outcome engine
-
     if state is None:
         state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE
     if user_id != state.get("bat_team_id"):
         return False, "Only the batting side plays shots."
     na = mwa.get_next_action(match_id)
@@ -1872,6 +1904,9 @@ def play_shot(match_id, user_id, shot_index, state=None):
     delivery = state.get("current_delivery")
     if not delivery:
         return False, "Bowler hasn't delivered yet."
+
+    from services.match_state_store import get_match_lock
+    import handlers.match as _bm  # for the shared _calc outcome engine
 
     shot = AVAILABLE_SHOTS[shot_index]
     striker = get_striker(state)
@@ -1986,6 +2021,8 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
+    if is_view_only_match(state):
+        return False, VIEW_ONLY_MESSAGE
     if user_id != state.get("bowl_team_id"):
         return False, "Only the bowling side picks the bowler."
     na = mwa.get_next_action(match_id)
