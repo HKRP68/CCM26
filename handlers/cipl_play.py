@@ -817,7 +817,15 @@ def _commentary_block(state):
         return ""
     lines = []
     for e in reversed(entries):
-        emoji = _CMT_EMOJI.get(e.get("type"), "")
+        etype = e.get("type")
+        # A wicket is emitted as a ball row (rich commentary, carries the W) plus
+        # a paired "wicket" summary card. Render only the ball row here so the
+        # Telegram block keeps a single line per delivery.
+        if etype == "wicket":
+            continue
+        emoji = _CMT_EMOJI.get(etype, "")
+        if etype == "ball" and e.get("isWicket"):
+            emoji = "⭕"
         text = html.escape(str(e.get("text", "")))
         over = html.escape(str(e.get("over", "")))
         lines.append(f"{over} {text} {emoji}".rstrip())

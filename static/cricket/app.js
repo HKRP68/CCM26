@@ -1959,13 +1959,24 @@ function renderCommentaryFeed() {
       // Defensive: any non-ball entry that slips through here must not crash on
       // an undefined `runs` (see the impact_player case above).
       const runsVal = (comm.runs == null) ? 0 : comm.runs;
-      const outcomeClass = comm.isWicket ? 'outcome-wicket' :
-                           (runsVal === 4 ? 'outcome-four' :
-                           (runsVal === 6 ? 'outcome-six' :
-                           (runsVal === 0 ? 'outcome-dot' :
-                           (runsVal >= 3 ? 'outcome-boundary' : 'outcome-normal'))));
-
-      const outcomeText = comm.isWicket ? 'W' : runsVal.toString();
+      const evKey = comm.eventKey || '';
+      let outcomeText, outcomeClass;
+      if (comm.isWicket) {
+        outcomeText = 'W'; outcomeClass = 'outcome-wicket';
+      } else if (evKey === 'wide') {
+        outcomeText = 'Wd'; outcomeClass = 'outcome-extra';
+      } else if (evKey === 'no_ball') {
+        outcomeText = 'Nb'; outcomeClass = 'outcome-extra';
+      } else if (evKey === 'legbye' || evKey === 'bye') {
+        outcomeText = runsVal > 0 ? `${runsVal}lb` : 'Lb';
+        outcomeClass = 'outcome-extra';
+      } else {
+        outcomeText = runsVal.toString();
+        outcomeClass = (runsVal === 4 ? 'outcome-four' :
+                       (runsVal === 6 ? 'outcome-six' :
+                       (runsVal === 0 ? 'outcome-dot' :
+                       (runsVal >= 3 ? 'outcome-boundary' : 'outcome-normal'))));
+      }
 
       item.innerHTML = `
         <div class="ball-over-num">${comm.over}</div>

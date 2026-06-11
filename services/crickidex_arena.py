@@ -122,6 +122,45 @@ def _p(pd):
     }
 
 
+def _full_dismissal(bs):
+    """Render a full scorecard dismissal line from a batting stat row.
+
+    Prefers a pre-rendered ``dismissal`` (set by the Challenge League engine);
+    otherwise builds one from how_out + bowled_by (+ fielder) so the scorecard
+    reads ``c Kohli b Bumrah`` / ``lbw b Shami`` / ``run out (Jadeja)`` instead
+    of a bare ``caught`` / ``bowled`` / ``lbw``.
+    """
+    if not bs.get("out"):
+        return ""
+    pre = (bs.get("dismissal") or "").strip()
+    if pre:
+        return pre
+    how = (bs.get("how_out") or "").strip()
+    bowler = bs.get("bowled_by") or ""
+    fielder = bs.get("fielder") or ""
+    low = how.lower()
+    if not how:
+        return "out"
+    if low in ("bowled", "b"):
+        return f"b {bowler}".strip()
+    if low == "lbw":
+        return f"lbw b {bowler}".strip()
+    if low in ("caught", "c"):
+        if fielder and bowler and fielder == bowler:
+            return f"c & b {bowler}".strip()
+        return (f"c {fielder} b {bowler}" if fielder else f"c b {bowler}").strip()
+    if low in ("caught and bowled", "c&b", "caught & bowled"):
+        return f"c & b {bowler}".strip()
+    if low == "stumped":
+        return (f"st {fielder} b {bowler}" if fielder else f"st b {bowler}").strip()
+    if low in ("run out", "runout"):
+        return f"run out ({fielder})".strip() if fielder else "run out"
+    if low == "hit wicket":
+        return f"hit wicket b {bowler}".strip()
+    # Already a full line (e.g. an "c X b Y" stored verbatim)? Keep it.
+    return how
+
+
 def _merge_stats(state, innings_filter=None):
     """Build the ``stats`` map keyed by str(roster_id), combining batting and
     bowling figures the way UnderCover's frontend expects.
@@ -176,7 +215,7 @@ def _merge_stats(state, innings_filter=None):
             "fours": bs.get("fours", 0),
             "sixes": bs.get("sixes", 0),
             "isOut": bool(bs.get("out", False)),
-            "how_out": bs.get("how_out", ""),
+            "how_out": _full_dismissal(bs),
             "wickets": ws.get("wickets", 0),
             "runsConceded": ws.get("runs", 0),
             "overs": ws.get("overs_done", 0),
@@ -381,6 +420,14 @@ def _serialize_match_state_impl(session, match, viewer_user):
         confirmed = openers_done if is_bat else bowler_done
         team_name = (state.get("host_name") if u.id == match.user1_id
                      else state.get("guest_name"))
+        # Challenge League (/cipl) matches carry the real franchise names on the
+        # batting/bowling side rather than host_name/guest_name. bat_team_id and
+        # bat_team_name swap together each innings, so the side flag still maps a
+        # user to their own team. This is what turns "@User vs @User" into the
+        # actual "CSK vs MI".
+        if not team_name:
+            team_name = (state.get("bat_team_name") if is_bat
+                         else state.get("bowl_team_name"))
         return {
             "telegramId": u.telegram_id,
             "username": u.username,
