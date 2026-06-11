@@ -40,6 +40,9 @@ FINE_GEMS = 5       # reduced from 20
 LOBBY_EXPIRE = 120
 OVERS_EXPIRE = 60
 
+# Longest match the Mini App lobby (/wpm) supports — full T20 length.
+WPM_MAX_OVERS = 20
+
 # Sentinel telegram ID for the AI bot opponent in /vsbot
 BOT_TG_ID_ = -1
 
@@ -1720,26 +1723,79 @@ async def endmatch_no_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ════════════════════════ /wpm Mini-App lobby ════════════════════════
 
+def _parse_overs_and_target(session, update, context, command_name):
+    """Parse ``/wpm [overs] [@user]`` into an over count and an optional invitee.
+
+    Overs may appear anywhere in the args (first plain number wins; defaults to
+    1). The invitee — used to make a directed match invite instead of an open
+    lobby — can be supplied by replying to that player's message, by tagging
+    them (``@user`` / text-mention), or by their numeric Telegram id.
+
+    Returns ``(overs, overs_explicit, target_user, target_reason)`` where
+    ``target_reason`` comes from ``resolve_command_target`` (``reply``,
+    ``username``, ``text_mention``, ``user_id``, ``missing``, ``not_mention``,
+    or ``not_found``).
+    """
+    args = list(context.args or [])
+    overs = 1
+    overs_explicit = False
+    rest = []
+    for tok in args:
+        if not overs_explicit and tok.lstrip("-").isdigit():
+            overs = int(tok)
+            overs_explicit = True
+        else:
+            rest.append(tok)
+
+    class _Shim:
+        pass
+    shim = _Shim()
+    shim.args = rest
+    target, reason = resolve_command_target(session, update, shim, command_name)
+    return overs, overs_explicit, target, reason
+
+
 async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Create an UnderCover-style chat lobby that launches the cricket Mini App."""
+    """Create an UnderCover-style chat lobby that launches the cricket Mini App.
+
+    Supports up to 20 overs and an optional directed invite — tag a player or
+    reply to their message (``/wpm 20 @user`` / reply ``/wpm 20``) to lock the
+    lobby to just them; omit the target to open it to anyone in the chat.
+    """
     tg = update.effective_user
     cid = update.effective_chat.id
-    try:
-        overs = int(context.args[0]) if context.args else 1
-    except ValueError:
-        overs = 0
-    if overs < 1 or overs > 5:
-        await update.message.reply_text(
-            "ℹ️ <b>Usage:</b> <code>/wpm &lt;overs (1-5)&gt;</code> to start a match lobby.",
-            parse_mode="HTML")
-        return
 
     session = get_session()
     try:
+        overs, _overs_explicit, target, target_reason = _parse_overs_and_target(
+            session, update, context, "wpm")
+        if overs < 1 or overs > WPM_MAX_OVERS:
+            await update.message.reply_text(
+                f"ℹ️ <b>Usage:</b> <code>/wpm &lt;overs (1-{WPM_MAX_OVERS})&gt; [@user]</code>\n"
+                "Open a lobby anyone can join, or invite a specific player by "
+                "tagging them or replying to their message.",
+                parse_mode="HTML")
+            return
+
         host = session.query(User).filter(User.telegram_id == tg.id).first()
         if not host:
             await update.message.reply_text("❌ Use /debut first!")
             return
+
+        # A tag/reply that didn't resolve to a registered player — don't silently
+        # fall back to an open lobby; tell the host so they can fix it.
+        if target is None and target_reason == "not_found":
+            await update.message.reply_text(
+                "❌ Couldn't find that player — make sure they've used /debut.\n"
+                f"Or open a lobby anyone can join with <code>/wpm {overs}</code>.",
+                parse_mode="HTML")
+            return
+        if target and target.id == host.id:
+            await update.message.reply_text(
+                "❌ You can't invite yourself — tag another player, or use "
+                f"<code>/wpm {overs}</code> for an open lobby.", parse_mode="HTML")
+            return
+
         existing = _active_cric_match_in_chat(session, cid)
         if existing:
             await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
@@ -1762,22 +1818,43 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 + "\n".join(f"• {error}" for error in errors), parse_mode="HTML")
             return
 
-        context.bot_data[_cric_lobby_key(cid)] = {
+        lobby = {
             "host_user_id": host.id,
             "host_tg_id": host.telegram_id,
             "host_label": _user_label(host),
             "overs": overs,
             "original_lobby_chat_id": cid,
         }
+        if target:
+            lobby["target_user_id"] = target.id
+            lobby["target_tg_id"] = target.telegram_id
+            lobby["target_label"] = _user_label(target)
+        context.bot_data[_cric_lobby_key(cid)] = lobby
+
+        if target:
+            join_label = "✅ Accept Match"
+            body = (
+                "🏏 <b>CRICKET MATCH INVITE!</b> 🏏\n"
+                "═════════════════════════════\n"
+                f"• <b>Host:</b> {_user_label(host)}\n"
+                f"• <b>Invited:</b> {_mention(target)}\n"
+                f"• <b>Length:</b> {overs} Over(s)\n\n"
+                f"{_mention(target)}, tap below to accept!\n"
+                f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if not accepted.</i>"
+            )
+        else:
+            join_label = "🤝 Join Match"
+            body = (
+                "🏏 <b>CRICKET MATCH LOBBY CREATED!</b> 🏏\n"
+                "═════════════════════════════\n"
+                f"• <b>Host:</b> {_user_label(host)}\n"
+                f"• <b>Length:</b> {overs} Over(s)\n\n"
+                "Click the button below to join the match!\n"
+                f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if no one joins.</i>"
+            )
         lobby_msg = await update.message.reply_text(
-            "🏏 <b>CRICKET MATCH LOBBY CREATED!</b> 🏏\n"
-            "═════════════════════════════\n"
-            f"• <b>Host:</b> {_user_label(host)}\n"
-            f"• <b>Length:</b> {overs} Over(s)\n\n"
-            "Click the button below to join the match!\n"
-            f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if no one joins.</i>",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🤝 Join Match", callback_data="cric_join"),
+            body, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(join_label, callback_data="cric_join"),
                 InlineKeyboardButton("❌ Cancel Lobby", callback_data="cric_cancel_lobby"),
             ]]))
         # Remember the message id so we can edit it on expiry, and schedule the
@@ -1866,6 +1943,13 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     if q.from_user.id == lobby["host_tg_id"]:
         await q.answer("You cannot join your own lobby!", show_alert=True)
+        return
+    # Directed invite (/wpm @user or reply): only the invited player may accept.
+    target_tg = lobby.get("target_tg_id")
+    if target_tg and q.from_user.id != target_tg:
+        await q.answer(
+            f"🔒 This match invite is for {lobby.get('target_label', 'another player')}.",
+            show_alert=True)
         return
 
     session = get_session()

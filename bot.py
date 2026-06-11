@@ -281,7 +281,7 @@ BOT_MENU_COMMANDS = (
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
-    ("wpm", "Open a match lobby anyone can join (Mini App)"),
+    ("wpm", "Match lobby up to 20 overs — tag/reply to invite a player (Mini App)"),
     ("testwpm", "Test /wpm and /cm completion summary delivery"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
@@ -495,9 +495,9 @@ async def start_handler(update, context):
         "/releasemultiple /relm [from] [to] - Range release\n"
         "/trade /tr @user - Trade players\n"
         "/playmatch /pm @user - Play a match\n"
-        "/wpm [overs] - Open a match lobby anyone can join (Mini App)\n"
+        "/wpm [overs] [@user] - Match lobby up to 20 overs; tag/reply to invite a player (Mini App)\n"
         "/vsbot [overs] - Play a bot opponent in chat\n"
-        "/wpmbot [overs] - Play a bot opponent in the Mini App\n"
+        "/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)\n"
         "/endmatch /em - End match (fine applies)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
