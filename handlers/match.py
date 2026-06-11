@@ -1721,6 +1721,135 @@ async def endmatch_no_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.edit_message_text("🔄 Match continues!")
 
 
+# ════════════════════════ /clearmatches (admin) ════════════════════════
+
+async def _is_chat_admin(context, chat, user_id):
+    """True if ``user_id`` may clear matches in ``chat``.
+
+    Group admins and the creator qualify; in a private chat the user is always
+    allowed (it is their own chat). Configured bot admins qualify everywhere.
+    """
+    try:
+        from handlers.forward_broadcast import is_forward_admin
+        if is_forward_admin(user_id):
+            return True
+    except Exception:
+        pass
+    if chat is None:
+        return False
+    if chat.type == "private":
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat.id, user_id)
+        return member.status in ("administrator", "creator")
+    except Exception:
+        return False
+
+
+def _clear_chat_memory(context, cid):
+    """Tear down in-memory match state, lobbies and challenge drafts for ``cid``.
+
+    Returns the set of in-memory match ids found, so the caller can also drop
+    their per-match locks / timers. Direct chat-keyed lobby pointers (the /wpm
+    Mini-App lobby and the /cm league lobby pointer) are removed here too.
+    """
+    bd = context.bot_data
+    mids = set()
+    for k in list(bd.keys()):
+        if not isinstance(k, str):
+            continue
+        v = bd.get(k)
+        if k.startswith("ms_") and isinstance(v, dict) and v.get("chat_id") == cid:
+            try:
+                mids.add(int(k[3:]))
+            except (TypeError, ValueError):
+                pass
+        elif (k.startswith("challenge_team_draft_") or k.startswith("cm_lobby_")) \
+                and isinstance(v, dict) and v.get("chat_id") == cid:
+            bd.pop(k, None)
+    # Chat-keyed lobby pointers (not match-state dicts)
+    bd.pop(_cric_lobby_key(cid), None)
+    bd.pop(f"cm_lobby_chat_{cid}", None)
+    return mids
+
+
+async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: mark every ongoing match in this chat as Completed (no winner).
+
+    Use this when the chat is stuck on "🚫 A match is already going on here." even
+    though no real match is running — it clears the stale match rows and any
+    leftover in-memory state so a fresh match can start. No prizes or fines are
+    applied: cleared matches simply end with no team declared the winner.
+    """
+    chat = update.effective_chat
+    tg = update.effective_user
+    if chat is None or tg is None:
+        return
+    cid = chat.id
+
+    if not await _is_chat_admin(context, chat, tg.id):
+        await update.message.reply_text(
+            "🚫 <b>Admins only.</b> Only a group admin can use /clearmatches.",
+            parse_mode="HTML")
+        return
+
+    session = get_session()
+    cleared = []
+    try:
+        rows = (session.query(Match)
+                .filter(Match.chat_id == cid,
+                        Match.status.in_(ACTIVE_MATCH_STATUSES))
+                .all())
+        for m in rows:
+            m.status = "completed"
+            m.completed_at = datetime.utcnow()
+            # No team won — leave the result blank.
+            m.winner_id = None
+            m.loser_id = None
+            cleared.append(m.id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("clearmatches failed for chat %s", cid)
+        await update.message.reply_text(
+            "⚠️ Could not clear matches — please try again.")
+        session.close()
+        return
+    finally:
+        session.close()
+
+    # In-memory teardown: cleared DB matches + any leftover state for this chat.
+    mem_mids = _clear_chat_memory(context, cid)
+    for mid in set(cleared) | mem_mids:
+        try:
+            cleanup_state(context, mid)
+        except Exception:
+            pass
+        try:
+            release_match_lock(mid)
+        except Exception:
+            pass
+        try:
+            _cancel_action_timer(context, mid)
+        except Exception:
+            pass
+
+    n = len(cleared)
+    if n == 0:
+        await update.message.reply_text(
+            "✅ <b>No ongoing matches here.</b>\n"
+            "The chat is already clear — you can start a new match. 🏏",
+            parse_mode="HTML")
+        return
+    await update.message.reply_text(
+        f"🧹 <b>Matches cleared.</b>\n\n"
+        f"All ongoing matches in this chat were marked "
+        f"<b>Completed — no team won</b>.\n"
+        f"<i>{n} match{'es' if n != 1 else ''} cleared.</i>\n\n"
+        f"You can start a fresh match now. 🏏",
+        parse_mode="HTML")
+
+
 # ════════════════════════ /wpm Mini-App lobby ════════════════════════
 
 def _parse_overs_and_target(session, update, context, command_name):

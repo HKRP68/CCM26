@@ -93,6 +93,7 @@ from handlers.match import (
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
+    clearmatches_handler,
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
     testwpm_handler,
 )
@@ -499,6 +500,7 @@ async def start_handler(update, context):
         "/vsbot [overs] - Play a bot opponent in chat\n"
         "/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)\n"
         "/endmatch /em - End match (fine applies)\n"
+        "/clearmatches - Admin: clear all stuck matches in this chat (no winner)\n"
         "/resume /rs - If buttons disappear mid-match\n"
         "/myprofile /me - Your profile\n"
         "/traits /tt - Your traits & inventory\n"
@@ -802,6 +804,7 @@ def main():
         app.add_handler(CommandHandler(["sim", "simmatch"], sim_handler))
         app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
+        app.add_handler(CommandHandler(["clearmatches", "clearmatch"], clearmatches_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
         app.add_handler(CommandHandler(["recentmatches", "recent", "matches"], recentmatches_handler))
