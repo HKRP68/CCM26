@@ -13,6 +13,7 @@ host clicks Start, the guest calls heads/tails, the winner chooses bat or bowl,
 and only then does the over-by-over flow begin in the chat.
 """
 
+import html
 import logging
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -66,6 +67,66 @@ class SimpleMatch:
         self.id = mid
         self.overs = overs
         self.stadium = stadium
+
+
+# ════════════════════════════════════════════════════════════════════
+# Team identity (coloured marker + short code for the scorecard card)
+# ════════════════════════════════════════════════════════════════════
+
+# Ordered hue buckets → coloured-circle emoji, for custom-league teams whose
+# primary_color is a hex string not present in IPL_TEAM_META.
+_CIRCLE_BY_HUE = [
+    (15, "🔴"), (45, "🟠"), (70, "🟡"), (170, "🟢"),
+    (260, "🔵"), (320, "🟣"), (360, "🔴"),
+]
+
+
+def _hex_to_circle(hex_color):
+    """Map a ``#rrggbb`` (or ``rrggbb``) string to the nearest coloured circle."""
+    s = (hex_color or "").lstrip("#").strip()
+    if len(s) != 6:
+        return "🏏"
+    try:
+        r, g, b = (int(s[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError:
+        return "🏏"
+    mx, mn = max(r, g, b), min(r, g, b)
+    diff = mx - mn
+    if diff < 0.10:  # near-greyscale → white/black circle by lightness
+        return "⚪" if mx > 0.5 else "⚫"
+    if mx == r:
+        hue = (60 * ((g - b) / diff) + 360) % 360
+    elif mx == g:
+        hue = 60 * ((b - r) / diff) + 120
+    else:
+        hue = 60 * ((r - g) / diff) + 240
+    for ceiling, emoji in _CIRCLE_BY_HUE:
+        if hue <= ceiling:
+            return emoji
+    return "🏏"
+
+
+def _resolve_team_identity(team_name, league_key, session):
+    """Return ``(short_code, colour_emoji)`` for the scorecard card.
+
+    Reuses the challenge helpers (which already know IPL teams and custom-league
+    short names); falls back to a hue-mapped circle from the team's stored
+    primary_color when the team isn't an IPL side.
+    """
+    try:
+        from handlers import challenge
+        code = challenge._team_short_code(team_name, league_key, session) or ""
+        emoji = challenge._team_emoji(team_name)
+        if emoji == "🏏" and session is not None:
+            from models import ChallengeTeam
+            team = (session.query(ChallengeTeam)
+                    .filter(ChallengeTeam.name == team_name).first())
+            if team and getattr(team, "primary_color", None):
+                emoji = _hex_to_circle(team.primary_color)
+        return code, emoji
+    except Exception:
+        logger.exception("cipl team identity resolution failed for %s", team_name)
+        return "", "🏏"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -326,6 +387,13 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         bat_team_name = host_team if bat_is_host else target_team
         bowl_team_name = target_team if bat_is_host else host_team
 
+        # Coloured marker + short code for the broadcast-style scorecard card.
+        league_key = draft.get("league_key")
+        bat_team_code, bat_team_emoji = _resolve_team_identity(
+            bat_team_name, league_key, session)
+        bowl_team_code, bowl_team_emoji = _resolve_team_identity(
+            bowl_team_name, league_key, session)
+
         bat_side = "host" if bat_is_host else "target"
         bowl_side = "target" if bat_is_host else "host"
         bat_xi = build_xi_from_draft(session, draft, bat_side)
@@ -378,7 +446,9 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await begin_cipl_match(context, draft["chat_id"], match_obj, bat_info, bowl_info,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
-                           pitch_type)
+                           pitch_type,
+                           bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
+                           bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -387,7 +457,8 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
-                           pitch_type):
+                           pitch_type, bat_team_code="", bowl_team_code="",
+                           bat_team_emoji="🏏", bowl_team_emoji="🏏"):
     state = cipl_match.build_cipl_state(
         match_id=match.id, overs=match.overs,
         bat_user_id=bat_user.id, bowl_user_id=bowl_user.id,
@@ -395,7 +466,9 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         bat_xi=bat_xi, bowl_xi=bowl_xi,
         bat_team_name=bat_team_name, bowl_team_name=bowl_team_name,
         chat_id=chat_id, pitch_type=pitch_type,
-        is_private=chat_id > 0, stadium=match.stadium)
+        is_private=chat_id > 0, stadium=match.stadium,
+        bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
+        bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji)
     state["user_names"] = {
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
@@ -450,7 +523,7 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
                                   callback_data=f"cipl_bowlapp_{mid}_{idx}")]
             for idx, (_, emoji, label) in enumerate(BOWLING_APPROACHES)]
     note = " <i>(auto-picked bowler)</i>" if auto else ""
-    text = (f"{_header(state)}\n\n"
+    text = (f"{_approach_card(state)}\n\n"
             f"🎳 Bowler: <b>{bowler['name']}</b>{note}\n"
             f"{_mention_tg(state, state['bowl_user_tg'])}, choose your "
             f"<b>Bowling Approach</b>:")
@@ -464,7 +537,7 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
                                   callback_data=f"cipl_batapp_{mid}_{idx}")]
             for idx, (_, emoji, label) in enumerate(BATTING_APPROACHES)]
     note = " <i>(auto Balanced)</i>" if auto else ""
-    text = (f"{_header(state)}\n\n"
+    text = (f"{_approach_card(state)}\n\n"
             f"🎳 Bowler: <b>{state['current_bowler']['name']}</b> • "
             f"{bowling_label(state['bowling_approach'])}{note}\n"
             f"🏏 {_mention_tg(state, state['bat_user_tg'])}, choose your "
@@ -637,6 +710,103 @@ def _bat_line(player, bat_stats):
     star = "" if st.get("out") else "*"
     return (f"{player['name']} {st.get('runs', 0)}{star} "
             f"({st.get('balls', 0)}b, {st.get('fours', 0)}×4, {st.get('sixes', 0)}×6)")
+
+
+# ════════════════════════════════════════════════════════════════════
+# Broadcast-style scorecard card (shown on the approach prompts)
+# ════════════════════════════════════════════════════════════════════
+
+# Commentary entry type → ball emoji for the expandable commentary block.
+_CMT_EMOJI = {
+    "dot": "0️⃣", "one": "1️⃣", "two": "2️⃣", "three": "3️⃣",
+    "four": "4️⃣", "six": "6️⃣", "wicket": "⭕", "extra": "↔️",
+}
+
+
+def _compact_bat_line(player, bat_stats):
+    """``Rohit Sharma 56(27)*`` — runs(balls), trailing ``*`` while not out."""
+    st = bat_stats.get(str(player["roster_id"]), {})
+    star = "" if st.get("out") else "*"
+    return (f"{html.escape(str(player['name']))} "
+            f"{st.get('runs', 0)}({st.get('balls', 0)}){star}")
+
+
+def _compact_bowler_figs(bws):
+    """``1/23 (2)`` — wickets/runs (overs)."""
+    overs = f"{bws['balls'] // 6}.{bws['balls'] % 6}" if bws['balls'] % 6 else str(bws['balls'] // 6)
+    return f"{bws.get('wickets', 0)}/{bws.get('runs', 0)} ({overs})"
+
+
+def _over_emoji_strip(state):
+    """Last completed over's deliveries as run/wicket emojis (—— on first over)."""
+    tl = state.get("last_over_timeline") or []
+    if not tl:
+        return "—"
+    return "".join(cipl_match._SYM.get(_sym_key(s), s) for s in tl)
+
+
+def _commentary_block(state):
+    """Last over's ball-by-ball as an expandable Telegram quote (newest first)."""
+    entries = state.get("last_over_commentary") or []
+    if not entries:
+        return ""
+    lines = []
+    for e in reversed(entries):
+        emoji = _CMT_EMOJI.get(e.get("type"), "")
+        text = html.escape(str(e.get("text", "")))
+        over = html.escape(str(e.get("over", "")))
+        lines.append(f"{over} {text} {emoji}".rstrip())
+    body = "\n".join(lines)
+    return f'\n🟩 <b>COMMENTARY</b>\n<blockquote expandable>"{body}"</blockquote>'
+
+
+def _crr_line(state):
+    """``CRR - 10.36`` (1st innings) or ``CRR - .. | RRR - .. | Need R off B`` (2nd)."""
+    line = f"CRR - {cipl_match.current_run_rate(state):.2f}"
+    c = cipl_match.chase(state)
+    if c and c["runs_required"] > 0:
+        line += (f" | RRR - {c['rrr']:.2f} | "
+                 f"Need {c['runs_required']} off {c['balls_remaining']}")
+    return line
+
+
+def _approach_card(state):
+    """Full broadcast-style scorecard card used on the approach-select prompts."""
+    inn = state.get("innings", 1)
+    bat_name = html.escape(str(state["bat_team_name"]))
+    bat_emoji = state.get("bat_team_emoji", "🏏")
+    bat_code = html.escape(str(state.get("bat_team_code") or "")) or bat_name
+    bowl_emoji = state.get("bowl_team_emoji", "🏏")
+    bowl_code = html.escape(str(state.get("bowl_team_code") or "")) or html.escape(
+        str(state["bowl_team_name"]))
+
+    striker = state["batting_order"][state["striker_idx"]]
+    non_striker = state["batting_order"][state["non_striker_idx"]]
+    bs = state["bat_stats"]
+    rule = "—" * 28
+
+    lines = [
+        f"Innings {inn} | <b>{bat_name}</b> | Bat",
+        rule,
+        f"{bat_emoji} {bat_code} - <b>{cipl_match.format_score(state)}</b> - "
+        f"{cipl_match.format_overs(state)}",
+        "",
+        f"🔹 {_compact_bat_line(striker, bs)}",
+        f"      {_compact_bat_line(non_striker, bs)}",
+        rule,
+        _crr_line(state),
+        rule,
+        f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
+    ]
+    bowler = state.get("current_bowler")
+    if bowler:
+        bws = state["bowl_stats"].get(str(bowler["roster_id"]))
+        if bws:
+            lines += [rule,
+                      f"{html.escape(str(bowler['name']))} - {_compact_bowler_figs(bws)}"]
+    card = "\n".join(lines)
+    card += _commentary_block(state)
+    return card
 
 
 async def _innings_break(context, mid, state):

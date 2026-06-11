@@ -97,13 +97,19 @@ def _new_bowl_stat():
 def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      bat_user_tg, bowl_user_tg, bat_xi, bowl_xi,
                      bat_team_name, bowl_team_name, chat_id,
-                     pitch_type="Hard", is_private=False, stadium=None):
+                     pitch_type="Hard", is_private=False, stadium=None,
+                     bat_team_code="", bowl_team_code="",
+                     bat_team_emoji="🏏", bowl_team_emoji="🏏"):
     """Build the initial state dict for a Challenge League approach match."""
     bat_stats = {str(p["roster_id"]): _new_bat_stat() for p in bat_xi}
     bowl_stats = {str(p["roster_id"]): _new_bowl_stat() for p in bowl_xi}
     return {
         "mode": "cipl_approach",
         "match_id": match_id, "overs": overs,
+        # Team identity for the broadcast-style scorecard card
+        "bat_team_code": bat_team_code, "bowl_team_code": bowl_team_code,
+        "bat_team_emoji": bat_team_emoji or "🏏",
+        "bowl_team_emoji": bowl_team_emoji or "🏏",
         "innings": 1, "target": None,
         "bat_team_id": bat_user_id, "bowl_team_id": bowl_user_id,
         "bat_user_tg": bat_user_tg, "bowl_user_tg": bowl_user_tg,
@@ -187,6 +193,14 @@ def format_score(state):
     return f"{state['total_runs']}/{state['total_wickets']}"
 
 
+def current_run_rate(state):
+    """Runs per over so far (0.0 before any legal ball is bowled)."""
+    balls = balls_bowled(state)
+    if balls <= 0:
+        return 0.0
+    return state["total_runs"] / balls * 6.0
+
+
 def chase(state):
     if state.get("innings") != 2 or not state.get("target"):
         return None
@@ -248,6 +262,7 @@ def simulate_over(state):
     balls_this_over = 0
     deliveries = 0
     chased = bool(target) and state["total_runs"] >= target
+    cmt_start = len(state.get("commentary_log", []))
 
     while balls_this_over < 6 and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
@@ -418,6 +433,9 @@ def simulate_over(state):
     bws["overs_done"] = bws["balls"] // 6
     bws["this_over_balls"] = 0
     state["over_runs"].append(over_runs)
+    # Snapshot this over for the approach-prompt scorecard card.
+    state["last_over_timeline"] = list(over_timeline)
+    state["last_over_commentary"] = list(state.get("commentary_log", [])[cmt_start:])
     state["free_hit"] = free_hit
     state["ball_history"] = ball_history
     state["batter_streaks"] = streaks
@@ -515,6 +533,10 @@ def end_first_innings(state):
     state["bat_team_id"], state["bowl_team_id"] = state["bowl_team_id"], state["bat_team_id"]
     state["bat_user_tg"], state["bowl_user_tg"] = state["bowl_user_tg"], state["bat_user_tg"]
     state["bat_team_name"], state["bowl_team_name"] = state["bowl_team_name"], state["bat_team_name"]
+    state["bat_team_code"], state["bowl_team_code"] = (
+        state.get("bowl_team_code", ""), state.get("bat_team_code", ""))
+    state["bat_team_emoji"], state["bowl_team_emoji"] = (
+        state.get("bowl_team_emoji", "🏏"), state.get("bat_team_emoji", "🏏"))
     state["bat_xi"], state["bowl_xi"] = state["bowl_xi"], state["bat_xi"]
     state["batting_order"] = list(state["bat_xi"])
 
@@ -539,6 +561,9 @@ def end_first_innings(state):
     state["batter_streaks"] = {}
     state["free_hit"] = False
     state["momentum_prev"] = 0.0
+    # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.
+    state["last_over_timeline"] = []
+    state["last_over_commentary"] = []
 
 
 def compute_result(state):
