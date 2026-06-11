@@ -8,7 +8,7 @@ auto_play_bot_turns). The human can also flip the in-app "autoplay" toggle to
 hand their own side to the AI too — for a fully automatic match.
 
 Flow:
-  1. /wpmbot [overs]  (1-5, like /wpm; default 1)
+  1. /wpmbot [overs]  (1-20, like /wpm; default 1)
   2. Validate roster / XI, list active bot teams as buttons.
   3. User picks a team → animated toss → bot or user chooses bat/bowl.
   4. The match is initialized for the Mini App and the "Play Match" card is
@@ -38,6 +38,8 @@ from handlers.vsbot import (
 logger = logging.getLogger(__name__)
 
 WPMBOT_INVITE_TIMEOUT = 120
+# Longest bot match the Mini App supports — full T20 length, matching /wpm.
+WPMBOT_MAX_OVERS = 20
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -54,11 +56,11 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             overs = int(context.args[0])
         except (ValueError, IndexError):
             await update.message.reply_text(
-                "ℹ️ <b>Usage:</b> <code>/wpmbot &lt;overs (1-5)&gt;</code> "
+                f"ℹ️ <b>Usage:</b> <code>/wpmbot &lt;overs (1-{WPMBOT_MAX_OVERS})&gt;</code> "
                 "to play the bot in the Mini App.", parse_mode="HTML")
             return
-    if overs < 1 or overs > 5:
-        await update.message.reply_text("❌ Overs must be 1-5.")
+    if overs < 1 or overs > WPMBOT_MAX_OVERS:
+        await update.message.reply_text(f"❌ Overs must be 1-{WPMBOT_MAX_OVERS}.")
         return
 
     session = get_session()
