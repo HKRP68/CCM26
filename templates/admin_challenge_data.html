@@ -190,6 +190,22 @@
     </div>
   </section>
 
+  <section class="cm-card">
+    <h3 style="margin-top:0;">➕ Quick Add Player</h3>
+    <p style="color:var(--muted);margin-top:-.4rem;">Pick a single player from the dropdown — the same quick-add used for Bot Teams.</p>
+    <form method="POST" style="display:flex;gap:.5rem;flex-wrap:wrap;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_single_player">
+      <select name="source_player_id" required style="flex:1;min-width:220px;">
+        <option value="">Choose a player...</option>
+        {% for p in all_master_players %}
+          <option value="{{ p.id }}" {{ 'disabled' if p.id in added_source_ids else '' }}>{{ p.name }} ({{ p.rating }}, {{ p.category }}){{ ' — already added' if p.id in added_source_ids else '' }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-primary" type="submit">Add</button>
+    </form>
+  </section>
+
   <section class="cm-card" id="add-players">
     <h3 style="margin-top:0;">Add Players from Master Player Data</h3>
     <p style="color:var(--muted);margin-top:-.4rem;">Search and filter existing Player Data. Already added players are selected/disabled. No duplicate challenge-only players are created.</p>

@@ -11368,6 +11368,32 @@ def admin_challenge_team_detail(league_id, team_id):
                         added += 1
                     log_admin(db, "challenge_player_bulk_add", "challenge_team", team.id, team.name, f"added={added}")
                     flash(f"✅ Added {added} selected player{'s' if added != 1 else ''} to {team.name}.", "success")
+                elif action == "add_single_player":
+                    # Bot-team-style quick add: one player chosen from a dropdown.
+                    source = None
+                    pid = request.form.get("source_player_id")
+                    if pid and str(pid).isdigit():
+                        source = db.query(Player).get(int(pid))
+                    if not source:
+                        flash("Choose a player to add.", "error")
+                    else:
+                        already = (db.query(ChallengePlayer)
+                                     .filter(ChallengePlayer.team_id == team.id,
+                                             ChallengePlayer.source_player_id == source.id)
+                                     .first())
+                        if already:
+                            flash(f"{source.name} is already in {team.name}.", "info")
+                        else:
+                            max_sort = db.query(func.max(ChallengePlayer.sort_order)).filter(ChallengePlayer.team_id == team.id).scalar() or 0
+                            db.add(ChallengePlayer(
+                                team_id=team.id,
+                                source_player_id=source.id,
+                                name=source.name[:150],
+                                details_json=_challenge_player_details_from_source(source),
+                                sort_order=max_sort + 1,
+                            ))
+                            log_admin(db, "challenge_player_add", "challenge_team", team.id, team.name, f"player={source.name}")
+                            flash(f"✅ Added {source.name} to {team.name}.", "success")
                 elif action == "delete_player":
                     player = (db.query(ChallengePlayer)
                                 .filter(ChallengePlayer.id == _int_form("player_id"), ChallengePlayer.team_id == team.id)
@@ -11395,6 +11421,11 @@ def admin_challenge_team_detail(league_id, team_id):
         master_players, filters = _filtered_master_players(db)
         filter_options = _challenge_filter_options(db)
         added_source_ids = {p.source_player_id for p in players if p.source_player_id}
+        # Full active roster (unfiltered) for the bot-team-style quick-add dropdown.
+        all_master_players = (db.query(Player)
+                                .filter(Player.is_active == True)
+                                .order_by(Player.rating.desc(), Player.name.asc())
+                                .all())
         return render_template(
             "admin_challenge_data.html",
             page="team",
@@ -11402,6 +11433,7 @@ def admin_challenge_team_detail(league_id, team_id):
             team=team,
             challenge_players=players,
             master_players=master_players,
+            all_master_players=all_master_players,
             added_source_ids=added_source_ids,
             filters=filters,
             filter_options=filter_options,
