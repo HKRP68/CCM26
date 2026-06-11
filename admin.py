@@ -11074,6 +11074,72 @@ def _challenge_player_details_from_source(player):
     }, separators=(",", ":"))
 
 
+def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
+    """Bulk-add challenge players by master player id/name, one entry per line.
+
+    Matching mirrors the Bot Team bulk add: try a numeric Player ID, then an
+    exact case-insensitive name match, then a partial case-insensitive match.
+    Returns (added_count, skipped_list).
+    """
+    team = db.query(ChallengeTeam).get(team_id)
+    if not team:
+        return 0, ["Team not found"]
+
+    added = 0
+    skipped = []
+    existing_ids = {
+        row[0]
+        for row in db.query(ChallengePlayer.source_player_id)
+        .filter(
+            ChallengePlayer.team_id == team_id,
+            ChallengePlayer.source_player_id.isnot(None),
+        )
+        .all()
+    }
+    max_sort = (
+        db.query(func.max(ChallengePlayer.sort_order))
+        .filter(ChallengePlayer.team_id == team_id)
+        .scalar()
+        or 0
+    )
+
+    for raw in player_names_or_ids:
+        name = raw.strip()
+        if not name:
+            continue
+
+        source = None
+        if name.isdigit():
+            source = db.query(Player).get(int(name))
+        if not source:
+            source = db.query(Player).filter(Player.name.ilike(name)).first()
+        if not source:
+            source = db.query(Player).filter(Player.name.ilike(f"%{name}%")).first()
+        if not source:
+            skipped.append(f"{name} (not found)")
+            continue
+        if not source.is_active:
+            skipped.append(f"{name} (inactive)")
+            continue
+        if source.id in existing_ids:
+            skipped.append(f"{name} (duplicate)")
+            continue
+
+        max_sort += 1
+        existing_ids.add(source.id)
+        db.add(ChallengePlayer(
+            team_id=team_id,
+            source_player_id=source.id,
+            name=source.name[:150],
+            details_json=_challenge_player_details_from_source(source),
+            sort_order=max_sort,
+        ))
+        added += 1
+
+    db.flush()
+    return added, skipped
+
+
 def _challenge_filters():
     return {
         "q": (request.args.get("q") or "").strip(),
@@ -11394,6 +11460,19 @@ def admin_challenge_team_detail(league_id, team_id):
                             ))
                             log_admin(db, "challenge_player_add", "challenge_team", team.id, team.name, f"player={source.name}")
                             flash(f"✅ Added {source.name} to {team.name}.", "success")
+                elif action == "bulk_add_players":
+                    names = [line.strip() for line in request.form.get("bulk_text", "").splitlines() if line.strip()]
+                    if not names:
+                        flash("No player names provided.", "error")
+                    else:
+                        added, skipped = _bulk_add_challenge_players(db, team.id, names)
+                        log_admin(db, "challenge_player_text_bulk_add", "challenge_team", team.id, team.name, f"added={added} skipped={len(skipped)}")
+                        msg = f"✅ Added {added} player{'s' if added != 1 else ''} to {team.name}."
+                        if skipped:
+                            msg += f" Skipped: {', '.join(skipped[:5])}"
+                            if len(skipped) > 5:
+                                msg += f" (+{len(skipped) - 5} more)"
+                        flash(msg, "success" if added else "info")
                 elif action == "delete_player":
                     player = (db.query(ChallengePlayer)
                                 .filter(ChallengePlayer.id == _int_form("player_id"), ChallengePlayer.team_id == team.id)
