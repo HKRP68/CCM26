@@ -39,7 +39,6 @@ from services.match_state_store import (
 from services import cipl_match
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES,
-    batting_label, bowling_label,
 )
 from handlers.match import _mention
 
@@ -601,10 +600,10 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
                                   callback_data=f"cipl_batapp_{mid}_{idx}")]
             for idx, (_, emoji, label) in enumerate(BATTING_APPROACHES)]
-    note = " <i>(auto Balanced)</i>" if auto else ""
+    # The bowling captain's chosen Bowling Approach is hidden here so the batting
+    # captain (the opponent) can't read the bowling plan before picking their own.
     text = (f"{_approach_card(state)}\n\n"
-            f"🎳 Bowler: <b>{state['current_bowler']['name']}</b> • "
-            f"{bowling_label(state['bowling_approach'])}{note}\n"
+            f"🎳 Bowler: <b>{state['current_bowler']['name']}</b>\n"
             f"🏏 {_mention_tg(state, state['bat_user_tg'])}, choose your "
             f"<b>Batting Approach</b>:")
     await _edit_action_message(context, state, text, rows)
@@ -741,10 +740,10 @@ def _render_over_summary(state, summary):
     n_line = _bat_line(non_striker, bs)
     mo = summary["momentum_shift"]
     arrow = "📈" if mo > 1 else ("📉" if mo < -1 else "➖")
+    # Bowling/Batting approaches are deliberately NOT shown in the public over
+    # summary — revealing them would let the opponent read each captain's plan.
     lines = [
         f"<b>End of Over {summary['over_no']}</b> — {summary['bowler']['name']}",
-        f"Approaches: {bowling_label(summary['bowling_approach'])} vs "
-        f"{batting_label(summary['batting_approach'])}",
         f"Timeline: {timeline}",
         f"This over: <b>{summary['over_runs']}</b> run(s), "
         f"{summary['over_wickets']} wkt(s)",
@@ -1028,6 +1027,16 @@ def _build_cipl_summary_image(state, result):
         logger.exception("match summary card unavailable for cipl")
         return None
 
+    # Use the SAME admin-configured scorecard text settings as /wpm, /vsbot and
+    # /wpmbot so the batsman-name font (and every other label) renders at the
+    # same size here — without this the card falls back to the smaller defaults.
+    try:
+        from services.config_service import get_config
+        text_settings = get_config().get("scorecard_text_settings")
+    except Exception:
+        logger.exception("cipl summary text settings load failed")
+        text_settings = None
+
     inn1_bats, inn1_bowls = _summary_rows(
         state.get("inn1_bat_stats", {}), state.get("inn1_bat_xi", []),
         state.get("inn1_bowl_stats", {}), state.get("inn1_bowl_xi", []))
@@ -1060,6 +1069,7 @@ def _build_cipl_summary_image(state, result):
             "inn1": {"team": inn1_team, "batters": inn1_bats, "bowlers": inn1_bowls},
             "inn2": {"team": inn2_team, "batters": inn2_bats, "bowlers": inn2_bowls},
         },
+        text_settings=text_settings,
     )
 
 
