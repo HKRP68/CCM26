@@ -913,6 +913,8 @@ async def _complete_match(context, mid, state):
     _ss(context, mid, state)
 
     result = cipl_match.compute_result(state)
+    # Per-over Win/Loss prize handed out below (None on a tie / award failure).
+    prize_info = None
     # Persist career stats + finalize Match row.
     session = get_session()
     try:
@@ -939,6 +941,23 @@ async def _complete_match(context, mid, state):
                 match.loser_id = defender_uid if won_by_chaser else chaser_uid
                 match.margin_type = result["margin_type"]
                 match.margin_value = result["margin"]
+
+                # Per-over Win/Loss prize — the user who won/lost the match with
+                # their League team gets coins/gems. Uses the same website-tunable
+                # economy as /wpm, /cm, /vsbot and /playmatch
+                # (config_service.match_*_per_over via award_match_rewards_core).
+                try:
+                    from services.match_rewards import award_match_rewards_core
+                    overs = state.get("overs") or CIPL_OVERS
+                    w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
+                        session, match.winner_id, match.loser_id, overs,
+                        is_vsbot=False)
+                    prize_info = {
+                        "w_coins": w_coins, "w_gems": w_gems,
+                        "l_coins": l_coins, "l_gems": l_gems,
+                    }
+                except Exception:
+                    logger.exception("cipl prize award failed for match %s", mid)
 
         # Snapshot the final scorecard + Arena board so the "View Match" Mini App
         # stays viewable after the live state is cleaned up below (same mechanism
@@ -972,6 +991,13 @@ async def _complete_match(context, mid, state):
     text = (f"🏁 <b>Match Over</b>\n\n"
             f"{_innings_scorecard(state, innings_label='2nd Innings')}\n\n"
             f"{result_line}")
+    if prize_info:
+        text += (
+            f"\n\n💰 <b>Prizes</b>\n"
+            f"🏆 {result['winner']}: +{prize_info['w_coins']:,} coins, "
+            f"+{prize_info['w_gems']} 💎\n"
+            f"🤝 {result['loser']}: +{prize_info['l_coins']:,} coins, "
+            f"+{prize_info['l_gems']} 💎")
     await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
                                    reply_markup=InlineKeyboardMarkup(_miniapp_row(state))
                                    if _miniapp_row(state) else None)
