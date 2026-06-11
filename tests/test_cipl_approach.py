@@ -143,6 +143,87 @@ class CiplMatchTests(unittest.TestCase):
         self.assertLessEqual(bowl_runs, s["total_runs"])
         self.assertGreaterEqual(s["total_wickets"], 0)
 
+    def test_current_run_rate(self):
+        s = _make_state()
+        self.assertEqual(cm.current_run_rate(s), 0.0)  # no balls yet
+        s["current_over"] = 2          # 1 completed over
+        s["current_ball"] = 0
+        s["total_runs"] = 12
+        self.assertAlmostEqual(cm.current_run_rate(s), 12.0)
+
+    def test_simulate_over_snapshots_last_over(self):
+        random.seed(5)
+        s = _make_state()
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "balanced"
+        s["batting_approach"] = "balanced"
+        cm.simulate_over(s)
+        self.assertTrue(s.get("last_over_timeline"))
+        self.assertTrue(s.get("last_over_commentary"))
+        # Each snapshot entry carries the over label + text used by the card.
+        for e in s["last_over_commentary"]:
+            self.assertIn("over", e)
+            self.assertIn("text", e)
+
+
+try:
+    import handlers.cipl_play as cp  # needs python-telegram-bot
+    _HAVE_CP = True
+except Exception:  # pragma: no cover - environment without Telegram deps
+    _HAVE_CP = False
+
+
+@unittest.skipUnless(_HAVE_CP, "handlers.cipl_play (python-telegram-bot) not importable")
+class ApproachCardTests(unittest.TestCase):
+    def _state_with_codes(self, overs=5):
+        s = _make_state(overs)
+        s.update(bat_team_code="MI", bowl_team_code="CSK",
+                 bat_team_emoji="🔵", bowl_team_emoji="🟡")
+        return s
+
+    def test_first_over_card_has_no_commentary(self):
+        s = self._state_with_codes()
+        card = cp._approach_card(s)
+        self.assertIn("MI", card)
+        self.assertIn("CRR -", card)
+        self.assertNotIn("COMMENTARY", card)   # no prior over yet
+        self.assertIn("—", card)               # empty over-emoji strip
+
+    def test_card_after_over_has_expandable_commentary(self):
+        random.seed(11)
+        s = self._state_with_codes()
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "balanced"
+        s["batting_approach"] = "aggressive"
+        cm.simulate_over(s)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]  # next over's bowler picked
+        card = cp._approach_card(s)
+        self.assertIn("<blockquote expandable>", card)
+        self.assertIn("COMMENTARY", card)
+        self.assertRegex(card, r"\d+\(\d+\)")            # striker runs(balls)
+
+    def test_hex_to_circle_buckets(self):
+        self.assertEqual(cp._hex_to_circle("#ff0000"), "🔴")
+        self.assertEqual(cp._hex_to_circle("#0000ff"), "🔵")
+        self.assertEqual(cp._hex_to_circle("bad"), "🏏")
+
+    def test_second_innings_card_shows_chase(self):
+        random.seed(13)
+        s = self._state_with_codes()
+        guard = 0
+        while not cm.is_innings_over(s) and guard < 50:
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "balanced"
+            s["batting_approach"] = "balanced"
+            cm.simulate_over(s)
+            guard += 1
+        cm.end_first_innings(s)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        card = cp._approach_card(s)
+        self.assertIn("RRR -", card)
+        self.assertIn("Need", card)
+        self.assertNotIn("COMMENTARY", card)             # stale snapshot cleared
+
 
 if __name__ == "__main__":
     unittest.main()
