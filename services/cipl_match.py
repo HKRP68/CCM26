@@ -14,6 +14,7 @@ mid-over batsman pick is required (per New Features.md).
 
 import json
 import logging
+import os
 import random
 
 from engine.ball_outcome import calculate_outcome
@@ -33,7 +34,19 @@ from services.sim_match import (
 
 logger = logging.getLogger(__name__)
 
+# Optional "dramatic finishes" realism layer (engine/scenario_engine.py). Loaded
+# defensively — if the import fails the match simply runs without scenario
+# steering, exactly as before.
+try:
+    from engine.scenario_engine import ScenarioEngine
+except Exception:  # pragma: no cover - defensive import guard
+    logger.exception("ScenarioEngine unavailable; CIPL runs without dramatic-finish steering")
+    ScenarioEngine = None
+
 WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
+
+# Dramatic-finish scenario types the engine can steer a 2nd-innings chase toward.
+SCENARIO_TYPES = ("last_ball_six", "win_by_1_run", "super_over_thriller")
 
 # Full SimCricketX commentary engine — micro (per-ball) lines + macro narratives
 # (collapse, milestones, partnership, maiden/big/expensive over, last-over drama,
@@ -93,6 +106,141 @@ def cp_to_player_dict(cp):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Scenario engine (dramatic-finish realism layer) — JSON-safe adapter
+# ════════════════════════════════════════════════════════════════════
+#
+# engine.scenario_engine.ScenarioEngine was written against engine.match.Match
+# (an in-memory object). CIPL persists its match as a JSON-serialisable dict
+# between overs, so we (1) expose that dict through a small attribute shim that
+# mirrors the handful of Match fields the ScenarioEngine reads, and (2) marshal
+# the engine's own mutable state (finale script, ball index, active flag …) in
+# and out of state["scenario"] each over.
+
+
+class _ScenarioFmtShim:
+    """Stand-in for Match.fmt — the ScenarioEngine only reads ``.overs``."""
+    __slots__ = ("overs",)
+
+    def __init__(self, overs):
+        self.overs = int(overs or 20)
+
+
+class _ScenarioMatchShim:
+    """Read-only adapter exposing the CIPL state dict through the attribute
+    interface engine.scenario_engine.ScenarioEngine expects."""
+
+    def __init__(self, state):
+        self._s = state
+        self.fmt = _ScenarioFmtShim(state.get("overs", 20))
+
+    @property
+    def innings(self):
+        return self._s.get("innings", 1)
+
+    @property
+    def target(self):
+        return self._s.get("target")
+
+    @property
+    def score(self):
+        return self._s.get("total_runs", 0)
+
+    @property
+    def wickets(self):
+        return self._s.get("total_wickets", 0)
+
+    @property
+    def current_over(self):
+        # ScenarioEngine works in 0-indexed overs; CIPL stores it 1-indexed.
+        return self._s.get("current_over", 1) - 1
+
+    @property
+    def current_ball(self):
+        # Legal balls already bowled this over == 0-indexed upcoming ball.
+        return self._s.get("current_ball", 0)
+
+    @property
+    def bowling_team(self):
+        return self._s.get("bowl_xi", [])
+
+
+def _scenario_probability():
+    """Chance (0–1) that an eligible chase is armed with a dramatic finish.
+    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.30)."""
+    try:
+        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.30"))))
+    except (TypeError, ValueError):
+        return 0.30
+
+
+def _maybe_enable_scenario(state):
+    """Optionally arm a dramatic-finish scenario for the 2nd-innings chase.
+
+    Gated to 20-over matches because the scenario corridors / phase boundaries
+    (free-play < 15, convergence 15–17, finale 18–19) are calibrated for T20.
+    The engine self-disables per over when a scripted finish would look
+    unrealistic, so arming it is always safe.
+    """
+    state["scenario"] = None
+    if ScenarioEngine is None:
+        return
+    if int(state.get("overs", 0)) != 20:
+        return
+    if not state.get("target"):
+        return
+    if random.random() >= _scenario_probability():
+        return
+    stype = random.choice(SCENARIO_TYPES)
+    state["scenario"] = {
+        "type": stype,
+        "active": True,
+        "finale_script": None,
+        "finale_ball_index": 0,
+        "convergence_logged": False,
+        "endgame_checked_overs": [],
+    }
+    logger.info("[CIPL Scenario] Armed dramatic finish '%s' for match %s (target=%s)",
+                stype, state.get("match_id"), state.get("target"))
+
+
+def _load_scenario_engine(state):
+    """Rebuild a ScenarioEngine from state["scenario"], restoring its mutable
+    fields. Returns None when no scenario is active for this innings."""
+    if ScenarioEngine is None:
+        return None
+    sc = state.get("scenario")
+    if not sc or not sc.get("active") or not sc.get("type"):
+        return None
+    if state.get("innings") != 2 or not state.get("target"):
+        return None
+    try:
+        eng = ScenarioEngine(sc["type"], _ScenarioMatchShim(state))
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("[CIPL Scenario] Failed to construct ScenarioEngine")
+        return None
+    eng.active = bool(sc.get("active", True))
+    eng.finale_script = sc.get("finale_script")
+    eng.finale_ball_index = int(sc.get("finale_ball_index", 0))
+    eng._convergence_logged = bool(sc.get("convergence_logged", False))
+    eng._endgame_checked_overs = set(sc.get("endgame_checked_overs", []))
+    return eng
+
+
+def _save_scenario_engine(state, eng):
+    """Marshal a ScenarioEngine's mutable state back into state["scenario"]."""
+    if eng is None:
+        return
+    state["scenario"] = {
+        "type": eng.scenario_type,
+        "active": bool(eng.active),
+        "finale_script": eng.finale_script,
+        "finale_ball_index": int(eng.finale_ball_index),
+        "convergence_logged": bool(getattr(eng, "_convergence_logged", False)),
+        "endgame_checked_overs": sorted(getattr(eng, "_endgame_checked_overs", set())),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════
 # State construction
 # ════════════════════════════════════════════════════════════════════
 
@@ -146,6 +294,8 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "chat_id": chat_id, "is_private": is_private,
         "pitch_type": pitch_type or "Hard", "stadium": stadium,
         "wicket_limit": WICKET_LIMIT,
+        # Dramatic-finish steering (armed at the innings break for 20-over chases).
+        "scenario": None,
         # innings-1 archive (filled at the break)
         "inn1_runs": 0, "inn1_wickets": 0, "inn1_overs": "0.0",
     }
@@ -258,6 +408,9 @@ def simulate_over(state):
     target = state.get("target")
     engine_fmt = _fmt_to_engine_fmt(None, overs_total)
     pressure_eng = PressureEngine(format_config=engine_fmt)
+    # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
+    # chase, else None (and the per-ball logic below is a no-op).
+    scenario_eng = _load_scenario_engine(state)
 
     bowl_adapted = _adapt_player(bowler)
     bws = state["bowl_stats"].setdefault(bowler_rid, _new_bowl_stat())
@@ -309,26 +462,53 @@ def simulate_over(state):
             pressure_score, batter_adapted.get("batting_rating", 50),
             bowl_adapted.get("bowling_rating", 50), pitch)
 
-        # Game state / momentum
+        # Scenario phase for THIS delivery (free_play / convergence / finale, or
+        # "inactive" when no scenario is armed). get_phase() also runs the
+        # per-over feasibility gate that self-disables unrealistic steering.
+        scenario_phase = scenario_eng.get_phase() if scenario_eng else "inactive"
+
+        # Game state / momentum. Passing scenario_phase lets GSME dampen its
+        # collapse layers during convergence so the scenario can steer the
+        # wicket count instead of being overwhelmed by a cascade.
         game_state = compute_game_state_vector(
             ball_history=ball_history[-BALL_HISTORY_WINDOW:],
             score=state["total_runs"], current_over=over_idx,
             current_ball=balls_this_over, wickets=state["total_wickets"],
             innings=innings, target=target or 0, pitch=pitch,
+            partnership_balls=state.get("partnership_balls", 0),
+            partnership_runs=state.get("partnership_runs", 0),
+            scenario_phase=scenario_phase,
             format_config=engine_fmt)
 
         streak = streaks.get(srid, {"boundaries": 0})
-        pitch_wear = min(1.0, balls_bowled(state) / max(1, overs_total * 6))
 
-        oc = _normalize_outcome(calculate_outcome(
-            batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
-            streak=streak, over_number=over_idx, batter_runs=bs["runs"],
-            innings=innings, pressure_effects=pressure_effects,
-            allow_extras=True, free_hit=free_hit, balls_faced=bs["balls"],
-            game_state=game_state, pitch_wear=pitch_wear,
-            batting_position=state["striker_idx"] + 1,
-            format_config=engine_fmt,
-            batting_approach=bat_app, bowling_approach=bowl_app))
+        # ── Scenario engine hook ──
+        # Finale phase scripts the delivery outright; free-play/convergence
+        # phases instead nudge the pressure effects toward the target corridor.
+        scenario_override = (scenario_eng.get_override_outcome(striker, bowler)
+                             if scenario_eng else None)
+        if scenario_override:
+            oc = _normalize_outcome(scenario_override)
+        else:
+            if scenario_eng:
+                for key, value in scenario_eng.get_scenario_bias({}).items():
+                    if key == "dot_bonus":
+                        pressure_effects[key] = pressure_effects.get(key, 0.0) + value
+                    elif key in pressure_effects:
+                        pressure_effects[key] *= value
+                    else:
+                        pressure_effects[key] = value
+
+            pitch_wear = min(1.0, balls_bowled(state) / max(1, overs_total * 6))
+            oc = _normalize_outcome(calculate_outcome(
+                batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
+                streak=streak, over_number=over_idx, batter_runs=bs["runs"],
+                innings=innings, pressure_effects=pressure_effects,
+                allow_extras=True, free_hit=free_hit, balls_faced=bs["balls"],
+                game_state=game_state, pitch_wear=pitch_wear,
+                batting_position=state["striker_idx"] + 1,
+                format_config=engine_fmt,
+                batting_approach=bat_app, bowling_approach=bowl_app))
 
         otype = oc.get("type")
         runs = oc.get("runs", 0)
@@ -509,6 +689,9 @@ def simulate_over(state):
     state["ball_history"] = ball_history
     state["batter_streaks"] = streaks
     state["prev_bowler_rid"] = bowler["roster_id"]
+    # Persist the scenario engine's mutable state (script, ball index, active
+    # flag) so it survives the JSON round-trip to the next over.
+    _save_scenario_engine(state, scenario_eng)
 
     momentum_after = _compute_momentum(ball_history)
     state["momentum_prev"] = momentum_after
@@ -767,6 +950,10 @@ def end_first_innings(state):
     # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.
     state["last_over_timeline"] = []
     state["last_over_commentary"] = []
+
+    # Optionally arm a dramatic-finish scenario for the chase now that the
+    # target is known (20-over matches only; self-disables if unrealistic).
+    _maybe_enable_scenario(state)
 
 
 def compute_result(state):

@@ -4,6 +4,8 @@ Covers engine/approach_modifiers.py and services/cipl_match.py — both pure
 Python (no Telegram / SQLAlchemy needed), so they run under plain unittest.
 """
 
+import json
+import os
 import random
 import unittest
 
@@ -164,6 +166,76 @@ class CiplMatchTests(unittest.TestCase):
         for e in s["last_over_commentary"]:
             self.assertIn("over", e)
             self.assertIn("text", e)
+
+
+class ScenarioEngineIntegrationTests(unittest.TestCase):
+    """The dramatic-finish ScenarioEngine is wired into the 2nd-innings chase
+    as an optional realism layer, gated to 20-over matches."""
+
+    def setUp(self):
+        self._prev = os.environ.get("CIPL_SCENARIO_PROBABILITY")
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("CIPL_SCENARIO_PROBABILITY", None)
+        else:
+            os.environ["CIPL_SCENARIO_PROBABILITY"] = self._prev
+
+    def test_not_armed_for_non_t20_overs(self):
+        os.environ["CIPL_SCENARIO_PROBABILITY"] = "1.0"
+        s = _make_state(overs=5)
+        s["target"], s["innings"] = 80, 2
+        cm._maybe_enable_scenario(s)
+        self.assertIsNone(s["scenario"])  # corridors are T20-only
+
+    def test_off_switch_never_arms(self):
+        os.environ["CIPL_SCENARIO_PROBABILITY"] = "0.0"
+        s = _make_state(overs=20)
+        s["target"], s["innings"] = 180, 2
+        cm._maybe_enable_scenario(s)
+        self.assertIsNone(s["scenario"])
+
+    def test_armed_for_t20_when_probability_high(self):
+        os.environ["CIPL_SCENARIO_PROBABILITY"] = "1.0"
+        s = _make_state(overs=20)
+        s["target"], s["innings"] = 180, 2
+        cm._maybe_enable_scenario(s)
+        self.assertIsNotNone(s["scenario"])
+        self.assertIn(s["scenario"]["type"], cm.SCENARIO_TYPES)
+        # Engine reconstructs and runs without raising.
+        self.assertIsNotNone(cm._load_scenario_engine(s))
+
+    def test_load_inactive_outside_second_innings(self):
+        s = _make_state(overs=20)
+        s["scenario"] = {"type": "last_ball_six", "active": True}
+        s["innings"] = 1
+        self.assertIsNone(cm._load_scenario_engine(s))
+
+    def test_full_t20_match_with_scenario_survives_json_round_trip(self):
+        os.environ["CIPL_SCENARIO_PROBABILITY"] = "1.0"
+        random.seed(123)
+        s = _make_state(overs=20)
+        guard = 0
+        while not cm.is_innings_over(s) and guard < 80:
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "balanced"
+            s["batting_approach"] = "balanced"
+            cm.simulate_over(s)
+            guard += 1
+        cm.end_first_innings(s)
+        self.assertEqual(s["innings"], 2)
+        self.assertIsNotNone(s["scenario"])  # armed at prob 1.0 for 20 overs
+        guard = 0
+        while not cm.is_innings_over(s) and guard < 80:
+            # Persisting the JSON state between overs must not lose scenario state.
+            s = json.loads(json.dumps(s))
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "balanced"
+            s["batting_approach"] = "balanced"
+            cm.simulate_over(s)
+            guard += 1
+        result = cm.compute_result(s)
+        self.assertIn(result["margin_type"], ("runs", "wickets", "tie"))
 
 
 try:
