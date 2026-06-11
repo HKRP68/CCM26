@@ -443,12 +443,17 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"🏟️ {match_obj.stadium} • {pitch_type} pitch • {match_obj.overs} overs\n\n"
         f"The match begins below — play over by over!",
         parse_mode="HTML")
+    # The toss-result message (this one) is kept; every other setup message is
+    # swept away when the match starts.
+    if getattr(q, "message", None) is not None:
+        draft["toss_result_msg_id"] = q.message.message_id
 
     await begin_cipl_match(context, draft["chat_id"], match_obj, bat_info, bowl_info,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
                            pitch_type,
                            bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
-                           bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji)
+                           bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
+                           draft=draft)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -458,7 +463,7 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
                            pitch_type, bat_team_code="", bowl_team_code="",
-                           bat_team_emoji="🏏", bowl_team_emoji="🏏"):
+                           bat_team_emoji="🏏", bowl_team_emoji="🏏", draft=None):
     state = cipl_match.build_cipl_state(
         match_id=match.id, overs=match.overs,
         bat_user_id=bat_user.id, bowl_user_id=bowl_user.id,
@@ -474,7 +479,67 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
     }
     _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
+    # Clear the pre-match setup chatter (keep the toss result) and pin a polished
+    # announcement carrying the Watch Match button.
+    await _cleanup_setup_and_announce(context, state, draft)
     await _prompt_bowler(context, match.id, state, first=True)
+
+
+async def _cleanup_setup_and_announce(context, state, draft):
+    """Delete the challenge setup messages (all but the toss result) and post +
+    pin the 'Watch X vs Y' announcement with the Mini App Watch Match button."""
+    chat_id = state["chat_id"]
+    keep = (draft or {}).get("toss_result_msg_id")
+    for mid_msg in list((draft or {}).get("setup_msg_ids", []) or []):
+        if mid_msg == keep:
+            continue
+        try:
+            await context.bot.delete_message(chat_id, mid_msg)
+        except Exception:
+            pass  # message too old / not deletable — leave it
+
+    text = _match_start_announcement(state)
+    kb = _miniapp_row(state)
+    try:
+        sent = await context.bot.send_message(
+            chat_id, text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+    except Exception:
+        logger.exception("cipl match-start announcement failed")
+        return
+    if not (sent and getattr(sent, "message_id", None)):
+        return
+    state["pinned_msg_id"] = sent.message_id
+    try:
+        await context.bot.pin_chat_message(
+            chat_id, sent.message_id, disable_notification=True)
+    except Exception:
+        # No pin rights (bot not an admin) — the announcement still stands.
+        logger.info("cipl announcement pin skipped (no rights) for chat %s", chat_id)
+
+
+def _match_start_announcement(state):
+    """Polished 'Watch CSK 🆚 MI — High-Voltage IPL Battle' card for the pin."""
+    bat = html.escape(str(state.get("bat_team_name", "Team A")))
+    bowl = html.escape(str(state.get("bowl_team_name", "Team B")))
+    bat_code = html.escape(str(state.get("bat_team_code") or "")) or bat
+    bowl_code = html.escape(str(state.get("bowl_team_code") or "")) or bowl
+    bat_emoji = state.get("bat_team_emoji", "🏏")
+    bowl_emoji = state.get("bowl_team_emoji", "🏏")
+    stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
+    pitch = html.escape(str(state.get("pitch_type") or "Hard"))
+    overs = state.get("overs", 20)
+    rule = "━" * 15
+    return (
+        f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
+        f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
+        f"{rule}\n"
+        f"🏟️ {stadium} • {pitch} pitch • {overs} overs\n"
+        f"🏏 {bat} batting first\n"
+        f"{rule}\n"
+        f"{bat_emoji} <b>{bat}</b>   vs   {bowl_emoji} <b>{bowl}</b>\n"
+        f"📺 Live scorecard, commentary &amp; XI inside\n\n"
+        f"👇 Tap <b>Watch Match</b> to follow the action live")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -509,7 +574,7 @@ async def _prompt_bowler(context, mid, state=None, first=False):
             rows.append(row); row = []
     if row:
         rows.append(row)
-    text = (f"{_header(state)}\n\n"
+    text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
             f"for over {state['current_over']}:")
     await _new_action_message(context, state, text, rows)
@@ -912,6 +977,14 @@ async def _complete_match(context, mid, state):
                 parse_mode="HTML")
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
+
+    # Unpin the match-start announcement now that the match is over.
+    pinned = state.get("pinned_msg_id")
+    if pinned:
+        try:
+            await context.bot.unpin_chat_message(state["chat_id"], pinned)
+        except Exception:
+            pass
 
     _ss(context, mid, state, next_action=A_COMPLETED)
     cleanup_state(context, mid)

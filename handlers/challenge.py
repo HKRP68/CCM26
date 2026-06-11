@@ -71,6 +71,20 @@ def _challenge_team_draft_key(draft_id):
     return f"challenge_team_draft_{draft_id}"
 
 
+def _track_setup_msg(draft, message):
+    """Record a setup message id on the draft so the over-by-over match can sweep
+    all the pre-match chatter from the chat once play begins (keeping only the
+    toss result). Safe no-op for a missing draft/message."""
+    if not draft or message is None:
+        return
+    mid = getattr(message, "message_id", None)
+    if mid is None:
+        return
+    ids = draft.setdefault("setup_msg_ids", [])
+    if mid not in ids:
+        ids.append(mid)
+
+
 def _league_battle_title(league_name):
     return f"League Battles · {league_name}" if league_name else "League Battles"
 
@@ -595,21 +609,25 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         },
         "created_at": datetime.utcnow().isoformat(),
     }
-    caption = _team_picker_prompt(context.bot_data[_challenge_team_draft_key(draft_id)], "host")
+    draft = context.bot_data[_challenge_team_draft_key(draft_id)]
+    caption = _team_picker_prompt(draft, "host")
     markup = _team_keyboard(draft_id, teams)
     image_url = _league_image_url(league_record)
     local_path = _local_static_path(image_url)
+    sent = None
     if image_url:
         try:
             if local_path:
                 with open(local_path, "rb") as photo:
-                    await update.message.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
+                    sent = await update.message.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
             else:
-                await update.message.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
-            return
+                sent = await update.message.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
         except Exception:
             logger.exception("Failed to send league image for %s; falling back to text", league_key)
-    await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+            sent = None
+    if sent is None:
+        sent = await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+    _track_setup_msg(draft, sent)
 
 
 async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -853,11 +871,15 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         message_obj = getattr(query, "message", None)
         if message_obj is not None:
             try:
-                await message_obj.reply_text(
+                sent = await message_obj.reply_text(
                     created_message,
                     parse_mode="HTML",
                     reply_markup=_challenge_xi_keyboard(draft_id, draft),
                 )
+                _track_setup_msg(draft, sent)
+                # The team-picker message lives on as `query.message`; track it too
+                # so the match-start sweep removes it from the chat.
+                _track_setup_msg(draft, message_obj)
             except Exception:
                 logger.exception("Failed to send challenge created Playing XI message")
 
