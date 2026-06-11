@@ -6191,11 +6191,37 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
 
 def _match_rest_full_state(db, match_id, user_id):
     import copy as _copy
-    from services.match_webapp_service import build_snapshot, role_for
+    from services.match_webapp_service import (
+        build_snapshot, role_for, load_final_scorecard, A_COMPLETED)
     from services.match_webapp_access import get_state, get_next_action, get_ball_seq
     state = get_state(match_id)
     if not state:
-        return None
+        # Live state cleaned up — serve the persisted final board read-only so a
+        # completed match stays viewable in the Mini App instead of 404-ing.
+        final = load_final_scorecard(db, match_id)
+        arena = (final or {}).get("arena_state") if final else None
+        if not arena:
+            return None
+        participant_roles = {
+            str(arena.get("bat_team_id")): "batsman",
+            str(arena.get("bowl_team_id")): "bowler",
+        }
+        snapshot = build_snapshot(db, match_id, user_id, state_override=arena)
+        if snapshot is not None:
+            snapshot["status"] = "completed"
+        return {
+            "ok": True,
+            "match_id": match_id,
+            "user_id": user_id,
+            "role": role_for(arena, user_id),
+            "next_action": A_COMPLETED,
+            "ball_seq": 0,
+            "roles": participant_roles,
+            "snapshot": snapshot,
+            "state": _copy.deepcopy(arena),
+            "completed": True,
+            "result_text": (final or {}).get("result_text"),
+        }
     participant_roles = {
         str(state.get("bat_team_id")): "batsman",
         str(state.get("bowl_team_id")): "bowler",

@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 
 WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
 
+# Full SimCricketX commentary engine — micro (per-ball) lines + macro narratives
+# (collapse, milestones, partnership, maiden/big/expensive over, last-over drama,
+# death overs, powerplay, high-pressure dot). Loaded once; if it fails to load we
+# silently fall back to the built-in terse lines so an over never crashes.
+try:
+    from engine.commentary_engine import CommentaryEngine
+    _COMMENTARY = CommentaryEngine()
+except Exception:  # pragma: no cover - defensive import guard
+    logger.exception("CommentaryEngine unavailable; using fallback commentary")
+    _COMMENTARY = None
+
 _SYM = {0: "0️⃣", 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 6: "6️⃣",
         "W": "🟥", "WD": "↔️", "NB": "🅽🅱", "LB": "🅻🅱"}
 
@@ -125,6 +136,8 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "timeline": [], "over_runs": [], "fow": [],
         "ball_history": [], "batter_streaks": {},
         "free_hit": False,
+        # Narrative inputs for the commentary engine.
+        "partnership_runs": 0, "wkt_marks": [],
         "momentum_prev": 0.0,
         "over_msg_ids": [],
         "commentary_log": [],
@@ -322,17 +335,32 @@ def simulate_over(state):
         batter_out = oc.get("batter_out", False)
         wicket_type = oc.get("wicket_type")
 
+        # Narrative inputs captured BEFORE this ball mutates state, so the engine
+        # can detect milestone/partnership/collapse threshold crossings correctly.
+        bs_runs_before = bs["runs"]
+        partnership_before = state.get("partnership_runs", 0)
+        over_runs_before = state["total_runs"] - runs_before
+        recent_wkts = _recent_wickets(state)
+
+        def _ec(is_maiden=False):
+            return _engine_text(
+                state, oc, striker, bowler, over_idx, innings, target,
+                required_rr, bs_runs_before, partnership_before, recent_wkts,
+                over_runs_before, balls_this_over, overs_total,
+                is_maiden=is_maiden)
+
         # --- Wides / No-balls: not a legal ball ---
         if is_extra and extra_type in ("Wide", "No Ball"):
             state["total_runs"] += 1 + runs
             state["extras_total"] += 1 + runs
+            state["partnership_runs"] = partnership_before + 1 + runs
             bws["runs"] += 1 + runs
             bws["this_over_runs"] += 1 + runs
             if extra_type == "Wide":
                 over_timeline.append("WD")
                 over_events.append({"sym": "WD", "text": f"Wide ({striker_name})"})
                 _push_commentary(state, "extra", striker_name,
-                                 f"Wide. {bowler['name']} strays down leg.")
+                                 _ec() or f"Wide. {bowler['name']} strays down leg.")
             else:
                 if runs:
                     bs["runs"] += runs
@@ -343,7 +371,7 @@ def simulate_over(state):
                 over_timeline.append("NB")
                 over_events.append({"sym": "NB", "text": f"No ball +{runs}"})
                 _push_commentary(state, "extra", striker_name,
-                                 f"No ball! Free hit coming up.")
+                                 _ec() or "No ball! Free hit coming up.")
                 free_hit = True
                 if runs % 2 == 1:
                     _swap_strike(state)
@@ -362,9 +390,11 @@ def simulate_over(state):
         if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
             state["total_runs"] += runs
             state["extras_total"] += runs
+            state["partnership_runs"] = partnership_before + runs
             over_timeline.append("LB")
             over_events.append({"sym": "LB", "text": f"Leg byes +{runs}"})
-            _push_commentary(state, "extra", striker_name, f"Leg byes, {runs} run(s).")
+            _push_commentary(state, "extra", striker_name,
+                             _ec() or f"Leg byes, {runs} run(s).")
             if runs % 2 == 1:
                 _swap_strike(state)
 
@@ -386,7 +416,10 @@ def simulate_over(state):
             state["fow"].append([state["total_runs"], state["total_wickets"],
                                  striker_name, format_overs(state)])
             _push_commentary(state, "wicket", striker_name,
-                             f"OUT! {striker_name} {wtype} b {bowler['name']}.")
+                             _ec() or f"OUT! {striker_name} {wtype} b {bowler['name']}.")
+            # Reset partnership; record the ball index for the collapse narrative.
+            state["partnership_runs"] = 0
+            state.setdefault("wkt_marks", []).append(balls_bowled(state))
             free_hit = False
             streaks.pop(srid, None)
             # Auto-promote next batsman (order fixed in Playing XI)
@@ -398,6 +431,7 @@ def simulate_over(state):
 
         else:  # runs
             state["total_runs"] += runs
+            state["partnership_runs"] = partnership_before + runs
             bs["runs"] += runs
             bws["runs"] += runs
             bws["this_over_runs"] += runs
@@ -411,8 +445,11 @@ def simulate_over(state):
                 streaks[srid] = {"boundaries": 0}
             over_timeline.append(str(runs))
             over_events.append({"sym": str(runs), "text": _run_text(runs, striker_name, bowler["name"])})
+            # Maiden = full over of dots with no runs off it yet.
+            _maiden = (balls_this_over >= 6 and over_runs_before == 0 and runs == 0)
             _push_commentary(state, _run_event(runs), striker_name,
-                             _run_text(runs, striker_name, bowler["name"]))
+                             _ec(is_maiden=_maiden)
+                             or _run_text(runs, striker_name, bowler["name"]))
             if runs not in (4, 6):
                 free_hit = False
             if runs % 2 == 1:
@@ -496,6 +533,61 @@ def _bowler_figures(bws):
     return f"{overs}-{bws.get('maidens', 0)}-{bws['runs']}-{bws['wickets']}"
 
 
+def _recent_wickets(state, window=12):
+    """Wickets fallen within the last ``window`` legal balls (for the collapse
+    narrative, which the engine triggers at >= 3)."""
+    now = balls_bowled(state)
+    marks = state.get("wkt_marks") or []
+    return sum(1 for m in marks if m > now - window)
+
+
+def _engine_text(state, oc, striker, bowler, over_idx, innings, target,
+                 required_rr, bs_runs_before, partnership_before, recent_wkts,
+                 over_runs_before, balls_this_over, overs_total, is_maiden=False):
+    """Build the rich ball-by-ball line from the SimCricketX commentary engine
+    (micro template + any macro narrative). Returns None on any failure so the
+    caller can fall back to the built-in terse line."""
+    if _COMMENTARY is None:
+        return None
+    try:
+        otype = oc.get("type")
+        is_wkt = bool(oc.get("batter_out") or otype == "wicket")
+        ball_context = {
+            "type": "wicket" if is_wkt else "run",
+            "runs": oc.get("runs", 0),
+            "is_extra": bool(oc.get("is_extra", False)),
+            "extra_type": oc.get("extra_type", "") or "",
+            "wicket_type": (oc.get("wicket_type") or "caught").lower().replace(" ", "_"),
+            "batter": striker.get("name", "The batter"),
+            "bowler": bowler.get("name", "The bowler"),
+            "bowling_type": (bowler.get("bowl_style") or "").lower(),
+            "batting_team": state.get("bat_team_name", "The batting side"),
+            "bowling_team": state.get("bowl_team_name", "The fielding side"),
+            "batter_out": is_wkt,
+        }
+        runs_needed = (max(0, int(target) - int(state["total_runs"]))
+                       if target else 999)
+        match_state = {
+            "current_over": over_idx, "current_ball": balls_this_over,
+            "innings": innings, "score": state["total_runs"],
+            "wickets": state["total_wickets"],
+            "batter_runs": bs_runs_before,
+            "partnership_runs": partnership_before,
+            "recent_wickets_match": recent_wkts,
+            "required_run_rate": required_rr,
+            "runs_needed": runs_needed,
+            "current_over_runs": over_runs_before,
+            "is_maiden_over": is_maiden,
+            "_fmt_last_over": max(0, overs_total - 1),
+            "_fmt_death_start": max(0, overs_total - 4),
+        }
+        text = (_COMMENTARY.get_commentary(ball_context, match_state) or "").strip()
+        return text or None
+    except Exception:
+        logger.exception("cipl engine commentary failed")
+        return None
+
+
 def _push_commentary(state, ctype, name, text):
     log = state.setdefault("commentary_log", [])
     log.append({"type": ctype, "name": name, "text": text,
@@ -560,6 +652,8 @@ def end_first_innings(state):
     state["ball_history"] = []
     state["batter_streaks"] = {}
     state["free_hit"] = False
+    state["partnership_runs"] = 0
+    state["wkt_marks"] = []
     state["momentum_prev"] = 0.0
     # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.
     state["last_over_timeline"] = []

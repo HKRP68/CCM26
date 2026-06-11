@@ -225,5 +225,44 @@ class ApproachCardTests(unittest.TestCase):
         self.assertNotIn("COMMENTARY", card)             # stale snapshot cleared
 
 
+class CommentaryEngineTests(unittest.TestCase):
+    """The over-by-over flow uses the full SimCricketX commentary engine, not the
+    terse built-in fallback lines."""
+
+    def test_engine_loaded(self):
+        self.assertIsNotNone(cm._COMMENTARY, "CommentaryEngine should load")
+        self.assertTrue(cm._COMMENTARY.events)
+        self.assertTrue(cm._COMMENTARY.narratives)
+
+    def test_commentary_is_rich_and_varied(self):
+        random.seed(7)
+        s = _make_state(overs=5)
+        for _ in range(5):
+            if cm.is_innings_over(s):
+                break
+            s["current_bowler"] = cm.eligible_bowlers(s)[0]
+            s["bowling_approach"] = "aggressive"
+            s["batting_approach"] = "ultra"
+            cm.simulate_over(s)
+        texts = [e["text"] for e in s["commentary_log"]]
+        self.assertGreater(len(texts), 0)
+        # Every line is non-empty and varied (engine output, not one fixed string).
+        self.assertTrue(all(t.strip() for t in texts))
+        self.assertGreater(len(set(texts)), 5)
+        # The old terse dot-ball template should no longer be the text source.
+        self.assertFalse(any(t.startswith("Dot ball. ") for t in texts))
+
+    def test_partnership_and_wkt_marks_tracked(self):
+        random.seed(3)
+        s = _make_state(overs=5)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "balanced"
+        s["batting_approach"] = "balanced"
+        cm.simulate_over(s)
+        self.assertIn("partnership_runs", s)
+        self.assertIsInstance(s["partnership_runs"], int)
+        self.assertIsInstance(s.get("wkt_marks"), list)
+
+
 if __name__ == "__main__":
     unittest.main()

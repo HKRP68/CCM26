@@ -722,9 +722,13 @@ def _bowler_card(state):
     }
 
 
-def build_snapshot(session, match_id, user_id):
-    """Build the polling snapshot for a user. Returns dict or None if no match."""
-    state = mwa.get_state(match_id)
+def build_snapshot(session, match_id, user_id, state_override=None):
+    """Build the polling snapshot for a user. Returns dict or None if no match.
+
+    ``state_override`` lets callers build a read-only snapshot for a completed
+    match from its persisted ``arena_state`` after the live state is cleaned up,
+    so the Mini App can reopen finished matches instead of 404-ing."""
+    state = state_override if state_override is not None else mwa.get_state(match_id)
     if not state:
         return None
     next_action = mwa.get_next_action(match_id)
