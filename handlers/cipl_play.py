@@ -45,6 +45,7 @@ from handlers.match import _mention
 logger = logging.getLogger(__name__)
 
 CIPL_TIMEOUT = 90  # seconds before an idle pick is auto-resolved
+CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 overs
 
 
 class SimpleUser:
@@ -340,8 +341,8 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                bowl_user.username, bowl_user.first_name)
         winner_tg_val = winner.telegram_id
 
-        from services.config_service import get_challenge_max_overs
-        overs = get_challenge_max_overs(session)
+        # Challenge League / League Battle is always a 20-over contest.
+        overs = CIPL_OVERS
         settings = random_match_settings()
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
@@ -639,6 +640,11 @@ def _bat_line(player, bat_stats):
 
 
 async def _innings_break(context, mid, state):
+    # Clear the last over of innings 1 (its "simulating…" prompt + summary) so the
+    # break message is the only thing left from innings 1 — even if the innings
+    # ended on the final ball or an all-out.
+    await _delete_prev_over(context, state)
+
     summary_text = _innings_scorecard(state, innings_label="1st Innings")
     cipl_match.end_first_innings(state)
     _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
@@ -646,16 +652,24 @@ async def _innings_break(context, mid, state):
     text = (f"🛑 <b>Innings Break</b>\n\n{summary_text}\n\n"
             f"🎯 <b>{state['bat_team_name']}</b> need <b>{target}</b> to win "
             f"in {state['overs']} overs.")
-    await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
-                                   reply_markup=InlineKeyboardMarkup(_miniapp_row(state))
-                                   if _miniapp_row(state) else None)
-    # Innings-1 messages are now history; start innings 2 with a clean slate.
-    state["over_msg_ids"] = []
+    kb = _miniapp_row(state)
+    sent = await context.bot.send_message(
+        state["chat_id"], text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+    # Keep the break card up through the first over of the chase (the target also
+    # rides along in every over header), then let the normal previous-over delete
+    # sweep it away the moment over 2 begins — so the chat doesn't accumulate it.
+    state["over_msg_ids"] = [sent.message_id] if sent and getattr(sent, "message_id", None) else []
     state["action_msg_id"] = None
     await _prompt_bowler(context, mid, state, first=True)
 
 
 async def _complete_match(context, mid, state):
+    # Clear the final over's "simulating…" prompt + summary before the result is
+    # posted — even when the chase is won mid-over, the last over message goes.
+    await _delete_prev_over(context, state)
+    _ss(context, mid, state)
+
     result = cipl_match.compute_result(state)
     # Persist career stats + finalize Match row.
     session = get_session()
@@ -683,6 +697,21 @@ async def _complete_match(context, mid, state):
                 match.loser_id = defender_uid if won_by_chaser else chaser_uid
                 match.margin_type = result["margin_type"]
                 match.margin_value = result["margin"]
+
+        # Snapshot the final scorecard + Arena board so the "View Match" Mini App
+        # stays viewable after the live state is cleaned up below (same mechanism
+        # /wpm uses). Must run while the live state still exists.
+        try:
+            if result["tie"]:
+                result_text = "Match Tied"
+            else:
+                result_text = (f"{result['winner']} beat {result['loser']} by "
+                               f"{result['margin']} {result['margin_type']}")
+            from services.match_webapp_service import save_final_scorecard
+            save_final_scorecard(session, mid, result_text=result_text)
+        except Exception:
+            logger.exception("cipl final scorecard snapshot failed for match %s", mid)
+
         session.commit()
     except Exception:
         session.rollback()

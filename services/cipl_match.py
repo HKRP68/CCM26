@@ -498,6 +498,9 @@ def end_first_innings(state):
     state["inn1_overs"] = format_overs(state)
     state["inn1_bat_team"] = state["bat_team_name"]
     state["inn1_bowl_team"] = state["bowl_team_name"]
+    # Alias used by the Mini App scorecard (services.match_webapp_service.build_scorecard)
+    # to label the 1st-innings batting side while the 2nd innings is in progress.
+    state["inn1_team"] = state["bat_team_name"]
     state["inn1_bat_team_id"] = state["bat_team_id"]
     state["inn1_bowl_team_id"] = state["bowl_team_id"]
     state["inn1_bat_stats"] = state["bat_stats"]
