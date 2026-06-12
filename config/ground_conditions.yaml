@@ -10,41 +10,41 @@ active_game_mode: "natural_game"
 # ─── PITCH PROFILES ───
 pitch_profiles:
   Green:
-    description: "Seamer-friendly surface with lateral movement — pace bowlers dominate, low scoring"
+    description: "Seamer-friendly surface with lateral movement — pace bowlers dominate, competitive scoring"
     scoring_matrix:
-      Dot: 0.35
-      Single: 0.365
-      Double: 0.085
+      Dot: 0.255
+      Single: 0.36
+      Double: 0.105
       Three: 0.005
-      Four: 0.07
-      Six: 0.025
-      Wicket: 0.065
-      Extras: 0.04
-    run_factor: 0.85
+      Four: 0.105
+      Six: 0.045
+      Wicket: 0.055
+      Extras: 0.07
+    run_factor: 0.98
     wicket_factors:
-      Fast: 1.40
-      Fast-medium: 1.20
-      Medium-fast: 1.15
+      Fast: 1.35
+      Fast-medium: 1.18
+      Medium-fast: 1.12
       default: 0.55
 
   Dry:
-    description: "Spin-friendly surface with variable bounce — spinners thrive, tough to score"
+    description: "Spin-friendly surface with variable bounce — spinners thrive, scoring needs application"
     scoring_matrix:
-      Dot: 0.33
-      Single: 0.367
-      Double: 0.088
-      Three: 0.008
-      Four: 0.07
-      Six: 0.03
-      Wicket: 0.06
-      Extras: 0.04
-    run_factor: 0.85
+      Dot: 0.23
+      Single: 0.365
+      Double: 0.12
+      Three: 0.007
+      Four: 0.115
+      Six: 0.05
+      Wicket: 0.05
+      Extras: 0.063
+    run_factor: 1.00
     wicket_factors:
-      Leg spin: 1.40
-      Wrist spin: 1.35
-      Off spin: 1.30
-      Finger spin: 1.20
-      default: 0.60
+      Leg spin: 1.15
+      Wrist spin: 1.13
+      Off spin: 1.11
+      Finger spin: 1.08
+      default: 0.70
 
   Hard:
     description: "True bounce with carry — balanced contest with slight batting edge"
@@ -100,6 +100,43 @@ pitch_profiles:
       Finger spin: 0.60
       Wrist spin: 0.60
       default: 0.60
+
+  Dusty:
+    description: "Worn, spin-friendly surface with grip and turn — spinners influential, par scoring"
+    scoring_matrix:
+      Dot: 0.245
+      Single: 0.35
+      Double: 0.12
+      Three: 0.007
+      Four: 0.115
+      Six: 0.055
+      Wicket: 0.053
+      Extras: 0.055
+    run_factor: 1.04
+    wicket_factors:
+      Leg spin: 1.18
+      Wrist spin: 1.16
+      Off spin: 1.14
+      Finger spin: 1.10
+      default: 0.82
+
+  Bouncy:
+    description: "Hard, bouncy track with carry — pace bowlers extract bounce, batters value through the line"
+    scoring_matrix:
+      Dot: 0.245
+      Single: 0.34
+      Double: 0.12
+      Three: 0.007
+      Four: 0.12
+      Six: 0.06
+      Wicket: 0.058
+      Extras: 0.05
+    run_factor: 1.12
+    wicket_factors:
+      Fast: 1.28
+      Fast-medium: 1.13
+      Medium-fast: 1.08
+      default: 0.80
 
 # ─── PHASE BOOSTS ───
 phase_boosts:
