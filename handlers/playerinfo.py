@@ -47,7 +47,7 @@ async def _send_player_card(session, user, player, target, owner_tg):
                              UserRoster.player_id.in_(version_ids)).first())
     acq_date = owned_row.acquired_date if owned_row else None
 
-    text = format_player_card(player, acq_date)
+    text = format_player_card(player, acq_date, value_mode="sell")
 
     # Versions footer
     if len(versions) > 1:

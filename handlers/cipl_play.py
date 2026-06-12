@@ -987,27 +987,33 @@ async def _complete_match(context, mid, state):
                        f"by {result['margin']} {result['margin_type']}!")
 
     # Win/result message FIRST, then the Match Summary image — same order and
-    # card as /wpm, /wpmbot and /cm.
-    text = (f"🏁 <b>Match Over</b>\n\n"
-            f"{_innings_scorecard(state, innings_label='2nd Innings')}\n\n"
+    # card as /wpm, /wpmbot and /cm. The match-end recap body sits inside an
+    # expandable quote so the chat stays tidy.
+    body = (f"{_innings_scorecard(state, innings_label='2nd Innings')}\n\n"
             f"{result_line}")
     if prize_info:
-        text += (
+        body += (
             f"\n\n💰 <b>Prizes</b>\n"
             f"🏆 {result['winner']}: +{prize_info['w_coins']:,} coins, "
             f"+{prize_info['w_gems']} 💎\n"
             f"🤝 {result['loser']}: +{prize_info['l_coins']:,} coins, "
             f"+{prize_info['l_gems']} 💎")
+    text = f"🏁 <b>Match Over</b>\n<blockquote expandable>{body}</blockquote>"
+    miniapp_row = _miniapp_row(state)
     await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
-                                   reply_markup=InlineKeyboardMarkup(_miniapp_row(state))
-                                   if _miniapp_row(state) else None)
+                                   reply_markup=InlineKeyboardMarkup(miniapp_row)
+                                   if miniapp_row else None)
     try:
         img = _build_cipl_summary_image(state, result)
         if img:
+            # The Spectate / View Match button rides on the scorecard image too,
+            # so anyone can open this exact match in the Mini App.
             await context.bot.send_photo(
                 state["chat_id"], photo=BytesIO(img),
                 caption=f"🏆 <b>Match Summary</b> — {result_line}",
-                parse_mode="HTML")
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(miniapp_row)
+                if miniapp_row else None)
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
 

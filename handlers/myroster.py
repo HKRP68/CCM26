@@ -28,6 +28,8 @@ def _build_roster_message(user, entries, stats, page, total, total_pages):
             f"   💸 Sell: {sell:,} 🪙"
         )
 
+    # All players sit inside one expandable Telegram quote so a large roster
+    # collapses to a tidy block the user can tap to expand.
     roster_text = "\n\n".join(lines)
 
     text = (
@@ -36,8 +38,8 @@ def _build_roster_message(user, entries, stats, page, total, total_pages):
         f"• Avg Rating: {stats['avg_rating']}\n"
         f"• Total Value: {stats['total_value']:,} 🪙\n"
         f"• Duplicates: {stats['duplicates']}\n\n"
-        f"👥 <b>Players (Page {page}/{total_pages}):</b>\n\n"
-        f"{roster_text}"
+        f"👥 <b>Players (Page {page}/{total_pages}):</b>\n"
+        f"<blockquote expandable>{roster_text}</blockquote>"
     )
 
     # Build navigation + action buttons
