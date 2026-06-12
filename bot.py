@@ -834,8 +834,13 @@ def main():
         app.add_handler(CommandHandler(["ipl160", "16o", "iplsim"], ipl160_handler))
         # The literal "/16-0IPL" isn't a valid Telegram command (hyphen +
         # uppercase), so it never arrives as a bot_command — catch the text.
-        app.add_handler(MessageHandler(
-            filters.Regex(r"(?i)^/16-0ipl\b"), ipl160_handler), group=5)
+        # Use local aliases: main() rebinds `MessageHandler`/`filters` via later
+        # `from telegram.ext import ...` lines, which makes them function-locals
+        # for the whole scope, so the module-level names are unbound here.
+        from telegram.ext import MessageHandler as _IplMsgHandler
+        from telegram.ext import filters as _ipl_filters
+        app.add_handler(_IplMsgHandler(
+            _ipl_filters.Regex(r"(?i)^/16-0ipl\b"), ipl160_handler), group=5)
         logger.info("Registered /ipl160 handler (16-0 IPL Sim Mini App)")
 
         # ── Chat membership tracking ────────────────────────────────
