@@ -1076,19 +1076,44 @@ def _compute_result(inn1, inn2, target):
 
 
 def _player_of_the_match(inn1, inn2, result):
-    """Highest impact player by runs + wickets*25 across both innings."""
+    """Highest impact player by runs + wickets*25 across both innings.
+
+    POTM rule: the award goes to the highest-impact player on the winning team;
+    a losing-team player is only eligible with 50+ impact. A tie (no winner)
+    falls back to the overall highest impact.
+    """
+    # name -> {"impact": int, "team": str}. Batters belong to their innings'
+    # batting team, bowlers to its bowling team.
     impact = {}
+
+    def _bump(name, team, amount):
+        entry = impact.setdefault(name, {"impact": 0, "team": team})
+        entry["impact"] += amount
+        if team and not entry.get("team"):
+            entry["team"] = team
+
     for inn in (inn1, inn2):
+        bat_team = inn.get("batting_team")
+        bowl_team = inn.get("bowling_team")
         for p in inn["order"]:
-            impact.setdefault(p["name"], 0)
-            impact[p["name"]] += inn["bat_stats"][id(p)]["runs"]
+            _bump(p["name"], bat_team, inn["bat_stats"][id(p)]["runs"])
         seen_bowlers = set()
         for bp in inn["bowl_plan"]:
             if id(bp) in seen_bowlers:
                 continue
             seen_bowlers.add(id(bp))
-            impact.setdefault(bp["name"], 0)
-            impact[bp["name"]] += inn["bowl_stats"].get(id(bp), {}).get("wickets", 0) * 25
+            wkts = inn["bowl_stats"].get(id(bp), {}).get("wickets", 0)
+            _bump(bp["name"], bowl_team, wkts * 25)
     if not impact:
         return None
-    return max(impact.items(), key=lambda kv: kv[1])[0]
+
+    winner_name = (result or {}).get("winner")
+    eligible = {
+        name: data for name, data in impact.items()
+        if (winner_name and data["team"] == winner_name)
+        or (winner_name and data["impact"] >= 50)
+        or not winner_name
+    }
+    if not eligible:
+        eligible = impact
+    return max(eligible.items(), key=lambda kv: kv[1]["impact"])[0]

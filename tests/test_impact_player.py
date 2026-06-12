@@ -273,6 +273,53 @@ def test_pvp_innings_break_setup_phase_allows_impact_player(monkeypatch):
     assert opts["legal_break"] == "innings break"
 
 
+def test_impact_player_walks_to_crease_after_wicket(monkeypatch):
+    """A batting-side Impact Player used after a wicket comes straight to the
+    crease as the next batsman and play resumes at the next delivery."""
+    from services.match_state_store import A_PICK_DELIVERY
+
+    state = _after_wicket_state()
+    state["bat_stats"] = {"100": {"out": True, "balls": 3, "runs": 5}}
+    saved = {}
+    monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
+    monkeypatch.setattr(svc.mwa, "get_next_action", lambda match_id: A_PICK_NEW_BATSMAN)
+    monkeypatch.setattr(
+        svc.mwa, "save_state",
+        lambda match_id, st, next_action=None, **kw: saved.update(next_action=next_action),
+    )
+
+    ok, msg, rec = svc.use_impact_player(_FakeSession([_incoming_row()]), 99, 1, 300, 100)
+
+    assert ok is True
+    # Impact sub is now in the batting order and on strike in the dismissed slot.
+    assert any(p["roster_id"] == 300 for p in state["batting_order"])
+    assert state["batting_order"][state["striker_idx"]]["roster_id"] == 300
+    # No separate "pick next batsman" prompt — play resumes at the delivery.
+    assert saved["next_action"] == A_PICK_DELIVERY
+
+
+def test_impact_bowler_bowls_next_over_between_overs(monkeypatch):
+    """A bowling-side Impact Player used between overs comes on to bowl the
+    upcoming over."""
+    from services.match_state_store import A_PICK_DELIVERY, A_PICK_NEW_BOWLER
+
+    state = _after_wicket_state()
+    state["bowl_stats"] = {"202": {"balls": 6, "runs": 5, "wickets": 1}}
+    saved = {}
+    monkeypatch.setattr(svc.mwa, "get_state", lambda match_id: state)
+    monkeypatch.setattr(svc.mwa, "get_next_action", lambda match_id: A_PICK_NEW_BOWLER)
+    monkeypatch.setattr(
+        svc.mwa, "save_state",
+        lambda match_id, st, next_action=None, **kw: saved.update(next_action=next_action),
+    )
+
+    ok, msg, rec = svc.use_impact_player(_FakeSession([_incoming_row()]), 99, 2, 300, 202)
+
+    assert ok is True
+    assert state["current_bowler"]["roster_id"] == 300
+    assert saved["next_action"] == A_PICK_DELIVERY
+
+
 def test_select_players_uses_serialized_batting_xi_indices_after_impact(monkeypatch):
     state = {
         "setup": svc.SETUP_PICKING,

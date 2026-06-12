@@ -1051,7 +1051,7 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi):
     return bats[:4], bowls[:4]
 
 
-def _cipl_calc_potm(state):
+def _cipl_calc_potm(state, winner_name=None):
     """Player of the Match for a finished /cipl match, by impact points.
 
     Mirrors handlers/match.py:_calc_potm but reads CIPL state, whose batting/
@@ -1060,7 +1060,17 @@ def _cipl_calc_potm(state):
 
     Batting impact: runs + 4s + 2·6s + strike-rate & milestone bonuses.
     Bowling impact: 25·wickets + economy·overs + milestone bonuses.
+
+    POTM rule: the award goes to the highest-impact player on the winning team;
+    a losing-team player is only eligible with 50+ impact. ``winner_name`` of
+    ``None`` (or a non-team value such as "Match Tied") falls back to the overall
+    highest impact.
     """
+    if winner_name and winner_name not in (
+            state.get("bat_team_name"), state.get("inn1_team"),
+            state.get("inn1_bat_team"), state.get("bowl_team_name")):
+        # A tie / unknown winner sentinel — treat as no winner.
+        winner_name = None
     def _bat_impact(bs):
         if not bs or bs.get("balls", 0) == 0:
             return 0
@@ -1123,9 +1133,23 @@ def _cipl_calc_potm(state):
     _add(state.get("bowl_xi"), state.get("bowl_stats"),
          team=inn2_bowl_team, is_bat=False)
 
+    # Eligibility: every winning-team player, plus losing-team players with 50+
+    # impact. Falls back to all players when the winner is unknown (tie).
+    def _total(data):
+        return data["bat_impact"] + data["bowl_impact"]
+
+    eligible = [
+        data for data in players.values()
+        if (winner_name and data.get("team") == winner_name)
+        or (winner_name and _total(data) >= 50)
+        or not winner_name
+    ]
+    if not eligible:
+        eligible = list(players.values())
+
     best_name, best_total, best_stats, best_team = None, 0, "", ""
-    for data in players.values():
-        total = data["bat_impact"] + data["bowl_impact"]
+    for data in eligible:
+        total = _total(data)
         if total > best_total:
             best_total = total
             best_name = data["name"]
@@ -1180,7 +1204,8 @@ def _build_cipl_summary_image(state, result):
     # Player of the Match — populates the card's POTM footer (without this it
     # renders a blank "—"). Defensive: never let a POTM error drop the card.
     try:
-        potm_name, potm_stats, potm_team = _cipl_calc_potm(state)
+        potm_name, potm_stats, potm_team = _cipl_calc_potm(
+            state, None if result["tie"] else winner_name)
     except Exception:
         logger.exception("cipl POTM calculation failed for match %s", state.get("match_id"))
         potm_name, potm_stats, potm_team = None, None, None

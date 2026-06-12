@@ -386,6 +386,11 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
         return False, "Spectators cannot use Impact Player.", None
     if not _impact_is_legal_break(state):
         return False, "Impact Player can be used only between overs, after a wicket, or at innings break.", None
+    na = mwa.get_next_action(match_id)
+    # When the Impact Player comes in live (after a wicket / between overs) they
+    # walk straight to the crease or bowl the next over. ``forced_next_action``
+    # captures that transition; ``None`` keeps the existing phase.
+    forced_next_action = None
     impact, usage = _impact_usage(state)
     rec = usage.setdefault(str(user_id), {"used": False})
     if rec.get("used"):
@@ -429,6 +434,22 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
             if replaced_in_order is None:
                 order.append(incoming)
         state["batting_order"] = order
+
+        # After a wicket the Impact substitute walks straight to the crease as
+        # the next batsman — no separate "pick next batsman" step. Mirrors the
+        # bookkeeping in select_wicket_batsman().
+        if na == A_PICK_NEW_BATSMAN:
+            in_idx = next((i for i, p in enumerate(order)
+                           if p.get("roster_id") == in_roster_id), None)
+            if in_idx is not None:
+                _install_new_batsman(state, in_idx)
+                used = max(in_idx, state.get("non_striker_idx", 1))
+                state["next_batsman_idx"] = max(
+                    state.get("next_batsman_idx", 2), used + 1)
+                state["last_dismissed"] = None
+                forced_next_action = (
+                    A_PICK_NEW_BOWLER if state.pop("pending_new_bowler", False)
+                    else A_PICK_DELIVERY)
     else:
         state.setdefault("bowl_stats", {})[str(in_roster_id)] = {
             "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
@@ -436,6 +457,11 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
         }
         if (state.get("current_bowler") or {}).get("roster_id") == out_roster_id:
             state["current_bowler"] = incoming
+        elif na == A_PICK_NEW_BOWLER:
+            # Between overs: the Impact bowler comes on to bowl the next over.
+            state["current_bowler"] = incoming
+            _emit_new_bowler(state, incoming)
+            forced_next_action = A_PICK_DELIVERY
 
     rec.update({
         "used": True,
@@ -458,7 +484,9 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
         "text": f"Impact Player used! {incoming.get('name')} replaces "
                 f"{outgoing.get('name')}. {_bat_career_line(incoming)}",
     })
-    mwa.save_state(match_id, state, next_action=mwa.get_next_action(match_id))
+    mwa.save_state(match_id, state, next_action=(
+        forced_next_action if forced_next_action is not None
+        else mwa.get_next_action(match_id)))
     return True, f"Impact Player confirmed: {incoming.get('name')} replaces {outgoing.get('name')}.", rec
 
 def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False,
@@ -2367,9 +2395,22 @@ def _pick_player_of_match(state, result):
 
     if not candidates:
         return None
+
+    def impact(c):
+        # Raw impact (no winner edge) — used both for the 50+ eligibility cutoff
+        # and for ranking, so the threshold is measured on true performance.
+        return c["runs"] + 20 * c["wkts"] + c["fours"] + c["sixes"] * 2
+
+    # POTM rule: winning-team players are always eligible; losing-team players
+    # only qualify with 50+ impact. Falls back to all when no winner (tie).
+    eligible = [r for r, c in candidates.items()
+                if c["winner"] or impact(c) >= 50]
+    if not eligible:
+        eligible = list(candidates)
+
     def score(c):
-        return c["runs"] + 20 * c["wkts"] + c["fours"] + c["sixes"] * 2 + (5 if c["winner"] else 0)
-    best_rid = max(candidates, key=lambda r: score(candidates[r]))
+        return impact(c) + (5 if c["winner"] else 0)
+    best_rid = max(eligible, key=lambda r: score(candidates[r]))
     b = candidates[best_rid]
     return {"roster_id": best_rid, "player_id": b.get("player_id"),
             "name": b["name"], "runs": b["runs"], "wickets": b["wkts"],

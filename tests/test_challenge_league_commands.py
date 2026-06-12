@@ -201,7 +201,12 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("League Battles · IPL", text)
         keyboard = kwargs["reply_markup"].inline_keyboard
         labels = [row[0].text for row in keyboard]
-        self.assertEqual(labels, challenge.IPL_TEAM_NAMES)
+        # Buttons show the short code (e.g. MI, CSK) rather than the full name,
+        # and the final row is a Cancel button.
+        expected_codes = [challenge.IPL_TEAM_META[name][0] for name in challenge.IPL_TEAM_NAMES]
+        self.assertEqual(labels[:-1], expected_codes)
+        self.assertEqual(labels[-1], "❌ Cancel")
+        self.assertEqual(keyboard[-1][0].callback_data, f"cl_cancel_{int(next(iter(context.bot_data)).rsplit('_', 1)[1])}")
         self.assertTrue(next(iter(context.bot_data)).startswith("challenge_team_draft_"))
 
     async def test_team_button_rejects_non_host_with_alert(self):
