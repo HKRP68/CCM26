@@ -3,6 +3,10 @@
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
 
+  // Raw Telegram initData — sent as the Authorization header so the backend can
+  // verify the user before sharing a result image. Empty in a normal browser.
+  window.tgInitData = (tg && tg.initData) ? tg.initData : "";
+
   // Open external (non-Telegram) links through Telegram when available —
   // window.open is unreliable inside the in-app WebView. Falls back to a tab.
   window.openExternal = function (url) {

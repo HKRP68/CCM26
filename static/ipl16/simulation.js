@@ -868,29 +868,75 @@ function showResultCard(outcome, container) {
     <a class="primary-btn wide play-again-btn" href="draft.html" data-act="again">Play Again</a>`;
 
   const card = container.querySelector(".result-card");
+
+  // Render the result card to a PNG canvas (shared by Download + Share).
+  const renderCard = () =>
+    html2canvas(card, { backgroundColor: "#161b21", scale: 2, useCORS: true });
+
+  // Download — go via a Blob + object URL rather than a data: URL, which more
+  // mobile WebViews allow to actually save.
   container.querySelector('[data-act="download"]').onclick = () => {
-    html2canvas(card, {
-      backgroundColor: "#161b21",
-      scale: 2,
-      useCORS: true,
-    }).then((canvas) => {
-      const link = document.createElement("a");
-      link.download = `cmu-16-0-result-${Date.now()}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+    renderCard().then((canvas) => {
+      const finish = (blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.download = `cmu-16-0-result-${Date.now()}.png`;
+        link.href = url;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      };
+      if (canvas.toBlob) canvas.toBlob(finish, "image/png");
+      else fetch(canvas.toDataURL("image/png")).then((r) => r.blob()).then(finish);
     });
   };
 
-  // Share the result to Telegram. We share the game's own URL (so friends can
-  // play) with a result + group-invite caption. openTgLink (telegram-init.js)
-  // routes through Telegram.WebApp.openTelegramLink inside the Mini App and
-  // falls back to a new tab in a normal browser.
   const shareText = `I went ${outcome.wins}-${outcome.losses} with my drafted IPL XI on CMU 16-0! ${outcome.stage} Beat it 👇 Join @cmugames`;
   const gameLink = (location.origin || "") + location.pathname.replace(/[^/]*$/, "");
   const shareUrl = gameLink || "https://t.me/cmugames";
   const tgShare = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`;
-  container.querySelector('[data-act="tg"]').onclick = () =>
-    (window.openTgLink || ((u) => window.open(u, "_blank")))(tgShare);
+
+  // Share on Telegram. Inside the Mini App (initData present) we POST the
+  // rendered result image to the bot, which sends it to the player's chat with
+  // a forwardable "Play CMU 16-0" button — so the share carries the image AND a
+  // bot link. Outside Telegram we fall back to the link-only share sheet.
+  const tgBtn = container.querySelector('[data-act="tg"]');
+  tgBtn.onclick = async () => {
+    const initData = window.tgInitData || "";
+    if (!initData) {
+      (window.openTgLink || ((u) => window.open(u, "_blank")))(tgShare);
+      return;
+    }
+    const original = tgBtn.innerHTML;
+    tgBtn.disabled = true;
+    tgBtn.textContent = "Sharing…";
+    try {
+      const canvas = await renderCard();
+      const dataUrl = canvas.toDataURL("image/png");
+      const res = await fetch("/api/ipl16/share", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "tma " + initData,
+        },
+        body: JSON.stringify({ image: dataUrl, caption: shareText }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (j && j.ok) {
+        showToast(j.message || "Sent to your chat — forward it to share! 📲");
+      } else {
+        showToast((j && j.message) || "Couldn't share — try Download instead.");
+      }
+    } catch (e) {
+      // Network/render failure — fall back to the link share sheet.
+      (window.openTgLink || ((u) => window.open(u, "_blank")))(tgShare);
+    } finally {
+      tgBtn.disabled = false;
+      tgBtn.innerHTML = original;
+    }
+  };
 
   // Join the official Telegram group — open inside Telegram when available.
   const joinBtn = container.querySelector('[data-act="join"]');

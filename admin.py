@@ -6749,6 +6749,59 @@ def ipl16_static(filename="index.html"):
     return resp
 
 
+@app.route("/api/ipl16/share", methods=["POST"])
+@csrf_exempt
+def ipl16_share():
+    """Deliver a CMU 16-0 result image into Telegram.
+
+    The Mini App renders the result card to a PNG and POSTs it here with the
+    player's Telegram initData. We send that image to the player's own chat with
+    a caption and a "Play CMU 16-0" deep-link button, so they can forward it to
+    share. allow_not_debuted=True: the game is standalone, any Telegram user can
+    share without a bot game account.
+    """
+    auth, tg_id, err = _webapp_auth(allow_not_debuted=True)
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        import base64
+        import os as _os
+        data = request.get_json(silent=True) or {}
+        img = data.get("image") or ""
+        if "," in img:                      # strip "data:image/png;base64," prefix
+            img = img.split(",", 1)[1]
+        try:
+            photo = base64.b64decode(img)
+        except Exception:
+            return {"ok": False, "message": "Bad image data."}, 400
+        if not photo:
+            return {"ok": False, "message": "Empty image."}, 400
+        if len(photo) > 8 * 1024 * 1024:    # Telegram photo cap is ~10MB
+            return {"ok": False, "message": "Image too large."}, 413
+
+        caption = (data.get("caption") or "").strip()[:900] or \
+            "🏏 My CMU 16-0 IPL season result! Join @cmugames and beat it."
+
+        payload = {"chat_id": tg_id, "caption": caption, "parse_mode": "HTML"}
+        # Forwardable "Play" button → opens the bot DM and launches the game.
+        bot_username = _os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+        if bot_username:
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [[{
+                "text": "🏏 Play CMU 16-0",
+                "url": f"https://t.me/{bot_username}?start=ipl160",
+            }]]})
+
+        _tg_send_photo_async(payload, photo, filename="cmu-16-0-result.png")
+        return {"ok": True, "message": "Sent to your chat — forward it to share!"}
+    except Exception as e:
+        logger.exception("ipl16_share failed")
+        return {"ok": False, "message": "Could not share. Please try again.",
+                "error": str(e)}, 500
+    finally:
+        db.close()
+
+
 # ── Player photos (migrated from UnderCover assets/players/) ─────────────
 _PLAYERS_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "static", "players")
