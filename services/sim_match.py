@@ -872,15 +872,21 @@ def _esc(s):
 
 
 def render_innings_card(inn):
-    """Render a single innings as an HTML scorecard for Telegram."""
+    """Render a single innings as an HTML scorecard for Telegram.
+
+    The full scorecard body is wrapped in a single expandable blockquote so the
+    message stays collapsed in chat until the reader taps to expand it. Telegram
+    does not allow nested blockquotes, so the batting/bowling tables are kept as
+    plain lines inside the one outer expandable quote.
+    """
     e = inn["extras"]
-    lines = [
+    # Header lines stay visible above the expandable quote.
+    header = [
         f"🏏 <b>{_esc(inn['batting_team'])}</b>",
         f"<b>{inn['runs']}/{inn['wickets']}</b> ({inn['overs']} ov)",
-        "━━━━━━━━━━━━━━━━━━━",
-        "<b>BATTING</b>",
     ]
-    rows = []
+
+    body = ["<b>BATTING</b>"]
     dnb = []
     for p in inn["order"]:
         bs = inn["bat_stats"][id(p)]
@@ -890,23 +896,21 @@ def render_innings_card(inn):
         sr = round(bs["runs"] / bs["balls"] * 100, 1) if bs["balls"] else 0.0
         mark = "" if bs["out"] else "*"
         dismissal = f" [{_esc(bs['how'])}]" if bs["out"] and bs["how"] else ""
-        rows.append(
+        body.append(
             f"{_esc(p['name'])} {mark}{bs['runs']} ({bs['balls']}){dismissal} "
             f"4s:{bs['fours']} 6s:{bs['sixes']} SR:{sr}"
         )
-    lines.append("<blockquote>" + "\n".join(rows) + "</blockquote>")
-    lines.append(
+    body.append(
         f"Extras: {inn['extras_total']} "
         f"(wd {e['wides']}, nb {e['noballs']}, lb {e['legbyes']})"
     )
-    lines.append(f"<b>TOTAL: {inn['runs']}/{inn['wickets']} ({inn['overs']} ov)</b>")
+    body.append(f"<b>TOTAL: {inn['runs']}/{inn['wickets']} ({inn['overs']} ov)</b>")
     if dnb:
-        lines.append(f"<i>DNB: {_esc(', '.join(dnb))}</i>")
+        body.append(f"<i>DNB: {_esc(', '.join(dnb))}</i>")
 
-    lines.append("━━━━━━━━━━━━━━━━━━━")
-    lines.append("<b>BOWLING</b>")
+    body.append("━━━━━━━━━━━━━━━━━━━")
+    body.append("<b>BOWLING</b>")
     seen = set()
-    brows = []
     for bp in inn["bowl_plan"]:
         if id(bp) in seen:
             continue
@@ -914,15 +918,15 @@ def render_innings_card(inn):
         bw = inn["bowl_stats"].get(id(bp), _new_bowl_stat())
         ov = f"{bw['balls'] // 6}.{bw['balls'] % 6}"
         econ = round(bw["runs"] / (bw["balls"] / 6), 2) if bw["balls"] else 0.0
-        brows.append(
+        body.append(
             f"{_esc(bp['name'])} {ov}-{bw['maidens']}-{bw['runs']}-{bw['wickets']} (econ {econ})"
         )
-    lines.append("<blockquote>" + "\n".join(brows) + "</blockquote>")
 
     if inn["fow"]:
         fow = " · ".join(f"{r}/{w} ({_esc(nm)}, {ov})" for r, w, nm, ov in inn["fow"])
-        lines.append(f"<b>FoW:</b> {fow}")
-    return "\n".join(lines)
+        body.append(f"<b>FoW:</b> {fow}")
+
+    return "\n".join(header) + "\n<blockquote expandable>" + "\n".join(body) + "</blockquote>"
 
 
 def render_result(match):
