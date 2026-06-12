@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>16-0 — Season Simulation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="simulation.css" />
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  </head>
+  <body>
+    <header class="sim-header">
+      <a class="back-link" href="draft.html">← Draft</a>
+      <span class="wordmark">16-0</span>
+      <span class="phase-pill" id="phasePill">League</span>
+    </header>
+
+    <main class="sim-shell">
+      <section class="season-hero">
+        <div class="hero-text">
+          <p class="eyebrow">Season Simulation</p>
+          <h1 id="screenTitle">League Phase</h1>
+        </div>
+        <div class="record-card">
+          <span class="record-label">Record</span>
+          <strong id="recordText">0-0</strong>
+          <span id="pointsText">0 pts</span>
+        </div>
+      </section>
+
+      <div class="strength-readout" id="strengthReadout"></div>
+
+      <!-- League phase -->
+      <section id="leagueScreen" class="screen is-active">
+        <div class="league-top">
+          <!-- LEFT: fixture card + roster + pinned buttons -->
+          <div class="league-left">
+            <div class="fixture-card">
+              <span class="round-label" id="matchLabel">Round 1 of 14</span>
+              <p class="fixture-status" id="fixtureStatus" hidden>Loading…</p>
+              <div class="vs-row" id="vsRow">
+                <div class="vs-box">
+                  <span class="vs-name">Your XI</span>
+                  <div class="vs-stats" id="userVsStats"></div>
+                </div>
+                <span class="vs-divider">VS</span>
+                <div class="vs-box vs-opp">
+                  <span class="vs-name" id="oppName">—</span>
+                  <div class="vs-stats" id="oppVsStats"></div>
+                </div>
+              </div>
+              <div class="fixture-result" id="fixtureResult" hidden></div>
+              <div class="pitch-badge" id="pitchBadge" hidden></div>
+            </div>
+
+            <div class="roster-card">
+              <div class="roster-scroll">
+                <table class="roster-table">
+                  <tbody id="rosterBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="btn-row league-actions">
+              <button id="playLeagueBtn" class="primary-btn" type="button">
+                Simulate
+              </button>
+            </div>
+          </div>
+
+          <!-- RIGHT: results list (unchanged) -->
+          <section class="panel results-panel">
+            <div class="panel-head">
+              <h2>Results</h2>
+              <span>Latest first</span>
+            </div>
+            <div id="leagueResults" class="results-list" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- League table -->
+      <section id="tableScreen" class="screen">
+        <div class="table-grid">
+          <section class="panel table-panel">
+            <div class="panel-head">
+              <h2>League Table</h2>
+              <span>Top 4 qualify</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Team</th>
+                    <th>P</th>
+                    <th>W</th>
+                    <th>L</th>
+                    <th>NRR</th>
+                    <th>Pts</th>
+                  </tr>
+                </thead>
+                <tbody id="leagueTable"></tbody>
+              </table>
+            </div>
+            <button id="playoffBtn" class="primary-btn wide" type="button" hidden>
+              Advance to Playoffs
+            </button>
+          </section>
+
+          <div class="table-right">
+            <section class="panel leaders-panel" id="leadersPanel">
+              <div class="panel-head">
+                <h2>Leaders</h2>
+                <span>All teams</span>
+              </div>
+              <div class="leader-columns">
+                <div>
+                  <h3>Top Scorers</h3>
+                  <ol id="runLeaders" class="leader-list"></ol>
+                </div>
+                <div>
+                  <h3>Top Wickets</h3>
+                  <ol id="wicketLeaders" class="leader-list"></ol>
+                </div>
+              </div>
+            </section>
+            <section class="panel season-end" id="seasonEnd" hidden></section>
+          </div>
+        </div>
+      </section>
+
+      <!-- Playoffs -->
+      <section id="playoffScreen" class="screen">
+        <div class="playoff-layout">
+          <section class="panel playoff-info">
+            <span class="mini-pill" id="playoffTitle">Qualifier 1</span>
+            <div class="playoff-outcome" id="playoffOutcome" hidden></div>
+            <div class="result-slot" id="resultSlot"></div>
+            <strong class="playoff-teams" id="playoffTeams">1st vs 2nd</strong>
+            <div class="playoff-result" id="playoffResult"></div>
+            <div class="playoff-actions" id="playoffActions">
+              <button id="playPlayoffBtn" class="primary-btn" type="button">
+                Play
+              </button>
+            </div>
+          </section>
+
+          <section id="scorecardPanel" class="panel scorecard">
+            <div class="result-banner" id="resultBanner">
+              Play the match to see the scorecard.
+            </div>
+            <div class="scorecard-grid" id="scorecardGrid"></div>
+            <div class="motm" id="motm"></div>
+            <div class="playoff-leaders" id="playoffLeaders"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" role="status" aria-live="polite"></div>
+
+    <script src="simulation.js"></script>
+  </body>
+</html>

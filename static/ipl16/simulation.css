@@ -1,0 +1,2092 @@
+:root {
+  --hdr: 3rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The `hidden` attribute must win over component display rules (e.g. buttons
+   set display:inline-flex), otherwise hidden buttons like "Advance to Playoffs"
+   stay visible for eliminated teams. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  height: 100svh;
+  background: #0a0a0a;
+  color: #fff;
+  font-family: Arial, Helvetica, sans-serif;
+  overflow: hidden;
+}
+
+/* ---------- Header (compact) ---------- */
+.sim-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: var(--hdr);
+  padding: env(safe-area-inset-top) clamp(0.8rem, 3vw, 1.4rem) 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.back-link,
+.phase-pill {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.back-link {
+  justify-self: start;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #cfcfcf;
+  font-size: 0.55rem;
+  text-decoration: none;
+}
+
+.wordmark {
+  justify-self: center;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.phase-pill {
+  justify-self: end;
+  padding: 0.28rem 0.62rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  color: #cccccc;
+  font-size: 0.55rem;
+}
+
+/* ---------- Shell ---------- */
+.sim-shell {
+  display: flex;
+  flex-direction: column;
+  width: min(120rem, 100%);
+  height: calc(100svh - var(--hdr));
+  margin: 0 auto;
+  padding: clamp(0.55rem, 1.3vw, 0.9rem) clamp(0.7rem, 1.8vw, 1.1rem)
+    calc(env(safe-area-inset-bottom) + 0.7rem);
+  overflow: hidden;
+}
+
+/* Season over: the result card carries the summary, so hide the redundant
+   top hero + strength readout to give the card and scorecard more room. */
+body.is-endgame .season-hero,
+body.is-endgame .strength-readout {
+  display: none;
+}
+
+/* ---------- Hero (small) ---------- */
+.season-hero {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.15rem;
+  color: #7e7e7e;
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2 {
+  font-family: "Anton", Impact, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(1.1rem, 2.6vw, 2rem);
+  line-height: 0.95;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 0.78rem;
+}
+
+h3 {
+  color: #bdbdbd;
+  font-size: 0.52rem;
+  margin-bottom: 0.4rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.record-card {
+  display: grid;
+  min-width: 7rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  text-align: right;
+}
+
+.record-label,
+.record-card span:last-child,
+.panel-head span,
+.fixture-head span {
+  color: #8e8e8e;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.record-card strong {
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+/* ---------- Strength readout ---------- */
+.strength-readout {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+  margin: 0 0 0.55rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.strength-readout .sr-label {
+  color: #8e8e8e;
+}
+
+.strength-readout .sr-stat {
+  color: #e6e6e6;
+}
+
+.strength-readout .sr-stat.is-weak {
+  color: #ee6e6e;
+}
+
+/* ---------- Screens fill remaining height ---------- */
+.screen {
+  display: none;
+}
+
+.screen.is-active {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Panels ---------- */
+.panel,
+.fixture-panel {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.6rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.7rem;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  flex: 0 0 auto;
+}
+
+/* ---------- Buttons ---------- */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.primary-btn {
+  width: fit-content;
+  min-height: 2rem;
+  padding: 0.5rem 0.95rem;
+  border: 1px solid #fff;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: #000;
+  color: #fff;
+}
+
+.primary-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.primary-btn.ghost {
+  background: transparent;
+  color: #fff;
+}
+
+.primary-btn.ghost:hover:not(:disabled) {
+  background: #fff;
+  color: #000;
+}
+
+.primary-btn.wide {
+  width: 100%;
+  margin-top: 0.7rem;
+}
+
+/* ---------- League screen ---------- */
+.league-top {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(0.6rem, 1.6vw, 1rem);
+}
+
+.fixture-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.85rem;
+  padding: clamp(0.85rem, 1.8vw, 1.2rem);
+}
+
+.fixture-head strong {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: clamp(1.3rem, 3.2vw, 2.2rem);
+  font-weight: 400;
+  line-height: 0.95;
+  text-transform: uppercase;
+}
+
+.results-panel {
+  min-height: 0;
+}
+
+.results-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.score-box {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left-width: 3px;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.score-box.is-win {
+  border-left-color: #5fce7e;
+}
+
+.score-box.is-loss {
+  border-left-color: #ee6e6e;
+}
+
+.score-box strong {
+  display: block;
+  margin-bottom: 0.2rem;
+  font-size: 0.66rem;
+}
+
+.score-box span {
+  color: #bcbcbc;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---------- League left column: fixture card + roster + buttons ---------- */
+.league-left {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: clamp(0.35rem, 1vw, 0.55rem);
+}
+
+.fixture-card {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: clamp(0.5rem, 1.2vw, 0.7rem);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.6rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.round-label {
+  color: #8e8e8e;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.fixture-status {
+  margin: 0.3rem 0;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: clamp(1.1rem, 2.6vw, 1.6rem);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.vs-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 0.55rem;
+}
+
+.vs-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.vs-name {
+  font-family: "Anton", Impact, sans-serif;
+  font-size: clamp(1rem, 2vw, 1.3rem);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.vs-divider {
+  align-self: center;
+  color: #6f6f6f;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 1.1rem;
+}
+
+.vs-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.75rem;
+}
+
+.vs-stat {
+  color: #dadada;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.vs-stat b {
+  margin-right: 0.22rem;
+  color: #8e8e8e;
+}
+
+.fixture-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.45rem 0.6rem;
+  border-left: 3px solid #5fce7e;
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.fixture-result.is-loss {
+  border-left-color: #ee6e6e;
+}
+
+.fr-verdict {
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+
+.fixture-result.is-win .fr-verdict {
+  color: #72d88d;
+}
+
+.fixture-result.is-loss .fr-verdict {
+  color: #ee6e6e;
+}
+
+.fr-score {
+  color: #bcbcbc;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pitch-badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.pitch-badge .pb-icon {
+  font-size: 0.7rem;
+}
+
+.pitch-batting {
+  border-color: rgba(95, 206, 126, 0.5);
+  background: rgba(95, 206, 126, 0.12);
+  color: #8fe0a5;
+}
+
+.pitch-neutral {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  color: #dcdcdc;
+}
+
+.pitch-bowling {
+  border-color: rgba(196, 142, 90, 0.55);
+  background: rgba(196, 142, 90, 0.14);
+  color: #d3a173;
+}
+
+.roster-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.6rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.roster-scroll {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.roster-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.roster-table td {
+  padding: 0.32rem 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.r-plane {
+  width: 0.88rem;
+  height: 0.88rem;
+  margin-left: 0.15rem;
+  object-fit: contain;
+  vertical-align: -2px;
+  opacity: 0.85;
+}
+
+.roster-table .r-slot {
+  width: 1.6rem;
+  color: #777;
+  font-size: 0.72rem;
+}
+
+.roster-table .r-name {
+  color: #fff;
+}
+
+.roster-table .r-ovr {
+  width: 2.6rem;
+  text-align: right;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 1.1rem;
+}
+
+.wk-tag {
+  margin-left: 0.3rem;
+  padding: 0.1rem 0.32rem;
+  border-radius: 0.25rem;
+  background: rgba(255, 255, 255, 0.12);
+  color: #cfcfcf;
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+}
+
+.league-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.league-actions .primary-btn {
+  flex: 1 1 0;
+  width: auto;
+}
+
+/* ---------- OVR tier colours (shared with the draft palette) ---------- */
+.ovr-gold {
+  color: #f2cd5c;
+}
+.ovr-blue {
+  color: #5fa8ee;
+}
+.ovr-green {
+  color: #5fce7e;
+}
+.ovr-white {
+  color: #ffffff;
+}
+
+/* ---------- Role badges (mirrors the draft) ---------- */
+.role-badge {
+  display: inline-block;
+  padding: 0.14rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  color: #c5c5c5;
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.role-opener {
+  border-color: rgba(255, 86, 86, 0.58);
+  background: rgba(255, 86, 86, 0.13);
+  color: #ff7070;
+}
+
+.role-middle {
+  border-color: rgba(95, 206, 126, 0.58);
+  background: rgba(95, 206, 126, 0.13);
+  color: #72d88d;
+}
+
+.role-finisher {
+  border-color: rgba(255, 158, 72, 0.6);
+  background: rgba(255, 158, 72, 0.14);
+  color: #ffa85f;
+}
+
+.role-lower {
+  border-color: rgba(95, 168, 238, 0.6);
+  background: rgba(95, 168, 238, 0.14);
+  color: #79baff;
+}
+
+/* ---------- Table screen ---------- */
+.table-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(0.6rem, 1.6vw, 1rem);
+}
+
+.table-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-right .panel {
+  flex: 1 1 auto;
+}
+
+.table-panel {
+  min-height: 0;
+}
+
+.table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.42rem 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  text-align: right;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: #111111;
+  color: #777;
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+td {
+  color: #d7d7d7;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+tr.is-user td {
+  color: #fff;
+}
+
+tr.is-user td:first-child {
+  box-shadow: inset 3px 0 0 #5fce7e;
+}
+
+.leaders-panel {
+  min-height: 0;
+}
+
+.leader-columns {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem;
+}
+
+.leader-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.leader-list li {
+  color: #d8d8d8;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.leader-list span {
+  display: block;
+  color: #777;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ---------- Season-over panel ---------- */
+.season-end {
+  min-height: 0;
+}
+
+.season-end:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.season-end .result-slot {
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+}
+
+/* Left panel elim info (rank + caps + back btn) */
+.elim-left-info {
+  margin-top: auto;
+  padding-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.season-end-msg {
+  color: #f1c0c0;
+  font-weight: 700;
+  font-size: 0.74rem;
+  margin: 0;
+}
+
+/* ---------- Mini leaders summary (playoff + season end) ---------- */
+.mini-leaders {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.2rem 0 0.8rem;
+}
+
+.mini-leaders > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.mini-leaders span {
+  color: #777;
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.mini-leaders strong {
+  font-size: 0.74rem;
+}
+
+.mini-leaders em {
+  color: #9a9a9a;
+  font-style: normal;
+  font-size: 0.56rem;
+  font-weight: 700;
+}
+
+/* ---------- Cap awards (Orange / Purple) ---------- */
+.cap-awards {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.4rem 0 0.85rem;
+}
+
+.cap-award {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left-width: 3px;
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cap-award.is-orange {
+  border-left-color: #f2913c;
+}
+
+.cap-award.is-purple {
+  border-left-color: #9a6ce0;
+}
+
+.cap-img {
+  width: 2.6rem;
+  height: 2.6rem;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.cap-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.cap-label {
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.is-orange .cap-label {
+  color: #f2a35c;
+}
+
+.is-purple .cap-label {
+  color: #b18ce8;
+}
+
+.cap-meta strong {
+  font-size: 0.74rem;
+}
+
+.tier-badge {
+  font-size: 0.7em;
+  margin-left: 0.2em;
+  vertical-align: middle;
+}
+
+.cap-meta em {
+  color: #9a9a9a;
+  font-style: normal;
+  font-size: 0.56rem;
+  font-weight: 700;
+}
+
+/* ---------- Elimination screen ---------- */
+.elim-stage {
+  margin: 0.1rem 0 0;
+  color: #f1c0c0;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.elim-record {
+  margin: 0.35rem 0 0;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.elim-mine {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.55rem;
+}
+
+.elim-mine p {
+  margin: 0;
+  color: #cfcfcf;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.elim-mine strong {
+  color: #fff;
+}
+
+.elim-mine em {
+  color: #8fbf9f;
+  font-style: normal;
+}
+
+/* ---------- Playoff screen ---------- */
+.playoff-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 0.32fr) minmax(0, 0.68fr);
+  gap: clamp(0.6rem, 1.6vw, 1rem);
+}
+
+.playoff-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  overflow: hidden;
+}
+
+.mini-pill {
+  align-self: flex-start;
+  padding: 0.28rem 0.62rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  color: #cccccc;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.playoff-outcome {
+  padding: 0.3rem 0;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: clamp(1.4rem, 3.2vw, 2.3rem);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.playoff-outcome.is-champion {
+  color: #f2cd5c;
+}
+
+.playoff-outcome.is-runnerup {
+  color: #cfcfcf;
+}
+
+.playoff-outcome.is-eliminated {
+  color: #ee6e6e;
+}
+
+.playoff-teams {
+  font-family: "Anton", Impact, sans-serif;
+  font-size: clamp(1.1rem, 2.4vw, 1.7rem);
+  font-weight: 400;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.playoff-result {
+  color: #bdbdbd;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.playoff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+}
+
+/* ---------- Scorecard ---------- */
+.scorecard {
+  min-height: 0;
+}
+
+.result-banner {
+  flex: 0 0 auto;
+  margin-bottom: 0.55rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  font-family: "Anton", Impact, sans-serif;
+  font-size: clamp(0.85rem, 1.8vw, 1.3rem);
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.result-banner.is-win {
+  border-color: rgba(95, 206, 126, 0.6);
+}
+
+.result-banner.is-loss {
+  border-color: rgba(238, 110, 110, 0.6);
+}
+
+.scorecard-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.innings-block {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.innings-block h3 {
+  margin-bottom: 0.15rem;
+  color: #e6e6e6;
+  font-family: "Anton", Impact, sans-serif;
+  font-weight: 400;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+}
+
+.score-table {
+  display: grid;
+  gap: 0.12rem;
+  margin-bottom: 0.4rem;
+}
+
+.score-row {
+  display: grid;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.22rem 0.45rem;
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.045);
+  color: #dcdcdc;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.score-row.bat {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.3fr) 1.7rem 1.7rem 2.5rem;
+}
+
+.score-row.bowl {
+  grid-template-columns: minmax(0, 1fr) 1.4rem 1.4rem 1.9rem 2.6rem;
+}
+
+.score-row > div:not(.c-name):not(.c-dis) {
+  text-align: right;
+}
+
+.c-name,
+.c-dis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.c-dis {
+  color: #8a8a8a;
+  font-weight: 600;
+}
+
+.score-row.head {
+  padding-top: 0;
+  padding-bottom: 0.1rem;
+  background: none;
+  color: #777;
+  font-size: 0.69rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.score-row.head .c-dis {
+  color: #777;
+}
+
+.score-row.is-dnb {
+  opacity: 0.45;
+}
+
+.motm {
+  flex: 0 0 auto;
+  margin-top: 0.5rem;
+  color: #f2cd5c;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Orange/Purple cap awards sit at the bottom of the scorecard panel */
+#scorecardPanel .playoff-leaders {
+  flex: 0 0 auto;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom) + 1.5rem);
+  z-index: 10;
+  max-width: 90vw;
+  padding: 0.85rem 1.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.96);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  opacity: 0;
+  transform: translateX(-50%) translateY(12px);
+  pointer-events: none;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ---------- Mobile (860px — basic stacking) ---------- */
+@media (max-width: 860px) {
+  body {
+    height: auto;
+    overflow: auto;
+  }
+
+  .sim-shell {
+    height: auto;
+    overflow: visible;
+  }
+
+  .screen.is-active {
+    display: block;
+  }
+
+  .season-hero {
+    display: grid;
+  }
+
+  .record-card {
+    width: 100%;
+    text-align: left;
+  }
+
+  .sim-header {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .league-top,
+  .table-grid,
+  .playoff-layout,
+  .scorecard-grid,
+  .leader-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .results-list,
+  .leader-columns,
+  .playoff-info,
+  .scorecard-grid {
+    overflow: visible;
+  }
+
+  .league-left {
+    height: auto;
+  }
+
+  .roster-card {
+    flex: 0 0 auto;
+  }
+
+  .roster-scroll {
+    height: auto;
+    max-height: 45vh;
+  }
+}
+
+/* ===================== MOBILE 768px (390px target) ===================== */
+@media (max-width: 768px) {
+  /* Global */
+  * { box-sizing: border-box; }
+
+  body {
+    overflow-x: hidden;
+    max-width: 100vw;
+    font-size: 14px;
+    height: auto;
+    overflow-y: auto;
+  }
+
+  /* ---------- Header ---------- */
+  .sim-header {
+    grid-template-columns: auto 1fr auto;
+    padding: calc(env(safe-area-inset-top) + 0.55rem) 1rem 0.55rem;
+    height: auto;
+    gap: 0.5rem;
+  }
+
+  .back-link {
+    font-size: 0.5rem;
+    padding: 0.32rem 0.5rem;
+    letter-spacing: 0.08em;
+  }
+
+  .wordmark {
+    font-size: 1rem;
+  }
+
+  .phase-pill {
+    font-size: 0.5rem;
+    padding: 0.24rem 0.5rem;
+  }
+
+  /* ---------- Shell ---------- */
+  .sim-shell {
+    height: auto;
+    overflow: visible;
+    padding: 0.5rem 1rem calc(env(safe-area-inset-bottom) + 1rem);
+  }
+
+  /* ---------- Season hero ---------- */
+  .season-hero {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+
+  h1 {
+    font-size: clamp(1rem, 5vw, 1.4rem);
+  }
+
+  .eyebrow {
+    font-size: 0.45rem;
+    letter-spacing: 0.12em;
+  }
+
+  .record-card {
+    min-width: 0;
+    padding: 0.3rem 0.5rem;
+    text-align: right;
+  }
+
+  .record-card strong {
+    font-size: 0.9rem;
+  }
+
+  .record-label,
+  .record-card span:last-child {
+    font-size: 0.52rem;
+  }
+
+  /* ---------- Strength readout: 3-col bar ---------- */
+  .strength-readout {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    margin-bottom: 0.4rem;
+    text-align: center;
+    font-size: 0.5rem;
+  }
+
+  /* ---------- Screen is-active on mobile ---------- */
+  .screen.is-active {
+    display: block;
+    min-height: 0;
+    flex: none;
+  }
+
+  /* ============ LEAGUE PHASE ============ */
+  .league-top {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .league-left {
+    height: auto;
+    gap: 0.5rem;
+  }
+
+  /* Fixture card */
+  .fixture-card {
+    padding: 0.6rem 0.75rem;
+    gap: 0.3rem;
+  }
+
+  .round-label {
+    font-size: 0.56rem;
+    letter-spacing: 0.12em;
+  }
+
+  .fixture-status {
+    font-size: clamp(0.9rem, 4.5vw, 1.3rem);
+  }
+
+  .vs-row {
+    gap: 0.35rem;
+  }
+
+  .vs-box {
+    padding: 0.5rem 0.6rem;
+    gap: 0.3rem;
+  }
+
+  .vs-name {
+    font-size: clamp(0.9rem, 4vw, 1.1rem);
+  }
+
+  .vs-stat {
+    font-size: 0.64rem;
+  }
+
+  .vs-divider {
+    font-size: 0.9rem;
+  }
+
+  .fixture-result {
+    padding: 0.35rem 0.5rem;
+  }
+
+  .fr-verdict {
+    font-size: 0.78rem;
+  }
+
+  .fr-score {
+    font-size: 0.5rem;
+  }
+
+  /* Roster */
+  .roster-card {
+    flex: 0 0 auto;
+  }
+
+  .roster-scroll {
+    height: auto;
+    max-height: 35vh;
+    overflow-y: auto;
+  }
+
+  .roster-table td {
+    font-size: 0.72rem;
+    padding: 0.28rem 0.45rem;
+  }
+
+  .roster-table .r-ovr {
+    font-size: 0.88rem;
+  }
+
+  /* Simulate button: full width, tall */
+  .league-actions {
+    flex-direction: column;
+    flex-wrap: nowrap;
+  }
+
+  .league-actions .primary-btn {
+    width: 100%;
+    flex: none;
+    min-height: 44px;
+    font-size: 0.72rem;
+  }
+
+  /* Results list */
+  .results-panel {
+    overflow: visible;
+  }
+
+  .results-list {
+    overflow: visible;
+    max-height: none;
+    gap: 0.35rem;
+  }
+
+  .score-box strong {
+    font-size: 0.64rem;
+  }
+
+  .score-box span {
+    font-size: 0.52rem;
+  }
+
+  /* ============ LEAGUE TABLE ============ */
+  .table-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .table-panel {
+    padding: 0.65rem 0.75rem;
+  }
+
+  table th,
+  table td {
+    padding: 0.38rem 0.28rem;
+    font-size: 0.66rem;
+  }
+
+  table th {
+    font-size: 0.54rem;
+  }
+
+  /* Keep the team name column from eating the row — let stat cols breathe */
+  table th:first-child,
+  table td:first-child {
+    max-width: 6.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Advance button: full width, sticky bottom */
+  #playoffBtn {
+    position: fixed;
+    bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+    min-height: 48px;
+    margin-top: 0;
+    z-index: 30;
+    font-size: 0.76rem;
+  }
+
+  /* Pad table so fixed playoff btn doesn't cover last row when visible */
+  #tableScreen .table-panel {
+    padding-bottom: 4.5rem;
+  }
+
+  /* Leaders: stacked, full width */
+  .table-right .panel {
+    flex: 0 0 auto;
+  }
+
+  .leader-columns {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+    overflow: visible;
+  }
+
+  .leader-list li {
+    font-size: 0.74rem;
+  }
+
+  .leader-list span {
+    font-size: 0.58rem;
+  }
+
+  /* Season-end / elim left info */
+  .elim-left-info {
+    padding-top: 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .season-end-msg {
+    font-size: 0.7rem;
+  }
+
+  /* ============ PLAYOFF SCREEN ============ */
+  .playoff-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    min-height: 0;
+  }
+
+  .playoff-info {
+    overflow: visible;
+    gap: 0.4rem;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .mini-pill {
+    font-size: 0.5rem;
+    padding: 0.24rem 0.5rem;
+  }
+
+  .playoff-outcome {
+    font-size: clamp(1.2rem, 6vw, 1.8rem);
+    padding: 0.2rem 0;
+  }
+
+  .playoff-teams {
+    font-size: clamp(0.9rem, 4.5vw, 1.3rem);
+  }
+
+  .playoff-result {
+    font-size: 0.6rem;
+    line-height: 1.45;
+  }
+
+  .playoff-actions {
+    padding-top: 0.4rem;
+    gap: 0.4rem;
+  }
+
+  /* Play / Next button: fixed bottom */
+  #playPlayoffBtn {
+    position: fixed;
+    bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+    min-height: 48px;
+    margin-top: 0;
+    z-index: 30;
+    font-size: 0.76rem;
+  }
+
+  .playoff-info {
+    padding-bottom: 4rem;
+  }
+
+  /* Result banner */
+  .result-banner {
+    font-size: clamp(0.72rem, 3.5vw, 0.95rem);
+    padding: 0.4rem 0.55rem;
+    line-height: 1.25;
+  }
+
+  /* Scorecard: single column stacked innings */
+  .scorecard {
+    padding: 0.65rem 0.75rem;
+    overflow: visible;
+  }
+
+  .scorecard-grid {
+    grid-template-columns: 1fr;
+    gap: 0.65rem;
+    overflow: visible;
+    min-height: 0;
+  }
+
+  .innings-block h3 {
+    font-size: 0.68rem;
+  }
+
+  /* Batting rows: 4 cols, dismissal as 2nd line under name */
+  .score-row.bat {
+    grid-template-columns: 1fr 1.5rem 1.5rem 2.3rem;
+    grid-template-rows: auto auto;
+    row-gap: 0;
+    font-size: 0.68rem;
+    padding: 0.2rem 0.4rem;
+  }
+
+  .score-row.bat > *:nth-child(1) { /* name */
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .score-row.bat > *:nth-child(2) { /* dismissal */
+    grid-row: 2;
+    grid-column: 1;
+    font-size: 0.55rem;
+    color: #8a8a8a;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-bottom: 0.15rem;
+  }
+
+  .score-row.bat > *:nth-child(3) { /* R */
+    grid-row: 1 / 3;
+    grid-column: 2;
+    align-self: center;
+  }
+
+  .score-row.bat > *:nth-child(4) { /* B */
+    grid-row: 1 / 3;
+    grid-column: 3;
+    align-self: center;
+  }
+
+  .score-row.bat > *:nth-child(5) { /* SR */
+    grid-row: 1 / 3;
+    grid-column: 4;
+    align-self: center;
+  }
+
+  /* Batting head row: single row, hide dismissal header */
+  .score-row.bat.head {
+    grid-template-rows: auto;
+    font-size: 0.56rem;
+  }
+
+  .score-row.bat.head > *:nth-child(2) {
+    display: none;
+  }
+
+  .score-row.bat.head > *:nth-child(3) {
+    grid-row: 1;
+  }
+
+  .score-row.bat.head > *:nth-child(4) {
+    grid-row: 1;
+  }
+
+  .score-row.bat.head > *:nth-child(5) {
+    grid-row: 1;
+  }
+
+  /* Bowling rows: compact */
+  .score-row.bowl {
+    grid-template-columns: 1fr 1.5rem 1.5rem 1.7rem 2.4rem;
+    font-size: 0.68rem;
+    padding: 0.2rem 0.4rem;
+  }
+
+  .score-row.bowl.head {
+    font-size: 0.56rem;
+  }
+
+  /* MoTM */
+  .motm {
+    font-size: 0.54rem;
+    margin-top: 0.4rem;
+  }
+
+  /* Elim screen */
+  .elim-stage {
+    font-size: 0.64rem;
+  }
+
+  .elim-record {
+    font-size: 0.84rem;
+  }
+
+  /* ============ RESULT CARD (inline) ============ */
+  .result-slot {
+    margin-top: 0.5rem;
+  }
+
+  .result-card {
+    width: 100%;
+    max-width: 390px;
+    padding: 1.1rem 1rem;
+    border-radius: 0.85rem;
+  }
+
+  .rc-wordmark {
+    font-size: 1.1rem;
+  }
+
+  .rc-record {
+    font-size: 56px;
+    margin-top: 0.65rem;
+  }
+
+  .rc-wl {
+    font-size: 0.55rem;
+    letter-spacing: 0.2em;
+  }
+
+  .rc-sub {
+    font-size: 0.66rem;
+    margin-top: 0.35rem;
+  }
+
+  .rc-badge {
+    font-size: 0.9rem;
+    padding: 0.3rem 0.85rem;
+  }
+
+  .rc-badge-wrap {
+    margin: 0.65rem 0;
+  }
+
+  .rc-xi {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 0.75rem;
+    margin: 0.4rem 0;
+  }
+
+  .rc-pname {
+    font-size: 0.62rem;
+  }
+
+  .rc-povr {
+    font-size: 0.75rem;
+  }
+
+  .rc-leaders {
+    gap: 0.6rem;
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+  }
+
+  .rc-leader-label {
+    font-size: 0.5rem;
+  }
+
+  .rc-leader strong {
+    font-size: 0.66rem;
+  }
+
+  .rc-foot {
+    margin-top: 0.75rem;
+  }
+
+  .rc-foot span {
+    font-size: 0.54rem;
+  }
+
+  /* Result actions: side by side */
+  .result-actions {
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+    justify-content: stretch;
+  }
+
+  .result-actions .primary-btn {
+    flex: 1 1 0;
+    width: auto;
+    min-height: 44px;
+    font-size: 0.62rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .play-again-btn {
+    min-height: 44px;
+    font-size: 0.68rem;
+    margin-top: 0.4rem;
+  }
+
+  /* Cap awards on mobile: compact */
+  .cap-awards {
+    gap: 0.4rem;
+    margin: 0.3rem 0 0.65rem;
+  }
+
+  .cap-award {
+    padding: 0.4rem 0.55rem;
+    gap: 0.5rem;
+  }
+
+  .cap-img {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .cap-meta strong {
+    font-size: 0.66rem;
+  }
+
+  .cap-meta em {
+    font-size: 0.5rem;
+  }
+
+  /* Mini leaders */
+  .mini-leaders strong {
+    font-size: 0.66rem;
+  }
+
+  /* Playoff leaders in scorecard panel */
+  #scorecardPanel .playoff-leaders {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+  }
+
+  /* Toast */
+  .toast {
+    font-size: 0.6rem;
+    padding: 0.7rem 1rem;
+    max-width: calc(100vw - 2rem);
+  }
+}
+
+/* ===================== Shareable result card ===================== */
+.result-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem 1rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.82);
+}
+
+.result-overlay[hidden] {
+  display: none;
+}
+
+.result-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.result-slot {
+  margin-top: 0.7rem;
+}
+
+.season-end .result-slot .result-card,
+.season-end .result-slot .result-actions,
+.season-end .result-slot .play-again-btn {
+  width: 100%;
+  max-width: 420px;
+}
+
+.result-card {
+  width: 420px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 1.5rem 1.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1rem;
+  background: #0f0f0f;
+  color: #ffffff;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.rc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rc-wordmark {
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
+}
+
+.rc-tags {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.rc-tag {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  color: #b8b8b8;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rc-ovr-tag {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.rc-record {
+  margin-top: 0.9rem;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 72px;
+  font-weight: 700;
+  line-height: 0.9;
+  text-align: center;
+  color: #ffffff;
+}
+
+.rc-wl {
+  text-align: center;
+  color: #8a8a8a;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+}
+
+.rc-sub {
+  margin-top: 0.45rem;
+  text-align: center;
+  color: #cccccc;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.rc-badge-wrap {
+  margin: 0.9rem 0;
+  text-align: center;
+}
+
+.rc-badge {
+  display: inline-block;
+  padding: 0.4rem 1rem;
+  border-radius: 999px;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.badge-gold {
+  border: 1px solid #ffd700;
+  background: rgba(255, 215, 0, 0.14);
+  color: #ffd700;
+}
+
+.badge-silver {
+  border: 1px solid #c0c0c0;
+  background: rgba(192, 192, 192, 0.14);
+  color: #dcdcdc;
+}
+
+.badge-red {
+  border: 1px solid #ef4444;
+  background: rgba(239, 68, 68, 0.14);
+  color: #ff6b6b;
+}
+
+.rc-xi {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.rc-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rc-player {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.rc-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1.18rem;
+  height: 1.18rem;
+  border-radius: 0.3rem;
+  color: #0f0f0f;
+  font-size: 0.56rem;
+  font-weight: 800;
+}
+
+.pos-blue { background: #5fa8ee; }
+.pos-green { background: #5fce7e; }
+.pos-gold { background: #f2cd5c; }
+.pos-red { background: #ef6b6b; }
+
+.rc-pname {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rc-povr {
+  flex-shrink: 0;
+  font-family: "Anton", Impact, sans-serif;
+  font-size: 0.85rem;
+}
+
+.rc-leaders {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.rc-leader {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.rc-leader-label {
+  color: #8a8a8a;
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rc-leader strong {
+  font-size: 0.74rem;
+}
+
+.rc-leader em {
+  color: #9a9a9a;
+  font-style: normal;
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+.rc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+}
+
+.rc-foot span {
+  color: #7a7a7a;
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+.rc-brand {
+  color: #5fce7e !important;
+  letter-spacing: 0.02em;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-start;
+  margin-top: 0.6rem;
+}
+
+.result-actions .primary-btn {
+  gap: 0.35rem;
+}
+
+.play-again-btn {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  text-align: center;
+  text-decoration: none;
+}
+
+.share-ico {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex-shrink: 0;
+}
+
+.result-actions .primary-btn {
+  width: auto;
+}
+
+.result-close {
+  padding: 0.3rem;
+  border: none;
+  background: none;
+  color: #9a9a9a;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.result-close:hover {
+  color: #ffffff;
+}

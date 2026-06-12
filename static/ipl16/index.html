@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>IPL Draft</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <img class="bg" src="assets/landing.png" alt="" />
+    <div class="bg-scrim" aria-hidden="true"></div>
+
+    <!-- ===================== LANDING ===================== -->
+    <main id="landing" class="screen is-active">
+      <header>
+        <h1>16-0</h1>
+        <p class="record-label">Can your team go undefeated?</p>
+        <p class="tagline">Build your XI. Simulate an IPL season.</p>
+        <dl class="stats">
+          <div>
+            <dt>19</dt>
+            <dd>Teams</dd>
+          </div>
+          <div>
+            <dt>809+</dt>
+            <dd>Players</dd>
+          </div>
+          <div>
+            <dt>2008–2026</dt>
+            <dd>Seasons</dd>
+          </div>
+        </dl>
+        <button class="start-button" type="button">Start Draft</button>
+      </header>
+    </main>
+
+    <!-- ===================== SETUP ===================== -->
+    <section id="setup" class="screen" aria-hidden="true">
+      <div class="setup-inner">
+        <div class="setup-top">
+          <button class="back-btn" type="button" aria-label="Back to home">
+            ← Back
+          </button>
+          <span class="wordmark">16-0</span>
+          <span class="setup-top-spacer" aria-hidden="true"></span>
+        </div>
+
+        <h2 class="setup-title">Draft Setup</h2>
+        <p class="setup-sub">Set your rules, then spin for your first franchise.</p>
+
+        <!-- Difficulty -->
+        <section class="group" data-setting="difficulty">
+          <h3 class="group-label">Difficulty</h3>
+          <div class="options cols-3" role="group" aria-label="Difficulty">
+            <button class="opt" type="button" data-value="easy" aria-pressed="false">
+              <span class="opt-title">Easy</span>
+              <span class="opt-desc">3 re-spins · limits relaxed</span>
+            </button>
+            <button class="opt is-selected" type="button" data-value="normal" aria-pressed="true">
+              <span class="opt-title">Normal</span>
+              <span class="opt-desc">1 re-spin available</span>
+            </button>
+            <button class="opt" type="button" data-value="hard" aria-pressed="false">
+              <span class="opt-title">Hard</span>
+              <span class="opt-desc">No re-spins · strict limits</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Show Ratings -->
+        <section class="group" data-setting="showRatings">
+          <h3 class="group-label">Show Ratings</h3>
+          <div class="options cols-2" role="group" aria-label="Show ratings">
+            <button class="opt is-selected" type="button" data-value="on" aria-pressed="true">
+              <span class="opt-title">On</span>
+              <span class="opt-desc">OVR shown on every player</span>
+            </button>
+            <button class="opt" type="button" data-value="off" aria-pressed="false">
+              <span class="opt-title">Off</span>
+              <span class="opt-desc">Blind draft — trust your gut</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Draft Mode -->
+        <section class="group" data-setting="draftMode">
+          <h3 class="group-label">Draft Mode</h3>
+          <div class="options cols-2" role="group" aria-label="Draft mode">
+            <button class="opt is-selected" type="button" data-value="squad" aria-pressed="true">
+              <span class="opt-title">Squad First</span>
+              <span class="opt-desc">Spin a franchise, pick any player</span>
+            </button>
+            <button class="opt" type="button" data-value="position" aria-pressed="false">
+              <span class="opt-title">Position First</span>
+              <span class="opt-desc">Pick a slot, then spin to fill it</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Player Ratings -->
+        <section class="group" data-setting="playerRatings">
+          <h3 class="group-label">Player Ratings</h3>
+          <div class="options cols-2" role="group" aria-label="Player ratings">
+            <button class="opt is-selected" type="button" data-value="career" aria-pressed="true">
+              <span class="opt-title">Career Seasons</span>
+              <span class="opt-desc">Rated as that exact season</span>
+            </button>
+            <button class="opt" type="button" data-value="prime" aria-pressed="false">
+              <span class="opt-title">Prime Mode</span>
+              <span class="opt-desc">Everyone at career-best rating</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Era -->
+        <section class="group" data-setting="era">
+          <h3 class="group-label">Era</h3>
+          <div class="options cols-4" role="group" aria-label="Era preset">
+            <button class="opt is-selected" type="button" data-value="all" aria-pressed="true">
+              <span class="opt-title">All-time</span>
+            </button>
+            <button class="opt" type="button" data-value="2012" aria-pressed="false">
+              <span class="opt-title">2012+</span>
+            </button>
+            <button class="opt" type="button" data-value="2016" aria-pressed="false">
+              <span class="opt-title">2016+</span>
+            </button>
+            <button class="opt" type="button" data-value="2020" aria-pressed="false">
+              <span class="opt-title">2020+</span>
+            </button>
+          </div>
+
+          <div class="era-slider">
+            <div class="era-track"><div class="era-fill"></div></div>
+            <input
+              type="range"
+              id="eraMin"
+              min="2008"
+              max="2026"
+              value="2008"
+              step="1"
+              aria-label="Earliest season"
+            />
+            <input
+              type="range"
+              id="eraMax"
+              min="2008"
+              max="2026"
+              value="2026"
+              step="1"
+              aria-label="Latest season"
+            />
+          </div>
+          <div class="era-readout">
+            <span id="eraFrom">2008</span>
+            <span id="eraCount">19 of 19 seasons</span>
+            <span id="eraTo">2026</span>
+          </div>
+          <p class="era-hint">
+            Only franchise-seasons in this range can be spun — narrow it to draft
+            from an era you know.
+          </p>
+        </section>
+
+        <button id="beginDraft" class="primary-btn" type="button">
+          Start Draft →
+        </button>
+
+        <footer class="setup-footer">
+          <p class="disclaimer">
+            16-0 is an independent, fan-made game. Not affiliated with, endorsed
+            by, or sponsored by the BCCI, the IPL, or any franchise. All team and
+            player names and statistics are used for informational and
+            descriptive purposes only.
+          </p>
+          <p class="copyright">© 2026 16-0game.vercel.app</p>
+        </footer>
+      </div>
+    </section>
+
+    <div class="toast" role="status" aria-live="polite"></div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
