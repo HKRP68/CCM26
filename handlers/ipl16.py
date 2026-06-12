@@ -22,24 +22,22 @@ logger = logging.getLogger(__name__)
 
 
 async def ipl160_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    webapp_url = os.getenv("WEBAPP_URL", "").strip()
-    if not webapp_url:
+    # Reuse the cricket Mini App host helper: WEBAPP_URL often points at
+    # /webapp, but the 16-0 game is served at the site root (/ipl16/), so we
+    # reduce WEBAPP_URL to scheme+host before appending the game path.
+    from services.match_broadcast import _webapp_host
+    host = _webapp_host()
+    if not host:
         await update.message.reply_text(
             "⚠️ <b>16-0 Mini App not configured.</b>\n\n"
             "<i>Admin: set the <code>WEBAPP_URL</code> env var to your "
-            "deployed HTTPS URL (the game is served at "
-            "<code>&lt;WEBAPP_URL&gt;/ipl16/</code>).</i>",
-            parse_mode="HTML",
-        )
-        return
-    if not webapp_url.startswith("https://"):
-        await update.message.reply_text(
-            "⚠️ Mini App URL must be HTTPS. Current: " + webapp_url[:80],
+            "deployed HTTPS URL. The game is served at "
+            "<code>https://&lt;host&gt;/ipl16/</code>.</i>",
             parse_mode="HTML",
         )
         return
 
-    game_url = f"{webapp_url.rstrip('/')}/ipl16/"
+    game_url = f"{host}/ipl16/"
 
     # WebApp buttons only work in PRIVATE chats. In groups, fall back to a
     # url= deep link that launches the bot's Mini App.
