@@ -277,13 +277,23 @@ def _league_teams(session, league_key, league_record=None):
     return teams
 
 
-def _team_keyboard(draft_id, teams, unavailable_teams=None):
+def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
+    """Build the team-selection keyboard.
+
+    Buttons show the team's short code (e.g. ``MI``, ``CSK``) rather than the
+    long full name; ``team_codes`` maps full name → short code (precomputed at
+    draft time so it stays consistent across re-renders). A Cancel button lets
+    either participant abort the selection.
+    """
     unavailable = {team for team in (unavailable_teams or []) if team}
+    codes = team_codes or {}
     rows = []
     for idx, team in enumerate(teams):
         if team in unavailable:
             continue
-        rows.append([InlineKeyboardButton(team, callback_data=f"cl_team_{draft_id}_{idx}")])
+        label = codes.get(team) or team
+        rows.append([InlineKeyboardButton(label, callback_data=f"cl_team_{draft_id}_{idx}")])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cl_cancel_{draft_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -582,10 +592,13 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None):
     draft_id = random.randint(100000, 999999)
     while context.bot_data.get(_challenge_team_draft_key(draft_id)):
         draft_id = random.randint(100000, 999999)
+    # Resolve short codes once (a session is in scope here) so button labels and
+    # later re-renders in the callback stay consistent without re-querying.
+    team_codes = {t: (_team_short_code(t, league_key, session) or t) for t in teams}
     context.bot_data[_challenge_team_draft_key(draft_id)] = {
         "draft_id": draft_id,
         "chat_id": update.effective_chat.id,
@@ -596,6 +609,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         "league_key": league_key,
         "league_name": league_name,
         "teams": teams,
+        "team_codes": team_codes,
         "turn": "host",
         "host": {
             "user_id": challenger.id,
@@ -611,7 +625,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     }
     draft = context.bot_data[_challenge_team_draft_key(draft_id)]
     caption = _team_picker_prompt(draft, "host")
-    markup = _team_keyboard(draft_id, teams)
+    markup = _team_keyboard(draft_id, teams, team_codes=team_codes)
     image_url = _league_image_url(league_record)
     local_path = _local_static_path(image_url)
     sent = None
@@ -781,7 +795,7 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         await _send_league_team_picker(
             update, context, challenger=challenger, target=target,
             league_key=league_key, league_name=league_name,
-            league_record=league_record, teams=teams,
+            league_record=league_record, teams=teams, session=session,
         )
     finally:
         session.close()
@@ -846,7 +860,8 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
             caption=message,
             parse_mode="HTML",
             reply_markup=_team_keyboard(
-                draft_id, teams, [] if same_team_allowed else [draft.get("host_team")]
+                draft_id, teams, [] if same_team_allowed else [draft.get("host_team")],
+                team_codes=draft.get("team_codes"),
             ),
         )
     except Exception:
@@ -855,7 +870,8 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
                 message,
                 parse_mode="HTML",
                 reply_markup=_team_keyboard(
-                    draft_id, teams, [] if same_team_allowed else [draft.get("host_team")]
+                    draft_id, teams, [] if same_team_allowed else [draft.get("host_team")],
+                    team_codes=draft.get("team_codes"),
                 ),
             )
         except Exception:
@@ -882,6 +898,41 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
                 _track_setup_msg(draft, message_obj)
             except Exception:
                 logger.exception("Failed to send challenge created Playing XI message")
+
+
+async def challenge_team_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cl_cancel_{draft_id} — either participant aborts team selection."""
+    query = update.callback_query
+    try:
+        _, _, draft_id = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid request.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft:
+        await query.answer("This team selection is no longer active.", show_alert=True)
+        return
+    if draft.get("turn") == "complete":
+        await query.answer("Team selection is already complete.", show_alert=True)
+        return
+
+    participants = {draft.get("host_tg_id"), draft.get("target_tg_id")}
+    if query.from_user.id not in participants:
+        await query.answer("Only the players in this challenge can cancel.", show_alert=True)
+        return
+
+    context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+    await query.answer("Cancelled.")
+    message = "❌ <b>Team selection cancelled.</b>"
+    try:
+        await query.edit_message_caption(caption=message, parse_mode="HTML")
+    except Exception:
+        try:
+            await query.edit_message_text(message, parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to update cancelled team picker message")
 
 
 async def _expire_cm_lobby(ctx):

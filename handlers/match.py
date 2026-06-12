@@ -805,11 +805,17 @@ async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
     finally: session.close()
 
 
-def _calc_potm(s):
+def _calc_potm(s, winner_name=None):
     """Calculate Player of the Match using Impact Points.
 
     Batting impact: runs + (4s × 1) + (6s × 2) + (bonus if 50/100) - (penalty if out cheap)
     Bowling impact: (wickets × 25) + (20 - economy_rate × 2) per over bowled
+
+    POTM rule: the award goes to the highest-impact player on the winning team.
+    A losing-team player is only eligible if their impact is 50+; among all
+    eligible players (every winner + qualifying losers) the highest impact wins.
+    When ``winner_name`` is unknown (a true tie), fall back to the overall
+    highest impact across both sides.
 
     Returns: (name, impact_points, stats_string) or (None, 0, "")
     """
@@ -917,9 +923,23 @@ def _calc_potm(s):
                     "bat": {}, "bowl": bws, "bat_impact": 0, "bowl_impact": _bowl_impact(bws),
                 }
 
-    # Find max impact
-    for rid, data in all_players.items():
-        total = data["bat_impact"] + data["bowl_impact"]
+    # Eligibility: every winning-team player, plus losing-team players whose
+    # impact is 50+. Falls back to all players when the winner is unknown (tie).
+    def _total(data):
+        return data["bat_impact"] + data["bowl_impact"]
+
+    eligible = [
+        data for data in all_players.values()
+        if (winner_name and data.get("team") == winner_name)
+        or (winner_name and _total(data) >= 50)
+        or not winner_name
+    ]
+    if not eligible:
+        eligible = list(all_players.values())
+
+    # Find max impact among the eligible players.
+    for data in eligible:
+        total = _total(data)
         if total > best_impact:
             best_impact = total
             best_name = data["name"]
@@ -4410,7 +4430,7 @@ async def _end_innings(ctx, mid):
         else:
             wc, wg, lc, lg = await _award_match_rewards(ctx, s, winner_tg, loser_tg, overs)
             await _save_match_stats(s)
-        potm_name, potm_impact, potm_stats = _calc_potm(s)
+        potm_name, potm_impact, potm_stats = _calc_potm(s, winner_name)
 
         # Get POTM player_id and the OWNER USER ID
         potm_pid = None

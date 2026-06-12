@@ -1,6 +1,8 @@
 """Handlers for /teamname, /purse, /stats."""
 
 import re
+import io
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -150,7 +152,27 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"</code>"
         )
 
-        await update.message.reply_text(text, parse_mode="HTML")
+        # Lead with the player's card image, then the full stats table. The
+        # stats block can exceed Telegram's 1024-char caption limit, so it is
+        # sent as a follow-up message rather than a caption.
+        card_bytes = None
+        try:
+            from services.card_generator import generate_card
+            card_bytes = await asyncio.to_thread(generate_card, player)
+        except Exception:
+            logger.exception("Stats card generation failed for %s", player.id)
+
+        if card_bytes:
+            caption = (
+                f"📛 <b>{player.name}</b> {flag}\n"
+                f"⭐ {player.rating} OVR | {player.category}\n"
+                f"🏆 POTM(s): {gs.potm}"
+            )
+            await update.message.reply_photo(
+                photo=io.BytesIO(card_bytes), caption=caption, parse_mode="HTML")
+            await update.message.reply_text(text, parse_mode="HTML")
+        else:
+            await update.message.reply_text(text, parse_mode="HTML")
 
     except Exception:
         logger.exception(f"Stats error for {tg_user.id}")
