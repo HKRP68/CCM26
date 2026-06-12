@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>16-0 — Draft</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="draft.css" />
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  </head>
+  <body>
+    <header class="draft-header">
+      <a class="back-link" href="index.html">← Home</a>
+      <span class="wordmark">16-0</span>
+      <span class="pick-counter"
+        ><span id="pickCount">0</span>/11 ·
+        <span id="overseasCount">0</span>/4 overseas</span
+      >
+    </header>
+
+    <main class="draft-layout">
+      <!-- LEFT: spin + squad + complete button -->
+      <section class="draft-main">
+        <div class="rules-bar" id="rulesBar"></div>
+
+        <div class="spin-area">
+          <div class="slot-machine">
+            <div class="reel-box" id="reelClub"></div>
+            <span class="reel-x">×</span>
+            <div class="reel-box" id="reelSeason"></div>
+          </div>
+          <div class="spin-controls">
+            <button id="spinBtn" class="spin-btn" type="button">Spin</button>
+            <button id="rerollBtn" class="reroll-btn" type="button" hidden>
+              Reroll · <span id="rerollLeft">1</span> left
+            </button>
+            <button id="completeBtn" class="spin-btn complete-btn" type="button" hidden>
+              Complete XI →
+            </button>
+          </div>
+          <div class="spin-meta" id="spinMeta">Loading squads…</div>
+        </div>
+
+        <div class="squad-grid" id="squadGrid" aria-live="polite"></div>
+      </section>
+
+      <!-- RIGHT: XI builder -->
+      <aside class="xi-sidebar">
+        <div class="xi-head">
+          <h2 class="xi-title">Your XI</h2>
+          <div class="xi-ovr-display" id="xiOvrDisplay" hidden>
+            <div class="xi-stat-pill">
+              <span class="xi-ovr-label">BAT</span>
+              <span class="xi-ovr-val" id="xiBatVal">—</span>
+            </div>
+            <div class="xi-stat-pill">
+              <span class="xi-ovr-label">BOWL</span>
+              <span class="xi-ovr-val" id="xiBowlVal">—</span>
+            </div>
+            <div class="xi-stat-pill">
+              <span class="xi-ovr-label">OVR</span>
+              <span class="xi-ovr-val" id="xiOvrVal">—</span>
+            </div>
+          </div>
+        </div>
+        <ol class="xi-slots" id="xiSlots"></ol>
+      </aside>
+    </main>
+
+    <div class="toast" role="status" aria-live="polite"></div>
+
+    <script src="draft.js"></script>
+  </body>
+</html>

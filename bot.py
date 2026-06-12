@@ -81,6 +81,7 @@ from handlers.unscramble import unscramble_handler, join_handler as unscramble_j
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
+from handlers.ipl16 import ipl160_handler
 
 # Match handlers
 from handlers.match import (
@@ -292,6 +293,7 @@ BOT_MENU_COMMANDS = (
     ("report", "Send feedback or report an issue"),
     ("cmuundo", "Undo your latest eligible action"),
     ("app", "Open the Cricket Simulator Mini App"),
+    ("ipl160", "Open the 16-0 IPL season simulator (Mini App)"),
     ("ewm", "Enable welcome messages for this chat"),
     ("dwm", "Disable welcome messages for this chat"),
     ("pbo", "Start a player bowl-out"),
@@ -827,6 +829,14 @@ def main():
         # ── Mini App launcher ────────────────────────────────────────
         app.add_handler(CommandHandler("app", app_handler))
         logger.info("Registered /app handler (Mini App)")
+
+        # ── 16-0 IPL Sim Mini App ────────────────────────────────────
+        app.add_handler(CommandHandler(["ipl160", "16o", "iplsim"], ipl160_handler))
+        # The literal "/16-0IPL" isn't a valid Telegram command (hyphen +
+        # uppercase), so it never arrives as a bot_command — catch the text.
+        app.add_handler(MessageHandler(
+            filters.Regex(r"(?i)^/16-0ipl\b"), ipl160_handler), group=5)
+        logger.info("Registered /ipl160 handler (16-0 IPL Sim Mini App)")
 
         # ── Chat membership tracking ────────────────────────────────
         from services.chat_tracker import handle_chat_member_update

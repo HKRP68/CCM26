@@ -6726,6 +6726,29 @@ def cricket_arena_asset(filename):
     return resp
 
 
+# ── 16-0 IPL Sim standalone Mini App ─────────────────────────────────────
+# Self-contained, client-side game extracted from 16-0.zip. All asset/script/
+# data references are relative, so serving at /ipl16/ resolves styles.css,
+# script.js, assets/*.png and the CSV fetches under the subpath. State lives in
+# the browser (localStorage) — no backend. Opened via a Telegram Web App button
+# from the /ipl160 command (handlers/ipl16.py).
+_IPL16_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "static", "ipl16")
+
+
+@app.route("/ipl16/")
+@app.route("/ipl16/<path:filename>")
+def ipl16_static(filename="index.html"):
+    from flask import send_from_directory
+    resp = send_from_directory(_IPL16_DIR, filename)
+    # Same no-cache strategy as /cricket — Telegram's in-app WebView caches
+    # aggressively, which otherwise pins an old build across redeploys.
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
 # ── Player photos (migrated from UnderCover assets/players/) ─────────────
 _PLAYERS_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "static", "players")
