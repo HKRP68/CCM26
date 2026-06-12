@@ -145,6 +145,48 @@ def _emit_new_batsman(state, idx):
     })
 
 
+def _slot_is_out(state, slot_key):
+    """True if the batsman currently occupying ``slot_key`` (striker_idx /
+    non_striker_idx) is marked out in bat_stats. State is JSON round-tripped so
+    bat_stats keys may be int or str — check both."""
+    order = state.get("batting_order", []) or []
+    si = state.get(slot_key)
+    if si is None or not (0 <= si < len(order)):
+        return False
+    rid = (order[si] or {}).get("roster_id")
+    stats = state.get("bat_stats", {}) or {}
+    st = stats.get(rid) or stats.get(str(rid))
+    return bool(st and st.get("out"))
+
+
+def _install_new_batsman(state, idx):
+    """Install the incoming batsman (batting-order index ``idx``) into whichever
+    crease slot holds the dismissed batsman.
+
+    A wicket only ever dismisses the striker, but the end-of-over swap in
+    ``_apply_outcome`` moves that dismissed batsman to ``non_striker_idx`` when
+    the wicket falls on the last ball of an over. Blindly writing
+    ``striker_idx = idx`` would then overwrite the *not-out* partner and leave
+    the dismissed batsman parked at the crease. Replace the out slot directly so
+    the not-out partner stays on strike for the new over.
+    """
+    if _slot_is_out(state, "non_striker_idx") and not _slot_is_out(state, "striker_idx"):
+        state["non_striker_idx"] = idx
+    else:
+        state["striker_idx"] = idx
+    _emit_new_batsman(state, idx)
+
+
+def _bowling_quota(total_overs):
+    """Maximum overs a single bowler may bowl: ceil(totalOvers / 5), min 1.
+    Matches the per-bowler cap enforced by the Mini App frontend."""
+    import math
+    try:
+        return max(1, math.ceil(int(total_overs) / 5))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _emit_new_bowler(state, p):
     """Blue card when a bowler comes on. Shows this-match figures if the bowler
     has already bowled this innings (returning), else career/basic stats."""
@@ -1598,14 +1640,19 @@ def select_wicket_batsman(match_id, user_id, index):
     if idx in (state.get("striker_idx"), state.get("non_striker_idx")):
         return False, "That batsman is already at the crease.", None
 
-    # Install as striker; resume the delivery loop.
-    state["striker_idx"] = idx
-    _emit_new_batsman(state, idx)
+    # Install the incoming batsman into the dismissed batsman's slot. After a
+    # last-ball wicket the over-end swap leaves the out batsman at non_striker,
+    # so don't assume the striker slot.
+    _install_new_batsman(state, idx)
     # Keep next_batsman_idx ahead of the highest used position.
     used = max(idx, state.get("non_striker_idx", 1))
     state["next_batsman_idx"] = max(state.get("next_batsman_idx", 2), used + 1)
     state["last_dismissed"] = None
-    mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+    # If the wicket fell on the last ball of the over, the new bowler still
+    # needs picking before the next delivery; otherwise resume the over.
+    next_action = (A_PICK_NEW_BOWLER if state.pop("pending_new_bowler", False)
+                   else A_PICK_DELIVERY)
+    mwa.save_state(match_id, state, next_action=next_action)
     return True, f"{player.get('name')} comes to the crease.", {
         "index": idx, "name": player.get("name")}
 
@@ -1675,6 +1722,9 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
             "wicket": state["total_wickets"],
         })
         state["partnership_runs"] = 0; state["partnership_balls"] = 0
+        # Capture the dismissed batsman's name now, before the end-of-over swap
+        # below can move them off the striker slot.
+        state["last_dismissed"] = striker.get("name")
         need_new_bat = True
         rtxt = f"WICKET! {striker['name']} — {oc.get('how','OUT')}"
     else:
@@ -1982,12 +2032,12 @@ def play_shot(match_id, user_id, shot_index, state=None):
             res["match_over"] = True
             res["result"] = result
     elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
-        # Save the dismissed batsman name (for selecting_wicket_batsman UI).
-        try:
-            dismissed = get_striker(state)
-            state["last_dismissed"] = dismissed.get("name") if dismissed else None
-        except Exception:
-            state["last_dismissed"] = None
+        # last_dismissed was captured in _apply_outcome (before the over-end swap).
+        # If the wicket fell on the last ball of the over, a new bowler is still
+        # owed once the incoming batsman has been chosen — remember that here so
+        # the (possibly manual) batsman pick routes to the bowler picker, not
+        # straight back to the same bowler.
+        state["pending_new_bowler"] = bool(res["eoo"])
         next_act = A_PICK_NEW_BATSMAN
         if state.get("manual_batsman"):
             # Manual mode: the batting player picks the next batsman.
@@ -1996,10 +2046,10 @@ def play_shot(match_id, user_id, shot_index, state=None):
         else:
             nb = state.get("next_batsman_idx", 2)
             if nb < len(state.get("batting_order", [])):
-                state["striker_idx"] = nb
+                _install_new_batsman(state, nb)
                 state["next_batsman_idx"] = nb + 1
-                _emit_new_batsman(state, nb)
-                next_act = A_PICK_DELIVERY
+                next_act = A_PICK_NEW_BOWLER if res["eoo"] else A_PICK_DELIVERY
+                state.pop("pending_new_bowler", None)
     elif res["eoo"]:
         next_act = A_PICK_NEW_BOWLER
     else:
@@ -2031,8 +2081,20 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     by_rid = {p["roster_id"]: p for p in _active_players(state.get("bowl_xi", []))}
     if bowler_rid not in by_rid:
         return False, "Pick a bowler from your XI."
-    if bowler_rid == state.get("prev_bowler_rid"):
+    prev = state.get("prev_bowler_rid")
+    if bowler_rid == prev:
         return False, "Same bowler can't bowl consecutive overs."
+    # Per-bowler over limit (ceil(overs / 5)). Keep the cap in force while any
+    # quota-safe bowler remains; relax it only if nobody is left so the picker
+    # can never dead-end.
+    quota = _bowling_quota(state.get("overs"))
+    under_quota = [
+        rid for rid, p in by_rid.items()
+        if rid != prev
+        and _stat_row(state.get("bowl_stats"), rid).get("overs_done", 0) < quota
+    ]
+    if under_quota and bowler_rid not in under_quota:
+        return False, f"That bowler has bowled their {quota}-over quota."
     state["current_bowler"] = by_rid[bowler_rid]
     _emit_new_bowler(state, by_rid[bowler_rid])
     mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
@@ -2040,15 +2102,31 @@ def select_new_bowler(match_id, user_id, bowler_rid):
 
 
 def get_new_bowler_options(match_id, user_id):
-    """Bowlers eligible for the next over (excludes the one who just bowled)."""
+    """Bowlers eligible for the next over (excludes the one who just bowled and
+    anyone who has reached the per-bowler over quota)."""
     state = mwa.get_state(match_id)
     if not state:
         return {"ok": False, "message": "Match not found."}
     prev = state.get("prev_bowler_rid")
-    opts = [{"roster_id": p["roster_id"], "name": p["name"],
-             "bowl_rating": p.get("bowl_rating"), "bowl_style": p.get("bowl_style"),
-             "rating": p.get("rating"), "disabled": (p["roster_id"] == prev)}
-            for p in _active_players(state.get("bowl_xi", []))]
+    quota = _bowling_quota(state.get("overs"))
+    players = _active_players(state.get("bowl_xi", []))
+    # Only enforce the quota if at least one quota-safe bowler is available;
+    # otherwise relax it (still excluding the previous bowler) to avoid dead-ends.
+    enforce_quota = any(
+        p["roster_id"] != prev
+        and _stat_row(state.get("bowl_stats"), p["roster_id"]).get("overs_done", 0) < quota
+        for p in players
+    )
+    opts = []
+    for p in players:
+        rid = p["roster_id"]
+        overs_done = _stat_row(state.get("bowl_stats"), rid).get("overs_done", 0)
+        disabled = (rid == prev) or (enforce_quota and overs_done >= quota)
+        opts.append({
+            "roster_id": rid, "name": p["name"],
+            "bowl_rating": p.get("bowl_rating"), "bowl_style": p.get("bowl_style"),
+            "rating": p.get("rating"), "disabled": disabled,
+        })
     return {"ok": True, "options": opts}
 
 
@@ -2908,10 +2986,11 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
                 nb = state.get("next_batsman_idx", 2)
                 if nb < len(state.get("batting_order", [])):
-                    state["striker_idx"] = nb
+                    _install_new_batsman(state, nb)
                     state["next_batsman_idx"] = nb + 1
-                    _emit_new_batsman(state, nb)
-                mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+                # A wicket on the last ball still owes a new-bowler pick.
+                nxt = A_PICK_NEW_BOWLER if res["eoo"] else A_PICK_DELIVERY
+                mwa.save_state(match_id, state, next_action=nxt)
             elif res["eoo"]:
                 mwa.save_state(match_id, state, next_action=A_PICK_NEW_BOWLER)
             else:
@@ -2932,10 +3011,11 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
         if na == A_PICK_NEW_BATSMAN:
             nb = state.get("next_batsman_idx", 2)
             if nb < len(state.get("batting_order", [])):
-                state["striker_idx"] = nb
+                _install_new_batsman(state, nb)
                 state["next_batsman_idx"] = nb + 1
-                _emit_new_batsman(state, nb)
-            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            nxt = (A_PICK_NEW_BOWLER if state.pop("pending_new_bowler", False)
+                   else A_PICK_DELIVERY)
+            mwa.save_state(match_id, state, next_action=nxt)
             continue
 
         break
@@ -3073,7 +3153,9 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
                     break
             elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
                 # Wicket: batsman selection stays manual even under Autoplay —
-                # hand control back so the user picks the incoming batsman.
+                # hand control back so the user picks the incoming batsman. A
+                # last-ball wicket still owes a new-bowler pick afterwards.
+                state["pending_new_bowler"] = bool(res["eoo"])
                 mwa.save_state(match_id, state, next_action=A_PICK_NEW_BATSMAN)
                 mwa.bump_ball_seq(match_id)
                 break
@@ -3102,10 +3184,11 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
         if na == A_PICK_NEW_BATSMAN:
             nb = state.get("next_batsman_idx", 2)
             if nb < len(state.get("batting_order", [])):
-                state["striker_idx"] = nb
+                _install_new_batsman(state, nb)
                 state["next_batsman_idx"] = nb + 1
-                _emit_new_batsman(state, nb)
-            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
+            nxt = (A_PICK_NEW_BOWLER if state.pop("pending_new_bowler", False)
+                   else A_PICK_DELIVERY)
+            mwa.save_state(match_id, state, next_action=nxt)
             steps.append({"type": "auto_batsman"})
             continue
 

@@ -190,10 +190,11 @@ def pick_bot_shot(striker, bowler, over, total_overs,
 def pick_bot_next_bowler(bowl_xi, prev_bowler_rid, bowl_stats, total_overs):
     """Pick next bowler from XI:
     - Cannot be previous bowler
-    - Cannot exceed quota (total_overs / 5 per bowler)
+    - Cannot exceed quota (ceil(total_overs / 5) per bowler)
     - Prefer best bowl_rating with overs remaining
     """
-    quota = max(1, total_overs // 5) if total_overs >= 5 else 1
+    # Per-bowler over cap = ceil(total_overs / 5), min 1 (e.g. 20→4, 10→2, 6→2).
+    quota = max(1, -(-int(total_overs) // 5))
     candidates = []
     for p in bowl_xi:
         if p["roster_id"] == prev_bowler_rid:
