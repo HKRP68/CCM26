@@ -143,6 +143,7 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         btns = []
+        slot_lines = []
         for row in rows:
             trait = session.query(Trait).get(row.trait_id)
             if not trait:
@@ -151,8 +152,8 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status = " ❌ <i>sold out</i>" if sold_out else ""
             discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
             stock = f"  📦 {row.quantity - row.purchased_count}/{row.quantity}" if row.quantity > 1 else ""
-            lines.append(
-                f"\n<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
+            slot_lines.append(
+                f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
                 f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
                 f"   <i>{trait.description}</i>"
             )
@@ -161,6 +162,10 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
                     callback_data=f"trbuy_{tg.id}_{row.slot_index}"
                 )])
+
+        # Slot 1–5 listings live inside an expandable quote to keep chat tidy.
+        if slot_lines:
+            lines.append("<blockquote expandable>" + "\n\n".join(slot_lines) + "</blockquote>")
 
         if btns:
             btns.append([
@@ -280,6 +285,7 @@ async def _refresh_shop_display(q, session, user):
         "━━━━━━━━━━━━━━━━━━━",
     ]
     btns = []
+    slot_lines = []
     for row in rows:
         trait = session.query(Trait).get(row.trait_id)
         if not trait:
@@ -288,8 +294,8 @@ async def _refresh_shop_display(q, session, user):
         status = " ❌ <i>sold out</i>" if sold_out else ""
         discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
         stock = f"  📦 {row.quantity - row.purchased_count}/{row.quantity}" if row.quantity > 1 else ""
-        lines.append(
-            f"\n<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
+        slot_lines.append(
+            f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
             f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
             f"   <i>{trait.description}</i>"
         )
@@ -298,6 +304,9 @@ async def _refresh_shop_display(q, session, user):
                 f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
                 callback_data=f"trbuy_{owner_tg}_{row.slot_index}"
             )])
+    # Slot 1–5 listings live inside an expandable quote to keep chat tidy.
+    if slot_lines:
+        lines.append("<blockquote expandable>" + "\n\n".join(slot_lines) + "</blockquote>")
     if btns:
         btns.append([
             InlineKeyboardButton("❌ Close",

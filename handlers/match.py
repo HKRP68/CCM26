@@ -4794,7 +4794,10 @@ async def _end_innings(ctx, mid):
         except Exception:
             logger.exception("match summary card failed (non-fatal)")
 
-        sent = await ctx.bot.send_message(cid, msg, parse_mode="HTML")
+        # Deliver the match-summary scorecard inside an expandable quote so it
+        # stays collapsed in chat until the reader taps to expand it.
+        summary_msg = f"<blockquote expandable>{msg}</blockquote>"
+        sent = await ctx.bot.send_message(cid, summary_msg, parse_mode="HTML")
 
         # ── Tour update announcement ──
         # If this match was part of a tour, send a follow-up showing the
