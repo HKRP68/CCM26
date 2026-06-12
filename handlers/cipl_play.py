@@ -1051,6 +1051,98 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi):
     return bats[:4], bowls[:4]
 
 
+def _cipl_calc_potm(state):
+    """Player of the Match for a finished /cipl match, by impact points.
+
+    Mirrors handlers/match.py:_calc_potm but reads CIPL state, whose batting/
+    bowling stats are keyed by ``str(roster_id)``. Returns
+    ``(name, stats_string, team)`` — all "" / None-safe — for the summary card.
+
+    Batting impact: runs + 4s + 2·6s + strike-rate & milestone bonuses.
+    Bowling impact: 25·wickets + economy·overs + milestone bonuses.
+    """
+    def _bat_impact(bs):
+        if not bs or bs.get("balls", 0) == 0:
+            return 0
+        runs = bs.get("runs", 0)
+        balls = bs.get("balls", 1)
+        impact = runs + bs.get("fours", 0) + bs.get("sixes", 0) * 2
+        sr = (runs / balls) * 100 if balls else 0
+        if sr >= 150:
+            impact += 10
+        elif sr >= 130:
+            impact += 5
+        if runs >= 100:
+            impact += 30
+        elif runs >= 50:
+            impact += 15
+        return impact
+
+    def _bowl_impact(bws):
+        if not bws or bws.get("balls", 0) == 0:
+            return 0
+        balls = bws.get("balls", 1)
+        overs = balls / 6
+        econ = (bws.get("runs", 0) / balls) * 6 if balls else 0
+        impact = bws.get("wickets", 0) * 25 + (8 - econ) * overs * 2
+        if bws.get("wickets", 0) >= 5:
+            impact += 30
+        elif bws.get("wickets", 0) >= 3:
+            impact += 15
+        return max(0, impact)
+
+    # After the match, innings == 2: current bat side batted 2nd / bowled 1st.
+    inn1_bat_team = state.get("inn1_team") or state.get("inn1_bat_team", "")
+    inn1_bowl_team = state.get("bat_team_name", "")
+    inn2_bat_team = state.get("bat_team_name", "")
+    inn2_bowl_team = state.get("bowl_team_name", "")
+
+    players = {}  # roster_id -> {name, team, bat, bowl, bat_impact, bowl_impact}
+
+    def _add(xi, stats, *, team, is_bat):
+        for p in xi or []:
+            rid = p["roster_id"]
+            st = (stats or {}).get(str(rid), {})
+            entry = players.setdefault(
+                rid, {"name": p.get("name", "Player"), "team": team,
+                      "bat": {}, "bowl": {}, "bat_impact": 0, "bowl_impact": 0})
+            if is_bat:
+                entry["bat"] = st
+                entry["bat_impact"] += _bat_impact(st)
+                entry["team"] = team  # batting team is the player's own side
+            else:
+                entry["bowl"] = st
+                entry["bowl_impact"] += _bowl_impact(st)
+
+    _add(state.get("inn1_bat_xi"), state.get("inn1_bat_stats"),
+         team=inn1_bat_team, is_bat=True)
+    _add(state.get("inn1_bowl_xi"), state.get("inn1_bowl_stats"),
+         team=inn1_bowl_team, is_bat=False)
+    _add(state.get("bat_xi"), state.get("bat_stats"),
+         team=inn2_bat_team, is_bat=True)
+    _add(state.get("bowl_xi"), state.get("bowl_stats"),
+         team=inn2_bowl_team, is_bat=False)
+
+    best_name, best_total, best_stats, best_team = None, 0, "", ""
+    for data in players.values():
+        total = data["bat_impact"] + data["bowl_impact"]
+        if total > best_total:
+            best_total = total
+            best_name = data["name"]
+            best_team = data["team"]
+            parts = []
+            bs, bws = data["bat"], data["bowl"]
+            if bs.get("balls", 0) > 0:
+                parts.append(f"{bs.get('runs', 0)}({bs.get('balls', 0)})")
+            if bws.get("balls", 0) > 0:
+                ov = bws["balls"] // 6
+                rem = bws["balls"] % 6
+                ovr = f"{ov}.{rem}" if rem else str(ov)
+                parts.append(f"{bws.get('wickets', 0)}/{bws.get('runs', 0)} ({ovr})")
+            best_stats = " | ".join(parts)
+    return best_name, best_stats, best_team
+
+
 def _build_cipl_summary_image(state, result):
     """Render the shared post-match summary card from the finished /cipl state."""
     try:
@@ -1084,6 +1176,15 @@ def _build_cipl_summary_image(state, result):
 
     inn1_team = state.get("inn1_bat_team", state.get("bowl_team_name", "Team 1"))
     inn2_team = state.get("bat_team_name", "Team 2")
+
+    # Player of the Match — populates the card's POTM footer (without this it
+    # renders a blank "—"). Defensive: never let a POTM error drop the card.
+    try:
+        potm_name, potm_stats, potm_team = _cipl_calc_potm(state)
+    except Exception:
+        logger.exception("cipl POTM calculation failed for match %s", state.get("match_id"))
+        potm_name, potm_stats, potm_team = None, None, None
+
     return generate_match_summary(
         inn1_team=inn1_team,
         inn1_runs=state.get("inn1_runs", 0),
@@ -1097,6 +1198,9 @@ def _build_cipl_summary_image(state, result):
         win_margin_text=margin_text,
         overs_total=state.get("overs", 0),
         stadium=state.get("stadium"),
+        potm_name=potm_name,
+        potm_stats=potm_stats,
+        potm_team=potm_team,
         top_per_team={
             "inn1": {"team": inn1_team, "batters": inn1_bats, "bowlers": inn1_bowls},
             "inn2": {"team": inn2_team, "batters": inn2_bats, "bowlers": inn2_bowls},

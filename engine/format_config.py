@@ -128,36 +128,43 @@ class FormatConfig:
 # T20 FormatConfig
 # ---------------------------------------------------------------------------
 
+# Neutral (Hard pitch) first-innings curve. Topped out at ~190 to match the
+# calibrated engine output (Hard averages ~195 in Monte Carlo), so the GSME /
+# pressure engines read par correctly against the higher scoring.
 _T20_PAR_SCORES: Dict[int, float] = {
     0:   0.0,
-    1:   7.0,
-    2:  14.5,
-    3:  22.0,
-    4:  30.5,
-    5:  38.5,
-    6:  48.0,   # End of powerplay
-    7:  55.5,
-    8:  63.5,
-    9:  72.0,
-    10: 81.0,
-    11: 90.0,
-    12: 99.0,
-    13: 108.0,
-    14: 116.5,
-    15: 125.5,
-    16: 135.5,
-    17: 146.5,
-    18: 157.5,
-    19: 167.5,
-    20: 176.0,
+    1:   7.5,
+    2:  15.5,
+    3:  24.0,
+    4:  33.0,
+    5:  41.5,
+    6:  52.0,   # End of powerplay
+    7:  60.0,
+    8:  68.5,
+    9:  78.0,
+    10: 87.5,
+    11: 97.0,
+    12: 107.0,
+    13: 116.5,
+    14: 126.0,
+    15: 135.5,
+    16: 146.5,
+    17: 158.0,
+    18: 170.0,
+    19: 181.0,
+    20: 190.0,
 }
 
+# Per-pitch multipliers on the neutral curve, aligned to calibrated full-pipeline
+# means: Green~181 Dry~180 Dusty~183 Bouncy~187 Hard~193 Flat~219 Dead~261.
 _T20_PITCH_PAR_FACTORS: Dict[str, float] = {
-    "Green": 0.84,
-    "Dry":   0.86,
-    "Hard":  1.00,
-    "Flat":  1.10,
-    "Dead":  1.25,
+    "Green":  0.94,
+    "Dry":    0.93,
+    "Dusty":  0.95,
+    "Bouncy": 0.97,
+    "Hard":   1.00,
+    "Flat":   1.13,
+    "Dead":   1.35,
 }
 
 _T20 = FormatConfig(
@@ -179,36 +186,44 @@ _T20 = FormatConfig(
     },
     extras_per_innings=5,
     target_scores={
-        "Green": 145,
-        "Dry":   145,
-        "Hard":  165,
-        "Flat":  185,
-        "Dead":  210,
+        "Green":  180,
+        "Dry":    180,
+        "Dusty":  184,
+        "Bouncy": 188,
+        "Hard":   195,
+        "Flat":   219,
+        "Dead":   260,
     },
     correct_toss_choice={
-        "Green": "bowl",  # Seam/swing → bowl first
-        "Dry":   "bat",   # Spin worsens with wear → bat first
-        "Hard":  "bat",   # Good batting surface → bat first
-        "Flat":  "bowl",  # Run-fest; dew helps chaser → bowl first
-        "Dead":  "bowl",  # Extreme batting; chaser advantaged → bowl first
+        "Green":  "bowl",  # Seam/swing → bowl first
+        "Dry":    "bat",   # Spin worsens with wear → bat first
+        "Dusty":  "bat",   # Turner deteriorates → bat first
+        "Bouncy": "bowl",  # Pace/bounce best with new ball → bowl first
+        "Hard":   "bat",   # Good batting surface → bat first
+        "Flat":   "bowl",  # Run-fest; dew helps chaser → bowl first
+        "Dead":   "bowl",  # Extreme batting; chaser advantaged → bowl first
     },
     correct_toss_choice_dn={
         # D/N T20: shorter game but dew still tilts towards chasing.
         # Bowling first = your team bats second under lights with dew.
-        "Green": "bowl",   # Already bowl; unchanged
-        "Dry":   "bowl",   # Dew neutralises spin in 2nd innings → bowl first
-        "Hard":  "bowl",   # Chase with dew advantage → bowl first
-        "Flat":  "bowl",   # Already bowl; unchanged
-        "Dead":  "bowl",   # Already bowl; unchanged
+        "Green":  "bowl",   # Already bowl; unchanged
+        "Dry":    "bowl",   # Dew neutralises spin in 2nd innings → bowl first
+        "Dusty":  "bowl",   # Dew kills turn → bowl first
+        "Bouncy": "bowl",   # Already bowl; unchanged
+        "Hard":   "bowl",   # Chase with dew advantage → bowl first
+        "Flat":   "bowl",   # Already bowl; unchanged
+        "Dead":   "bowl",   # Already bowl; unchanged
     },
     rrr_baseline={
         # "Neutral" RPO for each pitch in T20 context.
         # GSME divides actual RRR by this to get a normalised aggression index.
-        "Green": 7.5,
-        "Dry":   7.5,
-        "Hard":  8.5,
-        "Flat":  10.5,
-        "Dead":  11.5,
+        "Green":  8.0,
+        "Dry":    8.0,
+        "Dusty":  8.5,
+        "Bouncy": 9.0,
+        "Hard":   9.5,
+        "Flat":  11.0,
+        "Dead":  12.5,
     },
 )
 

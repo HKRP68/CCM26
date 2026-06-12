@@ -67,12 +67,13 @@ commentary_templates = {
 # 2) Pitch-influence definitions (60% weight)
 # -----------------------------------------------------------------------------
 PITCH_RUN_FACTOR = {
-    # Slightly boost scoring on Green/Dry (+15%), reduce Flat (-10%)
-    "Green": 0.70 * 1.15,   # run-suppressing → ~150–170 average
-    "Dry":   0.70 * 1.15,   # spin-friendly → ~150–170 average
-    "Hard":  1.10,   # balanced (batting edge) → 160–180
-    "Flat":  1.20 * 0.90,   # batting paradise → 180–200 (slightly toned down)
-    "Dead":  1.30    # batting festival → 200–230
+    "Green":  0.98,   # seam-friendly but competitive → ~181 average
+    "Dry":    1.00,   # spin-friendly → ~178 average
+    "Dusty":  1.04,   # worn turner → ~183 average
+    "Bouncy": 1.12,   # hard/bouncy carry → ~187 average
+    "Hard":   1.10,   # balanced (batting edge) → ~193
+    "Flat":   1.20 * 0.90,   # batting paradise → ~219
+    "Dead":   1.30    # batting festival → ~260
 }
 
 # ---------------------------------------------------------------------
@@ -81,23 +82,36 @@ PITCH_RUN_FACTOR = {
 
 PITCH_WICKET_FACTOR = {
     "Green": {
-        "Fast":         1.40,   # fastest bowlers excel on Green
-        "Fast-medium":  1.20,
-        "Medium-fast":  1.15,
+        "Fast":         1.35,   # fastest bowlers excel on Green
+        "Fast-medium":  1.18,
+        "Medium-fast":  1.12,
         "default":      0.55    # spinners/pacers that don’t fit above
     },
     "Dry": {
-        "Leg spin":     1.40,   # leggies turn square, highest threat
-        "Wrist spin":   1.35,   # similar to leggies on a turning track
-        "Off spin":     1.30,   # very effective but slightly easier than a leggie
-        "Finger spin":  1.20,   # orthodox left-arm; still strong, but a bit less than right-arm
-        "default":      0.60    # pace bowlers on a dry turner
+        "Leg spin":     1.15,   # leggies turn square, highest threat
+        "Wrist spin":   1.13,   # similar to leggies on a turning track
+        "Off spin":     1.11,   # very effective but slightly easier than a leggie
+        "Finger spin":  1.08,   # orthodox left-arm; still strong, but a bit less than right-arm
+        "default":      0.70    # pace bowlers on a dry turner
     },
     "Hard": {
         "Fast":         1.10,   # pace gets decent bounce & seam, but still batsmen can score
         "Fast-medium":  1.05,
         "Medium-fast":  1.00,
         "default":      0.90    # spin/other styles on a true track
+    },
+    "Dusty": {
+        "Leg spin":     1.18,   # worn turner — spinners influential
+        "Wrist spin":   1.16,
+        "Off spin":     1.14,
+        "Finger spin":  1.10,
+        "default":      0.82    # pace bowlers on a dusty turner
+    },
+    "Bouncy": {
+        "Fast":         1.28,   # extra bounce rewards genuine pace
+        "Fast-medium":  1.13,
+        "Medium-fast":  1.08,
+        "default":      0.80    # spinners on a hard, bouncy deck
     },
     "Flat": {
         # Almost no one “takes” wickets easily on Flat—batsmen dominate.
@@ -147,24 +161,44 @@ def get_pitch_wicket_multiplier(pitch: str, bowling_type: str, config=None) -> f
 # -----------------------------------------------------------------------------
 PITCH_SCORING_MATRIX = {
     "Green": {
-        "Dot":     0.42,   # High dot ball % (difficult to score)
-        "Single":  0.335,
-        "Double":  0.065,
+        "Dot":     0.255,  # Seamer-friendly but competitive scoring
+        "Single":  0.36,
+        "Double":  0.105,
         "Three":   0.005,  # ~0.6 threes per innings (very rare)
-        "Four":    0.05,   # Low boundaries
-        "Six":     0.015,
-        "Wicket":  0.07,   # High wicket chance (favors pacers)
-        "Extras":  0.04
+        "Four":    0.105,
+        "Six":     0.045,
+        "Wicket":  0.055,  # High wicket chance (favors pacers)
+        "Extras":  0.07
     },
     "Dry": {
-        "Dot":     0.38,   # Spin friendly = difficult scoring
-        "Single":  0.352,
-        "Double":  0.08,
-        "Three":   0.008,  # ~1 three per innings
-        "Four":    0.06,
-        "Six":     0.02,
-        "Wicket":  0.06,   # Favors spinners
-        "Extras":  0.04
+        "Dot":     0.23,   # Spin-friendly; scoring needs application
+        "Single":  0.365,
+        "Double":  0.12,
+        "Three":   0.007,  # ~1 three per innings
+        "Four":    0.115,
+        "Six":     0.05,
+        "Wicket":  0.05,   # Favors spinners
+        "Extras":  0.063
+    },
+    "Dusty": {
+        "Dot":     0.245,  # Worn turner; spinners influential, par scoring
+        "Single":  0.35,
+        "Double":  0.12,
+        "Three":   0.007,
+        "Four":    0.115,
+        "Six":     0.055,
+        "Wicket":  0.053,
+        "Extras":  0.055
+    },
+    "Bouncy": {
+        "Dot":     0.245,  # Hard, bouncy carry; pace threat but batters score
+        "Single":  0.34,
+        "Double":  0.12,
+        "Three":   0.007,
+        "Four":    0.12,
+        "Six":     0.06,
+        "Wicket":  0.058,
+        "Extras":  0.05
     },
     "Hard": {
         # 65/35 Batting/Bowling split — batters favored but bowlers compete
