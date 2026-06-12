@@ -469,6 +469,13 @@ async def start_handler(update, context):
             )
             return
 
+    # CMU 16-0 deep link (group button + result-share "Play" button use
+    # ?start=ipl160 so the game opens here in DM as a real Mini App).
+    if payload == "ipl160":
+        from handlers.ipl16 import send_ipl160_launch
+        await send_ipl160_launch(update, context)
+        return
+
     await update.message.reply_text(
         "🏏 <b>Welcome to Cricket Simulator Bot!</b>\n\n"
         "Use /debut (or /d) to create your account and receive your starting squad.\n\n"
