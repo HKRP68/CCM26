@@ -13,7 +13,6 @@ is not a valid Telegram command (hyphen + uppercase), so bot.py routes it here
 via a text matcher instead of a CommandHandler.
 """
 
-import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import ContextTypes
@@ -51,29 +50,17 @@ async def ipl160_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "Tap below to open the <b>16-0 IPL Simulator</b>.")
 
     if is_private:
+        # Private chat — open as a proper Telegram Mini App (overlay + SDK).
         button = InlineKeyboardButton(
             "🏏 Open 16-0 IPL Sim",
             web_app=WebAppInfo(url=game_url),
         )
     else:
-        # Group chat — must use a url= button. Deep-link into the bot's Mini
-        # App (named app if MINIAPP_NAME is set), tagging this app with
-        # startapp=ipl16 so it can route to the 16-0 game.
-        bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-        miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
-        if bot_username and miniapp_name:
-            deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp=ipl16"
-        elif bot_username:
-            deep_link = f"https://t.me/{bot_username}?startapp=ipl16"
-        else:
-            await update.message.reply_text(
-                "⚠️ Mini App buttons don't work in groups. Open this in a "
-                "private chat with the bot.\n\n"
-                "<i>Admin: set BOT_USERNAME env var for proper group support.</i>",
-                parse_mode="HTML",
-            )
-            return
-        button = InlineKeyboardButton("🏏 Open 16-0 IPL Sim", url=deep_link)
+        # Group chat — web_app buttons are rejected by Telegram here. The game
+        # is fully standalone (no initData needed), so point a plain url= button
+        # straight at it: Telegram opens the game in its in-app browser. This
+        # opens the GAME directly, not the bot's main Mini App dashboard.
+        button = InlineKeyboardButton("🏏 Open 16-0 IPL Sim", url=game_url)
 
     kb = InlineKeyboardMarkup([[button]])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
