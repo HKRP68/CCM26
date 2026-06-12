@@ -4,27 +4,45 @@ from config import get_buy_value, get_sell_value
 from services.flags import get_flag
 
 
-def format_player_card(player, acquired_date=None) -> str:
-    """Return the standard player info text block."""
+def format_player_card(player, acquired_date=None, value_mode="both") -> str:
+    """Return the standard player info text block.
+
+    ``value_mode`` selects which coin value(s) to show:
+      • "buy"  → Buy Value only   (used by /buypl)
+      • "sell" → Sell Value only  (used by /playerinfo, /myroster)
+      • "both" → Buy + Sell       (default — /claim, /gspin, /daily)
+
+    The Bio block is wrapped in an expandable Telegram quote and each value /
+    acquired line sits in its own quote, matching the card layout spec.
+    """
     buy_val = get_buy_value(player.rating)
     sell_val = get_sell_value(player.rating)
     flag = get_flag(player.country)
 
     acq = acquired_date.strftime("%d %b %Y") if acquired_date else "Not Owned"
 
-    return (
-        f"📛 <b>{player.name}</b>\n"
-        f"⭐ Rating: {player.rating} OVR\n"
-        f"📊 Batting Rating: {player.bat_rating}\n"
-        f"📊 Bowling Rating: {player.bowl_rating}\n\n"
-        f"👤 <b>Bio:</b>\n"
+    header = (
+        f"📛 <b>{player.name}</b> ⭐ Rating: {player.rating} OVR\n"
+        f"📊 Bat/Bowl Rating: {player.bat_rating}/{player.bowl_rating}"
+    )
+
+    bio = (
+        "<blockquote expandable>"
+        "👤 <b>Bio:</b>\n"
         f"🎯 Category: {player.category}\n"
         f"🏏 Bat Hand: {player.bat_hand}\n"
         f"🎳 Bowl Hand: {player.bowl_hand}\n"
         f"🌀 Bowl Style: {player.bowl_style}\n"
         f"🌍 Country: {player.country} {flag}\n"
-        f"📋 Version: {player.version}\n\n"
-        f"💰 Buy Value: {buy_val:,} 🪙\n"
-        f"💸 Sell Value: {sell_val:,} 🪙\n"
-        f"📅 Acquired: {acq}"
+        f"📋 Version: {player.version}"
+        "</blockquote>"
     )
+
+    value_lines = []
+    if value_mode in ("buy", "both"):
+        value_lines.append(f"<blockquote>💰 Buy Value: {buy_val:,} 🪙</blockquote>")
+    if value_mode in ("sell", "both"):
+        value_lines.append(f"<blockquote>💰 Sell Value: {sell_val:,} 🪙</blockquote>")
+    value_lines.append(f"<blockquote>📅 Acquired: {acq}</blockquote>")
+
+    return header + "\n\n" + bio + "\n" + "\n".join(value_lines)

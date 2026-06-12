@@ -149,7 +149,7 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     page_label = f"<b>Page {current_idx + 1}/{n}</b>" if n > 1 else ""
     if page_label and not restricted:
         caption_lines.append(page_label)
-    caption_lines.append(format_player_card(player))
+    caption_lines.append(format_player_card(player, value_mode="buy"))
     if n > 1 and not restricted:
         version_label = _format_version_label(player)
         caption_lines.append(f"\n🎴 <i>Version: <b>{version_label}</b></i>")

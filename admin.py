@@ -8062,6 +8062,12 @@ def _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_ma
                     rows.append(btns)
             return InlineKeyboardMarkup(rows) if rows else None
 
+        # When there is exactly one card (the default Match Summary, and the
+        # forced /wpmbot case), the Spectate button rides on the scorecard image
+        # itself. Telegram albums (2+ cards) cannot carry an inline keyboard, so
+        # in that case the button stays on the recap text instead.
+        single_card = len(cards) == 1
+
         async def _send_photos():
             if not cards:
                 return False
@@ -8080,7 +8086,8 @@ def _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_ma
             for img_bytes, caption, _fname in cards[:10]:
                 try:
                     await bot.send_photo(chat_id=chat_id, photo=BytesIO(img_bytes),
-                                         caption=caption or "", parse_mode="HTML")
+                                         caption=caption or "", parse_mode="HTML",
+                                         reply_markup=_build_markup() if single_card else None)
                     ok = True
                 except Exception:
                     logger.exception("bot-loop single photo send failed")
@@ -8093,7 +8100,8 @@ def _send_completed_match_cards_via_bot(chat_id, images, fallback_text, reply_ma
             try:
                 await bot.send_message(
                     chat_id=chat_id, text=fallback_text, parse_mode="HTML",
-                    disable_web_page_preview=True, reply_markup=_build_markup())
+                    disable_web_page_preview=True,
+                    reply_markup=None if single_card else _build_markup())
                 sent_any = True
             except Exception:
                 logger.exception("bot-loop completed-match message send failed")
@@ -8135,13 +8143,19 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
         import requests as _rq
         base = f"https://api.telegram.org/bot{token}"
         cards = [c for c in (images or []) if c and c[0]]
+        # Single card → the Spectate button rides on the scorecard image; albums
+        # can't carry a keyboard, so it stays on the recap text in that case.
+        single_card = len(cards) == 1
 
-        def _send_photo(card):
+        def _send_photo(card, markup=None):
             img_bytes, caption, fname = card
+            data = {"chat_id": chat_id, "caption": caption or "",
+                    "parse_mode": "HTML"}
+            if markup:
+                data["reply_markup"] = _json.dumps(markup)
             resp = _rq.post(
                 f"{base}/sendPhoto",
-                data={"chat_id": chat_id, "caption": caption or "",
-                      "parse_mode": "HTML"},
+                data=data,
                 files={"photo": (fname, img_bytes, "image/png")},
                 timeout=30)
             if not resp.ok:
@@ -8152,7 +8166,7 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
         # Win/result message goes FIRST, then the Match Summary image(s).
         payload = {"chat_id": chat_id, "text": fallback_text,
                    "parse_mode": "HTML", "disable_web_page_preview": True}
-        if reply_markup:
+        if reply_markup and not single_card:
             payload["reply_markup"] = _json.dumps(reply_markup)
         resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
         if resp.ok:
@@ -8161,7 +8175,7 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
             logger.warning("completed match result message send failed: %s", resp.text)
 
         if len(cards) == 1:
-            sent_any = _send_photo(cards[0]) or sent_any
+            sent_any = _send_photo(cards[0], markup=reply_markup) or sent_any
         elif len(cards) >= 2:
             media, files = [], {}
             for i, (img_bytes, caption, fname) in enumerate(cards[:10]):
@@ -8575,6 +8589,9 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
                      "the text recap above is the summary fallback.</i>")
             logger.warning("match %s summary image missing; sending text fallback", match_id)
 
+        # The match-end recap is wrapped in an expandable quote so a long
+        # summary collapses into a tidy, tappable block in the lobby chat.
+        text = f"<blockquote expandable>{text}</blockquote>"
         sent_result_text = _send_completed_match_cards(chat_id, images, text, reply_markup)
         sent_images = bool(images and sent_result_text)
     finally:
