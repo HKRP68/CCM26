@@ -880,8 +880,12 @@ function showResultCard(outcome, container) {
   };
 
   const tweetText = `I went ${outcome.wins}-${outcome.losses} with my drafted IPL XI on 16-0game.vercel.app! ${outcome.stage} Can you beat it?`;
-  container.querySelector('[data-act="x"]').onclick = () =>
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`, "_blank");
+  container.querySelector('[data-act="x"]').onclick = () => {
+    const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
+    // openExternal (telegram-init.js) routes through Telegram.WebApp.openLink
+    // inside the Mini App; falls back to window.open in a normal browser.
+    (window.openExternal || ((u) => window.open(u, "_blank")))(url);
+  };
 }
 
 function tableRows() {
