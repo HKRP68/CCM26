@@ -766,6 +766,7 @@ function userBests() {
 // Inline brand logos (currentColor so they match the button text on hover).
 const X_LOGO = `<svg class="share-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`;
 const WA_LOGO = `<svg class="share-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.71.306 1.263.489 1.694.625.712.227 1.36.195 1.872.118.571-.085 1.758-.719 2.006-1.413.247-.694.247-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.999-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884M20.52 3.449C18.24 1.245 15.24 0 12.045 0 5.463 0 .104 5.359.101 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413"/></svg>`;
+const TG_LOGO = `<svg class="share-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.479.329-.913.489-1.302.481-.428-.009-1.252-.242-1.865-.442-.751-.244-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`;
 
 // Assemble the data the card renders, drawn from the finished season.
 function buildOutcome(stage) {
@@ -821,7 +822,7 @@ function resultCardHtml(o) {
   const right = o.xi.slice(6).map(playerRow).join("");
   return `
     <div class="rc-head">
-      <span class="rc-wordmark">16-0</span>
+      <span class="rc-wordmark">CMU 16-0</span>
       <span class="rc-tags">
         <span class="rc-tag">${escapeHtml(o.mode)}</span>
         <span class="rc-tag rc-ovr-tag">OVR ${o.teamOvr}</span>
@@ -848,8 +849,8 @@ function resultCardHtml(o) {
       </div>
     </div>
     <div class="rc-foot">
-      <span>Think you can beat this?</span>
-      <span class="rc-brand">16-0game.vercel.app</span>
+      <span>CMU 16-0</span>
+      <span class="rc-brand">@cmugames</span>
     </div>`;
 }
 
@@ -861,31 +862,44 @@ function showResultCard(outcome, container) {
     <div class="result-card">${resultCardHtml(outcome)}</div>
     <div class="result-actions">
       <button class="primary-btn" type="button" data-act="download">Download</button>
-      <button class="primary-btn ghost" type="button" data-act="x">${X_LOGO} Share</button>
+      <button class="primary-btn ghost" type="button" data-act="tg">${TG_LOGO} Share on Telegram</button>
     </div>
+    <a class="primary-btn wide join-btn" href="https://t.me/cmugames" data-act="join">Join Official Telegram Group @cmugames</a>
     <a class="primary-btn wide play-again-btn" href="draft.html" data-act="again">Play Again</a>`;
 
   const card = container.querySelector(".result-card");
   container.querySelector('[data-act="download"]').onclick = () => {
     html2canvas(card, {
-      backgroundColor: "#0f0f0f",
+      backgroundColor: "#161b21",
       scale: 2,
       useCORS: true,
     }).then((canvas) => {
       const link = document.createElement("a");
-      link.download = `16-0-result-${Date.now()}.png`;
+      link.download = `cmu-16-0-result-${Date.now()}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     });
   };
 
-  const tweetText = `I went ${outcome.wins}-${outcome.losses} with my drafted IPL XI on 16-0game.vercel.app! ${outcome.stage} Can you beat it?`;
-  container.querySelector('[data-act="x"]').onclick = () => {
-    const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
-    // openExternal (telegram-init.js) routes through Telegram.WebApp.openLink
-    // inside the Mini App; falls back to window.open in a normal browser.
-    (window.openExternal || ((u) => window.open(u, "_blank")))(url);
-  };
+  // Share the result to Telegram. We share the game's own URL (so friends can
+  // play) with a result + group-invite caption. openTgLink (telegram-init.js)
+  // routes through Telegram.WebApp.openTelegramLink inside the Mini App and
+  // falls back to a new tab in a normal browser.
+  const shareText = `I went ${outcome.wins}-${outcome.losses} with my drafted IPL XI on CMU 16-0! ${outcome.stage} Beat it 👇 Join @cmugames`;
+  const gameLink = (location.origin || "") + location.pathname.replace(/[^/]*$/, "");
+  const shareUrl = gameLink || "https://t.me/cmugames";
+  const tgShare = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`;
+  container.querySelector('[data-act="tg"]').onclick = () =>
+    (window.openTgLink || ((u) => window.open(u, "_blank")))(tgShare);
+
+  // Join the official Telegram group — open inside Telegram when available.
+  const joinBtn = container.querySelector('[data-act="join"]');
+  if (joinBtn) {
+    joinBtn.onclick = (e) => {
+      e.preventDefault();
+      (window.openTgLink || ((u) => window.open(u, "_blank")))("https://t.me/cmugames");
+    };
+  }
 }
 
 function tableRows() {
@@ -1011,7 +1025,7 @@ function advancePlayoff(match) {
     state.playoff.stage = "final";
   } else if (stage === "final") {
     if (winner.id === USER_ID) {
-      endPlayoffs("Champions — the 16-0 dream is real.", "champion");
+      endPlayoffs("Champions — the CMU 16-0 dream is real.", "champion");
     } else {
       showUserEliminated("Final");
     }

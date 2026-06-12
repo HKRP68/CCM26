@@ -3,10 +3,16 @@
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
 
-  // Open external links through Telegram when available — window.open is
-  // unreliable inside the in-app WebView. Falls back to a new tab otherwise.
+  // Open external (non-Telegram) links through Telegram when available —
+  // window.open is unreliable inside the in-app WebView. Falls back to a tab.
   window.openExternal = function (url) {
     if (tg && typeof tg.openLink === "function") tg.openLink(url);
+    else window.open(url, "_blank");
+  };
+
+  // Open t.me links (group invites, share sheet) inside Telegram itself.
+  window.openTgLink = function (url) {
+    if (tg && typeof tg.openTelegramLink === "function") tg.openTelegramLink(url);
     else window.open(url, "_blank");
   };
 
