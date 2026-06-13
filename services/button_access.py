@@ -81,6 +81,12 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cl_pick_",
     "cl_confirm_",
     "cl_start_",
+    # Pitch selection + the guest's Deny Match button live on the same prompt
+    # (sent while handling the guest's team pick, so it would otherwise be owned
+    # by the guest). challenge.py validates each: only the host picks the pitch,
+    # only the guest may deny — so both sides must reach those handlers.
+    "cl_pitch_",
+    "cl_denymatch_",
     "pbo_accept_",
     "pbo_decline_",
     "pboacc_",

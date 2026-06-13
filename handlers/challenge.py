@@ -336,7 +336,11 @@ _PITCH_DESC = {
 
 
 def _pitch_keyboard(draft_id):
-    """Pitch-selection keyboard for the host — two surfaces per row."""
+    """Pitch-selection keyboard: host picks a surface, guest may Deny the match.
+
+    Two surfaces per row, with a guest-only Deny Match button on its own row at
+    the bottom. challenge.py validates the clicker for each button.
+    """
     rows, row = [], []
     for idx, pitch in enumerate(PITCH_TYPES):
         row.append(InlineKeyboardButton(
@@ -346,6 +350,8 @@ def _pitch_keyboard(draft_id):
             row = []
     if row:
         rows.append(row)
+    rows.append([InlineKeyboardButton(
+        "❌ Deny Match", callback_data=f"cl_denymatch_{draft_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -407,10 +413,11 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
         await query.answer("Invalid pitch selection.", show_alert=True)
         return
 
-    # Only the host chooses the pitch.
+    # Only the host chooses the pitch. The guest (and anyone else) is told this
+    # is the host's call — the guest's button on this prompt is Deny Match.
     host_tg_id = (draft.get("host") or {}).get("tg_id") or draft.get("host_tg_id")
     if query.from_user.id != host_tg_id:
-        await query.answer("Only the host can choose the pitch.", show_alert=True)
+        await query.answer("Only the host can select the pitch.", show_alert=True)
         return
     if draft.get("pitch_type"):
         await query.answer("Pitch already chosen.", show_alert=True)
@@ -436,6 +443,56 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
             logger.exception("Failed to update pitch confirmation message")
 
     await _send_challenge_xi_prompt(context, draft, getattr(query, "message", None))
+
+
+async def challenge_deny_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cl_denymatch_{draft_id} — only the guest may deny the match.
+
+    This button sits on the pitch-selection prompt next to the host's pitch
+    buttons. The guest pressing it tears down the challenge; the host pressing it
+    is told to use their own command; anyone else is ignored.
+    """
+    query = update.callback_query
+    try:
+        _, _, draft_id = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid request.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft:
+        await query.answer("This challenge is no longer active.", show_alert=True)
+        return
+
+    host_tg_id = (draft.get("host") or {}).get("tg_id") or draft.get("host_tg_id")
+    target_tg_id = (draft.get("target") or {}).get("tg_id") or draft.get("target_tg_id")
+
+    # Only the guest denies; the host has their own command, others aren't part
+    # of this challenge.
+    if query.from_user.id == host_tg_id:
+        await query.answer(
+            "This button is not for you. Please use your own command.",
+            show_alert=True)
+        return
+    if query.from_user.id != target_tg_id:
+        await query.answer("Only the guest can deny this match.", show_alert=True)
+        return
+
+    context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+    await query.answer("Match denied.")
+    target = draft.get("target") or {}
+    message = (
+        "❌ <b>Match denied</b> by "
+        f"{_mention(target.get('tg_id'), target.get('name') or 'Guest')}."
+    )
+    try:
+        await query.edit_message_text(message, parse_mode="HTML")
+    except Exception:
+        try:
+            await query.edit_message_caption(caption=message, parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to update denied pitch selection message")
 
 
 def _challenge_xi_keyboard(draft_id, draft):

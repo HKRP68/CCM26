@@ -351,9 +351,13 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             # Once both teams are chosen, the HOST is first asked to pick a pitch.
             pitch_text, pitch_kwargs = message.replies[0]
             self.assertIn("Choose the pitch", pitch_text)
-            pitch_buttons = [b for row in pitch_kwargs["reply_markup"].inline_keyboard for b in row]
+            pitch_rows = pitch_kwargs["reply_markup"].inline_keyboard
+            pitch_buttons = [b for row in pitch_rows for b in row
+                             if b.callback_data.startswith("cl_pitch_")]
             self.assertEqual(len(pitch_buttons), len(challenge.PITCH_TYPES))
             self.assertEqual(pitch_buttons[0].callback_data, "cl_pitch_123456_0")
+            # The guest's Deny Match button sits on its own row at the bottom.
+            self.assertEqual(pitch_rows[-1][0].callback_data, "cl_denymatch_123456")
 
             # The host picks the first pitch; only then do the XI buttons appear.
             pitch_query = SimpleNamespace(
@@ -374,6 +378,82 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([button.text for button in keyboard[0]], ["Select MI XI", "Select CSK XI"])
         self.assertEqual(keyboard[0][0].callback_data, "cl_xi_123456_host")
         self.assertEqual(keyboard[0][1].callback_data, "cl_xi_123456_target")
+
+    async def test_deny_match_button_lets_guest_tear_down_the_challenge(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "draft_id": 123456,
+                "turn": "complete",
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_denymatch_123456",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            edit_message_caption=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_deny_match_callback(update, context)
+
+        # The guest denying drops the draft so the match cannot proceed.
+        self.assertNotIn(
+            challenge._challenge_team_draft_key(123456), context.bot_data)
+        query.answer.assert_awaited_once_with("Match denied.")
+        denied_text = query.edit_message_text.await_args.args[0]
+        self.assertIn("Match denied", denied_text)
+
+    async def test_deny_match_button_tells_host_to_use_own_command(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "draft_id": 123456,
+                "turn": "complete",
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_denymatch_123456",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_deny_match_callback(update, context)
+
+        # The host pressing the guest's Deny button is rejected, draft untouched.
+        self.assertIn(
+            challenge._challenge_team_draft_key(123456), context.bot_data)
+        query.answer.assert_awaited_once_with(
+            "This button is not for you. Please use your own command.",
+            show_alert=True)
+
+    async def test_pitch_button_rejects_guest_with_host_only_alert(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "draft_id": 123456,
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_pitch_123456_0",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_pitch_callback(update, context)
+
+        query.answer.assert_awaited_once_with(
+            "Only the host can select the pitch.", show_alert=True)
 
     async def test_xi_button_rejects_wrong_user_with_requested_alert(self):
         context = SimpleNamespace(bot_data={
