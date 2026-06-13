@@ -18,6 +18,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player
+from utils.idempotency import claim_once, release
 from services.global_market import (
     list_player_market, buy_player, ensure_player_market_fresh,
     get_next_refresh_at,
@@ -294,10 +295,17 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
         await q.answer("Not your market!", show_alert=True)
         return
 
+    # Dedup rapid taps on this Buy button instance.
+    key = f"pmb_{q.message.chat_id}_{q.message.message_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             await q.answer("Do /debut first")
             return
 
@@ -346,8 +354,10 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 pass
         else:
             session.rollback()
+            release(key)
             await q.answer(msg, show_alert=True)
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-buy.
         session.rollback()
         logger.exception("playermarket_buy_callback error")
         await q.answer("⚠️ Error", show_alert=True)

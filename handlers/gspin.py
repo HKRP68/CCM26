@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, UserRoster, UserStats
 from services.player_service import get_random_player_by_rating_range
+from utils.idempotency import claim_once, release
 from services.cooldown_service import check_cooldown, format_remaining
 from services.miniapp_buttons import has_miniapp_url, miniapp_button
 from services.quota_service import get_quota_status
@@ -132,6 +133,12 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+
+    # Dedup rapid taps that race the cooldown write.
+    key = f"gspin_{query.message.chat_id}_{query.message.message_id}"
+    if not claim_once(key):
+        await query.answer("Already processing…")
+        return
     await query.answer()
     tg_user = query.from_user
 
@@ -141,6 +148,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            release(key)
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -148,6 +156,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         effective_cooldown = get_cooldown(session, "gspin", GSPIN_COOLDOWN)
         ready, _ = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
+            release(key)
             await query.edit_message_text("⏳ Already spun!")
             return
 
@@ -332,6 +341,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-spin.
         session.rollback()
         logger.exception("GSpin spin error")
     finally:

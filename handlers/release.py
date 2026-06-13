@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Player, UserRoster
 from config import get_sell_value
+from utils.idempotency import claim_once, release
 from services.activity_service import log_activity
 from services.flags import get_flag
 
@@ -309,16 +310,24 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("Invalid")
         return
 
+    # Dedup rapid taps so a player can't be released (and credited) twice.
+    key = f"rlone_{query.message.chat_id}_{query.message.message_id}"
+    if not claim_once(key):
+        await query.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
+            release(key)
             await query.answer("Not authorized")
             return
 
         entry = session.query(UserRoster).filter(
             UserRoster.id == roster_id, UserRoster.user_id == user.id).first()
         if not entry:
+            release(key)
             await query.answer("Not yours or already released")
             try: await query.edit_message_text("❌ This player is no longer in your roster.")
             except Exception: pass
@@ -331,6 +340,7 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             session.delete(entry)
             user.roster_count = max(0, user.roster_count - 1)
             session.commit()
+            release(key)  # nothing credited — let the user retry if needed
             try: await query.edit_message_text("⚠️ Player data missing — roster entry cleaned up.")
             except Exception: pass
             return
@@ -355,6 +365,7 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception as e:
+        # Keep the claim (may be post-commit) so a stale tap can't re-credit.
         session.rollback()
         logger.exception(f"Release one callback FAILED: {type(e).__name__}: {e}")
         msg = str(e)
@@ -502,10 +513,17 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
         await query.answer("Not your release!", show_alert=True)
         return
 
+    # Dedup rapid taps so a batch can't be released (and credited) twice.
+    key = f"rlm_{query.message.chat_id}_{query.message.message_id}"
+    if not claim_once(key):
+        await query.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
+            release(key)
             await query.answer("Not authorized")
             return
 
@@ -519,6 +537,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
         entries = _build_display_order(raw_entries)
 
         if pos_from < 1 or pos_to > len(entries) or pos_from > pos_to:
+            release(key)
             try: await query.edit_message_text(
                 f"❌ Roster changed. You now have {len(entries)} players.\n"
                 f"Please run /releasemultiple again.")
@@ -527,6 +546,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
 
         to_release = entries[pos_from - 1:pos_to]
         if not to_release:
+            release(key)
             try: await query.edit_message_text("❌ Nothing to release.")
             except Exception: pass
             return
@@ -555,6 +575,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
         await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception as e:
+        # Keep the claim (may be post-commit) so a stale tap can't re-credit a batch.
         session.rollback()
         logger.exception(f"ReleaseMultiple confirm FAILED: {type(e).__name__}: {e}")
         # Extract the actual constraint name from psycopg2 errors so we can
