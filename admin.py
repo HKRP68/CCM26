@@ -6562,6 +6562,7 @@ def match_rest_action():
                     from services.match_webapp_service import finalize_webapp_match
                     fin = finalize_webapp_match(db, match.id)
                     _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                    _announce_tour_after_result(match.id, fin)
                 else:
                     from services.match_state_store import A_PICK_DELIVERY as _DELIVERY
                     if (action_type == "shot" and isinstance(res, dict)
@@ -6653,6 +6654,7 @@ def match_rest_action():
                 from services.match_webapp_service import finalize_webapp_match
                 fin = finalize_webapp_match(db, match.id)
                 _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                _announce_tour_after_result(match.id, fin)
             else:
                 _broadcast_match_scorecard(match.id)
         except Exception:
@@ -6735,6 +6737,7 @@ def match_rest_autoplay():
                 from services.match_webapp_service import finalize_webapp_match
                 fin = finalize_webapp_match(db, match.id)
                 _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                _announce_tour_after_result(match.id, fin)
             else:
                 _broadcast_match_scorecard(match.id)
         except Exception:
@@ -8344,6 +8347,42 @@ def _send_completed_match_images(chat_id, images):
 
 _COMPLETED_MATCH_BROADCASTS = set()
 _COMPLETED_MATCH_BROADCASTS_LOCK = threading.Lock()
+
+
+def _announce_tour_after_result(match_id, fin):
+    """Post the tour standings update to the lobby chat after a tour Mini-App
+    match finishes. ``fin`` is finalize_webapp_match's payload; this is a no-op
+    unless it carried a ``tour_announcement`` (i.e. the match belonged to a tour).
+    """
+    text = (fin or {}).get("tour_announcement")
+    if not text:
+        return
+
+    def _work():
+        import time
+        try:
+            # Let the match-summary cards land first, then the tour standings.
+            time.sleep(3.0)
+            from database import get_session as _gs
+            from models import Match as _M
+            db = _gs()
+            try:
+                m = db.query(_M).get(match_id)
+                chat_id = m.chat_id if m else None
+            finally:
+                db.close()
+            if not chat_id:
+                return
+            _tg_send_async({"chat_id": chat_id, "text": text,
+                            "parse_mode": "HTML",
+                            "disable_web_page_preview": True})
+        except Exception:
+            logger.exception("tour announcement send failed")
+
+    try:
+        threading.Thread(target=_work, daemon=True).start()
+    except Exception:
+        logger.exception("could not queue tour announcement")
 
 
 def _broadcast_match_result(match_id, result):

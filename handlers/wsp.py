@@ -26,7 +26,7 @@ from models import User, Match
 from services.match_constants import random_match_settings
 from handlers.match import (
     _active_cric_match_in_chat, _active_cric_match_for_user,
-    _cric_lobby_for_user, _user_label, _mention,
+    _cric_lobby_for_user, _user_label, _mention, _user_busy_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,8 +86,11 @@ async def wsp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _active_cric_match_in_chat(session, cid):
             await update.message.reply_text("⚠️ There is already an active match in this chat!")
             return
-        if _active_cric_match_for_user(session, host.id):
-            await update.message.reply_text("⚠️ You already have an active match running!")
+        busy_host = _active_cric_match_for_user(session, host.id)
+        if busy_host:
+            await update.message.reply_text(
+                _user_busy_message(busy_host), parse_mode="HTML",
+                disable_web_page_preview=True)
             return
         if context.bot_data.get(_wsp_lobby_key(cid)):
             await update.message.reply_text("⚠️ A WSP lobby is already open in this chat!")

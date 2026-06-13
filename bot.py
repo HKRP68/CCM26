@@ -95,7 +95,7 @@ from handlers.match import (
     variation_callback, length_callback, spinner_delivery_callback,
     shot_callback, new_over_bowler_callback, new_batsman_callback,
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
-    clearmatches_handler,
+    clearmatches_handler, removematch_handler,
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
     testwpm_handler,
 )
@@ -288,6 +288,8 @@ BOT_MENU_COMMANDS = (
     ("testwpm", "Test /wpm and /cm completion summary delivery"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
+    ("rcl", "Resume a stuck Challenge League (/cipl) match"),
+    ("botstatus", "Bot ping, uptime & status"),
     ("lastmatch", "View your last match"),
     ("recentmatches", "View your recent matches"),
     ("matchinfo", "View active match information"),
@@ -511,7 +513,10 @@ async def start_handler(update, context):
         "/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)\n"
         "/endmatch /em - End match (fine applies)\n"
         "/clearmatches - Admin: clear all stuck matches in this chat (no winner)\n"
-        "/resume /rs - If buttons disappear mid-match\n"
+        "/removematch @user - Admin: remove a player stuck in a match\n"
+        "/resume /r - If buttons disappear mid-match\n"
+        "/rcl - Resume a stuck Challenge League (/cipl) match\n"
+        "/botstatus - Bot ping, uptime & status\n"
         "/myprofile /me - Your profile\n"
         "/traits /tt - Your traits & inventory\n"
         "/traitshop /tshop - Daily trait shop\n"
@@ -780,8 +785,14 @@ def main():
                 raise ApplicationHandlerStop
         app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-1)
 
+        # Record process start time for /botstatus uptime reporting.
+        from datetime import datetime as _dt_now
+        app.bot_data["bot_start_time"] = _dt_now.utcnow()
+
         # ── Command handlers ─────────────────────────────────────────
         # ── Core commands + short aliases ────────────────────────────
+        from handlers.botstatus import botstatus_handler
+        app.add_handler(CommandHandler(["botstatus", "bstatus", "ping"], botstatus_handler))
         app.add_handler(CommandHandler(["start", "s"], start_handler))
         app.add_handler(CommandHandler(["debut", "d"], debut_handler))
         app.add_handler(CommandHandler(["claim", "c"], claim_handler))
@@ -815,6 +826,7 @@ def main():
         app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["clearmatches", "clearmatch"], clearmatches_handler))
+        app.add_handler(CommandHandler(["removematch", "rmatch", "kickmatch"], removematch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
         app.add_handler(CommandHandler(["recentmatches", "recent", "matches"], recentmatches_handler))
@@ -894,13 +906,15 @@ def main():
         # Challenge League over-by-over "approach" match flow
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
-            cipl_bowlapp_callback, cipl_batapp_callback,
+            cipl_bowlapp_callback, cipl_batapp_callback, rcl_handler,
         )
         app.add_handler(CallbackQueryHandler(cipl_coin_callback, pattern=r"^cipl_coin_"))
         app.add_handler(CallbackQueryHandler(cipl_toss_callback, pattern=r"^cipl_toss_"))
         app.add_handler(CallbackQueryHandler(cipl_bowler_callback, pattern=r"^cipl_bowler_"))
         app.add_handler(CallbackQueryHandler(cipl_bowlapp_callback, pattern=r"^cipl_bowlapp_"))
         app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
+        # /rcl — resume a stuck Challenge League match from where it left off
+        app.add_handler(CommandHandler(["rcl", "resumecl"], rcl_handler))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))

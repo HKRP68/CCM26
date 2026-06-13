@@ -107,6 +107,14 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             if mem.get("played_via") == "webapp":
                 continue
 
+            # Challenge League (/cipl) matches run their own 90s auto-pick timer
+            # and a manual /rcl resume. Don't let the heartbeat re-render or
+            # auto-decide them with the regular-match logic (it doesn't
+            # understand CIPL actions and would spam prompts / placeholder
+            # "resuming" messages). A stalled CIPL match is recovered with /rcl.
+            if mem.get("mode") == "cipl_approach":
+                continue
+
             if idle_seconds >= AUTODECIDE_THRESHOLD:
                 # Long idle — auto-decide
                 await _auto_decide(context, mid, mem, ms.next_action)

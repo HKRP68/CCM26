@@ -616,6 +616,111 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Resume (/rcl) — re-render the current over prompt from saved state
+# ════════════════════════════════════════════════════════════════════
+
+def is_cipl_state(state):
+    """True if ``state`` belongs to a Challenge League over-by-over match."""
+    return bool(state) and state.get("mode") == "cipl_approach"
+
+
+async def cipl_resume(context, mid, state=None):
+    """Re-render the current Challenge League prompt from saved state.
+
+    A Challenge League match drives itself through three picks per over
+    (bowler → bowling approach → batting approach). If the flow stalls midway —
+    a dropped button, a transient send failure — this re-sends the prompt for
+    whichever pick is outstanding so the match continues from exactly where it
+    left off. It NEVER falls through to the regular-match delivery renderer
+    (which would spam "Couldn't show delivery buttons. Retrying automatically…").
+
+    Returns True if a prompt was re-sent, False otherwise.
+    """
+    if state is None:
+        state = _gs(context, mid)
+    if not is_cipl_state(state):
+        return False
+    action = get_next_action(context, mid)
+    if action == A_COMPLETED:
+        return False
+    try:
+        # Force a fresh action message so the buttons reappear even if the
+        # previous prompt message was deleted or is no longer editable.
+        state["action_msg_id"] = None
+        if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
+            await _prompt_bowl_approach(context, mid, state)
+        elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
+            await _prompt_bat_approach(context, mid, state)
+        else:
+            # A_PICK_CIPL_BOWLER, an unknown action, or a missing bowler all
+            # resume cleanly from the start of the over (bowler selection).
+            await _prompt_bowler(context, mid, state, first=True)
+        return True
+    except Exception:
+        logger.exception("cipl_resume failed for match %s", mid)
+        return False
+
+
+async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/rcl — resume a stuck Challenge League (/cipl) match in this chat."""
+    chat = update.effective_chat
+    if chat is None:
+        return
+    cid = chat.id
+
+    found_mid, found_state = _find_cipl_match_in_chat(context, cid)
+    if found_mid is None:
+        await update.message.reply_text(
+            "❌ No active Challenge League match in this chat to resume.\n"
+            "Start one with /cipl.")
+        return
+
+    await update.message.reply_text(
+        "🔄 <b>Resuming Challenge League match…</b>", parse_mode="HTML")
+    ok = await cipl_resume(context, found_mid, found_state)
+    if not ok:
+        await update.message.reply_text(
+            "⚠️ Couldn't resume — the match may have already finished.\n"
+            "If it stays stuck, ask an admin to /removematch you.")
+
+
+def _find_cipl_match_in_chat(context, cid):
+    """Return (match_id, state) for a live Challenge League match in ``cid``.
+
+    Checks the in-memory state cache first, then falls back to the DB so a match
+    that survived a restart can still be resumed. Returns (None, None) if none.
+    """
+    for k, v in list(context.bot_data.items()):
+        if (isinstance(k, str) and k.startswith("ms_")
+                and isinstance(v, dict)
+                and v.get("chat_id") == cid
+                and is_cipl_state(v)):
+            try:
+                return int(k.split("_", 1)[1]), v
+            except (ValueError, IndexError):
+                continue
+    # DB fallback — find unfinished matches in this chat and rehydrate state.
+    session = get_session()
+    try:
+        rows = (session.query(Match)
+                .filter(Match.chat_id == cid,
+                        Match.status.in_(("playing", "active", "toss", "selecting")))
+                .order_by(Match.id.desc())
+                .all())
+        mids = [m.id for m in rows]
+    except Exception:
+        logger.exception("cipl resume DB lookup failed for chat %s", cid)
+        mids = []
+    finally:
+        session.close()
+    for mid in mids:
+        state = _gs(context, mid)
+        if is_cipl_state(state):
+            return mid, state
+    return None, None
+
+
+# ════════════════════════════════════════════════════════════════════
 # Callbacks
 # ════════════════════════════════════════════════════════════════════
 
