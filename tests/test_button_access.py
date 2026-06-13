@@ -94,6 +94,10 @@ class ButtonAccessTests(unittest.TestCase):
             "cl_confirm_123456_host",
             "cl_confirm_123456_target",
             "cl_start_123456",
+            # Pitch selection + the guest's Deny Match button share one prompt;
+            # the handler decides who may press each (host picks, guest denies).
+            "cl_pitch_123456_0",
+            "cl_denymatch_123456",
         ]
         for callback_data in callbacks:
             with self.subTest(callback_data=callback_data):
