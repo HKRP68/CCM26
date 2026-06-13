@@ -8,7 +8,10 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player, UserRoster, UserStats
-from services.player_service import get_random_player_by_rarity, get_random_player_by_rating_range
+from services.player_service import (
+    get_random_unowned_player_by_rarity, get_random_unowned_player_by_rating_range,
+)
+from utils.idempotency import claim_once, release
 from services.cooldown_service import check_cooldown, format_remaining
 from services.miniapp_buttons import has_miniapp_url, miniapp_button
 from services.quota_service import get_quota_status
@@ -105,6 +108,13 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+
+    # Dedup rapid taps that race the cooldown write (the cooldown itself is the
+    # once-per-day gate; this stops two concurrent clicks both passing it).
+    key = f"daily_{query.message.chat_id}_{query.message.message_id}"
+    if not claim_once(key):
+        await query.answer("Already processing…")
+        return
     await query.answer()
     tg_user = query.from_user
 
@@ -114,6 +124,7 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            release(key)
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -121,6 +132,7 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
         ready, _ = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
+            release(key)
             await query.edit_message_text("⏳ Already claimed today!")
             return
 
@@ -152,17 +164,23 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Number of players to grant (admin-tunable)
         player_count = get_player_count(session, "daily", 2)
 
-        # Generate players
+        # Generate players — skip any the user already owns (and each other), so
+        # we never try to grant a duplicate (unique roster ownership).
         players = []
+        granted_ids = set()
         for _ in range(player_count):
-            p = get_random_player_by_rarity(session)
+            p = get_random_unowned_player_by_rarity(session, user.id, exclude_ids=granted_ids)
             if p:
                 players.append(p)
+                granted_ids.add(p.id)
 
         # Milestone bonus
         milestone_player = None
         if milestone:
-            milestone_player = get_random_player_by_rating_range(session, 81, 85)
+            milestone_player = get_random_unowned_player_by_rating_range(
+                session, user.id, 81, 85, exclude_ids=granted_ids)
+            if milestone_player:
+                granted_ids.add(milestone_player.id)
 
         stats.last_daily = datetime.utcnow()
 
@@ -228,6 +246,7 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("Daily claim error")
     finally:
         session.close()

@@ -13,7 +13,8 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, UserRoster, UserStats
-from services.player_service import get_random_player_by_rating_range
+from services.player_service import get_random_unowned_player_by_rating_range
+from utils.idempotency import claim_once, release
 from services.cooldown_service import check_cooldown, format_remaining
 from services.miniapp_buttons import has_miniapp_url, miniapp_button
 from services.quota_service import get_quota_status
@@ -132,6 +133,12 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+
+    # Dedup rapid taps that race the cooldown write.
+    key = f"gspin_{query.message.chat_id}_{query.message.message_id}"
+    if not claim_once(key):
+        await query.answer("Already processing…")
+        return
     await query.answer()
     tg_user = query.from_user
 
@@ -141,6 +148,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            release(key)
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -148,6 +156,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         effective_cooldown = get_cooldown(session, "gspin", GSPIN_COOLDOWN)
         ready, _ = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
+            release(key)
             await query.edit_message_text("⏳ Already spun!")
             return
 
@@ -185,7 +194,9 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif rt == "player":
                 low = reward_row.player_rating_min or 50
                 high = max(reward_row.player_rating_max or low, low)
-                player = get_random_player_by_rating_range(session, low, high)
+                # Skip players the user already owns (no duplicate ownership);
+                # None → falls through to compensation coins below.
+                player = get_random_unowned_player_by_rating_range(session, user.id, low, high)
                 if player:
                     if user.roster_count < MAX_ROSTER:
                         entry = UserRoster(user_id=user.id, player_id=player.id,
@@ -282,7 +293,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reward_lines = f"YOU GOT GEMS!\n💎 +{amount} gems"
             elif outcome_type == "player":
                 low, high = outcome_range
-                player = get_random_player_by_rating_range(session, low, high)
+                player = get_random_unowned_player_by_rating_range(session, user.id, low, high)
                 if player and user.roster_count < MAX_ROSTER:
                     entry = UserRoster(user_id=user.id, player_id=player.id,
                                         order_position=user.roster_count + 1,
@@ -333,6 +344,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("GSpin spin error")
     finally:
         session.close()

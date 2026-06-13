@@ -30,6 +30,9 @@ from services.pack_service import (
 from services.card_generator import generate_card
 from services.button_timeout import schedule_button_timeout
 from services.activity_service import log_activity
+from utils.idempotency import claim_once, release
+
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -363,16 +366,23 @@ async def pack_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Not your pack store!", show_alert=True)
         return
 
+    # Dedup rapid taps on this Buy button instance.
+    key = f"pkb_{q.message.chat_id}_{q.message.message_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
     await q.answer()
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             await context.bot.send_message(q.message.chat_id, "❌ Do /debut first!")
             return
         pack = session.query(Pack).filter(
             Pack.slot_number == slot, Pack.is_active == True).first()
         if not pack:
+            release(key)
             await q.answer("Pack not found.", show_alert=True)
             return
 
@@ -380,6 +390,7 @@ async def pack_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = buy_pack(session, user, pack)
         if not result["success"]:
             session.rollback()
+            release(key)
             try:
                 await q.edit_message_text(result["message"], parse_mode="HTML")
             except Exception:
@@ -431,6 +442,7 @@ async def pack_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("pack_buy_callback error")
         try:
             await context.bot.send_message(
@@ -588,6 +600,11 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         await q.answer("Not your pack!", show_alert=True)
         return
 
+    # Dedup so the same physical pack can't be opened twice by rapid taps.
+    key = f"opk_{tg.id}_{inventory_id}"
+    if not claim_once(key):
+        await q.answer("Already opening…")
+        return
     await q.answer()
     session = get_session()
     chat_id = q.message.chat_id
@@ -595,13 +612,22 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             await context.bot.send_message(chat_id, "❌ Do /debut first!")
             return
 
         from services.pack_service import open_unopened_pack
-        result = open_unopened_pack(session, user, inventory_id)
+        try:
+            result = open_unopened_pack(session, user, inventory_id)
+        except IntegrityError:
+            # Concurrent double-open raced past the guard — one already landed.
+            session.rollback()
+            release(key)
+            await q.answer("This pack was already opened.", show_alert=True)
+            return
         if not result["success"]:
             session.rollback()
+            release(key)
             try:
                 await q.edit_message_text(result["message"], parse_mode="HTML")
             except Exception:
@@ -775,6 +801,7 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("pack_open_inventory_callback error")
         try:
             await context.bot.send_message(

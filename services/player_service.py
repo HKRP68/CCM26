@@ -69,6 +69,53 @@ def get_random_player_by_rarity(session: Session) -> Player | None:
     return get_random_player_by_rating_range(session, 50, 58)
 
 
+def _owned_player_ids(session: Session, user_id) -> set:
+    """player_ids already in the user's roster (cheap — max 25 rows)."""
+    from models import UserRoster
+    return {r[0] for r in session.query(UserRoster.player_id)
+            .filter(UserRoster.user_id == user_id).all()}
+
+
+def get_random_unowned_player_by_rating_range(
+    session: Session, user_id, low: int, high: int,
+    *, exclude_ids=None, attempts: int = 12) -> Player | None:
+    """Like get_random_player_by_rating_range but never returns a player the
+    user already owns (or any id in exclude_ids).
+
+    A user can hold at most one row per player (unique constraint), so reward
+    flows must not try to grant a duplicate. Returns None if no unowned player
+    is found within `attempts` tries — callers fall back to coins.
+    """
+    from services import player_cache
+    skip = set(exclude_ids or ())
+    skip |= _owned_player_ids(session, user_id)
+    for _ in range(attempts):
+        pick = player_cache.get_random_in_rating_range(low, high)
+        if not pick:
+            return None
+        if pick["id"] in skip:
+            continue
+        return session.query(Player).get(pick["id"])
+    return None
+
+
+def get_random_unowned_player_by_rarity(
+    session: Session, user_id, *, exclude_ids=None, attempts: int = 12) -> Player | None:
+    """Rarity-weighted pick that skips players the user already owns."""
+    dist = _get_rarity_distribution(session)
+    roll = random.random()
+    low, high = 50, 58
+    matched = False
+    for threshold, lo, hi in dist:
+        if roll <= threshold:
+            low, high, matched = lo, hi, True
+            break
+    if not matched and dist:
+        _, low, high = dist[-1]
+    return get_random_unowned_player_by_rating_range(
+        session, user_id, low, high, exclude_ids=exclude_ids, attempts=attempts)
+
+
 def get_player_values(rating: int) -> tuple[int, int]:
     """Return (buy_value, sell_value) for a rating."""
     return get_buy_value(rating), get_sell_value(rating)

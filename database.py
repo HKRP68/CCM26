@@ -378,6 +378,18 @@ def _migrate_add_columns():
     # own transaction so a failure doesn't poison the rest.
     # ─────────────────────────────────────────────────────────────
     migration_sql = [
+        # ── user_roster dedup + unique ownership ──────────────────────────
+        # Backstop against rapid double-click buys/retains creating duplicate
+        # ownership rows. Order matters: collapse existing duplicates and fix
+        # the denormalized counter BEFORE creating the unique index, or the
+        # index creation fails on pre-existing dupes. All three are valid on
+        # both SQLite and Postgres and idempotent on re-run.
+        "DELETE FROM user_roster WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id)",
+        "UPDATE users SET roster_count = ("
+        "  SELECT COUNT(*) FROM user_roster WHERE user_roster.user_id = users.id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_roster_user_player "
+        "ON user_roster (user_id, player_id)",
         # Postgres: drop any legacy named unique constraints
         "ALTER TABLE players DROP CONSTRAINT IF EXISTS players_name_key",
         "ALTER TABLE players DROP CONSTRAINT IF EXISTS uq_players_name",

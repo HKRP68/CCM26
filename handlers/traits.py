@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player, UserRoster, Trait, PlayerTrait, TraitInventory, TraitDaily
+from utils.idempotency import claim_once, release
 from services.trait_service import (
     TRAIT_DEFINITIONS, refresh_shop, reroll_shop, buy_trait_from_shop,
     apply_trait_to_player, replace_trait_on_player,
@@ -213,10 +214,17 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        show_alert=True)
         return
 
+    # Dedup rapid taps on this Buy button instance.
+    key = f"trbuy_{q.message.chat_id}_{q.message.message_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             await q.answer("Do /debut first")
             return
 
@@ -234,9 +242,11 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _refresh_shop_display(q, session, user)
         else:
             session.rollback()
+            release(key)
             await q.answer(name_or_msg, show_alert=True)
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("traitbuy_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:

@@ -7,8 +7,11 @@ from types import SimpleNamespace
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from sqlalchemy.exc import IntegrityError
+
 from database import get_session
 from models import User, Player, UserRoster, UserStats
+from utils.idempotency import claim_once, release
 from services.player_service import get_random_player_by_rarity, get_player_values
 from services.cooldown_service import check_cooldown, format_remaining
 from services.card_generator import generate_card
@@ -19,17 +22,6 @@ from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value, get_
 
 logger = logging.getLogger(__name__)
 AUTO_TIMEOUT = 60
-_processed = set()
-
-
-def _is_done(key):
-    if key in _processed:
-        return True
-    _processed.add(key)
-    if len(_processed) > 5000:
-        for k in list(_processed)[:2500]:
-            _processed.discard(k)
-    return False
 
 
 def _cancel_timer(context, user_id):
@@ -278,7 +270,7 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sell_val = int(parts[3]) if len(parts) > 3 else 0
 
     key = f"claim_{user_id}_{player_id}"
-    if _is_done(key):
+    if not claim_once(key):
         await query.answer("Already processed!")
         return
     await query.answer()
@@ -294,14 +286,16 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            release(key)
             return
 
         player = session.query(Player).get(player_id)
         if not player:
+            release(key)
             return
 
         if user.roster_count >= MAX_ROSTER:
-            _processed.discard(key)
+            release(key)
             await context.bot.send_message(chat_id=chat_id,
                 text="❌ Your squad is full (25/25).\nUse ⚪ Replace or /releasepl <name>",
                 parse_mode="HTML")
@@ -312,6 +306,14 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            order_position=user.roster_count + 1,
                            acquired_date=datetime.utcnow())
         session.add(entry)
+        try:
+            session.flush()  # surfaces the unique-ownership violation now
+        except IntegrityError:
+            session.rollback()
+            release(key)
+            await context.bot.send_message(chat_id=chat_id,
+                text=f"❌ You already own {player.name}.")
+            return
         user.roster_count += 1
         new_count = user.roster_count
 
@@ -359,6 +361,7 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("Retain error")
     finally:
         session.close()
@@ -375,7 +378,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
 
     key = f"claim_{user_id}_{player_id}"
-    if _is_done(key):
+    if not claim_once(key):
         await query.answer("Already processed!")
         return
     await query.answer()
@@ -390,6 +393,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            release(key)
             return
 
         player = session.query(Player).get(player_id)
@@ -409,6 +413,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("Release error")
     finally:
         session.close()

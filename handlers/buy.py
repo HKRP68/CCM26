@@ -8,12 +8,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
+from sqlalchemy.exc import IntegrityError
+
 from database import get_session
 from models import User, Player, UserRoster
 from services.card_generator import generate_card
 from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
 from services.card_text import format_player_card
+from utils.idempotency import claim_once, release
 
 logger = logging.getLogger(__name__)
 
@@ -310,8 +313,20 @@ async def player_page_noop_callback(update: Update, context: ContextTypes.DEFAUL
 
 async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     tg_user = query.from_user
+
+    # Idempotency: dedup rapid/duplicate taps on THIS Buy button instance.
+    # Keyed on the message so a future /buypl (a new button) is never blocked.
+    key = f"buy_{query.message.chat_id}_{query.message.message_id}"
+    if not claim_once(key):
+        await query.answer("Already processing…")
+        return
+    await query.answer()
+    # Remove the keyboard immediately so the client can't re-fire the old button.
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     parts = query.data.split("_")  # buypl_{player_id}_{user_id}
     player_id = int(parts[1])
@@ -321,24 +336,25 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         user = session.query(User).get(owner_user_id)
         if not user or user.telegram_id != tg_user.id:
-            await query.edit_message_reply_markup(reply_markup=None)
+            release(key)
             return
 
         # Official-GC restriction: block purchase if the callback fires from a
         # non-official group (e.g. a stale/forwarded button).
         restricted, official_link = _is_buy_restricted(session, update)
         if restricted:
+            release(key)
             kb = _join_gc_keyboard(official_link)
             try:
                 await query.edit_message_reply_markup(reply_markup=kb)
             except Exception:
                 pass
-            await query.answer("Buying is restricted to the Official Group.", show_alert=True)
+            await query.message.reply_text("🔴 Buying is restricted to the Official Group.")
             return
 
         player = session.query(Player).get(player_id)
         if not player:
-            await query.edit_message_reply_markup(reply_markup=None)
+            release(key)
             await query.message.reply_text("❌ Player no longer available")
             return
 
@@ -346,7 +362,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         # honor the restricted_from_buypl flag even if a stale button slipped
         # through (e.g. admin enabled the flag after the buttons were sent).
         if getattr(player, "restricted_from_buypl", False):
-            await query.edit_message_reply_markup(reply_markup=None)
+            release(key)
             await query.message.reply_text(
                 f"🚫 <b>{player.name}</b> is <b>Not available to Buy</b> via /buypl.\n\n"
                 f"<i>Try the player market (/playermarket), packs, or trades.</i>",
@@ -358,8 +374,8 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         username = tg_user.username or tg_user.first_name
 
         if user.total_coins < buy_val:
+            release(key)
             shortage = buy_val - user.total_coins
-            await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(
                 f"❌ @{username} needs {shortage:,} more coins to buy {player.name}\n"
                 f"💰 Balance: {user.total_coins:,} | Price: {buy_val:,}"
@@ -367,14 +383,14 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         if user.roster_count >= MAX_ROSTER:
-            await query.edit_message_reply_markup(reply_markup=None)
+            release(key)
             await query.message.reply_text("❌ Roster full! Release players first.")
             return
 
         # Re-check version ownership (user might have bought another version since)
         from services.version_service import user_owns_any_version
         if user_owns_any_version(session, user.id, player.id):
-            await query.edit_message_reply_markup(reply_markup=None)
+            release(key)
             await query.message.reply_text(
                 f"❌ You already own a version of <b>{player.name}</b>.",
                 parse_mode="HTML",
@@ -389,7 +405,17 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             acquired_date=datetime.utcnow(),
         )
         session.add(entry)
-        session.flush()  # populate entry.id for undo record
+        try:
+            session.flush()  # populate entry.id; surfaces the unique violation now
+        except IntegrityError:
+            # Hard backstop: a duplicate slipped past the in-memory guard.
+            # Rollback reverts the coin debit too — user is never double-charged.
+            session.rollback()
+            release(key)
+            await query.message.reply_text(
+                f"❌ You already own <b>{player.name}</b>.", parse_mode="HTML",
+            )
+            return
         user.roster_count += 1
 
         log_activity(session, user.id, "buy",
@@ -409,7 +435,8 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
 
         session.commit()
 
-        await query.edit_message_reply_markup(reply_markup=None)
+        # Terminal success — keep the claim (TTL expires it) so the dup-click
+        # window stays closed. Keyboard was already removed up top.
         await query.message.reply_text(
             f"✅ <b>PURCHASED!</b>\n\n"
             f"📛 {player.name} - {player.rating} OVR\n"
@@ -422,6 +449,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     except Exception:
         session.rollback()
+        release(key)
         logger.exception(f"BuyPl confirm error")
     finally:
         session.close()

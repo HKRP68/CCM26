@@ -2,7 +2,8 @@
 
 from datetime import datetime, timedelta
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text
+    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text,
+    UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -120,7 +121,12 @@ class UserRoster(Base):
     user = relationship("User", back_populates="roster")
     player = relationship("Player")
 
-    __table_args__ = (Index("ix_user_roster_user", "user_id"),)
+    __table_args__ = (
+        Index("ix_user_roster_user", "user_id"),
+        # A user can hold at most one roster row per player. Hard backstop against
+        # rapid double-click buys/retains slipping past the in-memory guard.
+        UniqueConstraint("user_id", "player_id", name="uq_user_roster_user_player"),
+    )
 
 
 class UserStats(Base):

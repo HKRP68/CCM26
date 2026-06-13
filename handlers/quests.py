@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User
+from utils.idempotency import claim_once, release
 from services.quest_service import (
     get_user_quests, claim_quest_reward, claim_all_completed,
 )
@@ -371,16 +372,25 @@ async def quest_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer("Not yours!", show_alert=True)
         return
 
+    # Dedup rapid taps on THIS quest's Claim button (per-quest so other quests
+    # in the same message can still be claimed).
+    key = f"qstc_{q.message.chat_id}_{q.message.message_id}_{quest_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             await q.answer("Not found")
             return
 
         ok, msg, reward = claim_quest_reward(session, user.id, quest_id)
         if not ok:
             session.rollback()
+            release(key)
             await q.answer(msg, show_alert=True)
             return
 
@@ -405,6 +415,7 @@ async def quest_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("quest_claim_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:
@@ -434,14 +445,22 @@ async def quest_claimall_callback(update: Update, context: ContextTypes.DEFAULT_
         await q.answer("Unknown")
         return
 
+    # Dedup rapid taps on the Claim-All button for this quest type.
+    key = f"qstca_{q.message.chat_id}_{q.message.message_id}_{quest_type}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             return
 
         count, total = claim_all_completed(session, user.id, quest_type)
         if count == 0:
+            release(key)
             await q.answer("Nothing to claim.", show_alert=True)
             return
         session.commit()
@@ -460,6 +479,7 @@ async def quest_claimall_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("quest_claimall_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:

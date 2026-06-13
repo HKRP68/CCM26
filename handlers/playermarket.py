@@ -16,8 +16,11 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from sqlalchemy.exc import IntegrityError
+
 from database import get_session
 from models import User, Player
+from utils.idempotency import claim_once, release
 from services.global_market import (
     list_player_market, buy_player, ensure_player_market_fresh,
     get_next_refresh_at,
@@ -294,14 +297,27 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
         await q.answer("Not your market!", show_alert=True)
         return
 
+    # Dedup rapid taps on this Buy button instance.
+    key = f"pmb_{q.message.chat_id}_{q.message.message_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
+            release(key)
             await q.answer("Do /debut first")
             return
 
-        ok, msg = buy_player(session, user, slot)
+        try:
+            ok, msg = buy_player(session, user, slot)
+        except IntegrityError:
+            session.rollback()
+            release(key)
+            await q.answer("You already own this player.", show_alert=True)
+            return
         if ok:
             log_activity(session, user.id, "buy_market",
                          f"Bought {msg} from market",
@@ -346,9 +362,11 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 pass
         else:
             session.rollback()
+            release(key)
             await q.answer(msg, show_alert=True)
     except Exception:
         session.rollback()
+        release(key)
         logger.exception("playermarket_buy_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:
