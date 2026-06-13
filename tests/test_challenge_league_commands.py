@@ -44,6 +44,7 @@ def _load_challenge_with_stubs():
     match_constants = types.ModuleType("services.match_constants")
     match_constants.MATCH_EXPIRE = 60
     match_constants.random_match_settings = lambda: {}
+    match_constants.PITCH_TYPES = ["Dry", "Dusty", "Hard", "Flat", "Green", "Bouncy"]
     sys.modules["services.match_constants"] = match_constants
 
     telegram_user_service = types.ModuleType("services.telegram_user_service")
@@ -200,12 +201,12 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         text, kwargs = message.replies[0]
         self.assertIn("League Battles · IPL", text)
         keyboard = kwargs["reply_markup"].inline_keyboard
-        labels = [row[0].text for row in keyboard]
-        # Buttons show the short code (e.g. MI, CSK) rather than the full name,
-        # and the final row is a Cancel button.
+        # Teams render two per row; the final row is the Cancel button. Buttons
+        # show the short code (e.g. MI, CSK) rather than the full name.
+        team_labels = [btn.text for row in keyboard[:-1] for btn in row]
         expected_codes = [challenge.IPL_TEAM_META[name][0] for name in challenge.IPL_TEAM_NAMES]
-        self.assertEqual(labels[:-1], expected_codes)
-        self.assertEqual(labels[-1], "❌ Cancel")
+        self.assertEqual(team_labels, expected_codes)
+        self.assertEqual(keyboard[-1][0].text, "❌ Cancel")
         self.assertEqual(keyboard[-1][0].callback_data, f"cl_cancel_{int(next(iter(context.bot_data)).rsplit('_', 1)[1])}")
         self.assertTrue(next(iter(context.bot_data)).startswith("challenge_team_draft_"))
 
@@ -317,10 +318,11 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(draft["turn"], "complete")
 
 
-    async def test_target_selection_sends_challenge_created_xi_buttons(self):
+    async def test_target_selection_then_host_pitch_choice_sends_xi_buttons(self):
         message = DummyMessage("picker")
         context = SimpleNamespace(bot_data={
             challenge._challenge_team_draft_key(123456): {
+                "draft_id": 123456,
                 "host_tg_id": 1,
                 "target_tg_id": 2,
                 "league_name": "IPL",
@@ -342,11 +344,33 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         update = SimpleNamespace(callback_query=query)
 
         with patch.object(challenge, "_same_team_challenge_enabled", return_value=False), \
+             patch.object(challenge, "get_session", return_value=DummySession()), \
              patch.object(challenge, "_challenge_created_text", return_value="created"):
             await challenge.challenge_team_callback(update, context)
 
-        self.assertEqual(message.replies[0][0], "created")
-        keyboard = message.replies[0][1]["reply_markup"].inline_keyboard
+            # Once both teams are chosen, the HOST is first asked to pick a pitch.
+            pitch_text, pitch_kwargs = message.replies[0]
+            self.assertIn("Choose the pitch", pitch_text)
+            pitch_buttons = [b for row in pitch_kwargs["reply_markup"].inline_keyboard for b in row]
+            self.assertEqual(len(pitch_buttons), len(challenge.PITCH_TYPES))
+            self.assertEqual(pitch_buttons[0].callback_data, "cl_pitch_123456_0")
+
+            # The host picks the first pitch; only then do the XI buttons appear.
+            pitch_query = SimpleNamespace(
+                data="cl_pitch_123456_0",
+                from_user=SimpleNamespace(id=1),
+                answer=AsyncMock(),
+                edit_message_text=AsyncMock(),
+                edit_message_caption=AsyncMock(),
+                message=message,
+            )
+            await challenge.challenge_pitch_callback(
+                SimpleNamespace(callback_query=pitch_query), context)
+
+        draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
+        self.assertEqual(draft["pitch_type"], challenge.PITCH_TYPES[0])
+        self.assertEqual(message.replies[1][0], "created")
+        keyboard = message.replies[1][1]["reply_markup"].inline_keyboard
         self.assertEqual([button.text for button in keyboard[0]], ["Select MI XI", "Select CSK XI"])
         self.assertEqual(keyboard[0][0].callback_data, "cl_xi_123456_host")
         self.assertEqual(keyboard[0][1].callback_data, "cl_xi_123456_target")

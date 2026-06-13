@@ -1947,13 +1947,49 @@ def user_detail(user_id):
         for _, p in roster:
             p._tier_css = tier_css(p.rating)
 
-        activities = (
+        # ── Activity log: full history + filters + running net-coin balance ──
+        # Pull the complete ordered history (newest first) so we can compute the
+        # running coin balance after each activity, then apply display filters.
+        action_filter = (request.args.get("action") or "").strip()
+        limit_param = (request.args.get("limit") or "50").strip().lower()
+
+        all_activities = (
             db.query(ActivityLog)
             .filter(ActivityLog.user_id == user.id)
-            .order_by(ActivityLog.created_at.desc())
-            .limit(50)
+            .order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
             .all()
         )
+
+        # Distinct action types for the filter dropdown.
+        activity_actions = sorted({a.action for a in all_activities if a.action})
+
+        # Running net coins: the newest activity leaves the user at their current
+        # balance; walking backwards we subtract each change to get the balance
+        # that existed right after each earlier activity. Computed over the full
+        # (unfiltered) history so the numbers stay correct even when filtered.
+        running = user.total_coins or 0
+        for a in all_activities:
+            a._net_coins = running
+            running -= (a.coins_change or 0)
+
+        # Apply the action filter (display only — balances already computed).
+        if action_filter:
+            activities = [a for a in all_activities if a.action == action_filter]
+        else:
+            activities = all_activities
+
+        activity_total = len(activities)
+
+        # Limit for display: a number, or "all" to show the full history.
+        if limit_param == "all":
+            activity_limit = "all"
+        else:
+            try:
+                n = int(limit_param)
+            except (TypeError, ValueError):
+                n = 50
+            activity_limit = n if n > 0 else 50
+            activities = activities[:activity_limit]
 
         # Active matches the user is in (any non-completed/abandoned status)
         from models import Match
@@ -2025,6 +2061,10 @@ def user_detail(user_id):
 
         return render_template("user_detail.html", user=user, stats=stats,
                                roster=roster, activities=activities,
+                               activity_actions=activity_actions,
+                               activity_action_filter=action_filter,
+                               activity_limit=limit_param,
+                               activity_total=activity_total,
                                active_matches=match_meta,
                                recent_matches=recent_matches,
                                pending_trades=pending_trades,

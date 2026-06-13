@@ -83,6 +83,8 @@
         inset 0 0 20px rgba(0,0,0,0.7);
       transition: transform 5s cubic-bezier(0.15, 0.85, 0.15, 1);
     }
+    @keyframes spinLoop { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    #spin-wheel.wheel-free-spin { animation: spinLoop 0.7s linear infinite; }
     .wheel-pointer {
       position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
       width: 0; height: 0; border-left: 20px solid transparent; border-right: 20px solid transparent;
@@ -291,6 +293,40 @@
 
     let currentRotation = 0;
 
+    // Read the wheel's current visual rotation (0..360) from its computed transform.
+    function currentWheelAngle() {
+      const wheel = document.getElementById('spin-wheel');
+      const style = window.getComputedStyle(wheel);
+      const matrix = style.transform || style.webkitTransform;
+      if (!matrix || matrix === 'none') return 0;
+      try {
+        const v = matrix.split('(')[1].split(')')[0].split(',');
+        let angle = Math.round(Math.atan2(parseFloat(v[1]), parseFloat(v[0])) * (180 / Math.PI));
+        if (angle < 0) angle += 360;
+        return angle;
+      } catch (e) { return 0; }
+    }
+
+    // Start an immediate, continuous free spin so the wheel reacts the instant
+    // the user taps — instead of sitting frozen while the network request runs.
+    function startContinuousSpin() {
+      const wheel = document.getElementById('spin-wheel');
+      wheel.style.transition = 'none';
+      wheel.classList.add('wheel-free-spin');
+    }
+
+    // Stop the continuous spin, pinning the wheel at its current visual angle so
+    // there is no jump before the deterministic landing (or on error/cancel).
+    function stopContinuousSpin() {
+      const wheel = document.getElementById('spin-wheel');
+      const angle = currentWheelAngle();
+      wheel.classList.remove('wheel-free-spin');
+      wheel.style.transition = 'none';
+      wheel.style.transform = `rotate(${angle}deg)`;
+      void wheel.offsetWidth; // flush reflow so the next transition animates
+      currentRotation = angle;
+    }
+
     function pickSlice(reward) {
       // Land on a slice that matches the reward type; otherwise a coin slice.
       if (reward && reward.type === 'player') return 9;       // jackpot slice
@@ -311,6 +347,8 @@
 
       const wheel = document.getElementById('spin-wheel');
       const pointer = document.querySelector('.wheel-pointer');
+      // Restore the deceleration transition (it is cleared during the continuous spin).
+      wheel.style.transition = 'transform 5s cubic-bezier(0.15, 0.85, 0.15, 1)';
       wheel.style.transform = `rotate(${currentRotation}deg)`;
 
       // Pointer "tick" + haptic as each slice passes under the pointer.
@@ -383,12 +421,21 @@
     }
 
     async function doSpin(adToken) {
-      const res = await fetch('/api/webapp/spin', {
-        method: 'POST', headers: authHeaders(),
-        body: JSON.stringify(adToken ? { ad_token: adToken } : {})
-      });
-      const data = await res.json().catch(() => ({}));
-      return { ok: res.ok, status: res.status, data };
+      // Hard timeout so a slow/hanging request can never leave the wheel
+      // spinning forever — it aborts and surfaces an error instead.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch('/api/webapp/spin', {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify(adToken ? { ad_token: adToken } : {}),
+          signal: controller.signal
+        });
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, status: res.status, data };
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     async function getAdToken() {
@@ -414,9 +461,14 @@
         let adToken = '';
         if (isAd) { adToken = await getAdToken(); status.innerHTML = 'SPINNING… 🎡'; }
 
+        // Spin the wheel right away so it reacts instantly; the request runs in
+        // parallel and we land on the reward slice the moment it resolves.
+        startContinuousSpin();
+
         const { ok, status: code, data } = await doSpin(adToken);
 
         if (!ok || !data.ok) {
+          stopContinuousSpin();
           const msg = (data && (data.message || data.error)) || 'Spin failed.';
           status.innerHTML = `<span style="color:var(--danger);">${msg}</span>`;
           // ad_required → free already used; keep ad button. cycle_exhausted → both off.
@@ -427,6 +479,7 @@
         }
 
         const reward = data.reward;
+        stopContinuousSpin();
         animateTo(pickSlice(reward));
 
         setTimeout(() => {
@@ -447,7 +500,9 @@
           adBtn.disabled = false;
         }, 5000);
       } catch (err) {
-        status.innerHTML = '<span style="color:var(--danger);">Something went wrong. Try again.</span>';
+        stopContinuousSpin();
+        const timedOut = err && err.name === 'AbortError';
+        status.innerHTML = `<span style="color:var(--danger);">${timedOut ? 'Spin timed out. Please try again.' : 'Something went wrong. Try again.'}</span>`;
         freeBtn.disabled = false; adBtn.disabled = false;
       }
     }

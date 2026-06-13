@@ -314,23 +314,48 @@
 </div>
 
 <!-- ── Activity log ──────────────────────────────────────────── -->
-<h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--muted);text-transform:uppercase;">Recent Activity (last 50)</h3>
+<h3 style="margin-bottom:.75rem;font-size:.9rem;color:var(--muted);text-transform:uppercase;">
+  User Activity
+  <span style="color:var(--accent2);font-size:.75rem;">({{ activity_total }} record{{ '' if activity_total == 1 else 's' }}{% if activity_limit != 'all' and activity_total > activities|length %} · showing {{ activities|length }}{% endif %})</span>
+</h3>
+<form method="get" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem;">
+  <label style="font-size:.75rem;color:var(--muted);">Action
+    <select name="action" onchange="this.form.submit()" style="margin-left:.25rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.2rem .4rem;font-size:.75rem;">
+      <option value="">All actions</option>
+      {% for act in activity_actions %}
+      <option value="{{ act }}" {% if act == activity_action_filter %}selected{% endif %}>{{ act }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label style="font-size:.75rem;color:var(--muted);">Show
+    <select name="limit" onchange="this.form.submit()" style="margin-left:.25rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.2rem .4rem;font-size:.75rem;">
+      {% for opt in ['50', '100', '250', '500'] %}
+      <option value="{{ opt }}" {% if activity_limit == opt %}selected{% endif %}>Last {{ opt }}</option>
+      {% endfor %}
+      <option value="all" {% if activity_limit == 'all' %}selected{% endif %}>Full history</option>
+    </select>
+  </label>
+  {% if activity_action_filter or activity_limit != '50' %}
+  <a href="{{ url_for('user_detail', user_id=user.id) }}" style="font-size:.72rem;color:var(--muted);text-decoration:underline;">Reset</a>
+  {% endif %}
+</form>
 <div class="table-wrap">
   <table>
-    <thead><tr><th>Time</th><th>Action</th><th>Detail</th><th>Coins</th></tr></thead>
+    <thead><tr><th>Time</th><th>Action</th><th>Detail</th><th>Coins</th><th>Net Coins</th></tr></thead>
     <tbody>
     {% for a in activities %}
     <tr>
-      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at | ist('%d %b %H:%M') if a.created_at else '' }}</td>
+      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at | ist('%d %b %Y, %H:%M:%S') if a.created_at else '' }}</td>
       <td><span style="background:var(--bg);padding:.15rem .5rem;border-radius:4px;font-size:.75rem;font-weight:600;">{{ a.action }}</span></td>
       <td style="font-size:.8rem;">{{ a.detail or '' }}</td>
       <td style="font-size:.8rem;{% if a.coins_change > 0 %}color:var(--green);{% elif a.coins_change < 0 %}color:var(--red);{% endif %}">
         {% if a.coins_change %}{{ '{:+,}'.format(a.coins_change) }}{% endif %}
       </td>
+      <td style="font-size:.8rem;font-weight:600;white-space:nowrap;">{{ '{:,}'.format(a._net_coins) }}</td>
     </tr>
     {% endfor %}
     {% if not activities %}
-    <tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--muted);">No activity yet</td></tr>
+    <tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--muted);">No activity yet</td></tr>
     {% endif %}
     </tbody>
   </table>

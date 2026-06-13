@@ -2423,6 +2423,13 @@ def finalize_webapp_match(session, match_id):
     Idempotent. Rewards are applied via the existing award path if available."""
     from models import Match, User
     state = mwa.get_state(match_id)
+    # /cipl (Challenge League "approach") matches are driven and finalized
+    # entirely in the Telegram chat by handlers/cipl_play._complete_match. Their
+    # live state happens to share the match_state store the read-only Mini App
+    # polls, so the poll self-heal path could otherwise finalize+broadcast a
+    # SECOND scorecard (with a divergent POTM). Never finalize them here.
+    if state and state.get("mode") == "cipl_approach":
+        return None
     m = session.query(Match).get(match_id)
     if not m:
         return None
@@ -2576,6 +2583,10 @@ def ensure_webapp_match_completed(session, match_id):
 
     state = mwa.get_state(match_id)
     if not state:
+        return None
+    # /cipl matches finalize in chat (see finalize_webapp_match) — never let the
+    # Mini App poll self-heal complete/broadcast them and duplicate the scorecard.
+    if state.get("mode") == "cipl_approach":
         return None
 
     next_action = mwa.get_next_action(match_id)

@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
-from services.match_constants import MATCH_EXPIRE, random_match_settings
+from services.match_constants import MATCH_EXPIRE, PITCH_TYPES, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import (
     _active_cric_match_for_user,
@@ -288,11 +288,18 @@ def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
     unavailable = {team for team in (unavailable_teams or []) if team}
     codes = team_codes or {}
     rows = []
+    row = []
     for idx, team in enumerate(teams):
         if team in unavailable:
             continue
         label = codes.get(team) or team
-        rows.append([InlineKeyboardButton(label, callback_data=f"cl_team_{draft_id}_{idx}")])
+        row.append(InlineKeyboardButton(label, callback_data=f"cl_team_{draft_id}_{idx}"))
+        # Two teams per row for a more compact picker.
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cl_cancel_{draft_id}")])
     return InlineKeyboardMarkup(rows)
 
@@ -314,6 +321,121 @@ def _team_selection_status(draft):
             f"selected <b>{target_team}</b>."
         )
     return lines
+
+
+# ── Pitch selection (host chooses the surface after teams are picked) ──
+# Short, friendly one-liners shown beside each surface in the picker prompt.
+_PITCH_DESC = {
+    "Dry": "spin-friendly, tough to score",
+    "Dusty": "big turn, spinners thrive",
+    "Hard": "true bounce, balanced contest",
+    "Flat": "batting paradise, run-fest",
+    "Green": "seamers dominate, low scoring",
+    "Bouncy": "extra carry, pace & bounce",
+}
+
+
+def _pitch_keyboard(draft_id):
+    """Pitch-selection keyboard for the host — two surfaces per row."""
+    rows, row = [], []
+    for idx, pitch in enumerate(PITCH_TYPES):
+        row.append(InlineKeyboardButton(
+            pitch, callback_data=f"cl_pitch_{draft_id}_{idx}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
+
+def _pitch_prompt(draft):
+    host = draft.get("host") or {}
+    mention = _mention(host.get("tg_id"), host.get("name") or "Host")
+    lines = [
+        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>",
+        "═════════════════════════════",
+        f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}",
+        "",
+        "🌱 <b>Choose the pitch</b>",
+    ]
+    for pitch in PITCH_TYPES:
+        desc = _PITCH_DESC.get(pitch)
+        lines.append(f"• <b>{pitch}</b>" + (f" — {desc}" if desc else ""))
+    lines.append("")
+    lines.append(f"{mention}, pick the surface you want to play on.")
+    return "\n".join(lines)
+
+
+async def _send_challenge_xi_prompt(context, draft, message_obj):
+    """Send the 'challenge created' recap + Playing XI selection keyboard."""
+    draft_id = draft.get("draft_id")
+    session = get_session()
+    try:
+        created_message = _challenge_created_text(draft, session)
+    finally:
+        session.close()
+    if message_obj is None:
+        return
+    try:
+        sent = await message_obj.reply_text(
+            created_message,
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_keyboard(draft_id, draft),
+        )
+        _track_setup_msg(draft, sent)
+    except Exception:
+        logger.exception("Failed to send challenge created Playing XI message")
+
+
+async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cl_pitch_{draft_id}_{idx} — host selects the pitch, then XI selection opens."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, pitch_idx = query.data.split("_")
+        draft_id = int(draft_id)
+        pitch_idx = int(pitch_idx)
+    except Exception:
+        await query.answer("Invalid pitch selection.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft:
+        await query.answer("This challenge is no longer active.", show_alert=True)
+        return
+    if pitch_idx < 0 or pitch_idx >= len(PITCH_TYPES):
+        await query.answer("Invalid pitch selection.", show_alert=True)
+        return
+
+    # Only the host chooses the pitch.
+    host_tg_id = (draft.get("host") or {}).get("tg_id") or draft.get("host_tg_id")
+    if query.from_user.id != host_tg_id:
+        await query.answer("Only the host can choose the pitch.", show_alert=True)
+        return
+    if draft.get("pitch_type"):
+        await query.answer("Pitch already chosen.", show_alert=True)
+        return
+
+    pitch = PITCH_TYPES[pitch_idx]
+    draft["pitch_type"] = pitch
+    await query.answer(f"Pitch: {pitch}")
+
+    desc = _PITCH_DESC.get(pitch)
+    confirm = (
+        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
+        "═════════════════════════════\n"
+        f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
+        f"🌱 <b>Pitch:</b> {pitch}" + (f" — {desc}" if desc else "")
+    )
+    try:
+        await query.edit_message_text(confirm, parse_mode="HTML")
+    except Exception:
+        try:
+            await query.edit_message_caption(caption=confirm, parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to update pitch confirmation message")
+
+    await _send_challenge_xi_prompt(context, draft, getattr(query, "message", None))
 
 
 def _challenge_xi_keyboard(draft_id, draft):
@@ -879,25 +1001,21 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if draft.get("turn") == "complete" and not draft.get("challenge_created_sent"):
         draft["challenge_created_sent"] = True
-        session = get_session()
-        try:
-            created_message = _challenge_created_text(draft, session)
-        finally:
-            session.close()
         message_obj = getattr(query, "message", None)
+        # The team-picker message lives on as `query.message`; track it so the
+        # match-start sweep removes it from the chat.
         if message_obj is not None:
+            _track_setup_msg(draft, message_obj)
+            # New step: the host now picks the pitch before Playing XI selection.
             try:
                 sent = await message_obj.reply_text(
-                    created_message,
+                    _pitch_prompt(draft),
                     parse_mode="HTML",
-                    reply_markup=_challenge_xi_keyboard(draft_id, draft),
+                    reply_markup=_pitch_keyboard(draft_id),
                 )
                 _track_setup_msg(draft, sent)
-                # The team-picker message lives on as `query.message`; track it too
-                # so the match-start sweep removes it from the chat.
-                _track_setup_msg(draft, message_obj)
             except Exception:
-                logger.exception("Failed to send challenge created Playing XI message")
+                logger.exception("Failed to send pitch selection message")
 
 
 async def challenge_team_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

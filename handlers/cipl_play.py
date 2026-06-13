@@ -411,11 +411,14 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Challenge League / League Battle is always a 20-over contest.
         overs = CIPL_OVERS
         settings = random_match_settings()
+        # Honour the host's chosen pitch (selected during setup); fall back to the
+        # randomised surface only when no pitch was picked.
+        chosen_pitch = draft.get("pitch_type") or settings["pitch_type"]
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
             overs=overs, toss_winner_id=winner.id, toss_decision=decision,
             batting_first_id=bat_user.id, bowling_first_id=bowl_user.id,
-            stadium=settings["stadium"], pitch_type=settings["pitch_type"],
+            stadium=settings["stadium"], pitch_type=chosen_pitch,
             weather=settings["weather"], temperature=settings["temperature"],
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
@@ -533,7 +536,8 @@ def _match_start_announcement(state):
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
         f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
         f"{rule}\n"
-        f"🏟️ {stadium} • {pitch} pitch • {overs} overs\n"
+        f"🏟️ {stadium} • {overs} overs\n"
+        f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
         f"{rule}\n"
         f"{bat_emoji} <b>{bat}</b>   vs   {bowl_emoji} <b>{bowl}</b>\n"
@@ -1061,10 +1065,11 @@ def _cipl_calc_potm(state, winner_name=None):
     Batting impact: runs + 4s + 2·6s + strike-rate & milestone bonuses.
     Bowling impact: 25·wickets + economy·overs + milestone bonuses.
 
-    POTM rule: the award goes to the highest-impact player on the winning team;
-    a losing-team player is only eligible with 50+ impact. ``winner_name`` of
-    ``None`` (or a non-team value such as "Match Tied") falls back to the overall
-    highest impact.
+    POTM rule: every winning-team player gets a flat +15 impact bonus, then the
+    award goes to the highest adjusted-impact player overall — except when the
+    top two are within 50 points, in which case a winning-team player among them
+    is preferred. ``winner_name`` of ``None`` (or a non-team value such as
+    "Match Tied") falls back to the plain overall highest impact.
     """
     if winner_name and winner_name not in (
             state.get("bat_team_name"), state.get("inn1_team"),
@@ -1101,9 +1106,12 @@ def _cipl_calc_potm(state, winner_name=None):
             impact += 15
         return max(0, impact)
 
-    # After the match, innings == 2: current bat side batted 2nd / bowled 1st.
-    inn1_bat_team = state.get("inn1_team") or state.get("inn1_bat_team", "")
-    inn1_bowl_team = state.get("bat_team_name", "")
+    # After the match, innings == 2: the side now batting (bat_team_name) chased,
+    # and it is the side that BOWLED in innings 1. Read the archived first-innings
+    # team names directly so each player is attributed to the correct side.
+    inn1_bat_team = (state.get("inn1_bat_team") or state.get("inn1_team")
+                     or state.get("bowl_team_name", ""))
+    inn1_bowl_team = state.get("inn1_bowl_team") or state.get("bat_team_name", "")
     inn2_bat_team = state.get("bat_team_name", "")
     inn2_bowl_team = state.get("bowl_team_name", "")
 
@@ -1133,38 +1141,43 @@ def _cipl_calc_potm(state, winner_name=None):
     _add(state.get("bowl_xi"), state.get("bowl_stats"),
          team=inn2_bowl_team, is_bat=False)
 
-    # Eligibility: every winning-team player, plus losing-team players with 50+
-    # impact. Falls back to all players when the winner is unknown (tie).
-    def _total(data):
-        return data["bat_impact"] + data["bowl_impact"]
+    # ── POTM scoring & selection ──────────────────────────────────────
+    #  • Every player on the WINNING team gets a flat +15 impact bonus.
+    #  • POTM is the highest adjusted-impact player overall.
+    #  • Tie-break: if the top two are within 50 points of each other, prefer
+    #    the one from the winning team.
+    WINNING_TEAM_BONUS = 15
 
-    eligible = [
-        data for data in players.values()
-        if (winner_name and data.get("team") == winner_name)
-        or (winner_name and _total(data) >= 50)
-        or not winner_name
-    ]
-    if not eligible:
-        eligible = list(players.values())
+    for data in players.values():
+        base = data["bat_impact"] + data["bowl_impact"]
+        if winner_name and data.get("team") == winner_name:
+            base += WINNING_TEAM_BONUS
+        data["impact"] = base
 
-    best_name, best_total, best_stats, best_team = None, 0, "", ""
-    for data in eligible:
-        total = _total(data)
-        if total > best_total:
-            best_total = total
-            best_name = data["name"]
-            best_team = data["team"]
-            parts = []
-            bs, bws = data["bat"], data["bowl"]
-            if bs.get("balls", 0) > 0:
-                parts.append(f"{bs.get('runs', 0)}({bs.get('balls', 0)})")
-            if bws.get("balls", 0) > 0:
-                ov = bws["balls"] // 6
-                rem = bws["balls"] % 6
-                ovr = f"{ov}.{rem}" if rem else str(ov)
-                parts.append(f"{bws.get('wickets', 0)}/{bws.get('runs', 0)} ({ovr})")
-            best_stats = " | ".join(parts)
-    return best_name, best_stats, best_team
+    if not players:
+        return None, "", ""
+
+    ranked = sorted(players.values(), key=lambda d: d["impact"], reverse=True)
+    best = ranked[0]
+    if winner_name and len(ranked) >= 2:
+        second = ranked[1]
+        if (best["impact"] - second["impact"]) <= 50:
+            # Within 50 points — prefer a winning-team player from the top two.
+            winners_in_top2 = [d for d in (best, second)
+                               if d.get("team") == winner_name]
+            if winners_in_top2:
+                best = max(winners_in_top2, key=lambda d: d["impact"])
+
+    parts = []
+    bs, bws = best["bat"], best["bowl"]
+    if bs.get("balls", 0) > 0:
+        parts.append(f"{bs.get('runs', 0)}({bs.get('balls', 0)})")
+    if bws.get("balls", 0) > 0:
+        ov = bws["balls"] // 6
+        rem = bws["balls"] % 6
+        ovr = f"{ov}.{rem}" if rem else str(ov)
+        parts.append(f"{bws.get('wickets', 0)}/{bws.get('runs', 0)} ({ovr})")
+    return best["name"], " | ".join(parts), best["team"]
 
 
 def _build_cipl_summary_image(state, result):
@@ -1230,6 +1243,7 @@ def _build_cipl_summary_image(state, result):
             "inn1": {"team": inn1_team, "batters": inn1_bats, "bowlers": inn1_bowls},
             "inn2": {"team": inn2_team, "batters": inn2_bats, "bowlers": inn2_bowls},
         },
+        match_no=state.get("match_id"),
         text_settings=text_settings,
     )
 
