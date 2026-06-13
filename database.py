@@ -380,10 +380,45 @@ def _migrate_add_columns():
     migration_sql = [
         # ── user_roster dedup + unique ownership ──────────────────────────
         # Backstop against rapid double-click buys/retains creating duplicate
-        # ownership rows. Order matters: collapse existing duplicates and fix
-        # the denormalized counter BEFORE creating the unique index, or the
-        # index creation fails on pre-existing dupes. All three are valid on
-        # both SQLite and Postgres and idempotent on re-run.
+        # ownership rows. Order matters: remap FK references off the soon-to-be
+        # deleted duplicate rows, collapse the duplicates (keep lowest id), fix
+        # the denormalized counter, THEN create the unique index — or the index
+        # creation fails on pre-existing dupes. Without the FK remap, deleting a
+        # duplicate still referenced by player_traits/trades would raise an FK
+        # violation on Postgres, the swallowed error would leave the duplicate
+        # in place, and the index (this whole backstop) would never get created.
+        # All statements are valid on both SQLite and Postgres and idempotent.
+        #
+        # Remap dependents from each non-kept duplicate to the kept (MIN id) row
+        # for the same (user_id, player_id) — semantically the same player.
+        "UPDATE player_traits SET roster_id = ("
+        "  SELECT MIN(ur2.id) FROM user_roster ur1"
+        "  JOIN user_roster ur2 ON ur2.user_id = ur1.user_id"
+        "    AND ur2.player_id = ur1.player_id"
+        "  WHERE ur1.id = player_traits.roster_id)"
+        " WHERE roster_id IN (SELECT id FROM user_roster WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id))",
+        "UPDATE trades SET initiator_roster_id = ("
+        "  SELECT MIN(ur2.id) FROM user_roster ur1"
+        "  JOIN user_roster ur2 ON ur2.user_id = ur1.user_id"
+        "    AND ur2.player_id = ur1.player_id"
+        "  WHERE ur1.id = trades.initiator_roster_id)"
+        " WHERE initiator_roster_id IN (SELECT id FROM user_roster WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id))",
+        "UPDATE trades SET receiver_roster_id = ("
+        "  SELECT MIN(ur2.id) FROM user_roster ur1"
+        "  JOIN user_roster ur2 ON ur2.user_id = ur1.user_id"
+        "    AND ur2.player_id = ur1.player_id"
+        "  WHERE ur1.id = trades.receiver_roster_id)"
+        " WHERE receiver_roster_id IN (SELECT id FROM user_roster WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id))",
+        "UPDATE users SET captain_roster_id = ("
+        "  SELECT MIN(ur2.id) FROM user_roster ur1"
+        "  JOIN user_roster ur2 ON ur2.user_id = ur1.user_id"
+        "    AND ur2.player_id = ur1.player_id"
+        "  WHERE ur1.id = users.captain_roster_id)"
+        " WHERE captain_roster_id IN (SELECT id FROM user_roster WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id))",
         "DELETE FROM user_roster WHERE id NOT IN ("
         "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id)",
         "UPDATE users SET roster_count = ("

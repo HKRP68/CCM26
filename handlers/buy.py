@@ -322,11 +322,6 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("Already processing…")
         return
     await query.answer()
-    # Remove the keyboard immediately so the client can't re-fire the old button.
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
 
     parts = query.data.split("_")  # buypl_{player_id}_{user_id}
     player_id = int(parts[1])
@@ -336,8 +331,15 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         user = session.query(User).get(owner_user_id)
         if not user or user.telegram_id != tg_user.id:
+            # Not the owner — don't strip their button; just drop the claim.
             release(key)
             return
+
+        # Owner confirmed — now remove the keyboard so the client can't re-fire it.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
         # Official-GC restriction: block purchase if the callback fires from a
         # non-official group (e.g. a stale/forwarded button).

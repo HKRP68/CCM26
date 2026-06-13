@@ -22,6 +22,17 @@ from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value, get_
 
 logger = logging.getLogger(__name__)
 AUTO_TIMEOUT = 60
+# Claim/retain/release/replace are TERMINAL one-shot decisions coordinated
+# between the inline buttons and the 60s auto-decide timer. They share a key
+# (claim_<user>_<player>) so whichever fires first blocks the rest. Guard them
+# well beyond the auto-decide window (and beyond the default 30s) so a delayed
+# duplicate callback can't replay a terminal decision and double-credit coins.
+CLAIM_GUARD_TTL = 3600.0
+
+
+def _claim_done(key):
+    """True if this terminal claim decision was already taken (long-lived guard)."""
+    return not claim_once(key, ttl=CLAIM_GUARD_TTL)
 
 
 def _cancel_timer(context, user_id):
@@ -75,7 +86,7 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
     """
     d = context.job.data
     key = f"claim_{d['user_id']}_{d['player_id']}"
-    if _is_done(key):
+    if _claim_done(key):
         return
 
     session = get_session()
@@ -270,22 +281,16 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sell_val = int(parts[3]) if len(parts) > 3 else 0
 
     key = f"claim_{user_id}_{player_id}"
-    if not claim_once(key):
+    if _claim_done(key):
         await query.answer("Already processed!")
         return
     await query.answer()
-
-    # Remove buttons first
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    _cancel_timer(context, user_id)
 
     session = get_session()
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            # Not the owner — don't mutate the card UI or cancel their timer.
             release(key)
             return
 
@@ -293,6 +298,14 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not player:
             release(key)
             return
+
+        # Owner confirmed — now it's safe to consume the card UI + timer.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        _cancel_timer(context, user_id)
+        pname = player.name
 
         if user.roster_count >= MAX_ROSTER:
             release(key)
@@ -309,10 +322,17 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             session.flush()  # surfaces the unique-ownership violation now
         except IntegrityError:
+            # Already own this player — don't lose the card; credit its sell
+            # value instead (equivalent to the 🔴 Release option).
             session.rollback()
-            release(key)
+            user = session.query(User).get(user_id)
+            user.total_coins += sell_val
+            log_activity(session, user.id, "release",
+                         f"Released duplicate {pname} for {sell_val:,}",
+                         coins_change=sell_val, player_name=pname)
+            session.commit()
             await context.bot.send_message(chat_id=chat_id,
-                text=f"❌ You already own {player.name}.")
+                text=f"♻️ You already own {pname} — released for {sell_val:,} 🪙 instead.")
             return
         user.roster_count += 1
         new_count = user.roster_count
@@ -378,23 +398,25 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     player_id, user_id, sell_val = int(parts[1]), int(parts[2]), int(parts[3])
 
     key = f"claim_{user_id}_{player_id}"
-    if not claim_once(key):
+    if _claim_done(key):
         await query.answer("Already processed!")
         return
     await query.answer()
-
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    _cancel_timer(context, user_id)
 
     session = get_session()
     try:
         user = session.query(User).get(user_id)
         if not user or user.telegram_id != tg_user.id:
+            # Not the owner — don't mutate the card UI or cancel their timer.
             release(key)
             return
+
+        # Owner confirmed — now consume the card UI + timer.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        _cancel_timer(context, user_id)
 
         player = session.query(Player).get(player_id)
         name = player.name if player else "Unknown"
@@ -477,7 +499,7 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
     new_player_id, old_roster_id, user_id = int(parts[1]), int(parts[2]), int(parts[3])
 
     key = f"repl_{user_id}_{new_player_id}_{old_roster_id}"
-    if _is_done(key):
+    if _claim_done(key):
         await query.answer("Already processed!")
         return
     await query.answer()
@@ -486,7 +508,8 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
-    _is_done(f"claim_{user_id}_{new_player_id}")
+    # Mark the originating claim consumed so its auto-decide timer won't also act.
+    _claim_done(f"claim_{user_id}_{new_player_id}")
     _cancel_timer(context, user_id)
 
     session = get_session()

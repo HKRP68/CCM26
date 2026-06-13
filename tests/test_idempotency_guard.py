@@ -120,6 +120,30 @@ class RosterDedupMigrationTests(unittest.TestCase):
         count = con.execute("SELECT roster_count FROM users WHERE id=1").fetchone()[0]
         self.assertEqual(count, 2)
 
+    REMAP_PT = ("UPDATE player_traits SET roster_id = ("
+                "  SELECT MIN(ur2.id) FROM user_roster ur1"
+                "  JOIN user_roster ur2 ON ur2.user_id = ur1.user_id"
+                "    AND ur2.player_id = ur1.player_id"
+                "  WHERE ur1.id = player_traits.roster_id)"
+                " WHERE roster_id IN (SELECT id FROM user_roster WHERE id NOT IN ("
+                "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id))")
+
+    def test_fk_remap_before_delete_preserves_dependents(self):
+        """An equipped trait on a non-kept duplicate must be remapped to the kept
+        row, so the dedup DELETE doesn't strand/violate an FK reference."""
+        con = self._build()
+        con.execute("CREATE TABLE player_traits (id INTEGER PRIMARY KEY, roster_id INTEGER)")
+        # Trait equipped on roster row id=3 (a duplicate of player 10; kept is id=1).
+        con.execute("INSERT INTO player_traits (id, roster_id) VALUES (1, 3)")
+        con.execute(self.REMAP_PT)
+        con.execute(self.DEDUP)
+        con.commit()
+        # Trait now points at the surviving row, which still exists.
+        roster_id = con.execute("SELECT roster_id FROM player_traits WHERE id=1").fetchone()[0]
+        self.assertEqual(roster_id, 1)
+        survivors = {r[0] for r in con.execute("SELECT id FROM user_roster").fetchall()}
+        self.assertIn(roster_id, survivors)
+
 
 class _DummyMessage:
     def __init__(self, chat_id=100, message_id=200):

@@ -5,7 +5,10 @@ fetches the single chosen ORM row by ID. Result: massive egress reduction.
 """
 
 import random
+from datetime import datetime
+from typing import Iterable, Optional
 from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models import Player
@@ -23,7 +26,7 @@ def get_random_player_by_rating_range(session: Session, low: int, high: int) -> 
     if not pick:
         return None
     # Fetch single ORM row (cheap — single row, indexed lookup)
-    return session.query(Player).get(pick["id"])
+    return session.get(Player, pick["id"])
 
 
 def _get_rarity_distribution(session: Session):
@@ -69,7 +72,7 @@ def get_random_player_by_rarity(session: Session) -> Player | None:
     return get_random_player_by_rating_range(session, 50, 58)
 
 
-def _owned_player_ids(session: Session, user_id) -> set:
+def _owned_player_ids(session: Session, user_id: int) -> set:
     """player_ids already in the user's roster (cheap — max 25 rows)."""
     from models import UserRoster
     return {r[0] for r in session.query(UserRoster.player_id)
@@ -77,8 +80,8 @@ def _owned_player_ids(session: Session, user_id) -> set:
 
 
 def get_random_unowned_player_by_rating_range(
-    session: Session, user_id, low: int, high: int,
-    *, exclude_ids=None, attempts: int = 12) -> Player | None:
+    session: Session, user_id: int, low: int, high: int,
+    *, exclude_ids: Optional[Iterable[int]] = None, attempts: int = 12) -> Player | None:
     """Like get_random_player_by_rating_range but never returns a player the
     user already owns (or any id in exclude_ids).
 
@@ -95,12 +98,13 @@ def get_random_unowned_player_by_rating_range(
             return None
         if pick["id"] in skip:
             continue
-        return session.query(Player).get(pick["id"])
+        return session.get(Player, pick["id"])
     return None
 
 
 def get_random_unowned_player_by_rarity(
-    session: Session, user_id, *, exclude_ids=None, attempts: int = 12) -> Player | None:
+    session: Session, user_id: int, *,
+    exclude_ids: Optional[Iterable[int]] = None, attempts: int = 12) -> Player | None:
     """Rarity-weighted pick that skips players the user already owns."""
     dist = _get_rarity_distribution(session)
     roll = random.random()
@@ -114,6 +118,39 @@ def get_random_unowned_player_by_rarity(
         _, low, high = dist[-1]
     return get_random_unowned_player_by_rating_range(
         session, user_id, low, high, exclude_ids=exclude_ids, attempts=attempts)
+
+
+def grant_roster_entry(session: Session, user, player_id: int,
+                       *, order_position: Optional[int] = None):
+    """Add a UserRoster row for ``player_id`` unless the user already owns it.
+
+    A user may hold at most one row per player (unique constraint). Reward flows
+    that roll random players must therefore never blindly insert — an
+    already-owned roll would raise IntegrityError and roll back the WHOLE reward
+    transaction (coins, gems, streak). This helper inserts inside a SAVEPOINT so
+    a duplicate is contained: on conflict it rolls back only the savepoint and
+    returns None, leaving the surrounding transaction intact.
+
+    Returns the new UserRoster entry (with ``id`` populated) if added, else None
+    (already owned / lost a race). Increments ``user.roster_count`` on success.
+    """
+    from models import UserRoster
+    if session.query(UserRoster.id).filter_by(
+            user_id=user.id, player_id=player_id).first():
+        return None
+    try:
+        with session.begin_nested():
+            entry = UserRoster(
+                user_id=user.id, player_id=player_id,
+                order_position=(order_position if order_position is not None
+                                else (user.roster_count or 0) + 1),
+                acquired_date=datetime.utcnow(),
+            )
+            session.add(entry)
+        user.roster_count = (user.roster_count or 0) + 1
+        return entry
+    except IntegrityError:
+        return None
 
 
 def get_player_values(rating: int) -> tuple[int, int]:

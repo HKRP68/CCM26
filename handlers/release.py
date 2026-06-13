@@ -340,6 +340,7 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             session.delete(entry)
             user.roster_count = max(0, user.roster_count - 1)
             session.commit()
+            release(key)  # nothing credited — let the user retry if needed
             try: await query.edit_message_text("⚠️ Player data missing — roster entry cleaned up.")
             except Exception: pass
             return

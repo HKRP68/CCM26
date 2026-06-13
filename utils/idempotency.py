@@ -50,10 +50,17 @@ def claim_once(key: str, ttl: float = _DEFAULT_TTL) -> bool:
             return False
         _GUARD[key] = now
         if len(_GUARD) > _MAX_ENTRIES:
+            # Drop expired keys first…
             cutoff = now - ttl
-            expired = [k for k, t in _GUARD.items() if t < cutoff][: _MAX_ENTRIES // 2]
-            for k in expired:
+            for k in [k for k, t in _GUARD.items() if t < cutoff]:
                 _GUARD.pop(k, None)
+            # …then enforce the hard cap by evicting the oldest if still over,
+            # so a burst of fresh keys can't grow the map without bound.
+            overflow = len(_GUARD) - _MAX_ENTRIES
+            if overflow > 0:
+                oldest = sorted(_GUARD.items(), key=lambda kv: kv[1])[:overflow]
+                for k, _ in oldest:
+                    _GUARD.pop(k, None)
         return True
 
 

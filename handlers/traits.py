@@ -214,8 +214,9 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        show_alert=True)
         return
 
-    # Dedup rapid taps on this Buy button instance.
-    key = f"trbuy_{q.message.chat_id}_{q.message.message_id}"
+    # Dedup rapid taps on this slot's Buy button (per-slot so the daily-limit
+    # second purchase on the refreshed shop message isn't wrongly blocked).
+    key = f"trbuy_{q.message.chat_id}_{q.message.message_id}_{slot}"
     if not claim_once(key):
         await q.answer("Already processing…")
         return
