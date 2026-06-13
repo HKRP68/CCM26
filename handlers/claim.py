@@ -362,8 +362,8 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't replay it.
         session.rollback()
-        release(key)
         logger.exception("Retain error")
     finally:
         session.close()
@@ -416,8 +416,8 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML")
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-credit.
         session.rollback()
-        release(key)
         logger.exception("Release error")
     finally:
         session.close()

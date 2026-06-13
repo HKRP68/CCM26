@@ -414,8 +414,8 @@ async def quest_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-claim.
         session.rollback()
-        release(key)
         logger.exception("quest_claim_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:
@@ -478,8 +478,8 @@ async def quest_claimall_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             pass
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-claim all.
         session.rollback()
-        release(key)
         logger.exception("quest_claimall_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:

@@ -237,8 +237,8 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                                            reply_markup=InlineKeyboardMarkup(buttons))
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-claim daily.
         session.rollback()
-        release(key)
         logger.exception("Daily claim error")
     finally:
         session.close()

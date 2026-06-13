@@ -357,8 +357,8 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             release(key)
             await q.answer(msg, show_alert=True)
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-buy.
         session.rollback()
-        release(key)
         logger.exception("playermarket_buy_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:

@@ -246,8 +246,8 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             release(key)
             await q.answer(name_or_msg, show_alert=True)
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-buy the trait.
         session.rollback()
-        release(key)
         logger.exception("traitbuy_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:

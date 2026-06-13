@@ -439,8 +439,8 @@ async def pack_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(q.message.chat_id, text, parse_mode="HTML")
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-buy the pack.
         session.rollback()
-        release(key)
         logger.exception("pack_buy_callback error")
         try:
             await context.bot.send_message(
@@ -791,8 +791,8 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
             session.rollback()
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-open.
         session.rollback()
-        release(key)
         logger.exception("pack_open_inventory_callback error")
         try:
             await context.bot.send_message(

@@ -365,8 +365,8 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception as e:
+        # Keep the claim (may be post-commit) so a stale tap can't re-credit.
         session.rollback()
-        release(key)
         logger.exception(f"Release one callback FAILED: {type(e).__name__}: {e}")
         msg = str(e)
         import re
@@ -575,8 +575,8 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
         await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception as e:
+        # Keep the claim (may be post-commit) so a stale tap can't re-credit a batch.
         session.rollback()
-        release(key)
         logger.exception(f"ReleaseMultiple confirm FAILED: {type(e).__name__}: {e}")
         # Extract the actual constraint name from psycopg2 errors so we can
         # diagnose which lingering reference is blocking the delete.

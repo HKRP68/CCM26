@@ -438,8 +438,9 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
     except Exception:
+        # Don't release here: the error can be post-commit, and freeing the key
+        # would let a stale button replay an already-applied buy. TTL clears it.
         session.rollback()
-        release(key)
         logger.exception(f"BuyPl confirm error")
     finally:
         session.close()

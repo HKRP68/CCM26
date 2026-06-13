@@ -341,8 +341,8 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(text, parse_mode="HTML")
 
     except Exception:
+        # Keep the claim (may be post-commit) so a stale tap can't re-spin.
         session.rollback()
-        release(key)
         logger.exception("GSpin spin error")
     finally:
         session.close()
