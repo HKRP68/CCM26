@@ -7,8 +7,6 @@ from types import SimpleNamespace
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from sqlalchemy.exc import IntegrityError
-
 from database import get_session
 from models import User, Player, UserRoster, UserStats
 from utils.idempotency import claim_once, release
@@ -305,7 +303,6 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         _cancel_timer(context, user_id)
-        pname = player.name
 
         if user.roster_count >= MAX_ROSTER:
             release(key)
@@ -319,21 +316,6 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            order_position=user.roster_count + 1,
                            acquired_date=datetime.utcnow())
         session.add(entry)
-        try:
-            session.flush()  # surfaces the unique-ownership violation now
-        except IntegrityError:
-            # Already own this player — don't lose the card; credit its sell
-            # value instead (equivalent to the 🔴 Release option).
-            session.rollback()
-            user = session.query(User).get(user_id)
-            user.total_coins += sell_val
-            log_activity(session, user.id, "release",
-                         f"Released duplicate {pname} for {sell_val:,}",
-                         coins_change=sell_val, player_name=pname)
-            session.commit()
-            await context.bot.send_message(chat_id=chat_id,
-                text=f"♻️ You already own {pname} — released for {sell_val:,} 🪙 instead.")
-            return
         user.roster_count += 1
         new_count = user.roster_count
 

@@ -32,8 +32,6 @@ from services.button_timeout import schedule_button_timeout
 from services.activity_service import log_activity
 from utils.idempotency import claim_once, release
 
-from sqlalchemy.exc import IntegrityError
-
 logger = logging.getLogger(__name__)
 
 PACK_BUTTON_TIMEOUT = 45  # seconds, per spec
@@ -617,14 +615,7 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
             return
 
         from services.pack_service import open_unopened_pack
-        try:
-            result = open_unopened_pack(session, user, inventory_id)
-        except IntegrityError:
-            # Concurrent double-open raced past the guard — one already landed.
-            session.rollback()
-            release(key)
-            await q.answer("This pack was already opened.", show_alert=True)
-            return
+        result = open_unopened_pack(session, user, inventory_id)
         if not result["success"]:
             session.rollback()
             release(key)

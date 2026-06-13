@@ -52,7 +52,6 @@ def apply_reward(session, user, reward):
     import random
     from datetime import datetime
     from models import UserRoster, Player
-    from services.player_service import grant_roster_entry
 
     out = {
         "type": reward.reward_type,
@@ -119,20 +118,13 @@ def apply_reward(session, user, reward):
 
         MAX_ROSTER = 25
         if (user.roster_count or 0) < MAX_ROSTER:
-            # Savepoint-protected insert; rolling an already-owned player (only
-            # possible in the all-owned fallback above) compensates with coins
-            # rather than failing the spin on the unique index.
-            entry = grant_roster_entry(session, user, player.id)
-            if entry is None:
-                amt = random.randint(5000, 10000)
-                user.total_coins = (user.total_coins or 0) + amt
-                out["type"] = "coins"
-                out["label"] = "Duplicate player — coins instead"
-                out["amount"] = amt
-                out["player_id"] = None
-                out["player_name"] = None
-                out["player_rating"] = None
-                return out
+            entry = UserRoster(
+                user_id=user.id, player_id=player.id,
+                order_position=(user.roster_count or 0) + 1,
+                acquired_date=datetime.utcnow(),
+            )
+            session.add(entry)
+            user.roster_count = (user.roster_count or 0) + 1
             out["squad_full"] = False
         else:
             out["squad_full"] = True

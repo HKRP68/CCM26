@@ -55,8 +55,7 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False):
     from services.config_service import get_config
     from services.streak_service import update_streak
     from services.player_service import (
-        get_random_unowned_player_by_rarity, get_random_unowned_player_by_rating_range,
-        grant_roster_entry,
+        get_random_player_by_rarity, get_random_player_by_rating_range,
     )
 
     stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -93,24 +92,18 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False):
     if gems_award:
         user.total_gems = (user.total_gems or 0) + gems_award
 
-    # Players (admin-tunable count). Skip players the user already owns (and
-    # each other) so we never try to grant a duplicate (unique roster ownership).
+    # Players (admin-tunable count)
     player_count = get_player_count(session, "daily", 2)
     players = []
-    granted_ids = set()
     for _ in range(player_count):
-        p = get_random_unowned_player_by_rarity(session, user.id, exclude_ids=granted_ids)
+        p = get_random_player_by_rarity(session)
         if p:
             players.append(p)
-            granted_ids.add(p.id)
 
     # Milestone bonus
     milestone_player = None
     if milestone:
-        milestone_player = get_random_unowned_player_by_rating_range(
-            session, user.id, 81, 85, exclude_ids=granted_ids)
-        if milestone_player:
-            granted_ids.add(milestone_player.id)
+        milestone_player = get_random_player_by_rating_range(session, 81, 85)
 
     # Roster placement — auto-add if space, otherwise skip (Mini App can't
     # show release/replace picker)
@@ -125,12 +118,14 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False):
         if not p:
             continue
         if (user.roster_count or 0) < MAX_ROSTER:
-            # Savepoint-protected insert: an already-owned roll is skipped rather
-            # than blowing up the whole reward transaction on the unique index.
-            entry = grant_roster_entry(session, user, p.id)
-            if entry is None:
-                skipped.append({"name": p.name, "rating": p.rating, "id": p.id})
-                continue
+            entry = UserRoster(
+                user_id=user.id, player_id=p.id,
+                order_position=(user.roster_count or 0) + 1,
+                acquired_date=datetime.utcnow(),
+            )
+            session.add(entry)
+            session.flush()  # so entry.id is populated
+            user.roster_count = (user.roster_count or 0) + 1
             added.append({
                 "name": p.name, "rating": p.rating, "id": p.id,
                 "roster_id": entry.id,

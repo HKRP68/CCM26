@@ -8,9 +8,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player, UserRoster, UserStats
-from services.player_service import (
-    get_random_unowned_player_by_rarity, get_random_unowned_player_by_rating_range,
-)
+from services.player_service import get_random_player_by_rarity, get_random_player_by_rating_range
 from utils.idempotency import claim_once, release
 from services.cooldown_service import check_cooldown, format_remaining
 from services.miniapp_buttons import has_miniapp_url, miniapp_button
@@ -164,23 +162,17 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Number of players to grant (admin-tunable)
         player_count = get_player_count(session, "daily", 2)
 
-        # Generate players — skip any the user already owns (and each other), so
-        # we never try to grant a duplicate (unique roster ownership).
+        # Generate players
         players = []
-        granted_ids = set()
         for _ in range(player_count):
-            p = get_random_unowned_player_by_rarity(session, user.id, exclude_ids=granted_ids)
+            p = get_random_player_by_rarity(session)
             if p:
                 players.append(p)
-                granted_ids.add(p.id)
 
         # Milestone bonus
         milestone_player = None
         if milestone:
-            milestone_player = get_random_unowned_player_by_rating_range(
-                session, user.id, 81, 85, exclude_ids=granted_ids)
-            if milestone_player:
-                granted_ids.add(milestone_player.id)
+            milestone_player = get_random_player_by_rating_range(session, 81, 85)
 
         stats.last_daily = datetime.utcnow()
 

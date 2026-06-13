@@ -169,15 +169,12 @@ def open_free_pack(session, user):
             break
 
     if not player:
-        # Last resort — any active base player in the band, still excluding ones
-        # the user already owns (can't grant a duplicate under the unique index).
-        q = (session.query(Player)
-             .filter(Player.is_active == True,
-                     Player.parent_player_id.is_(None),
-                     Player.rating.between(int(band["min"]), int(band["max"]))))
-        if owned_base_ids:
-            q = q.filter(~Player.id.in_(owned_base_ids))
-        pool = q.all()
+        # Last resort — any active base player in the whole band range
+        pool = (session.query(Player)
+                .filter(Player.is_active == True,
+                        Player.parent_player_id.is_(None),
+                        Player.rating.between(int(band["min"]), int(band["max"])))
+                .all())
         if pool:
             player = random.choice(pool)
 
@@ -185,12 +182,15 @@ def open_free_pack(session, user):
         return {"ok": False, "error": "no_player",
                 "message": "Couldn't find a player to award. Try again."}
 
-    # Add to roster (savepoint-protected so a duplicate can't poison the grant).
-    from services.player_service import grant_roster_entry
-    entry = grant_roster_entry(session, user, player.id)
-    if entry is None:
-        return {"ok": False, "error": "owned",
-                "message": "You already own this player. Try again."}
+    # Add to roster
+    entry = UserRoster(
+        user_id=user.id, player_id=player.id,
+        order_position=(user.roster_count or 0) + 1,
+        acquired_date=datetime.utcnow(),
+    )
+    session.add(entry)
+    session.flush()
+    user.roster_count = (user.roster_count or 0) + 1
 
     # Set cooldown + reset the "ready" notification flag
     stats.last_free_pack = datetime.utcnow()

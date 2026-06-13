@@ -8,8 +8,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
-from sqlalchemy.exc import IntegrityError
-
 from database import get_session
 from models import User, Player, UserRoster
 from services.card_generator import generate_card
@@ -407,17 +405,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             acquired_date=datetime.utcnow(),
         )
         session.add(entry)
-        try:
-            session.flush()  # populate entry.id; surfaces the unique violation now
-        except IntegrityError:
-            # Hard backstop: a duplicate slipped past the in-memory guard.
-            # Rollback reverts the coin debit too — user is never double-charged.
-            session.rollback()
-            release(key)
-            await query.message.reply_text(
-                f"❌ You already own <b>{player.name}</b>.", parse_mode="HTML",
-            )
-            return
+        session.flush()  # populate entry.id for undo record
         user.roster_count += 1
 
         log_activity(session, user.id, "buy",

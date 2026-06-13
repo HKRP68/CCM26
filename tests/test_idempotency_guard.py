@@ -1,12 +1,11 @@
-"""Tests for the shared idempotency guard and the user_roster dedup migration.
+"""Tests for the shared idempotency guard.
 
 Covers the abuse fix: rapid/duplicate inline-button taps must apply an action
-at most once (utils.idempotency), and the DB must collapse any pre-existing
-duplicate roster rows and reject new ones (the migration in database.py).
+at most once (utils.idempotency). Duplicate player ownership itself is allowed
+by the game, so there is no DB-level uniqueness to test here.
 """
 
 import asyncio
-import sqlite3
 import threading
 import time
 import unittest
@@ -62,87 +61,6 @@ class IdempotencyGuardTests(unittest.TestCase):
         for t in threads:
             t.join()
         self.assertEqual(sum(winners), 1)
-
-
-class RosterDedupMigrationTests(unittest.TestCase):
-    """The three SQL statements added to database.py's migration_sql list."""
-
-    DEDUP = ("DELETE FROM user_roster WHERE id NOT IN ("
-             "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id)")
-    RECOUNT = ("UPDATE users SET roster_count = ("
-               "  SELECT COUNT(*) FROM user_roster WHERE user_roster.user_id = users.id)")
-    INDEX = ("CREATE UNIQUE INDEX IF NOT EXISTS uq_user_roster_user_player "
-             "ON user_roster (user_id, player_id)")
-
-    def _build(self):
-        con = sqlite3.connect(":memory:")
-        con.executescript(
-            "CREATE TABLE users (id INTEGER PRIMARY KEY, roster_count INTEGER);"
-            "CREATE TABLE user_roster (id INTEGER PRIMARY KEY, user_id INTEGER, player_id INTEGER);"
-        )
-        # User 1 owns player 10 THREE times (dupes) + player 11 once → wrong count 99.
-        con.execute("INSERT INTO users VALUES (1, 99)")
-        con.executemany("INSERT INTO user_roster (id, user_id, player_id) VALUES (?,?,?)",
-                        [(1, 1, 10), (2, 1, 10), (3, 1, 10), (4, 1, 11)])
-        return con
-
-    def _migrate(self, con):
-        con.execute(self.DEDUP)
-        con.execute(self.RECOUNT)
-        con.execute(self.INDEX)
-        con.commit()
-
-    def test_collapses_dupes_keeps_lowest_id(self):
-        con = self._build()
-        self._migrate(con)
-        rows = con.execute(
-            "SELECT id, player_id FROM user_roster ORDER BY player_id").fetchall()
-        self.assertEqual(rows, [(1, 10), (4, 11)])  # lowest id (1) kept for player 10
-
-    def test_recomputes_roster_count(self):
-        con = self._build()
-        self._migrate(con)
-        count = con.execute("SELECT roster_count FROM users WHERE id=1").fetchone()[0]
-        self.assertEqual(count, 2)
-
-    def test_index_rejects_new_duplicate(self):
-        con = self._build()
-        self._migrate(con)
-        with self.assertRaises(sqlite3.IntegrityError):
-            con.execute("INSERT INTO user_roster (id, user_id, player_id) VALUES (5, 1, 11)")
-
-    def test_migration_is_idempotent(self):
-        con = self._build()
-        self._migrate(con)
-        self._migrate(con)  # second run must not error or change anything
-        rows = con.execute("SELECT id, player_id FROM user_roster ORDER BY player_id").fetchall()
-        self.assertEqual(rows, [(1, 10), (4, 11)])
-        count = con.execute("SELECT roster_count FROM users WHERE id=1").fetchone()[0]
-        self.assertEqual(count, 2)
-
-    REMAP_PT = ("UPDATE player_traits SET roster_id = ("
-                "  SELECT MIN(ur2.id) FROM user_roster ur1"
-                "  JOIN user_roster ur2 ON ur2.user_id = ur1.user_id"
-                "    AND ur2.player_id = ur1.player_id"
-                "  WHERE ur1.id = player_traits.roster_id)"
-                " WHERE roster_id IN (SELECT id FROM user_roster WHERE id NOT IN ("
-                "  SELECT MIN(id) FROM user_roster GROUP BY user_id, player_id))")
-
-    def test_fk_remap_before_delete_preserves_dependents(self):
-        """An equipped trait on a non-kept duplicate must be remapped to the kept
-        row, so the dedup DELETE doesn't strand/violate an FK reference."""
-        con = self._build()
-        con.execute("CREATE TABLE player_traits (id INTEGER PRIMARY KEY, roster_id INTEGER)")
-        # Trait equipped on roster row id=3 (a duplicate of player 10; kept is id=1).
-        con.execute("INSERT INTO player_traits (id, roster_id) VALUES (1, 3)")
-        con.execute(self.REMAP_PT)
-        con.execute(self.DEDUP)
-        con.commit()
-        # Trait now points at the surviving row, which still exists.
-        roster_id = con.execute("SELECT roster_id FROM player_traits WHERE id=1").fetchone()[0]
-        self.assertEqual(roster_id, 1)
-        survivors = {r[0] for r in con.execute("SELECT id FROM user_roster").fetchall()}
-        self.assertIn(roster_id, survivors)
 
 
 class _DummyMessage:

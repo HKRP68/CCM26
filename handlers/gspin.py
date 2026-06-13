@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, UserRoster, UserStats
-from services.player_service import get_random_unowned_player_by_rating_range
+from services.player_service import get_random_player_by_rating_range
 from utils.idempotency import claim_once, release
 from services.cooldown_service import check_cooldown, format_remaining
 from services.miniapp_buttons import has_miniapp_url, miniapp_button
@@ -194,9 +194,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif rt == "player":
                 low = reward_row.player_rating_min or 50
                 high = max(reward_row.player_rating_max or low, low)
-                # Skip players the user already owns (no duplicate ownership);
-                # None → falls through to compensation coins below.
-                player = get_random_unowned_player_by_rating_range(session, user.id, low, high)
+                player = get_random_player_by_rating_range(session, low, high)
                 if player:
                     if user.roster_count < MAX_ROSTER:
                         entry = UserRoster(user_id=user.id, player_id=player.id,
@@ -293,7 +291,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reward_lines = f"YOU GOT GEMS!\n💎 +{amount} gems"
             elif outcome_type == "player":
                 low, high = outcome_range
-                player = get_random_unowned_player_by_rating_range(session, user.id, low, high)
+                player = get_random_player_by_rating_range(session, low, high)
                 if player and user.roster_count < MAX_ROSTER:
                     entry = UserRoster(user_id=user.id, player_id=player.id,
                                         order_position=user.roster_count + 1,

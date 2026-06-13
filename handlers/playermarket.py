@@ -16,8 +16,6 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from sqlalchemy.exc import IntegrityError
-
 from database import get_session
 from models import User, Player
 from utils.idempotency import claim_once, release
@@ -311,13 +309,7 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             await q.answer("Do /debut first")
             return
 
-        try:
-            ok, msg = buy_player(session, user, slot)
-        except IntegrityError:
-            session.rollback()
-            release(key)
-            await q.answer("You already own this player.", show_alert=True)
-            return
+        ok, msg = buy_player(session, user, slot)
         if ok:
             log_activity(session, user.id, "buy_market",
                          f"Bought {msg} from market",
