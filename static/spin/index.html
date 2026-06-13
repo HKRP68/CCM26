@@ -443,9 +443,17 @@
       try {
         if (window.Adsgram && window.__adController) { await window.__adController.show(); }
       } catch (e) { /* ad skipped/failed — still try to claim */ }
-      const res = await fetch('/api/webapp/ad-completed', { method: 'POST', headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      return data && data.ad_token ? data.ad_token : '';
+      // Bound the claim request so a stalled ad-completion can't hang the spin.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch('/api/webapp/ad-completed', {
+          method: 'POST', headers: authHeaders(), signal: controller.signal });
+        const data = await res.json().catch(() => ({}));
+        return data && data.ad_token ? data.ad_token : '';
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     async function executeSpin(isAd) {
@@ -458,12 +466,12 @@
       status.innerHTML = isAd ? 'LOADING AD… ⏳' : 'SPINNING… 🎡';
 
       try {
+        // Spin the wheel right away — before the ad-token flow too — so it reacts
+        // instantly and never sits frozen while any network request runs.
+        startContinuousSpin();
+
         let adToken = '';
         if (isAd) { adToken = await getAdToken(); status.innerHTML = 'SPINNING… 🎡'; }
-
-        // Spin the wheel right away so it reacts instantly; the request runs in
-        // parallel and we land on the reward slice the moment it resolves.
-        startContinuousSpin();
 
         const { ok, status: code, data } = await doSpin(adToken);
 
