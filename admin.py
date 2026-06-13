@@ -3196,6 +3196,7 @@ def _webapp_auth(allow_not_debuted=False):
     if init_data.startswith("tma "):
         init_data = init_data[4:]
 
+    _start_param = None
     # Dev/test bypass: only honored when WEBAPP_DEV_MODE=1
     if init_data.startswith("DEV_") and _os.getenv("WEBAPP_DEV_MODE") == "1":
         try:
@@ -3210,6 +3211,7 @@ def _webapp_auth(allow_not_debuted=False):
         tg_id = get_user_id(verified)
         if not tg_id:
             return None, None, ({"ok": False, "error": "no_user_id"}, 401)
+        _start_param = (verified.get("start_param") or "").strip()
 
     db = get_session()
     user = db.query(User).filter(User.telegram_id == tg_id).first()
@@ -3217,6 +3219,19 @@ def _webapp_auth(allow_not_debuted=False):
         db.close()
         return None, tg_id, ({"ok": False, "error": "not_debuted",
                               "message": "Complete your debut to unlock the Mini App."}, 403)
+
+    # Remember the group the Mini App was launched from (encoded in the launch
+    # deep link's start_param) so later activity echoes back there even if a
+    # subsequent launch — e.g. the persistent menu button — carries no param.
+    if user is not None and _start_param:
+        origin = _parse_origin_chat(_start_param)
+        if origin is not None and user.last_miniapp_chat_id != origin:
+            try:
+                user.last_miniapp_chat_id = origin
+                db.commit()
+            except Exception:
+                db.rollback()
+
     return (db, user, tg_id), None, None
 
 
@@ -7308,16 +7323,35 @@ _ACTIVITY_THROTTLE_LOCK = threading.Lock()
 _ACTIVITY_MIN_INTERVAL = 4.0  # seconds between activity posts per (chat, user)
 
 
+def _parse_origin_chat(start_param):
+    """Parse a group/supergroup chat id out of a Mini App launch start_param.
+
+    The launch deep links encode the origin chat as a ``_c<chatId>`` suffix
+    (e.g. ``home_c-100123``, ``spin_c-100123``, ``market_c-100123``). Any tab
+    name is accepted. Returns the negative chat id, or None if absent/positive.
+    """
+    import re as _re
+    if not start_param:
+        return None
+    m = _re.search(r"_c(-?\d+)$", start_param.strip())
+    if not m:
+        return None
+    try:
+        cid = int(m.group(1))
+    except (ValueError, TypeError):
+        return None
+    return cid if cid < 0 else None
+
+
 def _origin_group_chat_id():
     """Return the group/supergroup chat id the Mini App was launched from, or
     None for private DM / unknown launches.
 
     The id is parsed from ``start_param`` inside the HMAC-signed initData
-    (format ``<tab>_c<chatId>``) and only returned when negative (groups). In
+    (any ``<tab>_c<chatId>`` form) and only returned when negative (groups). In
     dev mode an ``origin_chat_id`` request-body override is accepted for testing.
     """
     import os as _os
-    import re as _re
 
     if _os.getenv("WEBAPP_DEV_MODE") == "1":
         try:
@@ -7340,15 +7374,7 @@ def _origin_group_chat_id():
         verified = None
     if not verified:
         return None
-    sp = (verified.get("start_param") or "").strip()
-    m = _re.match(r"^[a-z]+_c(-?\d+)$", sp)
-    if not m:
-        return None
-    try:
-        cid = int(m.group(1))
-    except (ValueError, TypeError):
-        return None
-    return cid if cid < 0 else None
+    return _parse_origin_chat(verified.get("start_param"))
 
 
 def _miniapp_activity_keyboard(chat_id):
@@ -7376,7 +7402,13 @@ def post_miniapp_activity(user, action, **ctx):
     asynchronously so the request never blocks on Telegram.
     """
     try:
+        # Prefer the chat encoded in THIS request's launch param; otherwise fall
+        # back to the last group the user opened the Mini App from (persisted on
+        # the user row). This makes activities echo to the group even when the
+        # current launch (e.g. the persistent menu button) carries no param.
         chat_id = _origin_group_chat_id()
+        if not chat_id:
+            chat_id = getattr(user, "last_miniapp_chat_id", None)
         if not chat_id:
             return
         import time as _time

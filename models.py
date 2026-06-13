@@ -55,6 +55,11 @@ class User(Base):
     # Pack pity timer — increments on low rolls, resets on a max-rating roll.
     # When ≥ PITY_THRESHOLD, the next pack guarantees max-rating from the band.
     pack_pity_counter = Column(Integer, default=0)
+    # Last group/supergroup chat the user opened the Mini App from (negative id).
+    # Captured from the launch deep link's start_param so Mini App activities
+    # (opening packs, GSpin, buying players, daily reward) can echo back into
+    # that group even when a later launch carries no origin param.
+    last_miniapp_chat_id = Column(BigInteger, nullable=True)
     # Ban / disable — banned users are refused by the bot's middleware
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)
