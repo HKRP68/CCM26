@@ -1947,13 +1947,72 @@ def user_detail(user_id):
         for _, p in roster:
             p._tier_css = tier_css(p.rating)
 
-        activities = (
-            db.query(ActivityLog)
+        # ── Activity log: filters + running net-coin balance ──
+        # Net coins after an activity = current balance minus every change that
+        # happened *after* it. For the default (newest-N, unfiltered) view those
+        # newer changes are all inside the window, so we only need to load N rows
+        # — no full-table scan. Filtered / full-history views walk the whole
+        # (live) history so intervening non-matching changes are still counted.
+        action_filter = (request.args.get("action") or "").strip()
+        limit_param = (request.args.get("limit") or "50").strip().lower()
+
+        # Distinct action types for the filter dropdown (indexed, cheap).
+        activity_actions = sorted(
+            r[0] for r in db.query(ActivityLog.action)
             .filter(ActivityLog.user_id == user.id)
-            .order_by(ActivityLog.created_at.desc())
-            .limit(50)
-            .all()
+            .distinct().all()
+            if r[0]
         )
+
+        # Normalise the limit to a canonical value so the dropdown reflects the
+        # effective selection (invalid input snaps back to 50).
+        if limit_param == "all":
+            activity_limit_n = None
+        else:
+            try:
+                activity_limit_n = int(limit_param)
+            except (TypeError, ValueError):
+                activity_limit_n = 50
+            if activity_limit_n <= 0:
+                activity_limit_n = 50
+            limit_param = str(activity_limit_n)
+
+        base_q = db.query(ActivityLog).filter(ActivityLog.user_id == user.id)
+        if action_filter:
+            base_q = base_q.filter(ActivityLog.action == action_filter)
+        activity_total = base_q.count()
+
+        running = user.total_coins or 0
+        if not action_filter and activity_limit_n is not None:
+            # Fast path: only the newest N rows are needed for both display and
+            # their running balances.
+            activities = (
+                base_q.order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
+                .limit(activity_limit_n).all()
+            )
+            for a in activities:
+                a._net_coins = running
+                running -= (a.coins_change or 0)
+        else:
+            # Filtered or full-history view: walk the entire live history so the
+            # balance accounts for intervening (non-matching) activities, then
+            # apply the action filter and display limit.
+            all_activities = (
+                db.query(ActivityLog)
+                .filter(ActivityLog.user_id == user.id)
+                .order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
+                .all()
+            )
+            for a in all_activities:
+                a._net_coins = running
+                running -= (a.coins_change or 0)
+            activities = ([a for a in all_activities if a.action == action_filter]
+                          if action_filter else all_activities)
+            if activity_limit_n is not None:
+                activities = activities[:activity_limit_n]
+
+        # String form the template compares against ('50'/'100'/… or 'all').
+        activity_limit = limit_param
 
         # Active matches the user is in (any non-completed/abandoned status)
         from models import Match
@@ -2025,6 +2084,10 @@ def user_detail(user_id):
 
         return render_template("user_detail.html", user=user, stats=stats,
                                roster=roster, activities=activities,
+                               activity_actions=activity_actions,
+                               activity_action_filter=action_filter,
+                               activity_limit=activity_limit,
+                               activity_total=activity_total,
                                active_matches=match_meta,
                                recent_matches=recent_matches,
                                pending_trades=pending_trades,
