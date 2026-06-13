@@ -8380,6 +8380,31 @@ def _send_completed_match_images(chat_id, images):
 _COMPLETED_MATCH_BROADCASTS = set()
 _COMPLETED_MATCH_BROADCASTS_LOCK = threading.Lock()
 
+# Idempotency guard so a tour-standings announcement is posted at most once per
+# match, even when several completion paths (action endpoints, autoplay, the
+# self-heal poll path) race to finalize the same match.
+_TOUR_ANNOUNCED = set()
+_TOUR_ANNOUNCED_LOCK = threading.Lock()
+
+
+def _resolve_lobby_chat_id(db, match_id, match):
+    """Resolve the chat a completed match's recap belongs to.
+
+    Mirrors ``_build_and_send_match_result``'s order: prefer the immutable lobby
+    origin persisted in the final scorecard's arena state, then the Match row's
+    chat_id. This keeps the tour announcement in the same chat as the recap.
+    """
+    arena = {}
+    try:
+        from services.match_webapp_service import load_final_scorecard
+        sc = load_final_scorecard(db, match_id) or {}
+        arena = sc.get("arena_state") or {}
+    except Exception:
+        arena = {}
+    return (arena.get("original_lobby_chat_id")
+            or (match.chat_id if match else None)
+            or arena.get("chat_id"))
+
 
 def _announce_tour_after_result(match_id, fin):
     """Post the tour standings update to the lobby chat after a tour Mini-App
@@ -8389,6 +8414,14 @@ def _announce_tour_after_result(match_id, fin):
     text = (fin or {}).get("tour_announcement")
     if not text:
         return
+
+    # Post at most once per match across all racing completion paths.
+    with _TOUR_ANNOUNCED_LOCK:
+        if match_id in _TOUR_ANNOUNCED:
+            return
+        if len(_TOUR_ANNOUNCED) >= 4096:
+            _TOUR_ANNOUNCED.clear()
+        _TOUR_ANNOUNCED.add(match_id)
 
     def _work():
         import time
@@ -8400,7 +8433,7 @@ def _announce_tour_after_result(match_id, fin):
             db = _gs()
             try:
                 m = db.query(_M).get(match_id)
-                chat_id = m.chat_id if m else None
+                chat_id = _resolve_lobby_chat_id(db, match_id, m)
             finally:
                 db.close()
             if not chat_id:
@@ -8409,11 +8442,16 @@ def _announce_tour_after_result(match_id, fin):
                             "parse_mode": "HTML",
                             "disable_web_page_preview": True})
         except Exception:
+            # Allow a later path to retry if this send failed.
+            with _TOUR_ANNOUNCED_LOCK:
+                _TOUR_ANNOUNCED.discard(match_id)
             logger.exception("tour announcement send failed")
 
     try:
         threading.Thread(target=_work, daemon=True).start()
     except Exception:
+        with _TOUR_ANNOUNCED_LOCK:
+            _TOUR_ANNOUNCED.discard(match_id)
         logger.exception("could not queue tour announcement")
 
 
@@ -8776,6 +8814,7 @@ def _finalize_and_broadcast_if_terminal_impl(db, match_id):
         fin = ensure_webapp_match_completed(db, match_id)
         if fin:
             _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+            _announce_tour_after_result(match_id, fin)
         return fin
     except Exception:
         logger.exception("terminal match finalize/broadcast self-heal failed")

@@ -1935,7 +1935,17 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if chat is None or tg is None or update.message is None:
         return
 
-    if not await _is_chat_admin(context, chat, tg.id):
+    # A group admin may only clear matches in THEIR OWN chat. A configured
+    # global bot admin may clear a player's matches anywhere. This matters
+    # because `_is_chat_admin` treats a private chat as always-admin, so without
+    # the scope restriction anyone could DM the bot `/removematch @victim` and
+    # end someone else's live game in another chat.
+    try:
+        from handlers.forward_broadcast import is_forward_admin
+        is_global_admin = is_forward_admin(tg.id)
+    except Exception:
+        is_global_admin = False
+    if not is_global_admin and not await _is_chat_admin(context, chat, tg.id):
         await update.message.reply_text(
             "🚫 <b>Admins only.</b> Only a group admin can use /removematch.",
             parse_mode="HTML")
@@ -1943,7 +1953,7 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     session = get_session()
     try:
-        target, reason = resolve_command_target(session, update, context, "removematch")
+        target, _reason = resolve_command_target(session, update, context, "removematch")
         if not target:
             await update.message.reply_text(
                 "👤 <b>Who?</b> Reply to the stuck player's message, or use "
@@ -1951,16 +1961,32 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode="HTML")
             return
 
-        rows = (session.query(Match)
-                .filter(or_(Match.user1_id == target.id, Match.user2_id == target.id),
-                        Match.status.in_(ACTIVE_MATCH_STATUSES))
-                .all())
+        q = (session.query(Match)
+             .filter(or_(Match.user1_id == target.id, Match.user2_id == target.id),
+                     Match.status.in_(ACTIVE_MATCH_STATUSES)))
+        # Non-global admins can only clear matches in the chat they're an admin of.
+        if not is_global_admin:
+            q = q.filter(Match.chat_id == chat.id)
+        rows = q.all()
         removed = [(m.id, m.chat_id) for m in rows]
+        removed_ids = [m.id for m in rows]
         for m in rows:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
             m.winner_id = None
             m.loser_id = None
+        # Any tour matches linked to a removed game can never finish normally
+        # (no winner is recorded) — reset their TourMatch back to pending so the
+        # tour stays playable.
+        if removed_ids:
+            try:
+                from models import TourMatch
+                (session.query(TourMatch)
+                 .filter(TourMatch.match_id.in_(removed_ids))
+                 .update({TourMatch.match_id: None, TourMatch.status: "pending"},
+                         synchronize_session=False))
+            except Exception:
+                logger.exception("removematch: tour-match reset failed (non-fatal)")
         session.commit()
         target_label = _user_label(target)
     except Exception:
@@ -2417,34 +2443,54 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         session.add(match)
         session.commit()
 
-        # Link this match to its TourMatch (tour matches launch /wpm-style).
+        def _abort_tour_launch():
+            """Detach the TourMatch (reset to pending) and delete the half-made
+            Match so a failed tour launch can be retried cleanly."""
+            tmid = lobby.get("tour_match_id")
+            try:
+                if tmid:
+                    from models import TourMatch
+                    tmrow = session.query(TourMatch).get(tmid)
+                    if tmrow:
+                        tmrow.match_id = None
+                        tmrow.status = "pending"
+                session.delete(match)
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("tour launch abort cleanup failed for match %s", match.id)
+
+        # Link this match to its TourMatch (tour matches launch /wpm-style). If
+        # linking fails we must NOT continue — a playable Match detached from its
+        # TourMatch would never be counted by record_match_result, drifting the
+        # tour standings. Abort the launch instead.
         if lobby.get("tour_match_id"):
+            link_ok = False
             try:
                 from services.tour_service import link_match_to_tour
-                link_match_to_tour(session, lobby["tour_match_id"], match.id)
+                tm_linked = link_match_to_tour(session, lobby["tour_match_id"], match.id)
                 session.commit()
+                link_ok = tm_linked is not None
             except Exception:
                 session.rollback()
                 logger.exception("Failed to link tour match %s → match %s",
                                  lobby.get("tour_match_id"), match.id)
+            if not link_ok:
+                _abort_tour_launch()
+                await q.answer("Failed to launch tour match. Please try again.",
+                               show_alert=True)
+                return
 
         from services.match_webapp_service import init_match_for_webapp
         ok, message = init_match_for_webapp(session, match.id)
         if not ok:
-            # If this was a tour match, reset its TourMatch back to pending so it
-            # can be replayed (the linked Match is about to be deleted).
+            # Reset a linked TourMatch back to pending so it can be replayed
+            # (the Match is about to be deleted).
             if lobby.get("tour_match_id"):
-                try:
-                    from models import TourMatch
-                    tmrow = session.query(TourMatch).get(lobby["tour_match_id"])
-                    if tmrow:
-                        tmrow.match_id = None
-                        tmrow.status = "pending"
-                        session.flush()
-                except Exception:
-                    logger.exception("Failed to reset tour match after launch failure")
-            session.delete(match)
-            session.commit()
+                _abort_tour_launch()
+            else:
+                session.delete(match)
+                session.commit()
             await q.answer(f"Failed to launch match: {message}", show_alert=True)
             return
 

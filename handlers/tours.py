@@ -621,22 +621,31 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         await q.answer()
 
+        # The lobby (and the match itself) belongs in the tour's group chat, not
+        # necessarily the chat where /mytours was tapped — otherwise a tour
+        # opened from a DM would publish the accept buttons where the invited
+        # player can't see them. Fall back to the tap chat if the tour has none.
+        lobby_chat_id = tour.chat_id or chat_id
+
         # One-match-per-chat: tour matches respect the same rule
         from handlers.match import _active_match_in_chat, _chat_busy_message
-        existing = _active_match_in_chat(session, chat_id)
+        existing = _active_match_in_chat(session, lobby_chat_id)
         if existing:
             await context.bot.send_message(
-                chat_id, _chat_busy_message(existing), parse_mode="HTML")
+                lobby_chat_id, _chat_busy_message(existing), parse_mode="HTML")
             return
 
         # A tour match must not collide with an open /wpm-style lobby either.
+        # Keying the guard on the tour's group also stops the SAME tour match
+        # from spawning duplicate lobbies when /mytours is tapped from two chats.
         from handlers.match import (
             _cric_lobby_key, _expire_lobby,
             _user_label, _mention, LOBBY_EXPIRE,
         )
-        if context.bot_data.get(_cric_lobby_key(chat_id)):
+        lobby_key = _cric_lobby_key(lobby_chat_id)
+        if context.bot_data.get(lobby_key):
             await context.bot.send_message(
-                chat_id, "⚠️ There is already a match lobby waiting in this chat!")
+                lobby_chat_id, "⚠️ There is already a match lobby waiting in this chat!")
             return
 
         # ── /wpm-style launch ──
@@ -651,7 +660,7 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "host_tg_id": u1.telegram_id,
             "host_label": _user_label(u1),
             "overs": tour.overs_per_match,
-            "original_lobby_chat_id": chat_id,
+            "original_lobby_chat_id": lobby_chat_id,
             "target_user_id": u2.id,
             "target_tg_id": u2.telegram_id,
             "target_label": _user_label(u2),
@@ -662,36 +671,39 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "stadium": tm.stadium,
             "pitch_type": tm.pitch_type,
         }
-        context.bot_data[_cric_lobby_key(chat_id)] = lobby
+        context.bot_data[lobby_key] = lobby
 
         t1 = u1.team_name or f"@{u1.username}'s XI"
         t2 = u2.team_name or f"@{u2.username}'s XI"
-        lobby_msg = await context.bot.send_message(
-            chat_id,
-            f"🏏 <b>TOUR MATCH {match_no}/{tour.match_count}</b> 🏏\n"
-            "═════════════════════════════\n"
-            f"• <b>Host:</b> {_user_label(u1)} ({t1})\n"
-            f"• <b>Invited:</b> {_mention(u2)} ({t2})\n"
-            f"• <b>Length:</b> {tour.overs_per_match} Over(s)\n"
-            f"• 📍 {tm.pitch_type} • 🏟️ {tm.stadium}\n\n"
-            f"{_mention(u2)}, tap below to accept — the match plays in the "
-            f"Cricket Arena Mini App.\n"
-            f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if not accepted.</i>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Accept Match", callback_data="cric_join"),
-                InlineKeyboardButton("❌ Cancel", callback_data="cric_cancel_lobby"),
-            ]]))
-        context.bot_data[_cric_lobby_key(chat_id)]["lobby_msg_id"] = lobby_msg.message_id
-
-        # Auto-cancel the lobby if the invite is never accepted.
+        # If publishing the invite or arming its expiry fails, drop the lobby key
+        # so a half-made "ghost" lobby can't block every later launch in the chat.
         try:
+            lobby_msg = await context.bot.send_message(
+                lobby_chat_id,
+                f"🏏 <b>TOUR MATCH {match_no}/{tour.match_count}</b> 🏏\n"
+                "═════════════════════════════\n"
+                f"• <b>Host:</b> {_user_label(u1)} ({t1})\n"
+                f"• <b>Invited:</b> {_mention(u2)} ({t2})\n"
+                f"• <b>Length:</b> {tour.overs_per_match} Over(s)\n"
+                f"• 📍 {tm.pitch_type} • 🏟️ {tm.stadium}\n\n"
+                f"{_mention(u2)}, tap below to accept — the match plays in the "
+                f"Cricket Arena Mini App.\n"
+                f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if not accepted.</i>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Accept Match", callback_data="cric_join"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="cric_cancel_lobby"),
+                ]]))
+            context.bot_data[lobby_key]["lobby_msg_id"] = lobby_msg.message_id
+            # Auto-cancel the lobby if the invite is never accepted.
             if context.job_queue:
                 context.job_queue.run_once(
-                    _expire_lobby, LOBBY_EXPIRE, name=f"lobby_{chat_id}",
-                    data={"chat_id": chat_id, "lobby_msg_id": lobby_msg.message_id})
+                    _expire_lobby, LOBBY_EXPIRE, name=f"lobby_{lobby_chat_id}",
+                    data={"chat_id": lobby_chat_id, "lobby_msg_id": lobby_msg.message_id})
         except Exception:
-            logger.exception("Failed to schedule tour lobby expiry")
+            context.bot_data.pop(lobby_key, None)
+            logger.exception("Failed to publish/schedule tour lobby")
+            raise
 
     except Exception:
         session.rollback()

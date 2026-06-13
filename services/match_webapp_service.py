@@ -2868,9 +2868,15 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
         logger.exception("abandoned webapp player-stat persistence failed")
 
     # Tour result hook — a forfeited tour match still counts (other side wins).
+    # Build the same standings announcement the normal finalize path produces so
+    # the lobby chat is told the series moved on.
+    tour_announcement = None
     try:
         from services.tour_service import record_match_result
-        record_match_result(session, match_id, winner_id, forfeit=True)
+        tour_after = record_match_result(session, match_id, winner_id, forfeit=True)
+        if tour_after is not None:
+            tour_announcement = _build_tour_announcement(
+                session, tour_after, match_id, winner_id)
     except Exception:
         logger.exception("Tour-result hook (forfeit) failed (non-fatal)")
 
@@ -2880,6 +2886,16 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
         cleanup_state(mwa.fresh_ctx(), match_id)
     except Exception:
         pass
+
+    # Announce the tour standings to the lobby chat, mirroring the finalize path.
+    if tour_announcement:
+        try:
+            from admin import _announce_tour_after_result
+            _announce_tour_after_result(
+                match_id, {"tour_announcement": tour_announcement})
+        except Exception:
+            logger.exception("forfeit tour announcement dispatch failed (non-fatal)")
+
     return True, "Match ended (forfeit)."
 
 

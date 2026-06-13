@@ -636,29 +636,32 @@ async def cipl_resume(context, mid, state=None):
 
     Returns True if a prompt was re-sent, False otherwise.
     """
-    if state is None:
+    # Hold the per-match lock so a resume can't interleave with a captain
+    # callback or the inactivity timer (both of which lock) and rewind the flow
+    # to an older action. Re-read state under the lock for the same reason.
+    async with get_match_lock(mid):
         state = _gs(context, mid)
-    if not is_cipl_state(state):
-        return False
-    action = get_next_action(context, mid)
-    if action == A_COMPLETED:
-        return False
-    try:
-        # Force a fresh action message so the buttons reappear even if the
-        # previous prompt message was deleted or is no longer editable.
-        state["action_msg_id"] = None
-        if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
-            await _prompt_bowl_approach(context, mid, state)
-        elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
-            await _prompt_bat_approach(context, mid, state)
-        else:
-            # A_PICK_CIPL_BOWLER, an unknown action, or a missing bowler all
-            # resume cleanly from the start of the over (bowler selection).
-            await _prompt_bowler(context, mid, state, first=True)
-        return True
-    except Exception:
-        logger.exception("cipl_resume failed for match %s", mid)
-        return False
+        if not is_cipl_state(state):
+            return False
+        action = get_next_action(context, mid)
+        if action == A_COMPLETED:
+            return False
+        try:
+            # Force a fresh action message so the buttons reappear even if the
+            # previous prompt message was deleted or is no longer editable.
+            state["action_msg_id"] = None
+            if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
+                await _prompt_bowl_approach(context, mid, state)
+            elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
+                await _prompt_bat_approach(context, mid, state)
+            else:
+                # A_PICK_CIPL_BOWLER, an unknown action, or a missing bowler all
+                # resume cleanly from the start of the over (bowler selection).
+                await _prompt_bowler(context, mid, state, first=True)
+            return True
+        except Exception:
+            logger.exception("cipl_resume failed for match %s", mid)
+            return False
 
 
 async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -675,6 +678,15 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Start one with /cipl.")
         return
 
+    # Only the two captains in this match may resume it — otherwise any group
+    # member could reset another match's prompt/timer flow.
+    requester = update.effective_user.id if update.effective_user else None
+    captains = {found_state.get("bat_user_tg"), found_state.get("bowl_user_tg")}
+    if requester not in captains:
+        await update.message.reply_text(
+            "❌ Only the two captains in this match can use /rcl to resume it.")
+        return
+
     await update.message.reply_text(
         "🔄 <b>Resuming Challenge League match…</b>", parse_mode="HTML")
     ok = await cipl_resume(context, found_mid, found_state)
@@ -687,18 +699,24 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _find_cipl_match_in_chat(context, cid):
     """Return (match_id, state) for a live Challenge League match in ``cid``.
 
-    Checks the in-memory state cache first, then falls back to the DB so a match
-    that survived a restart can still be resumed. Returns (None, None) if none.
+    Checks the in-memory state cache first (picking the most recent match by id),
+    then falls back to the DB so a match that survived a restart can still be
+    resumed. Returns (None, None) if none.
     """
+    best_mid, best_state = None, None
     for k, v in list(context.bot_data.items()):
         if (isinstance(k, str) and k.startswith("ms_")
                 and isinstance(v, dict)
                 and v.get("chat_id") == cid
                 and is_cipl_state(v)):
             try:
-                return int(k.split("_", 1)[1]), v
+                kid = int(k.split("_", 1)[1])
             except (ValueError, IndexError):
                 continue
+            if best_mid is None or kid > best_mid:
+                best_mid, best_state = kid, v
+    if best_mid is not None:
+        return best_mid, best_state
     # DB fallback — find unfinished matches in this chat and rehydrate state.
     session = get_session()
     try:

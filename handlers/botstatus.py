@@ -24,6 +24,7 @@ ACTIVE_MATCH_STATUSES = (
 
 
 def _fmt_uptime(seconds: float) -> str:
+    """Format an elapsed-seconds count as a compact 'Xd Yh Zm Ws' string."""
     seconds = int(max(0, seconds))
     days, rem = divmod(seconds, 86400)
     hours, rem = divmod(rem, 3600)
@@ -43,8 +44,9 @@ def _gather_health():
     """Return (active_matches, total_users, db_ok). Best-effort — never raises."""
     active_matches = total_users = None
     db_ok = False
-    session = get_session()
+    session = None
     try:
+        session = get_session()
         active_matches = (session.query(Match)
                           .filter(Match.status.in_(ACTIVE_MATCH_STATUSES))
                           .count())
@@ -53,7 +55,8 @@ def _gather_health():
     except Exception:
         logger.exception("botstatus health query failed")
     finally:
-        session.close()
+        if session is not None:
+            session.close()
     return active_matches, total_users, db_ok
 
 
