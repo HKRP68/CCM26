@@ -86,7 +86,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 if bot_username and miniapp_name:
                     deep = f"https://t.me/{bot_username}/{miniapp_name}?startapp={_sp}"
                 elif bot_username:
-                    deep = f"https://t.me/{bot_username}?start=market"
+                    deep = f"https://t.me/{bot_username}?startapp={_sp}"
                 else:
                     deep = None
                 if deep:

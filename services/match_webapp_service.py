@@ -2417,6 +2417,62 @@ def _pick_player_of_match(state, result):
             "impact_points": score(b)}
 
 
+def _tour_user_label(session, user_id):
+    from models import User
+    u = session.query(User).get(user_id) if user_id else None
+    if not u:
+        return "Player"
+    if u.username:
+        return f"@{u.username}"
+    return u.first_name or "Player"
+
+
+def _build_tour_announcement(session, tour, match_id, winner_uid):
+    """Build the group message that reports a tour match result + standings.
+
+    Mirrors the in-chat tour announcement so /mytours-launched Mini App matches
+    keep players informed of the series score and any tour winner.
+    """
+    try:
+        from models import TourMatch
+        tm = (session.query(TourMatch)
+              .filter(TourMatch.match_id == match_id).first())
+        u1_label = _tour_user_label(session, tour.user1_id)
+        u2_label = _tour_user_label(session, tour.user2_id)
+        u1w = tour.user1_wins or 0
+        u2w = tour.user2_wins or 0
+
+        if winner_uid == tour.user1_id:
+            result_line = f"🏆 <b>{u1_label}</b> won this match!"
+        elif winner_uid == tour.user2_id:
+            result_line = f"🏆 <b>{u2_label}</b> won this match!"
+        else:
+            result_line = "🤝 This match was a tie."
+
+        header = "🏏 <b>TOUR UPDATE</b>"
+        if tm is not None and getattr(tm, "match_number", None):
+            header = f"🏏 <b>TOUR — Match {tm.match_number} done</b>"
+
+        lines = [
+            header,
+            result_line,
+            "",
+            f"📊 <b>Series:</b> {u1_label} {u1w} — {u2w} {u2_label}",
+        ]
+        if tour.status == "completed":
+            if tour.winner_id is None:
+                lines.append("\n🎉 <b>Tour finished — it's a TIE!</b>")
+            else:
+                champ = (u1_label if tour.winner_id == tour.user1_id else u2_label)
+                lines.append(f"\n🎉 <b>Tour champion: {champ}!</b> 🏆")
+        else:
+            lines.append("\n▶️ Open <code>/mytours</code> to play the next match.")
+        return "\n".join(lines)
+    except Exception:
+        logger.exception("build tour announcement failed (non-fatal)")
+        return None
+
+
 def finalize_webapp_match(session, match_id):
     """Finalize a completed Mini-App match: update the Match record, persist
     the scorecard, and clean up live state. Returns the result dict.
@@ -2539,10 +2595,26 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         logger.exception("webapp player-stat persistence failed")
 
+    # ── Tour result hook ──
+    # Mini-App matches that belong to a tour (launched /wpm-style from /mytours)
+    # must update the tour standings exactly like the in-chat flow does. This is
+    # a no-op for standalone matches (record_match_result returns None).
+    tour_announcement = None
+    try:
+        from services.tour_service import record_match_result
+        tour_after = record_match_result(session, match_id, winner_uid)
+        if tour_after is not None:
+            tour_announcement = _build_tour_announcement(
+                session, tour_after, match_id, winner_uid)
+    except Exception:
+        logger.exception("Tour-result hook failed (non-fatal)")
+
     session.commit()
 
     payload = {"ok": True, "result": result, "rewards": rewards,
                "player_of_match": pom}
+    if tour_announcement:
+        payload["tour_announcement"] = tour_announcement
 
     # Keep the finished match queryable for 5 minutes after state cleanup.
     try:
@@ -2794,12 +2866,36 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
             logger.info("Saved abandoned webapp player stats for match %s: %s", match_id, saved_counts)
     except Exception:
         logger.exception("abandoned webapp player-stat persistence failed")
+
+    # Tour result hook — a forfeited tour match still counts (other side wins).
+    # Build the same standings announcement the normal finalize path produces so
+    # the lobby chat is told the series moved on.
+    tour_announcement = None
+    try:
+        from services.tour_service import record_match_result
+        tour_after = record_match_result(session, match_id, winner_id, forfeit=True)
+        if tour_after is not None:
+            tour_announcement = _build_tour_announcement(
+                session, tour_after, match_id, winner_id)
+    except Exception:
+        logger.exception("Tour-result hook (forfeit) failed (non-fatal)")
+
     session.commit()
     try:
         from services.match_state_store import cleanup_state
         cleanup_state(mwa.fresh_ctx(), match_id)
     except Exception:
         pass
+
+    # Announce the tour standings to the lobby chat, mirroring the finalize path.
+    if tour_announcement:
+        try:
+            from admin import _announce_tour_after_result
+            _announce_tour_after_result(
+                match_id, {"tour_announcement": tour_announcement})
+        except Exception:
+            logger.exception("forfeit tour announcement dispatch failed (non-fatal)")
+
     return True, "Match ended (forfeit)."
 
 

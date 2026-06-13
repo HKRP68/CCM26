@@ -3196,6 +3196,7 @@ def _webapp_auth(allow_not_debuted=False):
     if init_data.startswith("tma "):
         init_data = init_data[4:]
 
+    _start_param = None
     # Dev/test bypass: only honored when WEBAPP_DEV_MODE=1
     if init_data.startswith("DEV_") and _os.getenv("WEBAPP_DEV_MODE") == "1":
         try:
@@ -3210,6 +3211,7 @@ def _webapp_auth(allow_not_debuted=False):
         tg_id = get_user_id(verified)
         if not tg_id:
             return None, None, ({"ok": False, "error": "no_user_id"}, 401)
+        _start_param = (verified.get("start_param") or "").strip()
 
     db = get_session()
     user = db.query(User).filter(User.telegram_id == tg_id).first()
@@ -3217,6 +3219,19 @@ def _webapp_auth(allow_not_debuted=False):
         db.close()
         return None, tg_id, ({"ok": False, "error": "not_debuted",
                               "message": "Complete your debut to unlock the Mini App."}, 403)
+
+    # Remember the group the Mini App was launched from (encoded in the launch
+    # deep link's start_param) so later activity echoes back there even if a
+    # subsequent launch — e.g. the persistent menu button — carries no param.
+    if user is not None and _start_param:
+        origin = _parse_origin_chat(_start_param)
+        if origin is not None and user.last_miniapp_chat_id != origin:
+            try:
+                user.last_miniapp_chat_id = origin
+                db.commit()
+            except Exception:
+                db.rollback()
+
     return (db, user, tg_id), None, None
 
 
@@ -6562,6 +6577,7 @@ def match_rest_action():
                     from services.match_webapp_service import finalize_webapp_match
                     fin = finalize_webapp_match(db, match.id)
                     _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                    _announce_tour_after_result(match.id, fin)
                 else:
                     from services.match_state_store import A_PICK_DELIVERY as _DELIVERY
                     if (action_type == "shot" and isinstance(res, dict)
@@ -6653,6 +6669,7 @@ def match_rest_action():
                 from services.match_webapp_service import finalize_webapp_match
                 fin = finalize_webapp_match(db, match.id)
                 _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                _announce_tour_after_result(match.id, fin)
             else:
                 _broadcast_match_scorecard(match.id)
         except Exception:
@@ -6735,6 +6752,7 @@ def match_rest_autoplay():
                 from services.match_webapp_service import finalize_webapp_match
                 fin = finalize_webapp_match(db, match.id)
                 _broadcast_match_result(match.id, (fin or {}).get("result") or {})
+                _announce_tour_after_result(match.id, fin)
             else:
                 _broadcast_match_scorecard(match.id)
         except Exception:
@@ -7305,16 +7323,35 @@ _ACTIVITY_THROTTLE_LOCK = threading.Lock()
 _ACTIVITY_MIN_INTERVAL = 4.0  # seconds between activity posts per (chat, user)
 
 
+def _parse_origin_chat(start_param):
+    """Parse a group/supergroup chat id out of a Mini App launch start_param.
+
+    The launch deep links encode the origin chat as a ``_c<chatId>`` suffix
+    (e.g. ``home_c-100123``, ``spin_c-100123``, ``market_c-100123``). Any tab
+    name is accepted. Returns the negative chat id, or None if absent/positive.
+    """
+    import re as _re
+    if not start_param:
+        return None
+    m = _re.search(r"_c(-?\d+)$", start_param.strip())
+    if not m:
+        return None
+    try:
+        cid = int(m.group(1))
+    except (ValueError, TypeError):
+        return None
+    return cid if cid < 0 else None
+
+
 def _origin_group_chat_id():
     """Return the group/supergroup chat id the Mini App was launched from, or
     None for private DM / unknown launches.
 
     The id is parsed from ``start_param`` inside the HMAC-signed initData
-    (format ``<tab>_c<chatId>``) and only returned when negative (groups). In
+    (any ``<tab>_c<chatId>`` form) and only returned when negative (groups). In
     dev mode an ``origin_chat_id`` request-body override is accepted for testing.
     """
     import os as _os
-    import re as _re
 
     if _os.getenv("WEBAPP_DEV_MODE") == "1":
         try:
@@ -7337,15 +7374,7 @@ def _origin_group_chat_id():
         verified = None
     if not verified:
         return None
-    sp = (verified.get("start_param") or "").strip()
-    m = _re.match(r"^[a-z]+_c(-?\d+)$", sp)
-    if not m:
-        return None
-    try:
-        cid = int(m.group(1))
-    except (ValueError, TypeError):
-        return None
-    return cid if cid < 0 else None
+    return _parse_origin_chat(verified.get("start_param"))
 
 
 def _miniapp_activity_keyboard(chat_id):
@@ -7373,7 +7402,13 @@ def post_miniapp_activity(user, action, **ctx):
     asynchronously so the request never blocks on Telegram.
     """
     try:
+        # Prefer the chat encoded in THIS request's launch param; otherwise fall
+        # back to the last group the user opened the Mini App from (persisted on
+        # the user row). This makes activities echo to the group even when the
+        # current launch (e.g. the persistent menu button) carries no param.
         chat_id = _origin_group_chat_id()
+        if not chat_id:
+            chat_id = getattr(user, "last_miniapp_chat_id", None)
         if not chat_id:
             return
         import time as _time
@@ -8345,6 +8380,80 @@ def _send_completed_match_images(chat_id, images):
 _COMPLETED_MATCH_BROADCASTS = set()
 _COMPLETED_MATCH_BROADCASTS_LOCK = threading.Lock()
 
+# Idempotency guard so a tour-standings announcement is posted at most once per
+# match, even when several completion paths (action endpoints, autoplay, the
+# self-heal poll path) race to finalize the same match.
+_TOUR_ANNOUNCED = set()
+_TOUR_ANNOUNCED_LOCK = threading.Lock()
+
+
+def _resolve_lobby_chat_id(db, match_id, match):
+    """Resolve the chat a completed match's recap belongs to.
+
+    Mirrors ``_build_and_send_match_result``'s order: prefer the immutable lobby
+    origin persisted in the final scorecard's arena state, then the Match row's
+    chat_id. This keeps the tour announcement in the same chat as the recap.
+    """
+    arena = {}
+    try:
+        from services.match_webapp_service import load_final_scorecard
+        sc = load_final_scorecard(db, match_id) or {}
+        arena = sc.get("arena_state") or {}
+    except Exception:
+        arena = {}
+    return (arena.get("original_lobby_chat_id")
+            or (match.chat_id if match else None)
+            or arena.get("chat_id"))
+
+
+def _announce_tour_after_result(match_id, fin):
+    """Post the tour standings update to the lobby chat after a tour Mini-App
+    match finishes. ``fin`` is finalize_webapp_match's payload; this is a no-op
+    unless it carried a ``tour_announcement`` (i.e. the match belonged to a tour).
+    """
+    text = (fin or {}).get("tour_announcement")
+    if not text:
+        return
+
+    # Post at most once per match across all racing completion paths.
+    with _TOUR_ANNOUNCED_LOCK:
+        if match_id in _TOUR_ANNOUNCED:
+            return
+        if len(_TOUR_ANNOUNCED) >= 4096:
+            _TOUR_ANNOUNCED.clear()
+        _TOUR_ANNOUNCED.add(match_id)
+
+    def _work():
+        import time
+        try:
+            # Let the match-summary cards land first, then the tour standings.
+            time.sleep(3.0)
+            from database import get_session as _gs
+            from models import Match as _M
+            db = _gs()
+            try:
+                m = db.query(_M).get(match_id)
+                chat_id = _resolve_lobby_chat_id(db, match_id, m)
+            finally:
+                db.close()
+            if not chat_id:
+                return
+            _tg_send_async({"chat_id": chat_id, "text": text,
+                            "parse_mode": "HTML",
+                            "disable_web_page_preview": True})
+        except Exception:
+            # Allow a later path to retry if this send failed.
+            with _TOUR_ANNOUNCED_LOCK:
+                _TOUR_ANNOUNCED.discard(match_id)
+            logger.exception("tour announcement send failed")
+
+    try:
+        threading.Thread(target=_work, daemon=True).start()
+    except Exception:
+        with _TOUR_ANNOUNCED_LOCK:
+            _TOUR_ANNOUNCED.discard(match_id)
+        logger.exception("could not queue tour announcement")
+
 
 def _broadcast_match_result(match_id, result):
     """Queue /wpm and /cm's final lobby recap once, off the action request.
@@ -8705,6 +8814,7 @@ def _finalize_and_broadcast_if_terminal_impl(db, match_id):
         fin = ensure_webapp_match_completed(db, match_id)
         if fin:
             _broadcast_match_result(match_id, (fin or {}).get("result") or {})
+            _announce_tour_after_result(match_id, fin)
         return fin
     except Exception:
         logger.exception("terminal match finalize/broadcast self-heal failed")

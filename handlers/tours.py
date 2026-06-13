@@ -621,75 +621,89 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         await q.answer()
 
+        # The lobby (and the match itself) belongs in the tour's group chat, not
+        # necessarily the chat where /mytours was tapped — otherwise a tour
+        # opened from a DM would publish the accept buttons where the invited
+        # player can't see them. Fall back to the tap chat if the tour has none.
+        lobby_chat_id = tour.chat_id or chat_id
+
         # One-match-per-chat: tour matches respect the same rule
         from handlers.match import _active_match_in_chat, _chat_busy_message
-        existing = _active_match_in_chat(session, chat_id)
+        existing = _active_match_in_chat(session, lobby_chat_id)
         if existing:
             await context.bot.send_message(
-                chat_id, _chat_busy_message(existing), parse_mode="HTML")
+                lobby_chat_id, _chat_busy_message(existing), parse_mode="HTML")
             return
 
-        # Get random_match_settings for weather/umpire (but use TourMatch's stadium/pitch)
-        from datetime import timedelta as _td
-        from services.match_constants import random_match_settings
-        st = random_match_settings()
-        # Override stadium + pitch with the TourMatch's pre-decided values
-        st["stadium"] = tm.stadium
-        st["pitch_type"] = tm.pitch_type
-
-        # Create the Match record
-        now = datetime.utcnow()
-        # Tour matches use a longer expire window — both players should have time
-        MATCH_EXPIRE_TOUR = 300  # 5 minutes to accept
-        m = Match(
-            user1_id=u1.id, user2_id=u2.id, status="pending",
-            stadium=st["stadium"], pitch_type=st["pitch_type"],
-            weather=st["weather"], temperature=st["temperature"],
-            umpire1=st["umpire1"], umpire2=st["umpire2"],
-            chat_id=chat_id, created_at=now,
-            expires_at=now + _td(seconds=MATCH_EXPIRE_TOUR),
-            overs=tour.overs_per_match,
+        # A tour match must not collide with an open /wpm-style lobby either.
+        # Keying the guard on the tour's group also stops the SAME tour match
+        # from spawning duplicate lobbies when /mytours is tapped from two chats.
+        from handlers.match import (
+            _cric_lobby_key, _expire_lobby,
+            _user_label, _mention, LOBBY_EXPIRE,
         )
-        session.add(m)
-        session.flush()
+        lobby_key = _cric_lobby_key(lobby_chat_id)
+        if context.bot_data.get(lobby_key):
+            await context.bot.send_message(
+                lobby_chat_id, "⚠️ There is already a match lobby waiting in this chat!")
+            return
 
-        # Link to the TourMatch
-        link_match_to_tour(session, tm.id, m.id)
-        session.commit()
+        # ── /wpm-style launch ──
+        # Tour matches now play in the Cricket Arena Mini App exactly like /wpm:
+        # a directed lobby the opponent accepts, then a coin toss, then the
+        # interactive Mini-App match. The Match row is created (and linked to the
+        # TourMatch) when the toss winner elects bat/bowl, inside
+        # handlers.match.cric_decision_callback — which honours the tour_match_id
+        # and pre-decided venue we stash on the lobby here.
+        lobby = {
+            "host_user_id": u1.id,
+            "host_tg_id": u1.telegram_id,
+            "host_label": _user_label(u1),
+            "overs": tour.overs_per_match,
+            "original_lobby_chat_id": lobby_chat_id,
+            "target_user_id": u2.id,
+            "target_tg_id": u2.telegram_id,
+            "target_label": _user_label(u2),
+            # Tour wiring honoured by cric_decision_callback:
+            "tour_match_id": tm.id,
+            "tour_match_no": match_no,
+            "tour_match_count": tour.match_count,
+            "stadium": tm.stadium,
+            "pitch_type": tm.pitch_type,
+        }
+        context.bot_data[lobby_key] = lobby
 
-        # Send the match invite (same shape as /playmatch)
         t1 = u1.team_name or f"@{u1.username}'s XI"
         t2 = u2.team_name or f"@{u2.username}'s XI"
-        await context.bot.send_message(
-            chat_id,
-            f"🔔 <b>TOUR MATCH {match_no}/{tour.match_count}</b>\n\n"
-            f"From: @{u1.username} to @{u2.username}\n\n"
-            f"🏏 <b>CRICKET GURU MATCH</b>\n\n"
-            f"{t1} vs {t2}\n"
-            f"📍 {st['pitch_type']} | 🌤️ {st['weather']} | 🌡️ {st['temperature']}°C\n"
-            f"🏟️ {st['stadium']}\n"
-            f"🎩 {st['umpire1']} | {st['umpire2']}\n"
-            f"🏏 <b>{tour.overs_per_match} overs</b>\n\n"
-            f"⏳ Accept within {MATCH_EXPIRE_TOUR // 60} minutes",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Accept",
-                                      callback_data=f"matchacc_{m.id}_{u2.id}"),
-                InlineKeyboardButton("❌ Deny",
-                                      callback_data=f"matchdeny_{m.id}_{u2.id}"),
-            ]]))
-
-        # Schedule the standard match-invite expiry
+        # If publishing the invite or arming its expiry fails, drop the lobby key
+        # so a half-made "ghost" lobby can't block every later launch in the chat.
         try:
-            from handlers.match import _auto_expire
+            lobby_msg = await context.bot.send_message(
+                lobby_chat_id,
+                f"🏏 <b>TOUR MATCH {match_no}/{tour.match_count}</b> 🏏\n"
+                "═════════════════════════════\n"
+                f"• <b>Host:</b> {_user_label(u1)} ({t1})\n"
+                f"• <b>Invited:</b> {_mention(u2)} ({t2})\n"
+                f"• <b>Length:</b> {tour.overs_per_match} Over(s)\n"
+                f"• 📍 {tm.pitch_type} • 🏟️ {tm.stadium}\n\n"
+                f"{_mention(u2)}, tap below to accept — the match plays in the "
+                f"Cricket Arena Mini App.\n"
+                f"⏳ <i>Expires in {LOBBY_EXPIRE // 60} min if not accepted.</i>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Accept Match", callback_data="cric_join"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="cric_cancel_lobby"),
+                ]]))
+            context.bot_data[lobby_key]["lobby_msg_id"] = lobby_msg.message_id
+            # Auto-cancel the lobby if the invite is never accepted.
             if context.job_queue:
                 context.job_queue.run_once(
-                    _auto_expire, MATCH_EXPIRE_TOUR,
-                    name=f"match_{m.id}",
-                    data={"match_id": m.id, "chat_id": chat_id},
-                )
+                    _expire_lobby, LOBBY_EXPIRE, name=f"lobby_{lobby_chat_id}",
+                    data={"chat_id": lobby_chat_id, "lobby_msg_id": lobby_msg.message_id})
         except Exception:
-            pass
+            context.bot_data.pop(lobby_key, None)
+            logger.exception("Failed to publish/schedule tour lobby")
+            raise
 
     except Exception:
         session.rollback()

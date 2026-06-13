@@ -1,6 +1,6 @@
 """Handler for /playmatch — full match with endmatch, timeouts, rewards."""
 
-import asyncio, io, random, logging
+import asyncio, io, os, random, logging
 from datetime import datetime, timedelta
 from sqlalchemy import or_
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -221,7 +221,40 @@ def _chat_busy_message(match):
         f"  •  Start your match in a different chat or DM the bot\n"
         f"  •  If the match is stuck, the current players can use "
         f"/endmatch (fine applies) or /resume\n"
-        f"  •  Spectate with /matchinfo to see the live score"
+        f"  •  Spectate with /matchinfo to see the live score\n\n"
+        + _stuck_guidance()
+    )
+
+
+def _official_group_link():
+    """Official community group link, configurable via env. Empty if unset."""
+    return (os.getenv("OFFICIAL_GROUP_LINK")
+            or os.getenv("OFFICIAL_GROUP_URL")
+            or os.getenv("OFFICIAL_GC_LINK") or "").strip()
+
+
+def _stuck_guidance():
+    """Shared 'what to do if you're stuck in a match' footer."""
+    link = _official_group_link()
+    gc = (f'  •  Join the <a href="{link}">official group</a> and report it there\n'
+          if link else
+          "  •  Join the official group and report it there\n")
+    return (
+        "😵 <b>Stuck in a match?</b>\n"
+        + gc +
+        "  •  Ask an admin to remove you with <code>/removematch</code> "
+        "(reply to your message or tag you)"
+    )
+
+
+def _user_busy_message(match):
+    """'You already have a match running' message with stuck guidance."""
+    return (
+        "⚠️ <b>You already have an active match.</b>\n"
+        f"<i>Match #{match.id} — status: {match.status}</i>\n\n"
+        "Only <b>one match per player</b> is allowed (any game mode). "
+        "Finish it first, then start a new one.\n\n"
+        + _stuck_guidance()
     )
 
 
@@ -1870,6 +1903,131 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode="HTML")
 
 
+def _cancel_all_match_timers(context, mid):
+    """Cancel every kind of per-match timer/job we know about for ``mid``."""
+    try:
+        _cancel_action_timer(context, mid)
+    except Exception:
+        pass
+    jq = getattr(context, "job_queue", None)
+    if not jq:
+        return
+    # Regular match action timer, CIPL pick timer, and any expiry jobs.
+    for name in (f"action_timeout_{mid}", f"cipl_to_{mid}",
+                 f"match_expire_{mid}", f"match_recovery_{mid}"):
+        try:
+            for j in jq.get_jobs_by_name(name):
+                j.schedule_removal()
+        except Exception:
+            pass
+
+
+async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: /removematch @User — pull a user out of their active match.
+
+    Use when a player is stuck in a match (any cricket game mode that uses the
+    match table — /playmatch, /wpm, /wsp, /vsbot, /cm, /cipl). Every unfinished
+    match the user is in is marked Completed with no winner and its state torn
+    down, freeing both the user and the chat to start fresh.
+    """
+    chat = update.effective_chat
+    tg = update.effective_user
+    if chat is None or tg is None or update.message is None:
+        return
+
+    # A group admin may only clear matches in THEIR OWN chat. A configured
+    # global bot admin may clear a player's matches anywhere. This matters
+    # because `_is_chat_admin` treats a private chat as always-admin, so without
+    # the scope restriction anyone could DM the bot `/removematch @victim` and
+    # end someone else's live game in another chat.
+    try:
+        from handlers.forward_broadcast import is_forward_admin
+        is_global_admin = is_forward_admin(tg.id)
+    except Exception:
+        is_global_admin = False
+    if not is_global_admin and not await _is_chat_admin(context, chat, tg.id):
+        await update.message.reply_text(
+            "🚫 <b>Admins only.</b> Only a group admin can use /removematch.",
+            parse_mode="HTML")
+        return
+
+    session = get_session()
+    try:
+        target, _reason = resolve_command_target(session, update, context, "removematch")
+        if not target:
+            await update.message.reply_text(
+                "👤 <b>Who?</b> Reply to the stuck player's message, or use "
+                "<code>/removematch @username</code>.",
+                parse_mode="HTML")
+            return
+
+        q = (session.query(Match)
+             .filter(or_(Match.user1_id == target.id, Match.user2_id == target.id),
+                     Match.status.in_(ACTIVE_MATCH_STATUSES)))
+        # Non-global admins can only clear matches in the chat they're an admin of.
+        if not is_global_admin:
+            q = q.filter(Match.chat_id == chat.id)
+        rows = q.all()
+        removed = [(m.id, m.chat_id) for m in rows]
+        removed_ids = [m.id for m in rows]
+        for m in rows:
+            m.status = "completed"
+            m.completed_at = datetime.utcnow()
+            m.winner_id = None
+            m.loser_id = None
+        # Any tour matches linked to a removed game can never finish normally
+        # (no winner is recorded) — reset their TourMatch back to pending so the
+        # tour stays playable.
+        if removed_ids:
+            try:
+                from models import TourMatch
+                (session.query(TourMatch)
+                 .filter(TourMatch.match_id.in_(removed_ids))
+                 .update({TourMatch.match_id: None, TourMatch.status: "pending"},
+                         synchronize_session=False))
+            except Exception:
+                logger.exception("removematch: tour-match reset failed (non-fatal)")
+        session.commit()
+        target_label = _user_label(target)
+    except Exception:
+        session.rollback()
+        logger.exception("removematch failed")
+        await update.message.reply_text("⚠️ Could not remove the match — please try again.")
+        session.close()
+        return
+    finally:
+        session.close()
+
+    # In-memory teardown for every match the user was in.
+    for mid, m_chat in removed:
+        try:
+            cleanup_state(context, mid)
+        except Exception:
+            pass
+        try:
+            release_match_lock(mid)
+        except Exception:
+            pass
+        _cancel_all_match_timers(context, mid)
+        # Drop any leftover chat-keyed lobby pointers for that match's chat.
+        if m_chat:
+            try:
+                _clear_chat_memory(context, m_chat)
+            except Exception:
+                pass
+
+    if not removed:
+        await update.message.reply_text(
+            f"✅ <b>{target_label}</b> isn't in any active match right now.",
+            parse_mode="HTML")
+        return
+    await update.message.reply_text(
+        f"🧹 <b>Removed {target_label} from "
+        f"{len(removed)} match{'es' if len(removed) != 1 else ''}.</b>\n"
+        f"They can start a fresh game now. 🏏",
+        parse_mode="HTML")
+
+
 # ════════════════════════ /wpm Mini-App lobby ════════════════════════
 
 def _parse_overs_and_target(session, update, context, command_name):
@@ -1949,8 +2107,11 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if existing:
             await update.message.reply_text(_chat_busy_message(existing), parse_mode="HTML")
             return
-        if _active_cric_match_for_user(session, host.id):
-            await update.message.reply_text("⚠️ You already have an active match running!")
+        busy_host = _active_cric_match_for_user(session, host.id)
+        if busy_host:
+            await update.message.reply_text(
+                _user_busy_message(busy_host), parse_mode="HTML",
+                disable_web_page_preview=True)
             return
         if context.bot_data.get(_cric_lobby_key(cid)):
             await update.message.reply_text("⚠️ There is already a match lobby waiting in this chat!")
@@ -2263,6 +2424,11 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         winner_id = lobby["toss_winner_user_id"]
         opponent_id = guest.id if winner_id == host.id else host.id
         settings = random_match_settings()
+        # Tour matches carry a pre-decided venue on the lobby — honour it.
+        if lobby.get("stadium"):
+            settings["stadium"] = lobby["stadium"]
+        if lobby.get("pitch_type"):
+            settings["pitch_type"] = lobby["pitch_type"]
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="toss",
             overs=lobby["overs"], toss_winner_id=winner_id,
@@ -2277,11 +2443,54 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         session.add(match)
         session.commit()
 
+        def _abort_tour_launch():
+            """Detach the TourMatch (reset to pending) and delete the half-made
+            Match so a failed tour launch can be retried cleanly."""
+            tmid = lobby.get("tour_match_id")
+            try:
+                if tmid:
+                    from models import TourMatch
+                    tmrow = session.query(TourMatch).get(tmid)
+                    if tmrow:
+                        tmrow.match_id = None
+                        tmrow.status = "pending"
+                session.delete(match)
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("tour launch abort cleanup failed for match %s", match.id)
+
+        # Link this match to its TourMatch (tour matches launch /wpm-style). If
+        # linking fails we must NOT continue — a playable Match detached from its
+        # TourMatch would never be counted by record_match_result, drifting the
+        # tour standings. Abort the launch instead.
+        if lobby.get("tour_match_id"):
+            link_ok = False
+            try:
+                from services.tour_service import link_match_to_tour
+                tm_linked = link_match_to_tour(session, lobby["tour_match_id"], match.id)
+                session.commit()
+                link_ok = tm_linked is not None
+            except Exception:
+                session.rollback()
+                logger.exception("Failed to link tour match %s → match %s",
+                                 lobby.get("tour_match_id"), match.id)
+            if not link_ok:
+                _abort_tour_launch()
+                await q.answer("Failed to launch tour match. Please try again.",
+                               show_alert=True)
+                return
+
         from services.match_webapp_service import init_match_for_webapp
         ok, message = init_match_for_webapp(session, match.id)
         if not ok:
-            session.delete(match)
-            session.commit()
+            # Reset a linked TourMatch back to pending so it can be replayed
+            # (the Match is about to be deleted).
+            if lobby.get("tour_match_id"):
+                _abort_tour_launch()
+            else:
+                session.delete(match)
+                session.commit()
             await q.answer(f"Failed to launch match: {message}", show_alert=True)
             return
 
@@ -2341,6 +2550,21 @@ async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Block self-play by user id (robust even if usernames are missing/changed)
         if u2.id == u1.id:
             await update.message.reply_text("❌ Can't play yourself")
+            return
+        # One active match per player (any game mode that uses the match table).
+        busy_host = _active_match_for_user(session, u1.id)
+        if busy_host:
+            await update.message.reply_text(
+                _user_busy_message(busy_host), parse_mode="HTML",
+                disable_web_page_preview=True)
+            return
+        busy_guest = _active_match_for_user(session, u2.id)
+        if busy_guest:
+            await update.message.reply_text(
+                f"⚠️ <b>{_user_label(u2)}</b> is already in an active match "
+                f"(#{busy_guest.id}). They must finish it first.\n\n"
+                + _stuck_guidance(),
+                parse_mode="HTML", disable_web_page_preview=True)
             return
         r1 = session.query(UserRoster).filter(UserRoster.user_id == u1.id).count()
         r2 = session.query(UserRoster).filter(UserRoster.user_id == u2.id).count()
@@ -2910,6 +3134,19 @@ async def render_screen(ctx, mid):
 
     # Always release any stale processing lock first
     ctx.bot_data.pop(f"processing_{mid}", None)
+
+    # Challenge League (/cipl) matches run a different over-by-over state machine
+    # (bowler → bowling approach → batting approach). They must NEVER be rendered
+    # by the regular delivery/shot renderer below — doing so used to throw and
+    # spam "Couldn't show delivery buttons. Retrying automatically…". Route them
+    # to their own resume path instead.
+    if s.get("mode") == "cipl_approach":
+        try:
+            from handlers.cipl_play import cipl_resume
+            return await cipl_resume(ctx, mid, s)
+        except Exception:
+            logger.exception(f"cipl render_screen route failed for match {mid}")
+            return False
 
     try:
         # Always check innings-over first (regardless of next_action)
