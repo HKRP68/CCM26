@@ -30,13 +30,17 @@ from services.match_constants import PITCH_TYPES, MATCH_EXPIRE, random_match_set
 from services.telegram_user_service import sync_telegram_user, resolve_command_target
 from services.match_state_store import save_state, A_PICK_CIPL_BOWLER
 from services import cipl_match
-from handlers.match import _mention
+from handlers.match import (
+    _mention, _active_match_in_chat, _active_match_for_user,
+    _cric_lobby_for_user, _chat_busy_message, _user_busy_message)
 from handlers.lineup import _get_ordered_roster, validate_xi
 
 logger = logging.getLogger(__name__)
 
-INVITE_TIMEOUT = 30   # seconds the guest has to accept/deny
-LETSPLAY_OVERS = 20   # /letsplay is always a 20-over contest
+INVITE_TIMEOUT = 30    # seconds the guest has to accept/deny
+SETUP_TIMEOUT = 180    # seconds a setup stage (pitch/xi/toss) may stall before
+                       # the accepted draft is abandoned and the chat freed
+LETSPLAY_OVERS = 20    # /letsplay is always a 20-over contest
 
 _PITCH_EMOJI = {
     "Dry": "🟫", "Dusty": "🟤", "Hard": "🟩",
@@ -155,6 +159,34 @@ def _format_batting_order(pairs, header):
     return "\n".join(lines)
 
 
+def _pairs_from_roster_ids(session, user_id, roster_ids):
+    """Rebuild ordered (UserRoster, Player) pairs from a snapshot of roster ids.
+
+    Used at launch so each side plays the EXACT XI it confirmed — re-reading the
+    live roster order would let a player /swap or /autobuild between confirmation
+    and the toss and field an XI the opponent never saw. Any roster row that has
+    since been sold simply drops out, leaving fewer than 11 so validate_xi fails
+    and the launch is cancelled rather than silently substituting a player.
+    """
+    if not roster_ids:
+        return []
+    rows = (session.query(UserRoster, Player)
+            .join(Player, UserRoster.player_id == Player.id)
+            .filter(UserRoster.user_id == user_id,
+                    UserRoster.id.in_([int(r) for r in roster_ids]))
+            .all())
+    by_id = {int(e.id): (e, p) for e, p in rows}
+    return [by_id[int(rid)] for rid in roster_ids if int(rid) in by_id]
+
+
+def _first_xi_error(errors):
+    """First validate_xi error as a short, tag-free string for a TG alert."""
+    first = errors[0] if errors else "Your XI is invalid."
+    for tag in ("<b>", "</b>", "<i>", "</i>"):
+        first = first.replace(tag, "")
+    return first
+
+
 def _xi_preview(pairs):
     """Compact strength preview of a roster's top 11 for the invitation card."""
     top = pairs[:11]
@@ -191,6 +223,14 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Finish it first before starting another.")
             return
 
+        # Reuse the global one-match-per-chat gate shared by /match, /cipl and
+        # /wpm: a live DB match in this chat blocks a new Lets Play too.
+        chat_busy = _active_match_in_chat(session, chat.id)
+        if chat_busy:
+            await msg.reply_text(_chat_busy_message(chat_busy), parse_mode="HTML",
+                                 disable_web_page_preview=True)
+            return
+
         guest_user, reason = resolve_command_target(session, update, context, "letsplay")
         if not guest_user:
             await msg.reply_text(
@@ -201,6 +241,28 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if guest_user.id == host.id:
             await msg.reply_text("❌ You can't play a match against yourself.")
+            return
+
+        # One match per player (any mode): block if either side is already in a
+        # live DB match or a /wpm lobby, matching the other challenge handlers.
+        host_busy = _active_match_for_user(session, host.id)
+        if host_busy:
+            await msg.reply_text(_user_busy_message(host_busy), parse_mode="HTML",
+                                 disable_web_page_preview=True)
+            return
+        guest_busy = _active_match_for_user(session, guest_user.id)
+        if guest_busy:
+            gname = f"@{guest_user.username}" if guest_user.username else (guest_user.first_name or "They")
+            await msg.reply_text(
+                f"⚠️ {html.escape(gname)} is already in an active match "
+                f"(#{guest_busy.id}). They must finish it first.",
+                parse_mode="HTML")
+            return
+        if _cric_lobby_for_user(context.bot_data, host.id) \
+                or _cric_lobby_for_user(context.bot_data, guest_user.id):
+            await msg.reply_text(
+                "⚠️ One of you is already in a match lobby. Finish or cancel it "
+                "first, then try /letsplay again.")
             return
 
         host_pairs = _get_ordered_roster(session, host.id)
@@ -217,6 +279,25 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(
                 f"❌ {html.escape(gname)} needs at least 11 players to play "
                 f"(has {len(guest_pairs)}).", parse_mode="HTML")
+            return
+
+        # Fail fast: both top-11s must be a legal Playing XI before we even send
+        # the invite. The XI is re-validated at confirm and at launch too.
+        ok_host, host_errs = validate_xi(host_pairs)
+        if not ok_host:
+            await msg.reply_text(
+                f"⚠️ Your Playing XI is invalid: {html.escape(_first_xi_error(host_errs))}\n"
+                f"Fix it with /autobuild or /swap, then try /letsplay again.",
+                parse_mode="HTML")
+            return
+        ok_guest, guest_errs = validate_xi(guest_pairs)
+        if not ok_guest:
+            gname = f"@{guest_user.username}" if guest_user.username else (guest_user.first_name or "They")
+            await msg.reply_text(
+                f"⚠️ {html.escape(gname)}'s Playing XI is invalid: "
+                f"{html.escape(_first_xi_error(guest_errs))}\n"
+                f"They should fix it with /autobuild, then try /letsplay again.",
+                parse_mode="HTML")
             return
 
         host_info = {"user_id": host.id, "tg_id": host.telegram_id,
@@ -315,6 +396,51 @@ async def _on_invite_timeout(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Setup timer — covers the pitch / XI / toss stages after acceptance
+# ════════════════════════════════════════════════════════════════════
+
+_SETUP_STATUSES = ("pitch", "xi", "toss")
+
+
+def _rearm_setup_timeout(context, invite_id):
+    """(Re)start the rolling setup timer. Called on every setup transition so a
+    draft that stalls in pitch/XI/toss is abandoned instead of blocking the chat
+    forever — the accept path cancels the invite timer but never replaced it."""
+    if not getattr(context, "job_queue", None):
+        return
+    _cancel_setup_timeout(context, invite_id)
+    context.job_queue.run_once(
+        _on_setup_timeout, SETUP_TIMEOUT,
+        name=f"lp_setup_to_{invite_id}", data={"invite_id": invite_id})
+
+
+def _cancel_setup_timeout(context, invite_id):
+    if not getattr(context, "job_queue", None):
+        return
+    for j in context.job_queue.get_jobs_by_name(f"lp_setup_to_{invite_id}"):
+        j.schedule_removal()
+
+
+async def _on_setup_timeout(context: ContextTypes.DEFAULT_TYPE):
+    invite_id = context.job.data["invite_id"]
+    draft = _get_draft(context, invite_id)
+    if not draft or draft.get("match_launched") \
+            or draft.get("status") not in _SETUP_STATUSES:
+        return  # launched, cancelled, or already moved on
+    draft["status"] = "expired"
+    text = (
+        "🏏 <b>LETS PLAY</b>\n"
+        f"👤 {_m(draft['host'])}  vs  🎯 {_m(draft['guest'])}\n\n"
+        "⌛ Match setup timed out — nobody finished the pitch / XI / toss in "
+        "time. Start again with /letsplay.")
+    try:
+        await context.bot.send_message(draft["chat_id"], text, parse_mode="HTML")
+    except Exception:
+        pass
+    _drop_draft(context, invite_id)
+
+
+# ════════════════════════════════════════════════════════════════════
 # Accept / Deny
 # ════════════════════════════════════════════════════════════════════
 
@@ -345,8 +471,10 @@ async def letsplay_invite_callback(update: Update, context: ContextTypes.DEFAULT
         _drop_draft(context, invite_id)
         return
 
-    # Accepted → host picks the pitch.
+    # Accepted → host picks the pitch. Start the rolling setup timer that now
+    # guards the pitch/XI/toss stages.
     draft["status"] = "pitch"
+    _rearm_setup_timeout(context, invite_id)
     await q.edit_message_text(
         f"✅ {_m(draft['guest'])} accepted the challenge!\n\n"
         f"👤 {_m(draft['host'])} — pick the pitch below.",
@@ -400,6 +528,7 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
     await q.answer()
     draft["pitch_type"] = pitch
     draft["status"] = "xi"
+    _rearm_setup_timeout(context, invite_id)
     await q.edit_message_text(
         f"🌱 Pitch locked: <b>{_PITCH_EMOJI.get(pitch, '🏏')} {pitch}</b>",
         parse_mode="HTML")
@@ -511,17 +640,20 @@ async def letsplay_confirmxi_callback(update: Update, context: ContextTypes.DEFA
     valid, errors = validate_xi(pairs)
     if not valid:
         # Telegram alerts are short — show the first problem.
-        first = errors[0] if errors else "Your XI is invalid."
-        # Strip any HTML tags for the plain-text alert.
-        first = first.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", "")
-        await q.answer(f"⚠️ Fix your XI: {first}\nTry /autobuild.", show_alert=True)
+        await q.answer(f"⚠️ Fix your XI: {_first_xi_error(errors)}\nTry /autobuild.",
+                       show_alert=True)
         return
 
     await q.answer("XI confirmed!")
     draft[f"{side}_confirmed"] = True
+    # Snapshot the EXACT XI confirmed (ordered roster ids of the top 11), so a
+    # later /swap or /autobuild can't change what gets launched at the toss.
+    draft[f"{side}_xi_roster_ids"] = [int(e.id) for e, _p in pairs[:11]]
+    _rearm_setup_timeout(context, invite_id)
 
     if draft["host_confirmed"] and draft["guest_confirmed"]:
         draft["status"] = "toss"
+        _rearm_setup_timeout(context, invite_id)
         try:
             await q.edit_message_text(
                 "🔒 <b>Both Playing XIs locked!</b>\n"
@@ -584,18 +716,22 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
     if call not in ("heads", "tails"):
         await q.answer("Invalid call.", show_alert=True)
         return
-    if draft.get("toss_winner_side"):
-        await q.answer("Toss already done.", show_alert=True)
+    if draft.get("toss_winner_side") or draft.get("coin_flipping"):
+        await q.answer("Toss already in progress.", show_alert=True)
         return
     if q.from_user.id != draft["guest"]["tg_id"]:
         await q.answer("Only the guest calls the toss!", show_alert=True)
         return
+    # Lock synchronously BEFORE the async coin animation so a racing double-tap
+    # can't spawn a second election keyboard for the wrong side.
+    draft["coin_flipping"] = True
     await q.answer()
     from services.match_broadcast import run_coin_toss
     coin, won = await run_coin_toss(
         lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
     winner_side = "guest" if won else "host"
     draft["toss_winner_side"] = winner_side
+    _rearm_setup_timeout(context, invite_id)
     winner = draft[winner_side]
     await q.edit_message_text(
         f"🪙 The coin lands on <b>{coin.upper()}</b> — guest called "
@@ -625,6 +761,13 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
     if decision not in ("bat", "bowl") or winner_side not in ("host", "guest"):
         await q.answer("Invalid decision.", show_alert=True)
         return
+    # Trust only the toss winner actually recorded after the coin animation — a
+    # stale keyboard (e.g. from a racing double-tap) carries the wrong side and
+    # must not be allowed to launch the match.
+    if winner_side != draft.get("toss_winner_side"):
+        await q.answer("That toss result is stale. Use the latest buttons.",
+                       show_alert=True)
+        return
     if draft.get("match_launched"):
         await q.answer("Match already started.", show_alert=True)
         return
@@ -633,6 +776,7 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     draft["match_launched"] = True
+    _cancel_setup_timeout(context, invite_id)
     await q.answer()
     winner = draft[winner_side]
     await q.edit_message_text(
@@ -670,9 +814,17 @@ async def _launch_match(context, draft, decision, winner_side):
             await context.bot.send_message(draft["chat_id"], "⚠️ A player no longer exists.")
             return
 
-        host_pairs = _get_ordered_roster(session, host.id)
-        guest_pairs = _get_ordered_roster(session, guest.id)
-        # Final validation — rosters can't have shrunk below 11 mid-setup.
+        # Launch the EXACT XI each side confirmed (snapshot of roster ids taken
+        # at confirm time), not whatever the live roster order is now. Fall back
+        # to the current order only if a snapshot is somehow missing.
+        host_ids = draft.get("host_xi_roster_ids")
+        guest_ids = draft.get("guest_xi_roster_ids")
+        host_pairs = (_pairs_from_roster_ids(session, host.id, host_ids)
+                      if host_ids else _get_ordered_roster(session, host.id))
+        guest_pairs = (_pairs_from_roster_ids(session, guest.id, guest_ids)
+                       if guest_ids else _get_ordered_roster(session, guest.id))
+        # Final validation — a snapshot player may have been sold mid-setup,
+        # leaving fewer than 11 or an illegal composition.
         for pairs, info in ((host_pairs, host_info), (guest_pairs, guest_info)):
             ok, _err = validate_xi(pairs)
             if not ok:
