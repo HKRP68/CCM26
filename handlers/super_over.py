@@ -59,6 +59,10 @@ _PITCH_MAP = {
 # the chat reads like a live broadcast rather than an instant jump.
 _BALL_PAUSE = 1.4
 
+# Super Over flavour tuning (passed into the SimCricketX outcome engine).
+SO_BOUNDARY_BOOST = 1.6   # more fours/sixes than a regular over
+SO_BATTING_EDGE = 1.25    # edge to the team batting first in the Super Over
+
 
 def _so_key(mid):
     return f"so_{mid}"
@@ -690,7 +694,7 @@ async def so_shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _resolve_ball(context, mid, shot)
 
 
-# ── Ball resolution (verbatim SimCricketX engine) ──────────────────────
+# ── Ball resolution (SimCricketX engine + Super Over tuning) ───────────
 
 async def _resolve_ball(context, mid, shot):
     so = _get(context, mid)
@@ -703,9 +707,17 @@ async def _resolve_ball(context, mid, shot):
     bowler = _adapt_player(bowler_raw)
     streak = inn["streak"].setdefault(s_rid, {"boundaries": 0})
 
+    # Super Over flavour tuning:
+    #  • more boundaries overall,
+    #  • an edge to the team that batted FIRST in the Super Over (so it scores
+    #    a bit more when batting and concedes a bit less when bowling), and
+    #  • last-ball drama on the 6th legal ball.
+    edge = SO_BATTING_EDGE if so["bat_uid"] == so["first_bat_uid"] else 1.0
+    last_ball = inn["legal"] >= 5
     oc = calculate_super_over_outcome(
         batter, bowler, so["pitch"], streak,
-        over_number=0, batter_runs=inn["bat"][s_rid]["r"])
+        over_number=0, batter_runs=inn["bat"][s_rid]["r"],
+        boundary_boost=SO_BOUNDARY_BOOST, last_ball=last_ball, edge=edge)
 
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:

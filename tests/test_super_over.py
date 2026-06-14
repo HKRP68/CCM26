@@ -354,6 +354,46 @@ def test_resume_super_over_reposts_prompt():
     assert so["inn"]["stage"] in ("DELIV", "LEN", "SHOT")
 
 
+def test_super_over_buttons_are_shared_for_both_captains():
+    # The owner-access middleware must treat every Super Over button as a shared
+    # prompt (each callback validates the clicker itself), otherwise the side
+    # that didn't trigger the send gets "This button is not for you".
+    from services.button_access import is_shared_callback_data
+    for data in (f"so_bat_{1}_{2}", "so_batok_1", "so_bowl_1_2", "so_bowlok_1",
+                 "so_dv_1_0", "so_ln_1_0", "so_sh_1_0"):
+        assert is_shared_callback_data(data), data
+
+
+def test_first_batting_team_gets_the_edge():
+    random.seed(0)
+    so_mod_outcome = so_mod.calculate_super_over_outcome
+    # Boundary boost lifts 4s/6s; the batting edge cuts the favoured side's
+    # wicket chance. Compare large samples with identical players.
+    b = {"name": "A", "batting_rating": 80, "batting_hand": "Right"}
+    bw = {"name": "B", "bowling_rating": 70, "fielding_rating": 65,
+          "bowling_type": "Fast", "bowling_hand": "Right"}
+
+    def sample(n=8000, **kw):
+        random.seed(1)
+        bdry = wkt = 0
+        for _ in range(n):
+            o = so_mod_outcome(b, bw, "Hard", {"boundaries": 0}, 0, 0, **kw)
+            if o["type"] == "run" and o["runs"] in (4, 6):
+                bdry += 1
+            elif o["type"] == "wicket":
+                wkt += 1
+        return bdry / n, wkt / n
+
+    base_b, base_w = sample()
+    boost_b, _ = sample(boundary_boost=1.6)
+    edge_b, edge_w = sample(boundary_boost=1.6, edge=1.25)
+    drama_b, _ = sample(boundary_boost=1.6, edge=1.25, last_ball=True)
+
+    assert boost_b > base_b              # more boundaries with the boost
+    assert edge_w < base_w               # edge → fewer wickets for the bat side
+    assert drama_b > edge_b              # last-ball drama → even more boundaries
+
+
 def test_many_seeds_always_terminate_with_a_winner():
     for seed in range(15):
         random.seed(seed)
