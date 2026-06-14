@@ -627,6 +627,13 @@ def _xi_picker_keyboard(draft, side, pairs, selected_ids, confirmed):
             callback_data=f"lp_reselect_{invite_id}_{side}")]])
     sel = set(selected_ids)
     rows, row = [], []
+    # When nothing is picked yet, offer a one-tap load of the saved XI (the order
+    # persisted by _persist_xi_order on the last confirm) if there are enough
+    # players to fill an XI.
+    if not selected_ids and len(pairs) >= 11:
+        rows.append([InlineKeyboardButton(
+            "⚡ Auto-fill saved XI",
+            callback_data=f"lp_autofill_{invite_id}_{side}")])
     for entry, player in pairs:
         rid = int(entry.id)
         mark = "✅" if rid in sel else "➕"
@@ -678,44 +685,176 @@ def _persist_xi_order(session, user_id, selected_ids):
 
 
 async def _send_side_picker(context, draft, side, pairs):
-    """(Re)send one side's picker message, defaulting to their current top 11."""
+    """Send a fresh, empty Playing-XI picker message for one side.
+
+    Returns True if the picker was posted. The picker starts empty (the owner
+    picks all 11, or taps ⚡ Auto-fill saved XI). Raises nothing — a send
+    failure is logged and reported as False so the caller can alert the user.
+    """
     st = _xi_pick_state(draft, side)
-    if not st.get("selected"):
-        st["selected"] = [int(e.id) for e, _p in pairs[:11]]
+    st["selected"] = []
     st["confirmed"] = False
-    sent = await context.bot.send_message(
-        draft["chat_id"],
-        _xi_picker_text(draft, side, pairs, st["selected"]),
-        parse_mode="HTML",
-        reply_markup=_xi_picker_keyboard(draft, side, pairs, st["selected"], False),
-        disable_web_page_preview=True)
+    try:
+        sent = await context.bot.send_message(
+            draft["chat_id"],
+            _xi_picker_text(draft, side, pairs, st["selected"]),
+            parse_mode="HTML",
+            reply_markup=_xi_picker_keyboard(draft, side, pairs, st["selected"], False),
+            disable_web_page_preview=True)
+    except Exception:
+        logger.exception("letsplay: failed to send %s picker", side)
+        return False
     if sent and getattr(sent, "message_id", None):
         st["msg_id"] = sent.message_id
+    return True
+
+
+def _xi_entry_text(draft):
+    host_done = draft.get("host_confirmed")
+    guest_done = draft.get("guest_confirmed")
+    return (
+        "🧾 <b>Confirm Your Playing XI</b>\n"
+        f"🌱 Pitch: <b>{draft.get('pitch_type', 'Hard')}</b> • 20 overs\n\n"
+        f"{'✅' if host_done else '⏳'} {_m(draft['host'])} (Host)\n"
+        f"{'✅' if guest_done else '⏳'} {_m(draft['guest'])} (Guest)\n\n"
+        "Each player taps <b>Select XI</b> below to build their team, then "
+        "<b>Confirm XI</b>. The match starts once both sides have confirmed.")
+
+
+def _xi_entry_keyboard(draft):
+    """Two owner-gated 'Select XI' buttons; a side's button drops once confirmed."""
+    invite_id = draft["invite_id"]
+    rows = []
+    if not draft.get("host_confirmed"):
+        rows.append([InlineKeyboardButton(
+            f"🧤 {draft['host']['name']}: Select XI"[:64],
+            callback_data=f"lp_selectxi_{invite_id}_host")])
+    if not draft.get("guest_confirmed"):
+        rows.append([InlineKeyboardButton(
+            f"🧤 {draft['guest']['name']}: Select XI"[:64],
+            callback_data=f"lp_selectxi_{invite_id}_guest")])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def _refresh_xi_entry(context, draft):
+    """Re-render the entry message to reflect confirm status / remaining buttons."""
+    mid = draft.get("xi_entry_msg_id")
+    if not mid:
+        return
+    try:
+        await context.bot.edit_message_text(
+            _xi_entry_text(draft), chat_id=draft["chat_id"], message_id=mid,
+            parse_mode="HTML", reply_markup=_xi_entry_keyboard(draft),
+            disable_web_page_preview=True)
+    except Exception:
+        logger.debug("letsplay: refresh XI entry failed", exc_info=True)
 
 
 async def _prompt_xi_confirm(context, draft):
-    """Open both sides' Playing-XI pickers once the pitch is locked."""
+    """Post the compact entry message with a 'Select XI' button per side.
+
+    Each side opens its own picker on demand (lp_selectxi_), so the only message
+    sent up-front is this tiny two-button card — it can't hit Telegram size
+    limits the way two full roster keyboards could.
+    """
+    sent = await context.bot.send_message(
+        draft["chat_id"], _xi_entry_text(draft), parse_mode="HTML",
+        reply_markup=_xi_entry_keyboard(draft), disable_web_page_preview=True)
+    if sent and getattr(sent, "message_id", None):
+        draft["xi_entry_msg_id"] = sent.message_id
+
+
+async def letsplay_selectxi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lp_selectxi_{id}_{host|guest} — owner opens a fresh picker for their side."""
+    q = update.callback_query
+    try:
+        _, _, invite_id, side = q.data.split("_")
+        invite_id = int(invite_id)
+    except Exception:
+        await q.answer("Invalid action.", show_alert=True)
+        return
+    draft = _get_draft(context, invite_id)
+    if not draft or draft.get("status") != "xi":
+        await q.answer("XI selection is closed.", show_alert=True)
+        return
+    if side not in ("host", "guest"):
+        await q.answer("Invalid side.", show_alert=True)
+        return
+    if q.from_user.id != draft[side]["tg_id"]:
+        who = "Host" if side == "host" else "Guest"
+        await q.answer(f"Only the {who} can select this XI.", show_alert=True)
+        return
+    if _xi_pick_state(draft, side).get("confirmed"):
+        await q.answer("Already confirmed — tap ♻️ Reselect XI to change.",
+                       show_alert=True)
+        return
+
     session = get_session()
     try:
-        host_pairs = _get_ordered_roster(session, draft["host"]["user_id"])
-        guest_pairs = _get_ordered_roster(session, draft["guest"]["user_id"])
+        pairs = _get_ordered_roster(session, draft[side]["user_id"])
         session.commit()
     except Exception:
-        logger.exception("letsplay XI prompt failed")
-        await context.bot.send_message(draft["chat_id"], "⚠️ Failed to load XIs.")
+        logger.exception("letsplay selectxi load failed")
+        await q.answer("Couldn't read your roster. Try again.", show_alert=True)
         return
     finally:
         session.close()
-    await context.bot.send_message(
-        draft["chat_id"],
-        "🧾 <b>Confirm Your Playing XI</b>\n"
-        f"🌱 Pitch: <b>{draft.get('pitch_type', 'Hard')}</b> • 20 overs\n\n"
-        f"{_m(draft['host'])} (Host) and {_m(draft['guest'])} (Guest) — each "
-        "build your XI from your own roster below, then tap <b>Confirm XI</b>. "
-        "The match starts once both sides have confirmed.",
-        parse_mode="HTML", disable_web_page_preview=True)
-    await _send_side_picker(context, draft, "host", host_pairs)
-    await _send_side_picker(context, draft, "guest", guest_pairs)
+
+    if await _send_side_picker(context, draft, side, pairs):
+        await q.answer("Select your Playing XI 👇")
+    else:
+        await q.answer("⚠️ Couldn't open the picker (roster too large?). "
+                       "Tell an admin.", show_alert=True)
+
+
+async def letsplay_autofill_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lp_autofill_{id}_{host|guest} — one-tap load the saved (persisted) XI."""
+    q = update.callback_query
+    try:
+        _, _, invite_id, side = q.data.split("_")
+        invite_id = int(invite_id)
+    except Exception:
+        await q.answer("Invalid action.", show_alert=True)
+        return
+    draft = _get_draft(context, invite_id)
+    if not draft or draft.get("status") != "xi":
+        await q.answer("XI selection is closed.", show_alert=True)
+        return
+    if side not in ("host", "guest"):
+        await q.answer("Invalid side.", show_alert=True)
+        return
+    if q.from_user.id != draft[side]["tg_id"]:
+        who = "Host" if side == "host" else "Guest"
+        await q.answer(f"Only the {who} can fill this XI.", show_alert=True)
+        return
+    st = _xi_pick_state(draft, side)
+    if st.get("confirmed"):
+        await q.answer("Already confirmed — tap ♻️ Reselect XI to change.",
+                       show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        pairs = _get_ordered_roster(session, draft[side]["user_id"])
+        session.commit()
+    except Exception:
+        logger.exception("letsplay autofill load failed")
+        await q.answer("Couldn't read your roster. Try again.", show_alert=True)
+        return
+    finally:
+        session.close()
+    if len(pairs) < 11:
+        await q.answer("You need at least 11 players.", show_alert=True)
+        return
+    st["selected"] = [int(e.id) for e, _p in pairs[:11]]
+    await q.answer("Loaded your saved XI.")
+    try:
+        await q.edit_message_text(
+            _xi_picker_text(draft, side, pairs, st["selected"]), parse_mode="HTML",
+            reply_markup=_xi_picker_keyboard(draft, side, pairs, st["selected"], False),
+            disable_web_page_preview=True)
+    except Exception:
+        logger.exception("letsplay autofill render failed")
 
 
 async def letsplay_xipick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -810,6 +949,8 @@ async def letsplay_reselect_callback(update: Update, context: ContextTypes.DEFAU
     draft.pop(f"{side}_xi_roster_ids", None)
     _rearm_setup_timeout(context, invite_id)
     await q.answer("Reselect your XI.")
+    # Restore this side's ⏳ status + Select XI button on the entry card.
+    await _refresh_xi_entry(context, draft)
 
     session = get_session()
     try:
@@ -903,6 +1044,9 @@ async def letsplay_confirmxi_callback(update: Update, context: ContextTypes.DEFA
                           else _xi_picker_keyboard(draft, side, [], st["selected"], True)))
     except Exception:
         logger.exception("letsplay confirm render failed")
+
+    # Reflect this side's ✅ on the shared entry card (and drop its button).
+    await _refresh_xi_entry(context, draft)
 
     # Single-winner transition: if both sides are in, the first callback to get
     # here flips the draft out of "xi" synchronously (no await in between), so
