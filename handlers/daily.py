@@ -60,10 +60,16 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML")
                 return
 
+            _origin = update.effective_chat.id if update.effective_chat else None
+            if _origin is not None and update.effective_user:
+                try:
+                    from services.telegram_user_service import record_miniapp_origin
+                    record_miniapp_origin(update.effective_user.id, _origin)
+                except Exception:
+                    pass
             btn = miniapp_button("📅 Open Mini App to Claim", "daily",
                                  is_private=is_private,
-                                 origin_chat_id=(update.effective_chat.id
-                                                 if update.effective_chat else None))
+                                 origin_chat_id=_origin)
             if btn is not None:
                 text = (
                     "📅 <b>Your daily reward is ready!</b>\n\n"

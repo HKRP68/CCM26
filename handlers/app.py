@@ -58,6 +58,15 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
         # Encode the origin group so Mini App actions echo back into this chat.
         _chat_id = update.effective_chat.id if update.effective_chat else None
+        # Also persist the origin server-side now, so activity echoes work even
+        # if Telegram drops the start_param from the signed initData / caches the
+        # Mini App page.
+        if _chat_id is not None and update.effective_user:
+            try:
+                from services.telegram_user_service import record_miniapp_origin
+                record_miniapp_origin(update.effective_user.id, _chat_id)
+            except Exception:
+                pass
         _sp = f"home_c{_chat_id}" if (_chat_id is not None and _chat_id < 0) else "home"
         if bot_username and miniapp_name:
             # Named Mini App — t.me/<bot>/<app> launches it straight away

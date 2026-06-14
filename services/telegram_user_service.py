@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import or_
 
 from models import User
+
+logger = logging.getLogger(__name__)
 
 
 def _clean_username(username: str | None) -> str:
@@ -55,6 +58,39 @@ def sync_update_users(session, update: Any) -> None:
     reply = getattr(message, "reply_to_message", None)
     if reply is not None:
         sync_telegram_user(session, getattr(reply, "from_user", None))
+
+
+def record_miniapp_origin(tg_id, chat_id) -> None:
+    """Remember the group a user opened the Mini App from.
+
+    Called from the bot command handlers that surface a Mini App launch button
+    in a group (``/app``, ``/daily``, ``/gspin``, the player market). Persisting
+    the origin here — server-side, the moment the command runs — means Mini App
+    activity (daily, packs, gspin, buys) can echo back into that group even when
+    Telegram drops the launch ``start_param`` from the signed ``initData`` (a
+    real cross-client quirk) or serves a cached Mini App page. Best-effort and
+    self-contained; never raises. Only group/supergroup ids (negative) are kept.
+    """
+    try:
+        cid = int(chat_id)
+        uid = int(tg_id)
+    except (TypeError, ValueError):
+        return
+    if cid >= 0:
+        return
+    from database import get_session
+    from models import User
+    s = get_session()
+    try:
+        u = s.query(User).filter(User.telegram_id == uid).first()
+        if u and u.last_miniapp_chat_id != cid:
+            u.last_miniapp_chat_id = cid
+            s.commit()
+    except Exception:
+        s.rollback()
+        logger.exception("record_miniapp_origin failed")
+    finally:
+        s.close()
 
     for entity in (getattr(message, "entities", None) or []):
         sync_telegram_user(session, getattr(entity, "user", None))
