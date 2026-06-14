@@ -146,6 +146,25 @@ def _mention_tg(state, tg_id, fallback="Player"):
     return _mention(tg_id, names.get(str(tg_id), fallback))
 
 
+def _at_mention_tg(state, tg_id, fallback="Player"):
+    """Clickable '@username' mention (link text always carries the @ prefix)."""
+    names = state.get("user_names") or {}
+    raw = names.get(str(tg_id), fallback)
+    label = raw if str(raw).startswith("@") else f"@{raw}"
+    return _mention(tg_id, label)
+
+
+def _team_user_mentions(state):
+    """Map each CIPL team name → its captain's '@username' mention.
+
+    Used for the 'who beat who' result line. Innings-2 state holds the chaser as
+    bat_* and the defender as bowl_*, which together cover both teams."""
+    return {
+        state.get("bat_team_name"): _at_mention_tg(state, state.get("bat_user_tg")),
+        state.get("bowl_team_name"): _at_mention_tg(state, state.get("bowl_user_tg")),
+    }
+
+
 def _draft_key(draft_id):
     from handlers.challenge import _challenge_team_draft_key
     return _challenge_team_draft_key(draft_id)
@@ -1121,10 +1140,16 @@ async def _complete_match(context, mid, state):
     finally:
         session.close()
 
+    # "Who beat who" line uses clickable @user mentions alongside the team
+    # names: @winner (Team) beat @loser (Team).
+    mentions = _team_user_mentions(state)
     if result["tie"]:
         result_line = "🤝 <b>Match Tied!</b>"
     else:
-        result_line = (f"🏆 <b>{result['winner']}</b> beat {result['loser']} "
+        win_m = mentions.get(result["winner"], f"<b>{result['winner']}</b>")
+        lose_m = mentions.get(result["loser"], result["loser"])
+        result_line = (f"🏆 {win_m} ({result['winner']}) beat "
+                       f"{lose_m} ({result['loser']}) "
                        f"by {result['margin']} {result['margin_type']}!")
 
     # Win/result message FIRST, then the Match Summary image — same order and
