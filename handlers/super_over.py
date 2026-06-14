@@ -80,6 +80,44 @@ def _pitch_for_engine(pitch):
     return _PITCH_MAP.get((pitch or "Hard"), "Hard")
 
 
+def find_super_over_in_chat(bot_data, chat_id):
+    """Return the match id of a live Super Over in ``chat_id``, or None."""
+    for k, v in list(bot_data.items()):
+        if (isinstance(k, str) and k.startswith("so_")
+                and isinstance(v, dict) and v.get("chat_id") == chat_id):
+            return v.get("mid")
+    return None
+
+
+async def resume_super_over(context, mid):
+    """Re-render the live Super Over prompt (selection or current ball).
+
+    The /playmatch-style recovery for a Super Over: if a prompt message was
+    deleted or a send failed, re-post whichever screen is outstanding so the
+    captains can carry on. Returns True if a prompt was re-sent.
+    """
+    so = _get(context, mid)
+    if not so:
+        return False
+    try:
+        if "inn" in so and so.get("bat_confirmed") and so.get("bowl_confirmed"):
+            inn = so["inn"]
+            # If we somehow stalled mid-resolution, restart the ball cleanly from
+            # delivery selection (the half-resolved delivery is discarded).
+            if inn.get("stage") not in ("DELIV", "LEN", "SHOT"):
+                inn["stage"] = "DELIV"
+                inn["pending"] = {"delivery": None, "length": None}
+            inn["msg_id"] = None          # force a fresh prompt message
+            await _prompt(context, mid)
+        else:
+            so["sel_msg_id"] = None        # force a fresh selection message
+            await _send_selection(context, mid)
+        return True
+    except Exception:
+        logger.exception("resume_super_over failed (%s)", mid)
+        return False
+
+
 # ════════════════════════════════════════════════════════════════════
 # Entry point — called from handlers.cipl_play._complete_match on a tie
 # ════════════════════════════════════════════════════════════════════

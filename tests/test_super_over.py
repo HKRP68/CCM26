@@ -324,6 +324,36 @@ def test_double_tap_shot_resolves_one_ball():
         so_mod.calculate_super_over_outcome = orig
 
 
+def test_resume_super_over_reposts_prompt():
+    from handlers.super_over import find_super_over_in_chat, resume_super_over
+    random.seed(2)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+
+    # Found by chat id (what /resume and /rcl use).
+    assert find_super_over_in_chat(ctx.bot_data, CHAT) == mid
+
+    # During selection: resume re-sends the selection message.
+    n_before = len(ctx.bot.messages)
+    assert asyncio.run(resume_super_over(ctx, mid)) is True
+    assert len(ctx.bot.messages) > n_before
+    so = _get(ctx, mid)
+    assert so["sel_msg_id"] is not None
+
+    # During an innings: resume re-posts the current ball prompt and doesn't
+    # advance the ball.
+    asyncio.run(_do_selection(ctx, mid))
+    so = _get(ctx, mid)
+    assert "inn" in so
+    deliveries_before = so["inn"]["deliveries"]
+    assert asyncio.run(resume_super_over(ctx, mid)) is True
+    assert so["inn"]["deliveries"] == deliveries_before  # no extra ball
+    assert so["inn"]["stage"] in ("DELIV", "LEN", "SHOT")
+
+
 def test_many_seeds_always_terminate_with_a_winner():
     for seed in range(15):
         random.seed(seed)

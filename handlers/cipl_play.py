@@ -730,9 +730,17 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if _super_over_active(context, found_mid):
+        # The main match is over and a Super Over is live — re-render its prompt
+        # (selection or current ball) just like /resume, instead of touching the
+        # suspended main flow.
+        from handlers.super_over import resume_super_over
         await update.message.reply_text(
-            "🔥 A Super Over is in progress — the main match has already finished. "
-            "Play it out from the Super Over buttons.")
+            "🔄 <b>Resuming Super Over…</b>", parse_mode="HTML")
+        ok = await resume_super_over(context, found_mid)
+        if not ok:
+            await update.message.reply_text(
+                "⚠️ Couldn't re-show the Super Over right now. Please try again, "
+                "or ask an admin to /removematch you if it stays stuck.")
         return
 
     # Label the resume after whichever mode this match is (Lets Play vs cipl).
