@@ -342,6 +342,87 @@ def find_player(xi, roster_id):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Player traits (active only in /letsplay — personal-roster matches)
+# ════════════════════════════════════════════════════════════════════
+#
+# Challenge League (/cipl) players carry no traits, so the trait hook below is
+# never built for them and the engine call stays a no-op. /letsplay attaches a
+# ``traits`` list to each player dict (see handlers/letsplay.py); those traits
+# are folded into the engine's final outcome weights every ball via the generic
+# ``weight_hook`` on engine.ball_outcome.calculate_outcome.
+
+# trait_engine probability keys → engine raw-weight keys.
+_TRAIT_KEY_MAP = (("6", "Six"), ("4", "Four"), ("W", "Wicket"), ("dot", "Dot"))
+
+
+def _apply_trait_weights(raw_weights, striker_traits, bowler_traits, ctx,
+                         collector=None):
+    """Nudge the engine's raw outcome weights by the active player traits.
+
+    services.trait_engine.apply_traits works on a ~0-100 percentage-point scale
+    (the scale of the legacy probability engine), so we rescale the engine's
+    normalised weights to sum to 100, let apply_traits add its deltas to the
+    Six / Four / Wicket / Dot buckets, then rescale back. The engine renormalises
+    afterwards. Capping / stacking / level logic is reused verbatim, so /letsplay
+    traits behave exactly like /cm and /wpm traits.
+
+    When ``collector`` (a ``{"bat": set, "bowl": set}`` dict) is supplied, the
+    traits that actually fired this ball are recorded — tagged by role and
+    prefixed with their emoji — so the over summary can reveal them.
+    """
+    try:
+        from services.trait_engine import apply_traits
+    except Exception:
+        return raw_weights
+    total = sum(raw_weights.values())
+    if total <= 0:
+        return raw_weights
+    scale = 100.0 / total
+    probs = {tkey: raw_weights.get(ekey, 0.0) * scale
+             for tkey, ekey in _TRAIT_KEY_MAP}
+    try:
+        activated = apply_traits(probs, striker_traits or [], bowler_traits or [], ctx)
+    except Exception:
+        logger.exception("letsplay trait application failed; ignoring this ball")
+        return raw_weights
+    new = dict(raw_weights)
+    for tkey, ekey in _TRAIT_KEY_MAP:
+        new[ekey] = max(0.0, probs.get(tkey, 0.0)) / scale
+    if collector is not None and activated:
+        _record_activated_traits(collector, activated, striker_traits, bowler_traits)
+    return new
+
+
+def _trait_label(t):
+    name = t.get("display_name") or t.get("effect_key") or "Trait"
+    return f"{name} Lv.{t.get('level', 1)}"
+
+
+def _record_activated_traits(collector, activated, striker_traits, bowler_traits):
+    """Classify the apply_traits 'Name Lv.X' strings into bat/bowl, with emoji."""
+    st = {_trait_label(t): t for t in (striker_traits or [])}
+    bw = {_trait_label(t): t for t in (bowler_traits or [])}
+    for label in activated:
+        if label in st:
+            t = st[label]
+            collector["bat"].add(f"{t.get('emoji', '✨')} {label}")
+        elif label in bw:
+            t = bw[label]
+            collector["bowl"].add(f"{t.get('emoji', '✨')} {label}")
+        else:
+            collector["bowl"].add(f"✨ {label}")
+
+
+def _make_trait_hook(striker_traits, bowler_traits, ctx, collector=None):
+    """Return a one-arg weight hook (raw_weights -> raw_weights) bound to this
+    delivery's traits + context, or None when neither side has any trait."""
+    if not striker_traits and not bowler_traits:
+        return None
+    return lambda raw_weights: _apply_trait_weights(
+        raw_weights, striker_traits, bowler_traits, ctx, collector)
+
+
+# ════════════════════════════════════════════════════════════════════
 # Score / chase helpers
 # ════════════════════════════════════════════════════════════════════
 
@@ -431,6 +512,9 @@ def simulate_over(state):
     deliveries = 0
     chased = bool(target) and state["total_runs"] >= target
     cmt_start = len(state.get("commentary_log", []))
+    # Traits that fire this over (populated by the per-ball trait hook). Stays
+    # empty for Challenge League players, who carry no traits.
+    over_traits = {"bat": set(), "bowl": set()}
 
     while balls_this_over < 6 and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
@@ -500,6 +584,14 @@ def simulate_over(state):
                         pressure_effects[key] = value
 
             pitch_wear = min(1.0, balls_bowled(state) / max(1, overs_total * 6))
+            # /letsplay traits: build a per-ball weight hook from the striker's
+            # and bowler's active traits (None for Challenge League players, who
+            # carry no traits — so the engine call is unchanged for /cipl).
+            trait_hook = _make_trait_hook(
+                striker.get("traits"), bowler.get("traits"),
+                {"over": state["current_over"], "total_overs": overs_total,
+                 "rrr": required_rr, "bat_balls_faced": bs["balls"]},
+                collector=over_traits)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=over_idx, batter_runs=bs["runs"],
@@ -508,7 +600,8 @@ def simulate_over(state):
                 game_state=game_state, pitch_wear=pitch_wear,
                 batting_position=state["striker_idx"] + 1,
                 format_config=engine_fmt,
-                batting_approach=bat_app, bowling_approach=bowl_app))
+                batting_approach=bat_app, bowling_approach=bowl_app,
+                weight_hook=trait_hook))
 
         otype = oc.get("type")
         runs = oc.get("runs", 0)
@@ -712,6 +805,8 @@ def simulate_over(state):
         "over_events": over_events,
         "momentum_shift": momentum_after - momentum_before,
         "bowler_figures": _bowler_figures(bws),
+        "traits_activated": {"bat": sorted(over_traits["bat"]),
+                             "bowl": sorted(over_traits["bowl"])},
     }
 
     # Advance the over pointer if the over completed and play continues

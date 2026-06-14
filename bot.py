@@ -289,6 +289,7 @@ BOT_MENU_COMMANDS = (
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
     ("rcl", "Resume a stuck Challenge League (/cipl) match"),
+    ("letsplay", "Challenge a user with your own roster (20 overs)"),
     ("botstatus", "Bot ping, uptime & status"),
     ("lastmatch", "View your last match"),
     ("recentmatches", "View your recent matches"),
@@ -500,6 +501,7 @@ async def start_handler(update, context):
         "/purse /p - Check balance\n"
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
+        "/letsplay /lp @user - Reply or tag to play 20 overs with your own roster\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -915,6 +917,19 @@ def main():
         app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
         # /rcl — resume a stuck Challenge League match from where it left off
         app.add_handler(CommandHandler(["rcl", "resumecl"], rcl_handler))
+        # /letsplay — friendly head-to-head played with each user's own roster.
+        # Reuses the Challenge League over-by-over engine; traits are active.
+        from handlers.letsplay import (
+            letsplay_handler, letsplay_invite_callback, letsplay_pitch_callback,
+            letsplay_confirmxi_callback, letsplay_coin_callback,
+            letsplay_toss_callback,
+        )
+        app.add_handler(CommandHandler(["letsplay", "lp"], letsplay_handler))
+        app.add_handler(CallbackQueryHandler(letsplay_invite_callback, pattern=r"^lp_(accept|deny)_"))
+        app.add_handler(CallbackQueryHandler(letsplay_pitch_callback, pattern=r"^lp_pitch_"))
+        app.add_handler(CallbackQueryHandler(letsplay_confirmxi_callback, pattern=r"^lp_confirmxi_"))
+        app.add_handler(CallbackQueryHandler(letsplay_coin_callback, pattern=r"^lp_coin_"))
+        app.add_handler(CallbackQueryHandler(letsplay_toss_callback, pattern=r"^lp_toss_"))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))
