@@ -916,41 +916,6 @@ function renderGameplayScreen() {
   renderSquadsPanel();
 }
 
-// Render inline match status bar inside the controls sheet header
-function renderInlineMatchStatusBar() {
-  const container = document.getElementById('controls-match-status-bar');
-  if (!container) return;
-  container.innerHTML = '';
-
-  const striker = matchState.striker;
-  const nonStriker = matchState.nonStriker;
-  const bowler = matchState.bowler;
-
-  if (striker) {
-    const getBatRating = (p) => p.batting_ovr || p.batting_rating || p.rating || p.ovr || 0;
-    const badge = document.createElement('div');
-    badge.className = 'status-badge-inline highlight';
-    badge.innerHTML = `<span>🏏 Striker:</span> <strong>${striker.name} (${getBatRating(striker)})</strong>`;
-    container.appendChild(badge);
-  }
-
-  if (nonStriker) {
-    const getBatRating = (p) => p.batting_ovr || p.batting_rating || p.rating || p.ovr || 0;
-    const badge = document.createElement('div');
-    badge.className = 'status-badge-inline';
-    badge.innerHTML = `<span>Non-Striker:</span> <strong>${nonStriker.name} (${getBatRating(nonStriker)})</strong>`;
-    container.appendChild(badge);
-  }
-
-  if (bowler) {
-    const getBowlRating = (p) => p.bowling_ovr || p.bowling_rating || p.rating || p.ovr || 0;
-    const badge = document.createElement('div');
-    badge.className = 'status-badge-inline confirmed';
-    badge.innerHTML = `<span>🎳 Bowler:</span> <strong>${bowler.name} (${getBowlRating(bowler)})</strong>`;
-    container.appendChild(badge);
-  }
-}
-
 // 3. Render Interactive Controls
 function renderControlsSection() {
   const activeBlock = document.getElementById('controls-sheet');
@@ -978,9 +943,6 @@ function renderControlsSection() {
   };
 
   renderAutoplayStatusMessage();
-
-  // Render the inline status badges
-  renderInlineMatchStatusBar();
 
   // Spectator role
   if (matchState.myRole === 'spectator') {
@@ -1017,7 +979,7 @@ function renderControlsSection() {
     wasMyTurn = false;
     waitingBlock.classList.toggle('hidden', autoplayActive);
     promptText.innerText = autoplayActive ? "🏏 BATTING AUTOPLAY" : "🏏 GET READY TO PLAY";
-    promptSubtitle.innerText = autoplayActive ? "Your team is playing in Autoplay mode" : "Bowler is running in…";
+    promptSubtitle.innerText = autoplayActive ? "Autoplay on" : "Bowler running in…";
     hideActionSections();
     resetAutoplayQuickCards();
     incomingCard.classList.add('hidden');
@@ -1088,7 +1050,7 @@ function renderControlsSection() {
 
   if (autoplayActive && matchState.turnState === 'bowling_delivery') {
     promptText.innerText = "🎳 BOWLING AUTOPLAY";
-    promptSubtitle.innerText = "Your team is playing in Autoplay mode";
+    promptSubtitle.innerText = "Autoplay on";
     incomingCard.classList.add('hidden');
     renderAutoplayQuickCard('bowling');
     return;
@@ -1096,7 +1058,7 @@ function renderControlsSection() {
 
   if (autoplayActive && matchState.turnState === 'batting_shot') {
     promptText.innerText = "🏏 BATTING AUTOPLAY";
-    promptSubtitle.innerText = "Your team is playing in Autoplay mode";
+    promptSubtitle.innerText = "Autoplay on";
     incomingCard.classList.add('hidden');
     renderAutoplayQuickCard('batting');
     return;
@@ -1106,14 +1068,15 @@ function renderControlsSection() {
     promptText.innerText = "🎳 BOWLER CONTROLS";
     promptSubtitle.innerText = matchState.deliveryOptions?.is_spinner
       ? "Tap a spin delivery"
-      : "Select a delivery, then choose its length";
+      : "Pick a delivery & length";
     document.getElementById('bowling-controls').classList.remove('hidden');
     document.getElementById('incoming-delivery-container').classList.add('hidden');
     renderBowlerVariations();
   } 
   else if (matchState.turnState === 'batting_shot') {
     promptText.innerText = "🏏 CHOOSE YOUR SHOT";
-    
+    promptSubtitle.innerText = "Pick your shot";
+
     if (matchState.currentDelivery) {
       const delName = String(matchState.currentDelivery).replace(/_/g, ' ').toUpperCase();
       const speedName = matchState.currentSpeed ? String(matchState.currentSpeed).toUpperCase() : 'NORMAL';
@@ -1122,11 +1085,11 @@ function renderControlsSection() {
         : '';
       const displayText = `${speedName} ${delName}${speedKmh}`;
 
-      promptSubtitle.innerHTML = `<span class="glow-text" style="color:var(--warning-accent); font-weight:800; font-size:12px; letter-spacing:0.5px;">INCOMING: ${displayText}</span>`;
+      // Show the incoming delivery once — in its dedicated card only, not also
+      // duplicated in the subtitle.
       incomingCard.classList.remove('hidden');
       document.getElementById('incoming-delivery-val').innerText = displayText;
     } else {
-      promptSubtitle.innerText = "Pick the best shot for this ball";
       incomingCard.classList.add('hidden');
     }
     document.getElementById('batting-controls').classList.remove('hidden');
