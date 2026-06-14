@@ -96,7 +96,20 @@ def _bowl_label(p, s):
 
 ACTIVE_MATCH_STATUSES = (
     "pending", "accepted", "toss", "selecting", "playing", "active",
+    # "in_progress" is the live status used by the /vsbot ball-by-ball flow
+    # (handlers/vsbot.py). Without it here, a running /vsbot match would be
+    # invisible to the shared per-chat / per-user guards, letting a player or
+    # chat start a second game while a vsbot match is live.
+    "in_progress",
 )
+
+# Statuses that mean a match is actually *live* (the ball-by-ball / Mini App
+# game has started), as opposed to a still-forming pre-match lobby. Unlike
+# ACTIVE_MATCH_STATUSES this deliberately excludes "pending"/"toss"/etc. so the
+# stricter /wpm-style guards below never treat an abandoned pre-match lobby as
+# busy — while still catching every live game across modes (incl. /vsbot's
+# "in_progress").
+LIVE_MATCH_STATUSES = ("playing", "active", "in_progress")
 
 
 def _expire_stale_pending_matches(session):
@@ -154,7 +167,7 @@ def _active_cric_match_in_chat(session, chat_id):
         return None
     return (session.query(Match)
             .filter(Match.chat_id == chat_id,
-                    Match.status.in_(("playing", "active")))
+                    Match.status.in_(LIVE_MATCH_STATUSES))
             .order_by(Match.id.desc())
             .first())
 
@@ -163,7 +176,7 @@ def _active_cric_match_for_user(session, user_id):
     """Return a launched /wpm-style Mini App match involving ``user_id``."""
     return (session.query(Match)
             .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
-                    Match.status.in_(("playing", "active")))
+                    Match.status.in_(LIVE_MATCH_STATUSES))
             .order_by(Match.id.desc())
             .first())
 
@@ -1697,8 +1710,9 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _u = _session.query(User).filter(User.telegram_id == tg.id).first()
             if _u:
                 _m = (_session.query(Match)
-                      .filter(Match.status == "playing",
+                      .filter(Match.status.in_(("playing", "in_progress")),
                               or_(Match.user1_id == _u.id, Match.user2_id == _u.id))
+                      .order_by(Match.id.desc())
                       .first())
                 if _m:
                     mid = _m.id

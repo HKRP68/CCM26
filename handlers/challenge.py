@@ -18,9 +18,11 @@ from handlers.match import (
     _active_cric_match_for_user,
     _active_cric_match_in_chat,
     _active_match_in_chat,
+    _active_match_for_user,
     _chat_busy_message,
     _cric_lobby_for_user,
     _mention,
+    _user_busy_message,
     _user_label,
 )
 
@@ -772,6 +774,28 @@ def _local_static_path(image_url):
 
 
 async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None):
+    # One game per chat / one match per player (any game mode). Block early so a
+    # Challenge League draft can't start on top of a live match in this chat or
+    # while either player is already busy elsewhere.
+    cid = update.effective_chat.id
+    if session is not None:
+        chat_busy = _active_match_in_chat(session, cid) or _active_cric_match_in_chat(session, cid)
+        if chat_busy:
+            await update.message.reply_text(_chat_busy_message(chat_busy), parse_mode="HTML")
+            return
+        host_busy = _active_match_for_user(session, challenger.id)
+        if host_busy:
+            await update.message.reply_text(_user_busy_message(host_busy), parse_mode="HTML",
+                                            disable_web_page_preview=True)
+            return
+        guest_busy = _active_match_for_user(session, target.id)
+        if guest_busy:
+            await update.message.reply_text(
+                f"⚠️ {_user_label(target)} is already in an active match "
+                f"(#{guest_busy.id}). They must finish it first.",
+                parse_mode="HTML", disable_web_page_preview=True)
+            return
+
     draft_id = random.randint(100000, 999999)
     while context.bot_data.get(_challenge_team_draft_key(draft_id)):
         draft_id = random.randint(100000, 999999)

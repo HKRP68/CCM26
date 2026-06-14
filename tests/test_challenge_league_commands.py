@@ -56,9 +56,11 @@ def _load_challenge_with_stubs():
     handlers_match._active_cric_match_for_user = lambda *args, **kwargs: None
     handlers_match._active_cric_match_in_chat = lambda *args, **kwargs: None
     handlers_match._active_match_in_chat = lambda *args, **kwargs: None
+    handlers_match._active_match_for_user = lambda *args, **kwargs: None
     handlers_match._chat_busy_message = lambda *args, **kwargs: "busy"
     handlers_match._cric_lobby_for_user = lambda *args, **kwargs: None
     handlers_match._mention = lambda user, fallback_name=None: "@user"
+    handlers_match._user_busy_message = lambda *args, **kwargs: "busy"
     handlers_match._user_label = lambda user: "User"
     sys.modules["handlers.match"] = handlers_match
 
