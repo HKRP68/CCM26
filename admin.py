@@ -7467,10 +7467,17 @@ def post_miniapp_activity(user, action, **ctx):
         # the user row). This makes activities echo to the group even when the
         # current launch (e.g. the persistent menu button) carries no param.
         chat_id = _origin_group_chat_id()
+        src = "launch_param"
         if not chat_id:
             chat_id = getattr(user, "last_miniapp_chat_id", None)
+            src = "persisted"
         if not chat_id:
+            logger.info("miniapp activity '%s' for user %s: no origin group "
+                        "(no launch param + no persisted chat) — not echoed",
+                        action, getattr(user, "telegram_id", None))
             return
+        logger.info("miniapp activity '%s' for user %s → chat %s (%s)",
+                    action, getattr(user, "telegram_id", None), chat_id, src)
         import time as _time
         now = _time.time()
         tg_id = getattr(user, "telegram_id", None)
