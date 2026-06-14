@@ -66,6 +66,20 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cipl_bowler_",
     "cipl_bowlapp_",
     "cipl_batapp_",
+    # Super Over (tied /cipl, /c[league], /letsplay): the player-selection and
+    # ball-by-ball prompts are shared between the two captains — the bowling side
+    # picks delivery/length while the batting side picks the shot, all on the same
+    # message sent mid-handling of one captain's update. handlers/super_over.py
+    # validates every click by telegram_id, so (like the cipl_* prompts above)
+    # these must reach their handlers instead of being owner-locked to whoever
+    # triggered the send.
+    "so_bat_",
+    "so_batok_",
+    "so_bowl_",
+    "so_bowlok_",
+    "so_dv_",
+    "so_ln_",
+    "so_sh_",
     "wsp_join",
     "wsp_decision:",
     "wsp_cancel",

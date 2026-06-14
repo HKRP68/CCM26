@@ -37,7 +37,10 @@ def calculate_super_over_outcome(
     pitch: str,
     streak: dict,
     over_number: int,
-    batter_runs: int
+    batter_runs: int,
+    boundary_boost: float = 1.0,
+    last_ball: bool = False,
+    edge: float = 1.0,
 ) -> dict:
     """
     Simulates one delivery in a Super Over. Uses SUPER_OVER_SCORING_MATRIX
@@ -77,6 +80,13 @@ def calculate_super_over_outcome(
                            For a Super Over, this will typically be 0.
         batter_runs (int): total runs scored by the batter so far in the match
                            (used only if additional context is required).
+        boundary_boost (float): multiplier on Four/Six weights (default 1.0 =
+                           unchanged). >1 makes boundaries more frequent.
+        last_ball (bool): when True, adds extra last-ball drama — boundaries
+                           (×1.6) and wickets (×1.3) are both more likely.
+        edge (float): batting-side edge (default 1.0 = none). >1 lifts the
+                           batter's scoring (singles/twos/fours/sixes) and makes
+                           a dismissal correspondingly less likely.
 
     Returns:
         dict with keys:
@@ -109,13 +119,20 @@ def calculate_super_over_outcome(
             pitch_frac = get_pitch_run_multiplier(pitch)
             blended_frac = 0.4 * skill_frac + 0.6 * pitch_frac
             weight = base_prob * blended_frac
+            # Batting-side edge nudges the strike-rotating singles/twos up (Dot
+            # is left alone so the edge can't make scoring rarer).
+            if outcome != "Dot":
+                weight *= edge
 
         elif outcome in ("Four", "Six"):
-            # Boundary outcomes: same blending + 1.2× super-over excitement
+            # Boundary outcomes: same blending + 1.2× super-over excitement, then
+            # an explicit boundary boost / batting edge, and extra last-ball drama.
             skill_frac = batting / (batting + bowling) if (batting + bowling) > 0 else 0.5
             pitch_frac = get_pitch_run_multiplier(pitch)
             blended_frac = 0.4 * skill_frac + 0.6 * pitch_frac
-            weight = base_prob * blended_frac * 1.2
+            weight = base_prob * blended_frac * 1.2 * boundary_boost * edge
+            if last_ball:
+                weight *= 1.6   # last-ball drama — go big or go home
 
             # If batter has hit ≥3 boundaries already, diminish chance by 10%
             if streak.get("boundaries", 0) >= 3:
@@ -127,6 +144,11 @@ def calculate_super_over_outcome(
             pitch_frac = get_pitch_wicket_multiplier(pitch, bowling_type)
             blended_frac = 0.4 * skill_frac + 0.6 * pitch_frac
             weight = base_prob * blended_frac * 1.3
+            # Batting edge makes the favoured side a little harder to dismiss.
+            if edge:
+                weight /= edge
+            if last_ball:
+                weight *= 1.3   # last-ball drama cuts both ways
 
             # If batter has hit ≥2 boundaries, boost wicket chance by 1.4×
             if streak.get("boundaries", 0) >= 2:
