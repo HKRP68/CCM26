@@ -1457,22 +1457,15 @@ function renderBowlerVariations() {
 }
 
 // Render batting shot event listeners
-// Same shot vocabulary as Telegram /playmatch (services.bowling_service).
-// Same shot vocabulary + icons as services.bowling_service (AVAILABLE_SHOTS /
-// SHOT_ICONS). Extended with the UnderCover /cric repertoire.
+// Same shot vocabulary + icons as services.bowling_service
+// (AVAILABLE_SHOTS / SHOT_ICONS). Keep this list in sync.
 const SHOT_ICON_MAP = {
-  'Drive': '☄️', 'Cut': '✂️', 'Pull': '🌪️', 'Leg Glance': '🎯',
-  'Flick': '🪄', 'Sweep': '🧹', 'Switch Hit': '🔄', 'Slog': '💣',
-  'Loft': '🚀', 'Defend': '🛡️', 'Leave': '🚫',
-  'On Drive': '🏏', 'Off Drive': '🎯', 'Hook': '🪝', 'Square Cut': '🔪',
-  'Late Cut': '🌙', 'Reverse Sweep': '🔁', 'Slog Sweep': '🧨',
-  'Glance': '↗️', 'Paddle': '🏓', 'Upper Cut': '⬆️',
+  'Defend': '🛡️', 'Drive': '☄️', 'Cut': '✂️', 'Pull': '🌪️',
+  'Flick': '🪄', 'Sweep': '🧹', 'Loft': '🚀', 'Slog': '💣',
 };
 const BATTING_SHOTS = [
-  'Drive', 'Cut', 'Pull', 'Leg Glance', 'Flick', 'Sweep',
-  'Switch Hit', 'Slog', 'Loft', 'Defend', 'Leave',
-  'On Drive', 'Off Drive', 'Hook', 'Square Cut', 'Late Cut',
-  'Reverse Sweep', 'Slog Sweep', 'Glance', 'Paddle', 'Upper Cut',
+  'Defend', 'Drive', 'Cut', 'Pull',
+  'Flick', 'Sweep', 'Loft', 'Slog',
 ].map(shot => ({ shot, label: shot, icon: SHOT_ICON_MAP[shot] || '🏏' }));
 
 async function submitShot(shot) {

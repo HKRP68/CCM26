@@ -47,20 +47,16 @@ STYLE_MAP = {
     "Slow left-arm orthodox": "Off Spinner",
 }
 
-AVAILABLE_SHOTS = ["Drive", "Cut", "Pull", "Leg Glance", "Flick", "Sweep",
-                   "Switch Hit", "Slog", "Loft", "Defend", "Leave",
-                   # Extended shot repertoire (UnderCover /cric parity)
-                   "On Drive", "Off Drive", "Hook", "Square Cut", "Late Cut",
-                   "Reverse Sweep", "Slog Sweep", "Glance", "Paddle", "Upper Cut"]
+# Core batting shots — one per cricketing intent (block / front-foot /
+# back-foot off / back-foot leg / leg-side rotate / vs spin / aerial / max).
+# Kept intentionally small so the shot grid stays uncluttered.
+AVAILABLE_SHOTS = ["Defend", "Drive", "Cut", "Pull",
+                   "Flick", "Sweep", "Loft", "Slog"]
 
 # Emoji icon per shot for the Mini App batting grid.
 SHOT_ICONS = {
-    "Drive": "☄️", "Cut": "✂️", "Pull": "🌪️", "Leg Glance": "🎯",
-    "Flick": "🪄", "Sweep": "🧹", "Switch Hit": "🔄", "Slog": "💣",
-    "Loft": "🚀", "Defend": "🛡️", "Leave": "🚫",
-    "On Drive": "🏏", "Off Drive": "🎯", "Hook": "🪝", "Square Cut": "🔪",
-    "Late Cut": "🌙", "Reverse Sweep": "🔁", "Slog Sweep": "🧨",
-    "Glance": "↗️", "Paddle": "🏓", "Upper Cut": "⬆️",
+    "Defend": "🛡️", "Drive": "☄️", "Cut": "✂️", "Pull": "🌪️",
+    "Flick": "🪄", "Sweep": "🧹", "Loft": "🚀", "Slog": "💣",
 }
 
 

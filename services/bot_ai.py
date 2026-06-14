@@ -107,16 +107,16 @@ def pick_bot_delivery(bowler, over, total_overs, difficulty="Medium"):
 # Phase-weighted shot preferences
 BATTING_PHASE_PREFS = {
     "Powerplay": {  # overs 1-6 — boundary hunting
-        "shots": ["Drive", "Cut", "Pull", "Flick", "Slog", "Loft", "Leg Glance"],
-        "weights": [4, 3, 3, 2, 2, 2, 1],
+        "shots": ["Drive", "Cut", "Pull", "Flick", "Slog", "Loft"],
+        "weights": [4, 3, 3, 2, 2, 2],
     },
     "Middle": {     # overs 7-15 — anchor + rotate
-        "shots": ["Leg Glance", "Flick", "Drive", "Cut", "Sweep", "Pull"],
-        "weights": [4, 4, 3, 2, 2, 1],
+        "shots": ["Flick", "Drive", "Cut", "Sweep", "Pull"],
+        "weights": [5, 3, 2, 2, 1],
     },
     "Death": {      # overs 16-20 — go big or go home
-        "shots": ["Slog", "Loft", "Pull", "Switch Hit", "Drive"],
-        "weights": [5, 4, 2, 2, 1],
+        "shots": ["Slog", "Loft", "Pull", "Drive"],
+        "weights": [5, 4, 2, 1],
     },
 }
 
@@ -154,8 +154,8 @@ def pick_bot_shot(striker, bowler, over, total_overs,
     elif current_wickets >= 7 and phase != "Death":
         # Lost lots of wickets — anchor more, occasional defend
         prefs = {
-            "shots": ["Leg Glance", "Flick", "Drive", "Defend", "Cut"],
-            "weights":  [3, 3, 3, 2, 1],
+            "shots": ["Flick", "Drive", "Defend", "Cut"],
+            "weights":  [3, 3, 2, 1],
         }
     else:
         prefs = BATTING_PHASE_PREFS[phase]
@@ -165,7 +165,7 @@ def pick_bot_shot(striker, bowler, over, total_overs,
 
     # Easy difficulty: less Slog (lower wicket risk)
     if difficulty == "Easy":
-        weights = [w * 0.5 if s in ("Slog", "Switch Hit") else w
+        weights = [w * 0.5 if s in ("Slog",) else w
                    for s, w in zip(shots, weights)]
 
     # Legendary: more aggressive
