@@ -264,6 +264,66 @@ def test_owner_gating_blocks_wrong_user():
     assert so["sel_batters"] == []  # rejected — wrong owner
 
 
+def test_dismissed_batter_cannot_be_reselected():
+    random.seed(3)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    so = _get(ctx, mid)
+
+    bat_uid = so["bat_uid"]                       # GUEST
+    bat_tg = so["teams"][bat_uid]["tg"]
+    # Pretend this batter was dismissed in an earlier Super Over of this tie.
+    gone = int(so["teams"][bat_uid]["xi"][0]["roster_id"])
+    so["dismissed"][bat_uid].add(gone)
+
+    # A stale button tap for the dismissed player must be rejected.
+    asyncio.run(so_bat_callback(
+        _upd(FakeQuery(f"so_bat_{mid}_{gone}", bat_tg)), ctx))
+    assert gone not in so["sel_batters"]
+
+    # An eligible player is still accepted.
+    ok_rid = int(so["teams"][bat_uid]["xi"][1]["roster_id"])
+    asyncio.run(so_bat_callback(
+        _upd(FakeQuery(f"so_bat_{mid}_{ok_rid}", bat_tg)), ctx))
+    assert ok_rid in so["sel_batters"]
+
+
+def test_double_tap_shot_resolves_one_ball():
+    random.seed(5)
+    _patch_finalize(so_mod)
+    # Force every ball to a dot so the innings can't end on the first delivery.
+    orig = so_mod.calculate_super_over_outcome
+    so_mod.calculate_super_over_outcome = lambda *a, **k: {
+        "type": "run", "runs": 0, "description": "dot",
+        "wicket_type": None, "is_extra": False, "batter_out": False}
+    try:
+        ctx = FakeContext()
+        state = _tied_state()
+        mid = state["match_id"]
+        asyncio.run(start_super_over(ctx, mid, state))
+        asyncio.run(_do_selection(ctx, mid))   # innings 1 starts, stage DELIV
+        so = _get(ctx, mid)
+        bat_tg = so["teams"][so["bat_uid"]]["tg"]
+        bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+
+        # Advance to the SHOT stage.
+        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
+        if so["inn"]["stage"] == "LEN":
+            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
+        assert so["inn"]["stage"] == "SHOT"
+
+        before = so["inn"]["deliveries"]
+        # Two taps on the same shot button — only one must resolve.
+        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
+        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
+        assert so["inn"]["deliveries"] == before + 1
+    finally:
+        so_mod.calculate_super_over_outcome = orig
+
+
 def test_many_seeds_always_terminate_with_a_winner():
     for seed in range(15):
         random.seed(seed)

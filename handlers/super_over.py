@@ -146,11 +146,6 @@ async def start_super_over(context, mid, state) -> bool:
         }
         context.bot_data[_so_key(mid)] = so
 
-        # Persist the MAIN match's player stats now (the normal completion path is
-        # skipped on a tie) and record the level innings totals; keep the Match
-        # row ``active`` until the Super Over decides a winner.
-        _persist_main_stats(mid, state)
-
         m = main
         await context.bot.send_message(
             so["chat_id"],
@@ -164,10 +159,23 @@ async def start_super_over(context, mid, state) -> bool:
 
         _begin_super_over(so)
         await _send_selection(context, mid)
-        return True
     except Exception:
         logger.exception("start_super_over failed for match %s", mid)
+        # Roll back the partial Super Over so the caller's fallback (the normal
+        # tied-result completion) runs cleanly — including its own stat persist.
+        context.bot_data.pop(_so_key(mid), None)
         return False
+
+    # Kickoff succeeded — the Super Over is committed and live. Only now persist
+    # the MAIN match's player stats (the normal completion path is skipped on a
+    # tie). This MUST run after kickoff so a kickoff failure → fallback path is
+    # the sole place that persists; a failure HERE must not return False (that
+    # would let the fallback double-count career stats for the same match).
+    try:
+        _persist_main_stats(mid, state)
+    except Exception:
+        logger.exception("Super Over: deferred main-stat persistence failed (%s)", mid)
+    return True
 
 
 def _persist_main_stats(mid, state):
@@ -340,12 +348,20 @@ async def so_bat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sel = so["sel_batters"]
     if rid in sel:
         sel.remove(rid)
-    elif len(sel) >= 3:
+        await q.answer()
+        await _refresh_selection(context, mid, q)
+        return
+    # Reject taps on stale buttons for players who aren't currently eligible
+    # (e.g. a batter dismissed in an earlier Super Over of this same tie).
+    eligible = {int(p["roster_id"]) for p in _eligible_batters(so, so["bat_uid"])}
+    if rid not in eligible:
+        await q.answer("That player can't bat in this Super Over.", show_alert=True)
+        return
+    if len(sel) >= 3:
         await q.answer("You already picked 3 — tap a selected one to remove it.",
                        show_alert=True)
         return
-    else:
-        sel.append(rid)
+    sel.append(rid)
     await q.answer()
     await _refresh_selection(context, mid, q)
 
@@ -626,6 +642,11 @@ async def so_shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not (0 <= idx < len(AVAILABLE_SHOTS)):
         await q.answer("Invalid.", show_alert=True)
         return
+    # Lock this delivery synchronously (before any await) so a double-tap or a
+    # second concurrent shot callback — the bot runs updates concurrently — can't
+    # pass the SHOT check and resolve the same ball twice. _resolve_ball advances
+    # the stage to DELIV (next ball) or ends the innings.
+    inn["stage"] = "RESOLVING"
     await q.answer()
     shot = AVAILABLE_SHOTS[idx]
     await _resolve_ball(context, mid, shot)
@@ -866,6 +887,16 @@ async def _finalize(context, mid, winner_uid, loser_uid):
             prize = {"wc": w_coins, "wg": w_gems, "lc": l_coins, "lg": l_gems}
         except Exception:
             logger.exception("Super Over reward award failed (%s)", mid)
+        # Snapshot the final scorecard / Arena board while the live MatchState
+        # still exists (cleanup_state below removes it) so the Super-Over-decided
+        # match stays viewable in the Mini App — same as the normal completion.
+        try:
+            from services.match_webapp_service import save_final_scorecard
+            save_final_scorecard(
+                session, mid,
+                result_text=f"{win['name']} won the Super Over")
+        except Exception:
+            logger.exception("Super Over final scorecard snapshot failed (%s)", mid)
         session.commit()
     except Exception:
         session.rollback()

@@ -660,6 +660,16 @@ def is_cipl_state(state):
     return bool(state) and state.get("mode") == "cipl_approach"
 
 
+def _super_over_active(context, mid):
+    """True while a Super Over is running for this match.
+
+    The main /cipl / /letsplay over-by-over flow is suspended for the duration:
+    its callbacks and /rcl must refuse to act so they can't run another
+    main-match over and replace the tie with a wrong result.
+    """
+    return bool(context.bot_data.get(f"so_{mid}"))
+
+
 async def cipl_resume(context, mid, state=None):
     """Re-render the current Challenge League prompt from saved state.
 
@@ -678,6 +688,11 @@ async def cipl_resume(context, mid, state=None):
     async with get_match_lock(mid):
         state = _gs(context, mid)
         if not is_cipl_state(state):
+            return False
+        # While a Super Over is live the main over-by-over flow is suspended —
+        # never re-prompt it (that could run another main-match over after the
+        # regulation overs and overwrite the tie with a wrong result).
+        if _super_over_active(context, mid):
             return False
         action = get_next_action(context, mid)
         if action == A_COMPLETED:
@@ -712,6 +727,12 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ No active Challenge League or Lets Play match in this chat to "
             "resume.\nStart one with /cipl or /letsplay.")
+        return
+
+    if _super_over_active(context, found_mid):
+        await update.message.reply_text(
+            "🔥 A Super Over is in progress — the main match has already finished. "
+            "Play it out from the Super Over buttons.")
         return
 
     # Label the resume after whichever mode this match is (Lets Play vs cipl).
@@ -794,6 +815,10 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if not state:
             await q.answer("Match not found.", show_alert=True)
             return
+        if _super_over_active(context, mid):
+            await q.answer("🔥 Super Over in progress — the main match is over.",
+                           show_alert=True)
+            return
         if q.from_user.id != state["bowl_user_tg"]:
             await q.answer("Only the bowling captain picks the bowler.", show_alert=True)
             return
@@ -824,6 +849,10 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if not state:
             await q.answer("Match not found.", show_alert=True)
             return
+        if _super_over_active(context, mid):
+            await q.answer("🔥 Super Over in progress — the main match is over.",
+                           show_alert=True)
+            return
         if q.from_user.id != state["bowl_user_tg"]:
             await q.answer("Only the bowling captain picks this.", show_alert=True)
             return
@@ -852,6 +881,10 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         state = _gs(context, mid)
         if not state:
             await q.answer("Match not found.", show_alert=True)
+            return
+        if _super_over_active(context, mid):
+            await q.answer("🔥 Super Over in progress — the main match is over.",
+                           show_alert=True)
             return
         if q.from_user.id != state["bat_user_tg"]:
             await q.answer("Only the batting captain picks this.", show_alert=True)
