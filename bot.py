@@ -921,19 +921,13 @@ def main():
         # Reuses the Challenge League over-by-over engine; traits are active.
         from handlers.letsplay import (
             letsplay_handler, letsplay_invite_callback, letsplay_pitch_callback,
-            letsplay_selectxi_callback, letsplay_autofill_callback,
-            letsplay_xipick_callback, letsplay_reselect_callback,
-            letsplay_confirmxi_callback, letsplay_coin_callback,
+            letsplay_starttoss_callback, letsplay_coin_callback,
             letsplay_toss_callback,
         )
         app.add_handler(CommandHandler(["letsplay", "lp"], letsplay_handler))
         app.add_handler(CallbackQueryHandler(letsplay_invite_callback, pattern=r"^lp_(accept|deny)_"))
         app.add_handler(CallbackQueryHandler(letsplay_pitch_callback, pattern=r"^lp_pitch_"))
-        app.add_handler(CallbackQueryHandler(letsplay_selectxi_callback, pattern=r"^lp_selectxi_"))
-        app.add_handler(CallbackQueryHandler(letsplay_autofill_callback, pattern=r"^lp_autofill_"))
-        app.add_handler(CallbackQueryHandler(letsplay_xipick_callback, pattern=r"^lp_xipick_"))
-        app.add_handler(CallbackQueryHandler(letsplay_reselect_callback, pattern=r"^lp_reselect_"))
-        app.add_handler(CallbackQueryHandler(letsplay_confirmxi_callback, pattern=r"^lp_confirmxi_"))
+        app.add_handler(CallbackQueryHandler(letsplay_starttoss_callback, pattern=r"^lp_starttoss_"))
         app.add_handler(CallbackQueryHandler(letsplay_coin_callback, pattern=r"^lp_coin_"))
         app.add_handler(CallbackQueryHandler(letsplay_toss_callback, pattern=r"^lp_toss_"))
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
