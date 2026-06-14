@@ -6843,7 +6843,7 @@ function deliveryBannerHtml(s) {
   </div>`;
 }
 
-const LM_SHOTS = ["Drive","Cut","Pull","Leg Glance","Flick","Sweep","Switch Hit","Slog","Loft","Defend","Leave"];
+const LM_SHOTS = ["Defend","Drive","Cut","Pull","Flick","Sweep","Loft","Slog"];
 function shotGridHtml() {
   const btns = LM_SHOTS.map((sh, i) =>
     `<button class="lm-shot-btn" onclick="lmPlayShot(${i})">${escapeHtml(sh)}</button>`).join('');
