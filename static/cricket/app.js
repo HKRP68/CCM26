@@ -1432,11 +1432,17 @@ const BATTING_SHOTS = [
 ].map(shot => ({ shot, label: shot, icon: SHOT_ICON_MAP[shot] || '🏏' }));
 
 async function submitShot(shot) {
+  // Guard against double-taps: a second tap before the first shot resolved used
+  // to fire a second /api/match/action request, which could re-resolve the ball
+  // and flip the displayed outcome (e.g. 4 → 2). Ignore re-entry while a shot is
+  // already in flight, and disable the shot buttons for immediate feedback.
+  if (flowActionInFlight) return;
+  flowActionInFlight = true;
+  disableShotButtons();
   // Collapse the shot sheet immediately so the resolved outcome (and the event
   // box) is fully visible. The per-turn auto-expand re-opens it on the next ball.
   minimizeControlsSheet();
   showFlowStage('🏏 Shot played', `${shot} selected`, 'evt-runs');
-  flowActionInFlight = true;
   try {
     const res = await fetch('/api/match/action', {
       method: 'POST',
@@ -1455,6 +1461,15 @@ async function submitShot(shot) {
   } finally {
     flowActionInFlight = false;
   }
+}
+
+// Disable the batting shot buttons immediately after a shot is tapped so a
+// rapid second tap can't register before the sheet collapses / re-renders.
+// The next actionable turn re-renders the grid fresh via renderBattingShots.
+function disableShotButtons() {
+  const grid = document.querySelector('#batting-controls .button-grid');
+  if (!grid) return;
+  grid.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
 }
 
 // Minimize the bottom control sheet and flip its toggle chevron to "expand".
@@ -1500,13 +1515,17 @@ async function submitDelivery() {
     alert("Please select a delivery and length first!");
     return;
   }
+  // Guard against double-taps, same as submitShot — a second delivery request
+  // fired before the first resolved could re-resolve the ball and flip the
+  // outcome. Ignore re-entry while a delivery is already in flight.
+  if (flowActionInFlight) return;
+  flowActionInFlight = true;
 
   // Minimize sheet immediately and flash the delivery for tactile feedback —
   // the response below already carries the resolved outcome (vsbot turns
   // resolve synchronously on the server), so this must not gate anything.
   minimizeControlsSheet();
   showFlowStage('🎳 Bowler delivers', `${selectedDelivery} at ${selectedSpeed} pace`, 'evt-runs');
-  flowActionInFlight = true;
 
   try {
     const res = await fetch('/api/match/action', {
