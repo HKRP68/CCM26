@@ -1,0 +1,276 @@
+"""End-to-end test for the tied-match Super Over (handlers/super_over.py).
+
+Drives a full Super Over with fake Telegram objects: tie kickoff → player
+selection (owner-gated) → interactive ball-by-ball innings (delivery/length/shot
+picks) → result, including the tied-Super-Over replay loop. Asserts the special
+rules hold (≤6 legal balls, ≤2 wickets per innings, a winner is always reached).
+"""
+
+import asyncio
+import random
+from types import SimpleNamespace
+
+import handlers.super_over as so_mod
+from handlers.super_over import (
+    start_super_over, _get,
+    so_bat_callback, so_batok_callback, so_bowl_callback, so_bowlok_callback,
+    so_deliv_callback, so_len_callback, so_shot_callback,
+    _eligible_batters, _eligible_bowlers,
+)
+
+CHAT = -100123
+HOST_TG = 111      # batted 1st in main (bowls first in SO1)
+GUEST_TG = 222     # batted 2nd in main (bats first in SO1)
+HOST_UID = 1
+GUEST_UID = 2
+
+so_mod._BALL_PAUSE = 0  # no broadcast delay in tests
+
+
+# ── Fakes ────────────────────────────────────────────────────────────
+
+class FakeBot:
+    def __init__(self):
+        self._mid = 5000
+        self.messages = []
+
+    async def send_message(self, chat_id, text, parse_mode=None, reply_markup=None):
+        self._mid += 1
+        m = SimpleNamespace(message_id=self._mid, text=text,
+                            reply_markup=reply_markup, chat_id=chat_id)
+        self.messages.append(m)
+        return m
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None,
+                                parse_mode=None, reply_markup=None):
+        m = SimpleNamespace(message_id=message_id, text=text,
+                            reply_markup=reply_markup, chat_id=chat_id)
+        self.messages.append(m)
+        return m
+
+    async def delete_message(self, *a, **k):
+        pass
+
+
+class FakeContext:
+    def __init__(self):
+        self.bot = FakeBot()
+        self.bot_data = {}
+
+
+class FakeQuery:
+    def __init__(self, data, from_id):
+        self.data = data
+        self.from_user = SimpleNamespace(id=from_id)
+        self.message = SimpleNamespace(chat_id=CHAT)
+
+    async def answer(self, *a, **k):
+        pass
+
+    async def edit_message_text(self, text, parse_mode=None, reply_markup=None):
+        return SimpleNamespace(message_id=1, text=text, reply_markup=reply_markup)
+
+
+def _upd(q):
+    return SimpleNamespace(callback_query=q)
+
+
+# ── Fixtures: a tied cipl-style match state ───────────────────────────
+
+def _player(rid, name, bat, bowl, style="Fast", category="All-rounder"):
+    return {
+        "roster_id": rid, "player_id": rid, "name": name,
+        "rating": max(bat, bowl), "category": category,
+        "bat_rating": bat, "bowl_rating": bowl,
+        "bowl_style": style, "bowl_hand": "Right", "bat_hand": "Right",
+    }
+
+
+def _xi(prefix, base):
+    # 5 players each: enough for 3-batter / 1-bowler picks plus restrictions.
+    styles = ["Fast", "Off Spinner", "Medium Pacer", "Leg Spinner", "Fast"]
+    return [
+        _player(base + i, f"{prefix}{i}", 70 + i, 60 + i, styles[i])
+        for i in range(5)
+    ]
+
+
+def _tied_state():
+    host_xi = _xi("H", 100)    # host batted 1st (bowl side now)
+    guest_xi = _xi("G", 200)   # guest batted 2nd (bat side now)
+    return {
+        "match_id": 9001,
+        "chat_id": CHAT,
+        "overs": 20,
+        "pitch_type": "Hard",
+        "is_letsplay": False,
+        # post-innings-2 roles: bat side = team that batted 2nd
+        "bat_team_id": GUEST_UID, "bowl_team_id": HOST_UID,
+        "bat_user_tg": GUEST_TG, "bowl_user_tg": HOST_TG,
+        "bat_team_name": "Guest XI", "bowl_team_name": "Host XI",
+        "bat_team_code": "GUE", "bowl_team_code": "HOS",
+        "bat_team_emoji": "🟦", "bowl_team_emoji": "🟥",
+        "bat_xi": guest_xi, "bowl_xi": host_xi,
+        "inn1_bat_team": "Host XI",
+        "inn1_runs": 150, "inn1_wickets": 6,
+        "total_runs": 150, "total_wickets": 8,
+    }
+
+
+# ── Drivers ───────────────────────────────────────────────────────────
+
+async def _do_selection(ctx, mid):
+    """Both owners select their players for the current innings."""
+    so = _get(ctx, mid)
+    bat_uid, bowl_uid = so["bat_uid"], so["bowl_uid"]
+    bat_tg = so["teams"][bat_uid]["tg"]
+    bowl_tg = so["teams"][bowl_uid]["tg"]
+
+    batters = _eligible_batters(so, bat_uid)
+    need = min(3, len(batters))
+    for p in batters[:need]:
+        rid = int(p["roster_id"])
+        await so_bat_callback(_upd(FakeQuery(f"so_bat_{mid}_{rid}", bat_tg)), ctx)
+    await so_batok_callback(_upd(FakeQuery(f"so_batok_{mid}", bat_tg)), ctx)
+
+    bowler = _eligible_bowlers(so, bowl_uid)[0]
+    brid = int(bowler["roster_id"])
+    await so_bowl_callback(_upd(FakeQuery(f"so_bowl_{mid}_{brid}", bowl_tg)), ctx)
+    await so_bowlok_callback(_upd(FakeQuery(f"so_bowlok_{mid}", bowl_tg)), ctx)
+
+
+async def _bowl_one_ball(ctx, mid):
+    """Drive one delivery → (length) → shot, asserting the special rules."""
+    so = _get(ctx, mid)
+    inn = so["inn"]
+    bat_tg = so["teams"][so["bat_uid"]]["tg"]
+    bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+
+    assert inn["legal"] <= 6
+    assert inn["wickets"] <= 2
+
+    # Delivery (always)
+    await so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx)
+    so = _get(ctx, mid)
+    if not so or "inn" not in so:
+        return
+    if so["inn"]["stage"] == "LEN":
+        await so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx)
+    # Shot (resolves the ball)
+    await so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx)
+
+
+async def _play_match(ctx, mid):
+    guard = 0
+    while True:
+        guard += 1
+        assert guard < 4000, "Super Over did not terminate"
+        so = _get(ctx, mid)
+        if so is None:
+            break  # finalised + cleaned up
+        if not (so.get("bat_confirmed") and so.get("bowl_confirmed")):
+            await _do_selection(ctx, mid)
+            continue
+        if "inn" in so:
+            # rule invariants every ball
+            assert so["inn"]["legal"] <= 6
+            assert so["inn"]["wickets"] <= 2
+            await _bowl_one_ball(ctx, mid)
+
+
+# ── Tests ─────────────────────────────────────────────────────────────
+
+def _patch_finalize(monkeypatch_target):
+    """Replace DB-touching bits so the test runs without a database."""
+    captured = {}
+
+    def fake_persist(mid, state):
+        captured["persisted"] = True
+
+    async def fake_send(*a, **k):
+        return None
+
+    so_mod._persist_main_stats = fake_persist
+
+    # Patch the reward + Match-row work inside _finalize via a stub get_session.
+    class _Q:
+        def get(self, _):
+            return SimpleNamespace()
+
+    class _S:
+        def query(self, *a, **k):
+            return _Q()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    so_mod.get_session = lambda: _S()
+
+    # award_match_rewards_core + cleanup_state are imported lazily inside funcs;
+    # neutralise them through the modules they come from.
+    import services.match_rewards as mr
+    mr.award_match_rewards_core = lambda *a, **k: (0, 0, 0, 0)
+    import services.match_state_store as mss
+    mss.cleanup_state = lambda *a, **k: None
+    return captured
+
+
+def test_super_over_full_flow_decides_a_winner():
+    random.seed(7)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+
+    started = asyncio.run(start_super_over(ctx, mid, state))
+    assert started is True
+    so = _get(ctx, mid)
+    assert so is not None
+    # Team that batted 2nd in the main match bats first in the Super Over.
+    assert so["first_bat_uid"] == GUEST_UID
+    assert so["bat_uid"] == GUEST_UID and so["bowl_uid"] == HOST_UID
+
+    asyncio.run(_play_match(ctx, mid))
+
+    # On completion the Super Over state is cleaned up and a Match row finalised.
+    assert _get(ctx, mid) is None
+    # A winner/result was announced.
+    texts = "\n".join(m.text for m in ctx.bot.messages)
+    assert "SUPER OVER RESULT" in texts
+    assert "Match Winner" in texts
+    assert "MATCH RESULT" in texts  # final combined scorecard
+
+
+def test_owner_gating_blocks_wrong_user():
+    random.seed(1)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    so = _get(ctx, mid)
+
+    # The bowling owner (HOST) must not be able to pick the batting side's batters.
+    bat_uid = so["bat_uid"]
+    rid = int(so["teams"][bat_uid]["xi"][0]["roster_id"])
+    asyncio.run(so_bat_callback(
+        _upd(FakeQuery(f"so_bat_{mid}_{rid}", HOST_TG)), ctx))
+    assert so["sel_batters"] == []  # rejected — wrong owner
+
+
+def test_many_seeds_always_terminate_with_a_winner():
+    for seed in range(15):
+        random.seed(seed)
+        _patch_finalize(so_mod)
+        ctx = FakeContext()
+        state = _tied_state()
+        mid = state["match_id"]
+        assert asyncio.run(start_super_over(ctx, mid, state)) is True
+        asyncio.run(_play_match(ctx, mid))
+        assert _get(ctx, mid) is None, f"seed {seed} did not finish"

@@ -1090,6 +1090,17 @@ async def _complete_match(context, mid, state):
     _ss(context, mid, state)
 
     result = cipl_match.compute_result(state)
+    # A tied match triggers a Super Over (interactive, user-vs-user, ball by
+    # ball) for /cipl, /c[league] and /letsplay — they all reach here. The
+    # Match row stays 'active' until the Super Over decides a winner.
+    if result["tie"]:
+        try:
+            from handlers.super_over import start_super_over
+            if await start_super_over(context, mid, state):
+                return
+        except Exception:
+            logger.exception("Super Over kickoff failed for match %s — "
+                             "falling back to a tied result", mid)
     # Per-over Win/Loss prize handed out below (None on a tie / award failure).
     prize_info = None
     # Persist career stats + finalize Match row.

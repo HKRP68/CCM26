@@ -917,6 +917,20 @@ def main():
         app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
         # /rcl — resume a stuck Challenge League match from where it left off
         app.add_handler(CommandHandler(["rcl", "resumecl"], rcl_handler))
+        # Super Over (tied /cipl, /c[league] and /letsplay matches) — interactive
+        # user-vs-user, ball by ball; outcomes from the SimCricketX engine.
+        from handlers.super_over import (
+            so_bat_callback, so_batok_callback, so_bowl_callback,
+            so_bowlok_callback, so_deliv_callback, so_len_callback,
+            so_shot_callback,
+        )
+        app.add_handler(CallbackQueryHandler(so_batok_callback, pattern=r"^so_batok_"))
+        app.add_handler(CallbackQueryHandler(so_bat_callback, pattern=r"^so_bat_"))
+        app.add_handler(CallbackQueryHandler(so_bowlok_callback, pattern=r"^so_bowlok_"))
+        app.add_handler(CallbackQueryHandler(so_bowl_callback, pattern=r"^so_bowl_"))
+        app.add_handler(CallbackQueryHandler(so_deliv_callback, pattern=r"^so_dv_"))
+        app.add_handler(CallbackQueryHandler(so_len_callback, pattern=r"^so_ln_"))
+        app.add_handler(CallbackQueryHandler(so_shot_callback, pattern=r"^so_sh_"))
         # /letsplay — friendly head-to-head played with each user's own roster.
         # Reuses the Challenge League over-by-over engine; traits are active.
         from handlers.letsplay import (
