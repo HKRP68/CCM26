@@ -7743,11 +7743,19 @@ def _playmatch_spectate_markup(match_id, chat_id):
 def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
     """Queue one /wpm or /cm career stat card for the match's origin chat.
 
-    Card rendering hits the database and Pillow, so keep the entire build/send
-    flow out of the Mini App request path. This is especially noticeable at
-    match start, where two opener cards and one opening-bowler card are queued
-    together.
+    Disabled by request: the Mini App games (/wpm, /cm, /wpmbot) no longer post
+    per-player career stat cards into the Telegram chat — the same card is
+    already available inside the Mini App, so duplicating it in-chat is just
+    noise. Kept as an explicit no-op (rather than deleting every call site) so
+    the behaviour can be re-enabled in one place if it's ever wanted again.
+
+    Dropping these broadcasts also removes the Pillow card-rendering work (two
+    opener cards + one opening-bowler card) that ran at match start and competed
+    for the GIL with the first-ball request — which was making the first ball's
+    outcome slow to appear.
     """
+    return
+
     if not player or not owner_user_id:
         return
 
