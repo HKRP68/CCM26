@@ -3318,6 +3318,22 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Resume a stuck match — finds the live match for this chat and re-renders buttons."""
     cid = update.effective_chat.id
 
+    # A live Super Over (tied /cipl, /c[league] or /letsplay) is driven from a
+    # separate state, not the ms_* match state — re-render its prompt first.
+    try:
+        from handlers.super_over import find_super_over_in_chat, resume_super_over
+        so_mid = find_super_over_in_chat(context.bot_data, cid)
+    except Exception:
+        so_mid = None
+    if so_mid is not None:
+        await update.message.reply_text("🔄 <b>Resuming Super Over…</b>", parse_mode="HTML")
+        ok = await resume_super_over(context, so_mid)
+        if not ok:
+            await update.message.reply_text(
+                "⚠️ Couldn't re-show the Super Over right now. Please try again, "
+                "or use /endmatch to end the match (fine applies).")
+        return
+
     # Find any ms_* state with this chat_id
     found_mid = None
     for k, v in list(context.bot_data.items()):
