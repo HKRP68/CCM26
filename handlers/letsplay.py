@@ -582,7 +582,8 @@ def _show_xi_text(draft, host_pairs, guest_pairs):
         _format_batting_order(guest_pairs, f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)"),
         "",
         "━━━━━━━━━━━━━━━━━━━",
-        "🔒 Both XIs locked — tap <b>Start Toss</b> to flip the coin!",
+        f"🔒 Both XIs locked — {_m(draft['guest'])}, tap "
+        "<b>Start Toss</b> to flip the coin!",
     ]
     return "\n".join(parts)
 
@@ -596,9 +597,21 @@ async def _prompt_show_xi(context, draft):
     """
     invite_id = draft["invite_id"]
     session = get_session()
+    text = host_ids = guest_ids = bad = errs = None
     try:
         host_pairs, host_errs = _ordered_xi_for_side(session, draft["host"]["user_id"])
         guest_pairs, guest_errs = _ordered_xi_for_side(session, draft["guest"]["user_id"])
+        if host_pairs is None or guest_pairs is None:
+            bad = draft["host"] if host_pairs is None else draft["guest"]
+            errs = host_errs if host_pairs is None else guest_errs
+        else:
+            # Build the card and snapshot ids WHILE the session is open:
+            # commit()/close() below expires + detaches these ORM rows, so
+            # reading player.rating/name afterwards would raise
+            # DetachedInstanceError and leave the draft stuck until timeout.
+            host_ids = [int(e.id) for e, _p in host_pairs]
+            guest_ids = [int(e.id) for e, _p in guest_pairs]
+            text = _show_xi_text(draft, host_pairs, guest_pairs)
         session.commit()
     except Exception:
         logger.exception("letsplay: failed to build auto XIs")
@@ -611,9 +624,7 @@ async def _prompt_show_xi(context, draft):
     finally:
         session.close()
 
-    if host_pairs is None or guest_pairs is None:
-        bad = draft["host"] if host_pairs is None else draft["guest"]
-        errs = host_errs if host_pairs is None else guest_errs
+    if bad is not None:
         await context.bot.send_message(
             draft["chat_id"],
             f"❌ <b>{html.escape(bad['name'])}'s Playing XI is not valid:</b>\n"
@@ -627,20 +638,20 @@ async def _prompt_show_xi(context, draft):
 
     # Snapshot the exact XIs (in batting order) so a later /swap can't change
     # what actually launches.
-    draft["host_xi_roster_ids"] = [int(e.id) for e, _p in host_pairs]
-    draft["guest_xi_roster_ids"] = [int(e.id) for e, _p in guest_pairs]
+    draft["host_xi_roster_ids"] = host_ids
+    draft["guest_xi_roster_ids"] = guest_ids
 
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(
         "🪙 Start Toss", callback_data=f"lp_starttoss_{invite_id}")]])
     sent = await context.bot.send_message(
-        draft["chat_id"], _show_xi_text(draft, host_pairs, guest_pairs),
+        draft["chat_id"], text,
         parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     if sent and getattr(sent, "message_id", None):
         draft["showxi_msg_id"] = sent.message_id
 
 
 async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """lp_starttoss_{id} — either participant moves the match to the toss."""
+    """lp_starttoss_{id} — the GUEST starts the toss (guest calls it, like /cipl)."""
     q = update.callback_query
     try:
         _, _, invite_id = q.data.split("_")
@@ -652,8 +663,8 @@ async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFA
     if not draft or draft.get("status") != "showxi":
         await q.answer("This match is no longer waiting for the toss.", show_alert=True)
         return
-    if q.from_user.id not in (draft["host"]["tg_id"], draft["guest"]["tg_id"]):
-        await q.answer("Only the two players can start the toss.", show_alert=True)
+    if q.from_user.id != draft["guest"]["tg_id"]:
+        await q.answer("Only the guest starts the toss.", show_alert=True)
         return
     # Flip out of "showxi" synchronously (no await before this) so a racing
     # double-tap can't start two tosses.
