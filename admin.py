@@ -7265,11 +7265,17 @@ _CHAT_MEMBER_TTL = 300  # seconds
 
 
 def _user_in_chat(chat_id, user_tg_id):
-    """Return True if ``user_tg_id`` is a member of group ``chat_id``.
+    """Return True if ``user_tg_id`` may be echoed to group ``chat_id``.
 
-    Used to validate an UNSIGNED launch-origin hint before trusting it. Results
-    are cached briefly so repeated Mini App actions don't hammer getChatMember.
-    Best-effort — any error returns False (the activity simply isn't echoed).
+    Validates an UNSIGNED launch-origin hint before trusting it. Results are
+    cached briefly so repeated Mini App actions don't hammer getChatMember.
+
+    FAIL-OPEN: this only returns False when Telegram EXPLICITLY reports the user
+    is not in the chat (``left``/``kicked``, or a definitive "not found"/"not a
+    member" API error). On a transport error / timeout / unknown response it
+    returns True, so a flaky membership check can never be the reason a real
+    activity message fails to post. The worst case is a rate-limited, benign
+    activity line echoed to a group the bot is already in.
     """
     import os as _os
     import time as _time
@@ -7277,6 +7283,7 @@ def _user_in_chat(chat_id, user_tg_id):
         return False
     token = _os.getenv("BOT_TOKEN", "").strip()
     if not token:
+        # Without a token we can't send anyway; treat as not allowed.
         return False
     key = (int(chat_id), int(user_tg_id))
     now = _time.time()
@@ -7284,7 +7291,7 @@ def _user_in_chat(chat_id, user_tg_id):
         hit = _CHAT_MEMBER_CACHE.get(key)
         if hit and (now - hit[1]) < _CHAT_MEMBER_TTL:
             return hit[0]
-    ok = False
+    ok = True  # fail-open default
     try:
         import requests as _rq
         r = _rq.get(
@@ -7293,10 +7300,20 @@ def _user_in_chat(chat_id, user_tg_id):
         j = r.json()
         if j.get("ok"):
             status = (j.get("result") or {}).get("status")
-            ok = status in ("creator", "administrator", "member", "restricted")
+            # Definitive membership answer — block only the clear non-members.
+            ok = status not in ("left", "kicked")
+        else:
+            desc = (j.get("description") or "").lower()
+            # Definitive "this user isn't here" → block; anything else → allow.
+            if ("not found" in desc or "user not found" in desc
+                    or "member list is inaccessible" in desc
+                    or "user_not_participant" in desc):
+                ok = False
+            else:
+                ok = True
     except Exception:
-        logger.exception("getChatMember check failed")
-        ok = False
+        logger.exception("getChatMember check failed (allowing — fail-open)")
+        ok = True
     with _CHAT_MEMBER_CACHE_LOCK:
         if len(_CHAT_MEMBER_CACHE) > 5000:
             _CHAT_MEMBER_CACHE.clear()
@@ -7407,9 +7424,16 @@ def _origin_group_chat_id():
     """Return the group/supergroup chat id the Mini App was launched from, or
     None for private DM / unknown launches.
 
-    The id is parsed from ``start_param`` inside the HMAC-signed initData
-    (any ``<tab>_c<chatId>`` form) and only returned when negative (groups). In
-    dev mode an ``origin_chat_id`` request-body override is accepted for testing.
+    Resolution order (mirrors UnderCover's Drop flow, which reads start_param
+    client-side and forwards the chat id to the backend):
+      1. ``start_param`` inside the HMAC-signed initData (trusted).
+      2. The ``X-Tg-Start-Param`` request header the frontend forwards from
+         ``initDataUnsafe.start_param`` — some Telegram clients deliver the launch
+         param only as a URL fragment and omit it from the signed initData. This
+         is unsigned, so it is honoured only after a fail-open membership check
+         (``_user_in_chat``) confirms the user isn't an obvious outsider.
+    Only negative (group/supergroup) ids are returned. In dev mode an
+    ``origin_chat_id`` request-body override is accepted for testing.
     """
     import os as _os
 
@@ -7428,13 +7452,25 @@ def _origin_group_chat_id():
     if not init_data or init_data.startswith("DEV_"):
         return None
     try:
-        from services.webapp_auth import verify_init_data
+        from services.webapp_auth import verify_init_data, get_user_id
         verified = verify_init_data(init_data, _os.getenv("BOT_TOKEN", ""))
     except Exception:
         verified = None
     if not verified:
         return None
-    return _parse_origin_chat(verified.get("start_param"))
+
+    # 1. Trusted: signed initData start_param.
+    signed = _parse_origin_chat(verified.get("start_param"))
+    if signed is not None:
+        return signed
+
+    # 2. Unsigned client hint, membership-gated (fail-open).
+    client = _parse_origin_chat(request.headers.get("X-Tg-Start-Param"))
+    if client is not None:
+        tg_id = get_user_id(verified)
+        if tg_id and _user_in_chat(client, tg_id):
+            return client
+    return None
 
 
 def _miniapp_activity_keyboard(chat_id):
