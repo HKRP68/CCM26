@@ -2860,6 +2860,21 @@ if (tg) {
 
 // Auth — Telegram passes initData, we send it on every request as Authorization
 const INIT_DATA = tg?.initData || '';
+// The launch start_param (e.g. "home_c-100123") tells the backend which group
+// the Mini App was opened from. Some Telegram clients deliver it ONLY as the
+// URL fragment `tgWebAppStartParam` / `initDataUnsafe.start_param` and omit it
+// from the signed `initData` string, so we forward it explicitly. The backend
+// trusts it only after verifying this user belongs to that group.
+const START_PARAM = (() => {
+  try {
+    let p = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').trim();
+    if (!p) {
+      const h = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+      p = (h.get('tgWebAppStartParam') || '').trim();
+    }
+    return p;
+  } catch (e) { return ''; }
+})();
 // Dev override: append ?dev=<telegram_id> to the URL during testing
 const urlParams = new URLSearchParams(window.location.search);
 const devId = urlParams.get('dev');
@@ -2882,6 +2897,7 @@ async function api(path, body) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': AUTH_VALUE,
+        ...(START_PARAM ? { 'X-Tg-Start-Param': START_PARAM } : {}),
       },
       body: JSON.stringify(body || {}),
     });

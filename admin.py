@@ -3220,12 +3220,27 @@ def _webapp_auth(allow_not_debuted=False):
         return None, tg_id, ({"ok": False, "error": "not_debuted",
                               "message": "Complete your debut to unlock the Mini App."}, 403)
 
-    # Remember the group the Mini App was launched from (encoded in the launch
-    # deep link's start_param) so later activity echoes back there even if a
-    # subsequent launch — e.g. the persistent menu button — carries no param.
-    if user is not None and _start_param:
+    # Remember the group the Mini App was launched from so later activity echoes
+    # back there even if a subsequent launch (e.g. the persistent menu button)
+    # carries no param.
+    #   1. Prefer the start_param inside the SIGNED initData (trusted).
+    #   2. Otherwise fall back to the X-Tg-Start-Param header the frontend sends
+    #      from initDataUnsafe.start_param — some Telegram clients deliver the
+    #      launch param only as a URL fragment and omit it from the signed
+    #      initData. That header is unsigned, so it is honoured ONLY after
+    #      confirming this user is actually a member of that group.
+    if user is not None:
         origin = _parse_origin_chat(_start_param)
-        if origin is not None and user.last_miniapp_chat_id != origin:
+        trusted = origin is not None
+        if origin is None:
+            client_origin = _parse_origin_chat(
+                request.headers.get("X-Tg-Start-Param"))
+            if (client_origin is not None
+                    and user.last_miniapp_chat_id != client_origin
+                    and _user_in_chat(client_origin, tg_id)):
+                origin = client_origin  # membership-verified
+                trusted = True
+        if trusted and origin is not None and user.last_miniapp_chat_id != origin:
             try:
                 user.last_miniapp_chat_id = origin
                 db.commit()
@@ -7242,6 +7257,51 @@ def webapp_match_deliver():
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
+
+
+_CHAT_MEMBER_CACHE = {}
+_CHAT_MEMBER_CACHE_LOCK = threading.Lock()
+_CHAT_MEMBER_TTL = 300  # seconds
+
+
+def _user_in_chat(chat_id, user_tg_id):
+    """Return True if ``user_tg_id`` is a member of group ``chat_id``.
+
+    Used to validate an UNSIGNED launch-origin hint before trusting it. Results
+    are cached briefly so repeated Mini App actions don't hammer getChatMember.
+    Best-effort — any error returns False (the activity simply isn't echoed).
+    """
+    import os as _os
+    import time as _time
+    if not chat_id or not user_tg_id:
+        return False
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return False
+    key = (int(chat_id), int(user_tg_id))
+    now = _time.time()
+    with _CHAT_MEMBER_CACHE_LOCK:
+        hit = _CHAT_MEMBER_CACHE.get(key)
+        if hit and (now - hit[1]) < _CHAT_MEMBER_TTL:
+            return hit[0]
+    ok = False
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"https://api.telegram.org/bot{token}/getChatMember",
+            params={"chat_id": chat_id, "user_id": user_tg_id}, timeout=6)
+        j = r.json()
+        if j.get("ok"):
+            status = (j.get("result") or {}).get("status")
+            ok = status in ("creator", "administrator", "member", "restricted")
+    except Exception:
+        logger.exception("getChatMember check failed")
+        ok = False
+    with _CHAT_MEMBER_CACHE_LOCK:
+        if len(_CHAT_MEMBER_CACHE) > 5000:
+            _CHAT_MEMBER_CACHE.clear()
+        _CHAT_MEMBER_CACHE[key] = (ok, now)
+    return ok
 
 
 def _tg_send_async(payload):
