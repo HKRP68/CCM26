@@ -558,11 +558,25 @@ def _xi_pick_state(draft, side):
 
 
 def _cat_counts(sel_pairs):
+    """Count selected players by category for the composition-rule display."""
     counts = {"Batsman": 0, "Wicket Keeper": 0, "All-rounder": 0, "Bowler": 0}
     for _e, p in sel_pairs:
         cat = p.category if p.category in counts else "Batsman"
         counts[cat] += 1
     return counts
+
+
+def _prune_selected(st, valid_ids):
+    """Drop any selected ids whose roster row vanished mid-setup (e.g. sold).
+
+    Keeps the selection honest after a roster reload so the count, the Confirm
+    button and the max-11 guard only ever reflect players that still exist.
+    """
+    selected = st.get("selected", [])
+    kept = [i for i in selected if i in valid_ids]
+    if len(kept) != len(selected):
+        st["selected"] = kept
+    return st.get("selected", [])
 
 
 def _xi_picker_text(draft, side, pairs, selected_ids):
@@ -584,10 +598,10 @@ def _xi_picker_text(draft, side, pairs, selected_ids):
         "",
         f"<b>Selected:</b> {len(selected_ids)}/11",
         "<b>Composition</b>",
-        rule(3 <= c["Batsman"] <= 5, f"Batsmen {c['Batsman']} (3–5)"),
-        rule(3 <= c["Bowler"] <= 5, f"Bowlers {c['Bowler']} (3–5)"),
-        rule(1 <= c["Wicket Keeper"] <= 2, f"Wicket Keeper {c['Wicket Keeper']} (1–2)"),
-        rule(1 <= c["All-rounder"] <= 3, f"All-rounders {c['All-rounder']} (1–3)"),
+        rule(3 <= c["Batsman"] <= 5, f"Batsmen {c['Batsman']} (3-5)"),
+        rule(3 <= c["Bowler"] <= 5, f"Bowlers {c['Bowler']} (3-5)"),
+        rule(1 <= c["Wicket Keeper"] <= 2, f"Wicket Keeper {c['Wicket Keeper']} (1-2)"),
+        rule(1 <= c["All-rounder"] <= 3, f"All-rounders {c['All-rounder']} (1-3)"),
     ]
     if len(selected_ids) == 11:
         ok, errs = validate_xi(sel_pairs)
@@ -605,6 +619,7 @@ def _xi_picker_text(draft, side, pairs, selected_ids):
 
 
 def _xi_picker_keyboard(draft, side, pairs, selected_ids, confirmed):
+    """Build the picker keyboard: toggle buttons + Confirm, or a Reselect row."""
     invite_id = draft["invite_id"]
     if confirmed:
         return InlineKeyboardMarkup([[InlineKeyboardButton(
@@ -653,6 +668,13 @@ def _persist_xi_order(session, user_id, selected_ids):
         session.flush()
     except Exception:
         logger.exception("letsplay persist XI order failed for user %s", user_id)
+        # A failed flush leaves the session in a rolled-back state; clear it so
+        # the caller's commit still succeeds (persistence is best-effort, the
+        # draft snapshot is what actually launches the match).
+        try:
+            session.rollback()
+        except Exception:
+            logger.exception("letsplay persist XI rollback failed")
 
 
 async def _send_side_picker(context, draft, side, pairs):
@@ -739,7 +761,9 @@ async def letsplay_xipick_callback(update: Update, context: ContextTypes.DEFAULT
         await q.answer("That player isn't on your roster.", show_alert=True)
         return
 
-    selected = st["selected"]
+    # Drop any picks whose roster row vanished since the last render so the
+    # count and the max-11 guard below stay accurate.
+    selected = _prune_selected(st, valid_ids)
     if rid in selected:
         selected.remove(rid)
         await q.answer(f"Removed ({len(selected)}/11)")
@@ -796,10 +820,11 @@ async def letsplay_reselect_callback(update: Update, context: ContextTypes.DEFAU
         return
     finally:
         session.close()
+    selected = _prune_selected(st, {int(e.id) for e, _p in pairs})
     try:
         await q.edit_message_text(
-            _xi_picker_text(draft, side, pairs, st["selected"]), parse_mode="HTML",
-            reply_markup=_xi_picker_keyboard(draft, side, pairs, st["selected"], False),
+            _xi_picker_text(draft, side, pairs, selected), parse_mode="HTML",
+            reply_markup=_xi_picker_keyboard(draft, side, pairs, selected, False),
             disable_web_page_preview=True)
     except Exception:
         logger.exception("letsplay reselect render failed")
@@ -836,7 +861,10 @@ async def letsplay_confirmxi_callback(update: Update, context: ContextTypes.DEFA
     try:
         pairs = _get_ordered_roster(session, draft[side]["user_id"])
         by_id = {int(e.id): (e, p) for e, p in pairs}
-        sel_pairs = [by_id[i] for i in st["selected"] if i in by_id]
+        # Drop any picks whose roster row vanished mid-setup before validating
+        # and snapshotting, so the locked-in XI only holds live players.
+        selected = _prune_selected(st, set(by_id))
+        sel_pairs = [by_id[i] for i in selected if i in by_id]
         valid, errors = validate_xi(sel_pairs)
         if not valid:
             await q.answer(f"⚠️ {_first_xi_error(errors)}", show_alert=True)
@@ -876,7 +904,10 @@ async def letsplay_confirmxi_callback(update: Update, context: ContextTypes.DEFA
     except Exception:
         logger.exception("letsplay confirm render failed")
 
-    if both_done:
+    # Single-winner transition: if both sides are in, the first callback to get
+    # here flips the draft out of "xi" synchronously (no await in between), so
+    # concurrent confirms can't each fire _start_toss or race a reselect.
+    if both_done and draft.get("status") == "xi":
         draft["status"] = "toss"
         _rearm_setup_timeout(context, invite_id)
         # Drop the now-stale Reselect button on the other side's message.
@@ -887,7 +918,8 @@ async def letsplay_confirmxi_callback(update: Update, context: ContextTypes.DEFA
                 await context.bot.edit_message_reply_markup(
                     draft["chat_id"], other_mid, reply_markup=None)
             except Exception:
-                pass
+                logger.debug("letsplay: clearing stale reselect markup failed",
+                             exc_info=True)
         await _start_toss(context, draft)
 
 
