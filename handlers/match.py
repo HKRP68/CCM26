@@ -3595,6 +3595,19 @@ async def _process_shot_core(context, mid, si, *, q=None):
 
         _cancel_action_timer(context, mid)
 
+        # Backward-compat guard: a shot button rendered before a shot-list
+        # migration encodes an index into the *old* AVAILABLE_SHOTS. After the
+        # list shrank/reordered, that index can be out of range. Rather than
+        # crash or stall the match, re-show the current shot buttons so the
+        # batsman re-picks from the new set.
+        if not isinstance(si, int) or si < 0 or si >= len(AVAILABLE_SHOTS):
+            logger.warning(f"Stale/invalid shot index {si} for match {mid}; re-prompting")
+            try:
+                await _show_shot(context, s["chat_id"], mid)
+            except Exception:
+                logger.exception(f"Failed to re-prompt shot for match {mid}")
+            return
+
         try:
             shot = AVAILABLE_SHOTS[si]
             dl = s.get("current_delivery", "?")
