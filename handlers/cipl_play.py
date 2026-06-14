@@ -391,6 +391,23 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await q.answer("Players no longer exist.", show_alert=True)
             return
 
+        # Final concurrency gate at the commit point: one game per chat and one
+        # match per player (any game mode). Guards against a race where either
+        # side started another match while this Challenge League toss was open.
+        from handlers.match import (
+            _active_match_in_chat, _active_match_for_user, _active_cric_match_in_chat,
+        )
+        if _active_match_in_chat(session, draft["chat_id"]) \
+                or _active_cric_match_in_chat(session, draft["chat_id"]):
+            await q.answer("A match is already active in this chat.", show_alert=True)
+            return
+        if _active_match_for_user(session, host.id) \
+                or _active_match_for_user(session, target.id):
+            await q.answer(
+                "A player is already in another active match — finish it first.",
+                show_alert=True)
+            return
+
         winner = target if winner_side == "target" else host
         loser = host if winner_side == "target" else target
         if decision == "bat":

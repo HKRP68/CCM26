@@ -70,11 +70,22 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        from handlers.match import _active_match_in_chat, _chat_busy_message
+        from handlers.match import (
+            _active_match_in_chat, _active_match_for_user,
+            _chat_busy_message, _user_busy_message,
+        )
         existing = _active_match_in_chat(session, cid)
         if existing:
             await update.message.reply_text(
                 _chat_busy_message(existing), parse_mode="HTML")
+            return
+
+        # One match per player (any game mode)
+        busy = _active_match_for_user(session, user.id)
+        if busy:
+            await update.message.reply_text(
+                _user_busy_message(busy), parse_mode="HTML",
+                disable_web_page_preview=True)
             return
 
         roster_count = session.query(UserRoster).filter(
@@ -166,11 +177,18 @@ async def wpmbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.edit_message_text("❌ Bot team unavailable.")
             return
 
-        # Re-check the chat isn't busy now (race with another lobby/match).
-        from handlers.match import _active_match_in_chat, _chat_busy_message
+        # Re-check the chat/player aren't busy now (race with another lobby/match).
+        from handlers.match import (
+            _active_match_in_chat, _active_match_for_user, _chat_busy_message,
+        )
         existing = _active_match_in_chat(session, q.message.chat_id)
         if existing:
             await q.edit_message_text(_chat_busy_message(existing), parse_mode="HTML")
+            return
+        if _active_match_for_user(session, user.id):
+            await q.edit_message_text(
+                "⚠️ You already have an active match (any game mode). "
+                "Finish it first, then start a new one.")
             return
 
         bot_user = _get_or_create_bot_user(session)
