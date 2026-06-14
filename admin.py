@@ -7756,6 +7756,11 @@ def _broadcast_wpm_player_stat_card(match_id, player, owner_user_id, card_type):
             import json as _json
             from services.match_webapp_access import get_state
             state = get_state(match_id) or {}
+            # /wpmbot (vs-bot) matches stay quiet in-chat during play — only the
+            # final Match Summary + image are posted at the end. Skip the
+            # per-player career stat cards entirely for these matches.
+            if state.get("is_vsbot"):
+                return
             chat_id = _match_origin_chat_id(match_id, state)
             if not chat_id:
                 return
@@ -7842,6 +7847,10 @@ def _broadcast_match_scorecard(match_id):
 
             state = get_state(match_id)
             if not state:
+                return
+            # /wpmbot (vs-bot) matches don't get a live scorecard in the group
+            # chat — the only chat output is the final Match Summary + image.
+            if state.get("is_vsbot"):
                 return
             chat_id = state.get("chat_id")
             if not chat_id:
@@ -8218,6 +8227,29 @@ def _completed_team_name(arena, team_id, fallback):
     if team_id == arena.get("bowl_team_id"):
         return arena.get("bowl_team_name") or fallback
     return fallback
+
+
+def _completed_user_mention(db, user_id):
+    """Clickable '@username' mention (tg://) for a completed-match participant.
+
+    Returns the bot label for the AI opponent, or ``None`` when the user can't
+    be resolved so the caller can omit the "who beat who" line cleanly.
+    """
+    if not user_id:
+        return None
+    try:
+        from models import User
+        from handlers.match import BOT_TG_ID_
+        u = db.query(User).get(user_id)
+        if not u:
+            return None
+        if u.telegram_id == BOT_TG_ID_:
+            return "🤖 Bot"
+        label = f"@{u.username}" if u.username else (u.first_name or "Player")
+        return f'<a href="tg://user?id={u.telegram_id}">{label}</a>'
+    except Exception:
+        logger.exception("completed-match mention build failed")
+        return None
 
 
 def _completed_result_with_arena_fallback(result, arena):
@@ -8771,8 +8803,20 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
             f"in {top_wicket.get('overs', '0')} ov"
             if top_wicket else "—")
 
+        # "Who beat who" line: @winner (Team) beat @loser (Team). Skipped on a
+        # tie or when either participant can't be resolved to a mention.
+        beat_line = ""
+        if result.get("margin_type") not in (None, "", "tie"):
+            w_mention = _completed_user_mention(db, result.get("winner_team_id"))
+            l_mention = _completed_user_mention(db, result.get("loser_team_id"))
+            if w_mention and l_mention:
+                loser_team = _completed_team_name(arena, result.get("loser_team_id"), "Loser")
+                beat_line = (f"🥊 {w_mention} ({escape(str(winner_name))}) "
+                             f"beat {l_mention} ({escape(str(loser_team))})\n")
+
         text = ("━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH SUMMARY SCORECARD</b>\n\n"
                 f"{score_block}\n\n"
+                f"{beat_line}"
                 f"🏆 <b>Winner:</b> {escape(str(winner_name))}\n"
                 f"📏 <b>Winning Margin:</b> {escape(str(margin_text))}\n"
                 f"<i>{escape(short_summary)}</i>\n\n"
