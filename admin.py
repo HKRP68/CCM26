@@ -7264,6 +7264,53 @@ _CHAT_MEMBER_CACHE_LOCK = threading.Lock()
 _CHAT_MEMBER_TTL = 300  # seconds
 
 
+def _tg_call(method, json_body=None, params=None, timeout=8):
+    """Call the Telegram Bot API and return the parsed JSON dict (or None).
+
+    Prefers ``requests``; if it isn't installed, falls back to the stdlib
+    ``urllib.request`` so Telegram sends keep working even when the optional
+    ``requests`` dependency is missing from the environment. Pass ``params`` for
+    a GET, ``json_body`` for a POST. Never raises.
+    """
+    import os as _os
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return None
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    # Preferred path: requests.
+    try:
+        import requests as _rq
+        if params is not None:
+            resp = _rq.get(url, params=params, timeout=timeout)
+        else:
+            resp = _rq.post(url, json=json_body or {}, timeout=timeout)
+        try:
+            return resp.json()
+        except Exception:
+            return None
+    except ModuleNotFoundError:
+        pass  # requests not installed → stdlib fallback below
+    except Exception:
+        logger.exception("telegram %s failed (requests)", method)
+        return None
+    # Fallback: stdlib urllib (always available).
+    import json as _json
+    import urllib.request as _u
+    import urllib.parse as _up
+    try:
+        if params is not None:
+            req = _u.Request(f"{url}?{_up.urlencode(params)}", method="GET")
+        else:
+            data = _json.dumps(json_body or {}).encode("utf-8")
+            req = _u.Request(url, data=data, method="POST",
+                             headers={"Content-Type": "application/json"})
+        with _u.urlopen(req, timeout=timeout) as r:
+            return _json.loads(r.read().decode("utf-8"))
+    except Exception:
+        logger.exception("telegram %s failed (urllib)", method)
+        return None
+
+
 def _user_in_chat(chat_id, user_tg_id):
     """Return True if ``user_tg_id`` may be echoed to group ``chat_id``.
 
@@ -7291,29 +7338,20 @@ def _user_in_chat(chat_id, user_tg_id):
         hit = _CHAT_MEMBER_CACHE.get(key)
         if hit and (now - hit[1]) < _CHAT_MEMBER_TTL:
             return hit[0]
-    ok = True  # fail-open default
-    try:
-        import requests as _rq
-        r = _rq.get(
-            f"https://api.telegram.org/bot{token}/getChatMember",
-            params={"chat_id": chat_id, "user_id": user_tg_id}, timeout=6)
-        j = r.json()
-        if j.get("ok"):
-            status = (j.get("result") or {}).get("status")
-            # Definitive membership answer — block only the clear non-members.
-            ok = status not in ("left", "kicked")
-        else:
-            desc = (j.get("description") or "").lower()
-            # Definitive "this user isn't here" → block; anything else → allow.
-            if ("not found" in desc or "user not found" in desc
-                    or "member list is inaccessible" in desc
-                    or "user_not_participant" in desc):
-                ok = False
-            else:
-                ok = True
-    except Exception:
-        logger.exception("getChatMember check failed (allowing — fail-open)")
-        ok = True
+    j = _tg_call("getChatMember",
+                 params={"chat_id": chat_id, "user_id": user_tg_id}, timeout=6)
+    ok = True  # fail-open default (no/unknown response → allow)
+    if j and j.get("ok"):
+        status = (j.get("result") or {}).get("status")
+        # Definitive membership answer — block only the clear non-members.
+        ok = status not in ("left", "kicked")
+    elif j:
+        desc = (j.get("description") or "").lower()
+        # Definitive "this user isn't here" → block; anything else → allow.
+        if ("not found" in desc or "user not found" in desc
+                or "member list is inaccessible" in desc
+                or "user_not_participant" in desc):
+            ok = False
     with _CHAT_MEMBER_CACHE_LOCK:
         if len(_CHAT_MEMBER_CACHE) > 5000:
             _CHAT_MEMBER_CACHE.clear()
@@ -7331,12 +7369,9 @@ def _tg_send_async(payload):
         return
 
     def _send():
-        try:
-            import requests as _rq
-            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                     json=payload, timeout=8)
-        except Exception:
-            logger.exception("async tg send failed")
+        # _tg_call prefers requests and falls back to stdlib urllib, so the send
+        # works even when the optional `requests` dependency is missing.
+        _tg_call("sendMessage", json_body=payload, timeout=8)
 
     try:
         threading.Thread(target=_send, daemon=True).start()
@@ -7371,22 +7406,10 @@ def _tg_send_photo_async(payload, photo_bytes, filename="match_summary.png"):
 
 
 def _tg_api_post(method, payload, timeout=8):
-    """Synchronous Telegram API helper for already-background workers."""
-    import os as _os
-    token = _os.getenv("BOT_TOKEN", "").strip()
-    if not token:
-        return None
-    try:
-        import requests as _rq
-        resp = _rq.post(f"https://api.telegram.org/bot{token}/{method}",
-                        json=payload, timeout=timeout)
-        try:
-            return resp.json()
-        except Exception:
-            return None
-    except Exception:
-        logger.exception("telegram %s failed", method)
-        return None
+    """Synchronous Telegram API helper for already-background workers.
+
+    Routes through _tg_call (requests with a stdlib urllib fallback)."""
+    return _tg_call(method, json_body=payload, timeout=timeout)
 
 
 # ── Mini App activity → group chat ──────────────────────────────────────────
