@@ -73,6 +73,17 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cm_deny_",
     "cm_toss_",
     "cm_pick_",
+    # /letsplay own-roster flow: the invite (sent while handling the HOST's
+    # command, so it would otherwise be owned by the host) plus pitch, XI
+    # confirm, coin and toss prompts are all driven by both players in turn.
+    # letsplay.py validates every click by telegram_id / draft state, so these
+    # must reach their handlers like the /cipl and /cm prompts above.
+    "lp_accept_",
+    "lp_deny_",
+    "lp_pitch_",
+    "lp_confirmxi_",
+    "lp_coin_",
+    "lp_toss_",
     # Challenge League team and Playing XI buttons are shared prompts: the
     # same message is used by both host and guest, and challenge.py validates
     # which side may press each button based on the draft state.
