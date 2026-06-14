@@ -781,6 +781,7 @@ def calculate_outcome(
     is_day_night: bool = False,
     batting_approach: str = None,
     bowling_approach: str = None,
+    weight_hook=None,
 ) -> dict:
     """
     Determines the outcome of a single delivery.
@@ -1105,6 +1106,20 @@ def calculate_outcome(
             raw_weights, batting_approach, bowling_approach,
             bowler_rating=bowling)
         total_weight = sum(raw_weights.values())
+
+    # 4c) Generic weight hook — used by /letsplay to apply player TRAITS to the
+    # final outcome weights right before sampling (so traits respect ratings,
+    # pitch, momentum, pressure, scenario and approach layers). No-op when None,
+    # so Challenge League / every other caller is unaffected. Any failure is
+    # swallowed so a trait bug can never crash a delivery.
+    if weight_hook is not None:
+        try:
+            hooked = weight_hook(raw_weights)
+            if hooked:
+                raw_weights = hooked
+                total_weight = sum(raw_weights.values())
+        except Exception:
+            logger.exception("ball_outcome weight_hook failed; ignoring this ball")
 
     # 5) Normalize weights into probabilities
     # print(f"\n[calculate_outcome] Total raw weight sum: {total_weight:.6f}")
