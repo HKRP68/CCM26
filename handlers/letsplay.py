@@ -70,6 +70,26 @@ def _m(info):
     return _mention(info["tg_id"], info["name"])
 
 
+def _active_letsplay_in_chat(context, chat_id):
+    """True if a Lets Play invite/setup or live match is already running here.
+
+    Guards against two concurrent /letsplay matches stepping on each other's
+    per-over messages in the same chat. Checks both pending drafts and live
+    ``cipl_approach`` states flagged ``is_letsplay`` (a completed match has its
+    state cleaned up, so a lingering one means it's still live).
+    """
+    for k, v in list(context.bot_data.items()):
+        if not isinstance(k, str) or not isinstance(v, dict):
+            continue
+        if k.startswith("lp_") and v.get("chat_id") == chat_id \
+                and v.get("status") in ("pending", "pitch", "xi", "toss"):
+            return True
+        if k.startswith("ms_") and v.get("chat_id") == chat_id \
+                and v.get("is_letsplay") and v.get("mode") == "cipl_approach":
+            return True
+    return False
+
+
 # ════════════════════════════════════════════════════════════════════
 # Roster helpers
 # ════════════════════════════════════════════════════════════════════
@@ -135,6 +155,18 @@ def _format_batting_order(pairs, header):
     return "\n".join(lines)
 
 
+def _xi_preview(pairs):
+    """Compact strength preview of a roster's top 11 for the invitation card."""
+    top = pairs[:11]
+    if not top:
+        return None
+    total = sum(p.rating for _e, p in top)
+    avg = total / len(top)
+    stars = sorted(top, key=lambda ep: ep[1].rating, reverse=True)[:3]
+    names = ", ".join(html.escape(str(p.name)) for _e, p in stars)
+    return {"ovr": total, "avg": avg, "stars": names}
+
+
 # ════════════════════════════════════════════════════════════════════
 # /letsplay — start an invitation
 # ════════════════════════════════════════════════════════════════════
@@ -151,6 +183,12 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         host = sync_telegram_user(session, tg)
         if not host:
             await msg.reply_text("❌ Do /debut first to get a roster!")
+            return
+
+        if _active_letsplay_in_chat(context, chat.id):
+            await msg.reply_text(
+                "⚠️ A Lets Play match is already in progress in this chat. "
+                "Finish it first before starting another.")
             return
 
         guest_user, reason = resolve_command_target(session, update, context, "letsplay")
@@ -185,6 +223,8 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      "name": host.username or host.first_name or "Host"}
         guest_info = {"user_id": guest_user.id, "tg_id": guest_user.telegram_id,
                       "name": guest_user.username or guest_user.first_name or "Guest"}
+        # XI preview so the guest knows what they're up against (host's top 11).
+        host_preview = _xi_preview(host_pairs)
     except Exception:
         logger.exception("/letsplay setup failed")
         await msg.reply_text("⚠️ Couldn't start the match. Try again.")
@@ -198,6 +238,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "is_private": chat.id > 0,
         "status": "pending",
         "host": host_info, "guest": guest_info,
+        "host_preview": host_preview,
         "pitch_type": None,
         "host_confirmed": False, "guest_confirmed": False,
         "created_at": datetime.utcnow().isoformat(),
@@ -213,7 +254,10 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎮 <b>Match type:</b> Lets Play\n"
         "⏱️ <b>Format:</b> 20 Overs\n"
         "📋 <b>Roster:</b> Own Roster\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
+        + (f"📊 <b>Host XI:</b> {host_preview['ovr']} OVR "
+           f"(avg {host_preview['avg']:.1f})\n"
+           f"⭐ {host_preview['stars']}\n" if host_preview else "")
+        + "━━━━━━━━━━━━━━━━━━━\n"
         f"{_m(guest_info)}, do you accept? <i>(30s)</i>")
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Accept", callback_data=f"lp_accept_{invite_id}"),

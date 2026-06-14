@@ -674,9 +674,12 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     found_mid, found_state = _find_cipl_match_in_chat(context, cid)
     if found_mid is None:
         await update.message.reply_text(
-            "❌ No active Challenge League match in this chat to resume.\n"
-            "Start one with /cipl.")
+            "❌ No active Challenge League or Lets Play match in this chat to "
+            "resume.\nStart one with /cipl or /letsplay.")
         return
+
+    # Label the resume after whichever mode this match is (Lets Play vs cipl).
+    _label = "Lets Play" if found_state.get("is_letsplay") else "Challenge League"
 
     # Only the two captains in this match may resume it — otherwise any group
     # member could reset another match's prompt/timer flow.
@@ -688,7 +691,7 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🔄 <b>Resuming Challenge League match…</b>", parse_mode="HTML")
+        f"🔄 <b>Resuming {_label} match…</b>", parse_mode="HTML")
     ok = await cipl_resume(context, found_mid, found_state)
     if not ok:
         await update.message.reply_text(
@@ -886,6 +889,17 @@ def _render_over_summary(state, summary):
     if c and c["runs_required"] > 0:
         lines.append(f"🎯 Need {c['runs_required']} off {c['balls_remaining']} "
                      f"(RRR {c['rrr']:.2f})")
+    # Reveal any player traits that fired this over (/letsplay only — Challenge
+    # League players carry no traits, so these lists are always empty there).
+    ta = summary.get("traits_activated") or {}
+    bowl_t = ta.get("bowl") or []
+    bat_t = ta.get("bat") or []
+    if bowl_t or bat_t:
+        lines.append("")
+        if bowl_t:
+            lines.append("🎳 Traits: " + ", ".join(html.escape(t) for t in bowl_t))
+        if bat_t:
+            lines.append("🏏 Traits: " + ", ".join(html.escape(t) for t in bat_t))
     return "\n".join(lines)
 
 
