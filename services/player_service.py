@@ -54,19 +54,68 @@ def _get_rarity_distribution(session: Session):
     return CLAIM_RARITY
 
 
+def _pick_in_range_strict(session: Session, low: int, high: int) -> Player | None:
+    """Pick a random active player strictly inside [low, high] — no widening.
+
+    Unlike get_random_player_by_rating_range (which progressively widens the
+    band and ultimately returns ANY active player when the band is empty), this
+    helper never leaks outside the requested band. That keeps the website-set
+    rarity weights authoritative for /claim and /daily.
+    """
+    from services import player_cache
+    pool = []
+    for r in range(low, high + 1):
+        pool.extend(player_cache.get_by_rating(r))
+    if not pool:
+        return None
+    pick = random.choice(pool)
+    return session.get(Player, pick["id"])
+
+
 def get_random_player_by_rarity(session: Session) -> Player | None:
-    """Pick a random player using the claim rarity distribution.
-    Uses admin-configured tiers if any exist; otherwise falls back to config."""
+    """Pick a random player using the website Claim Rarity distribution.
+
+    Uses the admin-configured ClaimRarityTier rows when present (otherwise the
+    CLAIM_RARITY fallback). The chosen band is honoured strictly: if it has no
+    eligible players we re-roll among the OTHER configured bands (weighted by
+    their probabilities) rather than widening into arbitrary ratings, so the
+    rarity set on the website is the rarity players actually receive.
+    """
     dist = _get_rarity_distribution(session)
-    roll = random.random()
+    if not dist:
+        return get_random_player_by_rating_range(session, 50, 58)
+
+    # Convert cumulative thresholds back to per-band weights.
+    bands = []
+    prev = 0.0
     for threshold, low, high in dist:
-        if roll <= threshold:
-            return get_random_player_by_rating_range(session, low, high)
-    # If we somehow fall off the end, use the last tier's range
-    if dist:
-        _, low, high = dist[-1]
-        return get_random_player_by_rating_range(session, low, high)
-    return get_random_player_by_rating_range(session, 50, 58)
+        bands.append([max(0.0, threshold - prev), low, high])
+        prev = threshold
+
+    # Weighted draw without replacement: respect the configured rarity, but if a
+    # band is empty fall through to the next-most-likely configured band.
+    remaining = [b for b in bands if b[0] > 0] or [list(b) for b in bands]
+    while remaining:
+        total = sum(b[0] for b in remaining)
+        if total <= 0:
+            break
+        roll = random.random() * total
+        acc = 0.0
+        chosen = remaining[-1]
+        for band in remaining:
+            acc += band[0]
+            if roll <= acc:
+                chosen = band
+                break
+        remaining.remove(chosen)
+        player = _pick_in_range_strict(session, chosen[1], chosen[2])
+        if player:
+            return player
+
+    # Nothing in any configured band (shouldn't happen) — last-resort widening
+    # so /claim and /daily never fail outright.
+    _, low, high = dist[-1]
+    return get_random_player_by_rating_range(session, low, high)
 
 
 def get_player_values(rating: int) -> tuple[int, int]:

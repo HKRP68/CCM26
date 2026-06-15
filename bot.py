@@ -61,7 +61,7 @@ from handlers.buy import (
     buypl_handler, buypl_confirm_callback, buypl_cancel_callback,
     player_page_callback, player_page_noop_callback,
 )
-from handlers.team import teamname_handler, purse_handler, stats_handler
+from handlers.team import teamname_handler, purse_handler, stats_handler, statscl_handler
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
 from handlers.profile import myprofile_handler, myprofile_callback
 
@@ -281,6 +281,7 @@ BOT_MENU_COMMANDS = (
     ("teamname", "Set your team name"),
     ("purse", "Check your balance"),
     ("stats", "View player game statistics"),
+    ("statscl", "View any Challenge League player's stats"),
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
@@ -820,6 +821,7 @@ def main():
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
         app.add_handler(CommandHandler(["stats", "st"], stats_handler))
+        app.add_handler(CommandHandler("statscl", statscl_handler))
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
