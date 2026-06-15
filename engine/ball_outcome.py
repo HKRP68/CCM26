@@ -644,6 +644,9 @@ def _apply_rating_performance_modifiers(weights: dict,
         surplus = min((batting_rating - STRONG_BATTING_THRESHOLD) / 25.0, 1.0)
         _scale("Six",    1.0 + 0.20 * surplus)
         _scale("Four",   1.0 + 0.15 * surplus)
+        _scale("Three",  1.0 + 0.08 * surplus)   # better strike rotation
+        _scale("Double", 1.0 + 0.06 * surplus)
+        _scale("Single", 1.0 + 0.03 * surplus)
         _scale("Dot",    1.0 - 0.10 * surplus)
         _scale("Wicket", 1.0 - 0.15 * surplus)
 
@@ -661,6 +664,7 @@ def _apply_rating_performance_modifiers(weights: dict,
         surplus = min((bowling_rating - STRONG_BOWLING_THRESHOLD) / 20.0, 1.0)
         _scale("Dot",    1.0 + 0.15 * surplus)
         _scale("Wicket", 1.0 + 0.20 * surplus)
+        _scale("Single", 1.0 - 0.06 * surplus)   # chokes strike rotation
         _scale("Four",   1.0 - 0.12 * surplus)
         _scale("Six",    1.0 - 0.15 * surplus)
 
