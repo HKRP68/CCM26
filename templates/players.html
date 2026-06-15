@@ -65,7 +65,7 @@
   </select>
 
   <button type="submit" class="btn btn-blue">Apply</button>
-  {% if q or category or country_filter or rating_range or bat_hand or bowl_hand or is_active or rating_min is not none or rating_max is not none or bat_rating_min is not none or bat_rating_max is not none or bowl_rating_min is not none or bowl_rating_max is not none or version_mode %}
+  {% if q or category or country_filter or rating_range or bat_hand or bowl_hand or is_active or rating_min is not none or rating_max is not none or bat_rating_min is not none or bat_rating_max is not none or bowl_rating_min is not none or bowl_rating_max is not none or version_filter %}
   <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Clear</a>
   {% endif %}
 
@@ -93,10 +93,11 @@
     <input type="number" name="bowl_rating_max" placeholder="max" min="0" max="100" style="width:70px;"
            value="{{ bowl_rating_max if bowl_rating_max is not none else '' }}">
 
-    <select name="version_mode" style="margin-left:.5rem;">
+    <select name="version" style="margin-left:.5rem;">
       <option value="">All variants</option>
-      <option value="base"    {{ 'selected' if version_mode == 'base' }}>Base cards only</option>
-      <option value="version" {{ 'selected' if version_mode == 'version' }}>Versions only</option>
+      {% for v in versions %}
+      <option value="{{ v }}" {{ 'selected' if v == version_filter }}>{{ v }}</option>
+      {% endfor %}
     </select>
   </div>
 

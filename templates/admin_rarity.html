@@ -6,7 +6,7 @@
   <h1>🎲 Claim Rarity Distribution</h1>
   <div style="display:flex; gap:.5rem;">
     <a href="{{ url_for('admin_rarity_simulate') }}"
-       style="background:var(--accent2); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📊 Simulate 10k pulls</a>
+       style="background:var(--accent2); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📊 Simulate 100 pulls</a>
     <form method="POST" action="{{ url_for('admin_rarity_reset_defaults') }}" style="display:inline;"
           onsubmit="return confirm('Wipe current tiers and reset to the default 7? This cannot be undone.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

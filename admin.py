@@ -607,7 +607,16 @@ def players_list():
         elif version_mode == "version":
             query = query.filter(Player.parent_player_id.isnot(None))
         if version_filter:
-            query = query.filter(Player.version == version_filter)
+            vf = version_filter.strip()
+            if vf.lower() == "base":
+                # Base = the original card (no parent) or an explicit "Base" label.
+                query = query.filter(or_(
+                    Player.parent_player_id.is_(None),
+                    Player.version.is_(None),
+                    func.lower(Player.version) == "base",
+                ))
+            else:
+                query = query.filter(func.lower(Player.version) == vf.lower())
 
         # Sorting
         sort_map = {
@@ -1835,7 +1844,15 @@ def _apply_player_filters(query, filters, range_map):
     elif filters["version_mode"] == "version":
         query = query.filter(Player.parent_player_id.isnot(None))
     if filters["version_filter"]:
-        query = query.filter(Player.version == filters["version_filter"])
+        vf = filters["version_filter"].strip()
+        if vf.lower() == "base":
+            query = query.filter(or_(
+                Player.parent_player_id.is_(None),
+                Player.version.is_(None),
+                func.lower(Player.version) == "base",
+            ))
+        else:
+            query = query.filter(func.lower(Player.version) == vf.lower())
     return query
 
 
@@ -10578,12 +10595,12 @@ def admin_rarity_reset_defaults():
 @app.route("/rarity/simulate", methods=["GET"])
 @login_required
 def admin_rarity_simulate():
-    """Simulate 10,000 pulls and show actual distribution.
+    """Simulate a batch of pulls and show the actual distribution.
     Lets the admin visualize the impact of their config before committing."""
     db = get_session()
     try:
         from services.player_service import get_random_player_by_rarity
-        N = 10000
+        N = 100
         bands = {}  # rating_band → count
         # Pre-compute band labels from active tiers
         tiers = (db.query(ClaimRarityTier)
