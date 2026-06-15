@@ -293,6 +293,17 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ No player found")
             return
 
+        # A partial search (e.g. "Singh") can match several different players.
+        # Resolve to one: prefer an exact name match, else the player with the
+        # most league appearances. Group by normalized name so the same person
+        # linked to different master ids across leagues stays together — and
+        # unrelated players never get merged into one card.
+        needle = search.strip().lower()
+        groups = {}
+        for r in rows:
+            groups.setdefault((r[0].name or "").strip().lower(), []).append(r)
+        rows = groups.get(needle) or max(groups.values(), key=len)
+
         # Display name from the first (exact-preferred) appearance.
         name = rows[0][0].name or search
 

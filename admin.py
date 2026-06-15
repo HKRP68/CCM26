@@ -1844,7 +1844,15 @@ def _apply_player_filters(query, filters, range_map):
     elif filters["version_mode"] == "version":
         query = query.filter(Player.parent_player_id.isnot(None))
     if filters["version_filter"]:
-        query = query.filter(Player.version == filters["version_filter"])
+        vf = filters["version_filter"].strip()
+        if vf.lower() == "base":
+            query = query.filter(or_(
+                Player.parent_player_id.is_(None),
+                Player.version.is_(None),
+                func.lower(Player.version) == "base",
+            ))
+        else:
+            query = query.filter(func.lower(Player.version) == vf.lower())
     return query
 
 
