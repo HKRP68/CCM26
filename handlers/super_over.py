@@ -72,6 +72,18 @@ def _get(context, mid):
     return context.bot_data.get(_so_key(mid))
 
 
+async def _disable_message(context, chat_id, msg_id):
+    """Strip the inline keyboard from a now-stale message so its buttons can't
+    be tapped again (used selection messages are left in chat as a record)."""
+    if not msg_id:
+        return
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=msg_id, reply_markup=None)
+    except Exception:
+        pass
+
+
 def _mention(tg_id, name):
     """Clickable mention; falls back to a plain (escaped) name."""
     safe = html.escape(str(name or "Player"))
@@ -114,7 +126,9 @@ async def resume_super_over(context, mid):
             inn["msg_id"] = None          # force a fresh prompt message
             await _prompt(context, mid)
         else:
-            so["sel_msg_id"] = None        # force a fresh selection message
+            # Kill the dropped/old selection message's buttons, then re-send.
+            await _disable_message(context, so["chat_id"], so.get("sel_msg_id"))
+            so["sel_msg_id"] = None
             await _send_selection(context, mid)
         return True
     except Exception:
@@ -420,9 +434,18 @@ async def so_batok_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.from_user.id != bat["tg"]:
         await q.answer(f"❌ Only {bat['name']} can confirm batters.", show_alert=True)
         return
-    need = min(3, len(_eligible_batters(so, so["bat_uid"])))
+    eligible = {int(p["roster_id"]) for p in _eligible_batters(so, so["bat_uid"])}
+    need = min(3, len(eligible))
     if len(so["sel_batters"]) != need:
         await q.answer(f"Select {need} batters first.", show_alert=True)
+        return
+    # Defensive: every confirmed batter must still be eligible (a stale tap could
+    # have slipped one in before validation existed on its message).
+    if any(int(r) not in eligible for r in so["sel_batters"]):
+        so["sel_batters"] = []
+        await q.answer("Selection had an ineligible player — pick again.",
+                       show_alert=True)
+        await _refresh_selection(context, mid, q)
         return
     so["bat_confirmed"] = True
     await q.answer("Batters confirmed!")
@@ -445,7 +468,17 @@ async def so_bowl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if so["bowl_confirmed"]:
         await q.answer("Bowler already confirmed.", show_alert=True)
         return
-    so["sel_bowler"] = int(rest)
+    rid = int(rest)
+    # Validate against the CURRENT eligible bowlers (this team's XI minus the
+    # previous Super Over's bowler). Without this a stale button from an earlier
+    # selection message could reuse a restricted bowler or a player from the
+    # other XI — the latter would make _player_by_rid() return None at innings
+    # start. so_bowl_ is a shared prefix, so any captain's old button can arrive.
+    eligible = {int(p["roster_id"]) for p in _eligible_bowlers(so, so["bowl_uid"])}
+    if rid not in eligible:
+        await q.answer("That bowler can't bowl this Super Over.", show_alert=True)
+        return
+    so["sel_bowler"] = rid
     await q.answer()
     await _refresh_selection(context, mid, q)
 
@@ -464,6 +497,13 @@ async def so_bowlok_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     if not so["sel_bowler"]:
         await q.answer("Pick a bowler first.", show_alert=True)
+        return
+    # Defensive: the chosen bowler must still be eligible for this Super Over.
+    eligible = {int(p["roster_id"]) for p in _eligible_bowlers(so, so["bowl_uid"])}
+    if int(so["sel_bowler"]) not in eligible:
+        so["sel_bowler"] = None
+        await q.answer("That bowler isn't eligible — pick again.", show_alert=True)
+        await _refresh_selection(context, mid, q)
         return
     so["bowl_confirmed"] = True
     await q.answer("Bowler confirmed!")
@@ -486,6 +526,10 @@ async def _start_innings(context, mid):
     so = _get(context, mid)
     if not so:
         return
+    # Selection is locked in — remove the buttons from the selection message so a
+    # stale tap can't change the side after the innings has begun.
+    await _disable_message(context, so["chat_id"], so.get("sel_msg_id"))
+    so["sel_msg_id"] = None
     bat_uid, bowl_uid = so["bat_uid"], so["bowl_uid"]
     trio = list(so["sel_batters"])
     bowler_rid = so["sel_bowler"]

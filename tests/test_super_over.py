@@ -48,6 +48,13 @@ class FakeBot:
         self.messages.append(m)
         return m
 
+    async def edit_message_reply_markup(self, chat_id=None, message_id=None,
+                                        reply_markup=None):
+        self.messages.append(SimpleNamespace(
+            message_id=message_id, text=None, reply_markup=reply_markup,
+            chat_id=chat_id))
+        return None
+
     async def delete_message(self, *a, **k):
         pass
 
@@ -241,7 +248,7 @@ def test_super_over_full_flow_decides_a_winner():
     # On completion the Super Over state is cleaned up and a Match row finalised.
     assert _get(ctx, mid) is None
     # A winner/result was announced.
-    texts = "\n".join(m.text for m in ctx.bot.messages)
+    texts = "\n".join(m.text for m in ctx.bot.messages if m.text)
     assert "SUPER OVER RESULT" in texts
     assert "Match Winner" in texts
     assert "MATCH RESULT" in texts  # final combined scorecard
@@ -289,6 +296,34 @@ def test_dismissed_batter_cannot_be_reselected():
     asyncio.run(so_bat_callback(
         _upd(FakeQuery(f"so_bat_{mid}_{ok_rid}", bat_tg)), ctx))
     assert ok_rid in so["sel_batters"]
+
+
+def test_ineligible_bowler_tap_is_rejected():
+    from handlers.super_over import so_bowl_callback, _eligible_bowlers
+    random.seed(4)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    so = _get(ctx, mid)
+
+    bowl_uid = so["bowl_uid"]                      # HOST
+    bowl_tg = so["teams"][bowl_uid]["tg"]
+    # Mark this team's previous-Super-Over bowler — now restricted.
+    restricted = int(so["teams"][bowl_uid]["xi"][0]["roster_id"])
+    so["last_bowler"][bowl_uid] = restricted
+
+    # A stale button for the restricted bowler must be rejected.
+    asyncio.run(so_bowl_callback(
+        _upd(FakeQuery(f"so_bowl_{mid}_{restricted}", bowl_tg)), ctx))
+    assert so["sel_bowler"] is None
+
+    # An eligible bowler is accepted.
+    ok = int(_eligible_bowlers(so, bowl_uid)[0]["roster_id"])
+    asyncio.run(so_bowl_callback(
+        _upd(FakeQuery(f"so_bowl_{mid}_{ok}", bowl_tg)), ctx))
+    assert so["sel_bowler"] == ok
 
 
 def test_double_tap_shot_resolves_one_ball():
