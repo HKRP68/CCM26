@@ -197,12 +197,13 @@ def _cp_details(player):
         return {}
 
 
-def _find_challenge_player(session, search):
-    """Return (ChallengePlayer, ChallengeTeam, ChallengeLeague) for a name.
+def _find_challenge_players(session, search):
+    """Return [(ChallengePlayer, ChallengeTeam, ChallengeLeague), ...] for a name.
 
-    Searches every active challenge league. Prefers an exact (case-insensitive)
-    name match, then falls back to a partial match. Returns None if the player
-    is not part of any challenge league.
+    Searches every active challenge league. Prefers exact (case-insensitive)
+    name matches; if none are exact, returns the partial matches. The same real
+    player can appear in several leagues, so this returns every appearance.
+    Returns an empty list when the player is not part of any challenge league.
     """
     rows = (
         session.query(ChallengePlayer, ChallengeTeam, ChallengeLeague)
@@ -213,21 +214,19 @@ def _find_challenge_player(session, search):
             ChallengeTeam.is_active == True,  # noqa: E712
             ChallengePlayer.name.ilike(f"%{search}%"),
         )
-        .order_by(ChallengeLeague.sort_order, ChallengeTeam.sort_order,
-                  ChallengePlayer.sort_order)
+        .order_by(ChallengeLeague.sort_order, ChallengeLeague.name,
+                  ChallengeTeam.sort_order, ChallengePlayer.sort_order)
         .all()
     )
     if not rows:
-        return None
+        return []
     needle = search.strip().lower()
-    for cp, team, league in rows:
-        if (cp.name or "").strip().lower() == needle:
-            return cp, team, league
-    return rows[0]
+    exact = [r for r in rows if (r[0].name or "").strip().lower() == needle]
+    return exact or rows
 
 
-def _aggregate_player_game_stats(session, player_id):
-    """Sum every owner's PlayerGameStats for a master player_id into one block."""
+def _aggregate_player_game_stats(session, player_ids):
+    """Sum every owner's PlayerGameStats for one or more master player_ids."""
     agg = {
         "potm": 0, "bat_inns": 0, "runs": 0, "fifties": 0, "hundreds": 0,
         "fours": 0, "sixes": 0, "balls_faced": 0, "times_out": 0, "ducks": 0,
@@ -236,10 +235,11 @@ def _aggregate_player_game_stats(session, player_id):
         "balls_bowled": 0, "three_fers": 0, "five_fers": 0, "hattricks": 0,
         "best_bowl_wickets": 0, "best_bowl_runs": 0, "_has_bbf": False,
     }
-    if not player_id:
+    ids = [pid for pid in {p for p in (player_ids or []) if p}]
+    if not ids:
         return agg
     rows = (session.query(PlayerGameStats)
-            .filter(PlayerGameStats.player_id == player_id).all())
+            .filter(PlayerGameStats.player_id.in_(ids)).all())
     for gs in rows:
         for key in ("potm", "bat_inns", "runs", "fifties", "hundreds", "fours",
                     "sixes", "balls_faced", "times_out", "ducks", "bowl_inns",
@@ -259,8 +259,27 @@ def _aggregate_player_game_stats(session, player_id):
     return agg
 
 
+def _cp_attr(cp, details, master, key, fallback, cast=None):
+    """Read an attribute preferring the per-league details, then the master."""
+    val = details.get(key)
+    if val in (None, ""):
+        val = getattr(master, key, None) if master else None
+    if val in (None, ""):
+        val = fallback
+    if cast is not None:
+        try:
+            return cast(val)
+        except (TypeError, ValueError):
+            return fallback
+    return val
+
+
 async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/statscl <player name> — challenge-league player stats. Anyone can view."""
+    """/statscl <player name> — Challenge League player stats. Anyone can view.
+
+    Lists every league the player appears in (with that league's card values,
+    which can differ league to league) plus their overall match career.
+    """
     if not context.args:
         await update.message.reply_text(
             "Usage: /statscl <player name>\nExample: /statscl Virat Kohli")
@@ -269,27 +288,62 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     search = " ".join(context.args).strip()
     session = get_session()
     try:
-        found = _find_challenge_player(session, search)
-        if not found:
+        rows = _find_challenge_players(session, search)
+        if not rows:
             await update.message.reply_text("❌ No player found")
             return
 
-        cp, team, league = found
-        details = _cp_details(cp)
-        spid = getattr(cp, "source_player_id", None) or details.get("source_player_id")
+        # Display name from the first (exact-preferred) appearance.
+        name = rows[0][0].name or search
 
-        # Master Player gives us the correct card art (custom image / rarity
-        # template). Fall back to the challenge details for display values.
-        master = session.get(Player, spid) if spid else None
+        # Pick a master Player (for the card art) from any appearance that links
+        # one, and collect every linked master id for the career aggregate.
+        master = None
+        source_ids = []
+        primary_details = {}
+        for cp, _team, _league in rows:
+            d = _cp_details(cp)
+            spid = getattr(cp, "source_player_id", None) or d.get("source_player_id")
+            if spid:
+                source_ids.append(spid)
+                if master is None:
+                    m = session.get(Player, spid)
+                    if m is not None:
+                        master, primary_details = m, d
+        if not primary_details:
+            primary_details = _cp_details(rows[0][0])
 
-        name = cp.name or (master.name if master else search)
-        rating = (master.rating if master else None) or int(details.get("rating") or 0)
-        category = (master.category if master else None) or details.get("category") or "Player"
-        country = (master.country if master else None) or details.get("country") or ""
+        country = (getattr(master, "country", None)
+                   or primary_details.get("country") or "")
         flag = get_flag(country) if country else ""
+        head_rating = _cp_attr(rows[0][0], primary_details, master,
+                               "rating", 0, int)
+        head_category = _cp_attr(rows[0][0], primary_details, master,
+                                 "category", "Player")
 
-        agg = _aggregate_player_game_stats(session, spid)
+        # ── Per-league appearances ──
+        league_lines = []
+        for cp, team, league in rows[:8]:
+            d = _cp_details(cp)
+            rating = _cp_attr(cp, d, master, "rating", 0, int)
+            role = _cp_attr(cp, d, master, "category", "Player")
+            bat_r = _cp_attr(cp, d, master, "bat_rating", 0, int)
+            bowl_r = _cp_attr(cp, d, master, "bowl_rating", 0, int)
+            bat_hand = _cp_attr(cp, d, master, "bat_hand", "Right")
+            bowl_style = _cp_attr(cp, d, master, "bowl_style", "")
+            extra = f" · {bowl_style}" if bowl_style else ""
+            league_lines.append(
+                f"🏆 <b>{league.name}</b> · {team.name}\n"
+                f"   ⭐ {rating} OVR · {role}\n"
+                f"   🏏 Bat {bat_r} · 🎯 Bowl {bowl_r}\n"
+                f"   {bat_hand}-hand{extra}"
+            )
+        more = ""
+        if len(rows) > 8:
+            more = f"\n<i>…and {len(rows) - 8} more league(s)</i>"
 
+        # ── Overall match career (shared across leagues/modes) ──
+        agg = _aggregate_player_game_stats(session, source_ids)
         bat_avg = round(agg["runs"] / agg["times_out"], 2) if agg["times_out"] else 0.0
         bat_sr = round(agg["runs"] / agg["balls_faced"] * 100, 2) if agg["balls_faced"] else 0.0
         overs = round(agg["balls_bowled"] / 6, 1) if agg["balls_bowled"] else 0.0
@@ -300,42 +354,49 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if agg["bat_inns"] or agg["highest_score"]:
             hs = f"{agg['highest_score']}{'*' if agg['highest_score_not_out'] else ''}"
         bbf = f"{agg['best_bowl_wickets']}/{agg['best_bowl_runs']}" if agg["_has_bbf"] else "-"
+        played = bool(agg["bat_inns"] or agg["bowl_inns"])
 
-        text = (
+        header = (
             f"📛 <b>{name}</b> {flag}\n"
-            f"⭐ {rating} OVR | {category}\n"
-            f"🏆 {league.name} · {team.name}\n\n"
-            f"<code>"
-            f"Challenge League career\n"
-            f"POTM(s): {agg['potm']}\n"
-            f"\n"
-            f"{'🏏 BATTING':<20}{'🎯 BOWLING'}\n"
-            f"{'─' * 38}\n"
-            f"Inns: {agg['bat_inns']:<14}Inns: {agg['bowl_inns']}\n"
-            f"Runs: {agg['runs']:<14}Wickets: {agg['wickets_taken']}\n"
-            f"50s: {agg['fifties']:<15}3-Fers: {agg['three_fers']}\n"
-            f"100s: {agg['hundreds']:<14}5-Fers: {agg['five_fers']}\n"
-            f"4/6: {str(agg['fours']) + '/' + str(agg['sixes']):<13}Hattricks: {agg['hattricks']}\n"
-            f"Avg: {bat_avg:<14}Avg: {bowl_avg}\n"
-            f"SR: {bat_sr:<15}Economy: {econ}\n"
-            f"Ducks: {agg['ducks']:<13}SR: {bowl_sr}\n"
-            f"HS: {hs:<15}BBF: {bbf}\n"
-            f"</code>"
+            f"📋 In <b>{len(rows)}</b> Challenge League{'s' if len(rows) != 1 else ''}\n\n"
         )
+        text = header + "\n\n".join(league_lines) + more + "\n\n"
+        if played:
+            text += (
+                f"<b>📊 Match Career</b> (all leagues)\n"
+                f"<code>"
+                f"POTM(s): {agg['potm']}\n"
+                f"\n"
+                f"{'🏏 BATTING':<20}{'🎯 BOWLING'}\n"
+                f"{'─' * 38}\n"
+                f"Inns: {agg['bat_inns']:<14}Inns: {agg['bowl_inns']}\n"
+                f"Runs: {agg['runs']:<14}Wickets: {agg['wickets_taken']}\n"
+                f"50s: {agg['fifties']:<15}3-Fers: {agg['three_fers']}\n"
+                f"100s: {agg['hundreds']:<14}5-Fers: {agg['five_fers']}\n"
+                f"4/6: {str(agg['fours']) + '/' + str(agg['sixes']):<13}Hattricks: {agg['hattricks']}\n"
+                f"Avg: {bat_avg:<14}Avg: {bowl_avg}\n"
+                f"SR: {bat_sr:<15}Economy: {econ}\n"
+                f"Ducks: {agg['ducks']:<13}SR: {bowl_sr}\n"
+                f"HS: {hs:<15}BBF: {bbf}\n"
+                f"</code>"
+            )
+        else:
+            text += "<i>📊 No match stats yet — this player hasn't featured in a completed match.</i>"
 
         # Lead with the player's card image (master Player art when available).
         card_player = master
         if card_player is None:
             from types import SimpleNamespace
             card_player = SimpleNamespace(
-                id=spid or -(cp.id),
-                name=name, rating=rating or 50, category=category,
-                country=country or "", bat_hand=details.get("bat_hand") or "Right",
-                bowl_hand=details.get("bowl_hand") or "Right",
-                bowl_style=details.get("bowl_style") or "",
-                bat_rating=int(details.get("bat_rating") or 50),
-                bowl_rating=int(details.get("bowl_rating") or 40),
-                version=details.get("version") or "Base",
+                id=-(rows[0][0].id),
+                name=name, rating=head_rating or 50, category=head_category,
+                country=country or "",
+                bat_hand=primary_details.get("bat_hand") or "Right",
+                bowl_hand=primary_details.get("bowl_hand") or "Right",
+                bowl_style=primary_details.get("bowl_style") or "",
+                bat_rating=int(primary_details.get("bat_rating") or 50),
+                bowl_rating=int(primary_details.get("bowl_rating") or 40),
+                version=primary_details.get("version") or "Base",
                 card_file_id=None,
             )
 
@@ -349,8 +410,8 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if card_bytes:
             caption = (
                 f"📛 <b>{name}</b> {flag}\n"
-                f"⭐ {rating} OVR | {category}\n"
-                f"🏆 {league.name} · {team.name}"
+                f"⭐ {head_rating} OVR | {head_category}\n"
+                f"📋 In {len(rows)} Challenge League{'s' if len(rows) != 1 else ''}"
             )
             await update.message.reply_photo(
                 photo=io.BytesIO(card_bytes), caption=caption, parse_mode="HTML")
