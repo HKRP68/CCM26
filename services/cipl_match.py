@@ -31,6 +31,7 @@ from services.sim_match import (
     _fmt_to_engine_fmt,
     _normalize_outcome,
 )
+from services import death_over_chase
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +167,15 @@ class _ScenarioMatchShim:
 
 def _scenario_probability():
     """Chance (0–1) that an eligible chase is armed with a dramatic finish.
-    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.30)."""
+    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.12).
+
+    Lowered from 0.30 to reduce manufactured last-ball drama: the Death Over
+    Chase Momentum System now keeps death-over chases realistic without needing
+    the scenario engine to script as many contrived thrillers."""
     try:
-        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.30"))))
+        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.12"))))
     except (TypeError, ValueError):
-        return 0.30
+        return 0.12
 
 
 def _maybe_enable_scenario(state):
@@ -422,6 +427,29 @@ def _make_trait_hook(striker_traits, bowler_traits, ctx, collector=None):
         raw_weights, striker_traits, bowler_traits, ctx, collector)
 
 
+def _compose_weight_hooks(*hooks):
+    """Chain several one-arg weight hooks left-to-right, skipping None ones.
+    Returns None when nothing to apply so calculate_outcome stays a no-op."""
+    active = [h for h in hooks if h is not None]
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    def _chained(raw_weights):
+        w = raw_weights
+        for h in active:
+            try:
+                out = h(w)
+                if out:
+                    w = out
+            except Exception:
+                logger.exception("weight hook failed; skipping it this ball")
+        return w
+
+    return _chained
+
+
 # ════════════════════════════════════════════════════════════════════
 # Score / chase helpers
 # ════════════════════════════════════════════════════════════════════
@@ -470,6 +498,65 @@ def is_innings_over(state):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Death Over Chase Momentum System (realism guardrail)
+# ════════════════════════════════════════════════════════════════════
+#
+# Shared by /cipl, /letsplay and the Challenge League commands (all route here).
+# Once a chase enters a steerable death-over scenario, the success/failure
+# decision is rolled ONCE and frozen in state["death_over_chase"]; every later
+# ball biases the engine's outcome weights toward that frozen result. See
+# services/death_over_chase.py for the rules and percentages.
+
+def _death_snapshot(state, *, balls_left=None, runs_needed=None):
+    """Build the momentum-system snapshot from the current cipl_match state."""
+    if balls_left is None:
+        balls_left = max(0, state["overs"] * 6 - balls_bowled(state))
+    if runs_needed is None:
+        target = state.get("target")
+        runs_needed = max(0, int(target) - int(state["total_runs"])) if target else 0
+    striker = state["batting_order"][state["striker_idx"]]
+    non_striker = state["batting_order"][state["non_striker_idx"]]
+    sb = state["bat_stats"].get(str(striker["roster_id"]), {})
+    nb = state["bat_stats"].get(str(non_striker["roster_id"]), {})
+    return death_over_chase.build_snapshot(
+        state, balls_left=balls_left, runs_needed=runs_needed,
+        striker=striker, non_striker=non_striker,
+        striker_balls=sb.get("balls", 0), non_striker_balls=nb.get("balls", 0))
+
+
+def _ensure_death_over_chase(state):
+    """Detect + freeze the death-over chase decision once. Returns the stored
+    record ``{"frozen", "active", ["scenario", "decision"]}`` (mutated onto
+    state["death_over_chase"]). No-op outside a 2nd-innings chase."""
+    existing = state.get("death_over_chase")
+    if existing and existing.get("frozen"):
+        return existing
+    if state.get("innings") != 2 or not state.get("target"):
+        state["death_over_chase"] = {"frozen": False, "active": False}
+        return state["death_over_chase"]
+    snap = _death_snapshot(state)
+    scenario = death_over_chase.detect_scenario(snap)
+    if not scenario.get("active") or scenario.get("useNormalEngine"):
+        # Not yet in (or never reaches) a steerable scenario — leave unfrozen so
+        # a later over can re-detect as the situation tightens.
+        state["death_over_chase"] = {"frozen": False, "active": False}
+        return state["death_over_chase"]
+    decision = death_over_chase.decide_chase_result(scenario)
+    record = {"frozen": True, "active": not decision.get("useNormalEngine"),
+              "scenario": scenario, "decision": decision}
+    state["death_over_chase"] = record
+    if record["active"]:
+        logger.info(
+            "[CIPL DeathOverChase] match=%s scenario=%r chance=%s%% -> %s "
+            "(need %s off %s, %s wkts left)",
+            state.get("match_id"), scenario.get("scenario"),
+            scenario.get("chaseSuccessChance"),
+            "SUCCEED" if decision.get("chaseWillSucceed") else "FALL SHORT",
+            snap["runsNeeded"], snap["ballsLeft"], snap["wicketsLeft"])
+    return record
+
+
+# ════════════════════════════════════════════════════════════════════
 # Over simulation
 # ════════════════════════════════════════════════════════════════════
 
@@ -515,6 +602,16 @@ def simulate_over(state):
     # Traits that fire this over (populated by the per-ball trait hook). Stays
     # empty for Challenge League players, who carry no traits.
     over_traits = {"bat": set(), "bowl": set()}
+
+    # Death Over Chase Momentum System: freeze the chase decision once it enters
+    # a steerable death-over scenario, then bias every delivery toward it. The
+    # hook is None outside such a scenario (normal engine). Active for /cipl,
+    # /letsplay and Challenge League alike since they all reach this function.
+    dch_record = _ensure_death_over_chase(state)
+    dch_active = bool(dch_record.get("active"))
+    dch_hook = (death_over_chase.make_bias_hook(
+        dch_record["decision"], lambda: _death_snapshot(state))
+        if dch_active else None)
 
     while balls_this_over < 6 and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
@@ -569,12 +666,14 @@ def simulate_over(state):
         # ── Scenario engine hook ──
         # Finale phase scripts the delivery outright; free-play/convergence
         # phases instead nudge the pressure effects toward the target corridor.
+        # Suppressed while the Death Over Chase Momentum System is steering this
+        # chase, so the two layers never fight (and to cut manufactured drama).
         scenario_override = (scenario_eng.get_override_outcome(striker, bowler)
-                             if scenario_eng else None)
+                             if (scenario_eng and not dch_active) else None)
         if scenario_override:
             oc = _normalize_outcome(scenario_override)
         else:
-            if scenario_eng:
+            if scenario_eng and not dch_active:
                 for key, value in scenario_eng.get_scenario_bias({}).items():
                     if key == "dot_bonus":
                         pressure_effects[key] = pressure_effects.get(key, 0.0) + value
@@ -592,6 +691,9 @@ def simulate_over(state):
                 {"over": state["current_over"], "total_overs": overs_total,
                  "rrr": required_rr, "bat_balls_faced": bs["balls"]},
                 collector=over_traits)
+            # Compose traits (player ability) then the death-over chase bias
+            # (realism guardrail, applied last so it has the final say).
+            ball_hook = _compose_weight_hooks(trait_hook, dch_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=over_idx, batter_runs=bs["runs"],
@@ -601,7 +703,7 @@ def simulate_over(state):
                 batting_position=state["striker_idx"] + 1,
                 format_config=engine_fmt,
                 batting_approach=bat_app, bowling_approach=bowl_app,
-                weight_hook=trait_hook))
+                weight_hook=ball_hook))
 
         otype = oc.get("type")
         runs = oc.get("runs", 0)
