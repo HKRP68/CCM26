@@ -2604,6 +2604,57 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         logger.exception("webapp player-stat persistence failed")
 
+    # Player-of-the-Match career credit. ``persist_player_game_stats`` covers
+    # batting/bowling but not the POTM award, so increment it here (parity with
+    # the chat finalize in handlers.match). Find the POTM player's owning side
+    # from the innings XI lists, then bump that owner's PlayerGameStats.potm.
+    try:
+        if pom and pom.get("player_id") and state:
+            from models import PlayerGameStats
+            pom_rid = pom.get("roster_id")
+            pom_pid = pom.get("player_id")
+            owner_uid = None
+            for xi, owner in (
+                (state.get("inn1_bat_xi"), state.get("inn1_bat_team_id")),
+                (state.get("inn1_bowl_xi"), state.get("inn1_bowl_team_id")),
+                (state.get("bat_xi"), state.get("bat_team_id")),
+                (state.get("bowl_xi"), state.get("bowl_team_id")),
+            ):
+                if any(p.get("roster_id") == pom_rid for p in (xi or [])):
+                    owner_uid = owner
+                    break
+            if owner_uid:
+                row = (session.query(PlayerGameStats)
+                       .filter(PlayerGameStats.user_id == owner_uid,
+                               PlayerGameStats.player_id == pom_pid).first())
+                if row:
+                    row.potm = (row.potm or 0) + 1
+                else:
+                    session.add(PlayerGameStats(
+                        user_id=owner_uid, player_id=pom_pid, potm=1))
+    except Exception:
+        logger.exception("webapp POTM career credit failed (non-fatal)")
+
+    # Match-end quest tracking. The chat finalize fires per-user quest events
+    # (matches, wins, runs, 50s/100s, etc.) but the Mini App path never did, so
+    # /wpm and /wpmbot matches counted toward no quests. Fire the same shared
+    # tracker here for both human participants (the bot user is skipped inside).
+    try:
+        from services.quest_service import track_user_match_quests
+        from models import User as _QUser
+        is_vsbot_q = bool((state or {}).get("is_vsbot"))
+        is_tie = result.get("margin_type") == "tie"
+        for uid in (m.user1_id, m.user2_id):
+            if not uid:
+                continue
+            qu = session.query(_QUser).get(uid)
+            track_user_match_quests(
+                session, state or {}, qu,
+                bool(winner_uid and uid == winner_uid and not is_tie),
+                is_vsbot_q, winner_uid)
+    except Exception:
+        logger.exception("webapp match-end quest tracking failed")
+
     # ── Tour result hook ──
     # Mini-App matches that belong to a tour (launched /wpm-style from /mytours)
     # must update the tour standings exactly like the in-chat flow does. This is
@@ -3198,14 +3249,18 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
 
     This is the per-user analogue of ``auto_play_bot_turns`` — it powers the Mini
     App "autoplay" toggle so a human can hand their own side to the same
-    difficulty/phase-aware engine ``/vsbot`` uses. It drives whichever side the
-    user controls (bowling: delivery / new bowler; batting: shot / new batsman)
-    plus the one-time XI setup, reusing ``_apply_outcome`` and the same
-    next-action bookkeeping as the manual ``play_shot`` path.
+    difficulty/phase-aware engine ``/vsbot`` uses. It automates only the
+    ball-by-ball play of whichever side the user controls (bowling: deliveries;
+    batting: shots), reusing ``_apply_outcome`` and the same next-action
+    bookkeeping as the manual ``play_shot`` path. Every SELECTION stays manual,
+    even under Autoplay: XI/opener setup, the new bowler at the end of an over,
+    the incoming batsman after a wicket, and the opening bowler at the 2nd-innings
+    break are all handed back to the user to tap.
 
-    Stops when it's the opponent's/bot's turn, the match completes, or no
-    progress is made (loop-safety). Saves state as it goes; caller need not
-    commit. Returns a list of step dicts (for optional commentary)."""
+    Stops when it's the opponent's/bot's turn, a selection is owed, the match
+    completes, or no progress is made (loop-safety). Saves state as it goes;
+    caller need not commit. Returns a list of step dicts (for optional
+    commentary)."""
     import handlers.match as _bm
     from services import bot_ai
     from services.bowling_service import AVAILABLE_SHOTS
@@ -3323,31 +3378,14 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
             mwa.bump_ball_seq(match_id)
             continue
 
-        # Under Autoplay the user has handed their whole side to the AI, so the
-        # new-bowler / new-batsman picks are made automatically (mirroring
-        # auto_play_bot_turns) rather than pausing for a manual tap. Opener /
-        # opening-bowler selection at match start and at the innings break is the
-        # only selection that stays manual — that path is gated by _in_setup above.
-        if na == A_PICK_NEW_BOWLER:
-            new_bowler = bot_ai.pick_bot_next_bowler(
-                _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
-                state["bowl_stats"], state["overs"])
-            state["current_bowler"] = new_bowler
-            _emit_new_bowler(state, new_bowler)
-            mwa.save_state(match_id, state, next_action=A_PICK_DELIVERY)
-            steps.append({"type": "auto_bowler", "name": new_bowler["name"]})
-            continue
-
-        if na == A_PICK_NEW_BATSMAN:
-            nb = state.get("next_batsman_idx", 2)
-            if nb < len(state.get("batting_order", [])):
-                _install_new_batsman(state, nb)
-                state["next_batsman_idx"] = nb + 1
-            nxt = (A_PICK_NEW_BOWLER if state.pop("pending_new_bowler", False)
-                   else A_PICK_DELIVERY)
-            mwa.save_state(match_id, state, next_action=nxt)
-            steps.append({"type": "auto_batsman"})
-            continue
+        # Bowler/batsman SELECTION always stays the user's call, even under
+        # Autoplay — picking the new bowler at the end of an over, the incoming
+        # batsman after a wicket, and the opening bowler when the 2nd innings
+        # begins are all manual. Autoplay only ever automates deliveries and
+        # shots, so hand control back here and let the user tap. (This also
+        # mirrors the Mini App client, which never auto-acts on selection turns.)
+        if na in (A_PICK_NEW_BOWLER, A_PICK_NEW_BATSMAN):
+            break
 
         break
 

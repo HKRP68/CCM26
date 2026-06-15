@@ -415,3 +415,157 @@ def safe_track(session, user_id, event_key, count=1, mode="add"):
     except Exception:
         logger.exception(f"safe_track failed: user={user_id} event={event_key}")
         return []
+
+
+def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_uid):
+    """Fire every per-user match-end quest event for ``user`` from a completed
+    match ``state``.
+
+    Shared by the in-chat finalize (``handlers.match``) and the Mini App finalize
+    (``services.match_webapp_service.finalize_webapp_match``) so /wpm and /wpmbot
+    track exactly the same quests as /vsbot and PvP. ``state`` uses the common
+    shape (``inn1_*`` snapshots plus the live 2nd-innings stats). The bot user
+    (telegram_id == -1) is a no-op. Each event is best-effort via ``safe_track``;
+    callers still wrap this in their own try/except.
+    """
+    from models import UserRoster
+
+    if not user or getattr(user, "telegram_id", None) == -1:
+        return
+
+    uid = user.id
+    safe_track(session, uid, "match_played", 1)
+    if is_vsbot:
+        safe_track(session, uid, "vsbot_played", 1)
+    if is_winner:
+        safe_track(session, uid, "match_won", 1)
+        if is_vsbot:
+            safe_track(session, uid, "vsbot_won", 1)
+
+    # Aggregates across all of this user's players (both innings)
+    runs_total = wkts_total = fifties = hundreds = 0
+    sixes_total = fours_total = 0
+    hattricks_total = 0
+    maidens_total = 0
+    # Single-match maxes
+    max_runs_in_innings = 0
+    max_wickets_in_match = 0
+    max_sixes_in_innings = 0
+    max_boundaries_in_innings = 0
+    # Per-match accumulators (best single match, not summed across innings)
+    user_match_runs = 0
+    user_match_wkts = 0
+    user_match_not_outs = 0
+    cleanest_econ = None
+    had_clean_spell = False
+
+    for xi_key, stats_key, is_bat in [
+        ("inn1_bat_xi", "inn1_bat_stats", True),
+        ("inn1_bowl_xi", "inn1_bowl_stats", False),
+        ("bat_xi", "bat_stats", True),
+        ("bowl_xi", "bowl_stats", False),
+    ]:
+        xi = state.get(xi_key, [])
+        stats = state.get(stats_key, {}) or {}
+        for p in xi:
+            rid = p.get("roster_id")
+            if rid is None or rid <= 0:
+                continue
+            # Live state round-trips through JSON, so stat keys may be strings
+            # while roster_id in the XI stays an int — look up both.
+            pst = stats.get(rid)
+            if pst is None:
+                pst = stats.get(str(rid))
+            if not pst:
+                continue
+            ur = session.query(UserRoster).get(rid)
+            if not ur or ur.user_id != uid:
+                continue
+            if is_bat:
+                r = pst.get("runs", 0)
+                balls = pst.get("balls", 0)
+                runs_total += r
+                user_match_runs += r
+                max_runs_in_innings = max(max_runs_in_innings, r)
+                if r >= 100:
+                    hundreds += 1
+                elif r >= 50:
+                    fifties += 1
+                if balls > 0 and not pst.get("out"):
+                    user_match_not_outs += 1
+                sixes_p = pst.get("sixes", 0)
+                fours_p = pst.get("fours", 0)
+                sixes_total += sixes_p
+                fours_total += fours_p
+                max_sixes_in_innings = max(max_sixes_in_innings, sixes_p)
+                max_boundaries_in_innings = max(
+                    max_boundaries_in_innings, sixes_p + fours_p)
+            else:
+                w = pst.get("wickets", 0)
+                wkts_total += w
+                user_match_wkts += w
+                max_wickets_in_match = max(max_wickets_in_match, w)
+                if pst.get("hattrick"):
+                    hattricks_total += 1
+                maidens_total += pst.get("maidens", 0)
+                balls_b = pst.get("balls", 0)
+                runs_b = pst.get("runs", 0)
+                if balls_b >= 24:  # 4+ overs
+                    econ = (runs_b * 6.0) / balls_b if balls_b else 999
+                    if cleanest_econ is None or econ < cleanest_econ:
+                        cleanest_econ = econ
+                    if pst.get("maidens", 0) >= 1 and w >= 3:
+                        had_clean_spell = True
+
+    # Cumulative events
+    if runs_total > 0:
+        safe_track(session, uid, "runs_scored", runs_total)
+    if wkts_total > 0:
+        safe_track(session, uid, "wickets_taken", wkts_total)
+    if sixes_total > 0:
+        safe_track(session, uid, "sixes_hit", sixes_total)
+    if (sixes_total + fours_total) > 0:
+        safe_track(session, uid, "boundaries_hit", sixes_total + fours_total)
+    for _ in range(fifties):
+        safe_track(session, uid, "fifty", 1)
+    for _ in range(hundreds):
+        safe_track(session, uid, "hundred", 1)
+    for _ in range(hattricks_total):
+        safe_track(session, uid, "hattrick", 1)
+    if maidens_total > 0:
+        safe_track(session, uid, "maiden_over", maidens_total)
+    for _ in range(user_match_not_outs):
+        safe_track(session, uid, "not_out_innings", 1)
+
+    # Single-match max events
+    if max_runs_in_innings > 0:
+        safe_track(session, uid, "runs_in_innings", max_runs_in_innings, mode="max")
+    if max_wickets_in_match > 0:
+        safe_track(session, uid, "wickets_in_match", max_wickets_in_match, mode="max")
+    if max_sixes_in_innings > 0:
+        safe_track(session, uid, "sixes_in_match", max_sixes_in_innings, mode="max")
+    if max_boundaries_in_innings > 0:
+        safe_track(session, uid, "boundaries_in_match", max_boundaries_in_innings,
+                   mode="max")
+
+    # Allrounder match: 30+ runs AND 2+ wickets in same game
+    if user_match_runs >= 30 and user_match_wkts >= 2:
+        safe_track(session, uid, "allrounder_match", 1)
+
+    # Economy tier triggers (cumulative count of "clean spells")
+    if cleanest_econ is not None:
+        if cleanest_econ < 4.5:
+            safe_track(session, uid, "economy_under_4_5", 1)
+        if cleanest_econ < 5.0:
+            safe_track(session, uid, "economy_under_5", 1)
+        if cleanest_econ < 6.0:
+            safe_track(session, uid, "economy_under_6", 1)
+        if cleanest_econ < 7.0:
+            safe_track(session, uid, "economy_under_7", 1)
+
+    if had_clean_spell:
+        safe_track(session, uid, "clean_spell", 1)
+
+    # Chase win: user won AND batted second ("bat_xi" is the 2nd-innings lineup).
+    if is_winner and state.get("bat_team_id") == uid:
+        safe_track(session, uid, "chase_won", 1)
