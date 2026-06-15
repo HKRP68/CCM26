@@ -2711,3 +2711,32 @@ body {
   color: var(--warning-accent);
   margin-left: 2px;
 }
+
+/* Super Over block on the result screen (shown only when a match was decided
+   in a Super Over). */
+.result-super-over {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 92, 92, 0.10);
+  border: 1px solid rgba(255, 92, 92, 0.35);
+}
+.result-super-over.hidden { display: none; }
+.result-super-over-title {
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-size: 0.82rem;
+  margin-bottom: 6px;
+  color: #ff8a8a;
+}
+.result-super-over-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.86rem;
+  padding: 2px 0;
+}
+.result-super-over-win {
+  margin-top: 6px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}

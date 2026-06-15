@@ -267,10 +267,25 @@ async def start_super_over(context, mid, state) -> bool:
     return True
 
 
+def _spectate_markup(so):
+    """InlineKeyboardMarkup carrying the MAIN match's Mini App spectate button,
+    so every Super Over scorecard links back to the same match board."""
+    state = so.get("main_state")
+    if not state:
+        return None
+    try:
+        from handlers.cipl_play import _miniapp_row
+        rows = _miniapp_row(state)
+        return InlineKeyboardMarkup(rows) if rows else None
+    except Exception:
+        logger.exception("Super Over: spectate button build failed (%s)", so.get("mid"))
+        return None
+
+
 async def _send_main_scorecard(context, so, result, caption):
     """Render + send the MAIN-match summary card image (same scores throughout;
     only the result line changes — ``{"tie": True}`` → "Match Tied", or a winner
-    dict → "X won by N runs/wickets")."""
+    dict → "X won by N runs/wickets"). Carries the Mini App spectate button."""
     state = so.get("main_state")
     if not state:
         return False
@@ -280,7 +295,7 @@ async def _send_main_scorecard(context, so, result, caption):
         if img:
             await context.bot.send_photo(
                 so["chat_id"], photo=BytesIO(img), caption=caption,
-                parse_mode="HTML")
+                parse_mode="HTML", reply_markup=_spectate_markup(so))
             return True
     except Exception:
         logger.exception("Super Over: main scorecard image failed (%s)", so.get("mid"))
@@ -969,24 +984,69 @@ async def _show_ball(context, mid, note):
 # ════════════════════════════════════════════════════════════════════
 
 def _capture_innings_detail(so, inn, bat_uid, bowl_uid):
-    """Snapshot the just-finished Super Over innings for the scorecard image."""
+    """Snapshot the just-finished Super Over innings — used by both the scorecard
+    image and the Mini App scorecard innings."""
     batters = []
     for rid in inn["trio"]:
         st = inn["bat"].get(int(rid), {})
         if st.get("b", 0) > 0 or st.get("out"):
-            batters.append({"name": _name(so, bat_uid, rid), "runs": st.get("r", 0),
-                            "balls": st.get("b", 0), "out": st.get("out", False)})
+            batters.append({
+                "name": _name(so, bat_uid, rid), "runs": st.get("r", 0),
+                "balls": st.get("b", 0), "fours": st.get("4", 0),
+                "sixes": st.get("6", 0), "out": st.get("out", False),
+                "how_out": st.get("how", "") or ("out" if st.get("out") else "not out"),
+            })
     legal = inn["legal"]
     bowlers = [{"name": _name(so, bowl_uid, inn["bowler_rid"]),
                 "wickets": inn["bowl_wkts"], "runs": inn["bowl_runs"],
-                "overs": f"{legal // 6}.{legal % 6}"}]
+                "overs": f"{legal // 6}.{legal % 6}", "balls": legal}]
     return {
         "team": so["teams"][bat_uid]["name"],
-        "team_uid": bat_uid,
+        "team_uid": bat_uid, "opp_uid": bowl_uid,
         "runs": inn["runs"], "wickets": inn["wickets"],
         "overs": f"{legal // 6}.{legal % 6}",
         "batters": batters, "bowlers": bowlers,
     }
+
+
+def _super_over_summary(so, winner_name, margin_text):
+    """Compact Super Over summary for the Mini App result screen: winner +
+    each Super Over innings' total (labelled Innings 1 & 2)."""
+    innings = []
+    for i, d in enumerate(so.get("so_innings") or [], start=1):
+        innings.append({
+            "label": f"Super Over Innings {i}",
+            "team": d["team"], "runs": d["runs"], "wickets": d["wickets"],
+        })
+    return {"winner": winner_name, "marginText": margin_text, "innings": innings}
+
+
+def _super_over_miniapp_innings(so):
+    """Build the Super Over's innings in the Mini App scorecard format so they
+    show after the two main-match innings (Super Over Innings 1 & 2)."""
+    out = []
+    for i, d in enumerate(so.get("so_innings") or [], start=1):
+        bowl_team = so["teams"].get(d.get("opp_uid"), {}).get("name", "")
+        batting = [{
+            "name": b["name"], "runs": b["runs"], "balls": b["balls"],
+            "fours": b.get("fours", 0), "sixes": b.get("sixes", 0),
+            "out": b["out"], "how_out": b.get("how_out", ""),
+            "sr": round(b["runs"] * 100 / b["balls"], 1) if b["balls"] else 0,
+        } for b in d["batters"]]
+        bowling = [{
+            "name": w["name"], "overs": w["overs"], "runs": w["runs"],
+            "wickets": w["wickets"], "maidens": 0,
+            "econ": round(w["runs"] / (w["balls"] / 6), 2) if w.get("balls") else 0,
+        } for w in d["bowlers"]]
+        out.append({
+            "number": 2 + i,                       # after the two main innings
+            "label": f"Super Over - Innings {i}",
+            "super_over": True,
+            "bat_team": d["team"], "bowl_team": bowl_team,
+            "runs": d["runs"], "wickets": d["wickets"], "overs": d["overs"],
+            "batting": batting, "bowling": bowling,
+        })
+    return out
 
 
 async def _end_innings(context, mid, chase_won=False):
@@ -1115,7 +1175,9 @@ async def _finalize(context, mid, winner_uid, loser_uid):
             from services.match_webapp_service import save_final_scorecard
             save_final_scorecard(
                 session, mid,
-                result_text=f"{win['name']} won the Super Over")
+                result_text=f"{win['name']} won the match by {margin} {margin_type} (Super Over)",
+                extra_innings=_super_over_miniapp_innings(so),
+                super_over=_super_over_summary(so, win["name"], margin_text))
         except Exception:
             logger.exception("Super Over final scorecard snapshot failed (%s)", mid)
         session.commit()
@@ -1143,7 +1205,7 @@ async def _finalize(context, mid, winner_uid, loser_uid):
             await context.bot.send_photo(
                 so["chat_id"], photo=BytesIO(so_img),
                 caption=f"🔥 <b>Super Over</b> — {html.escape(win['name'])} {margin_text}",
-                parse_mode="HTML")
+                parse_mode="HTML", reply_markup=_spectate_markup(so))
     except Exception:
         logger.exception("Super Over: sending super-over card failed (%s)", mid)
 

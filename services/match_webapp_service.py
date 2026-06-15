@@ -2245,10 +2245,17 @@ def build_scorecard(match_id, user_id):
 
 # ══════════════════ Persisted scorecards (completed matches) ═════════
 
-def save_final_scorecard(session, match_id, result_text=None):
+def save_final_scorecard(session, match_id, result_text=None, extra_innings=None,
+                         super_over=None):
     """Snapshot the final scorecard from live state into MatchScorecard so it
     can be viewed read-only after the match. Idempotent. Call at completion,
-    BEFORE the live state is cleaned up."""
+    BEFORE the live state is cleaned up.
+
+    ``extra_innings`` (optional) is appended after the main innings — used to
+    carry Super Over innings so the Mini App shows them like the main match.
+    ``super_over`` (optional) is a compact summary (winner + per-innings totals)
+    surfaced on the Mini App result screen.
+    """
     import json as _json
     from models import MatchScorecard
 
@@ -2264,12 +2271,14 @@ def save_final_scorecard(session, match_id, result_text=None):
         logger.warning("save_final_scorecard: build_scorecard not ok for match %s "
                        "(state missing?) — no row persisted", match_id)
         return False
+    all_innings = list(sc["innings"]) + list(extra_innings or [])
     row = MatchScorecard(
         match_id=match_id,
-        scorecard_json=_json.dumps({"innings": sc["innings"],
+        scorecard_json=_json.dumps({"innings": all_innings,
                                     "current_innings": sc.get("current_innings"),
                                     "target": sc.get("target"),
                                     "impact_players": sc.get("impact_players", []),
+                                    "super_over": super_over,
                                     # Keep the completed Arena board queryable
                                     # after live match_state cleanup. This lets
                                     # /wpm Play Match reopen as a read-only
