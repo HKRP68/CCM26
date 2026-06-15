@@ -639,10 +639,18 @@ def players_list():
 
         categories = [r[0] for r in db.query(Player.category).distinct().order_by(Player.category).all()]
         countries = [r[0] for r in db.query(Player.country).distinct().order_by(Player.country).all()]
-        versions = [r[0] for r in (db.query(Player.version)
-                                   .filter(Player.version.isnot(None))
-                                   .distinct().order_by(Player.version).all())
-                    if r[0]]
+        # Version filter options: always offer the canonical rarities
+        # (Base / Star / Legend) plus every version label that exists in the
+        # DB, so newly created versions appear automatically.
+        db_versions = [r[0] for r in (db.query(Player.version)
+                                      .filter(Player.version.isnot(None))
+                                      .distinct().order_by(Player.version).all())
+                       if r[0]]
+        canonical_versions = ["Base", "Star", "Legend"]
+        seen_versions = {v.lower() for v in canonical_versions}
+        versions = canonical_versions + [
+            v for v in db_versions if v.lower() not in seen_versions
+        ]
 
         # Set of player IDs with active custom images (for 🎨 indicator)
         from services.player_image_service import list_players_with_custom_images
