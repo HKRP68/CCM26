@@ -48,6 +48,15 @@ class FakeBot:
         self.messages.append(m)
         return m
 
+    async def send_photo(self, chat_id, photo=None, caption=None,
+                         parse_mode=None, reply_markup=None):
+        self._mid += 1
+        m = SimpleNamespace(message_id=self._mid, text=caption,
+                            reply_markup=reply_markup, chat_id=chat_id,
+                            photo=photo, is_photo=True)
+        self.messages.append(m)
+        return m
+
     async def edit_message_reply_markup(self, chat_id=None, message_id=None,
                                         reply_markup=None):
         self.messages.append(SimpleNamespace(
@@ -225,6 +234,11 @@ def _patch_finalize(monkeypatch_target):
     mr.award_match_rewards_core = lambda *a, **k: (0, 0, 0, 0)
     import services.match_state_store as mss
     mss.cleanup_state = lambda *a, **k: None
+    # Skip real PIL scorecard rendering by default (fast); the dedicated image
+    # test re-stubs these to return bytes to assert the send flow.
+    import handlers.cipl_play as cipl_play
+    cipl_play._build_cipl_summary_image = lambda state, result: None
+    so_mod._build_super_over_card = lambda so: None
     return captured
 
 
@@ -251,7 +265,9 @@ def test_super_over_full_flow_decides_a_winner():
     texts = "\n".join(m.text for m in ctx.bot.messages if m.text)
     assert "SUPER OVER RESULT" in texts
     assert "Match Winner" in texts
-    assert "MATCH RESULT" in texts  # final combined scorecard
+    # Result delivered via the main scorecard image caption, or the text
+    # fallback when image rendering is unavailable.
+    assert ("won the match by" in texts) or ("MATCH RESULT" in texts)
 
 
 def test_owner_gating_blocks_wrong_user():
@@ -427,6 +443,34 @@ def test_first_batting_team_gets_the_edge():
     assert boost_b > base_b              # more boundaries with the boost
     assert edge_w < base_w               # edge → fewer wickets for the bat side
     assert drama_b > edge_b              # last-ball drama → even more boundaries
+
+
+def test_scorecard_images_sent_tie_superover_and_winner():
+    import handlers.cipl_play as cipl_play
+    random.seed(11)
+    _patch_finalize(so_mod)
+    # Stub the image builders so we don't need PIL/fonts — just bytes.
+    orig_main = cipl_play._build_cipl_summary_image
+    orig_so = so_mod._build_super_over_card
+    cipl_play._build_cipl_summary_image = lambda state, result: b"IMG"
+    so_mod._build_super_over_card = lambda so: b"IMG"
+    try:
+        ctx = FakeContext()
+        state = _tied_state()
+        mid = state["match_id"]
+        asyncio.run(start_super_over(ctx, mid, state))
+        asyncio.run(_play_match(ctx, mid))
+
+        photos = [m for m in ctx.bot.messages if getattr(m, "is_photo", False)]
+        caps = "\n".join(m.text for m in photos if m.text)
+        # 1) main "Match Tied" card, 2) Super Over card, 3) main winner card.
+        assert "Match Tied" in caps
+        assert "Super Over" in caps
+        assert "won the match by" in caps
+        assert len(photos) >= 3
+    finally:
+        cipl_play._build_cipl_summary_image = orig_main
+        so_mod._build_super_over_card = orig_so
 
 
 def test_many_seeds_always_terminate_with_a_winner():

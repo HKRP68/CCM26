@@ -35,6 +35,7 @@ import asyncio
 import html
 import logging
 from datetime import datetime
+from io import BytesIO
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -94,6 +95,29 @@ def _mention(tg_id, name):
 
 def _pitch_for_engine(pitch):
     return _PITCH_MAP.get((pitch or "Hard"), "Hard")
+
+
+def _xi_players(xi):
+    """Return ONLY the confirmed main-match Playing XI players.
+
+    The Super Over must use the same eleven that played the main match — never
+    anyone else from the squad/roster. ``state['bat_xi']`` / ``state['bowl_xi']``
+    already hold exactly that XI; this just defensively drops anything malformed
+    and de-dupes by roster id so no stray entry can slip into selection.
+    """
+    out, seen = [], set()
+    for p in xi or []:
+        if not isinstance(p, dict):
+            continue
+        rid = p.get("roster_id")
+        if rid is None:
+            continue
+        rid = int(rid)
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append(p)
+    return out
 
 
 def find_super_over_in_chat(bot_data, chat_id):
@@ -158,7 +182,8 @@ async def start_super_over(context, mid, state) -> bool:
                 "name": state.get("bat_team_name", "Team A"),
                 "code": state.get("bat_team_code", ""),
                 "emoji": state.get("bat_team_emoji", "🏏"),
-                "xi": list(state.get("bat_xi") or []),
+                # Strictly the eleven that played the main match — nobody else.
+                "xi": _xi_players(state.get("bat_xi")),
             },
             first_bat_uid: {
                 "uid": first_bat_uid,
@@ -166,7 +191,7 @@ async def start_super_over(context, mid, state) -> bool:
                 "name": state.get("bowl_team_name", "Team B"),
                 "code": state.get("bowl_team_code", ""),
                 "emoji": state.get("bowl_team_emoji", "🏏"),
-                "xi": list(state.get("bowl_xi") or []),
+                "xi": _xi_players(state.get("bowl_xi")),
             },
         }
         # Need at least 2 batters + 1 bowler available on each side.
@@ -199,6 +224,9 @@ async def start_super_over(context, mid, state) -> bool:
             "results": [],                       # per-super-over scorelines
             "dismissed": {uid: set() for uid in teams},   # rids out in any SO
             "last_bowler": {uid: None for uid in teams},  # prev-SO bowler rid
+            # Keep the finished main-match state so the main scorecard image can
+            # be re-rendered (tie now, winner after the Super Over).
+            "main_state": state,
         }
         context.bot_data[_so_key(mid)] = so
 
@@ -212,6 +240,11 @@ async def start_super_over(context, mid, state) -> bool:
             f"<b>{html.escape(teams[second_bat_uid]['name'])}</b> will bat first "
             "because they batted second in the main match.",
             parse_mode="HTML")
+
+        # Main-match scorecard image, captioned "Match Tied".
+        await _send_main_scorecard(
+            context, so, {"tie": True},
+            caption="🏏 <b>Match Tied</b> — Super Over to follow!")
 
         _begin_super_over(so)
         await _send_selection(context, mid)
@@ -232,6 +265,64 @@ async def start_super_over(context, mid, state) -> bool:
     except Exception:
         logger.exception("Super Over: deferred main-stat persistence failed (%s)", mid)
     return True
+
+
+async def _send_main_scorecard(context, so, result, caption):
+    """Render + send the MAIN-match summary card image (same scores throughout;
+    only the result line changes — ``{"tie": True}`` → "Match Tied", or a winner
+    dict → "X won by N runs/wickets")."""
+    state = so.get("main_state")
+    if not state:
+        return False
+    try:
+        from handlers.cipl_play import _build_cipl_summary_image
+        img = _build_cipl_summary_image(state, result)
+        if img:
+            await context.bot.send_photo(
+                so["chat_id"], photo=BytesIO(img), caption=caption,
+                parse_mode="HTML")
+            return True
+    except Exception:
+        logger.exception("Super Over: main scorecard image failed (%s)", so.get("mid"))
+    return False
+
+
+def _build_super_over_card(so):
+    """Render a 'SUPER OVER' titled scorecard image for the deciding Super Over
+    (its two innings), reusing the shared match-summary card generator."""
+    innings = so.get("so_innings") or []
+    if len(innings) < 2:
+        return None
+    try:
+        from services.match_summary_card import generate_match_summary
+        try:
+            from services.config_service import get_config
+            text_settings = get_config().get("scorecard_text_settings")
+        except Exception:
+            text_settings = None
+
+        a, b = innings[0], innings[1]
+        win_uid = so.get("_winner_uid")
+        win_name = so["teams"][win_uid]["name"] if win_uid in so["teams"] else ""
+        margin = so.get("_margin_text", "won the Super Over")
+        return generate_match_summary(
+            inn1_team=a["team"], inn1_runs=a["runs"], inn1_wickets=a["wickets"],
+            inn1_overs=a["overs"],
+            inn2_team=b["team"], inn2_runs=b["runs"], inn2_wickets=b["wickets"],
+            inn2_overs=b["overs"],
+            winner_name=win_name, win_margin_text=margin,
+            overs_total=1,
+            top_per_team={
+                "inn1": {"team": a["team"], "batters": a["batters"], "bowlers": a["bowlers"]},
+                "inn2": {"team": b["team"], "batters": b["batters"], "bowlers": b["bowlers"]},
+            },
+            match_no=so.get("mid"),
+            header_left="SUPER", header_right="OVER",
+            text_settings=text_settings,
+        )
+    except Exception:
+        logger.exception("Super Over: super-over scorecard image failed")
+        return None
 
 
 def _persist_main_stats(mid, state):
@@ -272,6 +363,7 @@ def _begin_super_over(so):
     so["target"] = None
     so["score"] = {}                 # uid -> (runs, wickets) this super over
     so["bowled_by"] = {}             # uid -> bowler rid used this super over
+    so["so_innings"] = []            # per-innings detail for the scorecard image
     _reset_selection(so)
 
 
@@ -876,11 +968,34 @@ async def _show_ball(context, mid, note):
 # Innings / Super Over transitions
 # ════════════════════════════════════════════════════════════════════
 
+def _capture_innings_detail(so, inn, bat_uid, bowl_uid):
+    """Snapshot the just-finished Super Over innings for the scorecard image."""
+    batters = []
+    for rid in inn["trio"]:
+        st = inn["bat"].get(int(rid), {})
+        if st.get("b", 0) > 0 or st.get("out"):
+            batters.append({"name": _name(so, bat_uid, rid), "runs": st.get("r", 0),
+                            "balls": st.get("b", 0), "out": st.get("out", False)})
+    legal = inn["legal"]
+    bowlers = [{"name": _name(so, bowl_uid, inn["bowler_rid"]),
+                "wickets": inn["bowl_wkts"], "runs": inn["bowl_runs"],
+                "overs": f"{legal // 6}.{legal % 6}"}]
+    return {
+        "team": so["teams"][bat_uid]["name"],
+        "team_uid": bat_uid,
+        "runs": inn["runs"], "wickets": inn["wickets"],
+        "overs": f"{legal // 6}.{legal % 6}",
+        "batters": batters, "bowlers": bowlers,
+    }
+
+
 async def _end_innings(context, mid, chase_won=False):
     so = _get(context, mid)
     inn = so["inn"]
     bat_uid = so["bat_uid"]
     so["score"][bat_uid] = (inn["runs"], inn["wickets"])
+    so.setdefault("so_innings", []).append(
+        _capture_innings_detail(so, inn, bat_uid, so["bowl_uid"]))
     # Record the bowler this team's opponent used (for next-SO restriction).
     so["last_bowler"][so["bowl_uid"]] = inn["bowler_rid"]
 
@@ -961,6 +1076,18 @@ async def _finalize(context, mid, winner_uid, loser_uid):
     win = so["teams"][winner_uid]
     lose = so["teams"][loser_uid]
 
+    # Super Over winning margin (runs if the winner batted first and defended,
+    # wickets if they chased it down).
+    w_runs, w_wkts = so["score"].get(winner_uid, (0, 0))
+    l_runs, _l_wkts = so["score"].get(loser_uid, (0, 0))
+    if winner_uid == so["first_bat_uid"]:
+        margin_type, margin = "runs", max(0, w_runs - l_runs)
+    else:
+        margin_type, margin = "wickets", max(1, 2 - w_wkts)
+    margin_text = f"won by {margin} {margin_type}"
+    so["_winner_uid"] = winner_uid
+    so["_margin_text"] = margin_text
+
     # Reward + finalise the Match row.
     prize = None
     session = get_session()
@@ -1009,9 +1136,29 @@ async def _finalize(context, mid, winner_uid, loser_uid):
         f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>",
         parse_mode="HTML")
 
-    # Final combined scorecard.
-    await context.bot.send_message(
-        so["chat_id"], _final_scorecard(so, win, prize), parse_mode="HTML")
+    # Super Over scorecard image (titled "SUPER OVER").
+    try:
+        so_img = _build_super_over_card(so)
+        if so_img:
+            await context.bot.send_photo(
+                so["chat_id"], photo=BytesIO(so_img),
+                caption=f"🔥 <b>Super Over</b> — {html.escape(win['name'])} {margin_text}",
+                parse_mode="HTML")
+    except Exception:
+        logger.exception("Super Over: sending super-over card failed (%s)", mid)
+
+    # Main scorecard image — same main-match scores, result now reads
+    # "X won the match by N runs/wickets" instead of "Match Tied".
+    sent_main = await _send_main_scorecard(
+        context, so,
+        {"tie": False, "winner": win["name"], "margin": margin,
+         "margin_type": margin_type},
+        caption=f"🏆 <b>{html.escape(win['name'])} won the match by "
+                f"{margin} {margin_type}</b>")
+    if not sent_main:
+        # Image unavailable — fall back to the text combined scorecard.
+        await context.bot.send_message(
+            so["chat_id"], _final_scorecard(so, win, prize), parse_mode="HTML")
 
     # Clean up the live match state and the Super Over working state.
     try:

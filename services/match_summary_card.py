@@ -207,7 +207,7 @@ def _draw_glow_block(img, box, color, *, blur=28, alpha=150):
     img.alpha_composite(glow)
 
 
-def _draw_header(draw, img, text_settings, match_no):
+def _draw_header(draw, img, text_settings, match_no, header_left=None, header_right=None):
     x, y, w, h = OUTER_PAD, HEADER_Y, CARD_W, HEADER_H
     _rounded(draw, [x, y, x + w, y + h], 34, (7, 10, 16, 248),
              (255, 255, 255, 38), 2)
@@ -234,10 +234,11 @@ def _draw_header(draw, img, text_settings, match_no):
               fill=(255, 255, 255, 36), width=1)
 
     f = _font_for(text_settings, "header_title", 104, family="display")
-    left = _text(text_settings, "header_title", "SUMMARY").upper()
+    left = (header_left or _text(text_settings, "header_title", "SUMMARY")).upper()
     _draw_shadowed_text(draw, _xy(text_settings, "header_title", x + 98, y + 48),
                         left, f, tracking=4)
-    right = _text(text_settings, "match_no", f"MATCH #{match_no or '—'}").upper()
+    right = (header_right if header_right is not None
+             else _text(text_settings, "match_no", f"MATCH #{match_no or '—'}")).upper()
     rw = _tracked_width(draw, right, f, 4)
     rx, ry = _xy(text_settings, "match_no", x + w - 98 - rw, y + 48)
     _draw_shadowed_text(draw, (rx, ry), right, f, tracking=4)
@@ -431,6 +432,8 @@ def generate_match_summary(*,
     is_spectator=False,
     match_no=None,
     text_settings=None,
+    header_left=None,
+    header_right=None,
 ) -> bytes | None:
     """Render the match summary card. Returns PNG bytes or ``None`` on failure."""
     try:
@@ -443,7 +446,8 @@ def generate_match_summary(*,
         draw.rounded_rectangle([12, 12, W - 13, H - 13], radius=26,
                                outline=(255, 255, 255, 25), width=1)
 
-        _draw_header(draw, img, text_settings, match_no)
+        _draw_header(draw, img, text_settings, match_no,
+                     header_left=header_left, header_right=header_right)
         stadium_text = stadium or (match_date.strftime("%d %b %Y") if isinstance(match_date, datetime) else "MATCH")
         _draw_stadium(draw, text_settings, stadium_text)
 
