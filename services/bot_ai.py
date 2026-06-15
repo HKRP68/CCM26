@@ -187,6 +187,18 @@ def pick_bot_shot(striker, bowler, over, total_overs,
 # Bowler rotation — picks who bowls next
 # ════════════════════════════════════════════════════════════════════
 
+def _overs_done(bowl_stats, roster_id):
+    """Read a bowler's completed-overs count, tolerant of roster-id keys that
+    JSON serialization may have stringified (live state round-trips through the
+    match-state store, so ``bowl_stats`` keys are strings while ``roster_id`` in
+    the XI stays an int). A raw ``.get(int_key)`` would miss the string key and
+    silently report 0 overs, letting a bowler blow past their quota."""
+    row = bowl_stats.get(roster_id)
+    if row is None:
+        row = bowl_stats.get(str(roster_id), {})
+    return row.get("overs_done", 0)
+
+
 def pick_bot_next_bowler(bowl_xi, prev_bowler_rid, bowl_stats, total_overs):
     """Pick next bowler from XI:
     - Cannot be previous bowler
@@ -195,13 +207,12 @@ def pick_bot_next_bowler(bowl_xi, prev_bowler_rid, bowl_stats, total_overs):
     """
     # Per-bowler over cap = ceil(total_overs / 5), min 1 (e.g. 20→4, 10→2, 6→2).
     quota = max(1, -(-int(total_overs) // 5))
+    bowl_stats = bowl_stats or {}
     candidates = []
     for p in bowl_xi:
         if p["roster_id"] == prev_bowler_rid:
             continue
-        bs = bowl_stats.get(p["roster_id"], {})
-        overs_done = bs.get("overs_done", 0)
-        if overs_done >= quota:
+        if _overs_done(bowl_stats, p["roster_id"]) >= quota:
             continue
         candidates.append(p)
 
