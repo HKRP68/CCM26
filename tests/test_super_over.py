@@ -34,7 +34,8 @@ class FakeBot:
         self._mid = 5000
         self.messages = []
 
-    async def send_message(self, chat_id, text, parse_mode=None, reply_markup=None):
+    async def send_message(self, chat_id, text, parse_mode=None,
+                           reply_markup=None, **kwargs):
         self._mid += 1
         m = SimpleNamespace(message_id=self._mid, text=text,
                             reply_markup=reply_markup, chat_id=chat_id)
@@ -42,11 +43,27 @@ class FakeBot:
         return m
 
     async def edit_message_text(self, text, chat_id=None, message_id=None,
-                                parse_mode=None, reply_markup=None):
+                                parse_mode=None, reply_markup=None, **kwargs):
         m = SimpleNamespace(message_id=message_id, text=text,
                             reply_markup=reply_markup, chat_id=chat_id)
         self.messages.append(m)
         return m
+
+    async def send_photo(self, chat_id, photo=None, caption=None,
+                         parse_mode=None, reply_markup=None, **kwargs):
+        self._mid += 1
+        m = SimpleNamespace(message_id=self._mid, text=caption,
+                            reply_markup=reply_markup, chat_id=chat_id,
+                            photo=photo, is_photo=True)
+        self.messages.append(m)
+        return m
+
+    async def edit_message_reply_markup(self, chat_id=None, message_id=None,
+                                        reply_markup=None, **kwargs):
+        self.messages.append(SimpleNamespace(
+            message_id=message_id, text=None, reply_markup=reply_markup,
+            chat_id=chat_id))
+        return None
 
     async def delete_message(self, *a, **k):
         pass
@@ -218,6 +235,11 @@ def _patch_finalize(monkeypatch_target):
     mr.award_match_rewards_core = lambda *a, **k: (0, 0, 0, 0)
     import services.match_state_store as mss
     mss.cleanup_state = lambda *a, **k: None
+    # Skip real PIL scorecard rendering by default (fast); the dedicated image
+    # test re-stubs these to return bytes to assert the send flow.
+    import handlers.cipl_play as cipl_play
+    cipl_play._build_cipl_summary_image = lambda state, result: None
+    so_mod._build_super_over_card = lambda so: None
     return captured
 
 
@@ -241,10 +263,12 @@ def test_super_over_full_flow_decides_a_winner():
     # On completion the Super Over state is cleaned up and a Match row finalised.
     assert _get(ctx, mid) is None
     # A winner/result was announced.
-    texts = "\n".join(m.text for m in ctx.bot.messages)
+    texts = "\n".join(m.text for m in ctx.bot.messages if m.text)
     assert "SUPER OVER RESULT" in texts
     assert "Match Winner" in texts
-    assert "MATCH RESULT" in texts  # final combined scorecard
+    # Result delivered via the main scorecard image caption, or the text
+    # fallback when image rendering is unavailable.
+    assert ("won the match by" in texts) or ("MATCH RESULT" in texts)
 
 
 def test_owner_gating_blocks_wrong_user():
@@ -289,6 +313,34 @@ def test_dismissed_batter_cannot_be_reselected():
     asyncio.run(so_bat_callback(
         _upd(FakeQuery(f"so_bat_{mid}_{ok_rid}", bat_tg)), ctx))
     assert ok_rid in so["sel_batters"]
+
+
+def test_ineligible_bowler_tap_is_rejected():
+    from handlers.super_over import so_bowl_callback, _eligible_bowlers
+    random.seed(4)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    so = _get(ctx, mid)
+
+    bowl_uid = so["bowl_uid"]                      # HOST
+    bowl_tg = so["teams"][bowl_uid]["tg"]
+    # Mark this team's previous-Super-Over bowler — now restricted.
+    restricted = int(so["teams"][bowl_uid]["xi"][0]["roster_id"])
+    so["last_bowler"][bowl_uid] = restricted
+
+    # A stale button for the restricted bowler must be rejected.
+    asyncio.run(so_bowl_callback(
+        _upd(FakeQuery(f"so_bowl_{mid}_{restricted}", bowl_tg)), ctx))
+    assert so["sel_bowler"] is None
+
+    # An eligible bowler is accepted.
+    ok = int(_eligible_bowlers(so, bowl_uid)[0]["roster_id"])
+    asyncio.run(so_bowl_callback(
+        _upd(FakeQuery(f"so_bowl_{mid}_{ok}", bowl_tg)), ctx))
+    assert so["sel_bowler"] == ok
 
 
 def test_double_tap_shot_resolves_one_ball():
@@ -392,6 +444,112 @@ def test_first_batting_team_gets_the_edge():
     assert boost_b > base_b              # more boundaries with the boost
     assert edge_w < base_w               # edge → fewer wickets for the bat side
     assert drama_b > edge_b              # last-ball drama → even more boundaries
+
+
+def test_scorecard_images_sent_tie_superover_and_winner():
+    import handlers.cipl_play as cipl_play
+    random.seed(11)
+    _patch_finalize(so_mod)
+    # Stub the image builders so we don't need PIL/fonts — just bytes — and the
+    # Mini App spectate button so every card carries it.
+    orig_main = cipl_play._build_cipl_summary_image
+    orig_so = so_mod._build_super_over_card
+    orig_row = cipl_play._miniapp_row
+    cipl_play._build_cipl_summary_image = lambda state, result: b"IMG"
+    so_mod._build_super_over_card = lambda so: b"IMG"
+    cipl_play._miniapp_row = lambda state: [["VIEW_MATCH_BTN"]]
+    try:
+        ctx = FakeContext()
+        state = _tied_state()
+        mid = state["match_id"]
+        asyncio.run(start_super_over(ctx, mid, state))
+        asyncio.run(_play_match(ctx, mid))
+
+        photos = [m for m in ctx.bot.messages if getattr(m, "is_photo", False)]
+        caps = "\n".join(m.text for m in photos if m.text)
+        # 1) main "Match Tied" card, 2) Super Over card, 3) main winner card.
+        assert "Match Tied" in caps
+        assert "Super Over" in caps
+        assert "won the match by" in caps
+        assert len(photos) >= 3
+        # Every scorecard image carries the main-match spectate button.
+        assert all(getattr(p, "reply_markup", None) is not None for p in photos)
+        # The reward message is sent even though the images rendered, so the
+        # coins/gems aren't applied silently.
+        text_msgs = "\n".join(
+            m.text for m in ctx.bot.messages
+            if m.text and not getattr(m, "is_photo", False))
+        assert "MATCH RESULT" in text_msgs
+        assert "Prizes" in text_msgs
+    finally:
+        cipl_play._build_cipl_summary_image = orig_main
+        so_mod._build_super_over_card = orig_so
+        cipl_play._miniapp_row = orig_row
+
+
+def test_super_over_miniapp_innings_shape():
+    from handlers.super_over import _super_over_miniapp_innings
+    so = {
+        "teams": {1: {"name": "Host XI"}, 2: {"name": "Guest XI"}},
+        "so_innings": [
+            {"team": "Guest XI", "team_uid": 2, "opp_uid": 1,
+             "runs": 15, "wickets": 1, "overs": "1.0",
+             "batters": [{"name": "G1", "runs": 12, "balls": 5, "fours": 1,
+                          "sixes": 1, "out": False, "how_out": "not out"}],
+             "bowlers": [{"name": "H5", "wickets": 1, "runs": 15, "overs": "1.0",
+                          "balls": 6}]},
+            {"team": "Host XI", "team_uid": 1, "opp_uid": 2,
+             "runs": 14, "wickets": 2, "overs": "1.0",
+             "batters": [{"name": "H1", "runs": 8, "balls": 4, "fours": 0,
+                          "sixes": 1, "out": True, "how_out": "Bowled"}],
+             "bowlers": [{"name": "G5", "wickets": 2, "runs": 14, "overs": "1.0",
+                          "balls": 6}]},
+        ],
+    }
+    inns = _super_over_miniapp_innings(so)
+    assert len(inns) == 2
+    assert inns[0]["label"] == "Super Over - Innings 1"
+    assert inns[1]["label"] == "Super Over - Innings 2"
+    assert inns[0]["number"] == 3 and inns[1]["number"] == 4
+    assert all(i["super_over"] for i in inns)
+    assert inns[0]["bat_team"] == "Guest XI" and inns[0]["bowl_team"] == "Host XI"
+    assert inns[0]["runs"] == 15 and inns[0]["wickets"] == 1
+    assert inns[0]["batting"][0]["name"] == "G1"
+    assert inns[0]["bowling"][0]["wickets"] == 1
+
+
+def test_finalize_persists_super_over_innings():
+    import services.match_webapp_service as mws
+    random.seed(13)
+    _patch_finalize(so_mod)
+    captured = {}
+
+    def fake_save(session, match_id, result_text=None, extra_innings=None,
+                  super_over=None):
+        captured["result_text"] = result_text
+        captured["extra_innings"] = extra_innings
+        captured["super_over"] = super_over
+        return True
+
+    orig = mws.save_final_scorecard
+    mws.save_final_scorecard = fake_save
+    try:
+        ctx = FakeContext()
+        state = _tied_state()
+        mid = state["match_id"]
+        asyncio.run(start_super_over(ctx, mid, state))
+        asyncio.run(_play_match(ctx, mid))
+        assert captured.get("extra_innings") is not None
+        assert len(captured["extra_innings"]) == 2  # two Super Over innings
+        assert "Super Over" in (captured.get("result_text") or "")
+        assert "won the match by" in (captured.get("result_text") or "")
+        # Compact summary for the Mini App result screen.
+        so = captured.get("super_over") or {}
+        assert so.get("winner")
+        assert len(so.get("innings") or []) == 2
+        assert so["innings"][0]["label"] == "Super Over Innings 1"
+    finally:
+        mws.save_final_scorecard = orig
 
 
 def test_many_seeds_always_terminate_with_a_winner():

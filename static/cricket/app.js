@@ -2308,6 +2308,32 @@ function renderResultScreen() {
   document.getElementById('result-inn2-score').innerText =
     `${inn2.runs}/${inn2.wickets} (${inn2.overs}.${inn2.balls} ov)`;
 
+  // Super Over (if the match was decided in one): show each Super Over innings'
+  // total and the winner, after the two main innings. Guarded so normal matches
+  // are unaffected.
+  const soEl = document.getElementById('result-super-over');
+  if (soEl) {
+    const so = matchState.superOver || result?.superOver;
+    const soInns = so && Array.isArray(so.innings) ? so.innings : [];
+    if (soInns.length) {
+      let html = '<div class="result-super-over-title">🔥 SUPER OVER</div>';
+      soInns.forEach((s, i) => {
+        const label = s.label || `Super Over Innings ${i + 1}`;
+        const team = s.team ? `${s.team} ` : '';
+        html += `<div class="result-super-over-row"><span>${label}</span>` +
+                `<span>${team}${s.runs}/${s.wickets}</span></div>`;
+      });
+      if (so.winner) {
+        html += `<div class="result-super-over-win">🏆 ${so.winner} won the match` +
+                `${so.marginText ? ' ' + so.marginText : ''}</div>`;
+      }
+      soEl.innerHTML = html;
+      soEl.classList.remove('hidden');
+    } else {
+      soEl.classList.add('hidden');
+    }
+  }
+
   // Render MOTM
   const motmSection = document.getElementById('result-motm-section');
   if (result && result.motm) {

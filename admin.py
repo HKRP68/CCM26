@@ -6315,6 +6315,11 @@ def _match_rest_full_state(db, match_id, user_id):
         snapshot = build_snapshot(db, match_id, user_id, state_override=arena)
         if snapshot is not None:
             snapshot["status"] = "completed"
+            # Surface a Super Over summary (if the match was decided in one) so
+            # the Mini App result screen can show its innings + winner.
+            so_summary = (final or {}).get("super_over")
+            if so_summary:
+                snapshot["superOver"] = so_summary
         return {
             "ok": True,
             "match_id": match_id,
