@@ -589,6 +589,91 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
     return adjusted
 
 
+# -----------------------------------------------------------------------------
+# Rating-based performance gating
+# -----------------------------------------------------------------------------
+# Product rule (applies to every game mode that funnels through calculate_outcome:
+# /cipl, /c<league>, /letsplay, /wpmbot, /wpm, /vsbot, /playmatch, /sim):
+#
+#   • A batsman whose Batting Rating is below WEAK_BATTING_THRESHOLD struggles:
+#       fewer 4s/6s, strike rate dragged below a run-a-ball (more dots, fewer
+#       2s/3s), and they fall early/cheaply (higher wicket chance).
+#   • A bowler whose Bowling Rating is below WEAK_BOWLING_THRESHOLD leaks runs:
+#       more boundaries/singles conceded, fewer dots, and fewer wickets.
+#   • The reverse rewards quality players (a strong batsman vs a weak bowler is
+#       rewarded), so the rating contest is sharpened in both directions.
+#
+# Effects scale with how far the rating sits past the threshold, and weights are
+# renormalised afterwards so total probability mass is preserved.
+WEAK_BATTING_THRESHOLD = 40
+WEAK_BOWLING_THRESHOLD = 55
+# Quality players (vice-versa) earn a milder edge above these marks.
+STRONG_BATTING_THRESHOLD = 75
+STRONG_BOWLING_THRESHOLD = 80
+
+
+def _apply_rating_performance_modifiers(weights: dict,
+                                        batting_rating: float,
+                                        bowling_rating: float) -> dict:
+    """Sharpen how raw player ratings shape a delivery's outcome weights.
+
+    See the module-level note above WEAK_BATTING_THRESHOLD for the product rule.
+    The adjustments are multiplicative on the raw outcome weights and are
+    renormalised at the end so the total probability mass is unchanged — only
+    the *distribution* between dots/runs/boundaries/wickets shifts.
+    """
+    w = dict(weights)
+
+    def _scale(key: str, factor: float) -> None:
+        if key in w:
+            w[key] *= factor
+
+    # --- Weak batsman (batting_rating < 40): scores less, gets out early ---
+    if batting_rating < WEAK_BATTING_THRESHOLD:
+        # deficit in [0,1]: rating 40 → 0.0, rating 20 → 0.5, rating 0 → 1.0
+        deficit = min((WEAK_BATTING_THRESHOLD - batting_rating) / 40.0, 1.0)
+        _scale("Six",    1.0 - 0.70 * deficit)   # big hits dry up
+        _scale("Four",   1.0 - 0.55 * deficit)   # fewer fours
+        _scale("Three",  1.0 - 0.40 * deficit)
+        _scale("Double", 1.0 - 0.30 * deficit)   # strike rate dragged down
+        _scale("Single", 1.0 - 0.12 * deficit)
+        _scale("Dot",    1.0 + 0.45 * deficit)   # many more dots → SR < 100
+        _scale("Wicket", 1.0 + 0.85 * deficit)   # falls early / cheaply
+    # --- Quality batsman (vice-versa): mild scoring edge ---
+    elif batting_rating >= STRONG_BATTING_THRESHOLD:
+        surplus = min((batting_rating - STRONG_BATTING_THRESHOLD) / 25.0, 1.0)
+        _scale("Six",    1.0 + 0.20 * surplus)
+        _scale("Four",   1.0 + 0.15 * surplus)
+        _scale("Dot",    1.0 - 0.10 * surplus)
+        _scale("Wicket", 1.0 - 0.15 * surplus)
+
+    # --- Weak bowler (bowling_rating < 55): concedes more, strikes less ---
+    if bowling_rating < WEAK_BOWLING_THRESHOLD:
+        # deficit in [0,1]: rating 55 → 0.0, rating ~27 → 0.5, rating 0 → 1.0
+        deficit = min((WEAK_BOWLING_THRESHOLD - bowling_rating) / 55.0, 1.0)
+        _scale("Six",    1.0 + 0.45 * deficit)   # leaks boundaries
+        _scale("Four",   1.0 + 0.40 * deficit)
+        _scale("Single", 1.0 + 0.12 * deficit)
+        _scale("Dot",    1.0 - 0.25 * deficit)   # harder to bowl dots
+        _scale("Wicket", 1.0 - 0.45 * deficit)   # fewer wickets
+    # --- Quality bowler (vice-versa): mild containment/strike edge ---
+    elif bowling_rating >= STRONG_BOWLING_THRESHOLD:
+        surplus = min((bowling_rating - STRONG_BOWLING_THRESHOLD) / 20.0, 1.0)
+        _scale("Dot",    1.0 + 0.15 * surplus)
+        _scale("Wicket", 1.0 + 0.20 * surplus)
+        _scale("Four",   1.0 - 0.12 * surplus)
+        _scale("Six",    1.0 - 0.15 * surplus)
+
+    # Renormalise so total probability mass is preserved (relative shift only).
+    orig_total = sum(weights.values())
+    new_total = sum(w.values())
+    if new_total > 0 and orig_total > 0:
+        scale = orig_total / new_total
+        w = {k: v * scale for k, v in w.items()}
+
+    return w
+
+
 # Batting position context multipliers (Feature 9)
 # Top-order batters have higher baseline impact; tail-enders are penalised.
 _POS_BATTING_MULT: dict = {
@@ -1023,6 +1108,17 @@ def calculate_outcome(
         if pitch_wear > 0.0:
             raw_weights = _apply_pitch_wear(raw_weights, pitch, pitch_wear)
             logger.debug("[PitchWear=%.3f] Applied T20 pitch deterioration.", pitch_wear)
+
+    # 3.4) Rating-based performance gating (all game modes).
+    # Sharpens the impact of raw player ratings: weak batsmen (rating < 40)
+    # score less and fall early; weak bowlers (rating < 55) concede more and
+    # strike less — and vice-versa for quality players. Uses the raw, un-position-
+    # adjusted batting rating so the threshold reflects the player's true rating.
+    raw_weights = _apply_rating_performance_modifiers(
+        raw_weights,
+        batter["batting_rating"],
+        bowler["bowling_rating"],
+    )
 
     # 3.5) Apply Game State Momentum Engine (GSME) adjustments.
     # This layer accounts for ball history (last 18 deliveries), run-rate
