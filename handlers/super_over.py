@@ -1218,9 +1218,18 @@ async def _finalize(context, mid, winner_uid, loser_uid):
         caption=f"🏆 <b>{html.escape(win['name'])} won the match by "
                 f"{margin} {margin_type}</b>")
     if not sent_main:
-        # Image unavailable — fall back to the text combined scorecard.
+        # Image unavailable — fall back to the text combined scorecard (scores
+        # only; prize/POTM live in the reward message below).
         await context.bot.send_message(
-            so["chat_id"], _final_scorecard(so, win, prize), parse_mode="HTML")
+            so["chat_id"], _final_scorecard(so, win, None), parse_mode="HTML")
+
+    # Final match-reward message — ALWAYS sent (independent of whether the images
+    # rendered) so the coins/gems from award_match_rewards_core and the Player of
+    # the Match are never lost. Carries the spectate button like the cards.
+    await context.bot.send_message(
+        so["chat_id"], _final_reward_text(so, win, lose, prize, margin_text),
+        parse_mode="HTML", reply_markup=_spectate_markup(so),
+        disable_web_page_preview=True)
 
     # Clean up the live match state and the Super Over working state.
     try:
@@ -1235,6 +1244,37 @@ def _so_scoreline(so, uid):
     t = so["teams"][uid]
     sc = so["score"].get(uid, (0, 0))
     return f"{html.escape(t['name'])}: <b>{sc[0]}/{sc[1]}</b>"
+
+
+def _final_reward_text(so, win, lose, prize, margin_text):
+    """Final reward message — result + Player of the Match + coins/gems. Sent
+    after the Super Over winner is decided, regardless of image rendering, so
+    the rewards (award_match_rewards_core) and POTM are never shown silently."""
+    lines = [
+        "🏆 <b>MATCH RESULT</b>",
+        f"{_mention(win['tg'], win['name'])} (<b>{html.escape(win['name'])}</b>) "
+        f"won the match {html.escape(margin_text)} <i>(Super Over)</i>.",
+    ]
+    # Player of the Match — taken from the MAIN match performance (like /cipl).
+    try:
+        from handlers.cipl_play import _cipl_calc_potm
+        potm_name, potm_stats, potm_team = _cipl_calc_potm(
+            so.get("main_state"), win["name"])
+    except Exception:
+        logger.exception("Super Over: POTM calc failed (%s)", so.get("mid"))
+        potm_name, potm_stats, potm_team = None, None, None
+    if potm_name:
+        team_suffix = f" ({html.escape(potm_team)})" if potm_team else ""
+        lines += ["", f"🌟 <b>Player of the Match:</b> {html.escape(potm_name)}{team_suffix}"]
+        if potm_stats:
+            lines.append(f"   <i>{html.escape(str(potm_stats))}</i>")
+    if prize:
+        lines += [
+            "", "💰 <b>Prizes</b>",
+            f"🏆 {html.escape(win['name'])}: +{prize['wc']:,} coins, +{prize['wg']} 💎",
+            f"🤝 {html.escape(lose['name'])}: +{prize['lc']:,} coins, +{prize['lg']} 💎",
+        ]
+    return "\n".join(lines)
 
 
 def _final_scorecard(so, win, prize):

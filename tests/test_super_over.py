@@ -34,7 +34,8 @@ class FakeBot:
         self._mid = 5000
         self.messages = []
 
-    async def send_message(self, chat_id, text, parse_mode=None, reply_markup=None):
+    async def send_message(self, chat_id, text, parse_mode=None,
+                           reply_markup=None, **kwargs):
         self._mid += 1
         m = SimpleNamespace(message_id=self._mid, text=text,
                             reply_markup=reply_markup, chat_id=chat_id)
@@ -42,14 +43,14 @@ class FakeBot:
         return m
 
     async def edit_message_text(self, text, chat_id=None, message_id=None,
-                                parse_mode=None, reply_markup=None):
+                                parse_mode=None, reply_markup=None, **kwargs):
         m = SimpleNamespace(message_id=message_id, text=text,
                             reply_markup=reply_markup, chat_id=chat_id)
         self.messages.append(m)
         return m
 
     async def send_photo(self, chat_id, photo=None, caption=None,
-                         parse_mode=None, reply_markup=None):
+                         parse_mode=None, reply_markup=None, **kwargs):
         self._mid += 1
         m = SimpleNamespace(message_id=self._mid, text=caption,
                             reply_markup=reply_markup, chat_id=chat_id,
@@ -58,7 +59,7 @@ class FakeBot:
         return m
 
     async def edit_message_reply_markup(self, chat_id=None, message_id=None,
-                                        reply_markup=None):
+                                        reply_markup=None, **kwargs):
         self.messages.append(SimpleNamespace(
             message_id=message_id, text=None, reply_markup=reply_markup,
             chat_id=chat_id))
@@ -473,6 +474,13 @@ def test_scorecard_images_sent_tie_superover_and_winner():
         assert len(photos) >= 3
         # Every scorecard image carries the main-match spectate button.
         assert all(getattr(p, "reply_markup", None) is not None for p in photos)
+        # The reward message is sent even though the images rendered, so the
+        # coins/gems aren't applied silently.
+        text_msgs = "\n".join(
+            m.text for m in ctx.bot.messages
+            if m.text and not getattr(m, "is_photo", False))
+        assert "MATCH RESULT" in text_msgs
+        assert "Prizes" in text_msgs
     finally:
         cipl_play._build_cipl_summary_image = orig_main
         so_mod._build_super_over_card = orig_so
