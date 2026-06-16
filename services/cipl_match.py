@@ -347,24 +347,63 @@ def _overs_bowled(state, rid):
     return state["bowl_stats"].get(str(rid), {}).get("balls", 0) // 6
 
 
+def is_part_time_bowler(p):
+    """A batsman/keeper offered as an *emergency* bowler — i.e. not a specialist
+    Bowler or All-rounder. Used to annotate the picker so the captain knows the
+    front-line attack is exhausted."""
+    return p.get("category") not in ("Bowler", "All-rounder")
+
+
 def eligible_bowlers(state):
-    """Bowlers + all-rounders, excluding the previous over's bowler and any who
-    have used their full over quota."""
+    """Bowlers a captain may pick for the upcoming over, in preference order.
+
+    Tiered so an over can ALWAYS be bowled — even when the front-line attack has
+    been mismanaged (e.g. only five bowlers and all their overs used up before
+    the last over):
+
+      1. Specialists (Bowler / All-rounder) under quota, not the previous bowler.
+      2. Emergency part-timers (batsmen) under quota, not the previous bowler —
+         this is the "someone has to bowl the 20th over" fallback.
+      3. Last resort: anyone left under quota (ignoring the no-back-to-back rule),
+         then anyone at all, so the match never deadlocks.
+
+    Within each tier, highest bowl_rating first.
+    """
     xi = state.get("bowl_xi") or []
-    elig = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")]
-    if not elig:
-        elig = list(xi)
     quota = max_bowler_overs(state)
-    under_quota = [p for p in elig if _overs_bowled(state, p["roster_id"]) < quota]
-    if under_quota:
-        elig = under_quota
     prev = state.get("prev_bowler_rid")
-    if prev is not None and len(elig) > 1:
-        filtered = [p for p in elig if p["roster_id"] != prev]
-        if filtered:
-            elig = filtered
-    # Highest bowl_rating first
-    return sorted(elig, key=lambda p: p.get("bowl_rating", 0), reverse=True)
+
+    def _avail(pool, enforce_quota=True, enforce_prev=True):
+        out = list(pool)
+        if enforce_quota:
+            out = [p for p in out if _overs_bowled(state, p["roster_id"]) < quota]
+        if enforce_prev and prev is not None:
+            out = [p for p in out if p["roster_id"] != prev]
+        return out
+
+    def _sorted(pool):
+        return sorted(pool, key=lambda p: p.get("bowl_rating", 0), reverse=True)
+
+    specialists = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")]
+    part_timers = [p for p in xi if is_part_time_bowler(p)]
+
+    # 1) Front-line attack with overs left.
+    pool = _avail(specialists)
+    if pool:
+        return _sorted(pool)
+
+    # 2) Specialists are bowled out (or only the previous bowler remains) — throw
+    #    the ball to a part-time batsman so the over can still be bowled.
+    pool = _avail(part_timers)
+    if pool:
+        return _sorted(pool)
+
+    # 3) Everyone is at quota / only the previous bowler is left: relax the
+    #    back-to-back rule, then the quota, so play can always continue.
+    pool = (_avail(xi, enforce_prev=False)
+            or _avail(xi, enforce_quota=False, enforce_prev=False)
+            or list(xi))
+    return _sorted(pool)
 
 
 def find_player(xi, roster_id):
@@ -711,6 +750,7 @@ def simulate_over(state):
             _push_commentary(state, "extra", striker_name,
                              _ec() or f"Leg byes, {runs} run(s).",
                              runs=runs, event_key="legbye")
+            free_hit = False  # legal delivery consumes the free hit
             if runs % 2 == 1:
                 _swap_strike(state)
 
@@ -796,8 +836,10 @@ def simulate_over(state):
                              _ec(is_maiden=_maiden)
                              or _run_text(runs, striker_name, bowler["name"]),
                              runs=runs, event_key=_run_key)
-            if runs not in (4, 6):
-                free_hit = False
+            # A free hit is consumed by this one legal delivery — clear it even if
+            # the batter found the boundary (otherwise the free-hit run-out lock
+            # would wrongly carry on to the next ball).
+            free_hit = False
             if runs % 2 == 1:
                 _swap_strike(state)
 

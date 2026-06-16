@@ -605,7 +605,7 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
 #
 # Effects scale with how far the rating sits past the threshold, and weights are
 # renormalised afterwards so total probability mass is preserved.
-WEAK_BATTING_THRESHOLD = 40
+WEAK_BATTING_THRESHOLD = 50
 WEAK_BOWLING_THRESHOLD = 55
 # Quality players (vice-versa) earn a milder edge above these marks.
 STRONG_BATTING_THRESHOLD = 75
@@ -628,17 +628,19 @@ def _apply_rating_performance_modifiers(weights: dict,
         if key in w:
             w[key] *= factor
 
-    # --- Weak batsman (batting_rating < 40): scores less, gets out early ---
+    # --- Weak batsman (batting_rating < 50): scores less, gets out early ---
+    # Pure bowlers / rabbits (rating ~20-30) must look like genuine tail-enders:
+    # low strike rate, very few boundaries and frequent dismissals. The penalty
+    # scales with how far below 50 the rating sits (rating 50 → 0.0, 0 → 1.0).
     if batting_rating < WEAK_BATTING_THRESHOLD:
-        # deficit in [0,1]: rating 40 → 0.0, rating 20 → 0.5, rating 0 → 1.0
-        deficit = min((WEAK_BATTING_THRESHOLD - batting_rating) / 40.0, 1.0)
-        _scale("Six",    1.0 - 0.70 * deficit)   # big hits dry up
-        _scale("Four",   1.0 - 0.55 * deficit)   # fewer fours
-        _scale("Three",  1.0 - 0.40 * deficit)
-        _scale("Double", 1.0 - 0.30 * deficit)   # strike rate dragged down
-        _scale("Single", 1.0 - 0.12 * deficit)
-        _scale("Dot",    1.0 + 0.45 * deficit)   # many more dots → SR < 100
-        _scale("Wicket", 1.0 + 0.85 * deficit)   # falls early / cheaply
+        deficit = min((WEAK_BATTING_THRESHOLD - batting_rating) / 50.0, 1.0)
+        _scale("Six",    1.0 - 0.90 * deficit)   # big hits all but vanish
+        _scale("Four",   1.0 - 0.80 * deficit)   # fours dry up
+        _scale("Three",  1.0 - 0.50 * deficit)
+        _scale("Double", 1.0 - 0.45 * deficit)   # strike rate dragged down hard
+        _scale("Single", 1.0 - 0.25 * deficit)
+        _scale("Dot",    1.0 + 0.80 * deficit)   # mostly dots → SR well below 100
+        _scale("Wicket", 1.0 + 1.20 * deficit)   # falls early / cheaply
     # --- Quality batsman (vice-versa): mild scoring edge ---
     elif batting_rating >= STRONG_BATTING_THRESHOLD:
         surplus = min((batting_rating - STRONG_BATTING_THRESHOLD) / 25.0, 1.0)
@@ -1192,10 +1194,15 @@ def calculate_outcome(
         # Recalculate total weight after pressure modifications
         total_weight = sum(raw_weights.values())
     
-    # 4) Free hit: slight boundary boost (+10%) for both Four and Six.
-    if free_hit and "Four" in raw_weights and "Six" in raw_weights:
-        raw_weights["Four"] *= FREE_HIT_BOUNDARY_BOOST
-        raw_weights["Six"] *= FREE_HIT_BOUNDARY_BOOST
+    # 4) Free hit: slight boundary boost (+10%) for both Four and Six, and the
+    # wicket chance collapses to a sliver — the only dismissal a free hit allows
+    # is a run out (forced below in calculate_outcome's wicket branch).
+    if free_hit:
+        if "Four" in raw_weights and "Six" in raw_weights:
+            raw_weights["Four"] *= FREE_HIT_BOUNDARY_BOOST
+            raw_weights["Six"] *= FREE_HIT_BOUNDARY_BOOST
+        if "Wicket" in raw_weights:
+            raw_weights["Wicket"] *= 0.10  # only run-outs remain possible
         total_weight = sum(raw_weights.values())
 
     # 4b) Approach modifiers (Challenge League over-by-over mode). No-op when
@@ -1253,7 +1260,12 @@ def calculate_outcome(
 
         # Decide wicket type based on bowling style (A7: varies by bowling type, A6: includes Stumped)
         types, weights_pct = _get_wicket_type_by_bowling(bowling_type)
-        wicket_choice = random.choices(types, weights=weights_pct)[0]
+        if free_hit:
+            # On a free hit (the ball after a no-ball) the only legal dismissal
+            # is a run out — bowled/caught/LBW/stumped do not count.
+            wicket_choice = "Run Out"
+        else:
+            wicket_choice = random.choices(types, weights=weights_pct)[0]
 
         result["wicket_type"] = wicket_choice
 

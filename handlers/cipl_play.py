@@ -604,18 +604,25 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     if not first:
         await _delete_prev_over(context, state)
     elig = cipl_match.eligible_bowlers(state)
+    # When the front-line attack is exhausted, eligible_bowlers falls back to
+    # part-time batsmen — flag them in the picker so the captain knows.
+    only_part_timers = bool(elig) and all(
+        cipl_match.is_part_time_bowler(p) for p in elig)
     rows, row = [], []
     for p in elig:
+        tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
         row.append(InlineKeyboardButton(
-            f"{p['name']} ({p.get('bowl_rating', 0)})",
+            f"{p['name']} ({p.get('bowl_rating', 0)}){tag}",
             callback_data=f"cipl_bowler_{mid}_{p['roster_id']}"))
         if len(row) == 2:
             rows.append(row); row = []
     if row:
         rows.append(row)
+    part_time_note = ("\n⚠️ <i>Front-line bowlers are bowled out — only part-time "
+                      "bowlers (🧤) are left.</i>" if only_part_timers else "")
     text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
-            f"for over {state['current_over']}:")
+            f"for over {state['current_over']}:{part_time_note}")
     await _new_action_message(context, state, text, rows)
     _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
     _arm_timer(context, mid, A_PICK_CIPL_BOWLER)
