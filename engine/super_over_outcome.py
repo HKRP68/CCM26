@@ -41,6 +41,7 @@ def calculate_super_over_outcome(
     boundary_boost: float = 1.0,
     last_ball: bool = False,
     edge: float = 1.0,
+    free_hit: bool = False,
 ) -> dict:
     """
     Simulates one delivery in a Super Over. Uses SUPER_OVER_SCORING_MATRIX
@@ -158,6 +159,14 @@ def calculate_super_over_outcome(
             # Extras depend solely on bowler error, with a 1.2× super-over boost
             weight = base_prob * ((100 - bowling) / 100.0) * 1.2
 
+        # Free hit: the only dismissal allowed is a run out, so the wicket
+        # chance collapses to a sliver and boundaries get the usual lift.
+        if free_hit:
+            if outcome == "Wicket":
+                weight *= 0.10
+            elif outcome in ("Four", "Six"):
+                weight *= 1.10
+
         # Ensure non-negative
         raw_weights[outcome] = max(weight, 0.0)
 
@@ -222,9 +231,13 @@ def calculate_super_over_outcome(
         result["runs"] = 0
         result["batter_out"] = True
 
-        # A7+A6: Wicket type based on bowling style (includes Stumped)
-        wicket_types, weights_pct = _get_wicket_type_by_bowling(bowling_type)
-        chosen_wicket = random.choices(wicket_types, weights=weights_pct, k=1)[0]
+        # A7+A6: Wicket type based on bowling style (includes Stumped).
+        # On a free hit the only legal dismissal is a run out.
+        if free_hit:
+            chosen_wicket = "Run Out"
+        else:
+            wicket_types, weights_pct = _get_wicket_type_by_bowling(bowling_type)
+            chosen_wicket = random.choices(wicket_types, weights=weights_pct, k=1)[0]
         result["wicket_type"] = chosen_wicket
         result["description"] = random.choice(commentary_templates["Wicket"])
 

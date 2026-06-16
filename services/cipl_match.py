@@ -347,11 +347,31 @@ def _overs_bowled(state, rid):
     return state["bowl_stats"].get(str(rid), {}).get("balls", 0) // 6
 
 
+# Emergency part-time bowlers (batsmen) are capped well below the regular quota
+# so a mismanaged attack can't simply farm out the innings to a batsman.
+PART_TIME_MAX_OVERS = 2
+
+
 def is_part_time_bowler(p):
     """A batsman/keeper offered as an *emergency* bowler — i.e. not a specialist
     Bowler or All-rounder. Used to annotate the picker so the captain knows the
     front-line attack is exhausted."""
     return p.get("category") not in ("Bowler", "All-rounder")
+
+
+def quota_for(state, p):
+    """Per-bowler over cap: the regular quota for specialists, but emergency
+    part-timers are capped at PART_TIME_MAX_OVERS (and never more than a
+    specialist could bowl)."""
+    base = max_bowler_overs(state)
+    if is_part_time_bowler(p):
+        return min(base, PART_TIME_MAX_OVERS)
+    return base
+
+
+def overs_left(state, p):
+    """Overs this player may still bowl under their (part-time-aware) quota."""
+    return max(0, quota_for(state, p) - _overs_bowled(state, p["roster_id"]))
 
 
 def eligible_bowlers(state):
@@ -370,13 +390,13 @@ def eligible_bowlers(state):
     Within each tier, highest bowl_rating first.
     """
     xi = state.get("bowl_xi") or []
-    quota = max_bowler_overs(state)
     prev = state.get("prev_bowler_rid")
 
     def _avail(pool, enforce_quota=True, enforce_prev=True):
         out = list(pool)
         if enforce_quota:
-            out = [p for p in out if _overs_bowled(state, p["roster_id"]) < quota]
+            out = [p for p in out
+                   if _overs_bowled(state, p["roster_id"]) < quota_for(state, p)]
         if enforce_prev and prev is not None:
             out = [p for p in out if p["roster_id"] != prev]
         return out
@@ -603,6 +623,10 @@ def simulate_over(state):
         bs = state["bat_stats"].setdefault(srid, _new_bat_stat())
         striker_name = striker["name"]
         batter_adapted = _adapt_player(striker)
+        # Is THIS delivery a free hit (set by a no-ball earlier)? Captured before
+        # the flag is consumed so the ball's commentary can carry the marker.
+        is_free_hit_ball = bool(free_hit)
+        fh_prefix = "🆓 FREE HIT — " if is_free_hit_ball else ""
 
         # Pressure
         balls_left = overs_total * 6 - balls_bowled(state)
@@ -720,9 +744,11 @@ def simulate_over(state):
                     elif runs == 6:
                         bs["sixes"] += 1
                 over_timeline.append("NB")
-                over_events.append({"sym": "NB", "text": f"No ball +{runs}"})
+                over_events.append({"sym": "NB", "text": f"No ball +{runs} — FREE HIT next"})
+                _nb_text = (_ec() or f"No ball! {bowler['name']} oversteps.")
                 _push_commentary(state, "extra", striker_name,
-                                 _ec() or "No ball! Free hit coming up.",
+                                 f"{_nb_text} 🆓 FREE HIT next ball — only a run out "
+                                 f"can dismiss.",
                                  runs=1 + runs, event_key="no_ball")
                 free_hit = True
                 if runs % 2 == 1:
@@ -748,7 +774,7 @@ def simulate_over(state):
             over_timeline.append("LB")
             over_events.append({"sym": "LB", "text": f"Leg byes +{runs}"})
             _push_commentary(state, "extra", striker_name,
-                             _ec() or f"Leg byes, {runs} run(s).",
+                             fh_prefix + (_ec() or f"Leg byes, {runs} run(s)."),
                              runs=runs, event_key="legbye")
             free_hit = False  # legal delivery consumes the free hit
             if runs % 2 == 1:
@@ -780,7 +806,8 @@ def simulate_over(state):
             state["fow"].append([state["total_runs"], state["total_wickets"],
                                  striker_name, format_overs(state)])
             # Ball row (paints the W badge in the over column) + the red OUT card.
-            _wkt_line = _ec() or f"OUT! {striker_name} {bs['dismissal']}."
+            # On a free hit this can only be a run out (engine-enforced).
+            _wkt_line = fh_prefix + (_ec() or f"OUT! {striker_name} {bs['dismissal']}.")
             _push_commentary(state, "ball", striker_name, _wkt_line,
                              runs=runs, is_wicket=True, event_key="wicket")
             non_striker = state["batting_order"][state["non_striker_idx"]]
@@ -833,8 +860,8 @@ def simulate_over(state):
             _run_key = ("dot_ball" if runs == 0 else "four" if runs == 4
                         else "six" if runs == 6 else None)
             _push_commentary(state, _run_event(runs), striker_name,
-                             _ec(is_maiden=_maiden)
-                             or _run_text(runs, striker_name, bowler["name"]),
+                             fh_prefix + (_ec(is_maiden=_maiden)
+                                          or _run_text(runs, striker_name, bowler["name"])),
                              runs=runs, event_key=_run_key)
             # A free hit is consumed by this one legal delivery — clear it even if
             # the batter found the boundary (otherwise the free-hit run-out lock

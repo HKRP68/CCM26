@@ -611,8 +611,9 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     rows, row = [], []
     for p in elig:
         tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
+        left = cipl_match.overs_left(state, p)
         row.append(InlineKeyboardButton(
-            f"{p['name']} ({p.get('bowl_rating', 0)}){tag}",
+            f"{p['name']} ({p.get('bowl_rating', 0)}) · {left} left{tag}",
             callback_data=f"cipl_bowler_{mid}_{p['roster_id']}"))
         if len(row) == 2:
             rows.append(row); row = []
