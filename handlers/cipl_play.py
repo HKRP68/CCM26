@@ -1002,7 +1002,13 @@ def _bat_line(player, bat_stats):
 _CMT_EMOJI = {
     "dot": "0️⃣", "one": "1️⃣", "two": "2️⃣", "three": "3️⃣",
     "four": "4️⃣", "six": "6️⃣", "wicket": "⭕", "extra": "↔️",
+    "new_bowler": "🎳", "returning_bowler": "🎳", "new_batsman": "🏏",
 }
+
+# Card-type commentary entries the Mini App renders as rich cards. The chat
+# already posts its own end-of-over summary message, so these are skipped in the
+# expandable per-over commentary block to avoid duplicate / empty lines.
+_CMT_SKIP_IN_BLOCK = {"wicket", "end_of_over", "over_complete"}
 
 
 def _compact_bat_line(player, bat_stats):
@@ -1036,9 +1042,10 @@ def _commentary_block(state):
     for e in reversed(entries):
         etype = e.get("type")
         # A wicket is emitted as a ball row (rich commentary, carries the W) plus
-        # a paired "wicket" summary card. Render only the ball row here so the
-        # Telegram block keeps a single line per delivery.
-        if etype == "wicket":
+        # a paired "wicket" summary card; rich Mini App cards (end_of_over /
+        # over_complete) are handled by the chat's own summary message. Skip all
+        # of these so the Telegram block keeps one clean line per event.
+        if etype in _CMT_SKIP_IN_BLOCK:
             continue
         emoji = _CMT_EMOJI.get(etype, "")
         if etype == "ball" and e.get("isWicket"):
@@ -1136,6 +1143,14 @@ async def _complete_match(context, mid, state):
     # Match row stays 'active' until the Super Over decides a winner.
     if result["tie"]:
         try:
+            # Mention the Super Over in the Mini App commentary feed so spectators
+            # know the tie is being resolved (the chat already announces it).
+            cipl_match._push_card(state, {
+                "type": "new_bowler",
+                "text": (f"🤝 Scores level at {cipl_match.format_score(state)} — "
+                         f"it's a SUPER OVER! 🔥"),
+            })
+            _ss(context, mid, state)
             from handlers.super_over import start_super_over
             if await start_super_over(context, mid, state):
                 return

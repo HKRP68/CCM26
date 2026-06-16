@@ -29,7 +29,7 @@ FREE_HIT_BOUNDARY_BOOST = 1.10
 #   • Enhanced boundary & wicket chances in the final 4 overs (17–20)
 #
 # Pitch average ranges (T20 context):
-#   - Green: 120–150 runs (favors pace bowlers)
+#   - Green: 150–160 runs (pace gets help, but strike rotation keeps it competitive)
 #   - Flat : 180–200 runs (batting paradise)
 #   - Dry  : 120–150 runs (favors spin bowlers)
 #   - Hard : 150–180 runs (balanced, slight batting edge)
@@ -67,7 +67,7 @@ commentary_templates = {
 # 2) Pitch-influence definitions (60% weight)
 # -----------------------------------------------------------------------------
 PITCH_RUN_FACTOR = {
-    "Green":  0.98,   # seam-friendly but competitive → ~181 average
+    "Green":  0.98,   # seam-friendly but competitive → par ~150-160
     "Dry":    1.00,   # spin-friendly → ~178 average
     "Dusty":  1.04,   # worn turner → ~183 average
     "Bouncy": 1.12,   # hard/bouncy carry → ~187 average
@@ -82,9 +82,9 @@ PITCH_RUN_FACTOR = {
 
 PITCH_WICKET_FACTOR = {
     "Green": {
-        "Fast":         1.35,   # fastest bowlers excel on Green
-        "Fast-medium":  1.18,
-        "Medium-fast":  1.12,
+        "Fast":         1.18,   # pace gets help, but no longer triggers collapses
+        "Fast-medium":  1.10,
+        "Medium-fast":  1.05,
         "default":      0.55    # spinners/pacers that don’t fit above
     },
     "Dry": {
@@ -161,14 +161,14 @@ def get_pitch_wicket_multiplier(pitch: str, bowling_type: str, config=None) -> f
 # -----------------------------------------------------------------------------
 PITCH_SCORING_MATRIX = {
     "Green": {
-        "Dot":     0.255,  # Seamer-friendly but competitive scoring
-        "Single":  0.36,
-        "Double":  0.105,
+        "Dot":     0.250,  # Seam help, but strike rotation keeps the board moving
+        "Single":  0.375,  # More 1s — reward working the gaps on a green top
+        "Double":  0.117,  # More 2s
         "Three":   0.005,  # ~0.6 threes per innings (very rare)
-        "Four":    0.105,
-        "Six":     0.045,
-        "Wicket":  0.055,  # High wicket chance (favors pacers)
-        "Extras":  0.07
+        "Four":    0.090,
+        "Six":     0.040,
+        "Wicket":  0.050,  # Reduced — fewer collapses (par ~150-160)
+        "Extras":  0.073
     },
     "Dry": {
         "Dot":     0.23,   # Spin-friendly; scoring needs application
