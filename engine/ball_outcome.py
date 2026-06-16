@@ -605,7 +605,7 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
 #
 # Effects scale with how far the rating sits past the threshold, and weights are
 # renormalised afterwards so total probability mass is preserved.
-WEAK_BATTING_THRESHOLD = 50
+WEAK_BATTING_THRESHOLD = 40
 WEAK_BOWLING_THRESHOLD = 55
 # Quality players (vice-versa) earn a milder edge above these marks.
 STRONG_BATTING_THRESHOLD = 75
@@ -628,19 +628,17 @@ def _apply_rating_performance_modifiers(weights: dict,
         if key in w:
             w[key] *= factor
 
-    # --- Weak batsman (batting_rating < 50): scores less, gets out early ---
-    # Pure bowlers / rabbits (rating ~20-30) must look like genuine tail-enders:
-    # low strike rate, very few boundaries and frequent dismissals. The penalty
-    # scales with how far below 50 the rating sits (rating 50 → 0.0, 0 → 1.0).
+    # --- Weak batsman (batting_rating < 40): scores less, gets out early ---
     if batting_rating < WEAK_BATTING_THRESHOLD:
-        deficit = min((WEAK_BATTING_THRESHOLD - batting_rating) / 50.0, 1.0)
-        _scale("Six",    1.0 - 0.90 * deficit)   # big hits all but vanish
-        _scale("Four",   1.0 - 0.80 * deficit)   # fours dry up
-        _scale("Three",  1.0 - 0.50 * deficit)
-        _scale("Double", 1.0 - 0.45 * deficit)   # strike rate dragged down hard
-        _scale("Single", 1.0 - 0.25 * deficit)
-        _scale("Dot",    1.0 + 0.80 * deficit)   # mostly dots → SR well below 100
-        _scale("Wicket", 1.0 + 1.20 * deficit)   # falls early / cheaply
+        # deficit in [0,1]: rating 40 → 0.0, rating 20 → 0.5, rating 0 → 1.0
+        deficit = min((WEAK_BATTING_THRESHOLD - batting_rating) / 40.0, 1.0)
+        _scale("Six",    1.0 - 0.70 * deficit)   # big hits dry up
+        _scale("Four",   1.0 - 0.55 * deficit)   # fewer fours
+        _scale("Three",  1.0 - 0.40 * deficit)
+        _scale("Double", 1.0 - 0.30 * deficit)   # strike rate dragged down
+        _scale("Single", 1.0 - 0.12 * deficit)
+        _scale("Dot",    1.0 + 0.45 * deficit)   # many more dots → SR < 100
+        _scale("Wicket", 1.0 + 0.85 * deficit)   # falls early / cheaply
     # --- Quality batsman (vice-versa): mild scoring edge ---
     elif batting_rating >= STRONG_BATTING_THRESHOLD:
         surplus = min((batting_rating - STRONG_BATTING_THRESHOLD) / 25.0, 1.0)
@@ -687,6 +685,63 @@ _POS_BATTING_MULT: dict = {
     5: 1.00, 6: 0.98, 7: 0.95, 8: 0.90,
     9: 0.85, 10: 0.80, 11: 0.75,
 }
+
+
+# -----------------------------------------------------------------------------
+# Multiplicative skill model (T20 / legacy path)
+# -----------------------------------------------------------------------------
+# The base matrix already encodes the pitch's shape, and the pitch run/wicket
+# multiplier sets its scoring level. On top of that, skill enters as a TRUE
+# MULTIPLIER centred on 1.0 at rating parity (effective_batting == bowling):
+#
+#     weight(outcome) = base_prob × pitch_factor × (skill_ratio ** exponent)
+#
+# The exponent decides how hard each outcome responds to the batting-vs-bowling
+# contest — boundaries swing hardest, singles barely move, and wickets are keyed
+# off the bowler's edge. This makes the rating contest decisive across the WHOLE
+# range (a star is clearly better than an average bat, a rabbit clearly worse)
+# instead of the old additive 60/40 blend that flattened ratings 55-90.
+#
+# Scale every exponent with SKILL_MODEL_STRENGTH for one-knob tuning.
+SKILL_MODEL_STRENGTH = 1.0
+_SKILL_RUN_EXP = {
+    "Dot":    -0.42,
+    "Single":  0.10,
+    "Double":  0.30,
+    "Three":   0.40,
+    "Four":    0.66,
+    "Six":     0.78,
+}
+_SKILL_WICKET_EXP = 0.40
+# Clamp the ratio so freak mismatches can't produce absurd weights.
+_SKILL_RATIO_CLAMP = (0.35, 2.8)
+# Hard pitch keeps a mild batting tilt (true track, pace gets less help).
+_HARD_BAT_RATIO_BOOST = 1.04
+_HARD_WICKET_SKILL_MULT = 0.92
+
+
+def _skill_multiplier(outcome_type: str, effective_batting: float,
+                      bowling: float, pitch: str, bowling_type: str,
+                      config=None) -> float:
+    """Return ``pitch_factor × skill_ratio**exponent`` for the multiplicative
+    model. ``skill_ratio`` is batting/bowling for run outcomes (bowling/batting
+    for wickets), so the factor is 1.0 at rating parity and scales smoothly."""
+    lo, hi = _SKILL_RATIO_CLAMP
+    if outcome_type == "Wicket":
+        ratio = max(lo, min(hi, bowling / max(1.0, effective_batting)))
+        skill_mult = ratio ** (_SKILL_WICKET_EXP * SKILL_MODEL_STRENGTH)
+        if pitch == "Hard":
+            skill_mult *= _HARD_WICKET_SKILL_MULT
+        pitch_factor = get_pitch_wicket_multiplier(pitch, bowling_type, config=config)
+    else:
+        ratio = effective_batting / max(1.0, bowling)
+        if pitch == "Hard":
+            ratio *= _HARD_BAT_RATIO_BOOST
+        ratio = max(lo, min(hi, ratio))
+        exp = _SKILL_RUN_EXP.get(outcome_type, 0.0) * SKILL_MODEL_STRENGTH
+        skill_mult = ratio ** exp
+        pitch_factor = get_pitch_run_multiplier(pitch, config=config)
+    return pitch_factor * skill_mult
 
 
 # -----------------------------------------------------------------------------
@@ -741,87 +796,44 @@ def compute_weighted_prob(
     elif balls_faced >= 12:
         effective_batting *= 1.01 if _is_lista else 1.03
 
-    # 1) Player-skill fraction
-    skill_frac = 0.5
-    
-    if outcome_type in ("Dot", "Single", "Double", "Three", "Four", "Six"):
-        # Run scoring: defined by Batting vs Bowling
-        if (effective_batting + bowling) > 0:
-            # Standard calculation
-            skill_frac = effective_batting / (effective_batting + bowling)
-            
-            # Hard pitch: batting-favored but bowlers still matter
-            # 65/35 split — batters have the edge but good bowlers can compete
-            if pitch == "Hard":
-                skill_frac = (effective_batting * 0.65) / ((effective_batting * 0.65) + (bowling * 0.35))
-                
-        else:
-            skill_frac = 0.5
-
-    elif outcome_type == "Wicket":
-        # Wicket taking: bowling vs batting contest only.
-        # Fielding is handled separately in calculate_outcome() via the
-        # catch-drop mechanic — it must NOT reduce chance-creation probability here.
-        if (effective_batting + bowling) > 0:
-            contest_frac = bowling / (effective_batting + bowling)
-            skill_frac = contest_frac
-
-            # Hard pitch: wickets harder to come by but not impossible
-            if pitch == "Hard":
-                skill_frac *= 0.85 if _is_lista else 0.75
-        else:
-            skill_frac = 0.5
-
-    # 2) Pitch-influence fraction
-    pitch_frac = 1.0
-    if _is_lista:
-        # ListA has its own phase matrix + run/wicket scaling layers.
-        # Avoid reusing T20 pitch multipliers here (prevents double-counting).
-        pitch_frac = 1.0
-    else:
-        if outcome_type in ("Dot", "Single", "Double", "Three", "Four", "Six"):
-            pitch_frac = get_pitch_run_multiplier(pitch, config=config)
-        elif outcome_type == "Wicket":
-            pitch_frac = get_pitch_wicket_multiplier(pitch, bowling_type, config=config)
-
-    # 3) Blend Pitch & Skill
-    # Default is 60% Pitch, 40% Skill.
-    # But for "Hard", we want to emphasize the skew we just calculated.
-
-    # 🔧 USER REQUEST: "If flat, batsman will have advantage over bowlers"
-    # Logic: Boosting the skill component if favorable to bat
-
-    _weights = _gc_blending_weights(config=config)
-    alpha = _weights[0] if _weights else 0.6  # Pitch weight
-    beta = _weights[1] if _weights else 0.4   # Skill weight
-
-    if pitch == "Hard":
-        # User explicitly mentioned 80/20. We applied that in skill logic.
-        # Let's keep standard blending but rely on the skewed skill_frac.
-        pass
-    
-    blended_frac = (alpha * pitch_frac) + (beta * skill_frac)
-
-    # 4) Compute raw weight
+    # Extras depend on bowler error, not the batting contest — handle first.
     if outcome_type == "Extras":
-        # Extras depend on bowler error but are floored to avoid near-zero rates.
         error_rate = max(EXTRA_ERROR_FLOOR, (100 - bowling) / 100.0)
         raw_weight = base_prob * error_rate * EXTRA_WEIGHT_MULTIPLIER
         return max(raw_weight, 0.0)
 
-    # Apply specific boosts/penalties logic
-    # Boundary streak penalty (same as before)
+    # 1) Combine pitch + skill into a single per-outcome factor.
+    if _is_lista:
+        # ListA keeps the additive 60/40 blend (it has its own phase matrix +
+        # run/wicket scaling layers, tuned separately from the T20 model).
+        if outcome_type == "Wicket":
+            skill_frac = (bowling / (effective_batting + bowling)
+                          if (effective_batting + bowling) > 0 else 0.5)
+        else:
+            skill_frac = (effective_batting / (effective_batting + bowling)
+                          if (effective_batting + bowling) > 0 else 0.5)
+        # ListA handles pitch separately downstream → pitch_frac neutral here.
+        _weights = _gc_blending_weights(config=config)
+        alpha = _weights[0] if _weights else 0.6
+        beta = _weights[1] if _weights else 0.4
+        blended_frac = (alpha * 1.0) + (beta * skill_frac)
+    else:
+        # T20 / legacy: TRUE MULTIPLICATIVE model (see _skill_multiplier).
+        blended_frac = _skill_multiplier(
+            outcome_type, effective_batting, bowling, pitch, bowling_type,
+            config=config)
+
+    # 2) Streak boosts/penalties (unchanged).
     boundary_penalty = 1.0
     if outcome_type in ("Four", "Six") and streak.get("boundaries", 0) >= 2:
         boundary_penalty = 0.8
-    
-    # Wicket boundary streak boost (same as before)
+
     wicket_boost = 1.0
     if outcome_type == "Wicket" and streak.get("boundaries", 0) >= 2:
         wicket_boost = 1.5
 
     raw_weight = base_prob * blended_frac * boundary_penalty * wicket_boost
-    
+
     return max(raw_weight, 0.0)
 
 # -----------------------------------------------------------------------------
@@ -1115,16 +1127,17 @@ def calculate_outcome(
             raw_weights = _apply_pitch_wear(raw_weights, pitch, pitch_wear)
             logger.debug("[PitchWear=%.3f] Applied T20 pitch deterioration.", pitch_wear)
 
-    # 3.4) Rating-based performance gating (all game modes).
-    # Sharpens the impact of raw player ratings: weak batsmen (rating < 40)
-    # score less and fall early; weak bowlers (rating < 55) concede more and
-    # strike less — and vice-versa for quality players. Uses the raw, un-position-
-    # adjusted batting rating so the threshold reflects the player's true rating.
-    raw_weights = _apply_rating_performance_modifiers(
-        raw_weights,
-        batter["batting_rating"],
-        bowler["bowling_rating"],
-    )
+    # 3.4) Rating-based performance gating — ListA only.
+    # The T20 / legacy path uses the multiplicative skill model in
+    # compute_weighted_prob, which already sharpens raw ratings continuously
+    # across the whole range, so this threshold-based gate would double-count
+    # there. ListA keeps the additive blend and still needs it.
+    if _is_lista:
+        raw_weights = _apply_rating_performance_modifiers(
+            raw_weights,
+            batter["batting_rating"],
+            bowler["bowling_rating"],
+        )
 
     # 3.5) Apply Game State Momentum Engine (GSME) adjustments.
     # This layer accounts for ball history (last 18 deliveries), run-rate
