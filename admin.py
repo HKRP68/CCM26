@@ -467,13 +467,32 @@ def dashboard():
         pack_open_actions = ["free_pack", "open_pack"]
         all_reward_actions = reward_actions + pack_open_actions + ["ad_watched"]
         filter_days = request.args.get("rewards_range", "today")
+        if filter_days not in {"today", "7d", "30d", "all"}:
+            filter_days = "today"
+        range_labels = {
+            "today": "Today",
+            "7d": "Last 7 Days",
+            "30d": "Last 30 Days",
+            "all": "All Time",
+        }
+        range_start = {
+            "today": today_0,
+            "7d": now - timedelta(days=7),
+            "30d": now - timedelta(days=30),
+            "all": None,
+        }[filter_days]
         last_24h = now - timedelta(hours=24)
+
+        def apply_reward_range(query, column=ActivityLog.created_at):
+            if range_start is not None:
+                query = query.filter(column >= range_start)
+            return query
 
         total_groups = (db.query(func.count(func.distinct(User.last_miniapp_chat_id)))
                         .filter(User.last_miniapp_chat_id.isnot(None))
                         .scalar() or 0)
-        total_claims = (db.query(func.count(ActivityLog.id))
-                        .filter(ActivityLog.action == "claim").scalar() or 0)
+        total_claims = (apply_reward_range(db.query(func.count(ActivityLog.id))
+                        .filter(ActivityLog.action == "claim")).scalar() or 0)
         todays_claims = (db.query(func.count(ActivityLog.id))
                          .filter(ActivityLog.action == "claim", ActivityLog.created_at >= today_0)
                          .scalar() or 0)
@@ -483,22 +502,23 @@ def dashboard():
         rewards_24h = (db.query(func.count(ActivityLog.id))
                        .filter(ActivityLog.action.in_(all_reward_actions), ActivityLog.created_at >= last_24h)
                        .scalar() or 0)
-        total_gspin = (db.query(func.count(ActivityLog.id))
-                       .filter(ActivityLog.action == "gspin").scalar() or 0)
-        total_daily = (db.query(func.count(ActivityLog.id))
-                       .filter(ActivityLog.action == "daily").scalar() or 0)
-        total_free_pack_open = (db.query(func.count(ActivityLog.id))
-                                .filter(ActivityLog.action == "free_pack").scalar() or 0)
-        total_player_bought = (db.query(func.count(ActivityLog.id))
-                               .filter(ActivityLog.action.in_(["buy", "buy_player", "market_buy"]))
+        total_gspin = (apply_reward_range(db.query(func.count(ActivityLog.id))
+                       .filter(ActivityLog.action == "gspin")).scalar() or 0)
+        total_daily = (apply_reward_range(db.query(func.count(ActivityLog.id))
+                       .filter(ActivityLog.action == "daily")).scalar() or 0)
+        total_free_pack_open = (apply_reward_range(db.query(func.count(ActivityLog.id))
+                                .filter(ActivityLog.action == "free_pack")).scalar() or 0)
+        total_player_bought = (apply_reward_range(db.query(func.count(ActivityLog.id))
+                               .filter(ActivityLog.action.in_(["buy", "buy_player", "market_buy"])))
                                .scalar() or 0)
         try:
             from models import AdsgramReward
-            total_ad_watched = db.query(func.count(AdsgramReward.id)).scalar() or 0
+            total_ad_watched = (apply_reward_range(db.query(func.count(AdsgramReward.id)),
+                                                    AdsgramReward.received_at).scalar() or 0)
         except Exception:
             total_ad_watched = 0
-        total_ad_watched += (db.query(func.count(ActivityLog.id))
-                             .filter(ActivityLog.action == "ad_watched")
+        total_ad_watched += (apply_reward_range(db.query(func.count(ActivityLog.id))
+                             .filter(ActivityLog.action == "ad_watched"))
                              .scalar() or 0)
 
         active_players_24h = (db.query(func.count(func.distinct(ActivityLog.user_id)))
@@ -515,19 +535,16 @@ def dashboard():
             most_active = {"user": most_active_row[0],
                            "count": most_active_row.activity_count}
 
-        today_reward_logs = (db.query(ActivityLog, User)
+        today_reward_logs = (apply_reward_range(db.query(ActivityLog, User)
                              .join(User, ActivityLog.user_id == User.id)
-                             .filter(ActivityLog.created_at >= today_0,
-                                     ActivityLog.action.in_(all_reward_actions))
+                             .filter(ActivityLog.action.in_(all_reward_actions)))
                              .order_by(ActivityLog.created_at.desc())
                              .limit(200).all())
-        source_counts = dict(db.query(ActivityLog.action, func.count(ActivityLog.id))
-                             .filter(ActivityLog.created_at >= today_0,
-                                     ActivityLog.action.in_(all_reward_actions))
+        source_counts = dict(apply_reward_range(db.query(ActivityLog.action, func.count(ActivityLog.id))
+                             .filter(ActivityLog.action.in_(all_reward_actions)))
                              .group_by(ActivityLog.action).all())
-        top_active_today = (db.query(User, func.count(ActivityLog.id).label("activity_count"))
-                            .join(ActivityLog, ActivityLog.user_id == User.id)
-                            .filter(ActivityLog.created_at >= today_0)
+        top_active_today = (apply_reward_range(db.query(User, func.count(ActivityLog.id).label("activity_count"))
+                            .join(ActivityLog, ActivityLog.user_id == User.id))
                             .group_by(User.id)
                             .order_by(desc("activity_count"))
                             .limit(5).all())
@@ -561,6 +578,7 @@ def dashboard():
             "claims_24h": claims_24h,
             "rewards_24h": rewards_24h,
             "filter_days": filter_days,
+            "range_label": range_labels[filter_days],
             "active_players_24h": active_players_24h,
             "most_active": most_active,
             "total_claim": total_claims,
