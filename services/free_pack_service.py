@@ -207,7 +207,8 @@ def open_free_pack(session, user):
     try:
         from services.activity_service import log_activity
         log_activity(session, user.id, "free_pack",
-                     f"Free Pack: {player.name} ({player.rating} OVR)")
+                     f"Free Pack: {player.name} ({player.rating} OVR)",
+                     player_name=player.name, player_rating=player.rating)
     except Exception:
         pass
 

@@ -36,6 +36,7 @@
   .ops-card.accent-teal { border-left: 3px solid #00C9A7; }
   .ops-card.accent-gold { border-left: 3px solid #FBBF24; }
   .ops-card.accent-grey { border-left: 3px solid #6b7280; }
+  .ops-card.accent-purple { border-left: 3px solid #a78bfa; }
 
   .panel {
     background: var(--card, #181f2a);
@@ -116,6 +117,14 @@
     display: inline-flex; align-items: center; justify-content: center;
     font-weight: 700; margin-right: .5rem;
   }
+  .reward-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .reward-table th, .reward-table td {
+    padding: .45rem .35rem;
+    border-bottom: 1px dashed var(--border, #2a3142);
+    text-align: left;
+  }
+  .reward-table th { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+  .rating-pill { display:inline-block; padding:.12rem .45rem; border-radius:999px; background:rgba(251,191,36,.14); color:#FBBF24; font-weight:800; }
 </style>
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
@@ -158,6 +167,102 @@
   <a href="{{ url_for('seed_database') }}" class="btn btn-primary">🌱 Seed Players</a>
 </div>
 {% endif %}
+
+<!-- Reward and player-acquisition stats -->
+<div class="panel">
+  <h3>💰 Claim Rewards</h3>
+  <div class="ops-grid" style="margin-bottom:0;">
+    <div class="ops-card accent-purple">
+      <span class="lbl">Total Groups</span>
+      <span class="num">{{ reward_stats.total_groups }}</span>
+      <span class="sub">groups that launched Mini App</span>
+    </div>
+    <div class="ops-card accent-gold">
+      <span class="lbl">Total Claims</span>
+      <span class="num">{{ reward_stats.total_claims }}</span>
+      <span class="sub">/claim reward pulls</span>
+    </div>
+    <div class="ops-card accent-red">
+      <span class="lbl">🔥 24-Hour Activity</span>
+      <span class="num">{{ reward_stats.active_players_24h }}</span>
+      <span class="sub">
+        Active Players{% if reward_stats.most_active %}: Most Active —
+        <a href="{{ url_for('user_detail', user_id=reward_stats.most_active.user.id) }}" style="color:inherit;">
+          {{ reward_stats.most_active.user.first_name or reward_stats.most_active.user.username or reward_stats.most_active.user.telegram_id }}
+        </a>
+        ({{ reward_stats.most_active.count }}){% endif %}
+      </span>
+    </div>
+    <div class="ops-card accent-teal">
+      <span class="lbl">Total Claim</span>
+      <span class="num">{{ reward_stats.total_claim }}</span>
+    </div>
+    <div class="ops-card accent-purple">
+      <span class="lbl">Total GSpin</span>
+      <span class="num">{{ reward_stats.total_gspin }}</span>
+    </div>
+    <div class="ops-card accent-teal">
+      <span class="lbl">Total Daily</span>
+      <span class="num">{{ reward_stats.total_daily }}</span>
+    </div>
+    <div class="ops-card accent-grey">
+      <span class="lbl">Total Ad Watched</span>
+      <span class="num">{{ reward_stats.total_ad_watched }}</span>
+    </div>
+    <div class="ops-card accent-purple">
+      <span class="lbl">Total Free Pack Open</span>
+      <span class="num">{{ reward_stats.total_free_pack_open }}</span>
+    </div>
+    <div class="ops-card accent-gold">
+      <span class="lbl">Total Player Bought</span>
+      <span class="num">{{ reward_stats.total_player_bought }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="twocol">
+  <div class="panel">
+    <h3>🏅 Today's Top Player by Claim / Daily / GSpin</h3>
+    <div class="recent-list">
+      {% for action, label in [('claim', 'Claim'), ('daily', 'Daily'), ('gspin', 'GSpin')] %}
+        {% set row = reward_stats.top_player_by_source.get(action) %}
+        <div class="row">
+          <div><strong>{{ label }}</strong></div>
+          {% if row %}
+            <div>
+              <span class="rating-pill">{{ row.player.rating }}</span>
+              {{ row.player.name }}
+              <span style="color:var(--muted);font-size:.75rem;">by {{ row.user.first_name or row.user.username or row.user.telegram_id }}</span>
+            </div>
+          {% else %}
+            <span style="color:var(--muted);">No player today</span>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>🕘 Today's Player Reward History</h3>
+    {% if reward_stats.history %}
+      <table class="reward-table">
+        <thead><tr><th>Time</th><th>Source</th><th>Player</th><th>User</th></tr></thead>
+        <tbody>
+        {% for row in reward_stats.history %}
+          <tr>
+            <td>{{ row.created_at | ist('%H:%M') if row.created_at else '—' }}</td>
+            <td>{{ row.action.replace('_', ' ')|title }}</td>
+            <td><span class="rating-pill">{{ row.player.rating }}</span> {{ row.player.name }}</td>
+            <td>{{ row.user.first_name or row.user.username or row.user.telegram_id }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p style="color:var(--muted);">No Claim/Daily/GSpin player rewards logged today.</p>
+    {% endif %}
+  </div>
+</div>
 
 <!-- Top stats grid: operations first -->
 <div class="ops-grid">
