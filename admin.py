@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger("admin")
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
-from sqlalchemy import func, or_, desc, asc
+from sqlalchemy import func, or_, desc, asc, cast, String
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -465,6 +465,8 @@ def dashboard():
         # totals without adding expensive joins to the hot reward endpoints.
         reward_actions = ["claim", "daily", "gspin"]
         pack_open_actions = ["free_pack", "open_pack"]
+        all_reward_actions = reward_actions + pack_open_actions + ["ad_watched"]
+        filter_days = request.args.get("rewards_range", "today")
         last_24h = now - timedelta(hours=24)
 
         total_groups = (db.query(func.count(func.distinct(User.last_miniapp_chat_id)))
@@ -472,6 +474,15 @@ def dashboard():
                         .scalar() or 0)
         total_claims = (db.query(func.count(ActivityLog.id))
                         .filter(ActivityLog.action == "claim").scalar() or 0)
+        todays_claims = (db.query(func.count(ActivityLog.id))
+                         .filter(ActivityLog.action == "claim", ActivityLog.created_at >= today_0)
+                         .scalar() or 0)
+        claims_24h = (db.query(func.count(ActivityLog.id))
+                      .filter(ActivityLog.action == "claim", ActivityLog.created_at >= last_24h)
+                      .scalar() or 0)
+        rewards_24h = (db.query(func.count(ActivityLog.id))
+                       .filter(ActivityLog.action.in_(all_reward_actions), ActivityLog.created_at >= last_24h)
+                       .scalar() or 0)
         total_gspin = (db.query(func.count(ActivityLog.id))
                        .filter(ActivityLog.action == "gspin").scalar() or 0)
         total_daily = (db.query(func.count(ActivityLog.id))
@@ -507,9 +518,19 @@ def dashboard():
         today_reward_logs = (db.query(ActivityLog, User)
                              .join(User, ActivityLog.user_id == User.id)
                              .filter(ActivityLog.created_at >= today_0,
-                                     ActivityLog.action.in_(reward_actions + pack_open_actions))
+                                     ActivityLog.action.in_(all_reward_actions))
                              .order_by(ActivityLog.created_at.desc())
                              .limit(200).all())
+        source_counts = dict(db.query(ActivityLog.action, func.count(ActivityLog.id))
+                             .filter(ActivityLog.created_at >= today_0,
+                                     ActivityLog.action.in_(all_reward_actions))
+                             .group_by(ActivityLog.action).all())
+        top_active_today = (db.query(User, func.count(ActivityLog.id).label("activity_count"))
+                            .join(ActivityLog, ActivityLog.user_id == User.id)
+                            .filter(ActivityLog.created_at >= today_0)
+                            .group_by(User.id)
+                            .order_by(desc("activity_count"))
+                            .limit(5).all())
         top_player_by_source = {k: None for k in reward_actions}
         reward_history = []
         player_text_re = re.compile(r"(?P<name>[A-Za-z0-9 ._\-'/]+?)\s*\((?P<rating>\d{2,3})(?:\s*OVR)?\)")
@@ -523,8 +544,9 @@ def dashboard():
             if not candidates:
                 continue
             best = max(candidates, key=lambda p: p["rating"] or 0)
-            item = {"action": log.action, "player": best, "user": log_user,
-                    "created_at": log.created_at}
+            item = {"id": log.id, "action": log.action, "player": best, "user": log_user,
+                    "created_at": log.created_at, "detail": log.detail or "",
+                    "group_name": (f"Group {log_user.last_miniapp_chat_id}" if log_user.last_miniapp_chat_id else "—")}
             reward_history.append(item)
             if log.action in top_player_by_source:
                 current = top_player_by_source[log.action]
@@ -535,6 +557,10 @@ def dashboard():
         reward_stats = {
             "total_groups": total_groups,
             "total_claims": total_claims,
+            "todays_claims": todays_claims,
+            "claims_24h": claims_24h,
+            "rewards_24h": rewards_24h,
+            "filter_days": filter_days,
             "active_players_24h": active_players_24h,
             "most_active": most_active,
             "total_claim": total_claims,
@@ -545,6 +571,9 @@ def dashboard():
             "total_player_bought": total_player_bought,
             "top_player_by_source": top_player_by_source,
             "history": reward_history,
+            "source_counts": source_counts,
+            "top_active_today": [{"user": u, "count": c} for u, c in top_active_today],
+            "highest_today": max(reward_history, key=lambda x: x["player"]["rating"], default=None),
         }
 
         # Player snapshot (kept compact)
@@ -608,6 +637,84 @@ def dashboard():
                                recent_logs=recent_logs, top_users=top_users,
                                reward_stats=reward_stats,
                                maint_active=maint_active, maint_until=maint_until)
+    finally:
+        db.close()
+
+@app.route("/reward-history")
+@login_required
+def reward_history_all():
+    db = get_session()
+    try:
+        now = datetime.utcnow()
+        reward_actions = ["claim", "daily", "gspin", "free_pack", "open_pack", "ad_watched"]
+        q = request.args.get("q", "").strip()
+        source = request.args.get("source", "").strip()
+        rating_min = request.args.get("rating_min", "").strip()
+        rating_max = request.args.get("rating_max", "").strip()
+        user_filter = request.args.get("user", "").strip()
+        group_filter = request.args.get("group", "").strip()
+        date_from = request.args.get("date_from", "").strip()
+        date_to = request.args.get("date_to", "").strip()
+        sort = request.args.get("sort", "newest")
+        page = max(int(request.args.get("page", 1) or 1), 1)
+        per_page = 50
+
+        query = db.query(ActivityLog, User).join(User, ActivityLog.user_id == User.id).filter(
+            ActivityLog.action.in_(reward_actions), ActivityLog.player_name.isnot(None))
+        if q:
+            like = f"%{q}%"
+            query = query.filter(or_(ActivityLog.player_name.ilike(like), User.username.ilike(like), User.first_name.ilike(like)))
+        if source:
+            query = query.filter(ActivityLog.action == source)
+        if rating_min.isdigit():
+            query = query.filter(ActivityLog.player_rating >= int(rating_min))
+        if rating_max.isdigit():
+            query = query.filter(ActivityLog.player_rating <= int(rating_max))
+        if user_filter:
+            like = f"%{user_filter}%"
+            query = query.filter(or_(User.username.ilike(like), User.first_name.ilike(like), cast(User.telegram_id, String).ilike(like)))
+        if group_filter:
+            try:
+                query = query.filter(User.last_miniapp_chat_id == int(group_filter))
+            except ValueError:
+                pass
+        for val, op in ((date_from, ">="), (date_to, "<")):
+            if val:
+                try:
+                    dt = datetime.strptime(val, "%Y-%m-%d")
+                    if op == "<":
+                        dt = dt + timedelta(days=1)
+                        query = query.filter(ActivityLog.created_at < dt)
+                    else:
+                        query = query.filter(ActivityLog.created_at >= dt)
+                except ValueError:
+                    pass
+        if sort == "rating":
+            query = query.order_by(ActivityLog.player_rating.desc(), ActivityLog.created_at.desc())
+        elif sort == "source":
+            query = query.order_by(ActivityLog.action.asc(), ActivityLog.created_at.desc())
+        else:
+            query = query.order_by(ActivityLog.created_at.desc())
+
+        total = query.count()
+        filters_dict = request.args.to_dict(flat=True)
+        filters_dict.pop("export", None)
+        filters_dict.pop("page", None)
+        rows = query.all() if request.args.get("export") == "csv" else query.offset((page - 1) * per_page).limit(per_page).all()
+        history = []
+        for log, user in rows:
+            history.append({"id": log.id, "action": log.action, "player": {"name": log.player_name, "rating": log.player_rating or 0},
+                            "user": user, "created_at": log.created_at, "detail": log.detail or "",
+                            "group_name": (f"Group {user.last_miniapp_chat_id}" if user.last_miniapp_chat_id else "—")})
+        if request.args.get("export") == "csv":
+            out = io.StringIO(); writer = csv.writer(out)
+            writer.writerow(["Reward ID", "Time", "Source", "Player", "Rating", "User", "Group", "Detail"])
+            for item in history:
+                writer.writerow([item["id"], item["created_at"], item["action"], item["player"]["name"], item["player"]["rating"],
+                                 item["user"].username or item["user"].first_name or item["user"].telegram_id, item["group_name"], item["detail"]])
+            return Response(out.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=player_reward_history.csv"})
+        return render_template("admin_reward_history.html", history=history, total=total, page=page,
+                               per_page=per_page, sources=reward_actions, filters=filters_dict, now=now)
     finally:
         db.close()
 
@@ -1817,6 +1924,9 @@ def users_list():
                           if u.matches_played else 0.0)
 
         # CSV export — same query, no pagination
+        filters_dict = request.args.to_dict(flat=True)
+        filters_dict.pop("export", None)
+        filters_dict.pop("page", None)
         if request.args.get("export") == "csv":
             return _users_csv_export(db, query)
 
