@@ -11,6 +11,7 @@ import html as html_lib
 import logging
 import threading
 import re
+import bcrypt
 from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
@@ -139,6 +140,12 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 # takes priority over the plaintext ADMIN_PASSWORD. Generate one with:
 #   python3 -c "import bcrypt; print(bcrypt.hashpw(b'mypassword', bcrypt.gensalt()).decode())"
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
+
+# Separate password for revealing audit-log IP addresses. This must be different
+# from the shared admin login password so only the person who knows this secret
+# can view sensitive IPs. If neither value is set, IP reveal stays disabled.
+AUDIT_LOG_IP_PASSWORD = os.getenv("AUDIT_LOG_IP_PASSWORD", "")
+AUDIT_LOG_IP_PASSWORD_HASH = os.getenv("AUDIT_LOG_IP_PASSWORD_HASH", "")
 
 PER_PAGE = 30
 
@@ -275,7 +282,6 @@ def _verify_password(submitted: str) -> bool:
         return False
     if ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_HASH.startswith("$2"):
         try:
-            import bcrypt
             return bcrypt.checkpw(submitted.encode("utf-8"),
                                   ADMIN_PASSWORD_HASH.encode("utf-8"))
         except Exception:
@@ -326,6 +332,39 @@ def _record_login_success(ip: str):
     _LOGIN_ATTEMPTS.pop(ip, None)
 
 
+def _audit_ip_password_configured() -> bool:
+    """Return whether a dedicated audit IP reveal password is configured."""
+    return bool(AUDIT_LOG_IP_PASSWORD_HASH or AUDIT_LOG_IP_PASSWORD)
+
+
+def _verify_audit_ip_password(submitted: str) -> bool:
+    """Check the dedicated audit IP reveal password, if configured."""
+    if not submitted or not _audit_ip_password_configured():
+        return False
+    if AUDIT_LOG_IP_PASSWORD_HASH and AUDIT_LOG_IP_PASSWORD_HASH.startswith("$2"):
+        try:
+            return bcrypt.checkpw(submitted.encode("utf-8"),
+                                  AUDIT_LOG_IP_PASSWORD_HASH.encode("utf-8"))
+        except Exception:
+            return False
+    import hmac
+    return hmac.compare_digest(submitted, AUDIT_LOG_IP_PASSWORD)
+
+
+def _can_view_audit_ip() -> bool:
+    """Return whether the current admin session has re-authenticated to view audit IPs."""
+    return _audit_ip_password_configured() and bool(session.get("audit_ip_unlocked"))
+
+
+def _mask_audit_ip(ip_address: str | None) -> str:
+    """Hide audit-log IP addresses unless the audit IP password has unlocked them."""
+    if not ip_address:
+        return "—"
+    if _can_view_audit_ip():
+        return ip_address
+    return "🔒 Encrypted"
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -348,6 +387,14 @@ def login_required(f):
         session.permanent = True  # uses PERMANENT_SESSION_LIFETIME
         return f(*args, **kwargs)
     return decorated
+
+@app.context_processor
+def _inject_audit_ip_helpers():
+    return {
+        "audit_ip_password_configured": _audit_ip_password_configured,
+        "can_view_audit_ip": _can_view_audit_ip,
+        "mask_audit_ip": _mask_audit_ip,
+    }
 
 
 # ── Auth ─────────────────────────────────────────────────────────────
@@ -12970,6 +13017,37 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
 # ═══════════════════════════════════════════════════════════════════════
 # AUDIT LOG — global admin actions feed
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@app.route("/audit-log/unlock-ip", methods=["POST"])
+@login_required
+def admin_audit_log_unlock_ip():
+    """Require the dedicated audit IP password before revealing IP addresses."""
+    submitted = request.form.get("password", "")
+    next_url = request.form.get("next") or url_for("admin_audit_log")
+    if not _audit_ip_password_configured():
+        session.pop("audit_ip_unlocked", None)
+        session.pop("audit_ip_unlocked_at", None)
+        flash("Audit IP reveal password is not configured. Set AUDIT_LOG_IP_PASSWORD or AUDIT_LOG_IP_PASSWORD_HASH.", "error")
+    elif _verify_audit_ip_password(submitted):
+        session["audit_ip_unlocked"] = True
+        session["audit_ip_unlocked_at"] = datetime.utcnow().isoformat()
+        flash("Audit-log IP addresses unlocked for this session.", "success")
+    else:
+        session.pop("audit_ip_unlocked", None)
+        session.pop("audit_ip_unlocked_at", None)
+        flash("Wrong audit IP password. IP addresses remain encrypted.", "error")
+    return redirect(next_url)
+
+
+@app.route("/audit-log/lock-ip", methods=["POST"])
+@login_required
+def admin_audit_log_lock_ip():
+    """Let admins immediately hide audit-log IP addresses again."""
+    session.pop("audit_ip_unlocked", None)
+    session.pop("audit_ip_unlocked_at", None)
+    flash("Audit-log IP addresses locked.", "info")
+    return redirect(request.form.get("next") or url_for("admin_audit_log"))
 
 @app.route("/audit-log")
 @login_required
