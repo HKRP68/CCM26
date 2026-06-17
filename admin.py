@@ -10,6 +10,7 @@ import zipfile
 import html as html_lib
 import logging
 import threading
+import re
 from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
@@ -459,6 +460,93 @@ def dashboard():
         top_users = (db.query(User).order_by(User.matches_won.desc())
                       .limit(5).all())
 
+        # Mini App / reward activity snapshot. ActivityLog is the shared
+        # audit source for bot + webapp rewards, so the dashboard can show
+        # totals without adding expensive joins to the hot reward endpoints.
+        reward_actions = ["claim", "daily", "gspin"]
+        pack_open_actions = ["free_pack", "open_pack"]
+        last_24h = now - timedelta(hours=24)
+
+        total_groups = (db.query(func.count(func.distinct(User.last_miniapp_chat_id)))
+                        .filter(User.last_miniapp_chat_id.isnot(None))
+                        .scalar() or 0)
+        total_claims = (db.query(func.count(ActivityLog.id))
+                        .filter(ActivityLog.action == "claim").scalar() or 0)
+        total_gspin = (db.query(func.count(ActivityLog.id))
+                       .filter(ActivityLog.action == "gspin").scalar() or 0)
+        total_daily = (db.query(func.count(ActivityLog.id))
+                       .filter(ActivityLog.action == "daily").scalar() or 0)
+        total_free_pack_open = (db.query(func.count(ActivityLog.id))
+                                .filter(ActivityLog.action == "free_pack").scalar() or 0)
+        total_player_bought = (db.query(func.count(ActivityLog.id))
+                               .filter(ActivityLog.action.in_(["buy", "buy_player", "market_buy"]))
+                               .scalar() or 0)
+        try:
+            from models import AdsgramReward
+            total_ad_watched = db.query(func.count(AdsgramReward.id)).scalar() or 0
+        except Exception:
+            total_ad_watched = 0
+        total_ad_watched += (db.query(func.count(ActivityLog.id))
+                             .filter(ActivityLog.action == "ad_watched")
+                             .scalar() or 0)
+
+        active_players_24h = (db.query(func.count(func.distinct(ActivityLog.user_id)))
+                              .filter(ActivityLog.created_at >= last_24h)
+                              .scalar() or 0)
+        most_active_row = (db.query(User, func.count(ActivityLog.id).label("activity_count"))
+                           .join(ActivityLog, ActivityLog.user_id == User.id)
+                           .filter(ActivityLog.created_at >= last_24h)
+                           .group_by(User.id)
+                           .order_by(desc("activity_count"))
+                           .first())
+        most_active = None
+        if most_active_row:
+            most_active = {"user": most_active_row[0],
+                           "count": most_active_row.activity_count}
+
+        today_reward_logs = (db.query(ActivityLog, User)
+                             .join(User, ActivityLog.user_id == User.id)
+                             .filter(ActivityLog.created_at >= today_0,
+                                     ActivityLog.action.in_(reward_actions + pack_open_actions))
+                             .order_by(ActivityLog.created_at.desc())
+                             .limit(200).all())
+        top_player_by_source = {k: None for k in reward_actions}
+        reward_history = []
+        player_text_re = re.compile(r"(?P<name>[A-Za-z0-9 ._\-'/]+?)\s*\((?P<rating>\d{2,3})(?:\s*OVR)?\)")
+        for log, log_user in today_reward_logs:
+            candidates = []
+            if log.player_name and log.player_rating:
+                candidates.append({"name": log.player_name, "rating": log.player_rating})
+            for m in player_text_re.finditer(log.detail or ""):
+                candidates.append({"name": m.group("name").strip(" ,:-"),
+                                   "rating": int(m.group("rating"))})
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda p: p["rating"] or 0)
+            item = {"action": log.action, "player": best, "user": log_user,
+                    "created_at": log.created_at}
+            reward_history.append(item)
+            if log.action in top_player_by_source:
+                current = top_player_by_source[log.action]
+                if current is None or best["rating"] > current["player"]["rating"]:
+                    top_player_by_source[log.action] = item
+        reward_history = reward_history[:25]
+
+        reward_stats = {
+            "total_groups": total_groups,
+            "total_claims": total_claims,
+            "active_players_24h": active_players_24h,
+            "most_active": most_active,
+            "total_claim": total_claims,
+            "total_gspin": total_gspin,
+            "total_daily": total_daily,
+            "total_ad_watched": total_ad_watched,
+            "total_free_pack_open": total_free_pack_open,
+            "total_player_bought": total_player_bought,
+            "top_player_by_source": top_player_by_source,
+            "history": reward_history,
+        }
+
         # Player snapshot (kept compact)
         total_players = db.query(func.count(Player.id)).scalar() or 0
         active_players = db.query(func.count(Player.id)).filter(
@@ -518,6 +606,7 @@ def dashboard():
                                countries=countries, growth=growth,
                                match_activity=match_activity,
                                recent_logs=recent_logs, top_users=top_users,
+                               reward_stats=reward_stats,
                                maint_active=maint_active, maint_until=maint_until)
     finally:
         db.close()
@@ -4079,6 +4168,8 @@ def webapp_ad_completed():
         try:
             from services.quest_service import safe_track
             safe_track(db, user.id, "ad_watched", 1)
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "ad_watched", "Completed rewarded ad in Mini App")
             db.commit()
         except Exception:
             db.rollback()
