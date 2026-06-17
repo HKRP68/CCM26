@@ -4168,6 +4168,10 @@ def webapp_ad_completed():
         try:
             from services.quest_service import safe_track
             safe_track(db, user.id, "ad_watched", 1)
+            db.commit()
+        except Exception:
+            db.rollback()
+        try:
             from services.activity_service import log_activity
             log_activity(db, user.id, "ad_watched", "Completed rewarded ad in Mini App")
             db.commit()

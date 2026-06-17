@@ -186,7 +186,7 @@
       <span class="lbl">🔥 24-Hour Activity</span>
       <span class="num">{{ reward_stats.active_players_24h }}</span>
       <span class="sub">
-        Active Players{% if reward_stats.most_active %}: Most Active —
+        Active Players{% if reward_stats.most_active and reward_stats.most_active.user %}: Most Active —
         <a href="{{ url_for('user_detail', user_id=reward_stats.most_active.user.id) }}" style="color:inherit;">
           {{ reward_stats.most_active.user.first_name or reward_stats.most_active.user.username or reward_stats.most_active.user.telegram_id }}
         </a>
@@ -194,7 +194,7 @@
       </span>
     </div>
     <div class="ops-card accent-teal">
-      <span class="lbl">Total Claim</span>
+      <span class="lbl">Total Claims</span>
       <span class="num">{{ reward_stats.total_claim }}</span>
     </div>
     <div class="ops-card accent-purple">
