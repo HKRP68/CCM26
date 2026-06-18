@@ -18,6 +18,7 @@ import os
 import random
 
 from engine.ball_outcome import calculate_outcome
+from engine import chase_chance
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
     make_ball_event,
@@ -44,6 +45,33 @@ except Exception:  # pragma: no cover - defensive import guard
     ScenarioEngine = None
 
 WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
+
+# Chase-chance steering: nudge ball outcomes toward the matrix-estimated
+# chasing/defending chance in the back end of a chase (the matrix is an
+# end-of-innings model — apply it over roughly the last 8 overs, "until the
+# 18th over"). STRENGTH scales how hard the matrix nudge pulls (0 = off).
+#
+# Two layers, applied during the 2nd innings only:
+#   1. A mild always-on chasing assist (the real "knows the target / dew" edge)
+#      that balances batting-first vs chasing toward ~50-50 overall.
+#   2. The matrix steer on top, in the back overs, for situational realism
+#      (e.g. 30 needed with ≤5 down stays a genuine ~56% chase).
+CHASE_STEER_BALLS = 30
+CHASE_STEER_STRENGTH = 0.30
+CHASE_BASELINE_ASSIST = {"boundary_modifier": 1.065, "wicket_modifier": 0.905,
+                         "dot_bonus": -0.015}
+
+
+def _merge_pressure(pressure_effects, bias):
+    """Fold a steering bias into a pressure_effects dict: dot_bonus is additive,
+    everything else multiplies onto any existing value."""
+    for key, value in bias.items():
+        if key == "dot_bonus":
+            pressure_effects[key] = pressure_effects.get(key, 0.0) + value
+        elif key in pressure_effects:
+            pressure_effects[key] *= value
+        else:
+            pressure_effects[key] = value
 
 # Dramatic-finish scenario types the engine can steer a 2nd-innings chase toward.
 # ``controlled_finish`` completes the chase at a chosen ball (see
@@ -518,6 +546,34 @@ def _make_trait_hook(striker_traits, bowler_traits, ctx, collector=None):
 # Score / chase helpers
 # ════════════════════════════════════════════════════════════════════
 
+def chase_chance_now(state):
+    """Live chasing-chance estimate for the current 2nd-innings situation (matrix
+    + player/pitch/momentum modifiers), or None when not a live chase. Used for
+    steering and safe to surface read-only — it never decides the result."""
+    if state.get("innings") != 2 or not state.get("target"):
+        return None
+    balls_left = state["overs"] * 6 - balls_bowled(state)
+    runs_needed = int(state["target"]) - int(state["total_runs"])
+    if balls_left <= 0 or runs_needed <= 0:
+        return None
+    order = state.get("batting_order", []) or []
+    s_idx, ns_idx = state.get("striker_idx", 0), state.get("non_striker_idx", 1)
+    striker = order[s_idx] if s_idx < len(order) else {}
+    non_striker = order[ns_idx] if ns_idx < len(order) else {}
+    bowler = state.get("current_bowler") or {}
+    s_runs = state.get("bat_stats", {}).get(str(striker.get("roster_id")), {}).get("runs", 0)
+    required_rr = runs_needed / balls_left * 6.0
+    recent = (state.get("ball_history") or [])[-6:]
+    recent_runs = sum(int(b.get("runs", 0) or 0) for b in recent)
+    return chase_chance.final_chase_chance(
+        runs_needed, int(state["total_wickets"]),
+        batter_mod=chase_chance.batter_modifier(striker, non_striker, s_runs),
+        bowler_mod=chase_chance.bowler_modifier(bowler, is_emergency=is_part_time_bowler(bowler)),
+        pitch_mod=chase_chance.pitch_modifier(state.get("pitch_type")),
+        momentum_mod=chase_chance.momentum_modifier(required_rr, recent_runs, len(recent)),
+    )
+
+
 def balls_bowled(state):
     return (state["current_over"] - 1) * 6 + state["current_ball"]
 
@@ -674,13 +730,25 @@ def simulate_over(state):
             oc = _normalize_outcome(scenario_override)
         else:
             if scenario_eng:
-                for key, value in scenario_eng.get_scenario_bias({}).items():
-                    if key == "dot_bonus":
-                        pressure_effects[key] = pressure_effects.get(key, 0.0) + value
-                    elif key in pressure_effects:
-                        pressure_effects[key] *= value
-                    else:
-                        pressure_effects[key] = value
+                _merge_pressure(pressure_effects, scenario_eng.get_scenario_bias({}))
+
+            # Chase-chance steering — a controlled nudge toward the matrix-estimated
+            # chasing chance. Skipped while a dramatic-finish scenario is actively
+            # steering (those matches are curated by the ScenarioEngine), so the
+            # two systems never fight.
+            if (scenario_eng is None or scenario_phase == "inactive") \
+                    and innings == 2 and target:
+                # Layer 1: mild always-on chasing assist → ~50-50 baseline.
+                _merge_pressure(pressure_effects, CHASE_BASELINE_ASSIST)
+                # Layer 2: matrix steer in the back overs (situational realism).
+                _balls_left_now = overs_total * 6 - balls_bowled(state)
+                if 0 < _balls_left_now <= CHASE_STEER_BALLS:
+                    _cc = chase_chance_now(state)
+                    if _cc:
+                        _merge_pressure(pressure_effects,
+                                        chase_chance.chase_steer_effects(
+                                            _cc["chasing_chance"],
+                                            strength=CHASE_STEER_STRENGTH))
 
             pitch_wear = min(1.0, balls_bowled(state) / max(1, overs_total * 6))
             # /letsplay traits: build a per-ball weight hook from the striker's
