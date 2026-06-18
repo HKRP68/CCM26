@@ -92,6 +92,16 @@ class SteerTests(unittest.TestCase):
         self.assertAlmostEqual(eff["wicket_modifier"], 1.0)
         self.assertAlmostEqual(eff["dot_bonus"], 0.0)
 
+    def test_no_single_boost_emitted(self):
+        # single_boost would override the pressure engine's strike_rotation_penalty.
+        for c in (10, 50, 90):
+            self.assertNotIn("single_boost", cc.chase_steer_effects(c))
+
+    def test_strength_above_one_keeps_multipliers_nonnegative(self):
+        eff = cc.chase_steer_effects(0, strength=5.0)
+        self.assertGreaterEqual(eff["boundary_modifier"], 0.0)
+        self.assertGreaterEqual(eff["wicket_modifier"], 0.0)
+
     def test_chasing_favoured_helps_bat(self):
         eff = cc.chase_steer_effects(90)
         self.assertGreater(eff["boundary_modifier"], 1.0)   # more boundaries
@@ -103,6 +113,28 @@ class SteerTests(unittest.TestCase):
         self.assertLess(eff["boundary_modifier"], 1.0)
         self.assertGreater(eff["wicket_modifier"], 1.0)
         self.assertGreater(eff["dot_bonus"], 0.0)
+
+
+class FeasibilityTests(unittest.TestCase):
+    def test_comfortable_rate_unscaled(self):
+        self.assertEqual(cc.feasibility_factor(30, 30), 1.0)   # 6 rpo
+        self.assertEqual(cc.feasibility_factor(12, 6), 1.0)    # 12 rpo (2/ball)
+
+    def test_impossible_ask_crashes_chance(self):
+        # 16 off 1 must NOT read as batting-favoured.
+        info = cc.final_chase_chance(16, 2)        # matrix alone is high
+        self.assertGreater(info["chasing_chance"], 50)
+        scaled = cc.apply_feasibility(dict(info), 16, 1)
+        self.assertLessEqual(scaled["chasing_chance"], 5)
+        self.assertEqual(scaled["chasing_chance"] + scaled["defending_chance"], 100)
+
+    def test_factor_monotonic_in_rate(self):
+        f2 = cc.feasibility_factor(12, 6)   # 2/ball
+        f3 = cc.feasibility_factor(18, 6)   # 3/ball
+        f5 = cc.feasibility_factor(30, 6)   # 5/ball
+        self.assertGreaterEqual(f2, f3)
+        self.assertGreaterEqual(f3, f5)
+        self.assertEqual(cc.feasibility_factor(36, 6), 0.0)  # 6/ball → ~hopeless
 
 
 if __name__ == "__main__":

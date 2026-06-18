@@ -28,21 +28,32 @@ CHASE_MATRIX = {
 
 
 def get_run_range(runs_needed):
-    if runs_needed <= 15: return "1-15"
-    if runs_needed <= 20: return "16-20"
-    if runs_needed <= 25: return "21-25"
-    if runs_needed <= 30: return "26-30"
-    if runs_needed <= 35: return "31-35"
-    if runs_needed <= 40: return "36-40"
-    if runs_needed <= 45: return "41-45"
-    if runs_needed <= 50: return "46-50"
+    if runs_needed <= 15:
+        return "1-15"
+    if runs_needed <= 20:
+        return "16-20"
+    if runs_needed <= 25:
+        return "21-25"
+    if runs_needed <= 30:
+        return "26-30"
+    if runs_needed <= 35:
+        return "31-35"
+    if runs_needed <= 40:
+        return "36-40"
+    if runs_needed <= 45:
+        return "41-45"
+    if runs_needed <= 50:
+        return "46-50"
     return "51+"
 
 
 def get_wicket_index(wickets_lost):
-    if wickets_lost <= 3: return 0
-    if wickets_lost <= 5: return 1
-    if wickets_lost <= 7: return 2
+    if wickets_lost <= 3:
+        return 0
+    if wickets_lost <= 5:
+        return 1
+    if wickets_lost <= 7:
+        return 2
     return 3
 
 
@@ -113,6 +124,31 @@ def momentum_modifier(required_rr, recent_runs=None, recent_balls=None):
     return _clamp(mod, -6.0, 6.0)
 
 
+def feasibility_factor(runs_needed, balls_left):
+    """0..1 scale applied to the chasing chance for the balls actually left.
+
+    The matrix is keyed only on runs-needed × wickets, so without this a steep
+    last-over ask (e.g. 16 off 1) would still read as batting-favoured. Full
+    (1.0) up to ~2 runs/ball, fading to ~0 by 6 runs/ball (all-sixes territory).
+    """
+    if balls_left <= 0:
+        return 0.0
+    rpb = runs_needed / balls_left
+    if rpb <= 2.0:
+        return 1.0
+    return max(0.0, (6.0 - rpb) / 4.0)
+
+
+def apply_feasibility(info, runs_needed, balls_left):
+    """Scale an ``info`` dict's chasing chance toward 1% as the required rate
+    becomes unachievable for the balls left. Mutates and returns ``info``."""
+    f = feasibility_factor(runs_needed, balls_left)
+    chance = max(1, int(round(1 + (info["chasing_chance"] - 1) * f)))
+    info["chasing_chance"] = chance
+    info["defending_chance"] = 100 - chance
+    return info
+
+
 def final_chase_chance(runs_needed, wickets_lost, batter_mod=0, bowler_mod=0,
                        pitch_mod=0, momentum_mod=0):
     """Full chasing-chance estimate with clamped modifiers. Returns a dict with
@@ -137,7 +173,6 @@ def final_chase_chance(runs_needed, wickets_lost, batter_mod=0, bowler_mod=0,
 STEER_BOUNDARY_K = 0.55   # ±55% boundaries at the extremes
 STEER_WICKET_K = 0.50     # ∓50% wickets
 STEER_DOT_K = 0.06        # ∓0.06 dot share
-STEER_SINGLE_K = 0.18     # ±18% singles
 
 
 def chase_steer_effects(chasing_chance, strength=1.0):
@@ -145,13 +180,19 @@ def chase_steer_effects(chasing_chance, strength=1.0):
     nudges the ball-outcome weights toward the favoured side. ``tilt`` is 0 at a
     50/50 contest, +1 when the chase is nailed-on, -1 when it's hopeless.
 
-    Chasing favoured  → more boundaries/singles, fewer dots, fewer wickets.
+    Chasing favoured  → more boundaries, fewer dots, fewer wickets.
     Defending favoured→ the reverse.
+
+    Note: deliberately does NOT emit ``single_boost`` — that key would override
+    the pressure engine's ``strike_rotation_penalty`` branch in calculate_outcome
+    and silently disable it. The boundary / wicket / dot nudges carry the steer.
     """
-    tilt = _clamp((chasing_chance - 50) / 50.0, -1.0, 1.0) * strength
+    base_tilt = _clamp((chasing_chance - 50) / 50.0, -1.0, 1.0)
+    # Clamp again AFTER applying strength so a strength > 1 can't push a
+    # multiplier negative (e.g. boundary_modifier below 0).
+    tilt = _clamp(base_tilt * float(strength), -1.0, 1.0)
     return {
         "boundary_modifier": 1.0 + STEER_BOUNDARY_K * tilt,
         "wicket_modifier": 1.0 - STEER_WICKET_K * tilt,
         "dot_bonus": -STEER_DOT_K * tilt,
-        "single_boost": 1.0 + STEER_SINGLE_K * tilt,
     }

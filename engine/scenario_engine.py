@@ -463,38 +463,79 @@ def _generate_win_by_1_run_script(runs_needed, wickets_remaining, balls_left):
     return _add_tension_wickets(script)
 
 
+def _ceil_to_valid(x):
+    """Smallest legal cricket run-value >= x (capped at 6). e.g. 5 -> 6."""
+    for v in VALID_RUNS:  # (0, 1, 2, 3, 4, 6), ascending
+        if v >= x:
+            return v
+    return 6
+
+
+def _runs_representable(total, balls):
+    """True if ``total`` runs can be made by exactly ``balls`` legal deliveries.
+    Every 0..6*balls is reachable EXCEPT ``6*balls - 1`` — that would need all
+    sixes bar a single 5, and 5 is not a legal single-ball score."""
+    if balls <= 0:
+        return total == 0
+    if total < 0 or total > 6 * balls:
+        return False
+    if total == 6 * balls - 1:
+        return False
+    return True
+
+
+def _fill_legal_runs(total, balls):
+    """Exactly ``balls`` legal run-values summing to ``total`` (caller guarantees
+    feasibility via _runs_representable). Each ball is chosen so the REMAINDER
+    stays representable by the balls that follow — which rules out stranding an
+    unreachable ``6k - 1`` (e.g. a lone 5) on the tail."""
+    seq = []
+    rem = total
+    for i in range(balls):
+        after = balls - i - 1
+        opts = [v for v in VALID_RUNS
+                if 0 <= v <= rem and _runs_representable(rem - v, after)]
+        v = random.choice(opts) if opts else _ceil_to_valid(min(6, rem))
+        seq.append(v)
+        rem -= v
+    return seq
+
+
 def _generate_controlled_finish_script(runs_needed, wickets_remaining, balls_to_finish):
-    """Build a sequence of exactly ``balls_to_finish`` deliveries whose runs sum
-    to ``runs_needed`` with the winning shot on the final ball. Cumulative runs
-    stay below the target until that last ball, so the chase is completed exactly
-    on the intended finish ball."""
-    if balls_to_finish <= 1:
-        return [{"runs": _snap_to_valid(min(6, max(1, runs_needed))), "is_wicket": False}]
+    """Build ``balls_to_finish`` deliveries whose cumulative runs first reach the
+    target on the FINAL ball — never a ball early, never short. Every value is a
+    legal cricket outcome (0,1,2,3,4,6)."""
+    if balls_to_finish <= 0:
+        return []
+    runs_needed = max(1, runs_needed)
 
-    # Pick a realistic winning shot (never larger than what's needed).
-    if runs_needed >= 8:
-        win = random.choice([1, 2, 4, 4, 6])
-    elif runs_needed >= 4:
-        win = random.choice([1, 2, 4])
-    else:
-        win = runs_needed  # 1, 2 or 3 to win
-    win = max(1, min(_snap_to_valid(win), runs_needed))
+    if balls_to_finish == 1:
+        # One ball: hit enough to win, rounded up to a legal value (5 -> 6).
+        return [{"runs": _ceil_to_valid(min(6, runs_needed)), "is_wicket": False}]
 
-    pre_runs = runs_needed - win
     pre_balls = balls_to_finish - 1
+    # Choose a winning shot on the last ball such that the remaining runs are
+    # fillable across the pre-balls (so the chase can't finish early or fall short).
+    lo = max(1, runs_needed - 6 * pre_balls)
+    hi = min(6, runs_needed)
+    cands = [w for w in (1, 2, 3, 4, 6)
+             if lo <= w <= hi and _runs_representable(runs_needed - w, pre_balls)]
+    win = random.choice(cands) if cands else _ceil_to_valid(lo)
 
-    # Don't let the pre-sequence overshoot what those balls can hold.
-    if pre_runs > pre_balls * 6:
-        win = _snap_to_valid(min(6, runs_needed))
-        pre_runs = max(0, runs_needed - win)
+    pre = _fill_legal_runs(max(0, runs_needed - win), pre_balls)
 
-    pre_seq = _distribute_runs(
-        pre_runs, pre_balls,
-        include_wicket=(wickets_remaining >= 4 and pre_balls >= 6),
-        include_boundary=(pre_balls >= 4),
-    )
+    # True the winning shot up to whatever actually clears the target on the last
+    # ball (covers the rare fallback where the pre-fill had to round a 5 up).
+    win = runs_needed - sum(pre)
+    win = max(1, min(6, win if win in VALID_RUNS else _ceil_to_valid(win)))
 
-    script = [{"runs": r, "is_wicket": w} for r, w in pre_seq]
+    # Optional drama: turn one pre-ball dot into a wicket (runs unchanged) when
+    # there are wickets to spare and balls enough for it to read naturally.
+    script = [{"runs": r, "is_wicket": False} for r in pre]
+    if wickets_remaining >= 4 and pre_balls >= 5:
+        dots = [i for i, r in enumerate(pre) if r == 0]
+        if dots:
+            script[random.choice(dots)]["is_wicket"] = True
     script.append({"runs": win, "is_wicket": False})
     return script
 

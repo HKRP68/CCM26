@@ -841,6 +841,13 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if get_next_action(context, mid) != A_PICK_CIPL_BOWLER:
             await q.answer("Bowler already chosen.", show_alert=True)
             return
+        # Enforce eligibility server-side too: a stale button (or tampered
+        # callback data) must not bypass the quota / no-back-to-back / part-time
+        # rules the picker applies.
+        allowed = {p["roster_id"] for p in cipl_match.eligible_bowlers(state)}
+        if rid not in allowed:
+            await q.answer("That bowler isn't eligible for this over.", show_alert=True)
+            return
         bowler = cipl_match.find_player(state["bowl_xi"], rid)
         if not bowler:
             await q.answer("Bowler not available.", show_alert=True)

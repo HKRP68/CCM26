@@ -565,13 +565,16 @@ def chase_chance_now(state):
     required_rr = runs_needed / balls_left * 6.0
     recent = (state.get("ball_history") or [])[-6:]
     recent_runs = sum(int(b.get("runs", 0) or 0) for b in recent)
-    return chase_chance.final_chase_chance(
+    info = chase_chance.final_chase_chance(
         runs_needed, int(state["total_wickets"]),
         batter_mod=chase_chance.batter_modifier(striker, non_striker, s_runs),
         bowler_mod=chase_chance.bowler_modifier(bowler, is_emergency=is_part_time_bowler(bowler)),
         pitch_mod=chase_chance.pitch_modifier(state.get("pitch_type")),
         momentum_mod=chase_chance.momentum_modifier(required_rr, recent_runs, len(recent)),
     )
+    # The matrix is keyed only on runs+wickets; fold in the balls actually left so
+    # an out-of-reach ask (e.g. 16 off 1) correctly favours the defence.
+    return chase_chance.apply_feasibility(info, runs_needed, balls_left)
 
 
 def balls_bowled(state):

@@ -900,11 +900,14 @@ async def _resolve_ball(context, mid, shot):
         inn["bat"][s_rid]["b"] += 1
         inn["bat"][s_rid]["r"] += runs       # e.g. completed runs before a run out
         inn["bat"][s_rid]["out"] = True
-        inn["bat"][s_rid]["how"] = oc.get("wicket_type", "Out")
+        wtype = oc.get("wicket_type", "Out")
+        inn["bat"][s_rid]["how"] = wtype
         inn["runs"] += runs
         inn["bowl_runs"] += runs
         inn["wickets"] += 1
-        inn["bowl_wkts"] += 1
+        # A run out is not the bowler's wicket (matters on free-hit run-outs).
+        if wtype != "Run Out":
+            inn["bowl_wkts"] += 1
         sym = "W"
     else:  # run
         inn["bat"][s_rid]["b"] += 1
