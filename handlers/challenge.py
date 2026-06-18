@@ -242,11 +242,17 @@ def _active_draft_in_chat(bot_data, chat_id):
 
 
 def _release_draft_chat_lock(bot_data, draft):
-    """Drop the per-chat draft lock once a draft ends or becomes a live match."""
+    """Drop the per-chat draft lock once a draft ends or becomes a live match.
+
+    Only releases the lock if it still points at *this* draft — a stale Deny
+    Match button on an old draft must not pop a newer draft's chat lock.
+    """
     if not draft:
         return
     chat_id = draft.get("chat_id")
-    if chat_id is not None:
+    if chat_id is None:
+        return
+    if bot_data.get(_challenge_draft_chat_key(chat_id)) == draft.get("draft_id"):
         bot_data.pop(_challenge_draft_chat_key(chat_id), None)
 
 

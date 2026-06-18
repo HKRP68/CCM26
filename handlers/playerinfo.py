@@ -107,7 +107,7 @@ async def _send_player_card(session, user, player, target, owner_tg):
                            .filter(PlayerImage.player_id == player.id).first())
                     if row and not row.tg_file_id:
                         row.tg_file_id = sent.photo[-1].file_id
-                        session.flush()
+                        session.commit()
             except Exception:
                 logger.debug("playerinfo file_id cache failed", exc_info=True)
             return

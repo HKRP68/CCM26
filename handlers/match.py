@@ -33,7 +33,7 @@ ACTION_WARN_SECONDS = 45
 ACTION_TIMEOUT = 90
 FINE_COINS = 2000   # reduced from 10000 — the forfeit itself is the bigger penalty
 FINE_GEMS = 5       # reduced from 20
-# /endmatch fine scales with how much of the match was played: balls bowled × 50
+# /endmatch fine scales with how much of the match was played: balls bowled x 50
 # coins (gems stay flat). The opponent is compensated the same amount.
 ENDMATCH_FINE_PER_BALL = 50
 
@@ -80,9 +80,17 @@ def _match_balls_bowled(s):
     """
     if not s:
         return 0
+    try:
+        innings = int(s.get("innings", 1) or 1)
+    except (TypeError, ValueError):
+        innings = 1
     total = 0
     found = False
-    for key in ("inn1_bowl_stats", "bowl_stats"):
+    # During innings 1 the live bowl_stats may already be snapshotted into
+    # inn1_bowl_stats (when stats are saved), so only add inn1 once we're in
+    # innings 2 — otherwise the first innings would be double-counted.
+    stat_keys = ("bowl_stats",) if innings < 2 else ("inn1_bowl_stats", "bowl_stats")
+    for key in stat_keys:
         stats = s.get(key)
         if isinstance(stats, dict) and stats:
             for bws in stats.values():
@@ -100,7 +108,7 @@ def _match_balls_bowled(s):
         cur = 0
     inn1 = 0
     try:
-        if s.get("innings", 1) >= 2 and s.get("inn1_overs") is not None:
+        if innings >= 2 and s.get("inn1_overs") is not None:
             ov = str(s.get("inn1_overs"))
             if "." in ov:
                 o, b = ov.split(".")
@@ -1766,16 +1774,21 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not mid:
         await update.message.reply_text("❌ No active match found."); return
 
-    balls = _match_balls_bowled(_gs(context, mid))
+    s_prompt = _gs(context, mid)
+    balls = _match_balls_bowled(s_prompt)
     est_fine = balls * ENDMATCH_FINE_PER_BALL
+    # Snapshot the ball count into the callback data so the player is charged
+    # exactly the amount shown here, even if play continues before they tap Yes.
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Yes", callback_data=f"endmatch_{mid}_{tg.id}"),
+        InlineKeyboardButton("✅ Yes", callback_data=f"endmatch_{mid}_{tg.id}_{balls}"),
         InlineKeyboardButton("❌ No", callback_data=f"endmatchno_{mid}"),
     ]])
+    comp_line = ("" if (s_prompt and s_prompt.get("is_vsbot"))
+                 else "\nYour opponent gets the same as compensation.")
     await update.message.reply_text(
         f"🏏 <b>/endmatch</b> ⚡\n\nDo you want to End the match? 🛑\n"
-        f"You will be fined {est_fine:,} Coins 💰 ({balls} balls × {ENDMATCH_FINE_PER_BALL}) "
-        f"and {FINE_GEMS} Gems 💎.\nYour opponent gets the same as compensation.\n\n"
+        f"You will be fined {est_fine:,} Coins 💰 ({balls} balls x {ENDMATCH_FINE_PER_BALL}) "
+        f"and {FINE_GEMS} Gems 💎.{comp_line}\n\n"
         f"✅ Yes — You get fined ⚠️\n❌ No — Match continues 🔄",
         parse_mode="HTML", reply_markup=kb)
 
@@ -1788,9 +1801,15 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
     s = _gs(context, mid)
     if s:
         await _save_match_stats(s)
-    # Fine scales with how much of the match was played; the opponent is
-    # compensated the same amount (skipped for vs-bot — no human to credit).
-    balls = _match_balls_bowled(s)
+    # Use the ball count snapshotted in the button (the amount the player agreed
+    # to), falling back to a fresh count for legacy buttons without it.
+    if len(parts) > 3:
+        try:
+            balls = max(0, int(parts[3]))
+        except (TypeError, ValueError):
+            balls = _match_balls_bowled(s)
+    else:
+        balls = _match_balls_bowled(s)
     fine_coins = balls * ENDMATCH_FINE_PER_BALL
     fine_gems = FINE_GEMS
     is_vsbot = bool(s.get("is_vsbot")) if s else False
@@ -1803,29 +1822,37 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
             opp_id = m.user2_id if m.user1_id == u.id else m.user1_id
             if opp_id and opp_id != u.id:
                 opponent = session.query(User).get(opp_id)
+        # Only ever compensate what was actually deducted — a low-balance quitter
+        # must not mint coins/gems for the opponent.
+        charged_coins = 0
+        charged_gems = 0
         if u:
-            u.total_coins = max(0, u.total_coins - fine_coins)
-            u.total_gems = max(0, u.total_gems - fine_gems)
+            charged_coins = min(u.total_coins or 0, fine_coins)
+            charged_gems = min(u.total_gems or 0, fine_gems)
+            u.total_coins = (u.total_coins or 0) - charged_coins
+            u.total_gems = (u.total_gems or 0) - charged_gems
             log_activity(session, u.id, "endmatch",
-                         f"Ended match #{mid} ({balls} balls): -{fine_coins} coins, -{fine_gems} gems",
-                         coins_change=-fine_coins, gems_change=-fine_gems)
+                         f"Ended match #{mid} ({balls} balls): -{charged_coins} coins, -{charged_gems} gems",
+                         coins_change=-charged_coins, gems_change=-charged_gems)
         if opponent:
-            opponent.total_coins = (opponent.total_coins or 0) + fine_coins
-            opponent.total_gems = (opponent.total_gems or 0) + fine_gems
+            opponent.total_coins = (opponent.total_coins or 0) + charged_coins
+            opponent.total_gems = (opponent.total_gems or 0) + charged_gems
             log_activity(session, opponent.id, "endmatch_compensation",
-                         f"Opponent ended match #{mid} ({balls} balls): +{fine_coins} coins, +{fine_gems} gems",
-                         coins_change=fine_coins, gems_change=fine_gems)
-        if m: m.status = "completed"; m.completed_at = datetime.utcnow()
+                         f"Opponent ended match #{mid} ({balls} balls): +{charged_coins} coins, +{charged_gems} gems",
+                         coins_change=charged_coins, gems_change=charged_gems)
+        if m:
+            m.status = "completed"
+            m.completed_at = datetime.utcnow()
         session.commit()
         u_mention = _mention(u) if u else "Player"
         comp_line = ""
         if opponent:
             comp_line = (f"🎁 {_mention(opponent)} compensated: "
-                         f"+{fine_coins:,} Coins 💰 +{fine_gems} Gems 💎\n")
+                         f"+{charged_coins:,} Coins 💰 +{charged_gems} Gems 💎\n")
         await q.edit_message_text(
             f"🛑 <b>MATCH ENDED</b>\n\n{u_mention} ended the match.\n"
-            f"⚠️ Fine ({balls} balls × {ENDMATCH_FINE_PER_BALL}): "
-            f"-{fine_coins:,} Coins 💰 -{fine_gems} Gems 💎\n"
+            f"⚠️ Fine ({balls} balls x {ENDMATCH_FINE_PER_BALL}): "
+            f"-{charged_coins:,} Coins 💰 -{charged_gems} Gems 💎\n"
             f"{comp_line}"
             f"📊 Player stats saved.", parse_mode="HTML")
     except Exception:
