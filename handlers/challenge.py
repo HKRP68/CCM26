@@ -200,6 +200,41 @@ def _cm_chat_key(chat_id):
     return f"cm_lobby_chat_{chat_id}"
 
 
+def _challenge_draft_chat_key(chat_id):
+    """Per-chat lock for a Challenge League team/XI selection draft.
+
+    Only one league challenge setup may be in progress in a chat at a time, so
+    a second user cannot start a fresh league challenge while another player's
+    team/player selection is still under way in the same group.
+    """
+    return f"cl_draft_chat_{chat_id}"
+
+
+def _active_draft_in_chat(bot_data, chat_id):
+    """Return the live league draft for this chat, or None.
+
+    Self-heals a stale chat→draft pointer (e.g. if the draft dict was already
+    removed) so a chat is never permanently locked out of new challenges.
+    """
+    draft_id = bot_data.get(_challenge_draft_chat_key(chat_id))
+    if draft_id is None:
+        return None
+    draft = bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft:
+        bot_data.pop(_challenge_draft_chat_key(chat_id), None)
+        return None
+    return draft
+
+
+def _release_draft_chat_lock(bot_data, draft):
+    """Drop the per-chat draft lock once a draft ends or becomes a live match."""
+    if not draft:
+        return
+    chat_id = draft.get("chat_id")
+    if chat_id is not None:
+        bot_data.pop(_challenge_draft_chat_key(chat_id), None)
+
+
 def _cm_user_lobby(bot_data, user_id):
     return next((lobby for key, lobby in bot_data.items()
                  if key.startswith("cm_lobby_")
@@ -302,7 +337,12 @@ def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cl_cancel_{draft_id}")])
+    # Cancel aborts the whole setup (either player); Deny Match lets the guest
+    # refuse the challenge right here in Team Selection (validated in the handler).
+    rows.append([
+        InlineKeyboardButton("❌ Cancel", callback_data=f"cl_cancel_{draft_id}"),
+        InlineKeyboardButton("🚫 Deny Match", callback_data=f"cl_denymatch_{draft_id}"),
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -481,6 +521,7 @@ async def challenge_deny_match_callback(update: Update, context: ContextTypes.DE
         await query.answer("Only the guest can deny this match.", show_alert=True)
         return
 
+    _release_draft_chat_lock(context.bot_data, draft)
     context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
     await query.answer("Match denied.")
     target = draft.get("target") or {}
@@ -778,6 +819,14 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     # Challenge League draft can't start on top of a live match in this chat or
     # while either player is already busy elsewhere.
     cid = update.effective_chat.id
+    # One league setup per chat: block a second challenge while another player's
+    # team/player selection is still under way in this group.
+    if _active_draft_in_chat(context.bot_data, cid) or context.bot_data.get(_cm_chat_key(cid)):
+        await update.message.reply_text(
+            "⚠️ A Challenge League team selection is already in progress in this chat. "
+            "Finish, cancel, or deny it before starting another.",
+            parse_mode="HTML")
+        return
     if session is not None:
         chat_busy = _active_match_in_chat(session, cid) or _active_cric_match_in_chat(session, cid)
         if chat_busy:
@@ -826,6 +875,8 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         },
         "created_at": datetime.utcnow().isoformat(),
     }
+    # Lock this chat to the new draft so a concurrent league challenge is refused.
+    context.bot_data[_challenge_draft_chat_key(update.effective_chat.id)] = draft_id
     draft = context.bot_data[_challenge_team_draft_key(draft_id)]
     caption = _team_picker_prompt(draft, "host")
     markup = _team_keyboard(draft_id, teams, team_codes=team_codes)
@@ -876,7 +927,7 @@ async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_T
                 or _cm_user_lobby(context.bot_data, challenger.id)):
             await update.message.reply_text("⚠️ You already have an active match or lobby!")
             return
-        if context.bot_data.get(_cm_chat_key(cid)):
+        if context.bot_data.get(_cm_chat_key(cid)) or _active_draft_in_chat(context.bot_data, cid):
             await update.message.reply_text("⚠️ There is already a challenge waiting in this chat!")
             return
 
@@ -1122,6 +1173,7 @@ async def challenge_team_cancel_callback(update: Update, context: ContextTypes.D
         await query.answer("Only the players in this challenge can cancel.", show_alert=True)
         return
 
+    _release_draft_chat_lock(context.bot_data, draft)
     context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
     await query.answer("Cancelled.")
     message = "❌ <b>Team selection cancelled.</b>"
@@ -1597,6 +1649,9 @@ async def challenge_start_match_callback(update: Update, context: ContextTypes.D
         return
 
     draft["match_started"] = True
+    # The live match now owns this chat (tracked via active-match checks), so the
+    # team-selection lock can be released for the next challenge once it ends.
+    _release_draft_chat_lock(context.bot_data, draft)
     await query.answer("Match started!")
     # Toss happens exactly like the current system: the guest calls heads/tails,
     # the winner elects bat/bowl, then the over-by-over match begins in chat.
