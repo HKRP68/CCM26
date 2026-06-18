@@ -613,18 +613,26 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     if not first:
         await _delete_prev_over(context, state)
     elig = cipl_match.eligible_bowlers(state)
+    # When the front-line attack is exhausted, eligible_bowlers falls back to
+    # part-time batsmen — flag them in the picker so the captain knows.
+    only_part_timers = bool(elig) and all(
+        cipl_match.is_part_time_bowler(p) for p in elig)
     rows, row = [], []
     for p in elig:
+        tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
+        left = cipl_match.overs_left(state, p)
         row.append(InlineKeyboardButton(
-            f"{p['name']} ({p.get('bowl_rating', 0)})",
+            f"{p['name']} ({p.get('bowl_rating', 0)}) · {left} left{tag}",
             callback_data=f"cipl_bowler_{mid}_{p['roster_id']}"))
         if len(row) == 2:
             rows.append(row); row = []
     if row:
         rows.append(row)
+    part_time_note = ("\n⚠️ <i>Front-line bowlers are bowled out — only part-time "
+                      "bowlers (🧤) are left.</i>" if only_part_timers else "")
     text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
-            f"for over {state['current_over']}:")
+            f"for over {state['current_over']}:{part_time_note}")
     await _new_action_message(context, state, text, rows)
     _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
     _arm_timer(context, mid, A_PICK_CIPL_BOWLER)
@@ -842,6 +850,13 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if get_next_action(context, mid) != A_PICK_CIPL_BOWLER:
             await q.answer("Bowler already chosen.", show_alert=True)
             return
+        # Enforce eligibility server-side too: a stale button (or tampered
+        # callback data) must not bypass the quota / no-back-to-back / part-time
+        # rules the picker applies.
+        allowed = {p["roster_id"] for p in cipl_match.eligible_bowlers(state)}
+        if rid not in allowed:
+            await q.answer("That bowler isn't eligible for this over.", show_alert=True)
+            return
         bowler = cipl_match.find_player(state["bowl_xi"], rid)
         if not bowler:
             await q.answer("Bowler not available.", show_alert=True)
@@ -1011,7 +1026,13 @@ def _bat_line(player, bat_stats):
 _CMT_EMOJI = {
     "dot": "0️⃣", "one": "1️⃣", "two": "2️⃣", "three": "3️⃣",
     "four": "4️⃣", "six": "6️⃣", "wicket": "⭕", "extra": "↔️",
+    "new_bowler": "🎳", "returning_bowler": "🎳", "new_batsman": "🏏",
 }
+
+# Card-type commentary entries the Mini App renders as rich cards. The chat
+# already posts its own end-of-over summary message, so these are skipped in the
+# expandable per-over commentary block to avoid duplicate / empty lines.
+_CMT_SKIP_IN_BLOCK = {"wicket", "end_of_over", "over_complete"}
 
 
 def _compact_bat_line(player, bat_stats):
@@ -1045,9 +1066,10 @@ def _commentary_block(state):
     for e in reversed(entries):
         etype = e.get("type")
         # A wicket is emitted as a ball row (rich commentary, carries the W) plus
-        # a paired "wicket" summary card. Render only the ball row here so the
-        # Telegram block keeps a single line per delivery.
-        if etype == "wicket":
+        # a paired "wicket" summary card; rich Mini App cards (end_of_over /
+        # over_complete) are handled by the chat's own summary message. Skip all
+        # of these so the Telegram block keeps one clean line per event.
+        if etype in _CMT_SKIP_IN_BLOCK:
             continue
         emoji = _CMT_EMOJI.get(etype, "")
         if etype == "ball" and e.get("isWicket"):
@@ -1145,6 +1167,14 @@ async def _complete_match(context, mid, state):
     # Match row stays 'active' until the Super Over decides a winner.
     if result["tie"]:
         try:
+            # Mention the Super Over in the Mini App commentary feed so spectators
+            # know the tie is being resolved (the chat already announces it).
+            cipl_match._push_card(state, {
+                "type": "new_bowler",
+                "text": (f"🤝 Scores level at {cipl_match.format_score(state)} — "
+                         f"it's a SUPER OVER! 🔥"),
+            })
+            _ss(context, mid, state)
             from handlers.super_over import start_super_over
             if await start_super_over(context, mid, state):
                 return

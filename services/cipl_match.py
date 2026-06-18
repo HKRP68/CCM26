@@ -18,6 +18,7 @@ import os
 import random
 
 from engine.ball_outcome import calculate_outcome
+from engine import chase_chance
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
     make_ball_event,
@@ -45,8 +46,65 @@ except Exception:  # pragma: no cover - defensive import guard
 
 WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
 
+# Chase-chance steering: nudge ball outcomes toward the matrix-estimated
+# chasing/defending chance in the back end of a chase (the matrix is an
+# end-of-innings model — apply it over roughly the last 8 overs, "until the
+# 18th over"). STRENGTH scales how hard the matrix nudge pulls (0 = off).
+#
+# Two layers, applied during the 2nd innings only:
+#   1. A mild always-on chasing assist (the real "knows the target / dew" edge)
+#      that balances batting-first vs chasing toward ~50-50 overall.
+#   2. The matrix steer on top, in the back overs, for situational realism
+#      (e.g. 30 needed with ≤5 down stays a genuine ~56% chase).
+CHASE_STEER_BALLS = 30
+CHASE_STEER_STRENGTH = 0.30
+CHASE_BASELINE_ASSIST = {"boundary_modifier": 1.065, "wicket_modifier": 0.905,
+                         "dot_bonus": -0.015}
+
+
+def _merge_pressure(pressure_effects, bias):
+    """Fold a steering bias into a pressure_effects dict: dot_bonus is additive,
+    everything else multiplies onto any existing value."""
+    for key, value in bias.items():
+        if key == "dot_bonus":
+            pressure_effects[key] = pressure_effects.get(key, 0.0) + value
+        elif key in pressure_effects:
+            pressure_effects[key] *= value
+        else:
+            pressure_effects[key] = value
+
 # Dramatic-finish scenario types the engine can steer a 2nd-innings chase toward.
-SCENARIO_TYPES = ("last_ball_six", "win_by_1_run", "super_over_thriller")
+# ``controlled_finish`` completes the chase at a chosen ball (see
+# _select_finish_profile) so finishes are spread out instead of always landing on
+# the last ball.
+SCENARIO_TYPES = ("last_ball_six", "win_by_1_run", "super_over_thriller",
+                  "controlled_finish")
+
+
+def _select_finish_profile(overs):
+    """Pick a finish profile for an armed chase, returning ``(scenario_type,
+    finish_ball)``. The weighting spreads finishes out to reduce last-ball drama:
+
+        30%  win with 1 ball to spare (19.5)
+        20%  last-ball win            (19.6)
+        10%  tie → Super Over
+        20%  finish in the 19th over  (18.1–18.6)
+        20%  comfortable win          (17.1–17.6, 2+ overs to spare)
+
+    ``finish_ball`` is an absolute legal-ball index (1..overs*6); ``None`` for the
+    tie profile, which is handled by the super_over_thriller script.
+    """
+    balls = overs * 6
+    r = random.random()
+    if r < 0.30:
+        return "controlled_finish", balls - 1
+    if r < 0.50:
+        return "controlled_finish", balls
+    if r < 0.60:
+        return "super_over_thriller", None
+    if r < 0.80:
+        return "controlled_finish", random.randint(balls - 11, balls - 6)
+    return "controlled_finish", random.randint(balls - 17, balls - 12)
 
 # Full SimCricketX commentary engine — micro (per-ball) lines + macro narratives
 # (collapse, milestones, partnership, maiden/big/expensive over, last-over drama,
@@ -190,17 +248,18 @@ def _maybe_enable_scenario(state):
         return
     if random.random() >= _scenario_probability():
         return
-    stype = random.choice(SCENARIO_TYPES)
+    stype, finish_ball = _select_finish_profile(int(state.get("overs", 20)))
     state["scenario"] = {
         "type": stype,
         "active": True,
+        "finish_ball": finish_ball,
         "finale_script": None,
         "finale_ball_index": 0,
         "convergence_logged": False,
         "endgame_checked_overs": [],
     }
-    logger.info("[CIPL Scenario] Armed dramatic finish '%s' for match %s (target=%s)",
-                stype, state.get("match_id"), state.get("target"))
+    logger.info("[CIPL Scenario] Armed finish '%s' (finish_ball=%s) for match %s (target=%s)",
+                stype, finish_ball, state.get("match_id"), state.get("target"))
 
 
 def _load_scenario_engine(state):
@@ -214,7 +273,8 @@ def _load_scenario_engine(state):
     if state.get("innings") != 2 or not state.get("target"):
         return None
     try:
-        eng = ScenarioEngine(sc["type"], _ScenarioMatchShim(state))
+        eng = ScenarioEngine(sc["type"], _ScenarioMatchShim(state),
+                              finish_ball=sc.get("finish_ball"))
     except Exception:  # pragma: no cover - defensive
         logger.exception("[CIPL Scenario] Failed to construct ScenarioEngine")
         return None
@@ -233,6 +293,7 @@ def _save_scenario_engine(state, eng):
     state["scenario"] = {
         "type": eng.scenario_type,
         "active": bool(eng.active),
+        "finish_ball": getattr(eng, "finish_ball", None),
         "finale_script": eng.finale_script,
         "finale_ball_index": int(eng.finale_ball_index),
         "convergence_logged": bool(getattr(eng, "_convergence_logged", False)),
@@ -314,24 +375,83 @@ def _overs_bowled(state, rid):
     return state["bowl_stats"].get(str(rid), {}).get("balls", 0) // 6
 
 
+# Emergency part-time bowlers (batsmen) are capped well below the regular quota
+# so a mismanaged attack can't simply farm out the innings to a batsman.
+PART_TIME_MAX_OVERS = 2
+
+
+def is_part_time_bowler(p):
+    """A batsman/keeper offered as an *emergency* bowler — i.e. not a specialist
+    Bowler or All-rounder. Used to annotate the picker so the captain knows the
+    front-line attack is exhausted."""
+    return p.get("category") not in ("Bowler", "All-rounder")
+
+
+def quota_for(state, p):
+    """Per-bowler over cap: the regular quota for specialists, but emergency
+    part-timers are capped at PART_TIME_MAX_OVERS (and never more than a
+    specialist could bowl)."""
+    base = max_bowler_overs(state)
+    if is_part_time_bowler(p):
+        return min(base, PART_TIME_MAX_OVERS)
+    return base
+
+
+def overs_left(state, p):
+    """Overs this player may still bowl under their (part-time-aware) quota."""
+    return max(0, quota_for(state, p) - _overs_bowled(state, p["roster_id"]))
+
+
 def eligible_bowlers(state):
-    """Bowlers + all-rounders, excluding the previous over's bowler and any who
-    have used their full over quota."""
+    """Bowlers a captain may pick for the upcoming over, in preference order.
+
+    Tiered so an over can ALWAYS be bowled — even when the front-line attack has
+    been mismanaged (e.g. only five bowlers and all their overs used up before
+    the last over):
+
+      1. Specialists (Bowler / All-rounder) under quota, not the previous bowler.
+      2. Emergency part-timers (batsmen) under quota, not the previous bowler —
+         this is the "someone has to bowl the 20th over" fallback.
+      3. Last resort: anyone left under quota (ignoring the no-back-to-back rule),
+         then anyone at all, so the match never deadlocks.
+
+    Within each tier, highest bowl_rating first.
+    """
     xi = state.get("bowl_xi") or []
-    elig = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")]
-    if not elig:
-        elig = list(xi)
-    quota = max_bowler_overs(state)
-    under_quota = [p for p in elig if _overs_bowled(state, p["roster_id"]) < quota]
-    if under_quota:
-        elig = under_quota
     prev = state.get("prev_bowler_rid")
-    if prev is not None and len(elig) > 1:
-        filtered = [p for p in elig if p["roster_id"] != prev]
-        if filtered:
-            elig = filtered
-    # Highest bowl_rating first
-    return sorted(elig, key=lambda p: p.get("bowl_rating", 0), reverse=True)
+
+    def _avail(pool, enforce_quota=True, enforce_prev=True):
+        out = list(pool)
+        if enforce_quota:
+            out = [p for p in out
+                   if _overs_bowled(state, p["roster_id"]) < quota_for(state, p)]
+        if enforce_prev and prev is not None:
+            out = [p for p in out if p["roster_id"] != prev]
+        return out
+
+    def _sorted(pool):
+        return sorted(pool, key=lambda p: p.get("bowl_rating", 0), reverse=True)
+
+    specialists = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")]
+    part_timers = [p for p in xi if is_part_time_bowler(p)]
+
+    # 1) Front-line attack with overs left.
+    pool = _avail(specialists)
+    if pool:
+        return _sorted(pool)
+
+    # 2) Specialists are bowled out (or only the previous bowler remains) — throw
+    #    the ball to a part-time batsman so the over can still be bowled.
+    pool = _avail(part_timers)
+    if pool:
+        return _sorted(pool)
+
+    # 3) Everyone is at quota / only the previous bowler is left: relax the
+    #    back-to-back rule, then the quota, so play can always continue.
+    pool = (_avail(xi, enforce_prev=False)
+            or _avail(xi, enforce_quota=False, enforce_prev=False)
+            or list(xi))
+    return _sorted(pool)
 
 
 def find_player(xi, roster_id):
@@ -426,6 +546,37 @@ def _make_trait_hook(striker_traits, bowler_traits, ctx, collector=None):
 # Score / chase helpers
 # ════════════════════════════════════════════════════════════════════
 
+def chase_chance_now(state):
+    """Live chasing-chance estimate for the current 2nd-innings situation (matrix
+    + player/pitch/momentum modifiers), or None when not a live chase. Used for
+    steering and safe to surface read-only — it never decides the result."""
+    if state.get("innings") != 2 or not state.get("target"):
+        return None
+    balls_left = state["overs"] * 6 - balls_bowled(state)
+    runs_needed = int(state["target"]) - int(state["total_runs"])
+    if balls_left <= 0 or runs_needed <= 0:
+        return None
+    order = state.get("batting_order", []) or []
+    s_idx, ns_idx = state.get("striker_idx", 0), state.get("non_striker_idx", 1)
+    striker = order[s_idx] if s_idx < len(order) else {}
+    non_striker = order[ns_idx] if ns_idx < len(order) else {}
+    bowler = state.get("current_bowler") or {}
+    s_runs = state.get("bat_stats", {}).get(str(striker.get("roster_id")), {}).get("runs", 0)
+    required_rr = runs_needed / balls_left * 6.0
+    recent = (state.get("ball_history") or [])[-6:]
+    recent_runs = sum(int(b.get("runs", 0) or 0) for b in recent)
+    info = chase_chance.final_chase_chance(
+        runs_needed, int(state["total_wickets"]),
+        batter_mod=chase_chance.batter_modifier(striker, non_striker, s_runs),
+        bowler_mod=chase_chance.bowler_modifier(bowler, is_emergency=is_part_time_bowler(bowler)),
+        pitch_mod=chase_chance.pitch_modifier(state.get("pitch_type")),
+        momentum_mod=chase_chance.momentum_modifier(required_rr, recent_runs, len(recent)),
+    )
+    # The matrix is keyed only on runs+wickets; fold in the balls actually left so
+    # an out-of-reach ask (e.g. 16 off 1) correctly favours the defence.
+    return chase_chance.apply_feasibility(info, runs_needed, balls_left)
+
+
 def balls_bowled(state):
     return (state["current_over"] - 1) * 6 + state["current_ball"]
 
@@ -516,6 +667,9 @@ def simulate_over(state):
     # empty for Challenge League players, who carry no traits.
     over_traits = {"bat": set(), "bowl": set()}
 
+    # Commentary: announce the bowler taking the new over (into attack / returns).
+    _emit_bowler_card(state, bowler)
+
     while balls_this_over < 6 and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
             break
@@ -528,6 +682,10 @@ def simulate_over(state):
         bs = state["bat_stats"].setdefault(srid, _new_bat_stat())
         striker_name = striker["name"]
         batter_adapted = _adapt_player(striker)
+        # Is THIS delivery a free hit (set by a no-ball earlier)? Captured before
+        # the flag is consumed so the ball's commentary can carry the marker.
+        is_free_hit_ball = bool(free_hit)
+        fh_prefix = "🆓 FREE HIT — " if is_free_hit_ball else ""
 
         # Pressure
         balls_left = overs_total * 6 - balls_bowled(state)
@@ -575,13 +733,25 @@ def simulate_over(state):
             oc = _normalize_outcome(scenario_override)
         else:
             if scenario_eng:
-                for key, value in scenario_eng.get_scenario_bias({}).items():
-                    if key == "dot_bonus":
-                        pressure_effects[key] = pressure_effects.get(key, 0.0) + value
-                    elif key in pressure_effects:
-                        pressure_effects[key] *= value
-                    else:
-                        pressure_effects[key] = value
+                _merge_pressure(pressure_effects, scenario_eng.get_scenario_bias({}))
+
+            # Chase-chance steering — a controlled nudge toward the matrix-estimated
+            # chasing chance. Skipped while a dramatic-finish scenario is actively
+            # steering (those matches are curated by the ScenarioEngine), so the
+            # two systems never fight.
+            if (scenario_eng is None or scenario_phase == "inactive") \
+                    and innings == 2 and target:
+                # Layer 1: mild always-on chasing assist → ~50-50 baseline.
+                _merge_pressure(pressure_effects, CHASE_BASELINE_ASSIST)
+                # Layer 2: matrix steer in the back overs (situational realism).
+                _balls_left_now = overs_total * 6 - balls_bowled(state)
+                if 0 < _balls_left_now <= CHASE_STEER_BALLS:
+                    _cc = chase_chance_now(state)
+                    if _cc:
+                        _merge_pressure(pressure_effects,
+                                        chase_chance.chase_steer_effects(
+                                            _cc["chasing_chance"],
+                                            strength=CHASE_STEER_STRENGTH))
 
             pitch_wear = min(1.0, balls_bowled(state) / max(1, overs_total * 6))
             # /letsplay traits: build a per-ball weight hook from the striker's
@@ -645,9 +815,11 @@ def simulate_over(state):
                     elif runs == 6:
                         bs["sixes"] += 1
                 over_timeline.append("NB")
-                over_events.append({"sym": "NB", "text": f"No ball +{runs}"})
+                over_events.append({"sym": "NB", "text": f"No ball +{runs} — FREE HIT next"})
+                _nb_text = (_ec() or f"No ball! {bowler['name']} oversteps.")
                 _push_commentary(state, "extra", striker_name,
-                                 _ec() or "No ball! Free hit coming up.",
+                                 f"{_nb_text} 🆓 FREE HIT next ball — only a run out "
+                                 f"can dismiss.",
                                  runs=1 + runs, event_key="no_ball")
                 free_hit = True
                 if runs % 2 == 1:
@@ -673,8 +845,9 @@ def simulate_over(state):
             over_timeline.append("LB")
             over_events.append({"sym": "LB", "text": f"Leg byes +{runs}"})
             _push_commentary(state, "extra", striker_name,
-                             _ec() or f"Leg byes, {runs} run(s).",
+                             fh_prefix + (_ec() or f"Leg byes, {runs} run(s)."),
                              runs=runs, event_key="legbye")
+            free_hit = False  # legal delivery consumes the free hit
             if runs % 2 == 1:
                 _swap_strike(state)
 
@@ -704,7 +877,8 @@ def simulate_over(state):
             state["fow"].append([state["total_runs"], state["total_wickets"],
                                  striker_name, format_overs(state)])
             # Ball row (paints the W badge in the over column) + the red OUT card.
-            _wkt_line = _ec() or f"OUT! {striker_name} {bs['dismissal']}."
+            # On a free hit this can only be a run out (engine-enforced).
+            _wkt_line = fh_prefix + (_ec() or f"OUT! {striker_name} {bs['dismissal']}.")
             _push_commentary(state, "ball", striker_name, _wkt_line,
                              runs=runs, is_wicket=True, event_key="wicket")
             non_striker = state["batting_order"][state["non_striker_idx"]]
@@ -728,6 +902,11 @@ def simulate_over(state):
             if state["next_batsman_idx"] < len(state["batting_order"]):
                 state["striker_idx"] = state["next_batsman_idx"]
                 state["next_batsman_idx"] += 1
+                # Commentary: announce the incoming batsman (unless the innings
+                # is ending on this wicket — no one walks out then).
+                if not is_innings_over(state):
+                    _emit_new_batsman_card(
+                        state, state["batting_order"][state["striker_idx"]])
             else:
                 state["total_wickets"] = state.get("wicket_limit", WICKET_LIMIT)
 
@@ -752,11 +931,13 @@ def simulate_over(state):
             _run_key = ("dot_ball" if runs == 0 else "four" if runs == 4
                         else "six" if runs == 6 else None)
             _push_commentary(state, _run_event(runs), striker_name,
-                             _ec(is_maiden=_maiden)
-                             or _run_text(runs, striker_name, bowler["name"]),
+                             fh_prefix + (_ec(is_maiden=_maiden)
+                                          or _run_text(runs, striker_name, bowler["name"])),
                              runs=runs, event_key=_run_key)
-            if runs not in (4, 6):
-                free_hit = False
+            # A free hit is consumed by this one legal delivery — clear it even if
+            # the batter found the boundary (otherwise the free-hit run-out lock
+            # would wrongly carry on to the next ball).
+            free_hit = False
             if runs % 2 == 1:
                 _swap_strike(state)
 
@@ -793,6 +974,11 @@ def simulate_over(state):
     over_completed = balls_this_over >= 6
     if over_completed and not is_innings_over(state):
         _swap_strike(state)
+
+    # Mini App commentary: post an end-of-over summary card when the over is
+    # complete (chronological feed only — the chat gets its own summary message).
+    if over_completed:
+        _emit_end_of_over_card(state, bowler, state["current_over"], over_runs)
 
     summary = {
         "over_no": state["current_over"],
@@ -919,6 +1105,74 @@ def _push_commentary(state, ctype, name, text, *, runs=None,
     # Keep the log bounded so the JSON state stays small.
     if len(log) > 240:
         del log[:len(log) - 240]
+
+
+def _push_card(state, entry):
+    """Append a rich Mini App commentary *card* (new_bowler / new_batsman /
+    end_of_over / over_complete). Always carries ``over``/``text`` so the
+    snapshot consumers (and the over-by-over chat block) can rely on them.
+    """
+    entry.setdefault("over", format_overs(state))
+    entry.setdefault("text", "")
+    log = state.setdefault("commentary_log", [])
+    log.append(entry)
+    if len(log) > 240:
+        del log[:len(log) - 240]
+
+
+def _bat_card_for(state, player):
+    """``{name, runs, balls}`` snapshot used by the end-of-over summary card."""
+    bs = state["bat_stats"].get(str(player["roster_id"]), {})
+    return {"name": player["name"],
+            "runs": bs.get("runs", 0), "balls": bs.get("balls", 0)}
+
+
+def _emit_bowler_card(state, bowler):
+    """Blue 'into the attack' (first spell) or 'returns to bowl' (subsequent
+    spell) card, posted to the commentary feed at the start of every over."""
+    bws = state["bowl_stats"].get(str(bowler["roster_id"]), {})
+    if bws.get("balls", 0) > 0:
+        _push_card(state, {
+            "type": "returning_bowler", "name": bowler["name"],
+            "text": f"{bowler['name']} returns to bowl ({_bowler_figures(bws)})."})
+    else:
+        style = bowler.get("bowl_style") or ""
+        suffix = f" — {style}" if style else ""
+        _push_card(state, {
+            "type": "new_bowler", "name": bowler["name"],
+            "text": f"{bowler['name']} comes into the attack{suffix}."})
+
+
+def _emit_new_batsman_card(state, player):
+    """Green 'comes to the crease' card when a new batsman is promoted."""
+    _push_card(state, {
+        "type": "new_batsman", "name": player["name"],
+        "text": f"{player['name']} comes to the crease."})
+
+
+def _emit_end_of_over_card(state, bowler, over_no, over_runs):
+    """Cricbuzz-style end-of-over summary card (+ a one-line bowler figure)."""
+    bws = state["bowl_stats"].get(str(bowler["roster_id"]), {})
+    balls = bws.get("balls", 0)
+    overs_str = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+    striker = state["batting_order"][state["striker_idx"]]
+    non_striker = state["batting_order"][state["non_striker_idx"]]
+    _push_card(state, {
+        "type": "end_of_over",
+        "text": f"End of over {over_no}: {over_runs} run(s), "
+                f"{state['total_runs']}/{state['total_wickets']}.",
+        "overNumber": over_no,
+        "runsScored": over_runs,
+        "totalRuns": state["total_runs"],
+        "totalWickets": state["total_wickets"],
+        "striker": _bat_card_for(state, striker),
+        "nonStriker": _bat_card_for(state, non_striker),
+        "bowler": {"name": bowler["name"], "wickets": bws.get("wickets", 0),
+                   "runsConceded": bws.get("runs", 0), "overs": overs_str},
+    })
+    _push_card(state, {
+        "type": "over_complete", "name": bowler["name"],
+        "text": f"{bowler['name']} completes the over ({_bowler_figures(bws)})."})
 
 
 def _pick_fielder(state, bowler, allow_bowler=False):

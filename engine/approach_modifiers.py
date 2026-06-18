@@ -45,9 +45,9 @@ _BATTING_MULT = {
                   "Four": 0.70, "Six": 0.50, "Wicket": 0.75},
     "balanced":  {},
     "aggressive": {"Dot": 0.85, "Single": 0.95, "Double": 1.00, "Three": 1.00,
-                   "Four": 1.40, "Six": 1.50, "Wicket": 1.35},
+                   "Four": 1.40, "Six": 1.50, "Wicket": 1.22},
     "ultra":     {"Dot": 0.70, "Single": 0.80, "Double": 0.90, "Three": 0.90,
-                  "Four": 1.60, "Six": 2.20, "Wicket": 1.90},
+                  "Four": 1.60, "Six": 2.20, "Wicket": 1.35},
 }
 
 _BOWLING_MULT = {
@@ -57,7 +57,7 @@ _BOWLING_MULT = {
     "mixed":     {"Dot": 1.15, "Single": 1.00, "Four": 0.80,
                   "Six": 0.60, "Wicket": 1.10},
     "aggressive": {"Dot": 0.95, "Single": 1.00, "Four": 1.20,
-                   "Six": 1.20, "Wicket": 1.50},
+                   "Six": 1.20, "Wicket": 1.30},
     "variation": {"Dot": 1.10, "Single": 1.00, "Four": 0.85,
                   "Six": 0.80, "Wicket": 1.25},
 }

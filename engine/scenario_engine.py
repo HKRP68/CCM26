@@ -47,7 +47,24 @@ SCENARIO_CONFIG = {
         },
         "finale_last_ball": None,  # needs exact tie — dynamic
     },
+    # Generic "win at a target ball" scenario. The chasing side completes the
+    # chase on ``finish_ball`` (an absolute legal-ball index, 1..overs*6) — used
+    # to spread finishes away from the last ball: a penultimate-ball win (19.5),
+    # a 19th-over finish (18.x) or a comfortable win (17.x). See
+    # cipl_match._maybe_enable_scenario for the finish-profile weighting.
+    "controlled_finish": {
+        "label": "Controlled Finish",
+        "convergence_target": {
+            "runs_needed_range": (10, 40),
+            "wickets_range": (2, 7),
+        },
+        "finale_last_ball": None,  # dynamic — winning shot on finish_ball
+    },
 }
+
+# How many balls before ``finish_ball`` the scripted finale takes over for a
+# controlled_finish scenario.
+FINALE_LEAD_BALLS = 8
 
 # --------------------------------------------------------------------------- #
 #  Wicket type helpers (mirrors ball_outcome.py distributions)
@@ -446,6 +463,83 @@ def _generate_win_by_1_run_script(runs_needed, wickets_remaining, balls_left):
     return _add_tension_wickets(script)
 
 
+def _ceil_to_valid(x):
+    """Smallest legal cricket run-value >= x (capped at 6). e.g. 5 -> 6."""
+    for v in VALID_RUNS:  # (0, 1, 2, 3, 4, 6), ascending
+        if v >= x:
+            return v
+    return 6
+
+
+def _runs_representable(total, balls):
+    """True if ``total`` runs can be made by exactly ``balls`` legal deliveries.
+    Every 0..6*balls is reachable EXCEPT ``6*balls - 1`` — that would need all
+    sixes bar a single 5, and 5 is not a legal single-ball score."""
+    if balls <= 0:
+        return total == 0
+    if total < 0 or total > 6 * balls:
+        return False
+    if total == 6 * balls - 1:
+        return False
+    return True
+
+
+def _fill_legal_runs(total, balls):
+    """Exactly ``balls`` legal run-values summing to ``total`` (caller guarantees
+    feasibility via _runs_representable). Each ball is chosen so the REMAINDER
+    stays representable by the balls that follow — which rules out stranding an
+    unreachable ``6k - 1`` (e.g. a lone 5) on the tail."""
+    seq = []
+    rem = total
+    for i in range(balls):
+        after = balls - i - 1
+        opts = [v for v in VALID_RUNS
+                if 0 <= v <= rem and _runs_representable(rem - v, after)]
+        v = random.choice(opts) if opts else _ceil_to_valid(min(6, rem))
+        seq.append(v)
+        rem -= v
+    return seq
+
+
+def _generate_controlled_finish_script(runs_needed, wickets_remaining, balls_to_finish):
+    """Build ``balls_to_finish`` deliveries whose cumulative runs first reach the
+    target on the FINAL ball — never a ball early, never short. Every value is a
+    legal cricket outcome (0,1,2,3,4,6)."""
+    if balls_to_finish <= 0:
+        return []
+    runs_needed = max(1, runs_needed)
+
+    if balls_to_finish == 1:
+        # One ball: hit enough to win, rounded up to a legal value (5 -> 6).
+        return [{"runs": _ceil_to_valid(min(6, runs_needed)), "is_wicket": False}]
+
+    pre_balls = balls_to_finish - 1
+    # Choose a winning shot on the last ball such that the remaining runs are
+    # fillable across the pre-balls (so the chase can't finish early or fall short).
+    lo = max(1, runs_needed - 6 * pre_balls)
+    hi = min(6, runs_needed)
+    cands = [w for w in (1, 2, 3, 4, 6)
+             if lo <= w <= hi and _runs_representable(runs_needed - w, pre_balls)]
+    win = random.choice(cands) if cands else _ceil_to_valid(lo)
+
+    pre = _fill_legal_runs(max(0, runs_needed - win), pre_balls)
+
+    # True the winning shot up to whatever actually clears the target on the last
+    # ball (covers the rare fallback where the pre-fill had to round a 5 up).
+    win = runs_needed - sum(pre)
+    win = max(1, min(6, win if win in VALID_RUNS else _ceil_to_valid(win)))
+
+    # Optional drama: turn one pre-ball dot into a wicket (runs unchanged) when
+    # there are wickets to spare and balls enough for it to read naturally.
+    script = [{"runs": r, "is_wicket": False} for r in pre]
+    if wickets_remaining >= 4 and pre_balls >= 5:
+        dots = [i for i, r in enumerate(pre) if r == 0]
+        if dots:
+            script[random.choice(dots)]["is_wicket"] = True
+    script.append({"runs": win, "is_wicket": False})
+    return script
+
+
 def _generate_super_over_script(runs_needed, wickets_remaining, balls_left):
     """
     Script for 'super over thriller': match ties exactly.
@@ -479,7 +573,7 @@ class ScenarioEngine:
     Attached to a Match instance when scenario_mode is set.
     """
 
-    def __init__(self, scenario_type, match):
+    def __init__(self, scenario_type, match, finish_ball=None):
         self.scenario_type = scenario_type
         self.match = match
         self.config = SCENARIO_CONFIG.get(scenario_type, {})
@@ -488,8 +582,11 @@ class ScenarioEngine:
         self.active = True
         self._convergence_logged = False
         self._endgame_checked_overs = set()  # tracks which overs have been checked
+        # Absolute legal-ball index (1..overs*6) the chase should finish on.
+        # Only meaningful for the controlled_finish scenario.
+        self.finish_ball = finish_ball
 
-        logger.info(f"[Scenario] Initialized: {scenario_type}")
+        logger.info(f"[Scenario] Initialized: {scenario_type} finish_ball={finish_ball}")
 
     def on_innings_transition(self):
         """Called when innings transitions from 1st to 2nd."""
@@ -551,6 +648,11 @@ class ScenarioEngine:
             return
         if self.match.target is None:
             return
+        # Controlled finishes are intentionally paced to a target ball (which may
+        # be a comfortable early win), so the "is this still a believable
+        # nail-biter?" gate must not self-disable them.
+        if self.scenario_type == "controlled_finish":
+            return
 
         current_over = self.match.current_over
         if current_over < 17:
@@ -595,6 +697,18 @@ class ScenarioEngine:
             return "inactive"
 
         over = self.match.current_over
+
+        # Controlled finish: the finale (scripted completion) begins a fixed
+        # number of balls before the target finish ball, so the chase can be
+        # closed out at 17.x / 18.x / 19.5 / 19.6 rather than always the last ball.
+        if self.scenario_type == "controlled_finish" and self.finish_ball:
+            bowled = over * 6 + self.match.current_ball
+            if bowled >= self.finish_ball - FINALE_LEAD_BALLS:
+                return "finale"
+            if over >= 12:
+                return "convergence"
+            return "free_play"
+
         if over < 15:
             return "free_play"
         elif over < 18:
@@ -619,6 +733,27 @@ class ScenarioEngine:
 
         if self.match.innings != 2 or self.match.target is None:
             return {}
+
+        # Controlled finish: pace the chase toward ``finish_ball``. If the side is
+        # scoring faster than the schedule (and would win early), suppress
+        # boundaries / add dots; if lagging, lift the scoring. The scripted finale
+        # then closes the chase out exactly on the target ball.
+        if self.scenario_type == "controlled_finish" and self.finish_ball:
+            bowled = self.match.current_over * 6 + self.match.current_ball
+            balls_to_finish = self.finish_ball - bowled
+            runs_needed = self.match.target - self.match.score
+            if balls_to_finish <= FINALE_LEAD_BALLS or runs_needed <= 0:
+                return {}
+            need_per_ball = runs_needed / balls_to_finish
+            cur_rate = self.match.score / max(1, bowled)
+            bias = {}
+            if cur_rate > need_per_ball * 1.15:
+                bias["boundary_modifier"] = 0.65
+                bias["dot_bonus"] = 0.07
+            elif cur_rate < need_per_ball * 0.85:
+                bias["boundary_modifier"] = 1.30
+                bias["dot_bonus"] = -0.04
+            return bias
 
         runs_needed = self.match.target - self.match.score
         balls_remaining = (self.match.fmt.overs - self.match.current_over) * 6 - self.match.current_ball
@@ -742,6 +877,8 @@ class ScenarioEngine:
             self._generate_win_by_1_run(runs_needed, wickets_remaining, balls_left)
         elif self.scenario_type == "super_over_thriller":
             self._generate_super_over(runs_needed, wickets_remaining, balls_left)
+        elif self.scenario_type == "controlled_finish":
+            self._generate_controlled_finish(runs_needed, wickets_remaining, balls_left)
         else:
             self.finale_script = None
 
@@ -786,6 +923,32 @@ class ScenarioEngine:
         self.finale_script = _generate_win_by_1_run_script(
             runs_needed, wickets_remaining, balls_left
         )
+
+    def _generate_controlled_finish(self, runs_needed, wickets_remaining, balls_left):
+        """Win at a target ball: the chase is completed on ``finish_ball`` with a
+        realistic mix of deliveries and the winning shot on the final scripted
+        ball, leaving any remaining overs unused (an early / comfortable win)."""
+        if runs_needed <= 0:
+            self.finale_script = None
+            return
+
+        overs = self.match.fmt.overs
+        balls_already = overs * 6 - balls_left
+        target_ball = self.finish_ball or (overs * 6)
+        balls_to_finish = target_ball - balls_already
+        # Clamp into a sane window: at least 1 ball, never past the innings end.
+        balls_to_finish = max(1, min(balls_to_finish, balls_left))
+
+        # Can't realistically score this many in the balls available — bail to
+        # normal sim rather than forcing an absurd sequence.
+        if runs_needed > balls_to_finish * 6:
+            logger.warning("[Scenario] Controlled finish infeasible: need %s off %s",
+                           runs_needed, balls_to_finish)
+            self.finale_script = None
+            return
+
+        self.finale_script = _generate_controlled_finish_script(
+            runs_needed, wickets_remaining, balls_to_finish)
 
     def _generate_super_over(self, runs_needed, wickets_remaining, balls_left):
         """Super Over Thriller: match ties exactly."""

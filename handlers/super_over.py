@@ -866,10 +866,14 @@ async def _resolve_ball(context, mid, shot):
     #  • last-ball drama on the 6th legal ball.
     edge = SO_BATTING_EDGE if so["bat_uid"] == so["first_bat_uid"] else 1.0
     last_ball = inn["legal"] >= 5
+    # A no-ball earlier in the over grants a free hit on this delivery: only a
+    # run out can dismiss the batter, and boundaries are a touch more likely.
+    free_hit = bool(inn.get("free_hit", False))
     oc = calculate_super_over_outcome(
         batter, bowler, so["pitch"], streak,
         over_number=0, batter_runs=inn["bat"][s_rid]["r"],
-        boundary_boost=SO_BOUNDARY_BOOST, last_ball=last_ball, edge=edge)
+        boundary_boost=SO_BOUNDARY_BOOST, last_ball=last_ball, edge=edge,
+        free_hit=free_hit)
 
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:
@@ -887,6 +891,8 @@ async def _resolve_ball(context, mid, shot):
             inn["runs"] += runs
             inn["bowl_runs"] += runs
             sym = "Wd" if extra_type == "Wide" else "Nb"
+            if extra_type == "No Ball":
+                inn["free_hit"] = True   # next legal ball is a free hit
         else:  # Leg Bye / Byes — legal delivery, runs are extras (not to batter)
             inn["runs"] += runs
             inn["bat"][s_rid]["b"] += 1
@@ -895,11 +901,14 @@ async def _resolve_ball(context, mid, shot):
         inn["bat"][s_rid]["b"] += 1
         inn["bat"][s_rid]["r"] += runs       # e.g. completed runs before a run out
         inn["bat"][s_rid]["out"] = True
-        inn["bat"][s_rid]["how"] = oc.get("wicket_type", "Out")
+        wtype = oc.get("wicket_type", "Out")
+        inn["bat"][s_rid]["how"] = wtype
         inn["runs"] += runs
         inn["bowl_runs"] += runs
         inn["wickets"] += 1
-        inn["bowl_wkts"] += 1
+        # A run out is not the bowler's wicket (matters on free-hit run-outs).
+        if wtype != "Run Out":
+            inn["bowl_wkts"] += 1
         sym = "W"
     else:  # run
         inn["bat"][s_rid]["b"] += 1
@@ -916,14 +925,18 @@ async def _resolve_ball(context, mid, shot):
 
     if legal:
         inn["legal"] += 1
+        inn["free_hit"] = False   # a legal delivery consumes the free hit
     inn["deliveries"] += 1
     inn["recent"].append(sym)
 
     # Commentary line from the engine (verbatim).
     commentary = oc.get("description", "")
-    note = (f"⚡ <b>{html.escape(deliv)}</b> → "
+    free_hit_tag = "🆓 <b>FREE HIT</b>\n" if free_hit else ""
+    no_ball_tag = ("\n🆓 <i>Free hit coming up — only a run out can dismiss!</i>"
+                   if (otype == "extra" and extra_type == "No Ball") else "")
+    note = (f"{free_hit_tag}⚡ <b>{html.escape(deliv)}</b> → "
             f"<i>{html.escape(_name(so, so['bat_uid'], s_rid))} plays the {html.escape(shot)}</i>\n"
-            f"{html.escape(commentary)}")
+            f"{html.escape(commentary)}{no_ball_tag}")
 
     # Strike rotation on odd runs off a legal ball (not on extras-only events).
     if otype == "run" and runs % 2 == 1:

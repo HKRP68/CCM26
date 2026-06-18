@@ -707,8 +707,10 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 over_timeline.append(str(runs))
                 _emit(_RUNS_TO_EVENT.get(runs, "general"),
                       striker_name, last_bowler_name, runs, legal_balls)
-                if runs != 4 and runs != 6:
-                    free_hit = False
+                # A free hit is consumed by this one legal delivery — clear it
+                # even on a boundary, else the run-out-only protection would
+                # wrongly carry to the next ball.
+                free_hit = False
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
 
