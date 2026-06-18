@@ -61,7 +61,9 @@ from handlers.buy import (
     buypl_handler, buypl_confirm_callback, buypl_cancel_callback,
     player_page_callback, player_page_noop_callback,
 )
-from handlers.team import teamname_handler, purse_handler, stats_handler, statscl_handler
+from handlers.team import teamname_handler, purse_handler, stats_handler
+# statscl_handler (/statscl — Challenge League player stats) moved to the
+# separate Challenge League bot.
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
 from handlers.profile import myprofile_handler, myprofile_callback
 
@@ -72,12 +74,15 @@ from handlers.bowlout import (
 )
 from handlers.catch import bal_handler, catch_handler
 from handlers.challenge import (
-    challenge_handler, challenge_league_handler, challenge_accept_callback,
+    challenge_handler, challenge_accept_callback,
     challenge_cancel_callback, challenge_deny_callback, challenge_coin_callback,
-    challenge_toss_callback, challenge_pick_callback, challenge_team_callback, challenge_team_cancel_callback, challenge_xi_callback,
-    challenge_xi_pick_callback, challenge_xi_confirm_callback, challenge_start_match_callback,
-    challenge_pitch_callback, challenge_deny_match_callback,
+    challenge_toss_callback, challenge_pick_callback,
 )
+# NOTE: Challenge League (/cipl, /challengeIPL/BBL/INT, custom league commands)
+# lives in a separate bot now. The league dispatcher and team/XI selection
+# callbacks (challenge_league_handler, challenge_team_*, challenge_pitch_*,
+# challenge_xi_*, challenge_start_match_*, challenge_deny_match_*) are no longer
+# imported or registered here. /cm and /letsplay remain on this bot.
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
 from handlers.undo import cmuundo_handler
@@ -281,7 +286,6 @@ BOT_MENU_COMMANDS = (
     ("teamname", "Set your team name"),
     ("purse", "Check your balance"),
     ("stats", "View player game statistics"),
-    ("statscl", "View any Challenge League player's stats"),
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
@@ -289,7 +293,7 @@ BOT_MENU_COMMANDS = (
     ("testwpm", "Test /wpm and /cm completion summary delivery"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
-    ("rcl", "Resume a stuck Challenge League (/cipl) match"),
+    ("rcl", "Resume a stuck /letsplay match"),
     ("letsplay", "Challenge a user with your own roster (20 overs)"),
     ("botstatus", "Bot ping, uptime & status"),
     ("lastmatch", "View your last match"),
@@ -304,9 +308,6 @@ BOT_MENU_COMMANDS = (
     ("pbo", "Start a player bowl-out"),
     ("catch", "Catch coins using your purse"),
     ("cm", "Start a two-wicket challenge match"),
-    ("challengeipl", "Challenge another user to an IPL match"),
-    ("challengebbl", "Challenge another user to a BBL match"),
-    ("challengeint", "Challenge another user to an international match"),
     ("unscramble", "Create an Unscramble Player lobby"),
     ("traits", "View your traits and inventory"),
     ("traitshop", "Browse the daily trait shop"),
@@ -503,9 +504,6 @@ async def start_handler(update, context):
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
         "/letsplay /lp @user - Reply or tag to play 20 overs with your own roster\n"
-        "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
-        "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
-        "/challengeINT /cint - Reply to a user to start an international challenge\n"
         "/unscramble - Create an Unscramble Player lobby\n"
         "/release /rel [name|pos] - Release for coins\n"
         "/releasemultiple /relm [from] [to] - Range release\n"
@@ -518,7 +516,7 @@ async def start_handler(update, context):
         "/clearmatches - Admin: clear all stuck matches in this chat (no winner)\n"
         "/removematch @user - Admin: remove a player stuck in a match\n"
         "/resume /r - If buttons disappear mid-match\n"
-        "/rcl - Resume a stuck Challenge League (/cipl) match\n"
+        "/rcl - Resume a stuck /letsplay match\n"
         "/botstatus - Bot ping, uptime & status\n"
         "/myprofile /me - Your profile\n"
         "/traits /tt - Your traits & inventory\n"
@@ -821,7 +819,7 @@ def main():
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
         app.add_handler(CommandHandler(["stats", "st"], stats_handler))
-        app.add_handler(CommandHandler("statscl", statscl_handler))
+        # /statscl (Challenge League player stats) moved to the separate Challenge League bot.
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
@@ -889,24 +887,15 @@ def main():
         app.add_handler(CommandHandler("catch", catch_handler))
         app.add_handler(CommandHandler("bal", bal_handler))
         app.add_handler(CommandHandler("cm", challenge_handler))
-        app.add_handler(MessageHandler(
-            _filters.Regex(r"^/[A-Za-z0-9_]+(?:@\w+)?(?:\s|$)"),
-            challenge_league_handler,
-        ), group=1)
         app.add_handler(CallbackQueryHandler(challenge_accept_callback, pattern=r"^cm_accept_"))
         app.add_handler(CallbackQueryHandler(challenge_deny_callback, pattern=r"^cm_deny_"))
         app.add_handler(CallbackQueryHandler(challenge_cancel_callback, pattern=r"^cm_cancel_"))
         app.add_handler(CallbackQueryHandler(challenge_coin_callback, pattern=r"^cm_coin_"))
         app.add_handler(CallbackQueryHandler(challenge_toss_callback, pattern=r"^cm_toss_"))
         app.add_handler(CallbackQueryHandler(challenge_pick_callback, pattern=r"^cm_pick_"))
-        app.add_handler(CallbackQueryHandler(challenge_team_callback, pattern=r"^cl_team_"))
-        app.add_handler(CallbackQueryHandler(challenge_pitch_callback, pattern=r"^cl_pitch_"))
-        app.add_handler(CallbackQueryHandler(challenge_deny_match_callback, pattern=r"^cl_denymatch_"))
-        app.add_handler(CallbackQueryHandler(challenge_team_cancel_callback, pattern=r"^cl_cancel_"))
-        app.add_handler(CallbackQueryHandler(challenge_xi_callback, pattern=r"^cl_xi_"))
-        app.add_handler(CallbackQueryHandler(challenge_xi_pick_callback, pattern=r"^cl_pick_"))
-        app.add_handler(CallbackQueryHandler(challenge_xi_confirm_callback, pattern=r"^cl_confirm_"))
-        app.add_handler(CallbackQueryHandler(challenge_start_match_callback, pattern=r"^cl_start_"))
+        # Challenge League (/cipl, /challengeIPL/BBL/INT, custom league commands) and
+        # its team/pitch/XI selection callbacks (cl_*) have moved to a separate bot.
+        # The over-by-over engine below stays because /letsplay reuses it.
         # Challenge League over-by-over "approach" match flow
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
