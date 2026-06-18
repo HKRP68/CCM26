@@ -95,21 +95,24 @@ async def _send_player_card(session, user, player, target, owner_tg):
         custom_bytes = None
 
     if custom_bytes:
-        sent = await target.reply_photo(
-            photo=io.BytesIO(custom_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
-        )
-        # Cache the returned file_id on the PlayerImage row for next time.
         try:
-            if sent and sent.photo:
-                from models import PlayerImage
-                row = (session.query(PlayerImage)
-                       .filter(PlayerImage.player_id == player.id).first())
-                if row and not row.tg_file_id:
-                    row.tg_file_id = sent.photo[-1].file_id
-                    session.flush()
+            sent = await target.reply_photo(
+                photo=io.BytesIO(custom_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
+            )
+            # Cache the returned file_id on the PlayerImage row for next time.
+            try:
+                if sent and sent.photo:
+                    from models import PlayerImage
+                    row = (session.query(PlayerImage)
+                           .filter(PlayerImage.player_id == player.id).first())
+                    if row and not row.tg_file_id:
+                        row.tg_file_id = sent.photo[-1].file_id
+                        session.flush()
+            except Exception:
+                logger.debug("playerinfo file_id cache failed", exc_info=True)
+            return
         except Exception:
-            pass
-        return
+            logger.exception("Custom image send failed, falling back to text")
 
     await target.reply_text(text, parse_mode="HTML", reply_markup=kb)
 

@@ -164,7 +164,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             from services.player_image_service import has_custom_card, get_custom_image_bytes
             if has_custom_card(player.id, session):
-                card_bytes = get_custom_image_bytes(player.id)
+                card_bytes = await asyncio.to_thread(get_custom_image_bytes, player.id)
         except Exception:
             logger.exception("Stats custom card load failed for %s", player.id)
 
@@ -420,7 +420,7 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from services.player_image_service import has_custom_card, get_custom_image_bytes
             cp_id = getattr(card_player, "id", None)
             if master is not None and cp_id and cp_id > 0 and has_custom_card(cp_id, session):
-                card_bytes = get_custom_image_bytes(cp_id)
+                card_bytes = await asyncio.to_thread(get_custom_image_bytes, cp_id)
         except Exception:
             logger.exception("statscl custom card load failed for %s", name)
 
