@@ -240,6 +240,25 @@ def _release_draft_chat_lock(bot_data, draft):
         bot_data.pop(_challenge_draft_chat_key(chat_id), None)
 
 
+def _waiting_cm_lobby_in_chat(bot_data, chat_id):
+    """True only if an *unanswered* /cm invite is waiting in this chat.
+
+    An accepted /cm lobby that stalled (e.g. the toss winner never pressed a
+    button) keeps its ``_cm_chat_key`` entry with no expiry and can't be
+    cancelled, so treating it as a blocker would lock every league challenge in
+    the chat forever. Live-match concurrency is already covered by the DB
+    active-match checks, so we only block on a lobby still awaiting a response.
+    """
+    lobby_id = bot_data.get(_cm_chat_key(chat_id))
+    if lobby_id is None:
+        return False
+    lobby = bot_data.get(_cm_lobby_key(lobby_id))
+    if not lobby:
+        bot_data.pop(_cm_chat_key(chat_id), None)
+        return False
+    return not lobby.get("accepted")
+
+
 def _cm_user_lobby(bot_data, user_id):
     return next((lobby for key, lobby in bot_data.items()
                  if key.startswith("cm_lobby_")
@@ -826,7 +845,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     cid = update.effective_chat.id
     # One league setup per chat: block a second challenge while another player's
     # team/player selection is still under way in this group.
-    if _active_draft_in_chat(context.bot_data, cid) or context.bot_data.get(_cm_chat_key(cid)):
+    if _active_draft_in_chat(context.bot_data, cid) or _waiting_cm_lobby_in_chat(context.bot_data, cid):
         await update.message.reply_text(
             "⚠️ A Challenge League team selection is already in progress in this chat. "
             "Finish, cancel, or deny it before starting another.",
@@ -888,18 +907,27 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     image_url = _league_image_url(league_record)
     local_path = _local_static_path(image_url)
     sent = None
-    if image_url:
-        try:
-            if local_path:
-                with open(local_path, "rb") as photo:
-                    sent = await update.message.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
-            else:
-                sent = await update.message.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            logger.exception("Failed to send league image for %s; falling back to text", league_key)
-            sent = None
-    if sent is None:
-        sent = await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+    try:
+        if image_url:
+            try:
+                if local_path:
+                    with open(local_path, "rb") as photo:
+                        sent = await update.message.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
+                else:
+                    sent = await update.message.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+            except Exception:
+                logger.exception("Failed to send league image for %s; falling back to text", league_key)
+                sent = None
+        if sent is None:
+            sent = await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+    except Exception:
+        # The draft + chat lock were installed before this send; if we couldn't
+        # post the picker at all, release them so the chat isn't locked with no
+        # buttons and no expiry timer (there's no participant to cancel it).
+        logger.exception("Failed to send league team picker; releasing draft lock")
+        _release_draft_chat_lock(context.bot_data, draft)
+        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+        return
     _track_setup_msg(draft, sent)
 
     # Free the chat lock if this draft is abandoned mid-selection (app crash,
