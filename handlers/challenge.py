@@ -35,6 +35,16 @@ CM_LOBBY_EXPIRE = 75
 # (never started), releasing the per-chat lock so the group isn't stuck.
 CHALLENGE_DRAFT_EXPIRE = int(os.getenv("CHALLENGE_DRAFT_EXPIRE_SECONDS", "600"))
 
+# Per-turn selection timeout. While a draft waits on a specific player (team
+# pick, pitch, or Playing XI), they get a 30s mention reminder; if they still
+# haven't acted by the full window, the match is forfeited. Each valid action
+# resets the clock (inactivity-based), so an active setup is never killed.
+CL_SELECT_WINDOW = int(os.getenv("CL_SELECT_WINDOW_SECONDS", "60"))
+CL_SELECT_REMIND = int(os.getenv("CL_SELECT_REMIND_SECONDS", "30"))
+# Forfeit penalty: the idle player is fined, the opponent compensated the same.
+CL_FORFEIT_COINS = int(os.getenv("CL_FORFEIT_COINS", "3000"))
+CL_FORFEIT_GEMS = int(os.getenv("CL_FORFEIT_GEMS", "5"))
+
 CHALLENGE_REPLY_REQUIRED_MESSAGE = "Please reply to a user’s message to challenge them."
 BUILT_IN_CHALLENGE_LEAGUES = {
     "ipl": "IPL",
@@ -509,6 +519,10 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
             logger.exception("Failed to update pitch confirmation message")
 
     await _send_challenge_xi_prompt(context, draft, getattr(query, "message", None))
+    # Both players now pick their Playing XI — arm the clock on both sides.
+    await _arm_selection_timer(
+        context, draft,
+        [draft.get("host_tg_id"), draft.get("target_tg_id")], "xi")
 
 
 async def challenge_deny_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,6 +559,7 @@ async def challenge_deny_match_callback(update: Update, context: ContextTypes.DE
         await query.answer("Only the guest can deny this match.", show_alert=True)
         return
 
+    await _disarm_selection_timer(context, draft)
     _release_draft_chat_lock(context.bot_data, draft)
     context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
     await query.answer("Match denied.")
@@ -943,6 +958,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     except Exception:
         logger.exception("Failed to schedule challenge draft expiry")
 
+    # Start the per-turn selection clock on the host (they pick their team first).
+    await _arm_selection_timer(context, draft, [draft.get("host_tg_id")], "team")
+
 
 async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                  target: User, league_key=None, league_name=None):
@@ -1195,6 +1213,13 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 logger.exception("Failed to send pitch selection message")
 
+    # Reset the selection clock for whoever the draft now waits on.
+    if draft.get("turn") == "target":
+        await _arm_selection_timer(context, draft, [draft.get("target_tg_id")], "team")
+    elif draft.get("turn") == "complete":
+        # The guest's team is set; the host now picks the pitch.
+        await _arm_selection_timer(context, draft, [draft.get("host_tg_id")], "pitch")
+
 
 async def challenge_team_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cl_cancel_{draft_id} — either participant aborts team selection."""
@@ -1219,6 +1244,7 @@ async def challenge_team_cancel_callback(update: Update, context: ContextTypes.D
         await query.answer("Only the players in this challenge can cancel.", show_alert=True)
         return
 
+    await _disarm_selection_timer(context, draft)
     _release_draft_chat_lock(context.bot_data, draft)
     context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
     await query.answer("Cancelled.")
@@ -1259,6 +1285,7 @@ async def _expire_challenge_draft(ctx):
     draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
     if not draft or draft.get("match_launched"):
         return
+    _cancel_selection_jobs(ctx, draft_id)
     _release_draft_chat_lock(ctx.bot_data, draft)
     ctx.bot_data.pop(_challenge_team_draft_key(draft_id), None)
     text = "⏰ <b>Team selection expired</b> — start again when you're ready."
@@ -1273,6 +1300,186 @@ async def _expire_challenge_draft(ctx):
                 parse_mode="HTML")
         except Exception:
             logger.debug("challenge draft expiry message edit failed", exc_info=True)
+
+
+# ── Per-turn selection timeout (team / pitch / Playing XI) ──────────────────
+# While a draft waits on specific players, arm a 30s reminder + forfeit timer.
+# Each valid action resets the clock; if a player never acts they forfeit, and
+# the opponent is compensated.
+
+def _selection_phase_label(phase):
+    return {"team": "team", "pitch": "pitch", "xi": "Playing XI"}.get(phase, "selection")
+
+
+def _mention_for_tg(draft, tg_id):
+    for side in ("host", "target"):
+        info = draft.get(side) or {}
+        if info.get("tg_id") == tg_id:
+            return _mention(tg_id, info.get("name") or "Player")
+    return _mention(tg_id, "Player")
+
+
+def _cancel_selection_jobs(context, draft_id):
+    try:
+        jq = getattr(context, "job_queue", None)
+        if jq:
+            for name in (f"cl_remind_{draft_id}", f"cl_forfeit_{draft_id}"):
+                for job in jq.get_jobs_by_name(name):
+                    job.schedule_removal()
+    except Exception:
+        logger.debug("cancel selection jobs failed", exc_info=True)
+
+
+async def _clear_selection_reminder(context, draft):
+    """Delete the last reminder ping for this draft, if any."""
+    msg_id = draft.pop("sel_remind_msg_id", None)
+    chat_id = draft.get("chat_id")
+    if msg_id and chat_id is not None:
+        try:
+            await context.bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+
+
+async def _arm_selection_timer(context, draft, awaiting, phase):
+    """(Re)start the reminder + forfeit timers for the players in ``awaiting``."""
+    draft_id = draft.get("draft_id")
+    _cancel_selection_jobs(context, draft_id)
+    await _clear_selection_reminder(context, draft)
+    awaiting = [tg for tg in (awaiting or []) if tg]
+    draft["sel_awaiting"] = awaiting
+    draft["sel_phase"] = phase
+    jq = getattr(context, "job_queue", None)
+    if not awaiting or not jq:
+        return
+    data = {"draft_id": draft_id}
+    try:
+        jq.run_once(_selection_reminder, CL_SELECT_REMIND, name=f"cl_remind_{draft_id}", data=data)
+        jq.run_once(_selection_forfeit, CL_SELECT_WINDOW, name=f"cl_forfeit_{draft_id}", data=data)
+    except Exception:
+        logger.exception("Failed to schedule selection timers")
+
+
+async def _touch_selection_timer(context, draft):
+    """Reset the inactivity clock after a valid action (same awaiting players)."""
+    awaiting = draft.get("sel_awaiting")
+    phase = draft.get("sel_phase")
+    if awaiting and phase:
+        await _arm_selection_timer(context, draft, awaiting, phase)
+
+
+async def _disarm_selection_timer(context, draft):
+    _cancel_selection_jobs(context, draft.get("draft_id"))
+    await _clear_selection_reminder(context, draft)
+    draft["sel_awaiting"] = []
+
+
+async def _selection_reminder(ctx):
+    """30s mark: re-mention the awaited player(s) (delete the previous ping)."""
+    draft_id = ctx.job.data["draft_id"]
+    draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("match_launched") or draft.get("match_started"):
+        return
+    awaiting = draft.get("sel_awaiting") or []
+    chat_id = draft.get("chat_id")
+    if not awaiting or chat_id is None:
+        return
+    prev = draft.pop("sel_remind_msg_id", None)
+    if prev:
+        try:
+            await ctx.bot.delete_message(chat_id, prev)
+        except Exception:
+            pass
+    mentions = ", ".join(_mention_for_tg(draft, tg) for tg in awaiting)
+    secs = max(0, CL_SELECT_WINDOW - CL_SELECT_REMIND)
+    text = (f"⏳ {mentions}, you have <b>{secs} seconds</b> to pick your "
+            f"{_selection_phase_label(draft.get('sel_phase'))} — or the match is "
+            f"forfeited (−{CL_FORFEIT_COINS:,} 🪙 −{CL_FORFEIT_GEMS} 💎).")
+    try:
+        sent = await ctx.bot.send_message(chat_id, text, parse_mode="HTML")
+        draft["sel_remind_msg_id"] = sent.message_id
+    except Exception:
+        logger.exception("Failed to send selection reminder")
+
+
+async def _selection_forfeit(ctx):
+    """Window elapsed: forfeit the match, fining the idle player(s)."""
+    draft_id = ctx.job.data["draft_id"]
+    draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("match_launched") or draft.get("match_started"):
+        return
+    idle = list(draft.get("sel_awaiting") or [])
+    if not idle:
+        return
+    _cancel_selection_jobs(ctx, draft_id)
+    chat_id = draft.get("chat_id")
+    prev = draft.pop("sel_remind_msg_id", None)
+    if prev and chat_id is not None:
+        try:
+            await ctx.bot.delete_message(chat_id, prev)
+        except Exception:
+            pass
+    # Tear the draft down first so nothing else can act on it.
+    _release_draft_chat_lock(ctx.bot_data, draft)
+    ctx.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+    label = _selection_phase_label(draft.get("sel_phase"))
+    summary = _apply_selection_forfeit(draft, idle)
+    if chat_id is None:
+        return
+    try:
+        await ctx.bot.send_message(
+            chat_id,
+            f"⌛ <b>Match forfeited</b> — no {label} selection in time.\n{summary}",
+            parse_mode="HTML")
+    except Exception:
+        logger.exception("Failed to announce selection forfeit")
+
+
+def _apply_selection_forfeit(draft, idle_tgs):
+    """Fine the idle player(s) and compensate the active opponent. Returns text."""
+    from services.activity_service import log_activity
+    idle_set = set(idle_tgs)
+    participants = []
+    for side in ("host", "target"):
+        info = draft.get(side) or {}
+        tg = info.get("tg_id")
+        if tg:
+            participants.append((tg, info.get("user_id"), info.get("name") or "Player"))
+    fined, compensated = [], []
+    session = get_session()
+    try:
+        for tg, uid, name in participants:
+            user = session.query(User).get(uid) if uid else None
+            if user is None:
+                user = session.query(User).filter(User.telegram_id == tg).first()
+            if user is None:
+                continue
+            if tg in idle_set:
+                user.total_coins = max(0, (user.total_coins or 0) - CL_FORFEIT_COINS)
+                user.total_gems = max(0, (user.total_gems or 0) - CL_FORFEIT_GEMS)
+                log_activity(session, user.id, "challenge_forfeit",
+                             f"No selection in time: -{CL_FORFEIT_COINS} coins, -{CL_FORFEIT_GEMS} gems",
+                             coins_change=-CL_FORFEIT_COINS, gems_change=-CL_FORFEIT_GEMS)
+                fined.append((tg, name))
+            else:
+                user.total_coins = (user.total_coins or 0) + CL_FORFEIT_COINS
+                user.total_gems = (user.total_gems or 0) + CL_FORFEIT_GEMS
+                log_activity(session, user.id, "challenge_forfeit_compensation",
+                             f"Opponent failed to select: +{CL_FORFEIT_COINS} coins, +{CL_FORFEIT_GEMS} gems",
+                             coins_change=CL_FORFEIT_COINS, gems_change=CL_FORFEIT_GEMS)
+                compensated.append((tg, name))
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Challenge forfeit economy failed")
+    finally:
+        session.close()
+    lines = []
+    for tg, name in fined:
+        lines.append(f"⚠️ {_mention(tg, name)} fined −{CL_FORFEIT_COINS:,} 🪙 −{CL_FORFEIT_GEMS} 💎")
+    for tg, name in compensated:
+        lines.append(f"🎁 {_mention(tg, name)} compensated +{CL_FORFEIT_COINS:,} 🪙 +{CL_FORFEIT_GEMS} 💎")
+    return "\n".join(lines)
 
 
 async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1551,6 +1758,7 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     selection = _challenge_xi_selection(draft, side)
     selected_ids = selection.setdefault("player_ids", [])
     draft.setdefault("xi_started", {})[side] = True
+    await _touch_selection_timer(context, draft)
     await query.answer(f"Select your {team_name} Playing XI.")
     try:
         await query.message.reply_text(
@@ -1620,6 +1828,8 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
 
         selected_ids.append(player_id)
         await query.answer(f"Selected: {len(selected_ids)}/11")
+    # Active picking resets the inactivity clock.
+    await _touch_selection_timer(context, draft)
     try:
         await query.edit_message_text(
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
@@ -1672,6 +1882,13 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         return
 
     selection["confirmed"] = True
+    # This side is done; keep waiting on the other side (or stop if both are in).
+    if _challenge_xi_ready(draft):
+        await _disarm_selection_timer(context, draft)
+    else:
+        other_tg = (draft.get("target_tg_id") if side == "host"
+                    else draft.get("host_tg_id"))
+        await _arm_selection_timer(context, draft, [other_tg], "xi")
     await query.answer("Playing XI confirmed!")
     batting_order = "\n".join(f"{idx}. {player.name}" for idx, player in enumerate(selected_players, start=1))
     try:
@@ -1724,6 +1941,7 @@ async def challenge_start_match_callback(update: Update, context: ContextTypes.D
         return
 
     draft["match_started"] = True
+    await _disarm_selection_timer(context, draft)
     # Keep the per-chat lock held through the toss: the Match row (which the
     # active-match checks key on) is only created later in cipl_toss_callback,
     # so releasing here would briefly let a second /cipl open in this chat. The

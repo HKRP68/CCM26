@@ -745,5 +745,82 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             challenge._active_draft_in_chat(context.bot_data, -100))
 
 
+class _FakeUser:
+    def __init__(self, uid, tg, coins, gems):
+        self.id = uid
+        self.telegram_id = tg
+        self.total_coins = coins
+        self.total_gems = gems
+
+
+class _FakeForfeitQuery:
+    def __init__(self, by_id):
+        self._by_id = by_id
+
+    def get(self, uid):
+        return self._by_id.get(uid)
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        return None
+
+
+class _FakeForfeitSession:
+    def __init__(self, by_id):
+        self._by_id = by_id
+        self.committed = False
+
+    def query(self, *args, **kwargs):
+        return _FakeForfeitQuery(self._by_id)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class ChallengeForfeitEconomyTests(unittest.TestCase):
+    def setUp(self):
+        act = types.ModuleType("services.activity_service")
+        act.log_activity = lambda *a, **k: None
+        sys.modules["services.activity_service"] = act
+
+    def _draft(self):
+        return {
+            "host": {"user_id": 10, "tg_id": 1, "name": "Host"},
+            "target": {"user_id": 20, "tg_id": 2, "name": "Guest"},
+        }
+
+    def test_idle_player_fined_and_opponent_compensated(self):
+        host = _FakeUser(10, 1, 5000, 20)
+        target = _FakeUser(20, 2, 5000, 20)
+        fake = _FakeForfeitSession({10: host, 20: target})
+        with patch.object(challenge, "get_session", return_value=fake):
+            summary = challenge._apply_selection_forfeit(self._draft(), [2])  # guest idle
+        self.assertEqual(target.total_coins, 5000 - challenge.CL_FORFEIT_COINS)
+        self.assertEqual(target.total_gems, 20 - challenge.CL_FORFEIT_GEMS)
+        self.assertEqual(host.total_coins, 5000 + challenge.CL_FORFEIT_COINS)
+        self.assertEqual(host.total_gems, 20 + challenge.CL_FORFEIT_GEMS)
+        self.assertTrue(fake.committed)
+        self.assertIn("fined", summary)
+        self.assertIn("compensated", summary)
+
+    def test_both_idle_fines_both_no_compensation(self):
+        host = _FakeUser(10, 1, 5000, 20)
+        target = _FakeUser(20, 2, 5000, 20)
+        fake = _FakeForfeitSession({10: host, 20: target})
+        with patch.object(challenge, "get_session", return_value=fake):
+            summary = challenge._apply_selection_forfeit(self._draft(), [1, 2])
+        self.assertEqual(host.total_coins, 5000 - challenge.CL_FORFEIT_COINS)
+        self.assertEqual(target.total_coins, 5000 - challenge.CL_FORFEIT_COINS)
+        self.assertNotIn("compensated", summary)
+
+
 if __name__ == "__main__":
     unittest.main()
