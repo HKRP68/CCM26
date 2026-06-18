@@ -209,8 +209,71 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         expected_codes = [challenge.IPL_TEAM_META[name][0] for name in challenge.IPL_TEAM_NAMES]
         self.assertEqual(team_labels, expected_codes)
         self.assertEqual(keyboard[-1][0].text, "❌ Cancel")
-        self.assertEqual(keyboard[-1][0].callback_data, f"cl_cancel_{int(next(iter(context.bot_data)).rsplit('_', 1)[1])}")
-        self.assertTrue(next(iter(context.bot_data)).startswith("challenge_team_draft_"))
+        draft_id = int(next(k for k in context.bot_data if k.startswith("challenge_team_draft_")).rsplit("_", 1)[1])
+        self.assertEqual(keyboard[-1][0].callback_data, f"cl_cancel_{draft_id}")
+        # The same final row also carries a guest-facing Deny Match button.
+        self.assertEqual(keyboard[-1][1].text, "🚫 Deny Match")
+        self.assertEqual(keyboard[-1][1].callback_data, f"cl_denymatch_{draft_id}")
+        self.assertTrue(any(k.startswith("challenge_team_draft_") for k in context.bot_data))
+        # Starting the draft registers a per-chat lock so a second concurrent
+        # league challenge in the same group is refused.
+        self.assertEqual(
+            context.bot_data.get(challenge._challenge_draft_chat_key(-100)), draft_id)
+
+    async def test_second_league_command_blocked_while_draft_in_progress(self):
+        reply_user = SimpleNamespace(id=3, is_bot=False)
+        message = DummyMessage("/cipl", reply_user=reply_user)
+        update = SimpleNamespace(
+            effective_message=message,
+            message=message,
+            effective_user=SimpleNamespace(id=4),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        host = SimpleNamespace(id=40, telegram_id=4)
+        target = SimpleNamespace(id=30, telegram_id=3)
+        # A draft is already live in this chat (-100).
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_draft_chat_key(-100): 555555,
+            challenge._challenge_team_draft_key(555555): {"chat_id": -100, "turn": "host"},
+        })
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "sync_telegram_user", side_effect=[target, host]):
+            await challenge.challenge_league_handler(update, context)
+
+        self.assertEqual(len(message.replies), 1)
+        text, _ = message.replies[0]
+        self.assertIn("already in progress", text)
+        # No new draft was created.
+        draft_keys = [k for k in context.bot_data if k.startswith("challenge_team_draft_")]
+        self.assertEqual(draft_keys, [challenge._challenge_team_draft_key(555555)])
+
+    async def test_deny_match_releases_chat_lock(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_draft_chat_key(-100): 123456,
+            challenge._challenge_team_draft_key(123456): {
+                "chat_id": -100,
+                "host_tg_id": 1,
+                "target_tg_id": 2,
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            },
+        })
+        query = SimpleNamespace(
+            data="cl_denymatch_123456",
+            from_user=SimpleNamespace(id=2),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            edit_message_caption=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        await challenge.challenge_deny_match_callback(update, context)
+
+        # The draft and its per-chat lock are both gone, freeing the group.
+        self.assertNotIn(challenge._challenge_team_draft_key(123456), context.bot_data)
+        self.assertIsNone(
+            challenge._active_draft_in_chat(context.bot_data, -100))
 
     async def test_team_button_rejects_non_host_with_alert(self):
         context = SimpleNamespace(bot_data={
@@ -643,7 +706,9 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_host_can_start_match_after_both_xi_confirmed(self):
         context = SimpleNamespace(bot_data={
+            challenge._challenge_draft_chat_key(-100): 123456,
             challenge._challenge_team_draft_key(123456): {
+                "chat_id": -100,
                 "turn": "complete",
                 "league_name": "IPL",
                 "host_team": challenge.IPL_TEAM_NAMES[0],
@@ -673,6 +738,88 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         markup = query.edit_message_text.await_args.kwargs["reply_markup"]
         coin_callbacks = {btn.callback_data for row in markup.inline_keyboard for btn in row}
         self.assertEqual(coin_callbacks, {"cipl_coin_heads_123456", "cipl_coin_tails_123456"})
+        # The per-chat lock must STILL be held through the toss window — the live
+        # Match row doesn't exist until cipl_toss, so releasing here would let a
+        # second /cipl open in this chat during the toss.
+        self.assertIsNotNone(
+            challenge._active_draft_in_chat(context.bot_data, -100))
+
+
+class _FakeUser:
+    def __init__(self, uid, tg, coins, gems):
+        self.id = uid
+        self.telegram_id = tg
+        self.total_coins = coins
+        self.total_gems = gems
+
+
+class _FakeForfeitQuery:
+    def __init__(self, by_id):
+        self._by_id = by_id
+
+    def get(self, uid):
+        return self._by_id.get(uid)
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        return None
+
+
+class _FakeForfeitSession:
+    def __init__(self, by_id):
+        self._by_id = by_id
+        self.committed = False
+
+    def query(self, *args, **kwargs):
+        return _FakeForfeitQuery(self._by_id)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class ChallengeForfeitEconomyTests(unittest.TestCase):
+    def setUp(self):
+        act = types.ModuleType("services.activity_service")
+        act.log_activity = lambda *a, **k: None
+        sys.modules["services.activity_service"] = act
+
+    def _draft(self):
+        return {
+            "host": {"user_id": 10, "tg_id": 1, "name": "Host"},
+            "target": {"user_id": 20, "tg_id": 2, "name": "Guest"},
+        }
+
+    def test_idle_player_fined_and_opponent_compensated(self):
+        host = _FakeUser(10, 1, 5000, 20)
+        target = _FakeUser(20, 2, 5000, 20)
+        fake = _FakeForfeitSession({10: host, 20: target})
+        with patch.object(challenge, "get_session", return_value=fake):
+            summary = challenge._apply_selection_forfeit(self._draft(), [2])  # guest idle
+        self.assertEqual(target.total_coins, 5000 - challenge.CL_FORFEIT_COINS)
+        self.assertEqual(target.total_gems, 20 - challenge.CL_FORFEIT_GEMS)
+        self.assertEqual(host.total_coins, 5000 + challenge.CL_FORFEIT_COINS)
+        self.assertEqual(host.total_gems, 20 + challenge.CL_FORFEIT_GEMS)
+        self.assertTrue(fake.committed)
+        self.assertIn("fined", summary)
+        self.assertIn("compensated", summary)
+
+    def test_both_idle_fines_both_no_compensation(self):
+        host = _FakeUser(10, 1, 5000, 20)
+        target = _FakeUser(20, 2, 5000, 20)
+        fake = _FakeForfeitSession({10: host, 20: target})
+        with patch.object(challenge, "get_session", return_value=fake):
+            summary = challenge._apply_selection_forfeit(self._draft(), [1, 2])
+        self.assertEqual(host.total_coins, 5000 - challenge.CL_FORFEIT_COINS)
+        self.assertEqual(target.total_coins, 5000 - challenge.CL_FORFEIT_COINS)
+        self.assertNotIn("compensated", summary)
 
 
 if __name__ == "__main__":

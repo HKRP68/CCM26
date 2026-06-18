@@ -65,8 +65,15 @@ def _basic_card_bytes(player) -> bytes:
 async def send_player_card(
     *, bot, chat_id, player, caption=None, reply_markup=None,
     parse_mode="HTML", reply_to_message_id=None, session=None,
+    allow_generated=True,
 ) -> Optional[object]:
     """Send a player's card to a chat. Prefers cached Telegram file_id.
+
+    When ``allow_generated`` is False, only a genuine admin-uploaded custom
+    image is sent as a photo; players without a custom card fall straight
+    through to the text reply (no auto-generated or basic card image). The
+    cached *generated* card (``Player.card_file_id``) is also skipped in that
+    mode, since it is not a custom card.
 
     Args:
       bot: a `telegram.Bot` (or PTB Update.message.reply_photo via context)
@@ -115,7 +122,8 @@ async def send_player_card(
 
     # ── Strategy 1.5: Cached file_id (generated card) ──
     # Player.card_file_id holds the file_id from the last auto-generated send.
-    if not cached_file_id:
+    # Skipped when generated cards are disabled — it is not a custom card.
+    if not cached_file_id and allow_generated:
         cached_file_id = getattr(player, "card_file_id", None)
 
     if cached_file_id:
@@ -165,6 +173,23 @@ async def send_player_card(
             return msg
         except Exception:
             logger.warning("Custom image send failed, falling back")
+
+    # ── No custom card available ──
+    # When generated cards are disabled, stop here and fall through to the text
+    # reply instead of rendering an auto-generated or basic card.
+    if not allow_generated:
+        try:
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=caption or f"<b>{player.name}</b> · {player.rating} OVR",
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+                **({"reply_to_message_id": reply_to_message_id}
+                   if reply_to_message_id is not None else {}),
+            )
+        except Exception:
+            logger.exception("Text-only player card send failed")
+            return None
 
     # ── Strategy 3: Auto-generated card ──
     try:

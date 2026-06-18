@@ -3,6 +3,7 @@
 import os
 import logging
 import threading
+import time
 from telegram.ext import (
     ApplicationBuilder,
     ApplicationHandlerStop,
@@ -672,14 +673,40 @@ def main():
             return False
 
         # ── Reply-context middleware (group=-4, runs before outbound replies) ──
+        # Refreshing the sender's stored username/name is a *blocking* DB round
+        # trip. Running it on every single update (every button tap, every
+        # message) serialises the asyncio event loop behind that I/O and is a
+        # major source of the "buttons take forever" lag under load. Usernames
+        # rarely change, so throttle the sync per user with a small TTL cache:
+        # the first interaction syncs, subsequent ones within the window skip the
+        # DB entirely. Command handlers that need a *fresh* reply/mention target
+        # still resolve it themselves (see resolve_command_target).
+        user_sync_ttl = float(os.getenv("USER_SYNC_TTL_SECONDS", "300"))
+        user_sync_cache = {}
+
         async def _bind_reply_context(update, context):
             bind_reply_context(update)
             bind_button_owner_context(update)
+            user = getattr(update, "effective_user", None)
+            now = time.monotonic()
+            if user is not None:
+                last = user_sync_cache.get(user.id)
+                if last is not None and now - last < user_sync_ttl:
+                    return  # synced recently — skip the blocking DB write
             try:
                 session = get_session()
                 try:
                     sync_update_users(session, update)
                     session.commit()
+                    if user is not None:
+                        user_sync_cache[user.id] = now
+                        # Opportunistic prune so the cache can't grow without
+                        # bound on a long-running, high-traffic bot.
+                        if len(user_sync_cache) > 10000:
+                            cutoff = now - user_sync_ttl
+                            for uid in [u for u, ts in user_sync_cache.items()
+                                        if ts < cutoff]:
+                                user_sync_cache.pop(uid, None)
                 except Exception:
                     session.rollback()
                     raise

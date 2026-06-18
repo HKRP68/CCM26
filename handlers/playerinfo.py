@@ -74,48 +74,47 @@ async def _send_player_card(session, user, player, target, owner_tg):
 
     kb = _build_version_keyboard(versions, player.id, owner_tg, base_id)
 
-    # Prefer cached file_id (zero disk/PIL); fall back to generated card.
-    # Priority: custom-image file_id → generated-card file_id → generate fresh.
-    from services.player_image_service import get_tg_file_id
-    file_id = get_tg_file_id(session, player.id) or player.card_file_id
-
-    if file_id:
+    # Only players with an admin-uploaded custom card get an image; everyone
+    # else is sent as text only (no auto-generated card).
+    from services.player_image_service import get_tg_file_id, get_custom_image_bytes
+    custom_file_id = get_tg_file_id(session, player.id)
+    if custom_file_id:
         try:
             await target.reply_photo(
-                photo=file_id, caption=text, parse_mode="HTML", reply_markup=kb,
+                photo=custom_file_id, caption=text, parse_mode="HTML", reply_markup=kb,
             )
             return
         except Exception:
-            # Stale file_id — clear it and fall through to regenerate.
-            if file_id == player.card_file_id:
-                player.card_file_id = None
-                try:
-                    session.flush()
-                except Exception:
-                    pass
-
-    card_bytes = await asyncio.to_thread(generate_card, player)
-    if card_bytes:
-        sent = await target.reply_photo(
-            photo=io.BytesIO(card_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
-        )
-        # Opportunistically cache the returned file_id for next time.
-        # Prefer the PlayerImage row (custom image); fall back to Player.card_file_id.
-        try:
-            if sent and sent.photo:
-                new_fid = sent.photo[-1].file_id
-                from models import PlayerImage
-                row = (session.query(PlayerImage)
-                       .filter(PlayerImage.player_id == player.id).first())
-                if row and not row.tg_file_id:
-                    row.tg_file_id = new_fid
-                elif not player.card_file_id:
-                    player.card_file_id = new_fid
-                session.flush()
-        except Exception:
+            # Stale custom file_id — fall through to disk bytes, then text.
             pass
-    else:
-        await target.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+    custom_bytes = None
+    try:
+        custom_bytes = get_custom_image_bytes(player.id)
+    except Exception:
+        custom_bytes = None
+
+    if custom_bytes:
+        try:
+            sent = await target.reply_photo(
+                photo=io.BytesIO(custom_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
+            )
+            # Cache the returned file_id on the PlayerImage row for next time.
+            try:
+                if sent and sent.photo:
+                    from models import PlayerImage
+                    row = (session.query(PlayerImage)
+                           .filter(PlayerImage.player_id == player.id).first())
+                    if row and not row.tg_file_id:
+                        row.tg_file_id = sent.photo[-1].file_id
+                        session.commit()
+            except Exception:
+                logger.debug("playerinfo file_id cache failed", exc_info=True)
+            return
+        except Exception:
+            logger.exception("Custom image send failed, falling back to text")
+
+    await target.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 
 async def playerinfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

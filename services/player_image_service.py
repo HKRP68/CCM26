@@ -230,6 +230,30 @@ def save_custom_image(session, player_id, file_bytes, original_filename,
     return True, "Saved."
 
 
+def has_custom_card(player_id, session=None):
+    """True if this player has an active admin-uploaded custom card image.
+
+    Cheap existence check (no disk read). Used by the player-card commands to
+    decide whether to send an image at all: players without a custom card are
+    sent as text only, while custom-card players are sent as usual.
+    """
+    own = False
+    if session is None:
+        from database import get_session
+        session = get_session()
+        own = True
+    try:
+        return (session.query(PlayerImage.id)
+                .filter(PlayerImage.player_id == player_id,
+                        PlayerImage.is_active == True)  # noqa: E712
+                .first()) is not None
+    except Exception:
+        return False
+    finally:
+        if own:
+            session.close()
+
+
 def get_tg_file_id(session, player_id):
     """Return cached Telegram file_id for this player's custom image if any.
 

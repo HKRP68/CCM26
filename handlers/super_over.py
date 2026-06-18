@@ -291,7 +291,8 @@ async def _send_main_scorecard(context, so, result, caption):
         return False
     try:
         from handlers.cipl_play import _build_cipl_summary_image
-        img = _build_cipl_summary_image(state, result)
+        # Offload the CPU-bound Pillow render so it doesn't block the event loop.
+        img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
         if img:
             await context.bot.send_photo(
                 so["chat_id"], photo=BytesIO(img), caption=caption,
@@ -1200,7 +1201,8 @@ async def _finalize(context, mid, winner_uid, loser_uid):
 
     # Super Over scorecard image (titled "SUPER OVER").
     try:
-        so_img = _build_super_over_card(so)
+        # Offload the CPU-bound Pillow render so it doesn't block the event loop.
+        so_img = await asyncio.to_thread(_build_super_over_card, so)
         if so_img:
             await context.bot.send_photo(
                 so["chat_id"], photo=BytesIO(so_img),

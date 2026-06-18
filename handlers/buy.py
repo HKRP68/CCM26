@@ -130,6 +130,27 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+async def _replace_paged_message(context, edit_query, *, photo, caption, keyboard):
+    """Delete the paged message and resend it, switching between text and photo.
+
+    A Telegram message can't be edited from text to photo (or back), so when the
+    target version's custom-card availability differs from the current message we
+    replace it instead of editing in place.
+    """
+    msg = edit_query.message
+    chat_id = msg.chat_id
+    try:
+        await context.bot.delete_message(chat_id, msg.message_id)
+    except Exception:
+        pass
+    if photo is not None:
+        await context.bot.send_photo(
+            chat_id, photo=photo, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await context.bot.send_message(
+            chat_id, text=caption, parse_mode="HTML", reply_markup=keyboard)
+
+
 async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
                              send_to, context, edit_query=None,
                              restricted=False, official_link=None):
@@ -171,6 +192,7 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         sent = await send_player_card(
             bot=context.bot, chat_id=chat_id, player=player,
             caption=caption, reply_markup=keyboard, session=None,
+            allow_generated=False,
         )
         if sent is None:
             await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
@@ -185,53 +207,48 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     )
 
     if edit_query is not None:
-        # Edit existing message: prefer cached file_id (instant, no PIL/upload).
-        from services.player_image_service import get_tg_file_id
-        cached_fid = get_tg_file_id(session, player.id) or getattr(player, "card_file_id", None)
-        if cached_fid and edit_query.message.photo:
+        # Custom-card-only: show a photo only when this version has an admin
+        # custom card; otherwise show text. Switch the message type (delete +
+        # resend) when paging between custom and non-custom versions.
+        from services.player_image_service import get_tg_file_id, get_custom_image_bytes
+        is_photo_msg = bool(edit_query.message.photo)
+        custom_fid = get_tg_file_id(session, player.id)
+        custom_bytes = None
+        if not custom_fid:
             try:
-                from telegram import InputMediaPhoto
-                await edit_query.edit_message_media(
-                    media=InputMediaPhoto(
-                        media=cached_fid,
-                        caption=caption, parse_mode="HTML",
-                    ),
-                    reply_markup=keyboard,
-                )
-                return
+                custom_bytes = await asyncio.to_thread(get_custom_image_bytes, player.id)
             except Exception:
-                # Stale file_id — clear it and fall through to regenerate.
-                if cached_fid == getattr(player, "card_file_id", None):
-                    player.card_file_id = None
-                    try:
-                        session.flush()
-                    except Exception:
-                        pass
+                custom_bytes = None
 
-        # Fallback: Pillow render (CPU-bound — run off the event loop).
-        card_bytes = await asyncio.to_thread(generate_card, player)
-        try:
-            if card_bytes and edit_query.message.photo:
-                from telegram import InputMediaPhoto
-                await edit_query.edit_message_media(
-                    media=InputMediaPhoto(
-                        media=_io.BytesIO(card_bytes),
-                        caption=caption, parse_mode="HTML",
-                    ),
-                    reply_markup=keyboard,
-                )
-            elif edit_query.message.photo:
-                # Photo message but new card failed — just update caption + keyboard
-                await edit_query.edit_message_caption(
-                    caption=caption, parse_mode="HTML", reply_markup=keyboard,
-                )
+        if custom_fid or custom_bytes:
+            media_src = custom_fid or _io.BytesIO(custom_bytes)
+            if is_photo_msg:
+                try:
+                    from telegram import InputMediaPhoto
+                    await edit_query.edit_message_media(
+                        media=InputMediaPhoto(media=media_src, caption=caption, parse_mode="HTML"),
+                        reply_markup=keyboard,
+                    )
+                except Exception:
+                    logger.exception("edit_version_page media edit failed")
             else:
-                # Text-only message
+                # Text → photo isn't editable; replace the message.
+                await _replace_paged_message(
+                    context, edit_query, photo=media_src, caption=caption, keyboard=keyboard)
+            return
+
+        # No custom card → text.
+        if is_photo_msg:
+            # Photo → text isn't editable; replace the message.
+            await _replace_paged_message(
+                context, edit_query, photo=None, caption=caption, keyboard=keyboard)
+        else:
+            try:
                 await edit_query.edit_message_text(
                     text=caption, parse_mode="HTML", reply_markup=keyboard,
                 )
-        except Exception:
-            logger.exception("edit_version_page failed")
+            except Exception:
+                logger.exception("edit_version_page text edit failed")
         return
 
     # New message — pass session so file_ids can be written back after first send.
@@ -241,6 +258,7 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     sent = await send_player_card(
         bot=context.bot, chat_id=chat_id, player=player,
         caption=caption, reply_markup=keyboard, session=session,
+        allow_generated=False,
     )
     if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)

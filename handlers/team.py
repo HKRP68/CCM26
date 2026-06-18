@@ -156,15 +156,17 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"</code>"
         )
 
-        # Lead with the player's card image, then the full stats table. The
-        # stats block can exceed Telegram's 1024-char caption limit, so it is
+        # Lead with the player's card image only when there's an admin-uploaded
+        # custom card; otherwise send the stats as text only (no generated card).
+        # The stats block can exceed Telegram's 1024-char caption limit, so it is
         # sent as a follow-up message rather than a caption.
         card_bytes = None
         try:
-            from services.card_generator import generate_card
-            card_bytes = await asyncio.to_thread(generate_card, player)
+            from services.player_image_service import has_custom_card, get_custom_image_bytes
+            if has_custom_card(player.id, session):
+                card_bytes = await asyncio.to_thread(get_custom_image_bytes, player.id)
         except Exception:
-            logger.exception("Stats card generation failed for %s", player.id)
+            logger.exception("Stats custom card load failed for %s", player.id)
 
         if card_bytes:
             caption = (
@@ -411,12 +413,16 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 card_file_id=None,
             )
 
+        # Only show an image when the master player has an admin-uploaded custom
+        # card; otherwise send the stats as text only (no generated card).
         card_bytes = None
         try:
-            from services.card_generator import generate_card
-            card_bytes = await asyncio.to_thread(generate_card, card_player)
+            from services.player_image_service import has_custom_card, get_custom_image_bytes
+            cp_id = getattr(card_player, "id", None)
+            if master is not None and cp_id and cp_id > 0 and has_custom_card(cp_id, session):
+                card_bytes = await asyncio.to_thread(get_custom_image_bytes, cp_id)
         except Exception:
-            logger.exception("statscl card generation failed for %s", name)
+            logger.exception("statscl custom card load failed for %s", name)
 
         if card_bytes:
             caption = (
