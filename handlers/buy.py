@@ -171,6 +171,7 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         sent = await send_player_card(
             bot=context.bot, chat_id=chat_id, player=player,
             caption=caption, reply_markup=keyboard, session=None,
+            allow_generated=False,
         )
         if sent is None:
             await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
@@ -241,6 +242,7 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     sent = await send_player_card(
         bot=context.bot, chat_id=chat_id, player=player,
         caption=caption, reply_markup=keyboard, session=session,
+        allow_generated=False,
     )
     if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
