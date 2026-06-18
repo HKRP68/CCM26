@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 CM_LOBBY_EXPIRE = 75
 
+# League team/XI selection can take a while (two team picks, pitch, two XIs),
+# so this expiry is generous — it only frees a draft that was clearly abandoned
+# (never started), releasing the per-chat lock so the group isn't stuck.
+CHALLENGE_DRAFT_EXPIRE = int(os.getenv("CHALLENGE_DRAFT_EXPIRE_SECONDS", "600"))
+
 CHALLENGE_REPLY_REQUIRED_MESSAGE = "Please reply to a user’s message to challenge them."
 BUILT_IN_CHALLENGE_LEAGUES = {
     "ipl": "IPL",
@@ -897,6 +902,19 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         sent = await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
     _track_setup_msg(draft, sent)
 
+    # Free the chat lock if this draft is abandoned mid-selection (app crash,
+    # network loss) and never started — mirrors the /cm lobby expiry.
+    try:
+        if context.job_queue:
+            context.job_queue.run_once(
+                _expire_challenge_draft, CHALLENGE_DRAFT_EXPIRE,
+                name=f"cl_draft_{draft_id}",
+                data={"draft_id": draft_id, "chat_id": cid,
+                      "message_id": sent.message_id},
+            )
+    except Exception:
+        logger.exception("Failed to schedule challenge draft expiry")
+
 
 async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                  target: User, league_key=None, league_name=None):
@@ -1198,6 +1216,35 @@ async def _expire_cm_lobby(ctx):
             parse_mode="HTML")
     except Exception:
         logger.exception("/cm lobby expiry message failed")
+
+
+async def _expire_challenge_draft(ctx):
+    """Free an abandoned league draft so its per-chat lock doesn't stick.
+
+    Keys off ``match_launched`` (set only once the live Match row exists), so a
+    draft abandoned at any pre-match step — team pick, pitch, XI, or even the
+    toss — is cleaned up, while a launched match (which owns the chat through
+    the active-match checks) is left untouched.
+    """
+    data = ctx.job.data
+    draft_id = data["draft_id"]
+    draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("match_launched"):
+        return
+    _release_draft_chat_lock(ctx.bot_data, draft)
+    ctx.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+    text = "⏰ <b>Team selection expired</b> — start again when you're ready."
+    try:
+        await ctx.bot.edit_message_caption(
+            chat_id=data["chat_id"], message_id=data["message_id"],
+            caption=text, parse_mode="HTML")
+    except Exception:
+        try:
+            await ctx.bot.edit_message_text(
+                text, chat_id=data["chat_id"], message_id=data["message_id"],
+                parse_mode="HTML")
+        except Exception:
+            logger.debug("challenge draft expiry message edit failed", exc_info=True)
 
 
 async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1649,9 +1696,10 @@ async def challenge_start_match_callback(update: Update, context: ContextTypes.D
         return
 
     draft["match_started"] = True
-    # The live match now owns this chat (tracked via active-match checks), so the
-    # team-selection lock can be released for the next challenge once it ends.
-    _release_draft_chat_lock(context.bot_data, draft)
+    # Keep the per-chat lock held through the toss: the Match row (which the
+    # active-match checks key on) is only created later in cipl_toss_callback,
+    # so releasing here would briefly let a second /cipl open in this chat. The
+    # lock is released in cipl_toss_callback once that Match row exists.
     await query.answer("Match started!")
     # Toss happens exactly like the current system: the guest calls heads/tails,
     # the winner elects bat/bowl, then the over-by-over match begins in chat.

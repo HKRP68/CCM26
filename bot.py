@@ -699,6 +699,13 @@ def main():
                     session.commit()
                     if user is not None:
                         user_sync_cache[user.id] = now
+                        # Opportunistic prune so the cache can't grow without
+                        # bound on a long-running, high-traffic bot.
+                        if len(user_sync_cache) > 10000:
+                            cutoff = now - user_sync_ttl
+                            for uid in [u for u, ts in user_sync_cache.items()
+                                        if ts < cutoff]:
+                                user_sync_cache.pop(uid, None)
                 except Exception:
                     session.rollback()
                     raise

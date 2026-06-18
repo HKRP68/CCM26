@@ -706,7 +706,9 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_host_can_start_match_after_both_xi_confirmed(self):
         context = SimpleNamespace(bot_data={
+            challenge._challenge_draft_chat_key(-100): 123456,
             challenge._challenge_team_draft_key(123456): {
+                "chat_id": -100,
                 "turn": "complete",
                 "league_name": "IPL",
                 "host_team": challenge.IPL_TEAM_NAMES[0],
@@ -736,6 +738,11 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         markup = query.edit_message_text.await_args.kwargs["reply_markup"]
         coin_callbacks = {btn.callback_data for row in markup.inline_keyboard for btn in row}
         self.assertEqual(coin_callbacks, {"cipl_coin_heads_123456", "cipl_coin_tails_123456"})
+        # The per-chat lock must STILL be held through the toss window — the live
+        # Match row doesn't exist until cipl_toss, so releasing here would let a
+        # second /cipl open in this chat during the toss.
+        self.assertIsNotNone(
+            challenge._active_draft_in_chat(context.bot_data, -100))
 
 
 if __name__ == "__main__":
