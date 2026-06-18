@@ -37,13 +37,11 @@ CHALLENGE_DRAFT_EXPIRE = int(os.getenv("CHALLENGE_DRAFT_EXPIRE_SECONDS", "600"))
 
 # Per-turn selection timeout. While a draft waits on a specific player (team
 # pick, pitch, or Playing XI), they get a 30s mention reminder; if they still
-# haven't acted by the full window, the match is forfeited. Each valid action
+# haven't acted by the full window, the challenge is simply cancelled (no
+# penalty — fines only apply once a live match is underway). Each valid action
 # resets the clock (inactivity-based), so an active setup is never killed.
 CL_SELECT_WINDOW = int(os.getenv("CL_SELECT_WINDOW_SECONDS", "60"))
 CL_SELECT_REMIND = int(os.getenv("CL_SELECT_REMIND_SECONDS", "30"))
-# Forfeit penalty: the idle player is fined, the opponent compensated the same.
-CL_FORFEIT_COINS = int(os.getenv("CL_FORFEIT_COINS", "3000"))
-CL_FORFEIT_GEMS = int(os.getenv("CL_FORFEIT_GEMS", "5"))
 
 CHALLENGE_REPLY_REQUIRED_MESSAGE = "Please reply to a user’s message to challenge them."
 BUILT_IN_CHALLENGE_LEAGUES = {
@@ -1399,8 +1397,8 @@ async def _selection_reminder(ctx):
     mentions = ", ".join(_mention_for_tg(draft, tg) for tg in awaiting)
     secs = max(0, CL_SELECT_WINDOW - CL_SELECT_REMIND)
     text = (f"⏳ {mentions}, you have <b>{secs} seconds</b> to pick your "
-            f"{_selection_phase_label(draft.get('sel_phase'))} — or the match is "
-            f"forfeited (−{CL_FORFEIT_COINS:,} 🪙 −{CL_FORFEIT_GEMS} 💎).")
+            f"{_selection_phase_label(draft.get('sel_phase'))} — or the match "
+            f"will be cancelled.")
     try:
         sent = await ctx.bot.send_message(chat_id, text, parse_mode="HTML")
         draft["sel_remind_msg_id"] = sent.message_id
@@ -1408,14 +1406,30 @@ async def _selection_reminder(ctx):
         logger.exception("Failed to send selection reminder")
 
 
+async def _delete_setup_messages(context, draft):
+    """Delete the draft's tracked setup messages so their buttons disappear."""
+    chat_id = draft.get("chat_id")
+    if chat_id is None:
+        return
+    for mid in list(draft.get("setup_msg_ids") or []):
+        try:
+            await context.bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
 async def _selection_forfeit(ctx):
-    """Window elapsed: forfeit the match, fining the idle player(s)."""
+    """Window elapsed during setup: just cancel the match (no fine).
+
+    Pre-match selection (team / pitch / Playing XI) carries no penalty — if a
+    player doesn't pick in time the challenge is simply cancelled and its
+    buttons removed. (Fines only apply once a live match is underway.)
+    """
     draft_id = ctx.job.data["draft_id"]
     draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
     if not draft or draft.get("match_launched") or draft.get("match_started"):
         return
-    idle = list(draft.get("sel_awaiting") or [])
-    if not idle:
+    if not (draft.get("sel_awaiting") or []):
         return
     _cancel_selection_jobs(ctx, draft_id)
     chat_id = draft.get("chat_id")
@@ -1425,67 +1439,21 @@ async def _selection_forfeit(ctx):
             await ctx.bot.delete_message(chat_id, prev)
         except Exception:
             pass
-    # Tear the draft down first so nothing else can act on it.
+    # Remove the picker/prompt messages so their buttons disappear, then drop
+    # the draft + per-chat lock so a fresh challenge can start.
+    await _delete_setup_messages(ctx, draft)
+    label = _selection_phase_label(draft.get("sel_phase"))
     _release_draft_chat_lock(ctx.bot_data, draft)
     ctx.bot_data.pop(_challenge_team_draft_key(draft_id), None)
-    label = _selection_phase_label(draft.get("sel_phase"))
-    summary = _apply_selection_forfeit(draft, idle)
     if chat_id is None:
         return
     try:
         await ctx.bot.send_message(
             chat_id,
-            f"⌛ <b>Match forfeited</b> — no {label} selection in time.\n{summary}",
+            f"⌛ <b>Challenge cancelled</b> — no {label} selection in time.",
             parse_mode="HTML")
     except Exception:
-        logger.exception("Failed to announce selection forfeit")
-
-
-def _apply_selection_forfeit(draft, idle_tgs):
-    """Fine the idle player(s) and compensate the active opponent. Returns text."""
-    from services.activity_service import log_activity
-    idle_set = set(idle_tgs)
-    participants = []
-    for side in ("host", "target"):
-        info = draft.get(side) or {}
-        tg = info.get("tg_id")
-        if tg:
-            participants.append((tg, info.get("user_id"), info.get("name") or "Player"))
-    fined, compensated = [], []
-    session = get_session()
-    try:
-        for tg, uid, name in participants:
-            user = session.query(User).get(uid) if uid else None
-            if user is None:
-                user = session.query(User).filter(User.telegram_id == tg).first()
-            if user is None:
-                continue
-            if tg in idle_set:
-                user.total_coins = max(0, (user.total_coins or 0) - CL_FORFEIT_COINS)
-                user.total_gems = max(0, (user.total_gems or 0) - CL_FORFEIT_GEMS)
-                log_activity(session, user.id, "challenge_forfeit",
-                             f"No selection in time: -{CL_FORFEIT_COINS} coins, -{CL_FORFEIT_GEMS} gems",
-                             coins_change=-CL_FORFEIT_COINS, gems_change=-CL_FORFEIT_GEMS)
-                fined.append((tg, name))
-            else:
-                user.total_coins = (user.total_coins or 0) + CL_FORFEIT_COINS
-                user.total_gems = (user.total_gems or 0) + CL_FORFEIT_GEMS
-                log_activity(session, user.id, "challenge_forfeit_compensation",
-                             f"Opponent failed to select: +{CL_FORFEIT_COINS} coins, +{CL_FORFEIT_GEMS} gems",
-                             coins_change=CL_FORFEIT_COINS, gems_change=CL_FORFEIT_GEMS)
-                compensated.append((tg, name))
-        session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("Challenge forfeit economy failed")
-    finally:
-        session.close()
-    lines = []
-    for tg, name in fined:
-        lines.append(f"⚠️ {_mention(tg, name)} fined −{CL_FORFEIT_COINS:,} 🪙 −{CL_FORFEIT_GEMS} 💎")
-    for tg, name in compensated:
-        lines.append(f"🎁 {_mention(tg, name)} compensated +{CL_FORFEIT_COINS:,} 🪙 +{CL_FORFEIT_GEMS} 💎")
-    return "\n".join(lines)
+        logger.exception("Failed to announce selection cancel")
 
 
 async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

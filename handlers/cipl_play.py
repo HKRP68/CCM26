@@ -16,6 +16,7 @@ and only then does the over-by-over flow begin in the chat.
 import asyncio
 import html
 import logging
+import os
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -45,7 +46,12 @@ from handlers.match import _mention
 
 logger = logging.getLogger(__name__)
 
-CIPL_TIMEOUT = 90  # seconds before an idle pick is auto-resolved
+CIPL_TIMEOUT = int(os.getenv("CIPL_TIMEOUT_SECONDS", "90"))  # inactivity → forfeit
+CIPL_REMIND = int(os.getenv("CIPL_REMIND_SECONDS", "30"))    # mention before forfeit
+# Forfeiting a *live* match (failing to pick bowler / bowling or batting
+# approach in time) fines the idle player and compensates the opponent.
+CIPL_FORFEIT_COINS = int(os.getenv("CIPL_FORFEIT_COINS", "3000"))
+CIPL_FORFEIT_GEMS = int(os.getenv("CIPL_FORFEIT_GEMS", "5"))
 CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 overs
 
 
@@ -211,7 +217,19 @@ def _with_view_match(state, keyboard):
     return kb
 
 
+async def _clear_action_reminder(context, state):
+    """Remove the '30s left' inactivity ping once the player acts."""
+    pid = state.pop("action_remind_msg_id", None)
+    chat_id = state.get("chat_id")
+    if pid and chat_id is not None:
+        try:
+            await context.bot.delete_message(chat_id, pid)
+        except Exception:
+            pass
+
+
 async def _new_action_message(context, state, text, keyboard):
+    await _clear_action_reminder(context, state)
     kb = _with_view_match(state, keyboard)
     sent = await context.bot.send_message(
         state["chat_id"], text, parse_mode="HTML",
@@ -223,6 +241,7 @@ async def _new_action_message(context, state, text, keyboard):
 
 
 async def _edit_action_message(context, state, text, keyboard):
+    await _clear_action_reminder(context, state)
     mid_msg = state.get("action_msg_id")
     kb = _with_view_match(state, keyboard)
     markup = InlineKeyboardMarkup(kb) if kb else None
@@ -264,23 +283,73 @@ def _miniapp_row(state):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Inactivity timer (auto-pick Balanced / top bowler)
+# Inactivity timer (30s reminder, then forfeit + fine)
 # ════════════════════════════════════════════════════════════════════
 
 def _cancel_timer(context, mid):
     if not getattr(context, "job_queue", None):
         return
-    for j in context.job_queue.get_jobs_by_name(f"cipl_to_{mid}"):
-        j.schedule_removal()
+    for name in (f"cipl_to_{mid}", f"cipl_remind_{mid}"):
+        for j in context.job_queue.get_jobs_by_name(name):
+            j.schedule_removal()
 
 
 def _arm_timer(context, mid, expected_action):
     _cancel_timer(context, mid)
     if not getattr(context, "job_queue", None):
         return
+    data = {"mid": mid, "expected": expected_action}
+    if CIPL_REMIND and CIPL_REMIND < CIPL_TIMEOUT:
+        context.job_queue.run_once(
+            _on_remind, CIPL_REMIND, name=f"cipl_remind_{mid}", data=data)
     context.job_queue.run_once(
-        _on_timeout, CIPL_TIMEOUT, name=f"cipl_to_{mid}",
-        data={"mid": mid, "expected": expected_action})
+        _on_timeout, CIPL_TIMEOUT, name=f"cipl_to_{mid}", data=data)
+
+
+def _idle_actor(state, expected):
+    """Return (idle_uid, idle_tg, idle_name, win_uid, win_tg, win_name) for a
+    live-match timeout, based on whose turn it is to act."""
+    if expected == A_PICK_BAT_APPROACH:
+        return (state.get("bat_team_id"), state.get("bat_user_tg"),
+                state.get("bat_team_name", "Batting side"),
+                state.get("bowl_team_id"), state.get("bowl_user_tg"),
+                state.get("bowl_team_name", "Bowling side"))
+    # Bowler pick or bowling-approach pick → the bowling side is on the clock.
+    return (state.get("bowl_team_id"), state.get("bowl_user_tg"),
+            state.get("bowl_team_name", "Bowling side"),
+            state.get("bat_team_id"), state.get("bat_user_tg"),
+            state.get("bat_team_name", "Batting side"))
+
+
+async def _on_remind(context):
+    d = context.job.data
+    mid = d["mid"]
+    expected = d["expected"]
+    async with get_match_lock(mid):
+        if get_next_action(context, mid) != expected:
+            return  # already acted — no nag
+        state = _gs(context, mid)
+        if not state:
+            return
+        _, idle_tg, idle_name, _, _, _ = _idle_actor(state, expected)
+        secs = max(0, CIPL_TIMEOUT - CIPL_REMIND)
+        prev = state.pop("action_remind_msg_id", None)
+        if prev:
+            try:
+                await context.bot.delete_message(state["chat_id"], prev)
+            except Exception:
+                pass
+        try:
+            sent = await context.bot.send_message(
+                state["chat_id"],
+                f"⏳ {_mention(idle_tg, idle_name)}, you have <b>{secs} seconds</b> "
+                f"to play your turn — or you forfeit the match "
+                f"(−{CIPL_FORFEIT_COINS:,} 🪙 −{CIPL_FORFEIT_GEMS} 💎).",
+                parse_mode="HTML")
+            state["action_remind_msg_id"] = sent.message_id
+            _ss(context, mid, state)
+        except Exception:
+            logger.exception("cipl reminder send failed for match %s", mid)
 
 
 async def _on_timeout(context):
@@ -294,23 +363,84 @@ async def _on_timeout(context):
         if not state:
             return
         try:
-            if expected == A_PICK_CIPL_BOWLER:
-                elig = cipl_match.eligible_bowlers(state)
-                if not elig:
-                    return
-                state["current_bowler"] = elig[0]
-                _ss(context, mid, state)
-                await _prompt_bowl_approach(context, mid, state, auto=True)
-            elif expected == A_PICK_BOWL_APPROACH:
-                state["bowling_approach"] = "balanced"
-                _ss(context, mid, state)
-                await _prompt_bat_approach(context, mid, state, auto=True)
-            elif expected == A_PICK_BAT_APPROACH:
-                state["batting_approach"] = "balanced"
-                _ss(context, mid, state)
-                await _run_over(context, mid, state)
+            await _forfeit_live_match(context, mid, state, expected)
         except Exception:
-            logger.exception("cipl timeout auto-pick failed for match %s", mid)
+            logger.exception("cipl timeout forfeit failed for match %s", mid)
+
+
+async def _forfeit_live_match(context, mid, state, expected):
+    """Idle player forfeits a live match: they're fined, the opponent wins and
+    is compensated the same amount."""
+    _cancel_timer(context, mid)
+    (idle_uid, idle_tg, idle_name,
+     win_uid, win_tg, win_name) = _idle_actor(state, expected)
+    chat_id = state.get("chat_id")
+
+    prev = state.pop("action_remind_msg_id", None)
+    if prev and chat_id is not None:
+        try:
+            await context.bot.delete_message(chat_id, prev)
+        except Exception:
+            pass
+    # Remove the stale selection prompt's buttons so it can't be tapped.
+    try:
+        await _delete_prev_over(context, state)
+    except Exception:
+        pass
+
+    from services.activity_service import log_activity
+    session = get_session()
+    try:
+        match = session.query(Match).get(mid)
+        if match and match.status not in ("completed", "abandoned"):
+            match.status = "completed"
+            match.completed_at = datetime.utcnow()
+            match.winner_id = win_uid
+            match.loser_id = idle_uid
+            match.margin_type = "forfeit"
+            match.margin_value = 0
+        idle_user = session.query(User).get(idle_uid) if idle_uid else None
+        win_user = session.query(User).get(win_uid) if win_uid else None
+        if idle_user:
+            charged_coins = min(idle_user.total_coins or 0, CIPL_FORFEIT_COINS)
+            charged_gems = min(idle_user.total_gems or 0, CIPL_FORFEIT_GEMS)
+            idle_user.total_coins = (idle_user.total_coins or 0) - charged_coins
+            idle_user.total_gems = (idle_user.total_gems or 0) - charged_gems
+            log_activity(session, idle_user.id, "cipl_forfeit",
+                         f"Forfeited match #{mid} (inactivity): -{charged_coins} coins, -{charged_gems} gems",
+                         coins_change=-charged_coins, gems_change=-charged_gems)
+            if win_user:
+                win_user.total_coins = (win_user.total_coins or 0) + charged_coins
+                win_user.total_gems = (win_user.total_gems or 0) + charged_gems
+                log_activity(session, win_user.id, "cipl_forfeit_compensation",
+                             f"Opponent forfeited match #{mid}: +{charged_coins} coins, +{charged_gems} gems",
+                             coins_change=charged_coins, gems_change=charged_gems)
+        else:
+            charged_coins = charged_gems = 0
+        session.commit()
+    except Exception:
+        session.rollback()
+        charged_coins = charged_gems = 0
+        logger.exception("cipl forfeit economy failed for match %s", mid)
+    finally:
+        session.close()
+
+    if chat_id is not None:
+        try:
+            await context.bot.send_message(
+                chat_id,
+                f"⌛ <b>Match forfeited</b>\n"
+                f"{_mention(idle_tg, idle_name)} didn't play in time.\n"
+                f"🏆 {_mention(win_tg, win_name)} wins!\n"
+                f"⚠️ Fine: −{charged_coins:,} 🪙 −{charged_gems} 💎\n"
+                f"🎁 Compensation: +{charged_coins:,} 🪙 +{charged_gems} 💎",
+                parse_mode="HTML")
+        except Exception:
+            logger.exception("cipl forfeit announce failed for match %s", mid)
+
+    _ss(context, mid, state, next_action=A_COMPLETED)
+    cleanup_state(context, mid)
+    release_match_lock(mid)
 
 
 # ════════════════════════════════════════════════════════════════════
