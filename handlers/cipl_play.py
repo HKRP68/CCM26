@@ -13,6 +13,7 @@ host clicks Start, the guest calls heads/tails, the winner chooses bat or bowl,
 and only then does the over-by-over flow begin in the chat.
 """
 
+import asyncio
 import html
 import logging
 from datetime import datetime, timedelta
@@ -1239,7 +1240,10 @@ async def _complete_match(context, mid, state):
                                    reply_markup=InlineKeyboardMarkup(miniapp_row)
                                    if miniapp_row else None)
     try:
-        img = _build_cipl_summary_image(state, result)
+        # Pillow rendering is CPU-bound and synchronous — run it off the event
+        # loop so finishing one Challenge League match doesn't freeze every
+        # other user's buttons (and other live matches) while the card renders.
+        img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
         if img:
             # The Spectate / View Match button rides on the scorecard image too,
             # so anyone can open this exact match in the Mini App.
