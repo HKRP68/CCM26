@@ -807,11 +807,17 @@ def _challenge_rule_checkbox(passed):
 
 
 def _challenge_player_rating_suffix(player):
+    """Return ` · {rating}` for display, or "" when the player has no rating."""
     rating = _challenge_player_rating(player)
     return f" · {rating}" if rating is not None else ""
 
 
 def _challenge_xi_text(draft, side, team_name, players, selected_ids):
+    """Build the picker (building) view: full numbered roster + live rule status.
+
+    Players are shown 1..N in roster order with a ✅ and batting position on the
+    ones already picked; the number maps to the keyboard's number buttons.
+    """
     owner = draft.get(side) or {}
     selected_ids = [int(pid) for pid in selected_ids]
     selected_set = set(selected_ids)
