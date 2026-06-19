@@ -720,15 +720,30 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Lock synchronously BEFORE the async coin animation so a racing double-tap
     # can't spawn a second election keyboard for the wrong side.
     draft["coin_flipping"] = True
-    await q.answer()
-    from services.match_broadcast import run_coin_toss
-    coin, won = await run_coin_toss(
-        lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
-    winner_side = "guest" if won else "host"
-    draft["toss_winner_side"] = winner_side
+    # Rearm the setup timer up front: the flip/reveal can sleep on Telegram
+    # flood control, and we must not let _on_setup_timeout drop this draft out
+    # from under the callback while it's waiting and then reveal buttons for an
+    # invite that no longer exists.
     _rearm_setup_timeout(context, invite_id)
+    try:
+        await q.answer()
+        from services.match_broadcast import run_coin_toss, reveal_toss_result
+        coin, won = await run_coin_toss(
+            lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+    except Exception:
+        # The flip never produced a result — release the lock so the guest can
+        # call again instead of being stuck behind "Toss already in progress."
+        draft["coin_flipping"] = False
+        _rearm_setup_timeout(context, invite_id)
+        logger.exception("letsplay coin flip failed for invite %s", invite_id)
+        await q.answer("Toss failed — call it again.", show_alert=True)
+        return
+    winner_side = "guest" if won else "host"
     winner = draft[winner_side]
-    await q.edit_message_text(
+    # The reveal is the critical edit: if it fails the toss is left frozen on a
+    # mid-flip frame. Retry it, and only mark the winner once it actually lands —
+    # otherwise release the lock so the guest can call the toss again.
+    revealed = await reveal_toss_result(lambda: q.edit_message_text(
         f"🪙 The coin lands on <b>{coin.upper()}</b> — guest called "
         f"<b>{call.upper()}</b>.\n\n"
         f"🏆 {_m(winner)} won the toss. Choose:",
@@ -737,7 +752,20 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
                                  callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
             InlineKeyboardButton("🎳 Bowl First",
                                  callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
-        ]]))
+        ]])))
+    if not revealed:
+        # The animation edits already stripped the Heads/Tails keyboard, so a
+        # bare alert would leave the guest with no button to retry. Clear the
+        # lock and re-post the toss-call prompt so the toss can actually resume.
+        draft["coin_flipping"] = False
+        _rearm_setup_timeout(context, invite_id)
+        logger.warning("letsplay toss reveal failed for invite %s — reprompting",
+                       invite_id)
+        await q.answer("Toss hiccup — call it again below.", show_alert=True)
+        await _start_toss(context, draft)
+        return
+    draft["toss_winner_side"] = winner_side
+    _rearm_setup_timeout(context, invite_id)
 
 
 async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
