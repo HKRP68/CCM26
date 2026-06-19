@@ -740,6 +740,47 @@ def _challenge_player_category(player):
     return value or "Player"
 
 
+def _challenge_player_rating(player):
+    """Best-effort overall rating from details_json; None when unavailable.
+
+    Rating is not a column on ChallengePlayer — it lives inside details_json —
+    so this degrades gracefully (returns None) rather than raising when the blob
+    has no rating, keeping the numbered-roster render robust.
+    """
+    data = _challenge_player_details(player)
+    for key in ("rating", "Rating", "overall", "Overall", "OVR", "ovr"):
+        value = data.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return round(float(value))
+        except (TypeError, ValueError):
+            # Non-numeric ratings are rendered into HTML messages, so escape any
+            # markup-like characters from this admin-supplied details_json value.
+            from html import escape
+            return escape(str(value))
+    return None
+
+
+def _challenge_side_for_user(draft, tg_id):
+    """Return 'host'/'target' for this Telegram id, or None if not a participant."""
+    for side in ("host", "target"):
+        if (draft.get(side) or {}).get("tg_id") == tg_id:
+            return side
+    return None
+
+
+def _store_xi_message_ref(selection, message):
+    """Remember the XI message so /change can edit it in place. No-op if unknown."""
+    if message is None:
+        return
+    try:
+        selection["msg_id"] = message.message_id
+        selection["msg_chat_id"] = getattr(message, "chat_id", None) or message.chat.id
+    except Exception:
+        pass
+
+
 def _challenge_is_wicket_keeper(player):
     category = _challenge_player_category(player).lower()
     return "wicket" in category or category == "wk"
@@ -765,50 +806,136 @@ def _challenge_rule_checkbox(passed):
     return "☑️" if passed else "☐"
 
 
+def _challenge_player_rating_suffix(player):
+    """Return ` · {rating}` for display, or "" when the player has no rating."""
+    rating = _challenge_player_rating(player)
+    return f" · {rating}" if rating is not None else ""
+
+
+TELEGRAM_MSG_LIMIT = 4096
+
+
+def _join_within_limit(lines, *, limit=TELEGRAM_MSG_LIMIT, notice="… (list trimmed — use the numbers above)"):
+    """Join lines into one message, trimming trailing lines to stay under Telegram's
+    4096-char limit. Admin teams can be bulk-loaded with very large rosters, so an
+    unbounded roster could otherwise exceed the limit and the picker would fail to
+    open/update. Trailing lines (the redundant batting-order block, then the highest
+    squad numbers) drop first, keeping the lower numbers and their mapping intact."""
+    text = "\n".join(lines)
+    if len(text) <= limit:
+        return text
+    budget = limit - len(notice) - 1
+    kept = []
+    total = 0
+    for line in lines:
+        add = len(line) + (1 if kept else 0)
+        if total + add > budget:
+            break
+        kept.append(line)
+        total += add
+    kept.append(notice)
+    return "\n".join(kept)
+
+
 def _challenge_xi_text(draft, side, team_name, players, selected_ids):
+    """Build the picker (building) view: full numbered roster + live rule status.
+
+    Players are shown 1..N in roster order with a ✅ and batting position on the
+    ones already picked; the number maps to the keyboard's number buttons.
+    """
     owner = draft.get(side) or {}
-    selected_set = {int(pid) for pid in selected_ids}
+    selected_ids = [int(pid) for pid in selected_ids]
+    selected_set = set(selected_ids)
+    batting_position = {pid: idx for idx, pid in enumerate(selected_ids, start=1)}
     selected_players = [player for player in players if int(getattr(player, "id")) in selected_set]
     selected_players.sort(key=lambda player: selected_ids.index(int(getattr(player, "id"))))
     keeper_count = sum(1 for player in selected_players if _challenge_is_wicket_keeper(player))
     bowling_options = sum(1 for player in selected_players if _challenge_is_bowling_option(player))
     lines = [
         f"🏏 <b>{team_name} Playing XI Selection</b>",
-        f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, select exactly 11 players.",
-        "Tap a checked player again to remove them from your XI.",
+        f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, pick exactly 11 players.",
         "",
         f"<b>Selected:</b> {len(selected_ids)}/11",
         "",
         "<b>Rules:</b>",
         f"{_challenge_rule_checkbox(keeper_count >= 1)} 1 Wicket Keeper ({keeper_count}/1)",
         f"{_challenge_rule_checkbox(bowling_options >= 5)} At least 5 Bowling Options ({bowling_options}/5)",
-        "• Selection order becomes batting order",
+        "",
+        "<b>Squad</b> — tap a number to add/remove, or reply with 11 numbers "
+        "in batting order (e.g. <code>1 4 7 2 9 5 11 3 8 6 10</code>):",
     ]
+    for idx, player in enumerate(players, start=1):
+        pid = int(getattr(player, "id"))
+        category = _challenge_player_category(player)
+        rating = _challenge_player_rating_suffix(player)
+        if pid in selected_set:
+            lines.append(f"{idx}. ✅ {player.name} ({category}){rating} — bat #{batting_position[pid]}")
+        else:
+            lines.append(f"{idx}. {player.name} ({category}){rating}")
     if selected_players:
         lines.extend(["", "<b>Batting order:</b>"])
         lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
-    return "\n".join(lines)
+    return _join_within_limit(lines)
+
+
+def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
+    """XI/bench view: 1-11 Playing XI (batting order), bench continuing from 12."""
+    selected_ids = [int(pid) for pid in selected_ids]
+    pid_map = {int(getattr(player, "id")): player for player in players}
+    xi_players = [pid_map[pid] for pid in selected_ids if pid in pid_map]
+    bench_players = [player for player in players if int(getattr(player, "id")) not in set(selected_ids)]
+    lines = [f"✅ <b>{team_name} Playing XI</b>", "", "<b>🏏 Playing XI</b>"]
+    for idx, player in enumerate(xi_players, start=1):
+        lines.append(f"{idx}. {player.name} ({_challenge_player_category(player)}){_challenge_player_rating_suffix(player)}")
+    if bench_players:
+        lines.extend(["", "<b>🪑 Bench</b>"])
+        for idx, player in enumerate(bench_players, start=12):
+            lines.append(f"{idx}. {player.name} ({_challenge_player_category(player)}){_challenge_player_rating_suffix(player)}")
+    lines.extend([
+        "",
+        "✏️ Swap a player with <code>/change &lt;out&gt; &lt;in&gt;</code> — e.g. <code>/change 2 13</code>",
+    ])
+    return _join_within_limit(lines)
 
 
 def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids):
+    """Compact number buttons (5/row). Button text is the roster index; the
+    callback still carries player_id, so the toggle handler is unchanged."""
     selected_set = {int(pid) for pid in selected_ids}
     rows = []
     row = []
-    for player in players:
+    for idx, player in enumerate(players, start=1):
         player_id = int(getattr(player, "id"))
-        prefix = "✅ " if player_id in selected_set else ""
+        label = f"✅{idx}" if player_id in selected_set else str(idx)
         row.append(InlineKeyboardButton(
-            f"{prefix}{player.name}",
+            label,
             callback_data=f"cl_pick_{draft_id}_{side}_{player_id}",
         ))
-        if len(row) == 2:
+        if len(row) == 5:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
+    control = []
     if len(selected_ids) == 11:
-        rows.append([InlineKeyboardButton("Confirm XI", callback_data=f"cl_confirm_{draft_id}_{side}")])
+        control.append(InlineKeyboardButton("✅ Confirm XI", callback_data=f"cl_confirm_{draft_id}_{side}"))
+    if selected_ids:
+        control.append(InlineKeyboardButton("🧹 Clear", callback_data=f"cl_clear_{draft_id}_{side}"))
+    if control:
+        rows.append(control)
     return InlineKeyboardMarkup(rows)
+
+
+def _challenge_xi_postselect_keyboard(draft_id, side, confirmed):
+    """Keyboard for the XI/bench view (after a full 11 is picked or confirmed)."""
+    if confirmed:
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("✏️ Edit XI", callback_data=f"cl_edit_{draft_id}_{side}"),
+        ]])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Confirm XI", callback_data=f"cl_confirm_{draft_id}_{side}"),
+        InlineKeyboardButton("✏️ Edit", callback_data=f"cl_edit_{draft_id}_{side}"),
+    ]])
 
 
 def _same_team_challenge_enabled(session=None, league_key=None):
@@ -1735,11 +1862,12 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await _touch_selection_timer(context, draft)
     await query.answer(f"Select your {team_name} Playing XI.")
     try:
-        await query.message.reply_text(
+        sent = await query.message.reply_text(
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
             parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
         )
+        _store_xi_message_ref(selection, sent)
     except Exception:
         logger.exception("Failed to send challenge XI player selection buttons")
 
@@ -1804,6 +1932,7 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
         await query.answer(f"Selected: {len(selected_ids)}/11")
     # Active picking resets the inactivity clock.
     await _touch_selection_timer(context, draft)
+    _store_xi_message_ref(selection, getattr(query, "message", None))
     try:
         await query.edit_message_text(
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
@@ -1864,13 +1993,15 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
                     else draft.get("host_tg_id"))
         await _arm_selection_timer(context, draft, [other_tg], "xi")
     await query.answer("Playing XI confirmed!")
-    batting_order = "\n".join(f"{idx}. {player.name}" for idx, player in enumerate(selected_players, start=1))
+    # Edit is still allowed until the match-ready message is posted (both sides in).
+    edit_allowed = not _challenge_xi_ready(draft) and not draft.get("match_ready_sent")
+    _store_xi_message_ref(selection, getattr(query, "message", None))
     try:
         await query.edit_message_text(
-            f"✅ <b>{team_name} Playing XI Confirmed</b>\n"
-            f"<b>Selected:</b> 11/11\n\n"
-            f"<b>Batting order:</b>\n{batting_order}",
+            _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids),
             parse_mode="HTML",
+            reply_markup=(_challenge_xi_postselect_keyboard(draft_id, side, confirmed=True)
+                          if edit_allowed else None),
         )
     except Exception:
         logger.exception("Failed to confirm challenge XI selection message")
@@ -1887,6 +2018,286 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
                 )
             except Exception:
                 logger.exception("Failed to send challenge match-ready message")
+
+
+async def challenge_xi_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reset a side's in-progress XI selection back to empty."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, side = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid clear button.", show_alert=True)
+        return
+    if side not in ("host", "target"):
+        await query.answer("Invalid clear button.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This Playing XI selection is no longer active.", show_alert=True)
+        return
+    if query.from_user.id != (draft.get(side) or {}).get("tg_id"):
+        await query.answer("This XI selection is not for you.", show_alert=True)
+        return
+
+    selection = _challenge_xi_selection(draft, side)
+    if selection.get("confirmed"):
+        await query.answer("Your XI is confirmed — tap Edit first.", show_alert=True)
+        return
+
+    selection["player_ids"] = []
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    await _touch_selection_timer(context, draft)
+    _store_xi_message_ref(selection, getattr(query, "message", None))
+    await query.answer("Selection cleared.")
+    try:
+        await query.edit_message_text(
+            _challenge_xi_text(draft, side, team_name, players, []),
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, []),
+        )
+    except Exception:
+        logger.exception("Failed to clear challenge XI selection message")
+
+
+async def challenge_xi_edit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Re-open the number picker for a side (un-confirming if needed)."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, side = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid edit button.", show_alert=True)
+        return
+    if side not in ("host", "target"):
+        await query.answer("Invalid edit button.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This Playing XI selection is no longer active.", show_alert=True)
+        return
+    if query.from_user.id != (draft.get(side) or {}).get("tg_id"):
+        await query.answer("This XI selection is not for you.", show_alert=True)
+        return
+    if draft.get("match_ready_sent") or draft.get("match_started"):
+        await query.answer("Both XIs are locked — the match is starting.", show_alert=True)
+        return
+
+    selection = _challenge_xi_selection(draft, side)
+    selected_ids = selection.setdefault("player_ids", [])
+    was_confirmed = selection.get("confirmed")
+    selection["confirmed"] = False
+    # Re-arm this side's timer since we're waiting on them again.
+    await _arm_selection_timer(context, draft, [(draft.get(side) or {}).get("tg_id")], "xi")
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    _store_xi_message_ref(selection, getattr(query, "message", None))
+    await query.answer("Edit your XI." if was_confirmed else "Keep editing.")
+    try:
+        await query.edit_message_text(
+            _challenge_xi_text(draft, side, team_name, players, selected_ids),
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
+        )
+    except Exception:
+        logger.exception("Failed to re-open challenge XI selection message")
+
+
+async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Power-user XI selection: a participant replies with 11 numbers (batting order).
+
+    This runs on every plain (non-command) text message, so it bails out fast and
+    silently unless the sender is mid-XI-selection for an active draft in this chat.
+    Each user only ever touches their own side's selection, so simultaneous host
+    and guest replies never collide (see the concurrency note on the draft state).
+    """
+    message = getattr(update, "effective_message", None)
+    text = (getattr(message, "text", None) or "").strip()
+    if not text or text.startswith("/"):
+        return
+    chat = getattr(update, "effective_chat", None)
+    user = getattr(update, "effective_user", None)
+    if chat is None or user is None:
+        return
+    draft = _active_draft_in_chat(context.bot_data, chat.id)
+    if not draft or draft.get("turn") != "complete":
+        return
+    side = _challenge_side_for_user(draft, user.id)
+    if side is None:
+        return
+    if not (draft.get("xi_started") or {}).get(side):
+        return
+    selection = _challenge_xi_selection(draft, side)
+    if selection.get("confirmed"):
+        return
+
+    tokens = [tok for tok in re.split(r"[\s,]+", text) if tok]
+    if len(tokens) < 2 or not all(tok.isdigit() for tok in tokens):
+        # Not a quick-select attempt — leave normal chat untouched.
+        return
+
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    total = len(players)
+    numbers = [int(tok) for tok in tokens]
+
+    if len(numbers) != 11:
+        await message.reply_text(f"❌ Send exactly 11 numbers (you sent {len(numbers)}).")
+        return
+    out_of_range = [n for n in numbers if n < 1 or n > total]
+    if out_of_range:
+        await message.reply_text(f"❌ Out of range: {out_of_range[0]}. Use numbers 1–{total}.")
+        return
+    if len(set(numbers)) != 11:
+        await message.reply_text("❌ No duplicates — pick 11 different players.")
+        return
+
+    selected_ids = [int(getattr(players[n - 1], "id")) for n in numbers]
+    selected_players = [players[n - 1] for n in numbers]
+    valid, error = _challenge_xi_validation(selected_players)
+    if not valid:
+        await message.reply_text(f"❌ {error}")
+        return
+
+    selection["player_ids"] = selected_ids
+    await _touch_selection_timer(context, draft)
+    draft_id = draft.get("draft_id")
+    try:
+        sent = await message.reply_text(
+            _challenge_xi_text(draft, side, team_name, players, selected_ids),
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
+        )
+        _store_xi_message_ref(selection, sent)
+    except Exception:
+        logger.exception("Failed to render quick-select XI message")
+    # Keep the chat tidy by removing the numbers the user typed (best effort).
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """`/change <out> <in>` — swap a player in the XI/bench frame, editing in place.
+
+    `out` is a Playing XI slot (1-11). `in` is a bench number (12+); the bench
+    player takes that batting slot and the dropped player goes to the bench. If
+    both are 1-11 the two batting positions are swapped (a reorder). Usable while
+    picking and any time before the match starts.
+    """
+    message = getattr(update, "effective_message", None)
+    chat = getattr(update, "effective_chat", None)
+    user = getattr(update, "effective_user", None)
+    if message is None or chat is None or user is None:
+        return
+    draft = _active_draft_in_chat(context.bot_data, chat.id)
+    if not draft or draft.get("turn") != "complete":
+        return
+    side = _challenge_side_for_user(draft, user.id)
+    if side is None:
+        return
+    if draft.get("match_started") or draft.get("match_launched"):
+        await message.reply_text("❌ The match has started — you can't change your XI now.")
+        return
+
+    selection = _challenge_xi_selection(draft, side)
+    selected_ids = [int(pid) for pid in selection.get("player_ids") or []]
+    if len(selected_ids) != 11:
+        await message.reply_text("❌ Pick your full Playing XI first, then use /change.")
+        return
+
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+    finally:
+        session.close()
+    pid_order = [int(getattr(p, "id")) for p in players]
+    pid_map = {int(getattr(p, "id")): p for p in players}
+
+    # XI/bench numbering: 1-11 = batting order, 12.. = bench in roster order.
+    bench_ids = [pid for pid in pid_order if pid not in set(selected_ids)]
+    bench_number = {12 + i: pid for i, pid in enumerate(bench_ids)}
+
+    args = context.args if getattr(context, "args", None) is not None else (message.text or "").split()[1:]
+    nums = [a for a in args if str(a).lstrip("-").isdigit()]
+
+    def _usage_text(reason):
+        return (f"❌ {reason}\n"
+                "Usage: <code>/change &lt;out&gt; &lt;in&gt;</code> — e.g. <code>/change 2 13</code>\n\n"
+                + _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids))
+
+    if len(nums) != 2:
+        await message.reply_text(_usage_text("Give two numbers: the XI slot to drop and the player to bring in."), parse_mode="HTML")
+        return
+    out_no, in_no = int(nums[0]), int(nums[1])
+    if not (1 <= out_no <= 11):
+        await message.reply_text(_usage_text(f"The first number must be a Playing XI slot (1–11), not {out_no}."), parse_mode="HTML")
+        return
+
+    new_ids = list(selected_ids)
+    if 1 <= in_no <= 11:
+        # Reorder: swap two batting positions.
+        new_ids[out_no - 1], new_ids[in_no - 1] = new_ids[in_no - 1], new_ids[out_no - 1]
+    elif in_no in bench_number:
+        new_ids[out_no - 1] = bench_number[in_no]
+    else:
+        await message.reply_text(_usage_text(f"The second number must be a bench player (12–{11 + len(bench_ids)}) or an XI slot (1–11), not {in_no}."), parse_mode="HTML")
+        return
+
+    new_players = [pid_map[pid] for pid in new_ids if pid in pid_map]
+    valid, error = _challenge_xi_validation(new_players)
+    if not valid:
+        await message.reply_text(f"❌ {error}\nNo change made.")
+        return
+
+    selection["player_ids"] = new_ids
+    await _touch_selection_timer(context, draft)
+    draft_id = draft.get("draft_id")
+    confirmed = bool(selection.get("confirmed"))
+
+    # Edit the tracked XI message in place (no new message), falling back to a reply.
+    edited = False
+    msg_chat_id = selection.get("msg_chat_id")
+    msg_id = selection.get("msg_id")
+    rendered = _challenge_xi_confirmed_text(draft, side, team_name, players, new_ids)
+    markup = (_challenge_xi_postselect_keyboard(draft_id, side, confirmed=confirmed)
+              if not (draft.get("match_ready_sent") or draft.get("match_started")) else None)
+    if msg_chat_id is not None and msg_id is not None:
+        try:
+            await context.bot.edit_message_text(
+                rendered, chat_id=msg_chat_id, message_id=msg_id,
+                parse_mode="HTML", reply_markup=markup,
+            )
+            edited = True
+        except Exception:
+            logger.debug("change: in-place XI edit failed", exc_info=True)
+    if not edited:
+        try:
+            sent = await message.reply_text(rendered, parse_mode="HTML", reply_markup=markup)
+            _store_xi_message_ref(selection, sent)
+        except Exception:
+            logger.exception("Failed to render /change XI message")
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 async def challenge_start_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

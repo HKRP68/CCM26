@@ -568,9 +568,12 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
         buttons = [button for row in message.replies[0][1]["reply_markup"].inline_keyboard for button in row]
+        # 12 compact number buttons (no control row at 0 selected).
         self.assertEqual(len(buttons), 12)
-        self.assertEqual(buttons[0].text, "MI Player 1")
+        self.assertEqual(buttons[0].text, "1")
         self.assertEqual(buttons[0].callback_data, "cl_pick_123456_host_1")
+        # The full numbered roster is shown in the message text.
+        self.assertIn("1. MI Player 1", message.replies[0][0])
 
     async def test_xi_selection_enforces_order_count_and_confirm_button(self):
         categories = ["Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder"] + ["Batsman"] * 5
@@ -602,7 +605,9 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         selected = context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"]
         self.assertEqual(selected, list(range(1, 12)))
         final_markup = query.edit_message_text.await_args.kwargs["reply_markup"].inline_keyboard
-        self.assertEqual(final_markup[-1][0].text, "Confirm XI")
+        control_labels = [btn.text for btn in final_markup[-1]]
+        self.assertIn("✅ Confirm XI", control_labels)
+        self.assertIn("🧹 Clear", control_labels)
         self.assertIn("11. Player 11", query.edit_message_text.await_args.args[0])
 
     async def test_xi_selection_rejects_invalid_eleventh_player_without_wicket_keeper(self):
@@ -743,6 +748,277 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         # second /cipl open in this chat during the toss.
         self.assertIsNotNone(
             challenge._active_draft_in_chat(context.bot_data, -100))
+
+
+def _squad_15():
+    """15-man squad: ids 1-11 form a valid XI (1 keeper, 5 bowling options)."""
+    categories = [
+        "Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder",
+        "Batsman", "Batsman", "Batsman", "Batsman", "Batsman",
+        "Bowler", "All-rounder", "Wicket Keeper", "Batsman",
+    ]
+    return [
+        SimpleNamespace(id=i, name=f"Player {i}", details_json=f'{{"category":"{c}","rating":{50 + i}}}')
+        for i, c in enumerate(categories, start=1)
+    ]
+
+
+def _xi_draft(*, started=True, confirmed=False, player_ids=None):
+    sel = {"player_ids": list(player_ids or []), "confirmed": confirmed}
+    return {
+        challenge._challenge_draft_chat_key(-100): 123456,
+        challenge._challenge_team_draft_key(123456): {
+            "draft_id": 123456,
+            "chat_id": -100,
+            "turn": "complete",
+            "league_name": "IPL",
+            "host_team": challenge.IPL_TEAM_NAMES[0],
+            "target_team": challenge.IPL_TEAM_NAMES[1],
+            "host": {"tg_id": 1, "name": "User 1"},
+            "target": {"tg_id": 2, "name": "User 2"},
+            "xi_started": {"host": started},
+            "xi_selections": {"host": sel},
+        },
+    }
+
+
+class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
+    def test_confirmed_text_lists_xi_and_bench(self):
+        players = _squad_15()
+        draft = {"host": {"tg_id": 1, "name": "User 1"}}
+        text = challenge._challenge_xi_confirmed_text(
+            draft, "host", "Mumbai Indians", players, list(range(1, 12)))
+        self.assertIn("🏏 Playing XI", text)
+        self.assertIn("🪑 Bench", text)
+        self.assertIn("1. Player 1", text)
+        self.assertIn("11. Player 11", text)
+        # Bench continues from 12 over the non-selected squad players.
+        self.assertIn("12. Player 12", text)
+        self.assertIn("15. Player 15", text)
+
+    def test_picker_text_capped_for_huge_roster(self):
+        # A pathological admin team with a very large roster must not blow past
+        # Telegram's 4096-char message limit (it would fail to open otherwise).
+        players = [
+            SimpleNamespace(id=i, name=f"Player With A Fairly Long Name {i}",
+                            details_json='{"category":"Batsman","rating":80}')
+            for i in range(1, 201)
+        ]
+        draft = {"host": {"tg_id": 1, "name": "User 1"}}
+        text = challenge._challenge_xi_text(draft, "host", "Mega Team", players, [])
+        self.assertLessEqual(len(text), challenge.TELEGRAM_MSG_LIMIT)
+        self.assertIn("1. Player With A Fairly Long Name 1", text)  # low numbers kept
+        confirmed = challenge._challenge_xi_confirmed_text(
+            draft, "host", "Mega Team", players, list(range(1, 12)))
+        self.assertLessEqual(len(confirmed), challenge.TELEGRAM_MSG_LIMIT)
+
+    async def test_quickselect_sets_batting_order(self):
+        players = _squad_15()
+        context = SimpleNamespace(bot_data=_xi_draft())
+        msg = SimpleNamespace(text="11 10 9 8 7 6 5 4 3 2 1",
+                              reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_quickselect(update, context)
+
+        ids = context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"]
+        self.assertEqual(ids, list(range(11, 0, -1)))
+        msg.delete.assert_awaited_once()
+
+    async def test_quickselect_rejects_wrong_count(self):
+        players = _squad_15()
+        context = SimpleNamespace(bot_data=_xi_draft())
+        msg = SimpleNamespace(text="1 2 3 4 5", reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_quickselect(update, context)
+
+        self.assertIn("exactly 11", msg.reply_text.await_args.args[0])
+        self.assertEqual(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"], [])
+
+    async def test_quickselect_surfaces_validation_error(self):
+        players = _squad_15()
+        context = SimpleNamespace(bot_data=_xi_draft())
+        # 11 batsmen-only style pick (no keeper / not enough bowling): use ids 7-11 + 15 batsmen mix
+        msg = SimpleNamespace(text="7 8 9 10 11 15 2 3 4 5 6",
+                              reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_quickselect(update, context)
+
+        # No keeper among these ids → validation rejects, selection unchanged.
+        self.assertIn("Wicket Keeper", msg.reply_text.await_args.args[0])
+        self.assertEqual(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"], [])
+
+    async def test_quickselect_ignores_non_participant_and_unstarted(self):
+        players = _squad_15()
+        # Not a participant (id 99)
+        context = SimpleNamespace(bot_data=_xi_draft())
+        msg = SimpleNamespace(text="1 2 3 4 5 6 7 8 9 10 11",
+                              reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=99),
+        )
+        await challenge.challenge_xi_quickselect(update, context)
+        msg.reply_text.assert_not_awaited()
+
+        # Participant who never opened the picker (xi_started false)
+        context2 = SimpleNamespace(bot_data=_xi_draft(started=False))
+        msg2 = SimpleNamespace(text="1 2 3 4 5 6 7 8 9 10 11",
+                               reply_text=AsyncMock(), delete=AsyncMock())
+        update2 = SimpleNamespace(
+            effective_message=msg2,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        await challenge.challenge_xi_quickselect(update2, context2)
+        msg2.reply_text.assert_not_awaited()
+
+    async def test_quickselect_ignores_plain_chat(self):
+        context = SimpleNamespace(bot_data=_xi_draft())
+        msg = SimpleNamespace(text="hello team good luck", reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        await challenge.challenge_xi_quickselect(update, context)
+        msg.reply_text.assert_not_awaited()
+
+    async def test_clear_callback_empties_selection(self):
+        players = _squad_15()
+        context = SimpleNamespace(bot_data=_xi_draft(player_ids=range(1, 12)))
+        query = SimpleNamespace(
+            data="cl_clear_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            message=SimpleNamespace(message_id=5, chat_id=-100),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_clear_callback(SimpleNamespace(callback_query=query), context)
+
+        self.assertEqual(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"], [])
+        query.answer.assert_awaited_with("Selection cleared.")
+
+    async def test_edit_callback_unconfirms_and_reopens(self):
+        players = _squad_15()
+        context = SimpleNamespace(
+            bot_data=_xi_draft(player_ids=range(1, 12), confirmed=True),
+            job_queue=None,
+        )
+        query = SimpleNamespace(
+            data="cl_edit_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            message=SimpleNamespace(message_id=5, chat_id=-100),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_edit_callback(SimpleNamespace(callback_query=query), context)
+
+        self.assertFalse(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["confirmed"])
+
+    async def test_edit_callback_refused_after_match_ready(self):
+        players = _squad_15()
+        bot_data = _xi_draft(player_ids=range(1, 12), confirmed=True)
+        bot_data[challenge._challenge_team_draft_key(123456)]["match_ready_sent"] = True
+        context = SimpleNamespace(bot_data=bot_data, job_queue=None)
+        query = SimpleNamespace(
+            data="cl_edit_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            message=SimpleNamespace(message_id=5, chat_id=-100),
+        )
+        await challenge.challenge_xi_edit_callback(SimpleNamespace(callback_query=query), context)
+        query.answer.assert_awaited_once_with("Both XIs are locked — the match is starting.", show_alert=True)
+        self.assertTrue(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["confirmed"])
+
+    async def test_change_swaps_bench_player_in_place(self):
+        players = _squad_15()
+        bot_data = _xi_draft(player_ids=range(1, 12), confirmed=True)
+        # Pretend the confirmed message is tracked so /change edits in place.
+        bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"].update(
+            {"msg_id": 7, "msg_chat_id": -100})
+        context = SimpleNamespace(
+            bot_data=bot_data,
+            args=["2", "13"],
+            bot=SimpleNamespace(edit_message_text=AsyncMock()),
+        )
+        msg = SimpleNamespace(text="/change 2 13", reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_change_handler(update, context)
+
+        ids = context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"]
+        # Slot 2 (player 2) replaced by bench #13 (player 13); order preserved otherwise.
+        self.assertEqual(ids[1], 13)
+        self.assertNotIn(2, ids)
+        context.bot.edit_message_text.assert_awaited_once()
+        msg.reply_text.assert_not_awaited()  # edited in place, no new message
+
+    async def test_change_rejects_rule_breaking_swap(self):
+        players = _squad_15()
+        bot_data = _xi_draft(player_ids=range(1, 12), confirmed=True)
+        context = SimpleNamespace(
+            bot_data=bot_data,
+            args=["1", "15"],  # drop the only keeper for a batsman
+            bot=SimpleNamespace(edit_message_text=AsyncMock()),
+        )
+        msg = SimpleNamespace(text="/change 1 15", reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_change_handler(update, context)
+
+        ids = context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"]
+        self.assertEqual(ids, list(range(1, 12)))  # unchanged
+        self.assertIn("Wicket Keeper", msg.reply_text.await_args.args[0])
+
+    async def test_change_requires_full_xi(self):
+        players = _squad_15()
+        context = SimpleNamespace(
+            bot_data=_xi_draft(player_ids=[1, 2, 3]),
+            args=["2", "13"],
+            bot=SimpleNamespace(edit_message_text=AsyncMock()),
+        )
+        msg = SimpleNamespace(text="/change 2 13", reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        await challenge.challenge_change_handler(update, context)
+        self.assertIn("full Playing XI", msg.reply_text.await_args.args[0])
 
 
 if __name__ == "__main__":

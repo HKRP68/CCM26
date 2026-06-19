@@ -77,6 +77,7 @@ from handlers.challenge import (
     challenge_cancel_callback, challenge_deny_callback, challenge_coin_callback,
     challenge_toss_callback, challenge_pick_callback, challenge_team_callback, challenge_team_cancel_callback, challenge_xi_callback,
     challenge_xi_pick_callback, challenge_xi_confirm_callback, challenge_start_match_callback,
+    challenge_xi_clear_callback, challenge_xi_edit_callback, challenge_xi_quickselect, challenge_change_handler,
     challenge_pitch_callback, challenge_deny_match_callback,
 )
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
@@ -916,6 +917,9 @@ def main():
         app.add_handler(CommandHandler("catch", catch_handler))
         app.add_handler(CommandHandler("bal", bal_handler))
         app.add_handler(CommandHandler("cm", challenge_handler))
+        # /change <out> <in> — swap a CIPL Playing XI player. Runs in group 0
+        # (before the group-1 league command regex, which safely ignores it).
+        app.add_handler(CommandHandler("change", challenge_change_handler))
         app.add_handler(MessageHandler(
             _filters.Regex(r"^/[A-Za-z0-9_]+(?:@\w+)?(?:\s|$)"),
             challenge_league_handler,
@@ -933,7 +937,18 @@ def main():
         app.add_handler(CallbackQueryHandler(challenge_xi_callback, pattern=r"^cl_xi_"))
         app.add_handler(CallbackQueryHandler(challenge_xi_pick_callback, pattern=r"^cl_pick_"))
         app.add_handler(CallbackQueryHandler(challenge_xi_confirm_callback, pattern=r"^cl_confirm_"))
+        app.add_handler(CallbackQueryHandler(challenge_xi_clear_callback, pattern=r"^cl_clear_"))
+        app.add_handler(CallbackQueryHandler(challenge_xi_edit_callback, pattern=r"^cl_edit_"))
         app.add_handler(CallbackQueryHandler(challenge_start_match_callback, pattern=r"^cl_start_"))
+        # Typed quick-select: a participant replies with 11 numbers to set their
+        # XI. Own dedicated group (6) — group 2 already holds the WordChase and
+        # Bluff text handlers, and PTB runs only the first matching handler per
+        # group, so sharing a group would starve those games. It is an O(1)
+        # no-op for any text that isn't an active XI quick-select.
+        app.add_handler(MessageHandler(
+            _filters.TEXT & ~_filters.COMMAND,
+            challenge_xi_quickselect,
+        ), group=6)
         # Challenge League over-by-over "approach" match flow
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
