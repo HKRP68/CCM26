@@ -463,16 +463,29 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if call not in ("heads", "tails"):
         await q.answer("Invalid call.", show_alert=True)
         return
-    if draft.get("toss_winner_side"):
+    if draft.get("toss_winner_side") or draft.get("coin_flipping"):
         await q.answer("Toss already done.", show_alert=True)
         return
     if q.from_user.id != draft.get("target_tg_id"):
         await q.answer("Only the guest calls the toss!", show_alert=True)
         return
-    await q.answer()
-    from services.match_broadcast import run_coin_toss
-    coin, won = await run_coin_toss(
-        lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+    # Lock synchronously BEFORE the async coin animation. The flip plays over
+    # several Telegram edits, during which the Heads/Tails buttons still look
+    # tappable; without this lock a racing double-tap would spawn a second coin
+    # flip and a second result keyboard for the wrong side.
+    draft["coin_flipping"] = True
+    try:
+        await q.answer()
+        from services.match_broadcast import run_coin_toss
+        coin, won = await run_coin_toss(
+            lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+    except Exception:
+        # The flip never produced a result — release the lock so the guest can
+        # call again instead of being stuck behind "Toss already done."
+        draft["coin_flipping"] = False
+        logger.exception("/cipl coin flip failed for draft %s", draft_id)
+        await q.answer("Toss failed — call it again.", show_alert=True)
+        return
     winner_side = "target" if won else "host"
     draft["toss_winner_side"] = winner_side
     winner_tg = draft.get("target_tg_id") if won else draft.get("host_tg_id")
@@ -506,16 +519,42 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if decision not in ("bat", "bowl"):
         await q.answer("Invalid decision.", show_alert=True)
         return
+    # A duplicate tap (the impatient winner double-tapping while the first tap is
+    # still finalising, or tapping a stale button after the match began) must NOT
+    # fire an alarming "Match already started" popup — that scary alert is exactly
+    # what this fix is meant to remove. Acknowledge it with a quiet toast instead;
+    # the real match is proceeding on the board below.
+    if draft.get("launch_in_progress"):
+        await q.answer("Starting the match…")
+        return
     if draft.get("match_launched"):
-        await q.answer("Match already started.", show_alert=True)
+        await q.answer("Match already started — play on the board below 👇")
         return
     winner_tg = draft.get("target_tg_id") if winner_side == "target" else draft.get("host_tg_id")
     if q.from_user.id != winner_tg:
         await q.answer("Toss winner only.", show_alert=True)
         return
 
-    session = get_session()
+    # Lock synchronously BEFORE the (slow) DB work that builds and commits the
+    # match. Launching involves several queries + a commit, during which the
+    # Bat/Bowl buttons still look tappable; without this lock an impatient winner
+    # who taps again would either race a second launch or, once the first finished,
+    # get the alarming "Match already started" alert even though their first tap
+    # is what actually started the match.
+    #
+    # Use a dedicated in-progress flag rather than `match_launched`: the draft
+    # expiry job (`_expire_challenge_draft`) keys off `match_launched` to decide
+    # whether the chat is still owned by setup, so `match_launched` must stay
+    # false until the Match row actually commits. The in-progress flag is cleared
+    # in `finally`, so a failed/aborted launch can be retried.
+    draft["launch_in_progress"] = True
+    launch_committed = False
+    # Acquire the session INSIDE the try so that if get_session() itself fails the
+    # finally still runs and releases launch_in_progress — otherwise the draft
+    # would be stuck rejecting every retry.
+    session = None
     try:
+        session = get_session()
         host = session.query(User).get(draft["host_user_id"])
         target = session.query(User).get(draft["target_user_id"])
         if not host or not target:
@@ -593,17 +632,28 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         session.add(match)
         session.commit()
+        launch_committed = True
+        # The live Match row now exists — only now does the chat belong to an
+        # active match rather than to setup, so flip `match_launched` (the flag
+        # the draft expiry job keys off) here, not before the commit.
+        draft["match_launched"] = True
         match_obj = SimpleMatch(match.id, match.overs, match.stadium)
         pitch_type = match.pitch_type
     except Exception:
-        session.rollback()
+        if session is not None:
+            session.rollback()
         logger.exception("/cipl toss/launch failed")
         await q.answer("Failed to start match.", show_alert=True)
         return
     finally:
-        session.close()
+        if session is not None:
+            session.close()
+        # Always release the synchronous double-tap lock. On success the match is
+        # now guarded by `match_launched`; on failure (validation rejected it, a
+        # player vanished, an exception, …) clearing it lets the toss winner tap
+        # again instead of being stuck behind "Match already started".
+        draft["launch_in_progress"] = False
 
-    draft["match_launched"] = True
     # The live Match row now exists, so the chat is guarded by the active-match
     # checks. Release the team-selection lock here (held through the toss) so the
     # hand-off is seamless and the chat isn't double-locked.
