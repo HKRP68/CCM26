@@ -519,8 +519,16 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if decision not in ("bat", "bowl"):
         await q.answer("Invalid decision.", show_alert=True)
         return
-    if draft.get("match_launched") or draft.get("launch_in_progress"):
-        await q.answer("Match already started.", show_alert=True)
+    # A duplicate tap (the impatient winner double-tapping while the first tap is
+    # still finalising, or tapping a stale button after the match began) must NOT
+    # fire an alarming "Match already started" popup — that scary alert is exactly
+    # what this fix is meant to remove. Acknowledge it with a quiet toast instead;
+    # the real match is proceeding on the board below.
+    if draft.get("launch_in_progress"):
+        await q.answer("Starting the match…")
+        return
+    if draft.get("match_launched"):
+        await q.answer("Match already started — play on the board below 👇")
         return
     winner_tg = draft.get("target_tg_id") if winner_side == "target" else draft.get("host_tg_id")
     if q.from_user.id != winner_tg:
@@ -541,8 +549,12 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # in `finally`, so a failed/aborted launch can be retried.
     draft["launch_in_progress"] = True
     launch_committed = False
-    session = get_session()
+    # Acquire the session INSIDE the try so that if get_session() itself fails the
+    # finally still runs and releases launch_in_progress — otherwise the draft
+    # would be stuck rejecting every retry.
+    session = None
     try:
+        session = get_session()
         host = session.query(User).get(draft["host_user_id"])
         target = session.query(User).get(draft["target_user_id"])
         if not host or not target:
@@ -628,12 +640,14 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         match_obj = SimpleMatch(match.id, match.overs, match.stadium)
         pitch_type = match.pitch_type
     except Exception:
-        session.rollback()
+        if session is not None:
+            session.rollback()
         logger.exception("/cipl toss/launch failed")
         await q.answer("Failed to start match.", show_alert=True)
         return
     finally:
-        session.close()
+        if session is not None:
+            session.close()
         # Always release the synchronous double-tap lock. On success the match is
         # now guarded by `match_launched`; on failure (validation rejected it, a
         # player vanished, an exception, …) clearing it lets the toss winner tap
