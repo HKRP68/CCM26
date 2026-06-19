@@ -476,7 +476,7 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     draft["coin_flipping"] = True
     try:
         await q.answer()
-        from services.match_broadcast import run_coin_toss
+        from services.match_broadcast import run_coin_toss, reveal_toss_result
         coin, won = await run_coin_toss(
             lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
     except Exception:
@@ -487,10 +487,12 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.answer("Toss failed — call it again.", show_alert=True)
         return
     winner_side = "target" if won else "host"
-    draft["toss_winner_side"] = winner_side
     winner_tg = draft.get("target_tg_id") if won else draft.get("host_tg_id")
     winner_name = (draft.get("target") if won else draft.get("host") or {}).get("name", "Winner")
-    await q.edit_message_text(
+    # The reveal is the critical edit: if it fails the toss is left frozen on a
+    # mid-flip frame. Retry it, and only mark the winner once it actually lands —
+    # otherwise release the lock so the guest can call the toss again.
+    revealed = await reveal_toss_result(lambda: q.edit_message_text(
         f"🪙 The coin lands on <b>{coin.upper()}</b> — guest called "
         f"<b>{call.upper()}</b>.\n\n"
         f"🏆 {_mention(winner_tg, winner_name)} won the toss. Choose:",
@@ -499,7 +501,13 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                  callback_data=f"cipl_toss_bat_{draft_id}_{winner_side}"),
             InlineKeyboardButton("🎳 Bowl First",
                                  callback_data=f"cipl_toss_bowl_{draft_id}_{winner_side}"),
-        ]]))
+        ]])))
+    if not revealed:
+        draft["coin_flipping"] = False
+        logger.warning("/cipl toss reveal failed for draft %s — recoverable", draft_id)
+        await q.answer("Toss reveal failed — call it again.", show_alert=True)
+        return
+    draft["toss_winner_side"] = winner_side
 
 
 async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

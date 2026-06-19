@@ -17,6 +17,7 @@ import os
 import random
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo)
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 logger = logging.getLogger(__name__)
 
@@ -139,15 +140,50 @@ async def run_coin_toss(edit_fn, call_side):
 
     edit_fn: async callable taking the HTML string to display each frame.
     call_side: 'heads' or 'tails' — what the calling captain chose.
+
+    Animation-frame edits are best-effort: a dropped frame is cosmetic, so we
+    swallow ordinary errors. Flood control (RetryAfter) is the exception — if we
+    keep firing edits into a throttled chat the *result* reveal that follows is
+    the one that gets dropped, leaving the toss frozen mid-flip. Honour the
+    requested wait so the burst drains before the caller reveals the winner.
     """
     for fr in COIN_TOSS_FRAMES:
         try:
             await edit_fn(fr)
+        except RetryAfter as e:
+            await asyncio.sleep(getattr(e, "retry_after", 1) + 0.5)
         except Exception:
             pass
         await asyncio.sleep(COIN_TOSS_FRAME_DELAY)
     coin = random.choice(["heads", "tails"])
     return coin, (coin == call_side)
+
+
+async def reveal_toss_result(edit_fn, attempts=4):
+    """Run the final winner-reveal edit, retrying so it reliably lands.
+
+    The reveal is the one edit that MUST render: if it silently fails the toss
+    looks frozen on a mid-flip animation frame ("Tumbling end over end…") and
+    players are stuck with no Bat/Bowl buttons. Telegram flood control or a
+    transient network blip on this single edit is exactly what causes that, so
+    retry a few times (honouring RetryAfter) and report whether it rendered.
+
+    edit_fn: async callable performing the reveal edit (takes no arguments).
+    Returns True if an edit succeeded, False if every attempt failed — callers
+    use that to recover the toss instead of leaving it permanently stuck.
+    """
+    for i in range(attempts):
+        try:
+            await edit_fn()
+            return True
+        except RetryAfter as e:
+            await asyncio.sleep(getattr(e, "retry_after", 1) + 0.5)
+        except (TimedOut, NetworkError):
+            await asyncio.sleep(0.5 * (i + 1))
+        except Exception:
+            logger.exception("toss reveal edit failed")
+            await asyncio.sleep(0.5 * (i + 1))
+    return False
 
 
 async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
