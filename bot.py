@@ -941,12 +941,14 @@ def main():
         app.add_handler(CallbackQueryHandler(challenge_xi_edit_callback, pattern=r"^cl_edit_"))
         app.add_handler(CallbackQueryHandler(challenge_start_match_callback, pattern=r"^cl_start_"))
         # Typed quick-select: a participant replies with 11 numbers to set their
-        # XI. Own dedicated group so it dispatches independently and never blocks
-        # (or is blocked by) other text handlers; it is an O(1) no-op otherwise.
+        # XI. Own dedicated group (6) — group 2 already holds the WordChase and
+        # Bluff text handlers, and PTB runs only the first matching handler per
+        # group, so sharing a group would starve those games. It is an O(1)
+        # no-op for any text that isn't an active XI quick-select.
         app.add_handler(MessageHandler(
             _filters.TEXT & ~_filters.COMMAND,
             challenge_xi_quickselect,
-        ), group=2)
+        ), group=6)
         # Challenge League over-by-over "approach" match flow
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,

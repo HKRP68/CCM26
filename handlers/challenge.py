@@ -753,9 +753,12 @@ def _challenge_player_rating(player):
         if value in (None, ""):
             continue
         try:
-            return int(round(float(value)))
+            return round(float(value))
         except (TypeError, ValueError):
-            return str(value)
+            # Non-numeric ratings are rendered into HTML messages, so escape any
+            # markup-like characters from this admin-supplied details_json value.
+            from html import escape
+            return escape(str(value))
     return None
 
 
