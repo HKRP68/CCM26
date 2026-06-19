@@ -503,9 +503,26 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                  callback_data=f"cipl_toss_bowl_{draft_id}_{winner_side}"),
         ]])))
     if not revealed:
+        # The animation edits already stripped the Heads/Tails keyboard, so a
+        # bare alert would leave the guest with no button to retry. Clear the
+        # lock and post a fresh toss-call prompt so the toss can actually resume.
         draft["coin_flipping"] = False
-        logger.warning("/cipl toss reveal failed for draft %s — recoverable", draft_id)
-        await q.answer("Toss reveal failed — call it again.", show_alert=True)
+        logger.warning("/cipl toss reveal failed for draft %s — reprompting", draft_id)
+        await q.answer("Toss hiccup — call it again below.", show_alert=True)
+        target = draft.get("target") or {}
+        try:
+            await context.bot.send_message(
+                q.message.chat_id,
+                f"🪙 <b>TOSS</b>\n"
+                f"{_mention(target.get('tg_id'), target.get('name') or 'Guest')}, "
+                f"call the coin again:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Heads", callback_data=f"cipl_coin_heads_{draft_id}"),
+                    InlineKeyboardButton("Tails", callback_data=f"cipl_coin_tails_{draft_id}"),
+                ]]))
+        except Exception:
+            logger.exception("/cipl toss re-prompt failed for draft %s", draft_id)
         return
     draft["toss_winner_side"] = winner_side
 

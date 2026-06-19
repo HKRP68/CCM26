@@ -720,6 +720,11 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Lock synchronously BEFORE the async coin animation so a racing double-tap
     # can't spawn a second election keyboard for the wrong side.
     draft["coin_flipping"] = True
+    # Rearm the setup timer up front: the flip/reveal can sleep on Telegram
+    # flood control, and we must not let _on_setup_timeout drop this draft out
+    # from under the callback while it's waiting and then reveal buttons for an
+    # invite that no longer exists.
+    _rearm_setup_timeout(context, invite_id)
     try:
         await q.answer()
         from services.match_broadcast import run_coin_toss, reveal_toss_result
@@ -749,11 +754,15 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
                                  callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
         ]])))
     if not revealed:
+        # The animation edits already stripped the Heads/Tails keyboard, so a
+        # bare alert would leave the guest with no button to retry. Clear the
+        # lock and re-post the toss-call prompt so the toss can actually resume.
         draft["coin_flipping"] = False
         _rearm_setup_timeout(context, invite_id)
-        logger.warning("letsplay toss reveal failed for invite %s — recoverable",
+        logger.warning("letsplay toss reveal failed for invite %s — reprompting",
                        invite_id)
-        await q.answer("Toss reveal failed — call it again.", show_alert=True)
+        await q.answer("Toss hiccup — call it again below.", show_alert=True)
+        await _start_toss(context, draft)
         return
     draft["toss_winner_side"] = winner_side
     _rearm_setup_timeout(context, invite_id)

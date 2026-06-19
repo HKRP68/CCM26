@@ -17,9 +17,26 @@ import os
 import random
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo)
-from telegram.error import NetworkError, RetryAfter, TimedOut
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
 logger = logging.getLogger(__name__)
+
+
+def _retry_after_seconds(exc):
+    """Flood-control wait from a RetryAfter, as float seconds.
+
+    ``RetryAfter.retry_after`` is a number in python-telegram-bot < 22.2 but can
+    be a ``datetime.timedelta`` in newer versions (opt-in via PTB_TIMEDELTA).
+    Since this repo only pins ``>=21.3``, normalise either form so adding jitter
+    never raises ``TypeError`` and abandons the flood wait.
+    """
+    ra = getattr(exc, "retry_after", 1)
+    if hasattr(ra, "total_seconds"):
+        ra = ra.total_seconds()
+    try:
+        return float(ra)
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def _webapp_host():
@@ -151,7 +168,7 @@ async def run_coin_toss(edit_fn, call_side):
         try:
             await edit_fn(fr)
         except RetryAfter as e:
-            await asyncio.sleep(getattr(e, "retry_after", 1) + 0.5)
+            await asyncio.sleep(_retry_after_seconds(e) + 0.5)
         except Exception:
             pass
         await asyncio.sleep(COIN_TOSS_FRAME_DELAY)
@@ -177,8 +194,21 @@ async def reveal_toss_result(edit_fn, attempts=4):
             await edit_fn()
             return True
         except RetryAfter as e:
-            await asyncio.sleep(getattr(e, "retry_after", 1) + 0.5)
+            await asyncio.sleep(_retry_after_seconds(e) + 0.5)
+        except BadRequest as e:
+            # NB: BadRequest subclasses NetworkError in PTB, so it must be caught
+            # before the NetworkError clause below.
+            if "not modified" in str(e).lower():
+                # A previous attempt's edit landed even though the client never
+                # saw the ack — the reveal is already on screen, so this is a
+                # success, not a failure that would strand the Bat/Bowl buttons.
+                return True
+            logger.warning("toss reveal BadRequest: %s", e)
+            await asyncio.sleep(0.5 * (i + 1))
         except (TimedOut, NetworkError):
+            # The edit may actually have reached Telegram before the client gave
+            # up; the next attempt re-sends the identical reveal and finds it
+            # already applied — handled by the "not modified" branch above.
             await asyncio.sleep(0.5 * (i + 1))
         except Exception:
             logger.exception("toss reveal edit failed")
