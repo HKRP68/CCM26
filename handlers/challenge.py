@@ -2107,7 +2107,12 @@ async def challenge_xi_edit_callback(update: Update, context: ContextTypes.DEFAU
 
 
 async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Power-user XI selection: a participant replies with 11 numbers (batting order).
+    """Power-user XI selection: a participant replies with player numbers (batting order).
+
+    Accepts a partial pick (2–11 numbers); the full keeper/bowling-options rules
+    are only enforced once exactly 11 are given, and the Confirm XI button stays
+    hidden until then. A lone number is intentionally ignored so a stray digit in
+    the group chat can't wipe a selection — single players are picked by button.
 
     This runs on every plain (non-command) text message, so it bails out fast and
     silently unless the sender is mid-XI-selection for an active draft in this chat.
