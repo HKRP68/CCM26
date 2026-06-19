@@ -112,12 +112,18 @@ def play_match_keyboard(match_id, chat_id=None, is_private=False, label=None):
 # Shared coin-toss UI (heads/tails call → animated flip → result)
 # ════════════════════════════════════════════════════════════════════
 
+# Keep the flip short and snappy — a long animation (many frames + a long sleep
+# per frame) means several sequential Telegram edit round-trips before the
+# result lands, which players read as "the toss is stuck". Three quick frames is
+# enough to feel like a coin flip while showing the winner fast.
 COIN_TOSS_FRAMES = [
     "🪙 <b>TOSS</b>\n\n     ⬆️\n   ╱  🪙  ╲\n\n<i>The coin is in the air…</i>",
-    "🪙 <b>TOSS</b>\n\n          🌀\n        🪙\n\n<i>Spinning higher…</i>",
     "🪙 <b>TOSS</b>\n\n     🌀 🪙 🌀\n\n<i>Tumbling end over end…</i>",
     "🪙 <b>TOSS</b>\n\n          ⬇️\n        🪙\n\n<i>Coming down now!</i>",
 ]
+
+# Seconds to hold each animation frame before editing to the next one.
+COIN_TOSS_FRAME_DELAY = 0.25
 
 
 def coin_call_keyboard(heads_cb, tails_cb, prompt_owner=None):
@@ -139,7 +145,7 @@ async def run_coin_toss(edit_fn, call_side):
             await edit_fn(fr)
         except Exception:
             pass
-        await asyncio.sleep(0.45)
+        await asyncio.sleep(COIN_TOSS_FRAME_DELAY)
     coin = random.choice(["heads", "tails"])
     return coin, (coin == call_side)
 

@@ -463,12 +463,17 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if call not in ("heads", "tails"):
         await q.answer("Invalid call.", show_alert=True)
         return
-    if draft.get("toss_winner_side"):
+    if draft.get("toss_winner_side") or draft.get("coin_flipping"):
         await q.answer("Toss already done.", show_alert=True)
         return
     if q.from_user.id != draft.get("target_tg_id"):
         await q.answer("Only the guest calls the toss!", show_alert=True)
         return
+    # Lock synchronously BEFORE the async coin animation. The flip plays over
+    # several Telegram edits, during which the Heads/Tails buttons still look
+    # tappable; without this lock a racing double-tap would spawn a second coin
+    # flip and a second result keyboard for the wrong side.
+    draft["coin_flipping"] = True
     await q.answer()
     from services.match_broadcast import run_coin_toss
     coin, won = await run_coin_toss(
@@ -514,6 +519,15 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.answer("Toss winner only.", show_alert=True)
         return
 
+    # Lock synchronously BEFORE the (slow) DB work that builds and commits the
+    # match. Launching involves several queries + a commit, during which the
+    # Bat/Bowl buttons still look tappable; without this lock an impatient winner
+    # who taps again would either race a second launch or, once the first finished,
+    # get the alarming "Match already started" alert even though their first tap
+    # is what actually started the match. The lock is released again on any
+    # failure path (see `finally`) so a genuine failure can be retried.
+    draft["match_launched"] = True
+    launch_committed = False
     session = get_session()
     try:
         host = session.query(User).get(draft["host_user_id"])
@@ -593,6 +607,7 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         session.add(match)
         session.commit()
+        launch_committed = True
         match_obj = SimpleMatch(match.id, match.overs, match.stadium)
         pitch_type = match.pitch_type
     except Exception:
@@ -602,8 +617,12 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     finally:
         session.close()
+        # If the match never actually committed (validation rejected it, a player
+        # vanished, an exception, …) release the launch lock so the toss winner
+        # can tap again instead of being stuck behind "Match already started".
+        if not launch_committed:
+            draft["match_launched"] = False
 
-    draft["match_launched"] = True
     # The live Match row now exists, so the chat is guarded by the active-match
     # checks. Release the team-selection lock here (held through the toss) so the
     # hand-off is seamless and the chat isn't double-locked.
