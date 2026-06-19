@@ -838,40 +838,31 @@ def _join_within_limit(lines, *, limit=TELEGRAM_MSG_LIMIT, notice="… (list tri
 
 
 def _challenge_xi_text(draft, side, team_name, players, selected_ids):
-    """Build the picker (building) view: full numbered roster + live rule status.
+    """Build the picker view: rule status that updates as players are picked.
 
-    Players are shown 1..N in roster order with a ✅ and batting position on the
-    ones already picked; the number maps to the keyboard's number buttons.
+    The squad itself lives on the numbered name buttons, so the text stays
+    concise — header, live rule checkboxes, and the current batting order.
     """
     owner = draft.get(side) or {}
     selected_ids = [int(pid) for pid in selected_ids]
     selected_set = set(selected_ids)
-    batting_position = {pid: idx for idx, pid in enumerate(selected_ids, start=1)}
     selected_players = [player for player in players if int(getattr(player, "id")) in selected_set]
     selected_players.sort(key=lambda player: selected_ids.index(int(getattr(player, "id"))))
     keeper_count = sum(1 for player in selected_players if _challenge_is_wicket_keeper(player))
     bowling_options = sum(1 for player in selected_players if _challenge_is_bowling_option(player))
     lines = [
         f"🏏 <b>{team_name} Playing XI Selection</b>",
-        f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, pick exactly 11 players.",
+        f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, select exactly 11 players.",
+        "Tap a player to add/remove, or reply with their numbers "
+        "(e.g. <code>1 2 3 4 5 6 7 8 9 10 11</code>).",
         "",
         f"<b>Selected:</b> {len(selected_ids)}/11",
         "",
         "<b>Rules:</b>",
         f"{_challenge_rule_checkbox(keeper_count >= 1)} 1 Wicket Keeper ({keeper_count}/1)",
         f"{_challenge_rule_checkbox(bowling_options >= 5)} At least 5 Bowling Options ({bowling_options}/5)",
-        "",
-        "<b>Squad</b> — tap a number to add/remove, or reply with 11 numbers "
-        "in batting order (e.g. <code>1 4 7 2 9 5 11 3 8 6 10</code>):",
+        "• Selection order becomes batting order",
     ]
-    for idx, player in enumerate(players, start=1):
-        pid = int(getattr(player, "id"))
-        category = _challenge_player_category(player)
-        rating = _challenge_player_rating_suffix(player)
-        if pid in selected_set:
-            lines.append(f"{idx}. ✅ {player.name} ({category}){rating} — bat #{batting_position[pid]}")
-        else:
-            lines.append(f"{idx}. {player.name} ({category}){rating}")
     if selected_players:
         lines.extend(["", "<b>Batting order:</b>"])
         lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
@@ -899,19 +890,20 @@ def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
 
 
 def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids):
-    """Compact number buttons (5/row). Button text is the roster index; the
-    callback still carries player_id, so the toggle handler is unchanged."""
+    """Numbered name buttons (2/row), e.g. "1. Dhoni". A ✅ marks picked players;
+    the button text carries the roster number + name, the callback carries
+    player_id so the toggle handler is unchanged. Confirm XI shows only at 11."""
     selected_set = {int(pid) for pid in selected_ids}
     rows = []
     row = []
     for idx, player in enumerate(players, start=1):
         player_id = int(getattr(player, "id"))
-        label = f"✅{idx}" if player_id in selected_set else str(idx)
+        mark = "✅ " if player_id in selected_set else ""
         row.append(InlineKeyboardButton(
-            label,
+            f"{mark}{idx}. {player.name}",
             callback_data=f"cl_pick_{draft_id}_{side}_{player_id}",
         ))
-        if len(row) == 5:
+        if len(row) == 2:
             rows.append(row)
             row = []
     if row:
@@ -2115,7 +2107,12 @@ async def challenge_xi_edit_callback(update: Update, context: ContextTypes.DEFAU
 
 
 async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Power-user XI selection: a participant replies with 11 numbers (batting order).
+    """Power-user XI selection: a participant replies with player numbers (batting order).
+
+    Accepts a partial pick (2–11 numbers); the full keeper/bowling-options rules
+    are only enforced once exactly 11 are given, and the Confirm XI button stays
+    hidden until then. A lone number is intentionally ignored so a stray digit in
+    the group chat can't wipe a selection — single players are picked by button.
 
     This runs on every plain (non-command) text message, so it bails out fast and
     silently unless the sender is mid-XI-selection for an active draft in this chat.
@@ -2156,23 +2153,26 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     total = len(players)
     numbers = [int(tok) for tok in tokens]
 
-    if len(numbers) != 11:
-        await message.reply_text(f"❌ Send exactly 11 numbers (you sent {len(numbers)}).")
+    if len(numbers) > 11:
+        await message.reply_text(f"❌ That's {len(numbers)} numbers — pick at most 11.")
         return
     out_of_range = [n for n in numbers if n < 1 or n > total]
     if out_of_range:
         await message.reply_text(f"❌ Out of range: {out_of_range[0]}. Use numbers 1–{total}.")
         return
-    if len(set(numbers)) != 11:
-        await message.reply_text("❌ No duplicates — pick 11 different players.")
+    if len(set(numbers)) != len(numbers):
+        await message.reply_text("❌ No duplicates — pick different players.")
         return
 
     selected_ids = [int(getattr(players[n - 1], "id")) for n in numbers]
     selected_players = [players[n - 1] for n in numbers]
-    valid, error = _challenge_xi_validation(selected_players)
-    if not valid:
-        await message.reply_text(f"❌ {error}")
-        return
+    # A full XI must satisfy the rules; a partial pick (<11) is accepted as-is
+    # and simply won't surface the Confirm XI button until it reaches 11.
+    if len(numbers) == 11:
+        valid, error = _challenge_xi_validation(selected_players)
+        if not valid:
+            await message.reply_text(f"❌ {error}")
+            return
 
     selection["player_ids"] = selected_ids
     await _touch_selection_timer(context, draft)

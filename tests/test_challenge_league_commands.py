@@ -568,12 +568,10 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
         buttons = [button for row in message.replies[0][1]["reply_markup"].inline_keyboard for button in row]
-        # 12 compact number buttons (no control row at 0 selected).
+        # 12 numbered name buttons (no control row at 0 selected).
         self.assertEqual(len(buttons), 12)
-        self.assertEqual(buttons[0].text, "1")
+        self.assertEqual(buttons[0].text, "1. MI Player 1")
         self.assertEqual(buttons[0].callback_data, "cl_pick_123456_host_1")
-        # The full numbered roster is shown in the message text.
-        self.assertIn("1. MI Player 1", message.replies[0][0])
 
     async def test_xi_selection_enforces_order_count_and_confirm_button(self):
         categories = ["Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder"] + ["Batsman"] * 5
@@ -796,21 +794,19 @@ class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("12. Player 12", text)
         self.assertIn("15. Player 15", text)
 
-    def test_picker_text_capped_for_huge_roster(self):
+    def test_confirmed_text_capped_for_huge_roster(self):
         # A pathological admin team with a very large roster must not blow past
-        # Telegram's 4096-char message limit (it would fail to open otherwise).
+        # Telegram's 4096-char message limit (the bench list would overflow).
         players = [
             SimpleNamespace(id=i, name=f"Player With A Fairly Long Name {i}",
                             details_json='{"category":"Batsman","rating":80}')
             for i in range(1, 201)
         ]
         draft = {"host": {"tg_id": 1, "name": "User 1"}}
-        text = challenge._challenge_xi_text(draft, "host", "Mega Team", players, [])
-        self.assertLessEqual(len(text), challenge.TELEGRAM_MSG_LIMIT)
-        self.assertIn("1. Player With A Fairly Long Name 1", text)  # low numbers kept
         confirmed = challenge._challenge_xi_confirmed_text(
             draft, "host", "Mega Team", players, list(range(1, 12)))
         self.assertLessEqual(len(confirmed), challenge.TELEGRAM_MSG_LIMIT)
+        self.assertIn("1. Player With A Fairly Long Name 1", confirmed)  # XI kept
 
     async def test_quickselect_sets_batting_order(self):
         players = _squad_15()
@@ -830,7 +826,7 @@ class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ids, list(range(11, 0, -1)))
         msg.delete.assert_awaited_once()
 
-    async def test_quickselect_rejects_wrong_count(self):
+    async def test_quickselect_allows_partial_selection(self):
         players = _squad_15()
         context = SimpleNamespace(bot_data=_xi_draft())
         msg = SimpleNamespace(text="1 2 3 4 5", reply_text=AsyncMock(), delete=AsyncMock())
@@ -843,7 +839,30 @@ class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
              patch.object(challenge, "_challenge_team_players", return_value=players):
             await challenge.challenge_xi_quickselect(update, context)
 
-        self.assertIn("exactly 11", msg.reply_text.await_args.args[0])
+        # Fewer than 11 are accepted as-is (no validation, no error reply).
+        sel = context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]
+        self.assertEqual(sel["player_ids"], [1, 2, 3, 4, 5])
+        # No Confirm XI button while under 11.
+        markup = msg.reply_text.await_args.kwargs["reply_markup"].inline_keyboard
+        labels = [btn.text for row in markup for btn in row]
+        self.assertNotIn("✅ Confirm XI", labels)
+        msg.delete.assert_awaited_once()
+
+    async def test_quickselect_rejects_more_than_eleven(self):
+        players = _squad_15()
+        context = SimpleNamespace(bot_data=_xi_draft())
+        msg = SimpleNamespace(text="1 2 3 4 5 6 7 8 9 10 11 12",
+                              reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=msg,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=1),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_team_players", return_value=players):
+            await challenge.challenge_xi_quickselect(update, context)
+
+        self.assertIn("at most 11", msg.reply_text.await_args.args[0])
         self.assertEqual(context.bot_data[challenge._challenge_team_draft_key(123456)]["xi_selections"]["host"]["player_ids"], [])
 
     async def test_quickselect_surfaces_validation_error(self):
