@@ -474,10 +474,18 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # tappable; without this lock a racing double-tap would spawn a second coin
     # flip and a second result keyboard for the wrong side.
     draft["coin_flipping"] = True
-    await q.answer()
-    from services.match_broadcast import run_coin_toss
-    coin, won = await run_coin_toss(
-        lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+    try:
+        await q.answer()
+        from services.match_broadcast import run_coin_toss
+        coin, won = await run_coin_toss(
+            lambda t: q.edit_message_text(t, parse_mode="HTML"), call)
+    except Exception:
+        # The flip never produced a result — release the lock so the guest can
+        # call again instead of being stuck behind "Toss already done."
+        draft["coin_flipping"] = False
+        logger.exception("/cipl coin flip failed for draft %s", draft_id)
+        await q.answer("Toss failed — call it again.", show_alert=True)
+        return
     winner_side = "target" if won else "host"
     draft["toss_winner_side"] = winner_side
     winner_tg = draft.get("target_tg_id") if won else draft.get("host_tg_id")
@@ -511,7 +519,7 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if decision not in ("bat", "bowl"):
         await q.answer("Invalid decision.", show_alert=True)
         return
-    if draft.get("match_launched"):
+    if draft.get("match_launched") or draft.get("launch_in_progress"):
         await q.answer("Match already started.", show_alert=True)
         return
     winner_tg = draft.get("target_tg_id") if winner_side == "target" else draft.get("host_tg_id")
@@ -524,9 +532,14 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Bat/Bowl buttons still look tappable; without this lock an impatient winner
     # who taps again would either race a second launch or, once the first finished,
     # get the alarming "Match already started" alert even though their first tap
-    # is what actually started the match. The lock is released again on any
-    # failure path (see `finally`) so a genuine failure can be retried.
-    draft["match_launched"] = True
+    # is what actually started the match.
+    #
+    # Use a dedicated in-progress flag rather than `match_launched`: the draft
+    # expiry job (`_expire_challenge_draft`) keys off `match_launched` to decide
+    # whether the chat is still owned by setup, so `match_launched` must stay
+    # false until the Match row actually commits. The in-progress flag is cleared
+    # in `finally`, so a failed/aborted launch can be retried.
+    draft["launch_in_progress"] = True
     launch_committed = False
     session = get_session()
     try:
@@ -608,6 +621,10 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         session.add(match)
         session.commit()
         launch_committed = True
+        # The live Match row now exists — only now does the chat belong to an
+        # active match rather than to setup, so flip `match_launched` (the flag
+        # the draft expiry job keys off) here, not before the commit.
+        draft["match_launched"] = True
         match_obj = SimpleMatch(match.id, match.overs, match.stadium)
         pitch_type = match.pitch_type
     except Exception:
@@ -617,11 +634,11 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     finally:
         session.close()
-        # If the match never actually committed (validation rejected it, a player
-        # vanished, an exception, …) release the launch lock so the toss winner
-        # can tap again instead of being stuck behind "Match already started".
-        if not launch_committed:
-            draft["match_launched"] = False
+        # Always release the synchronous double-tap lock. On success the match is
+        # now guarded by `match_launched`; on failure (validation rejected it, a
+        # player vanished, an exception, …) clearing it lets the toss winner tap
+        # again instead of being stuck behind "Match already started".
+        draft["launch_in_progress"] = False
 
     # The live Match row now exists, so the chat is guarded by the active-match
     # checks. Release the team-selection lock here (held through the toss) so the
