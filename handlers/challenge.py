@@ -812,6 +812,31 @@ def _challenge_player_rating_suffix(player):
     return f" · {rating}" if rating is not None else ""
 
 
+TELEGRAM_MSG_LIMIT = 4096
+
+
+def _join_within_limit(lines, *, limit=TELEGRAM_MSG_LIMIT, notice="… (list trimmed — use the numbers above)"):
+    """Join lines into one message, trimming trailing lines to stay under Telegram's
+    4096-char limit. Admin teams can be bulk-loaded with very large rosters, so an
+    unbounded roster could otherwise exceed the limit and the picker would fail to
+    open/update. Trailing lines (the redundant batting-order block, then the highest
+    squad numbers) drop first, keeping the lower numbers and their mapping intact."""
+    text = "\n".join(lines)
+    if len(text) <= limit:
+        return text
+    budget = limit - len(notice) - 1
+    kept = []
+    total = 0
+    for line in lines:
+        add = len(line) + (1 if kept else 0)
+        if total + add > budget:
+            break
+        kept.append(line)
+        total += add
+    kept.append(notice)
+    return "\n".join(kept)
+
+
 def _challenge_xi_text(draft, side, team_name, players, selected_ids):
     """Build the picker (building) view: full numbered roster + live rule status.
 
@@ -850,7 +875,7 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
     if selected_players:
         lines.extend(["", "<b>Batting order:</b>"])
         lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
-    return "\n".join(lines)
+    return _join_within_limit(lines)
 
 
 def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
@@ -870,7 +895,7 @@ def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
         "",
         "✏️ Swap a player with <code>/change &lt;out&gt; &lt;in&gt;</code> — e.g. <code>/change 2 13</code>",
     ])
-    return "\n".join(lines)
+    return _join_within_limit(lines)
 
 
 def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids):

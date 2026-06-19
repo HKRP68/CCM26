@@ -796,6 +796,22 @@ class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("12. Player 12", text)
         self.assertIn("15. Player 15", text)
 
+    def test_picker_text_capped_for_huge_roster(self):
+        # A pathological admin team with a very large roster must not blow past
+        # Telegram's 4096-char message limit (it would fail to open otherwise).
+        players = [
+            SimpleNamespace(id=i, name=f"Player With A Fairly Long Name {i}",
+                            details_json='{"category":"Batsman","rating":80}')
+            for i in range(1, 201)
+        ]
+        draft = {"host": {"tg_id": 1, "name": "User 1"}}
+        text = challenge._challenge_xi_text(draft, "host", "Mega Team", players, [])
+        self.assertLessEqual(len(text), challenge.TELEGRAM_MSG_LIMIT)
+        self.assertIn("1. Player With A Fairly Long Name 1", text)  # low numbers kept
+        confirmed = challenge._challenge_xi_confirmed_text(
+            draft, "host", "Mega Team", players, list(range(1, 12)))
+        self.assertLessEqual(len(confirmed), challenge.TELEGRAM_MSG_LIMIT)
+
     async def test_quickselect_sets_batting_order(self):
         players = _squad_15()
         context = SimpleNamespace(bot_data=_xi_draft())
