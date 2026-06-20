@@ -206,17 +206,19 @@ def _better_figure(new_w, new_r, cur_w, cur_r):
 def _player_identity(line):
     """Stable per-player key for tournament-wide aggregation.
 
-    Aggregation is by **player**, never by the controlling user — in a free-form
-    tournament a team can be played by different users across its matches, and the
-    same player's figures must accumulate into a single leaderboard row. Prefers
-    the master player id, then the roster id, then a normalized name.
+    Aggregation is by **player on a team**, never by the controlling user — in a
+    free-form tournament a team can be played by different users across its
+    matches, and the same player's figures must accumulate into a single
+    leaderboard row. Prefers the team-specific ``roster_id`` (ChallengePlayer id)
+    so the same master player appearing on two different participating teams is
+    kept separate; falls back to the master ``player_id`` then a normalized name.
     """
-    pid = line.get("player_id")
-    if pid is not None:
-        return ("p", pid)
     rid = line.get("roster_id")
     if rid is not None:
         return ("r", rid)
+    pid = line.get("player_id")
+    if pid is not None:
+        return ("p", pid)
     return ("n", (line.get("name") or "").strip().lower())
 
 
@@ -270,6 +272,13 @@ def recompute_player_stats(session, tournament_id):
     Caller commits.
     """
     tid = int(tournament_id)
+    # Serialize concurrent rebuilds for this tournament by taking a row lock on the
+    # Tournament (no-op on SQLite, ``SELECT ... FOR UPDATE`` on Postgres). Without
+    # it, two matches finishing concurrently could each delete + rebuild from a
+    # snapshot missing the other's just-inserted match, leaving split/duplicate
+    # aggregate rows. The lock makes the second rebuild wait and see the first's
+    # committed match, so the final rebuild is computed from the full set.
+    session.query(Tournament).filter_by(id=tid).with_for_update().first()
     # "fetch" evicts the deleted rows from the session identity map so the rows we
     # re-create below (which may reuse the same primary keys) don't collide with
     # stale instances when recompute runs twice within one session.
