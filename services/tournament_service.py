@@ -203,50 +203,120 @@ def _better_figure(new_w, new_r, cur_w, cur_r):
     return new_r < cur_r
 
 
-def _upsert_player_stats(session, tournament_id, line):
-    pid = line.get("player_id")
-    rid = line.get("roster_id")
-    q = session.query(TournamentPlayerStats).filter_by(
-        tournament_id=tournament_id, user_id=line["user_id"])
-    if pid is not None:
-        row = q.filter(TournamentPlayerStats.player_id == pid).first()
-    else:
-        row = q.filter(TournamentPlayerStats.player_id.is_(None),
-                       TournamentPlayerStats.roster_id == rid).first()
-    if not row:
-        row = TournamentPlayerStats(
-            tournament_id=tournament_id, user_id=line["user_id"],
-            player_id=pid, roster_id=rid, name=line.get("name"),
-            team_name=line.get("team_name"), best_bowl_runs=-1)
-        session.add(row)
-    # Refresh display snapshots
-    row.name = line.get("name") or row.name
-    if line.get("team_name"):
-        row.team_name = line["team_name"]
+def _player_identity(line):
+    """Stable per-player key for tournament-wide aggregation.
 
-    featured = line["batted"] or line["bowled"]
-    if featured:
-        row.matches = (row.matches or 0) + 1
-    if line["batted"]:
-        row.bat_innings = (row.bat_innings or 0) + 1
-        row.bat_runs = (row.bat_runs or 0) + line["bat_runs"]
-        row.bat_balls = (row.bat_balls or 0) + line["bat_balls"]
-        row.bat_fours = (row.bat_fours or 0) + line["bat_fours"]
-        row.bat_sixes = (row.bat_sixes or 0) + line["bat_sixes"]
-        if line["bat_out"]:
-            row.bat_outs = (row.bat_outs or 0) + 1
-        if line["bat_runs"] > (row.highest_score or 0):
-            row.highest_score = line["bat_runs"]
-    if line["bowled"]:
-        row.bowl_innings = (row.bowl_innings or 0) + 1
-        row.bowl_wickets = (row.bowl_wickets or 0) + line["bowl_wickets"]
-        row.bowl_runs = (row.bowl_runs or 0) + line["bowl_runs"]
-        row.bowl_balls = (row.bowl_balls or 0) + line["bowl_balls"]
-        if _better_figure(line["bowl_wickets"], line["bowl_runs"],
-                          row.best_bowl_wickets or 0,
-                          row.best_bowl_runs if row.best_bowl_runs is not None else -1):
-            row.best_bowl_wickets = line["bowl_wickets"]
-            row.best_bowl_runs = line["bowl_runs"]
+    Aggregation is by **player on a team**, never by the controlling user — in a
+    free-form tournament a team can be played by different users across its
+    matches, and the same player's figures must accumulate into a single
+    leaderboard row. Prefers the team-specific ``roster_id`` (ChallengePlayer id)
+    so the same master player appearing on two different participating teams is
+    kept separate; falls back to the master ``player_id`` then a normalized name.
+    """
+    rid = line.get("roster_id")
+    if rid is not None:
+        return ("r", rid)
+    pid = line.get("player_id")
+    if pid is not None:
+        return ("p", pid)
+    return ("n", (line.get("name") or "").strip().lower())
+
+
+def _apply_line(acc, line):
+    """Fold one per-match player line into an in-memory accumulator dict."""
+    # Latest non-empty display snapshots win.
+    if line.get("name"):
+        acc["name"] = line["name"]
+    if line.get("team_name"):
+        acc["team_name"] = line["team_name"]
+    if acc.get("user_id") is None and line.get("user_id") is not None:
+        acc["user_id"] = line["user_id"]
+    if acc.get("player_id") is None and line.get("player_id") is not None:
+        acc["player_id"] = line["player_id"]
+    if acc.get("roster_id") is None and line.get("roster_id") is not None:
+        acc["roster_id"] = line["roster_id"]
+
+    batted = bool(line.get("batted"))
+    bowled = bool(line.get("bowled"))
+    if batted or bowled:
+        acc["matches"] += 1
+    if batted:
+        acc["bat_innings"] += 1
+        acc["bat_runs"] += int(line.get("bat_runs", 0) or 0)
+        acc["bat_balls"] += int(line.get("bat_balls", 0) or 0)
+        acc["bat_fours"] += int(line.get("bat_fours", 0) or 0)
+        acc["bat_sixes"] += int(line.get("bat_sixes", 0) or 0)
+        if line.get("bat_out"):
+            acc["bat_outs"] += 1
+        if int(line.get("bat_runs", 0) or 0) > acc["highest_score"]:
+            acc["highest_score"] = int(line.get("bat_runs", 0) or 0)
+    if bowled:
+        acc["bowl_innings"] += 1
+        wk = int(line.get("bowl_wickets", 0) or 0)
+        rc = int(line.get("bowl_runs", 0) or 0)
+        acc["bowl_wickets"] += wk
+        acc["bowl_runs"] += rc
+        acc["bowl_balls"] += int(line.get("bowl_balls", 0) or 0)
+        if _better_figure(wk, rc, acc["best_bowl_wickets"], acc["best_bowl_runs"]):
+            acc["best_bowl_wickets"] = wk
+            acc["best_bowl_runs"] = rc
+
+
+def recompute_player_stats(session, tournament_id):
+    """Rebuild ``TournamentPlayerStats`` from the stored match scorecards.
+
+    Authoritative + idempotent: deletes the tournament's player rows and rebuilds
+    one row **per player** by folding every ``TournamentMatch.scorecard_json`` line.
+    Because the session is ``autoflush=False``, aggregation is done in-memory and
+    rows are bulk-created at the end (so we never re-query un-flushed inserts).
+    Caller commits.
+    """
+    tid = int(tournament_id)
+    # Serialize concurrent rebuilds for this tournament by taking a row lock on the
+    # Tournament (no-op on SQLite, ``SELECT ... FOR UPDATE`` on Postgres). Without
+    # it, two matches finishing concurrently could each delete + rebuild from a
+    # snapshot missing the other's just-inserted match, leaving split/duplicate
+    # aggregate rows. The lock makes the second rebuild wait and see the first's
+    # committed match, so the final rebuild is computed from the full set.
+    session.query(Tournament).filter_by(id=tid).with_for_update().first()
+    # "fetch" evicts the deleted rows from the session identity map so the rows we
+    # re-create below (which may reuse the same primary keys) don't collide with
+    # stale instances when recompute runs twice within one session.
+    session.query(TournamentPlayerStats).filter_by(
+        tournament_id=tid).delete(synchronize_session="fetch")
+
+    matches = (session.query(TournamentMatch)
+               .filter_by(tournament_id=tid)
+               .order_by(TournamentMatch.id).all())
+
+    aggregates = {}
+    for m in matches:
+        if not m.scorecard_json:
+            continue
+        try:
+            lines = json.loads(m.scorecard_json)
+        except Exception:
+            logger.exception("Bad scorecard_json on tournament_match %s", m.id)
+            continue
+        for line in lines or []:
+            key = _player_identity(line)
+            acc = aggregates.get(key)
+            if acc is None:
+                acc = {
+                    "user_id": None, "player_id": None, "roster_id": None,
+                    "name": None, "team_name": None,
+                    "matches": 0, "bat_innings": 0, "bat_runs": 0, "bat_balls": 0,
+                    "bat_fours": 0, "bat_sixes": 0, "bat_outs": 0, "highest_score": 0,
+                    "bowl_innings": 0, "bowl_wickets": 0, "bowl_runs": 0,
+                    "bowl_balls": 0, "best_bowl_wickets": 0, "best_bowl_runs": -1,
+                }
+                aggregates[key] = acc
+            _apply_line(acc, line)
+
+    for acc in aggregates.values():
+        if acc.get("user_id") is None:
+            continue  # a player row requires a user_id (NOT NULL)
+        session.add(TournamentPlayerStats(tournament_id=tid, **acc))
 
 
 def record_tournament_match(session, state, winner_user_id=None, result_text=None):
@@ -329,10 +399,8 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             lose_team.lost = (lose_team.lost or 0) + 1
             lose_team.points = (lose_team.points or 0) + (tour.points_loss or 0)
 
-    # ── Per-player stats ──
+    # ── Per-player stats: recorded on the match scorecard, aggregated below ──
     lines = _collect_player_lines(state)
-    for line in lines:
-        _upsert_player_stats(session, tid, line)
 
     # ── Match row ──
     if not result_text:
@@ -357,6 +425,13 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
         completed_at=datetime.utcnow(),
     )
     session.add(tm)
+
+    # Rebuild per-player aggregates from all match scorecards (incl. this one),
+    # keyed by player rather than by controlling user. Flush so the new match row
+    # is visible to the rebuild query.
+    session.flush()
+    recompute_player_stats(session, tid)
+
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
     return tm
 

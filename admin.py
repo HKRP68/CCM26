@@ -12256,7 +12256,16 @@ def admin_challenge_team_detail(league_id, team_id):
 # TOURNAMENT PANEL — Challenge League Tournaments
 # ═══════════════════════════════════════════════════════════════════════
 
+# Throttle for the dashboard's lazy stats heal. record_tournament_match already
+# keeps stats correct for every new match, so the dashboard recompute only needs
+# to heal already-recorded tournaments — not run a full delete+rebuild on every
+# page load. Recompute at most once per tournament per this many seconds.
+_TOURNAMENT_RECOMPUTE_TTL = 300
+_tournament_recompute_at = {}
+
+
 def _get_tournament_or_404(db, tournament_id):
+    """Return the Tournament for ``tournament_id`` or flash + return None."""
     t = db.query(Tournament).get(int(tournament_id))
     if not t:
         flash("Tournament not found.", "error")
@@ -12266,6 +12275,7 @@ def _get_tournament_or_404(db, tournament_id):
 @app.route("/tournaments", methods=["GET", "POST"])
 @login_required
 def admin_tournaments_list():
+    """List/create tournaments, manage the active one, and show tournament history."""
     from services import tournament_service
     db = get_session()
     try:
@@ -12358,6 +12368,7 @@ def admin_tournaments_list():
 @app.route("/tournaments/<int:tournament_id>", methods=["GET", "POST"])
 @login_required
 def admin_tournament_detail(tournament_id):
+    """Manage a tournament: settings, participating teams, lifecycle, reset/delete."""
     from services import tournament_service
     db = get_session()
     try:
@@ -12416,6 +12427,11 @@ def admin_tournament_detail(tournament_id):
                     tournament_service.deactivate_tournament(db, t.id)
                     log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
                     flash("Deactivated.", "info")
+                elif action == "recompute_stats":
+                    tournament_service.recompute_player_stats(db, t.id)
+                    _tournament_recompute_at[t.id] = __import__("time").time()
+                    log_admin(db, "tournament_recompute_stats", "tournament", t.id, t.name)
+                    flash("✅ Player statistics recomputed.", "success")
                 elif action == "reset":
                     tournament_service.reset_tournament(db, t.id)
                     log_admin(db, "tournament_reset", "tournament", t.id, t.name)
@@ -12453,13 +12469,31 @@ def admin_tournament_detail(tournament_id):
 @app.route("/tournaments/<int:tournament_id>/dashboard")
 @login_required
 def admin_tournament_dashboard(tournament_id):
+    """Render a tournament's dashboard: points table, stat leaders, history.
+
+    Lazily heals per-player aggregates from the stored match scorecards, throttled
+    so it doesn't rebuild on every page load.
+    """
     from services import tournament_service
     import json as _json
+    import time
     db = get_session()
     try:
         t = _get_tournament_or_404(db, tournament_id)
         if not t:
             return redirect(url_for("admin_tournaments_list"))
+        # Heal/refresh per-player aggregates from the stored match scorecards
+        # (idempotent), but at most once per TTL — new matches already recompute
+        # at record time, so this only heals already-recorded tournaments.
+        now = time.time()
+        if now - _tournament_recompute_at.get(t.id, 0) > _TOURNAMENT_RECOMPUTE_TTL:
+            try:
+                tournament_service.recompute_player_stats(db, t.id)
+                db.commit()
+                _tournament_recompute_at[t.id] = now
+            except Exception:
+                db.rollback()
+                logger.exception("tournament dashboard recompute failed for %s", t.id)
         table = tournament_service.points_table(db, t.id)
         leaders = tournament_service.stat_leaders(db, t.id)
         matches = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
