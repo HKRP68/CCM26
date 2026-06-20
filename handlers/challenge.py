@@ -976,7 +976,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None):
     # One game per chat / one match per player (any game mode). Block early so a
     # Challenge League draft can't start on top of a live match in this chat or
     # while either player is already busy elsewhere.
@@ -1036,6 +1036,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
             "name": _user_label(target),
         },
         "created_at": datetime.utcnow().isoformat(),
+        "tournament_id": tournament_id,
     }
     # Lock this chat to the new draft so a concurrent league challenge is refused.
     context.bot_data[_challenge_draft_chat_key(update.effective_chat.id)] = draft_id
@@ -1207,6 +1208,16 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         if not league_key:
             return
 
+        from services.tournament_service import extract_tournament_intent, resolve_active_tournament_for_chat
+        _, wants_tournament = extract_tournament_intent(context.args)
+        tournament_id = None
+        if wants_tournament:
+            tournament, terr = resolve_active_tournament_for_chat(session, update.effective_chat.id)
+            if terr:
+                await update.message.reply_text(terr, parse_mode="HTML")
+                return
+            tournament_id = tournament.id
+
         target_tg = _reply_target_telegram_user(update)
         if not target_tg:
             await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
@@ -1237,6 +1248,7 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
             update, context, challenger=challenger, target=target,
             league_key=league_key, league_name=league_name,
             league_record=league_record, teams=teams, session=session,
+            tournament_id=tournament_id,
         )
     finally:
         session.close()

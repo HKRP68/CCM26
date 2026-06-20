@@ -190,6 +190,13 @@ from handlers.tours import (
     mytours_stats_callback, mytours_back_callback,
 )
 
+# Tournament handlers
+from handlers.tournament import (
+    newtournament_handler, jointournament_handler,
+    pointstable_handler, tournamentstats_handler,
+    addtotournament_handler, addtotournament_pick_callback,
+)
+
 # Achievements handlers
 from handlers.achievements import (
     achievements_handler,
@@ -320,6 +327,11 @@ BOT_MENU_COMMANDS = (
     ("openpack", "Open a pack from your inventory"),
     ("cmtours", "Create a tournament"),
     ("mytours", "View your tournaments"),
+    ("newtournament", "Create a group tournament"),
+    ("jointournament", "Join a tournament"),
+    ("pointstable", "View a tournament's points table"),
+    ("tournamentstats", "View a tournament's leaderboard"),
+    ("addtotournament", "Manually attach your last match to a tournament"),
     ("vsbot", "Play a match against a bot"),
     ("wpmbot", "Play a bot in the Mini App"),
     ("myquest", "View and claim quest rewards"),
@@ -1048,6 +1060,14 @@ def main():
         app.add_handler(CallbackQueryHandler(mytours_info_callback, pattern=r"^mti_"))
         app.add_handler(CallbackQueryHandler(mytours_stats_callback, pattern=r"^mts_"))
         app.add_handler(CallbackQueryHandler(mytours_back_callback, pattern=r"^mtb_"))
+
+        # ── Tournaments ────────────────────────────────────────────
+        app.add_handler(CommandHandler("newtournament", newtournament_handler))
+        app.add_handler(CommandHandler("jointournament", jointournament_handler))
+        app.add_handler(CommandHandler("pointstable", pointstable_handler))
+        app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
+        app.add_handler(CommandHandler("addtotournament", addtotournament_handler))
+        app.add_handler(CallbackQueryHandler(addtotournament_pick_callback, pattern=r"^atp_"))
 
         # ── vsbot ────────────────────────────────────────────────────
         app.add_handler(CommandHandler(["vsbot", "vsb"], vsbot_handler))

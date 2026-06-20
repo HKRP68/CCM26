@@ -228,6 +228,16 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  disable_web_page_preview=True)
             return
 
+        from services.tournament_service import extract_tournament_intent, resolve_active_tournament_for_chat
+        context.args, wants_tournament = extract_tournament_intent(context.args)
+        tournament_id = None
+        if wants_tournament:
+            tournament, terr = resolve_active_tournament_for_chat(session, chat.id)
+            if terr:
+                await msg.reply_text(terr, parse_mode="HTML")
+                return
+            tournament_id = tournament.id
+
         guest_user, reason = resolve_command_target(session, update, context, "letsplay")
         if not guest_user:
             await msg.reply_text(
@@ -323,6 +333,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "pitch_type": None,
         "host_confirmed": False, "guest_confirmed": False,
         "created_at": datetime.utcnow().isoformat(),
+        "tournament_id": tournament_id,
     }
     context.bot_data[_dkey(invite_id)] = draft
 
@@ -879,6 +890,7 @@ async def _launch_match(context, draft, decision, winner_side):
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
             expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
+            tournament_id=draft.get("tournament_id"),
         )
         session.add(match)
         session.commit()

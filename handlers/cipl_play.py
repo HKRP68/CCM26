@@ -654,6 +654,7 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
             expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
+            tournament_id=draft.get("tournament_id"),
         )
         session.add(match)
         session.commit()
