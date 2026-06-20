@@ -14065,6 +14065,197 @@ def admin_competition_template_delete(tpl_id):
         db.close()
 
 
+# ─── Tournaments ────────────────────────────────────────────────────
+
+@app.route("/tournaments")
+@login_required
+def admin_tournaments():
+    """List all tournaments + create form."""
+    db = get_session()
+    try:
+        from models import Tournament
+        tournaments = db.query(Tournament).order_by(Tournament.created_at.desc()).all()
+        return render_template("admin_tournaments.html", tournaments=tournaments)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/create", methods=["POST"])
+@login_required
+def admin_tournament_create():
+    db = get_session()
+    try:
+        from services.tournament_service import create_tournament
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("Name is required.", "error")
+            return redirect(url_for("admin_tournaments"))
+
+        chat_id_raw = (request.form.get("chat_id") or "").strip()
+        try:
+            chat_id = int(chat_id_raw) if chat_id_raw else None
+        except ValueError:
+            chat_id = None
+
+        creator_id_raw = (request.form.get("creator_user_id") or "").strip()
+        try:
+            creator_id = int(creator_id_raw)
+        except (ValueError, TypeError):
+            flash("Creator user ID is required.", "error")
+            return redirect(url_for("admin_tournaments"))
+
+        tournament, err = create_tournament(
+            db, name, creator_id, chat_id=chat_id,
+            points_win=int(request.form.get("points_win") or 2),
+            points_loss=int(request.form.get("points_loss") or 0),
+            points_tie=int(request.form.get("points_tie") or 1),
+        )
+        if err:
+            db.rollback()
+            flash(f"❌ {err}", "error")
+            return redirect(url_for("admin_tournaments"))
+        db.commit()
+        flash(f"✅ Created tournament '{name}'", "info")
+        try:
+            log_admin(db, "create_tournament", "tournament",
+                      tournament.id, "system", f"name={name}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament.id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_tournaments"))
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>")
+@login_required
+def admin_tournament_detail(tournament_id):
+    """Points table + attached matches + add-team/add-match forms."""
+    db = get_session()
+    try:
+        from models import Tournament, TournamentMatch, Match, User
+        from services.tournament_service import get_points_table
+        tournament = db.query(Tournament).get(tournament_id)
+        if not tournament:
+            flash("Tournament not found.", "error")
+            return redirect(url_for("admin_tournaments"))
+
+        rows = get_points_table(db, tournament_id)
+        team_rows = []
+        for t in rows:
+            u = db.query(User).get(t.user_id)
+            team_rows.append({"team": t, "user": u})
+
+        matches = (db.query(TournamentMatch, Match)
+                   .join(Match, Match.id == TournamentMatch.match_id)
+                   .filter(TournamentMatch.tournament_id == tournament_id)
+                   .order_by(TournamentMatch.added_at.desc())
+                   .all())
+
+        return render_template("admin_tournament_detail.html",
+                               tournament=tournament,
+                               team_rows=team_rows,
+                               matches=matches)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/add_team", methods=["POST"])
+@login_required
+def admin_tournament_add_team(tournament_id):
+    db = get_session()
+    try:
+        from services.tournament_service import join_tournament
+        user_id_raw = (request.form.get("user_id") or "").strip()
+        try:
+            user_id = int(user_id_raw)
+        except ValueError:
+            flash("Invalid user ID.", "error")
+            return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+
+        team, err = join_tournament(db, tournament_id, user_id)
+        if err:
+            db.rollback()
+            flash(f"❌ {err}", "error")
+            return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+        db.commit()
+        flash(f"✅ Added user #{user_id} to the tournament.", "info")
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/add_match", methods=["POST"])
+@login_required
+def admin_tournament_add_match(tournament_id):
+    db = get_session()
+    try:
+        from services.tournament_service import attach_match
+        match_id_raw = (request.form.get("match_id") or "").strip()
+        try:
+            match_id = int(match_id_raw)
+        except ValueError:
+            flash("Invalid Match No.", "error")
+            return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+
+        tm, err = attach_match(db, tournament_id, match_id)
+        if err:
+            db.rollback()
+            flash(f"❌ {err}", "error")
+            return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+        db.commit()
+        flash(f"✅ Match #{match_id} attached.", "info")
+        try:
+            log_admin(db, "attach_match", "tournament",
+                      tournament_id, "system", f"match_id={match_id}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/complete", methods=["POST"])
+@login_required
+def admin_tournament_complete(tournament_id):
+    db = get_session()
+    try:
+        from services.tournament_service import complete_tournament
+        tournament = complete_tournament(db, tournament_id)
+        if not tournament:
+            db.rollback()
+            flash("Tournament not found.", "error")
+            return redirect(url_for("admin_tournaments"))
+        db.commit()
+        flash(f"✅ Tournament '{tournament.name}' marked completed.", "info")
+        try:
+            log_admin(db, "complete_tournament", "tournament",
+                      tournament_id, "system", "")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Error: {e}", "error")
+        return redirect(url_for("admin_tournament_detail", tournament_id=tournament_id))
+    finally:
+        db.close()
+
+
 # ─── Branding (channel + group links) ────────────────────────────────
 
 @app.route("/branding")

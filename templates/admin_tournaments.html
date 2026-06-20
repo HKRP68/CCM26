@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Tournaments{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏆 Tournaments</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;" {% if not tournaments %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:700;">➕ Create new tournament</summary>
+
+  <form method="POST" action="{{ url_for('admin_tournament_create') }}" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div style="grid-column:span 2;">
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Tournament name</label>
+        <input type="text" name="name" required placeholder="e.g. CIPL Season 3"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Creator user ID</label>
+        <input type="number" name="creator_user_id" required
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Chat ID (optional)</label>
+        <input type="number" name="chat_id"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <h3 style="margin:1.2rem 0 .5rem;font-size:.95rem;">📊 Points</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.7rem;">
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Win</label>
+        <input type="number" name="points_win" value="2" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Loss</label>
+        <input type="number" name="points_loss" value="0" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Tie</label>
+        <input type="number" name="points_tie" value="1" min="0"
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Create tournament</button>
+  </form>
+</details>
+
+<h3>All tournaments</h3>
+{% if tournaments %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Name</th>
+    <th>Status</th>
+    <th>Chat ID</th>
+    <th>Points (W/L/T)</th>
+    <th>Created</th>
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for t in tournaments %}
+  <tr>
+    <td><strong>{{ t.name }}</strong></td>
+    <td>
+      {% if t.status == "active" %}
+        <span style="color:var(--green);font-weight:700;">● ACTIVE</span>
+      {% elif t.status == "open" %}
+        <span style="color:var(--accent);">Open</span>
+      {% else %}
+        <span style="color:var(--muted);">Completed</span>
+      {% endif %}
+    </td>
+    <td style="font-size:.82rem;">{{ t.chat_id or "—" }}</td>
+    <td style="font-size:.82rem;">{{ t.points_win }} / {{ t.points_loss }} / {{ t.points_tie }}</td>
+    <td style="font-size:.82rem;">{{ t.created_at | ist('%Y-%m-%d %H:%M') }}</td>
+    <td>
+      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="btn btn-ghost btn-sm">View</a>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No tournaments yet. Create one above.
+</p>
+{% endif %}
+
+{% endblock %}

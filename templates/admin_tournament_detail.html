@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}{{ tournament.name }}{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏆 {{ tournament.name }}</h2>
+  <a href="{{ url_for('admin_tournaments') }}" class="btn btn-ghost btn-sm">← All tournaments</a>
+</div>
+
+<div class="stats-grid" style="margin-bottom:1.5rem;">
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Status</p>
+    <p style="font-size:1.2rem;font-weight:800;margin:.25rem 0 0;">
+      {% if tournament.status == "completed" %}
+        <span style="color:var(--blue);">✅ Completed</span>
+      {% elif tournament.status == "active" %}
+        <span style="color:var(--green);">● Active</span>
+      {% else %}
+        <span style="color:var(--accent);">Open</span>
+      {% endif %}
+    </p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Teams</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;">{{ team_rows | length }}</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Matches attached</p>
+    <p style="font-size:1.7rem;font-weight:800;margin:.25rem 0 0;">{{ matches | length }}</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;margin:0;">Points (W/L/T)</p>
+    <p style="font-size:1.2rem;font-weight:800;margin:.25rem 0 0;">{{ tournament.points_win }} / {{ tournament.points_loss }} / {{ tournament.points_tie }}</p>
+  </div>
+</div>
+
+{% if tournament.status != "completed" %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .8rem;">🏁 Mark completed</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin:0 0 1rem;">
+    Freezes the points table and stats. No further matches can be attached after this.
+  </p>
+  <form method="POST" action="{{ url_for('admin_tournament_complete', tournament_id=tournament.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-primary"
+            onclick="return confirm('Mark this tournament completed?');">
+      🏁 Complete tournament
+    </button>
+  </form>
+</div>
+{% endif %}
+
+<h3>Points table</h3>
+{% if team_rows %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>#</th>
+    <th>Team</th>
+    <th>P</th>
+    <th>W</th>
+    <th>L</th>
+    <th>T</th>
+    <th>Pts</th>
+  </tr></thead>
+  <tbody>
+  {% for row in team_rows %}
+  <tr {% if loop.index == 1 %}style="background:rgba(212,168,42,.06);"{% endif %}>
+    <td>{{ loop.index }}</td>
+    <td>
+      <strong>{{ (row.user.team_name if row.user else None) or (("@" + row.user.username + "'s XI") if row.user and row.user.username else "User #" ~ row.team.user_id) }}</strong>
+    </td>
+    <td>{{ row.team.played }}</td>
+    <td>{{ row.team.won }}</td>
+    <td>{{ row.team.lost }}</td>
+    <td>{{ row.team.tied }}</td>
+    <td><strong>{{ row.team.points }}</strong></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No teams yet.
+</p>
+{% endif %}
+
+<h3 style="margin-top:1.5rem;">Attached matches</h3>
+{% if matches %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Match #</th>
+    <th>Players</th>
+    <th>Winner</th>
+    <th>Attached</th>
+  </tr></thead>
+  <tbody>
+  {% for tm, m in matches %}
+  <tr>
+    <td>#{{ m.id }}</td>
+    <td style="font-size:.82rem;">User #{{ m.user1_id }} vs User #{{ m.user2_id }}</td>
+    <td style="font-size:.82rem;">{{ "User #" ~ m.winner_id if m.winner_id else "Tie" }}</td>
+    <td style="font-size:.82rem;">{{ tm.added_at | ist('%Y-%m-%d %H:%M') }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No matches attached yet.
+</p>
+{% endif %}
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-top:1.5rem;">
+  <summary style="cursor:pointer;font-weight:700;">➕ Add team manually</summary>
+  <form method="POST" action="{{ url_for('admin_tournament_add_team', tournament_id=tournament.id) }}" style="margin-top:1rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="number" name="user_id" required placeholder="User ID"
+           style="flex:1;min-width:160px;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    <button type="submit" class="btn btn-primary btn-sm">Add</button>
+  </form>
+</details>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-top:1rem;">
+  <summary style="cursor:pointer;font-weight:700;">➕ Attach match by Match No</summary>
+  <p style="color:var(--muted);font-size:.85rem;margin:.6rem 0;">
+    Manually attaches a completed match (e.g. one played via a mode not wired to the
+    <code>Tournament</code> keyword). Rejected if the match isn't completed or is
+    already attached to another tournament.
+  </p>
+  <form method="POST" action="{{ url_for('admin_tournament_add_match', tournament_id=tournament.id) }}" style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="number" name="match_id" required placeholder="Match No"
+           style="flex:1;min-width:160px;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    <button type="submit" class="btn btn-primary btn-sm">Attach</button>
+  </form>
+</details>
+
+{% endblock %}
