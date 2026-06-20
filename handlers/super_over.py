@@ -1194,6 +1194,17 @@ async def _finalize(context, mid, winner_uid, loser_uid):
                 super_over=_super_over_summary(so, win["name"], margin_text))
         except Exception:
             logger.exception("Super Over final scorecard snapshot failed (%s)", mid)
+        # Record the tournament result if the main match was an official tournament
+        # match — the Super Over winner is the tournament winner.
+        try:
+            main_state = so.get("main") or {}
+            if main_state.get("tournament_id"):
+                from services import tournament_service
+                tournament_service.record_tournament_match(
+                    session, main_state, winner_user_id=winner_uid,
+                    result_text=f"{win['name']} won (Super Over)")
+        except Exception:
+            logger.exception("tournament Super Over recording failed (%s)", mid)
         session.commit()
     except Exception:
         session.rollback()

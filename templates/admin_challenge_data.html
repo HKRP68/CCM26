@@ -71,6 +71,7 @@
       <div><label>League name</label><input name="league_name" placeholder="IPL" required></div>
       <div><label>Short code</label><input name="short_code" placeholder="IPL"></div>
       <div><label>Command</label><input name="command" placeholder="/cipl"></div>
+      <div><label>Tournament Command</label><input name="tournament_command" placeholder="/cipl_tournament"></div>
       <div><label>Sort</label><input type="number" name="league_sort_order" value="0"></div>
       <div><label>League image</label><input type="file" name="league_image" accept="image/*"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" checked style="width:auto;"> Active</label>
@@ -122,6 +123,7 @@
       <div><label>League name</label><input name="league_name" value="{{ league.name }}" required></div>
       <div><label>Short code</label><input name="short_code" value="{{ league.short_code or '' }}"></div>
       <div><label>Command</label><input name="command" value="{{ league.command or '' }}" placeholder="/cipl"></div>
+      <div><label>Tournament Command</label><input name="tournament_command" value="{{ league.tournament_command or '' }}" placeholder="/cipl_tournament"></div>
       <div><label>Sort</label><input type="number" name="league_sort_order" value="{{ league.sort_order }}"></div>
       <div><label>League image</label><input type="file" name="league_image" accept="image/*"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" {{ 'checked' if league.is_active else '' }} style="width:auto;"> Active</label>

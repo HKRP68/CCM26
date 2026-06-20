@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ t.name }} — Manage{% endblock %}
+
+{% block content %}
+<style>
+.tour-shell { display:flex; flex-direction:column; gap:1rem; }
+.breadcrumbs { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin-bottom:.35rem; }
+.breadcrumbs a { color:var(--accent); text-decoration:none; }
+.tour-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
+.tour-form-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:.8rem; align-items:end; }
+.tour-form-grid label { color:var(--muted); display:block; font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.25rem; }
+.tour-form-grid input, .tour-form-grid select, .tour-form-grid textarea { width:100%; }
+.status-pill { border-radius:999px; padding:.22rem .55rem; font-size:.74rem; font-weight:700; border:1px solid var(--border); text-transform:capitalize; }
+.status-pill.active { color:#86efac; border-color:rgba(134,239,172,.4); background:rgba(34,197,94,.12); }
+.status-pill.paused { color:#fde68a; border-color:rgba(253,230,138,.4); background:rgba(234,179,8,.12); }
+.status-pill.draft, .status-pill.scheduled { color:#93c5fd; border-color:rgba(147,197,253,.4); background:rgba(59,130,246,.12); }
+.status-pill.completed { color:#c4b5fd; border-color:rgba(196,181,253,.4); background:rgba(139,92,246,.12); }
+.status-pill.cancelled { color:#fca5a5; border-color:rgba(252,165,165,.4); background:rgba(239,68,68,.12); }
+.lifecycle { display:flex; gap:.45rem; flex-wrap:wrap; }
+.team-list { display:flex; flex-direction:column; gap:.5rem; }
+.team-pill { display:flex; justify-content:space-between; align-items:center; gap:.6rem; background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.55rem .8rem; }
+.danger { border-color:rgba(239,68,68,.4) !important; color:#fca5a5 !important; }
+@media (max-width: 900px) { .tour-form-grid { grid-template-columns:1fr; } }
+</style>
+
+<div class="tour-shell">
+  <div>
+    <div class="breadcrumbs">
+      <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span><span>{{ t.name }}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; align-items:center;">
+      <h2 style="margin:0;">{{ t.name }} <span class="status-pill {{ t.status }}">{{ t.status }}</span>{% if t.is_active %} <span class="status-pill active">● active</span>{% endif %}</h2>
+      <a class="btn btn-primary" href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">📊 View Dashboard</a>
+    </div>
+    <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • {{ t.format }} • {{ t.overs }} overs{% if t.command_snapshot %} • <code>{{ t.command_snapshot }}</code>{% endif %}</p>
+  </div>
+
+  <!-- Lifecycle -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">Status & lifecycle</h3>
+    <div class="lifecycle">
+      {% if not t.is_active %}
+      <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="activate"><button class="btn btn-primary" type="submit">Activate (make live)</button></form>
+      {% else %}
+      <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="deactivate"><button class="btn" type="submit">Deactivate</button></form>
+      {% endif %}
+      <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="start"><button class="btn" type="submit">▶ Start</button></form>
+      <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="pause"><button class="btn" type="submit">⏸ Pause</button></form>
+      <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="resume"><button class="btn" type="submit">⏵ Resume</button></form>
+      <form method="POST" style="display:inline;" onsubmit="return confirm('Mark this tournament completed?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="complete"><button class="btn" type="submit">✅ Complete</button></form>
+      <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this tournament?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="cancel"><button class="btn danger" type="submit">✖ Cancel</button></form>
+    </div>
+    <p style="color:var(--muted); font-size:.84rem; margin:.7rem 0 0;">The tournament command only starts matches when this tournament is <strong>active</strong> (status = active and live). Activating it automatically deactivates any other active tournament.</p>
+  </section>
+
+  <!-- Settings -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">Settings</h3>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_settings">
+      <div class="tour-form-grid">
+        <div><label>Name</label><input name="name" value="{{ t.name }}"></div>
+        <div><label>Format</label><input name="format" value="{{ t.format }}"></div>
+        <div><label>Overs</label><input type="number" name="overs" value="{{ t.overs }}"></div>
+        <div><label>Max teams</label><input type="number" name="max_teams" value="{{ t.max_teams }}"></div>
+      </div>
+      <div class="tour-form-grid" style="margin-top:.6rem;">
+        <div><label>Points: Win</label><input type="number" name="points_win" value="{{ t.points_win }}"></div>
+        <div><label>Points: Tie</label><input type="number" name="points_tie" value="{{ t.points_tie }}"></div>
+        <div><label>Points: Loss</label><input type="number" name="points_loss" value="{{ t.points_loss }}"></div>
+        <div><label>Points: No result</label><input type="number" name="points_no_result" value="{{ t.points_no_result }}"></div>
+        <div><label>Min balls (Strike rate)</label><input type="number" name="min_balls_for_sr" value="{{ t.min_balls_for_sr }}"></div>
+        <div><label>Min balls (Economy)</label><input type="number" name="min_balls_for_econ" value="{{ t.min_balls_for_econ }}"></div>
+      </div>
+      <div style="margin-top:.6rem;">
+        <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Description</label>
+        <textarea name="description" rows="2" style="width:100%;">{{ t.description or '' }}</textarea>
+      </div>
+      <button class="btn btn-primary" type="submit" style="margin-top:.7rem;">Save settings</button>
+    </form>
+  </section>
+
+  <!-- Participating teams -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">Participating teams ({{ teams|length }})</h3>
+    {% if teams %}
+    <div class="team-list">
+      {% for tt in teams %}
+      <div class="team-pill">
+        <span>{{ tt.name }}{% if tt.short_name %} <span style="color:var(--muted);">({{ tt.short_name }})</span>{% endif %}</span>
+        <form method="POST" style="display:inline;" onsubmit="return confirm('Remove {{ tt.name }} from the tournament?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--muted);">No teams added yet.</p>
+    {% endif %}
+    {% if available %}
+    <form method="POST" style="margin-top:.7rem; display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_team">
+      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Add team</label>
+      <select name="challenge_team_id">{% for ct in available %}<option value="{{ ct.id }}">{{ ct.name }}</option>{% endfor %}</select></div>
+      <button class="btn btn-primary" type="submit">+ Add</button>
+    </form>
+    {% elif t.league_id %}
+    <p style="color:var(--muted); margin-top:.6rem;">All teams from this league are already participating.</p>
+    {% endif %}
+  </section>
+
+  <!-- Data management -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">Data management</h3>
+    <div class="lifecycle">
+      <form method="POST" style="display:inline;" onsubmit="return confirm('Reset ALL match records, player stats and standings? Team list and settings are kept.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reset"><button class="btn" type="submit">♻️ Reset tournament data</button></form>
+      <form method="POST" style="display:inline;" onsubmit="return confirm('Permanently delete this tournament and all its data?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><button class="btn danger" type="submit">🗑️ Delete tournament</button></form>
+    </div>
+  </section>
+</div>
+{% endblock %}

@@ -192,6 +192,38 @@ def is_challenge_league_command(command_name, session):
     return league_key, _league_display_from_key(league_key, leagues)
 
 
+def _tournament_command_map(session):
+    """Return ``{command: ChallengeLeague}`` for every league's tournament command."""
+    out = {}
+    try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)  # noqa: E712
+                       .all()):
+            cmd = (league.tournament_command or "").strip().lower().lstrip("/").split("@", 1)[0]
+            if cmd:
+                out[cmd] = league
+    except Exception:
+        logger.exception("Failed to load tournament command map")
+    return out
+
+
+def is_tournament_command(command_name, session):
+    """Return the ``ChallengeLeague`` whose tournament command matches, or None."""
+    command = (command_name or "").lower().lstrip("/").split("@", 1)[0]
+    if not command:
+        return None
+    return _tournament_command_map(session).get(command)
+
+
+def _active_tournament_command(session, tour):
+    """Best-effort tournament command string for an active tournament."""
+    if tour.league_id:
+        lg = session.query(ChallengeLeague).get(tour.league_id)
+        if lg and lg.tournament_command:
+            return lg.tournament_command
+    return tour.command_snapshot or ""
+
+
 def _reply_target_telegram_user(update):
     message = getattr(update, "effective_message", None) or getattr(update, "message", None)
     reply = getattr(message, "reply_to_message", None) if message is not None else None
@@ -976,7 +1008,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, is_tournament=False):
     # One game per chat / one match per player (any game mode). Block early so a
     # Challenge League draft can't start on top of a live match in this chat or
     # while either player is already busy elsewhere.
@@ -1022,6 +1054,10 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         "target_tg_id": target.telegram_id,
         "league_key": league_key,
         "league_name": league_name,
+        # Official tournament match? The tournament id is carried through the
+        # whole draft → toss → play flow so the result is recorded against it.
+        "is_tournament": bool(is_tournament),
+        "tournament_id": tournament_id,
         "teams": teams,
         "team_codes": team_codes,
         "turn": "host",
@@ -1198,11 +1234,93 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+async def _handle_tournament_command(update, context, session, league):
+    """Gate + start a Challenge League Tournament match from a tournament command.
+
+    Enforces the tournament command availability rules (spec §4): an active
+    tournament must exist, the command must belong to its league, the tournament
+    must not be completed/cancelled/paused, and both teams must be participants.
+    """
+    from services import tournament_service
+
+    active = tournament_service.get_active_tournament(session)
+    if not active:
+        await update.message.reply_text(
+            "❌ No Challenge League Tournament is currently active.")
+        return
+
+    if active.league_id != league.id:
+        await update.message.reply_text(
+            "❌ This Tournament Command is currently unavailable.\n\n"
+            f"Active Tournament: {active.name}\n"
+            f"League: {active.league_name or ''}\n"
+            f"Tournament Command: {_active_tournament_command(session, active)}")
+        return
+
+    if active.status == "completed":
+        await update.message.reply_text("❌ This tournament has already been completed.")
+        return
+    if active.status == "cancelled":
+        await update.message.reply_text("❌ This tournament has been cancelled.")
+        return
+    if active.status == "paused":
+        await update.message.reply_text(
+            "⏸️ This Challenge League Tournament is currently paused.")
+        return
+    if active.status != "active":
+        await update.message.reply_text(
+            "❌ No Challenge League Tournament is currently active.")
+        return
+
+    target_tg = _reply_target_telegram_user(update)
+    if not target_tg:
+        await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
+        return
+    if getattr(target_tg, "is_bot", False):
+        await update.message.reply_text("❌ Bot accounts cannot be challenged.")
+        return
+    if update.effective_user and target_tg.id == update.effective_user.id:
+        await update.message.reply_text("❌ You cannot challenge yourself.")
+        return
+
+    target = sync_telegram_user(session, target_tg)
+    if not target:
+        await update.message.reply_text("❌ User not found. They need to use /debut first.")
+        return
+    challenger = sync_telegram_user(session, update.effective_user)
+    if not challenger:
+        await update.message.reply_text("❌ Use /debut first.")
+        return
+
+    league_key = normalize_challenge_league(league.short_code or league.name)
+    league_name = (league.name or (league_key or "").upper()).strip()
+
+    # Restrict the team picker to teams that are participating in the tournament.
+    part_names = tournament_service.participating_team_names(session, active.id)
+    teams = [t for t in _league_teams(session, league_key, league) if t in part_names]
+    if len(teams) < 2:
+        await update.message.reply_text(
+            "❌ One or both teams are not participating in the active tournament.")
+        return
+
+    await _send_league_team_picker(
+        update, context, challenger=challenger, target=target,
+        league_key=league_key, league_name=league_name,
+        league_record=league, teams=teams, session=session,
+        tournament_id=active.id, is_tournament=True)
+
+
 async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start built-in or admin-created league challenge commands from replies."""
     command_name = _challenge_command_name(update)
     session = get_session()
     try:
+        # Official tournament command takes precedence over the casual league command.
+        tournament_league = is_tournament_command(command_name, session)
+        if tournament_league is not None:
+            await _handle_tournament_command(update, context, session, tournament_league)
+            return
+
         league_key, league_name = is_challenge_league_command(command_name, session)
         if not league_key:
             return

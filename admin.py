@@ -36,7 +36,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     ClaimRarityTier, GameConfig,
                     MessageTemplate,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
-                    ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer)
+                    ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
+                    Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats)
 
 app = Flask(__name__)
 
@@ -11964,6 +11965,7 @@ def admin_challenge_data():
                             name=name[:120],
                             short_code=(request.form.get("short_code") or "").strip().upper()[:30] or None,
                             command=_normalize_admin_command(request.form.get("command")),
+                            tournament_command=_normalize_admin_command(request.form.get("tournament_command")) or None,
                             sort_order=_int_form("league_sort_order"),
                             is_active=_checked("league_is_active", True),
                             same_team_allowed=_checked("same_team_allowed", True),
@@ -12034,6 +12036,7 @@ def admin_challenge_league_detail(league_id):
                     league.name = (request.form.get("league_name") or league.name).strip()[:120]
                     league.short_code = (request.form.get("short_code") or "").strip().upper()[:30] or None
                     league.command = _normalize_admin_command(request.form.get("command")) or None
+                    league.tournament_command = _normalize_admin_command(request.form.get("tournament_command")) or None
                     league.sort_order = _int_form("league_sort_order")
                     league.is_active = _checked("league_is_active")
                     league.same_team_allowed = _checked("same_team_allowed")
@@ -12245,6 +12248,237 @@ def admin_challenge_team_detail(league_id, team_id):
             total_teams=1,
             total_players=len(players),
         )
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TOURNAMENT PANEL — Challenge League Tournaments
+# ═══════════════════════════════════════════════════════════════════════
+
+def _get_tournament_or_404(db, tournament_id):
+    t = db.query(Tournament).get(int(tournament_id))
+    if not t:
+        flash("Tournament not found.", "error")
+    return t
+
+
+@app.route("/tournaments", methods=["GET", "POST"])
+@login_required
+def admin_tournaments_list():
+    from services import tournament_service
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "create_tournament":
+                    name = (request.form.get("name") or "").strip()
+                    league = db.query(ChallengeLeague).get(_int_form("league_id")) \
+                        if _int_form("league_id") else None
+                    if not name:
+                        flash("Tournament name is required.", "error")
+                    elif not league:
+                        flash("Select a valid Challenge League.", "error")
+                    else:
+                        t = Tournament(
+                            name=name[:120], league_id=league.id, league_name=league.name,
+                            command_snapshot=league.tournament_command,
+                            description=(request.form.get("description") or "").strip() or None,
+                            format=(request.form.get("format") or "League").strip()[:40],
+                            overs=_int_form("overs", 20), max_teams=_int_form("max_teams", 8),
+                            points_win=_int_form("points_win", 2),
+                            points_tie=_int_form("points_tie", 1),
+                            points_loss=_int_form("points_loss", 0),
+                            points_no_result=_int_form("points_no_result", 1),
+                            min_balls_for_sr=_int_form("min_balls_for_sr", 20),
+                            min_balls_for_econ=_int_form("min_balls_for_econ", 12),
+                            status="draft",
+                        )
+                        db.add(t)
+                        db.flush()
+                        for cid in request.form.getlist("team_ids"):
+                            ct = db.query(ChallengeTeam).get(int(cid)) if cid else None
+                            if ct and ct.league_id == league.id:
+                                db.add(TournamentTeam(
+                                    tournament_id=t.id, challenge_team_id=ct.id,
+                                    name=ct.name, short_name=ct.short_name,
+                                    logo_url=ct.logo_url, sort_order=ct.sort_order))
+                        log_admin(db, "tournament_create", "tournament", t.id, t.name)
+                        db.commit()
+                        flash(f"✅ Created tournament {t.name}.", "success")
+                        return redirect(url_for("admin_tournament_detail", tournament_id=t.id))
+                elif action in {"activate", "deactivate", "delete"}:
+                    t = db.query(Tournament).get(_int_form("tournament_id"))
+                    if not t:
+                        flash("Tournament not found.", "error")
+                    elif action == "activate":
+                        tournament_service.activate_tournament(db, t.id)
+                        log_admin(db, "tournament_activate", "tournament", t.id, t.name)
+                        flash(f"✅ {t.name} is now the active tournament.", "success")
+                    elif action == "deactivate":
+                        tournament_service.deactivate_tournament(db, t.id)
+                        log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
+                        flash(f"{t.name} deactivated.", "info")
+                    else:
+                        nm = t.name
+                        db.delete(t)
+                        log_admin(db, "tournament_delete", "tournament", t.id, nm)
+                        flash(f"Removed tournament {nm}.", "info")
+                else:
+                    flash("Unknown tournament action.", "error")
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.exception("tournament list mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_tournaments_list"))
+
+        tournaments = (db.query(Tournament)
+                       .order_by(Tournament.is_active.desc(), Tournament.updated_at.desc())
+                       .all())
+        current = [t for t in tournaments if t.status in ("draft", "scheduled", "active", "paused")]
+        history = [t for t in tournaments if t.status in ("completed", "cancelled")]
+        leagues = (db.query(ChallengeLeague)
+                   .order_by(ChallengeLeague.sort_order, ChallengeLeague.name).all())
+        league_teams = {}
+        for lg in leagues:
+            league_teams[lg.id] = [
+                {"id": ct.id, "name": ct.name}
+                for ct in db.query(ChallengeTeam)
+                .filter(ChallengeTeam.league_id == lg.id)
+                .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()]
+        return render_template(
+            "admin_tournaments.html",
+            current=current, history=history, leagues=leagues, league_teams=league_teams)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>", methods=["GET", "POST"])
+@login_required
+def admin_tournament_detail(tournament_id):
+    from services import tournament_service
+    db = get_session()
+    try:
+        t = _get_tournament_or_404(db, tournament_id)
+        if not t:
+            return redirect(url_for("admin_tournaments_list"))
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "save_settings":
+                    t.name = (request.form.get("name") or t.name).strip()[:120]
+                    t.description = (request.form.get("description") or "").strip() or None
+                    t.format = (request.form.get("format") or t.format).strip()[:40]
+                    t.overs = _int_form("overs", t.overs)
+                    t.max_teams = _int_form("max_teams", t.max_teams)
+                    t.points_win = _int_form("points_win", t.points_win)
+                    t.points_tie = _int_form("points_tie", t.points_tie)
+                    t.points_loss = _int_form("points_loss", t.points_loss)
+                    t.points_no_result = _int_form("points_no_result", t.points_no_result)
+                    t.min_balls_for_sr = _int_form("min_balls_for_sr", t.min_balls_for_sr)
+                    t.min_balls_for_econ = _int_form("min_balls_for_econ", t.min_balls_for_econ)
+                    log_admin(db, "tournament_edit", "tournament", t.id, t.name)
+                    flash("✅ Saved tournament settings.", "success")
+                elif action == "add_team":
+                    ct = db.query(ChallengeTeam).get(_int_form("challenge_team_id")) \
+                        if _int_form("challenge_team_id") else None
+                    if not ct or ct.league_id != t.league_id:
+                        flash("Invalid team.", "error")
+                    elif db.query(TournamentTeam).filter_by(
+                            tournament_id=t.id, challenge_team_id=ct.id).first():
+                        flash("Team already participating.", "info")
+                    else:
+                        db.add(TournamentTeam(
+                            tournament_id=t.id, challenge_team_id=ct.id, name=ct.name,
+                            short_name=ct.short_name, logo_url=ct.logo_url, sort_order=ct.sort_order))
+                        log_admin(db, "tournament_team_add", "tournament", t.id, ct.name)
+                        flash(f"✅ Added {ct.name}.", "success")
+                elif action == "remove_team":
+                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    if tt and tt.tournament_id == t.id:
+                        nm = tt.name
+                        db.delete(tt)
+                        log_admin(db, "tournament_team_remove", "tournament", t.id, nm)
+                        flash(f"Removed {nm}.", "info")
+                elif action in {"start", "pause", "resume", "complete", "cancel"}:
+                    status_map = {"start": "active", "pause": "paused", "resume": "active",
+                                  "complete": "completed", "cancel": "cancelled"}
+                    tournament_service.set_status(db, t.id, status_map[action])
+                    log_admin(db, f"tournament_{action}", "tournament", t.id, t.name)
+                    flash(f"✅ Tournament {action}.", "success")
+                elif action == "activate":
+                    tournament_service.activate_tournament(db, t.id)
+                    log_admin(db, "tournament_activate", "tournament", t.id, t.name)
+                    flash(f"✅ {t.name} is now the active tournament.", "success")
+                elif action == "deactivate":
+                    tournament_service.deactivate_tournament(db, t.id)
+                    log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
+                    flash("Deactivated.", "info")
+                elif action == "reset":
+                    tournament_service.reset_tournament(db, t.id)
+                    log_admin(db, "tournament_reset", "tournament", t.id, t.name)
+                    flash("♻️ Tournament data reset.", "info")
+                elif action == "delete":
+                    nm = t.name
+                    db.delete(t)
+                    log_admin(db, "tournament_delete", "tournament", tournament_id, nm)
+                    db.commit()
+                    flash(f"Removed {nm}.", "info")
+                    return redirect(url_for("admin_tournaments_list"))
+                else:
+                    flash("Unknown action.", "error")
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.exception("tournament detail mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_tournament_detail", tournament_id=t.id))
+
+        teams = (db.query(TournamentTeam).filter_by(tournament_id=t.id)
+                 .order_by(TournamentTeam.sort_order, TournamentTeam.name).all())
+        part_cids = {tt.challenge_team_id for tt in teams}
+        available = []
+        if t.league_id:
+            available = [ct for ct in db.query(ChallengeTeam)
+                         .filter(ChallengeTeam.league_id == t.league_id)
+                         .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()
+                         if ct.id not in part_cids]
+        return render_template("admin_tournament_detail.html", t=t, teams=teams, available=available)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/dashboard")
+@login_required
+def admin_tournament_dashboard(tournament_id):
+    from services import tournament_service
+    import json as _json
+    db = get_session()
+    try:
+        t = _get_tournament_or_404(db, tournament_id)
+        if not t:
+            return redirect(url_for("admin_tournaments_list"))
+        table = tournament_service.points_table(db, t.id)
+        leaders = tournament_service.stat_leaders(db, t.id)
+        matches = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
+                   .order_by(TournamentMatch.id.desc()).all())
+        tt_map = {tt.id: tt.name for tt in
+                  db.query(TournamentTeam).filter_by(tournament_id=t.id).all()}
+        players = (db.query(TournamentPlayerStats).filter_by(tournament_id=t.id)
+                   .order_by(TournamentPlayerStats.bat_runs.desc()).all())
+        match_cards = []
+        for m in matches:
+            try:
+                lines = _json.loads(m.scorecard_json) if m.scorecard_json else []
+            except Exception:
+                lines = []
+            match_cards.append((m, lines))
+        return render_template(
+            "admin_tournament_dashboard.html",
+            t=t, table=table, leaders=leaders, match_cards=match_cards,
+            tt_map=tt_map, players=players)
     finally:
         db.close()
 

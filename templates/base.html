@@ -463,6 +463,9 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_tours_list') }}" class="{{ 'active' if request.endpoint in ('admin_tours_list','admin_tour_detail') }}">🏆 Tours</a>
     <a href="{{ url_for('admin_commentary_list') }}" class="{{ 'active' if request.endpoint in ('admin_commentary_list','admin_commentary_new','admin_commentary_edit','admin_commentary_import') }}">💬 Commentary</a>
 
+    <div class="section-label">Tournament Panel</div>
+    <a href="{{ url_for('admin_tournaments_list') }}" class="{{ 'active' if request.endpoint in ('admin_tournaments_list','admin_tournament_detail','admin_tournament_dashboard') }}">🏆 Challenge League Tournaments</a>
+
     <div class="section-label">Economy & Rewards</div>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">💰 Economy</a>
     <a href="{{ url_for('admin_gspin_rewards') }}" class="{{ 'active' if request.endpoint == 'admin_gspin_rewards' }}">🎡 GSpin Rewards</a>

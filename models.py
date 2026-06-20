@@ -331,6 +331,11 @@ class Match(Base):
     inn2_wickets = Column(Integer, nullable=True)
     potm_player_id = Column(Integer, nullable=True)
     potm_impact = Column(Integer, nullable=True)
+    # Set when this match is played through a Challenge League Tournament command.
+    # NULL for regular Challenge League / casual matches, which must never affect
+    # tournament statistics.
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -1646,6 +1651,9 @@ class ChallengeLeague(Base):
     name = Column(String(120), nullable=False)
     short_code = Column(String(30), nullable=True, index=True)
     command = Column(String(60), nullable=True, index=True)
+    # Official tournament command for this league (e.g. "/cipl_tournament"). When a
+    # match is started with this command it is recognised as a tournament match.
+    tournament_command = Column(String(60), nullable=True, index=True)
     image_url = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -1703,6 +1711,185 @@ class ChallengePlayer(Base):
 
     __table_args__ = (
         Index("ix_challenge_player_team_name", "team_id", "name", unique=True),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CHALLENGE LEAGUE TOURNAMENTS — admin-run structured competitions
+# ══════════════════════════════════════════════════════════════════════
+
+
+class Tournament(Base):
+    """A Challenge League Tournament. Only one may be ``is_active`` at a time."""
+    __tablename__ = "tournaments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # League this tournament belongs to. SET NULL (plus the name snapshot) keeps
+    # completed-tournament history viewable even if the league is later removed.
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+    league_name = Column(String(120), nullable=True)
+    command_snapshot = Column(String(60), nullable=True)
+
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Lifecycle: draft / scheduled / active / paused / completed / cancelled
+    status = Column(String(20), default="draft", nullable=False, index=True)
+    # The single currently-selected tournament whose command is live. At most one
+    # row may be True; activating one deactivates all others.
+    is_active = Column(Boolean, default=False, nullable=False, index=True)
+
+    format = Column(String(40), default="League", nullable=False)
+    overs = Column(Integer, default=20, nullable=False)
+    max_teams = Column(Integer, default=8, nullable=False)
+
+    # Points rules
+    points_win = Column(Integer, default=2, nullable=False)
+    points_tie = Column(Integer, default=1, nullable=False)
+    points_loss = Column(Integer, default=0, nullable=False)
+    points_no_result = Column(Integer, default=1, nullable=False)
+
+    # Leaderboard qualification minimums (balls faced / balls bowled)
+    min_balls_for_sr = Column(Integer, default=20, nullable=False)
+    min_balls_for_econ = Column(Integer, default=12, nullable=False)
+
+    activated_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    league = relationship("ChallengeLeague")
+    teams = relationship("TournamentTeam", back_populates="tournament",
+                         cascade="all, delete-orphan")
+    matches = relationship("TournamentMatch", back_populates="tournament",
+                           cascade="all, delete-orphan")
+    player_stats = relationship("TournamentPlayerStats", back_populates="tournament",
+                                cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_tournament_status_active", "status", "is_active"),
+    )
+
+
+class TournamentTeam(Base):
+    """A team participating in a tournament, with its running standings."""
+    __tablename__ = "tournament_teams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    challenge_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"),
+                               nullable=True, index=True)
+    name = Column(String(120), nullable=False)
+    short_name = Column(String(30), nullable=True)
+    logo_url = Column(String(500), nullable=True)
+
+    # Standings
+    played = Column(Integer, default=0, nullable=False)
+    won = Column(Integer, default=0, nullable=False)
+    lost = Column(Integer, default=0, nullable=False)
+    tied = Column(Integer, default=0, nullable=False)
+    no_result = Column(Integer, default=0, nullable=False)
+    points = Column(Integer, default=0, nullable=False)
+
+    # Net run-rate data
+    runs_for = Column(Integer, default=0, nullable=False)
+    balls_for = Column(Integer, default=0, nullable=False)
+    runs_against = Column(Integer, default=0, nullable=False)
+    balls_against = Column(Integer, default=0, nullable=False)
+
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    tournament = relationship("Tournament", back_populates="teams")
+
+    __table_args__ = (
+        Index("ix_tournament_team_unique", "tournament_id", "challenge_team_id", unique=True),
+    )
+
+
+class TournamentMatch(Base):
+    """A recorded match played within a tournament."""
+    __tablename__ = "tournament_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="SET NULL"),
+                      nullable=True, index=True)
+    team1_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"), nullable=True)
+    team2_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"), nullable=True)
+    winner_team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"), nullable=True)
+
+    # Room for playoffs/finals later; league-stage for now.
+    stage = Column(String(30), default="league", nullable=False)
+    result_text = Column(String(300), nullable=True)
+
+    inn1_runs = Column(Integer, nullable=True)
+    inn1_wickets = Column(Integer, nullable=True)
+    inn1_balls = Column(Integer, nullable=True)
+    inn2_runs = Column(Integer, nullable=True)
+    inn2_wickets = Column(Integer, nullable=True)
+    inn2_balls = Column(Integer, nullable=True)
+
+    host_user_id = Column(Integer, nullable=True)
+    target_user_id = Column(Integer, nullable=True)
+
+    # Full per-player batting + bowling lines for this match (JSON).
+    scorecard_json = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    tournament = relationship("Tournament", back_populates="matches")
+
+    __table_args__ = (
+        Index("ix_tournament_match_teams", "tournament_id", "team1_id", "team2_id"),
+    )
+
+
+class TournamentPlayerStats(Base):
+    """Tournament-wide aggregate stats for a player as played by a given user."""
+    __tablename__ = "tournament_player_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Master player id (preferred identity). NULL for challenge players that have
+    # no source_player_id — those fall back to roster_id for identity/upserts.
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
+    roster_id = Column(Integer, nullable=True, index=True)  # ChallengePlayer.id
+    name = Column(String(150), nullable=True)
+    team_name = Column(String(120), nullable=True)
+
+    matches = Column(Integer, default=0, nullable=False)
+
+    # Batting
+    bat_innings = Column(Integer, default=0, nullable=False)
+    bat_runs = Column(Integer, default=0, nullable=False)
+    bat_balls = Column(Integer, default=0, nullable=False)
+    bat_fours = Column(Integer, default=0, nullable=False)
+    bat_sixes = Column(Integer, default=0, nullable=False)
+    bat_outs = Column(Integer, default=0, nullable=False)
+    highest_score = Column(Integer, default=0, nullable=False)
+
+    # Bowling
+    bowl_innings = Column(Integer, default=0, nullable=False)
+    bowl_wickets = Column(Integer, default=0, nullable=False)
+    bowl_runs = Column(Integer, default=0, nullable=False)
+    bowl_balls = Column(Integer, default=0, nullable=False)
+    best_bowl_wickets = Column(Integer, default=0, nullable=False)
+    best_bowl_runs = Column(Integer, default=-1, nullable=False)  # -1 = no figure yet
+
+    tournament = relationship("Tournament", back_populates="player_stats")
+
+    # Non-unique: NULL player_ids would defeat a DB unique constraint (NULLs are
+    # distinct in SQL), so the service enforces one row per identity in code.
+    __table_args__ = (
+        Index("ix_tournament_player_lookup", "tournament_id", "user_id", "player_id"),
+        Index("ix_tournament_player_roster", "tournament_id", "user_id", "roster_id"),
     )
 
 

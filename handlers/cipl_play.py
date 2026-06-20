@@ -112,6 +112,22 @@ def _hex_to_circle(hex_color):
     return "🏏"
 
 
+def _resolve_challenge_team_id(team_name, league_key, session):
+    """Return the ChallengeTeam.id for ``team_name`` within ``league_key`` (or None)."""
+    try:
+        from handlers.challenge import _get_challenge_league_record
+        from models import ChallengeTeam
+        q = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
+        league = _get_challenge_league_record(session, league_key)
+        if league is not None:
+            q = q.filter(ChallengeTeam.league_id == league.id)
+        team = q.first()
+        return team.id if team else None
+    except Exception:
+        logger.exception("cipl challenge team id resolution failed for %s", team_name)
+        return None
+
+
 def _resolve_team_identity(team_name, league_key, session):
     """Return ``(short_code, colour_emoji)`` for the scorecard card.
 
@@ -624,6 +640,25 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         bowl_team_code, bowl_team_emoji = _resolve_team_identity(
             bowl_team_name, league_key, session)
 
+        # ── Challenge League Tournament tagging ──
+        # An official tournament match is recorded against the active tournament.
+        # Guard against replaying a pairing that has already completed.
+        tournament_id = None
+        if draft.get("is_tournament") and draft.get("tournament_id"):
+            from services import tournament_service
+            tid = draft.get("tournament_id")
+            host_cid = _resolve_challenge_team_id(host_team, league_key, session)
+            target_cid = _resolve_challenge_team_id(target_team, league_key, session)
+            if tournament_service.pairing_already_played(session, tid, host_cid, target_cid):
+                await q.answer(
+                    "This tournament match has already been completed.", show_alert=True)
+                await context.bot.send_message(
+                    draft["chat_id"],
+                    "❌ This tournament match has already been completed.")
+                return
+            tournament_id = tid
+            draft["tournament_team_by_user"] = {host.id: host_cid, target.id: target_cid}
+
         bat_side = "host" if bat_is_host else "target"
         bowl_side = "target" if bat_is_host else "host"
         bat_xi = build_xi_from_draft(session, draft, bat_side)
@@ -654,6 +689,7 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
             expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
+            tournament_id=tournament_id,
         )
         session.add(match)
         session.commit()
@@ -730,6 +766,11 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
     }
+    # Carry tournament identity through the match so the result is recorded against
+    # the active Challenge League Tournament when it completes.
+    if draft:
+        state["tournament_id"] = draft.get("tournament_id")
+        state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
     _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
@@ -1445,6 +1486,16 @@ async def _complete_match(context, mid, state):
             save_final_scorecard(session, mid, result_text=result_text)
         except Exception:
             logger.exception("cipl final scorecard snapshot failed for match %s", mid)
+
+        # Record the official tournament result (standings + per-player stats).
+        # No-op for casual Challenge League matches (no tournament_id in state).
+        # A tie reaching here did NOT go to a Super Over, so it is recorded as a tie.
+        try:
+            if state.get("tournament_id"):
+                from services import tournament_service
+                tournament_service.record_tournament_match(session, state)
+        except Exception:
+            logger.exception("tournament match recording failed for %s", mid)
 
         session.commit()
     except Exception:
