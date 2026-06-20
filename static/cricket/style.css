@@ -2197,8 +2197,10 @@ body {
   flex-shrink: 0;
 }
 
-.mh-leg-dot.inn1-dot { background: var(--primary-accent); }
-.mh-leg-dot.inn2-dot { background: var(--warning-accent); }
+/* Manhattan teams use distinct Red (innings 1) and Blue (innings 2) so the
+   two sides are never confused with each other or with the gold/amber theme. */
+.mh-leg-dot.inn1-dot { background: #e5384d; }
+.mh-leg-dot.inn2-dot { background: #3b82f6; }
 
 .mh-chart {
   display: flex;
@@ -2232,13 +2234,13 @@ body {
 }
 
 .mh-bar.inn1 {
-  background: linear-gradient(to top, var(--primary-accent), rgba(var(--accent-rgb), 0.6));
-  box-shadow: 0 0 4px rgba(var(--accent-rgb), 0.3);
+  background: linear-gradient(to top, #e5384d, rgba(229, 56, 77, 0.6));
+  box-shadow: 0 0 4px rgba(229, 56, 77, 0.35);
 }
 
 .mh-bar.inn2 {
-  background: linear-gradient(to top, var(--warning-accent), rgba(var(--warning-rgb), 0.6));
-  box-shadow: 0 0 4px rgba(var(--warning-rgb), 0.3);
+  background: linear-gradient(to top, #3b82f6, rgba(59, 130, 246, 0.6));
+  box-shadow: 0 0 4px rgba(59, 130, 246, 0.35);
 }
 
 .mh-bar.empty { background: transparent; width: 7px; }

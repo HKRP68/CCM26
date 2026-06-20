@@ -2287,7 +2287,77 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
         result_text=(result_text or "")[:300] or None,
     )
     session.add(row)
+
+    # Archive a human-readable text scorecard (MatchNo<id>.txt) to the Telegram
+    # storage channel — once, on first save — for every match that flows through
+    # this seam (Mini-App /cm, /cipl, Super Over), complete or abandoned.
+    _archive_text_scorecard(match_id, all_innings, result_text, super_over)
     return True
+
+
+def _build_text_scorecard(match_id, innings, result_text=None, super_over=None):
+    """Render the persisted innings list into a plain-text scorecard string
+    (same spirit as the main-engine MatchNo<id>.txt archive)."""
+    teams = [inn.get("bat_team") or f"Innings {inn.get('number', '?')}" for inn in innings]
+    title = " vs ".join(dict.fromkeys(t for t in teams if t)) or "Match"
+    out = [f"Match Summary: {title}", f"Match Number: #{match_id}"]
+    if result_text:
+        out.append(f"Result: {result_text}")
+    out.append("")
+
+    for inn in innings:
+        bat_team = inn.get("bat_team") or f"Innings {inn.get('number', '?')}"
+        out.append(f"{bat_team.upper()} INNINGS")
+        bsep = "-" * 95
+        out.append(bsep)
+        out.append(f"{'Batsman':<22}{'Status':<38}{'R':>3} {'B':>4} {'4s':>4} {'6s':>4} {'SR':>7}")
+        out.append(bsep)
+        for r in inn.get("batting", []):
+            status = r.get("how_out") or ("out" if r.get("out") else "not out")
+            out.append(
+                f"{str(r.get('name','?'))[:21]:<22}{str(status)[:37]:<38}"
+                f"{r.get('runs',0):>3} {r.get('balls',0):>4} {r.get('fours',0):>4} "
+                f"{r.get('sixes',0):>4} {float(r.get('sr',0) or 0):>7.2f}"
+            )
+        out.append("")
+        out.append(f"Total: {inn.get('runs',0)}/{inn.get('wickets',0)} ({inn.get('overs','0')} Overs)")
+        out.append("")
+        obsep = "-" * 68
+        out.append(obsep)
+        out.append(f"{'Bowler':<26}{'O':>5} {'M':>5} {'R':>5} {'W':>5} {'Econ':>7}")
+        out.append(obsep)
+        for b in inn.get("bowling", []):
+            out.append(
+                f"{str(b.get('name','?'))[:25]:<26}{str(b.get('overs','0')):>5} "
+                f"{b.get('maidens',0):>5} {b.get('runs',0):>5} {b.get('wickets',0):>5} "
+                f"{float(b.get('econ',0) or 0):>7.2f}"
+            )
+        out.append("=" * 55)
+        out.append("")
+
+    if super_over:
+        out.append(f"Super Over: {super_over}")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _archive_text_scorecard(match_id, innings, result_text, super_over=None):
+    """Best-effort, non-blocking upload of the text scorecard. Schedules the
+    async upload on the running loop; silently no-ops if storage is unconfigured
+    or there is no running loop."""
+    try:
+        from services import tg_storage_service
+        if not tg_storage_service.is_configured():
+            return
+        text = _build_text_scorecard(match_id, innings, result_text, super_over)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        loop.create_task(tg_storage_service.upload_text_async(
+            text, f"MatchNo{match_id}.txt",
+            caption=f"📄 Scorecard · Match {match_id}"))
+    except RuntimeError:
+        pass  # no running event loop — skip (caller is sync/non-async context)
+    except Exception:
+        logger.exception("text scorecard archive failed (non-fatal)")
 
 
 def load_final_scorecard(session, match_id):
