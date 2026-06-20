@@ -62,6 +62,7 @@ def init_db():
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
+        Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
         FantasyRoleRule, EventMedia,
@@ -210,6 +211,11 @@ def _migrate_add_columns():
         _try_add("users", col, coltype)
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
+
+    # Challenge League Tournaments: per-league tournament command + match tagging.
+    # (The tournament_* tables themselves are created by create_all above.)
+    _try_add("challenge_leagues", "tournament_command", "VARCHAR(60)")
+    _try_add("matches", "tournament_id", "INTEGER")
 
     # Fantasy league configuration fields added after the original fantasy
     # launch. New eligibility/rule tables are handled by create_all above.

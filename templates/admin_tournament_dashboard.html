@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{ t.name }} — Dashboard{% endblock %}
+
+{% block content %}
+<style>
+.tour-shell { display:flex; flex-direction:column; gap:1rem; }
+.breadcrumbs { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin-bottom:.35rem; }
+.breadcrumbs a { color:var(--accent); text-decoration:none; }
+.tour-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
+.tbl { width:100%; border-collapse:collapse; font-size:.9rem; }
+.tbl th, .tbl td { text-align:left; padding:.5rem .55rem; border-bottom:1px solid var(--border); }
+.tbl th { color:var(--muted); font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; }
+.tbl td.num, .tbl th.num { text-align:right; font-variant-numeric:tabular-nums; }
+.leader-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:1rem; }
+.leader-box h4 { margin:.1rem 0 .5rem; font-size:.95rem; }
+.leader-row { display:flex; justify-content:space-between; gap:.6rem; padding:.32rem 0; border-bottom:1px dashed var(--border); font-size:.88rem; }
+.leader-row span.v { color:var(--accent); font-weight:800; font-variant-numeric:tabular-nums; }
+.empty { color:var(--muted); font-size:.86rem; }
+.match-card { background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.7rem .85rem; margin-bottom:.6rem; }
+.match-head { display:flex; justify-content:space-between; gap:.6rem; flex-wrap:wrap; font-weight:700; }
+details.match-card summary { cursor:pointer; }
+</style>
+
+{% macro leaders_list(rows, attr, suffix='') %}
+  {% if rows %}
+    {% for r in rows %}
+      <div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r[attr] }}{{ suffix }}</span></div>
+    {% endfor %}
+  {% else %}<div class="empty">No data yet.</div>{% endif %}
+{% endmacro %}
+
+{% macro leaders_pairs(pairs, suffix='') %}
+  {% if pairs %}
+    {% for r, v in pairs %}
+      <div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ v }}{{ suffix }}</span></div>
+    {% endfor %}
+  {% else %}<div class="empty">No qualified players yet.</div>{% endif %}
+{% endmacro %}
+
+<div class="tour-shell">
+  <div>
+    <div class="breadcrumbs">
+      <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span>
+      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Dashboard</span>
+    </div>
+    <h2 style="margin:0;">📊 {{ t.name }} Dashboard</h2>
+    <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • status: {{ t.status }}{% if t.is_active %} • ● active{% endif %}</p>
+  </div>
+
+  <!-- Points table -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">🏅 Points Table</h3>
+    {% if table %}
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Team</th><th class="num">P</th><th class="num">W</th><th class="num">L</th><th class="num">T</th><th class="num">Pts</th><th class="num">NRR</th></tr></thead>
+      <tbody>
+        {% for tt in table %}
+        <tr><td>{{ loop.index }}</td><td>{{ tt.name }}</td><td class="num">{{ tt.played }}</td><td class="num">{{ tt.won }}</td><td class="num">{{ tt.lost }}</td><td class="num">{{ tt.tied }}</td><td class="num"><strong>{{ tt.points }}</strong></td><td class="num">{{ '%+.3f'|format(tt._nrr) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty">No teams / results yet.</div>{% endif %}
+  </section>
+
+  <!-- Stat leaders -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">🌟 Tournament Stats</h3>
+    <div class="leader-grid">
+      <div class="leader-box"><h4>🏏 Most Runs</h4>{{ leaders_list(leaders.most_runs, 'bat_runs') }}</div>
+      <div class="leader-box"><h4>🎯 Most Wickets</h4>{{ leaders_list(leaders.most_wickets, 'bowl_wickets') }}</div>
+      <div class="leader-box"><h4>6️⃣ Most Sixes</h4>{{ leaders_list(leaders.most_sixes, 'bat_sixes') }}</div>
+      <div class="leader-box"><h4>4️⃣ Most Fours</h4>{{ leaders_list(leaders.most_fours, 'bat_fours') }}</div>
+      <div class="leader-box"><h4>⭐ Highest Score</h4>{{ leaders_list(leaders.highest_score, 'highest_score') }}</div>
+      <div class="leader-box"><h4>💥 Best Figure</h4>
+        {% if leaders.best_figure %}{% for r in leaders.best_figure %}<div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r.best_bowl_wickets }}/{{ r.best_bowl_runs }}</span></div>{% endfor %}{% else %}<div class="empty">No data yet.</div>{% endif %}
+      </div>
+      <div class="leader-box"><h4>⚡ Best Strike Rate</h4>{{ leaders_pairs(leaders.best_strike_rate) }}</div>
+      <div class="leader-box"><h4>🛡️ Best Economy</h4>{{ leaders_pairs(leaders.best_economy) }}</div>
+    </div>
+  </section>
+
+  <!-- Player statistics -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">👤 Player Statistics</h3>
+    {% if players %}
+    <div style="overflow:auto;">
+    <table class="tbl">
+      <thead><tr><th>Player</th><th>Team</th><th class="num">M</th><th class="num">Runs</th><th class="num">Balls</th><th class="num">4s</th><th class="num">6s</th><th class="num">HS</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Runs</th><th class="num">Econ</th><th class="num">Best</th></tr></thead>
+      <tbody>
+        {% for p in players %}
+        <tr>
+          <td>{{ p.name or 'Player' }}</td><td>{{ p.team_name or '—' }}</td>
+          <td class="num">{{ p.matches }}</td>
+          <td class="num">{{ p.bat_runs }}</td><td class="num">{{ p.bat_balls }}</td>
+          <td class="num">{{ p.bat_fours }}</td><td class="num">{{ p.bat_sixes }}</td><td class="num">{{ p.highest_score }}</td>
+          <td class="num">{{ '%.1f'|format(p.bat_runs / p.bat_balls * 100) if p.bat_balls else '—' }}</td>
+          <td class="num">{{ p.bowl_wickets }}</td><td class="num">{{ p.bowl_runs }}</td>
+          <td class="num">{{ '%.2f'|format(p.bowl_runs / (p.bowl_balls/6)) if p.bowl_balls else '—' }}</td>
+          <td class="num">{% if p.best_bowl_runs >= 0 %}{{ p.best_bowl_wickets }}/{{ p.best_bowl_runs }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<div class="empty">No player stats recorded yet.</div>{% endif %}
+  </section>
+
+  <!-- Match history -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">📜 Match History ({{ match_cards|length }})</h3>
+    {% if match_cards %}
+    {% for m, lines in match_cards %}
+    <details class="match-card">
+      <summary>
+        <span class="match-head" style="display:inline-flex; gap:.6rem;">
+          <strong>{{ tt_map.get(m.team1_id, 'Team 1') }} vs {{ tt_map.get(m.team2_id, 'Team 2') }}</strong>
+          <span class="empty">{{ m.result_text or '' }}</span>
+        </span>
+      </summary>
+      <div style="margin-top:.5rem; color:var(--muted); font-size:.85rem;">
+        1st innings: {{ m.inn1_runs }}/{{ m.inn1_wickets }} &nbsp;•&nbsp; 2nd innings: {{ m.inn2_runs }}/{{ m.inn2_wickets }}
+      </div>
+      {% if lines %}
+      <div style="overflow:auto; margin-top:.5rem;">
+      <table class="tbl">
+        <thead><tr><th>Player</th><th>Team</th><th class="num">R</th><th class="num">B</th><th class="num">4s</th><th class="num">6s</th><th class="num">Wkts</th><th class="num">RC</th></tr></thead>
+        <tbody>
+          {% for ln in lines %}
+          <tr><td>{{ ln.name }}</td><td>{{ ln.team_name or '—' }}</td>
+            <td class="num">{{ ln.bat_runs }}{{ '' if ln.bat_out else '*' }}</td><td class="num">{{ ln.bat_balls }}</td>
+            <td class="num">{{ ln.bat_fours }}</td><td class="num">{{ ln.bat_sixes }}</td>
+            <td class="num">{{ ln.bowl_wickets }}</td><td class="num">{{ ln.bowl_runs }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
+    </details>
+    {% endfor %}
+    {% else %}<div class="empty">No tournament matches played yet.</div>{% endif %}
+  </section>
+</div>
+{% endblock %}
