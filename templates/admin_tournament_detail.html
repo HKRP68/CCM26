@@ -113,6 +113,7 @@
   <section class="tour-card">
     <h3 style="margin-top:0;">Data management</h3>
     <div class="lifecycle">
+      <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="recompute_stats"><button class="btn" type="submit">📊 Recompute stats</button></form>
       <form method="POST" style="display:inline;" onsubmit="return confirm('Reset ALL match records, player stats and standings? Team list and settings are kept.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reset"><button class="btn" type="submit">♻️ Reset tournament data</button></form>
       <form method="POST" style="display:inline;" onsubmit="return confirm('Permanently delete this tournament and all its data?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><button class="btn danger" type="submit">🗑️ Delete tournament</button></form>
     </div>

@@ -12416,6 +12416,10 @@ def admin_tournament_detail(tournament_id):
                     tournament_service.deactivate_tournament(db, t.id)
                     log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
                     flash("Deactivated.", "info")
+                elif action == "recompute_stats":
+                    tournament_service.recompute_player_stats(db, t.id)
+                    log_admin(db, "tournament_recompute_stats", "tournament", t.id, t.name)
+                    flash("✅ Player statistics recomputed.", "success")
                 elif action == "reset":
                     tournament_service.reset_tournament(db, t.id)
                     log_admin(db, "tournament_reset", "tournament", t.id, t.name)
@@ -12460,6 +12464,14 @@ def admin_tournament_dashboard(tournament_id):
         t = _get_tournament_or_404(db, tournament_id)
         if not t:
             return redirect(url_for("admin_tournaments_list"))
+        # Heal/refresh per-player aggregates from the stored match scorecards so
+        # the dashboard always reflects player-keyed totals (idempotent).
+        try:
+            tournament_service.recompute_player_stats(db, t.id)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("tournament dashboard recompute failed for %s", t.id)
         table = tournament_service.points_table(db, t.id)
         leaders = tournament_service.stat_leaders(db, t.id)
         matches = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
