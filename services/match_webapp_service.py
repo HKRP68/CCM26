@@ -2598,11 +2598,18 @@ def finalize_webapp_match(session, match_id):
         logger.exception("save_final_scorecard failed")
 
     try:
-        from services.player_stats_service import persist_player_game_stats
+        from services.player_stats_service import persist_player_game_stats, persist_player_match_stats
         saved_counts = persist_player_game_stats(session, state or {})
         logger.info("Saved webapp player stats for match %s: %s", match_id, saved_counts)
+        persist_player_match_stats(session, state or {})
     except Exception:
         logger.exception("webapp player-stat persistence failed")
+
+    try:
+        from services.tournament_service import attach_match_if_tagged
+        attach_match_if_tagged(session, match_id=match_id)
+    except Exception:
+        logger.exception("Tournament auto-attach failed (non-fatal)")
 
     # Player-of-the-Match career credit. ``persist_player_game_stats`` covers
     # batting/bowling but not the POTM award, so increment it here (parity with
@@ -2869,11 +2876,17 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
         pass
     try:
         if q["has_progress"]:
-            from services.player_stats_service import persist_player_game_stats
+            from services.player_stats_service import persist_player_game_stats, persist_player_match_stats
             saved_counts = persist_player_game_stats(session, state or {})
             logger.info("Saved terminated webapp player stats for match %s: %s", match_id, saved_counts)
+            persist_player_match_stats(session, state or {})
     except Exception:
         logger.exception("terminated webapp player-stat persistence failed")
+    try:
+        from services.tournament_service import attach_match_if_tagged
+        attach_match_if_tagged(session, match_id=match_id)
+    except Exception:
+        logger.exception("Tournament auto-attach failed (non-fatal)")
     session.commit()
     try:
         from services.match_state_store import cleanup_state
@@ -2921,11 +2934,17 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
         pass
     try:
         if state and _balls_bowled_total(state) > 0:
-            from services.player_stats_service import persist_player_game_stats
+            from services.player_stats_service import persist_player_game_stats, persist_player_match_stats
             saved_counts = persist_player_game_stats(session, state)
             logger.info("Saved abandoned webapp player stats for match %s: %s", match_id, saved_counts)
+            persist_player_match_stats(session, state)
     except Exception:
         logger.exception("abandoned webapp player-stat persistence failed")
+    try:
+        from services.tournament_service import attach_match_if_tagged
+        attach_match_if_tagged(session, match_id=match_id)
+    except Exception:
+        logger.exception("Tournament auto-attach failed (non-fatal)")
 
     # Tour result hook — a forfeited tour match still counts (other side wins).
     # Build the same standings announcement the normal finalize path produces so

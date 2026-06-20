@@ -1303,41 +1303,21 @@ async def _save_match_stats(s):
         except Exception:
             logger.exception("Form history recording failed")
 
-        # ── Per-match stats snapshot (for tour leaderboards) ──
+        # ── Per-match stats snapshot (for tour/tournament leaderboards) ──
+        match_id_for_tournament = None
         try:
-            from models import PlayerMatchStats as _PMS
-            mid_v = s.get("match_id")
-            if mid_v:
-                # Clear any prior snapshot for this match (re-runs)
-                session.query(_PMS).filter(_PMS.match_id == mid_v).delete(
-                    synchronize_session=False)
-                # `agg` was built above with per-(uid, pid) totals
-                for (uid_v, pid_v), d in agg.items():
-                    if uid_v == -1:  # bot
-                        continue
-                    if d["balls"] == 0 and d["overs"] == 0:
-                        continue
-                    # Derive bat fours/sixes from inn1+inn2 bat_stats
-                    fours = sixes = 0
-                    for inn_stats, lookup in [
-                        (inn1_bat_stats, bat_lookup_1),
-                        (inn2_bat_stats, bat_lookup_2),
-                    ]:
-                        for rid, bs in inn_stats.items():
-                            rid_int = int(rid) if isinstance(rid, str) else rid
-                            if rid_int in lookup and lookup[rid_int] == (pid_v, uid_v):
-                                fours += bs.get("fours", 0)
-                                sixes += bs.get("sixes", 0)
-                    pms = _PMS(
-                        match_id=mid_v, player_id=pid_v, user_id=uid_v,
-                        bat_runs=d["runs"], bat_balls=d["balls"],
-                        bat_fours=fours, bat_sixes=sixes, bat_out=d["out"],
-                        bowl_wickets=d["wickets"], bowl_runs=d["runs_conceded"],
-                        bowl_balls=int(d["overs"] * 6),
-                    )
-                    session.add(pms)
+            from services.player_stats_service import persist_player_match_stats
+            match_id_for_tournament = persist_player_match_stats(session, s)
         except Exception:
             logger.exception("PlayerMatchStats snapshot failed (non-fatal)")
+
+        # ── Tournament auto-attach (no-op unless the match was tagged at creation) ──
+        try:
+            if match_id_for_tournament:
+                from services.tournament_service import attach_match_if_tagged
+                attach_match_if_tagged(session, match_id=match_id_for_tournament)
+        except Exception:
+            logger.exception("Tournament auto-attach failed (non-fatal)")
 
         session.commit()
         logger.info(f"Saved match stats for match {s.get('match_id')}")

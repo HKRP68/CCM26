@@ -334,6 +334,9 @@ class Match(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    # Set once at match creation when started with the `Tournament` keyword;
+    # never changed afterward so finalization-time attachment is unambiguous.
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=True)
 
     user1 = relationship("User", foreign_keys=[user1_id])
     user2 = relationship("User", foreign_keys=[user2_id])
@@ -1080,6 +1083,68 @@ class TourMatch(Base):
 
     __table_args__ = (
         Index("ix_tour_matches_tour", "tour_id", "match_number"),
+    )
+
+
+class Tournament(Base):
+    """A multi-player (N-participant) tournament with a points table.
+
+    Unlike Tour (fixed 2 players), any number of users can join. Matches are
+    attached either automatically (started with the `Tournament` keyword,
+    tagged via Match.tournament_id at creation) or manually via the admin
+    panel / /addtotournament fallback.
+    """
+    __tablename__ = "tournaments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    chat_id = Column(BigInteger, nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String(20), default="open", index=True)  # open -> active -> completed
+    points_win = Column(Integer, default=2)
+    points_loss = Column(Integer, default=0)
+    points_tie = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_tournaments_chat_status", "chat_id", "status"),
+    )
+
+
+class TournamentTeam(Base):
+    """A participant's standing within one tournament's points table."""
+    __tablename__ = "tournament_teams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    played = Column(Integer, default=0)
+    won = Column(Integer, default=0)
+    lost = Column(Integer, default=0)
+    tied = Column(Integer, default=0)
+    points = Column(Integer, default=0)
+    joined_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_tteam_tournament_user", "tournament_id", "user_id", unique=True),
+    )
+
+
+class TournamentMatch(Base):
+    """Links one completed Match to a Tournament. A match counts toward at
+    most one tournament (match_id is unique)."""
+    __tablename__ = "tournament_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=False)
+    added_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_tmatch_tournament", "tournament_id"),
+        Index("ix_tmatch_match_unique", "match_id", unique=True),
     )
 
 
