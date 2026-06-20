@@ -810,6 +810,15 @@ async def _action_timeout(context):
         except Exception:
             logger.exception("Forfeit scorecard send failed (non-fatal)")
 
+        # Archive the text scorecard for the (incomplete) forfeited match.
+        _win_label = "Bot" if winner_is_bot else (
+            (getattr(winner_user, "first_name", None)
+             or getattr(winner_user, "username", None) or "Opponent")
+            if winner_user else "Opponent")
+        await _send_text_scorecard_to_storage(
+            context, mid,
+            result_text=f"{_win_label} won (opponent forfeited)")
+
         # Tour announcement after match forfeit
         if tour_announce:
             try:
@@ -1876,6 +1885,11 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 await _send_innings_scorecards(context, mid, innings_num=2)
     except Exception:
         logger.exception("Endmatch scorecard send failed (non-fatal)")
+
+    # Archive the text scorecard for the manually-ended (incomplete) match.
+    if s:
+        await _send_text_scorecard_to_storage(
+            context, mid, result_text="Match ended early")
 
     cleanup_state(context, mid)
     release_match_lock(mid)
@@ -4393,6 +4407,274 @@ async def new_over_bowler_callback(update: Update, context: ContextTypes.DEFAULT
     await asyncio.gather(_card(), render_screen(context, mid))
 
 
+# ═══════════════════════════ TEXT SCORECARD ══════════════════════════
+# A plain-text scorecard (like the user-uploaded MatchNo576.txt) is archived
+# to the Telegram storage channel at the end of EVERY match — complete or
+# incomplete (forfeit / manual end) — so there is a durable, human-readable
+# record of every game alongside the image cards.
+
+def _overs_str_to_float(overs_str):
+    """Convert a cricket overs string like ``19.5`` into ``19.8333`` so a run
+    rate can be computed (each over is 6 balls, not 10)."""
+    try:
+        s = str(overs_str)
+        if "." in s:
+            whole, balls = s.split(".", 1)
+            return int(whole) + (int(balls) / 6.0)
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _text_innings_block(s, *, bat_team, bowl_team, total_runs, total_wickets,
+                        overs_str, bat_order, bat_stats_map, bowl_xi,
+                        bowl_stats_map, extras, fow):
+    """Render one innings as plain-text lines (batting + bowling + FoW)."""
+    lines = []
+    lines.append(f"{(bat_team or 'TEAM').upper()} INNINGS")
+    bsep = "-" * 95
+    lines.append(bsep)
+    lines.append(f"{'Batsman':<22}{'Status':<38}{'R':>3} {'B':>4} {'4s':>4} {'6s':>4} {'SR':>7}")
+    lines.append(bsep)
+
+    dnb = []
+    for p in bat_order:
+        bstat = bat_stats_map.get(p["roster_id"], {})
+        balls = bstat.get("balls", 0)
+        is_out = bstat.get("out", False)
+        runs = bstat.get("runs", 0)
+        if balls == 0 and not is_out:
+            dnb.append(p.get("name", "?"))
+            continue
+        if is_out:
+            dismissal = bstat.get("dismissal_text") or "out"
+        else:
+            dismissal = "not out"
+        sr = round(runs / balls * 100, 2) if balls else 0.0
+        lines.append(
+            f"{p.get('name','?')[:21]:<22}{str(dismissal)[:37]:<38}"
+            f"{runs:>3} {balls:>4} {bstat.get('fours',0):>4} "
+            f"{bstat.get('sixes',0):>4} {sr:>7.2f}"
+        )
+
+    lines.append("")
+    lines.append(
+        f"Extras: {extras['total']} (wd {extras['wd']}, nb {extras['nb']}, "
+        f"b {extras['b']}, lb {extras['lb']})"
+    )
+    rr = round(total_runs / _overs_str_to_float(overs_str), 2) if _overs_str_to_float(overs_str) else 0.0
+    lines.append(f"Total: {total_runs}/{total_wickets} ({overs_str} Overs, RR: {rr})")
+    if dnb:
+        lines.append("")
+        lines.append(f"Did Not Bat: {', '.join(dnb)}")
+
+    lines.append("")
+    obsep = "-" * 68
+    lines.append(obsep)
+    lines.append(f"{'Bowler':<26}{'O':>5} {'M':>5} {'R':>5} {'W':>5} {'Econ':>7}")
+    lines.append(obsep)
+    for p in bowl_xi:
+        bws = bowl_stats_map.get(p["roster_id"], {})
+        balls = bws.get("balls", 0)
+        if balls == 0 and bws.get("wickets", 0) == 0 and bws.get("runs", 0) == 0:
+            continue
+        ov_str = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+        econ = round(bws.get("runs", 0) / (balls / 6.0), 2) if balls else 0.0
+        lines.append(
+            f"{p.get('name','?')[:25]:<26}{ov_str:>5} {bws.get('maidens',0):>5} "
+            f"{bws.get('runs',0):>5} {bws.get('wickets',0):>5} {econ:>7.2f}"
+        )
+
+    if fow:
+        lines.append("")
+        lines.append(obsep)
+        lines.append("Fall of Wickets")
+        lines.append(obsep)
+        for i, item in enumerate(fow, start=1):
+            try:
+                runs_at, over_at = item[0], item[1]
+            except (TypeError, IndexError):
+                runs_at, over_at = item, ""
+            lines.append(f"{i}-{runs_at}  ({over_at})")
+    lines.append("=" * 55)
+    return lines
+
+
+def _text_playing_xi_block(s):
+    """Render the Playing XI for both teams (name + category)."""
+    lines = []
+    pairs = []
+    inn1_team = s.get("inn1_team")
+    if s.get("innings", 1) >= 2:
+        # Innings already swapped: inn1_* holds the team that batted first.
+        if inn1_team:
+            pairs.append((inn1_team, s.get("inn1_bat_xi", [])))
+        pairs.append((s.get("bat_team_name", "Team 2"), s.get("bat_xi", [])))
+    else:
+        pairs.append((s.get("bat_team_name", "Team 1"), s.get("bat_xi", [])))
+        pairs.append((s.get("bowl_team_name", "Team 2"), s.get("bowl_xi", [])))
+
+    if not any(xi for _, xi in pairs):
+        return lines
+    lines.append("")
+    lines.append("--- PLAYING XI ---")
+    for team_name, xi in pairs:
+        if not xi:
+            continue
+        lines.append("")
+        lines.append(f"--- {team_name} Playing XI ---")
+        for p in xi:
+            cat = p.get("category") or ""
+            lines.append(f"{p.get('name','?')}{f' ({cat})' if cat else ''}")
+    return lines
+
+
+def _build_match_text_scorecard(s, mid, *, result_text=None,
+                                potm_name=None, potm_stats=None):
+    """Build a full plain-text scorecard for the match in state ``s``.
+
+    Covers both innings where data exists. Safe for incomplete matches — it
+    renders whatever innings have play and omits the rest.
+    """
+    team_a = s.get("inn1_team") or s.get("bat_team_name", "Team 1")
+    if s.get("innings", 1) >= 2:
+        team_b = s.get("bat_team_name", "Team 2")
+    else:
+        team_b = s.get("bowl_team_name", "Team 2")
+
+    head = [
+        f"Match Summary: {team_a} vs {team_b}",
+        f"Match Number: #{mid}",
+    ]
+    if s.get("pitch_type"):
+        head.append(f"Pitch: {s.get('pitch_type')}")
+    if s.get("stadium"):
+        head.append(f"Stadium: {s.get('stadium')}")
+    if result_text:
+        head.append(f"Result: {result_text}")
+    if potm_name:
+        potm_line = f"Player of the Match: {potm_name}"
+        if potm_stats:
+            potm_line += f" ({potm_stats})"
+        head.append(potm_line)
+    head.append("")
+
+    blocks = []
+
+    # ── Innings 1 ──────────────────────────────────────────────────────
+    if s.get("innings", 1) >= 2:
+        # First innings is closed; data lives in inn1_* keys.
+        extras1 = {
+            "wd": s.get("inn1_wides", 0), "nb": s.get("inn1_noballs", 0),
+            "b": 0, "lb": s.get("inn1_legbyes", 0),
+        }
+        extras1["total"] = extras1["wd"] + extras1["nb"] + extras1["b"] + extras1["lb"]
+        bat_xi1 = s.get("inn1_bat_xi", [])
+        order1 = s.get("inn1_batting_order") or bat_xi1
+        order1 = _dedupe_order(order1, bat_xi1)
+        blocks.append(_text_innings_block(
+            s, bat_team=s.get("inn1_team", "Team 1"),
+            bowl_team=s.get("bat_team_name", "Team 2"),
+            total_runs=s.get("inn1_runs", 0),
+            total_wickets=s.get("inn1_wickets", 0),
+            overs_str=s.get("inn1_overs", "0.0"),
+            bat_order=order1, bat_stats_map=s.get("inn1_bat_stats", {}),
+            bowl_xi=s.get("inn1_bowl_xi", []),
+            bowl_stats_map=s.get("inn1_bowl_stats", {}),
+            extras=extras1, fow=s.get("inn1_fow", []),
+        ))
+    elif _state_has_play(s):
+        # Still in innings 1 (incomplete) — render live state as innings 1.
+        extras1 = {
+            "wd": s.get("wides", 0), "nb": s.get("noballs", 0),
+            "b": 0, "lb": s.get("legbyes", 0),
+        }
+        extras1["total"] = extras1["wd"] + extras1["nb"] + extras1["b"] + extras1["lb"]
+        bat_xi1 = s.get("bat_xi", [])
+        order1 = _dedupe_order(s.get("batting_order") or bat_xi1, bat_xi1)
+        blocks.append(_text_innings_block(
+            s, bat_team=s.get("bat_team_name", "Team 1"),
+            bowl_team=s.get("bowl_team_name", "Team 2"),
+            total_runs=s.get("total_runs", 0),
+            total_wickets=s.get("total_wickets", 0),
+            overs_str=format_overs(s),
+            bat_order=order1, bat_stats_map=s.get("bat_stats", {}),
+            bowl_xi=s.get("bowl_xi", []),
+            bowl_stats_map=s.get("bowl_stats", {}),
+            extras=extras1, fow=s.get("fow", []),
+        ))
+
+    # ── Innings 2 (only if reached) ────────────────────────────────────
+    if s.get("innings", 1) >= 2:
+        extras2 = {
+            "wd": s.get("wides", 0), "nb": s.get("noballs", 0),
+            "b": 0, "lb": s.get("legbyes", 0),
+        }
+        extras2["total"] = extras2["wd"] + extras2["nb"] + extras2["b"] + extras2["lb"]
+        bat_xi2 = s.get("bat_xi", [])
+        order2 = _dedupe_order(s.get("batting_order") or bat_xi2, bat_xi2)
+        blocks.append(_text_innings_block(
+            s, bat_team=s.get("bat_team_name", "Team 2"),
+            bowl_team=s.get("bowl_team_name", "Team 1"),
+            total_runs=s.get("total_runs", 0),
+            total_wickets=s.get("total_wickets", 0),
+            overs_str=format_overs(s),
+            bat_order=order2, bat_stats_map=s.get("bat_stats", {}),
+            bowl_xi=s.get("bowl_xi", []),
+            bowl_stats_map=s.get("bowl_stats", {}),
+            extras=extras2, fow=s.get("fow", []),
+        ))
+
+    body = list(head)
+    for blk in blocks:
+        body.extend(blk)
+        body.append("")
+    body.extend(_text_playing_xi_block(s))
+
+    return "\n".join(body).rstrip() + "\n"
+
+
+def _dedupe_order(order, fallback_xi):
+    """De-duplicate a batting order list (by roster_id), then append any XI
+    members not present. Mirrors the ordering used for the image scorecards."""
+    seen = set()
+    out = []
+    for p in (order or []):
+        rid = p.get("roster_id")
+        if rid not in seen:
+            seen.add(rid)
+            out.append(p)
+    for p in (fallback_xi or []):
+        rid = p.get("roster_id")
+        if rid not in seen:
+            seen.add(rid)
+            out.append(p)
+    return out
+
+
+async def _send_text_scorecard_to_storage(ctx, mid, *, result_text=None,
+                                           potm_name=None, potm_stats=None):
+    """Archive the plain-text scorecard to the Telegram storage channel.
+
+    Best-effort and fully non-fatal — never blocks match cleanup. Fires for
+    every match end (complete or incomplete)."""
+    try:
+        s = _gs(ctx, mid)
+        if not s:
+            return
+        if not _state_has_play(s) and s.get("innings", 1) < 2:
+            return  # nothing was played — skip empty card
+        text = _build_match_text_scorecard(
+            s, mid, result_text=result_text,
+            potm_name=potm_name, potm_stats=potm_stats)
+        from services import tg_storage_service
+        await tg_storage_service.upload_text_async(
+            text, f"MatchNo{mid}.txt",
+            caption=f"📄 Scorecard · Match {mid}")
+    except Exception:
+        logger.exception("text scorecard storage upload failed (non-fatal)")
+
+
 # ═══════════════════════════ END INNINGS ═════════════════════════════
 
 async def _send_innings_scorecards(ctx, mid, innings_num):
@@ -5052,6 +5334,13 @@ async def _end_innings(ctx, mid):
             pass
         except Exception:
             logger.exception("match summary card failed (non-fatal)")
+
+        # Archive the human-readable text scorecard (MatchNo<id>.txt) to the
+        # Telegram storage channel for every completed match.
+        await _send_text_scorecard_to_storage(
+            ctx, mid,
+            result_text=f"{winner_name} won {margin}",
+            potm_name=potm_name, potm_stats=potm_stats)
 
         # Deliver the match-summary scorecard inside an expandable quote so it
         # stays collapsed in chat until the reader taps to expand it.
