@@ -10,6 +10,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from sqlalchemy import func
+import html
 
 from database import get_session
 from models import TournamentPlayerStats
@@ -34,12 +35,12 @@ _CAT_LABELS = dict(_CATEGORIES)
 
 
 def _sr(r):
-    return (r.bat_runs / r.bat_balls * 100.0) if r.bat_balls else 0.0
+    return ((r.bat_runs or 0) / r.bat_balls * 100.0) if r.bat_balls else 0.0
 
 
 def _econ(r):
     overs = (r.bowl_balls or 0) / 6.0
-    return (r.bowl_runs / overs) if overs else 0.0
+    return ((r.bowl_runs or 0) / overs) if overs else 0.0
 
 
 def _leaders_for(session, tour, category):
@@ -68,7 +69,7 @@ def _leaders_for(session, tour, category):
 
 def _render(tour, category, rows):
     label = _CAT_LABELS.get(category, "Stats")
-    lines = [f"🏆 <b>{tour.name}</b> — Tournament Stats",
+    lines = [f"🏆 <b>{html.escape(tour.name)}</b> — Tournament Stats",
              f"<b>{label}</b> · Top 10", ""]
     if not rows:
         lines.append("<i>No qualifying players yet.</i>")
@@ -76,8 +77,8 @@ def _render(tour, category, rows):
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         for i, (name, team, val) in enumerate(rows, 1):
             rank = medals.get(i, f"{i}.")
-            team_s = f" · {team}" if team else ""
-            lines.append(f"{rank} {name or 'Player'}{team_s} — <b>{val}</b>")
+            team_s = f" · {html.escape(team)}" if team else ""
+            lines.append(f"{rank} {html.escape(name or 'Player')}{team_s} — <b>{val}</b>")
     return "\n".join(lines)
 
 
@@ -174,13 +175,14 @@ async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = exact or rows
         rows = sorted(rows, key=lambda r: (r.bat_runs or 0), reverse=True)[:3]
 
-        blocks = [f"🏆 <b>{tour.name}</b> — Player Tournament Stats"]
+        blocks = [f"🏆 <b>{html.escape(tour.name)}</b> — Player Tournament Stats"]
         for r in rows:
             fig = (f"{r.best_bowl_wickets}/{r.best_bowl_runs}"
-                   if r.best_bowl_runs is not None and r.best_bowl_runs >= 0 else "—")
-            team = f" · {r.team_name}" if r.team_name else ""
+                   if r.best_bowl_wickets is not None and r.best_bowl_runs is not None
+                   and r.best_bowl_runs >= 0 else "—")
+            team = f" · {html.escape(r.team_name)}" if r.team_name else ""
             blocks.append(
-                f"\n👤 <b>{r.name or 'Player'}</b>{team}\n"
+                f"\n👤 <b>{html.escape(r.name or 'Player')}</b>{team}\n"
                 f"🎮 Matches: {r.matches}\n"
                 f"🏏 Runs: {r.bat_runs} ({r.bat_balls}b) · SR {_sr(r):.1f}\n"
                 f"   4s: {r.bat_fours} · 6s: {r.bat_sixes} · HS: {r.highest_score}\n"
