@@ -46,8 +46,8 @@ from handlers.match import _mention
 
 logger = logging.getLogger(__name__)
 
-CIPL_TIMEOUT = int(os.getenv("CIPL_TIMEOUT_SECONDS", "90"))  # inactivity → forfeit
-CIPL_REMIND = int(os.getenv("CIPL_REMIND_SECONDS", "30"))    # mention before forfeit
+CIPL_TIMEOUT = int(os.getenv("CIPL_TIMEOUT_SECONDS", "300"))  # 5-min turn → forfeit
+CIPL_REMIND = int(os.getenv("CIPL_REMIND_SECONDS", "270"))    # mention before forfeit
 # Forfeiting a *live* match (failing to pick bowler / bowling or batting
 # approach in time) fines the idle player and compensates the opponent.
 CIPL_FORFEIT_COINS = int(os.getenv("CIPL_FORFEIT_COINS", "3000"))
@@ -299,7 +299,7 @@ def _miniapp_row(state):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Inactivity timer (30s reminder, then forfeit + fine)
+# Inactivity timer (5-min turn, reminder shortly before forfeit + fine)
 # ════════════════════════════════════════════════════════════════════
 
 def _cancel_timer(context, mid):

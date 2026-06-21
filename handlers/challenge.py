@@ -36,12 +36,13 @@ CM_LOBBY_EXPIRE = 75
 CHALLENGE_DRAFT_EXPIRE = int(os.getenv("CHALLENGE_DRAFT_EXPIRE_SECONDS", "600"))
 
 # Per-turn selection timeout. While a draft waits on a specific player (team
-# pick, pitch, or Playing XI), they get a 30s mention reminder; if they still
-# haven't acted by the full window, the challenge is simply cancelled (no
-# penalty — fines only apply once a live match is underway). Each valid action
-# resets the clock (inactivity-based), so an active setup is never killed.
-CL_SELECT_WINDOW = int(os.getenv("CL_SELECT_WINDOW_SECONDS", "60"))
-CL_SELECT_REMIND = int(os.getenv("CL_SELECT_REMIND_SECONDS", "30"))
+# pick, pitch, or Playing XI), they get a 5-minute window to choose; 30s before
+# it elapses they get a mention reminder, and if they still haven't acted by the
+# full window the challenge is simply cancelled (no penalty — fines only apply
+# once a live match is underway). Each valid action resets the clock
+# (inactivity-based), so an active setup is never killed.
+CL_SELECT_WINDOW = int(os.getenv("CL_SELECT_WINDOW_SECONDS", "300"))
+CL_SELECT_REMIND = int(os.getenv("CL_SELECT_REMIND_SECONDS", "270"))
 
 CHALLENGE_REPLY_REQUIRED_MESSAGE = "Please reply to a user’s message to challenge them."
 BUILT_IN_CHALLENGE_LEAGUES = {
@@ -1563,9 +1564,9 @@ async def _expire_challenge_draft(ctx):
 
 
 # ── Per-turn selection timeout (team / pitch / Playing XI) ──────────────────
-# While a draft waits on specific players, arm a 30s reminder + forfeit timer.
-# Each valid action resets the clock; if a player never acts they forfeit, and
-# the opponent is compensated.
+# While a draft waits on specific players, give them a 5-minute window with a
+# reminder shortly before it elapses. Each valid action resets the clock; if a
+# player never acts the challenge is cancelled (no fine during setup).
 
 def _selection_phase_label(phase):
     return {"team": "team", "pitch": "pitch", "xi": "Playing XI"}.get(phase, "selection")
@@ -1635,7 +1636,7 @@ async def _disarm_selection_timer(context, draft):
 
 
 async def _selection_reminder(ctx):
-    """30s mark: re-mention the awaited player(s) (delete the previous ping)."""
+    """Near the deadline: re-mention the awaited player(s) (delete the previous ping)."""
     draft_id = ctx.job.data["draft_id"]
     draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
     if not draft or draft.get("match_launched") or draft.get("match_started"):
