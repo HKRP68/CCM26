@@ -63,8 +63,10 @@ def test_report_contains_every_required_label_and_conclusion():
                   "Win the toss"):
         assert label in text
     assert conditions["best_toss"] in ("bat", "bowl")
-    # Conclusion line reflects the computed decision.
-    assert ("BOWL first" in text) or ("BAT first" in text)
+    # Conclusion line must reflect the *computed* decision, not just any phrase.
+    expected = "BOWL first" if conditions["best_toss"] == "bowl" else "BAT first"
+    assert expected in text
+    assert conditions["best_toss_reason"] in text
 
 
 def test_effectiveness_scores_in_range():

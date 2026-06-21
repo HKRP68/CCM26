@@ -808,7 +808,7 @@ def simulate_over(state):
                 state.get("conditions"),
                 {"over": state["current_over"], "total_overs": overs_total,
                  "innings": innings})
-            weight_hook = _compose_hooks(env_hook, trait_hook)
+            weight_hook = _compose_hooks(trait_hook, env_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=over_idx, batter_runs=bs["runs"],

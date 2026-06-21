@@ -23,6 +23,7 @@ outcome engine recognises.
 """
 
 import random
+from html import escape
 
 # Surfaces offered in Challenge Leagues.
 PITCH_TYPES = ["Dry", "Dusty", "Hard", "Flat", "Green", "Bouncy"]
@@ -290,34 +291,45 @@ def _bar(score):
 
 
 def format_pitch_report(pitch_type, conditions, eff, decision):
-    """Build the compact HTML Pitch Report card."""
+    """Build the compact HTML Pitch Report card.
+
+    Every interpolated value is HTML-escaped because the result is sent with
+    Telegram ``parse_mode="HTML"`` — e.g. the Bouncy blurb contains a literal
+    ``&`` that Telegram would otherwise reject.
+    """
     c = conditions
-    blurb = _PITCH_BLURB.get(pitch_type, "")
+    # Use the normalised pitch from conditions so the title always matches the
+    # stored/simulated surface (unknown surfaces fall back to "Hard").
+    display_pitch = escape(str(c.get("pitch_type", pitch_type)))
+    blurb = escape(_PITCH_BLURB.get(c.get("pitch_type", pitch_type), ""))
     dn_icon = "🌙" if c.get("day_night") == "Night" else "☀️"
     decide, reason = decision
     decide_word = "BOWL first" if decide == "bowl" else "BAT first"
+
+    def e(key):
+        return escape(str(c.get(key, "")))
 
     pac = eff["pacers"]
     spn = eff["spinners"]
     bts = eff["batters"]
 
     lines = [
-        f"🌱 <b>PITCH REPORT</b> — <b>{pitch_type}</b>",
+        f"🌱 <b>PITCH REPORT</b> — <b>{display_pitch}</b>",
         f"<i>{blurb}</i>",
         "━━━━━━━━━━━━━━━",
-        f"🌤️ {c['weather']}  ·  🌡️ {c['temperature']}°C",
-        f"{dn_icon} {c['day_night']} · {c['match_time']}",
-        f"💧 Humidity: {c['humidity']}  ·  💨 {c['wind_direction']} ({c['wind_strength']})",
-        f"❄️ Dew: {c['dew_text']}",
-        f"🌿 Grass: {c['grass']}  ·  🕳️ Pitch: {c['pitch_age']}  ·  🟩 Outfield: {c['outfield']}",
+        f"🌤️ {e('weather')}  ·  🌡️ {e('temperature')}°C",
+        f"{dn_icon} {e('day_night')} · {e('match_time')}",
+        f"💧 Humidity: {e('humidity')}  ·  💨 {e('wind_direction')} ({e('wind_strength')})",
+        f"❄️ Dew: {e('dew_text')}",
+        f"🌿 Grass: {e('grass')}  ·  🕳️ Pitch: {e('pitch_age')}  ·  🟩 Outfield: {e('outfield')}",
         "━━━━━━━━━━━━━━━",
         "<b>Effective for</b>",
-        f"⚡ Pacers   {_bar(pac[0])} {pac[1]}",
-        f"🌀 Spinners {_bar(spn[0])} {spn[1]}",
-        f"🏏 Batters  {_bar(bts[0])} {bts[1]}",
+        f"⚡ Pacers   {_bar(pac[0])} {escape(str(pac[1]))}",
+        f"🌀 Spinners {_bar(spn[0])} {escape(str(spn[1]))}",
+        f"🏏 Batters  {_bar(bts[0])} {escape(str(bts[1]))}",
         "━━━━━━━━━━━━━━━",
         f"🪙 <b>Win the toss → {decide_word}</b>",
-        f"<i>{reason}</i>",
+        f"<i>{escape(str(reason))}</i>",
     ]
     return "\n".join(lines)
 
@@ -333,7 +345,7 @@ def build_pitch_report(pitch_type, rng=None):
     decision = best_toss_decision(pitch_type, conditions)
     conditions["best_toss"] = decision[0]
     conditions["best_toss_reason"] = decision[1]
-    text = format_pitch_report(pitch_type, conditions, eff, decision)
+    text = format_pitch_report(conditions["pitch_type"], conditions, eff, decision)
     return text, conditions
 
 
@@ -366,6 +378,8 @@ def _env_multipliers(conditions, ctx):
     w = conditions.get("weather")
     temp = conditions.get("temperature", 26)
     hum = conditions.get("humidity")
+    wind_direction = conditions.get("wind_direction")
+    wind_strength = conditions.get("wind_strength")
     dew = conditions.get("dew")
     grass = conditions.get("grass")
     outfield = conditions.get("outfield")
@@ -375,22 +389,39 @@ def _env_multipliers(conditions, ctx):
     # ── Weather + new-ball / wear progression ──
     if w in ("Overcast", "Light Rain Earlier"):
         if phase == "powerplay":
-            nudge("Wicket", 1.12); nudge("Dot", 1.05)
-            nudge("Four", 0.95); nudge("Six", 0.93)
+            nudge("Wicket", 1.12)
+            nudge("Dot", 1.05)
+            nudge("Four", 0.95)
+            nudge("Six", 0.93)
         else:
             nudge("Wicket", 1.05)
     elif w in ("Clear and Sunny", "Hot and Dry"):
-        nudge("Four", 1.04); nudge("Six", 1.04)
+        nudge("Four", 1.04)
+        nudge("Six", 1.04)
         if phase == "death":  # dry surface spins/grips late
             nudge("Wicket", 1.08)
     elif w == "Humid" and phase == "powerplay":
         nudge("Wicket", 1.06)
 
+    # ── Wind — strong/moderate wind affects aerial shots and accuracy ──
+    if wind_strength in ("Moderate", "Strong"):
+        strong = wind_strength == "Strong"
+        if strong:
+            nudge("Extras", 1.05)  # accuracy dips in strong wind
+        if wind_direction == "Tailwind":
+            nudge("Six", 1.04 if strong else 1.02)
+        elif wind_direction == "Headwind":
+            nudge("Six", 0.96 if strong else 0.98)
+        elif wind_direction == "Crosswind" and strong:
+            nudge("Wicket", 1.03)  # drift induces edges/mistimes
+
     # ── Temperature ──
     if temp <= 18 and phase == "powerplay":
-        nudge("Wicket", 1.08); nudge("Four", 0.96)
+        nudge("Wicket", 1.08)
+        nudge("Four", 0.96)
     elif temp >= 34 and phase != "powerplay":
-        nudge("Wicket", 1.06); nudge("Six", 1.03)
+        nudge("Wicket", 1.06)
+        nudge("Six", 1.03)
 
     # ── Humidity ──
     if hum == "High" and phase == "powerplay":
@@ -400,19 +431,24 @@ def _env_multipliers(conditions, ctx):
 
     # ── Grass ──
     if grass == "Heavy" and phase == "powerplay":
-        nudge("Wicket", 1.08); nudge("Four", 0.96)
+        nudge("Wicket", 1.08)
+        nudge("Four", 0.96)
     elif grass in ("No Grass", "Little") and phase != "powerplay":
         nudge("Wicket", 1.04)
 
     # ── Outfield ──
     if outfield == "Fast":
-        nudge("Four", 1.06); nudge("Six", 1.04)
+        nudge("Four", 1.06)
+        nudge("Six", 1.04)
     elif outfield in ("Slow", "Wet"):
-        nudge("Four", 0.92); nudge("Six", 0.92); nudge("Double", 1.05)
+        nudge("Four", 0.92)
+        nudge("Six", 0.92)
+        nudge("Double", 1.05)
 
     # ── Pitch age / wear ──
     if age == "Very Used" and phase != "powerplay":
-        nudge("Wicket", 1.08); nudge("Four", 0.95)
+        nudge("Wicket", 1.08)
+        nudge("Four", 0.95)
 
     # ── Night dew — skid + chasing assist (strongest when chasing) ──
     if night and dew in ("Light", "Moderate", "Heavy"):
