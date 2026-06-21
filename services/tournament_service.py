@@ -109,20 +109,6 @@ def participating_team_names(session, tournament_id):
     return {(r.name or "").strip() for r in rows if (r.name or "").strip()}
 
 
-def pairing_already_played(session, tournament_id, cid_a, cid_b):
-    """True if these two participating teams already completed a tournament match."""
-    ta = tournament_team_for_challenge_team(session, tournament_id, cid_a)
-    tb = tournament_team_for_challenge_team(session, tournament_id, cid_b)
-    if not ta or not tb:
-        return False
-    q = session.query(TournamentMatch).filter(
-        TournamentMatch.tournament_id == int(tournament_id),
-        TournamentMatch.team1_id.in_([ta.id, tb.id]),
-        TournamentMatch.team2_id.in_([ta.id, tb.id]),
-    )
-    return q.first() is not None
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Recording a completed match
 # ──────────────────────────────────────────────────────────────────────
@@ -319,6 +305,74 @@ def recompute_player_stats(session, tournament_id):
         session.add(TournamentPlayerStats(tournament_id=tid, **acc))
 
 
+def recompute_standings(session, tournament_id):
+    """Rebuild ``TournamentTeam`` standings from all recorded ``TournamentMatch`` rows.
+
+    Standings (played/won/lost/tied, points, NRR data) are a pure function of the
+    recorded matches, so deleting a match and calling this reverses its effect.
+    Takes the same per-tournament row lock as the player-stats rebuild. Caller commits.
+    """
+    tid = int(tournament_id)
+    session.query(Tournament).filter_by(id=tid).with_for_update().first()
+    tour = session.query(Tournament).get(tid)
+    teams = {tt.id: tt for tt in
+             session.query(TournamentTeam).filter_by(tournament_id=tid).all()}
+    for tt in teams.values():
+        tt.played = tt.won = tt.lost = tt.tied = tt.no_result = tt.points = 0
+        tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
+    if not tour:
+        return
+    pw, ptie, pl = (tour.points_win or 0), (tour.points_tie or 0), (tour.points_loss or 0)
+    for m in session.query(TournamentMatch).filter_by(tournament_id=tid).all():
+        t1 = teams.get(m.team1_id)
+        t2 = teams.get(m.team2_id)
+        i1r, i1b = int(m.inn1_runs or 0), int(m.inn1_balls or 0)
+        i2r, i2b = int(m.inn2_runs or 0), int(m.inn2_balls or 0)
+        if t1:
+            t1.played += 1
+            t1.runs_for += i1r; t1.balls_for += i1b
+            t1.runs_against += i2r; t1.balls_against += i2b
+        if t2:
+            t2.played += 1
+            t2.runs_for += i2r; t2.balls_for += i2b
+            t2.runs_against += i1r; t2.balls_against += i1b
+        if m.winner_team_id is None:
+            for tt in (t1, t2):
+                if tt:
+                    tt.tied += 1
+                    tt.points += ptie
+        else:
+            win = teams.get(m.winner_team_id)
+            lose = t2 if win is t1 else t1
+            if win:
+                win.won += 1
+                win.points += pw
+            if lose:
+                lose.lost += 1
+                lose.points += pl
+
+
+def recompute_tournament(session, tournament_id):
+    """Rebuild both standings and player stats from the recorded matches."""
+    recompute_standings(session, tournament_id)
+    recompute_player_stats(session, tournament_id)
+
+
+def delete_tournament_match(session, tournament_match_id):
+    """Delete one recorded match and rebuild standings + player stats without it.
+
+    Returns the tournament id (so the caller can log/redirect) or None. Caller commits.
+    """
+    tm = session.query(TournamentMatch).get(int(tournament_match_id))
+    if not tm:
+        return None
+    tid = tm.tournament_id
+    session.delete(tm)
+    session.flush()
+    recompute_tournament(session, tid)
+    return tid
+
+
 def record_tournament_match(session, state, winner_user_id=None, result_text=None):
     """Record a completed tournament match: standings + per-player stats.
 
@@ -370,36 +424,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     t_inn2 = tteam(inn2_bat_uid)       # team that batted second
     win_team = tteam(win_uid) if win_uid is not None else None
 
-    # ── Standings ──
-    for tt in (t_inn1, t_inn2):
-        if tt:
-            tt.played = (tt.played or 0) + 1
-    if t_inn1:
-        t_inn1.runs_for = (t_inn1.runs_for or 0) + inn1_runs
-        t_inn1.balls_for = (t_inn1.balls_for or 0) + inn1_balls
-        t_inn1.runs_against = (t_inn1.runs_against or 0) + inn2_runs
-        t_inn1.balls_against = (t_inn1.balls_against or 0) + inn2_balls
-    if t_inn2:
-        t_inn2.runs_for = (t_inn2.runs_for or 0) + inn2_runs
-        t_inn2.balls_for = (t_inn2.balls_for or 0) + inn2_balls
-        t_inn2.runs_against = (t_inn2.runs_against or 0) + inn1_runs
-        t_inn2.balls_against = (t_inn2.balls_against or 0) + inn1_balls
-
-    if win_uid is None:  # tie
-        for tt in (t_inn1, t_inn2):
-            if tt:
-                tt.tied = (tt.tied or 0) + 1
-                tt.points = (tt.points or 0) + (tour.points_tie or 0)
-    else:
-        lose_team = t_inn2 if win_team is t_inn1 else t_inn1
-        if win_team:
-            win_team.won = (win_team.won or 0) + 1
-            win_team.points = (win_team.points or 0) + (tour.points_win or 0)
-        if lose_team:
-            lose_team.lost = (lose_team.lost or 0) + 1
-            lose_team.points = (lose_team.points or 0) + (tour.points_loss or 0)
-
-    # ── Per-player stats: recorded on the match scorecard, aggregated below ──
+    # Standings + per-player stats are rebuilt from the recorded matches below.
     lines = _collect_player_lines(state)
 
     # ── Match row ──
@@ -426,11 +451,10 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     )
     session.add(tm)
 
-    # Rebuild per-player aggregates from all match scorecards (incl. this one),
-    # keyed by player rather than by controlling user. Flush so the new match row
-    # is visible to the rebuild query.
+    # Rebuild standings + per-player aggregates from all recorded matches (incl.
+    # this one). Flush so the new match row is visible to the rebuild queries.
     session.flush()
-    recompute_player_stats(session, tid)
+    recompute_tournament(session, tid)
 
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
     return tm

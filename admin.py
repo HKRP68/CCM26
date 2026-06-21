@@ -12488,7 +12488,7 @@ def admin_tournament_dashboard(tournament_id):
         now = time.time()
         if now - _tournament_recompute_at.get(t.id, 0) > _TOURNAMENT_RECOMPUTE_TTL:
             try:
-                tournament_service.recompute_player_stats(db, t.id)
+                tournament_service.recompute_tournament(db, t.id)
                 db.commit()
                 _tournament_recompute_at[t.id] = now
             except Exception:
@@ -12515,6 +12515,32 @@ def admin_tournament_dashboard(tournament_id):
             tt_map=tt_map, players=players)
     finally:
         db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/matches/<int:match_row_id>/delete", methods=["POST"])
+@login_required
+def admin_tournament_match_delete(tournament_id, match_row_id):
+    """Remove a recorded tournament match and rebuild standings + player stats."""
+    from services import tournament_service
+    db = get_session()
+    try:
+        tm = db.query(TournamentMatch).get(match_row_id)
+        if not tm or tm.tournament_id != tournament_id:
+            flash("Match not found.", "error")
+        else:
+            tournament_service.delete_tournament_match(db, tm.id)
+            log_admin(db, "tournament_match_delete", "tournament", tournament_id,
+                      f"match {match_row_id}")
+            db.commit()
+            _tournament_recompute_at.pop(tournament_id, None)
+            flash("🗑️ Match removed and statistics rebuilt.", "info")
+    except Exception as e:
+        db.rollback()
+        logger.exception("tournament match delete failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_tournament_dashboard", tournament_id=tournament_id))
 
 
 # ═══════════════════════════════════════════════════════════════════════
