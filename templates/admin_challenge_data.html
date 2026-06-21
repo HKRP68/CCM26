@@ -20,7 +20,8 @@
 .league-stat span { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; }
 .cm-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
 .cm-card-soft { background:var(--bg-soft); border:1px solid var(--border); border-radius:14px; padding:1rem; }
-.cm-row { display:grid; grid-template-columns:72px minmax(180px,1fr) auto; gap:1rem; align-items:center; }
+.cm-row { display:grid; grid-template-columns:72px minmax(0,1fr); gap:1rem; align-items:center; }
+.cm-row .cm-actions { grid-column:1 / -1; justify-content:flex-start; margin-top:.25rem; }
 .cm-image { width:72px; height:72px; border-radius:14px; object-fit:cover; border:1px solid var(--border); background:linear-gradient(135deg, rgba(212,168,42,.18), rgba(255,255,255,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); font-weight:800; }
 .cm-title { margin:0; font-size:1.1rem; }
 .cm-meta { color:var(--muted); font-size:.86rem; margin-top:.2rem; display:flex; gap:.45rem; flex-wrap:wrap; }
