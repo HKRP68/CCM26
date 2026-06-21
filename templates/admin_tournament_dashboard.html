@@ -117,8 +117,14 @@ details.match-card summary { cursor:pointer; }
           <span class="empty">{{ m.result_text or '' }}</span>
         </span>
       </summary>
-      <div style="margin-top:.5rem; color:var(--muted); font-size:.85rem;">
-        1st innings: {{ m.inn1_runs }}/{{ m.inn1_wickets }} &nbsp;•&nbsp; 2nd innings: {{ m.inn2_runs }}/{{ m.inn2_wickets }}
+      <div style="margin-top:.5rem; display:flex; justify-content:space-between; gap:.6rem; flex-wrap:wrap; align-items:center;">
+        <span style="color:var(--muted); font-size:.85rem;">
+          1st innings: {{ m.inn1_runs }}/{{ m.inn1_wickets }} &nbsp;•&nbsp; 2nd innings: {{ m.inn2_runs }}/{{ m.inn2_wickets }}
+        </span>
+        <form method="POST" action="{{ url_for('admin_tournament_match_delete', tournament_id=t.id, match_row_id=m.id) }}" onsubmit="return confirm('Remove this match? Its stats will be rebuilt without it.');" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn" type="submit" style="border-color:rgba(239,68,68,.4); color:#fca5a5;">🗑️ Remove match</button>
+        </form>
       </div>
       {% if lines %}
       <div style="overflow:auto; margin-top:.5rem;">

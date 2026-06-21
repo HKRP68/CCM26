@@ -642,20 +642,12 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # ── Challenge League Tournament tagging ──
         # An official tournament match is recorded against the active tournament.
-        # Guard against replaying a pairing that has already completed.
+        # The same two teams may meet any number of times in a tournament.
         tournament_id = None
         if draft.get("is_tournament") and draft.get("tournament_id"):
-            from services import tournament_service
             tid = draft.get("tournament_id")
             host_cid = _resolve_challenge_team_id(host_team, league_key, session)
             target_cid = _resolve_challenge_team_id(target_team, league_key, session)
-            if tournament_service.pairing_already_played(session, tid, host_cid, target_cid):
-                await q.answer(
-                    "This tournament match has already been completed.", show_alert=True)
-                await context.bot.send_message(
-                    draft["chat_id"],
-                    "❌ This tournament match has already been completed.")
-                return
             tournament_id = tid
             draft["tournament_team_by_user"] = {host.id: host_cid, target.id: target_cid}
 
