@@ -320,7 +320,7 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      bat_team_name, bowl_team_name, chat_id,
                      pitch_type="Hard", is_private=False, stadium=None,
                      bat_team_code="", bowl_team_code="",
-                     bat_team_emoji="🏏", bowl_team_emoji="🏏"):
+                     bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=None):
     """Build the initial state dict for a Challenge League approach match."""
     bat_stats = {str(p["roster_id"]): _new_bat_stat() for p in bat_xi}
     bowl_stats = {str(p["roster_id"]): _new_bowl_stat() for p in bowl_xi}
@@ -354,6 +354,9 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "commentary_log": [],
         "chat_id": chat_id, "is_private": is_private,
         "pitch_type": pitch_type or "Hard", "stadium": stadium,
+        # Dynamic match conditions from the Pitch Report (None for non-league
+        # callers) — drives the environmental weight hook in the ball loop.
+        "conditions": conditions,
         "wicket_limit": WICKET_LIMIT,
         # Dramatic-finish steering (armed at the innings break for 20-over chases).
         "scenario": None,
@@ -540,6 +543,42 @@ def _make_trait_hook(striker_traits, bowler_traits, ctx, collector=None):
         return None
     return lambda raw_weights: _apply_trait_weights(
         raw_weights, striker_traits, bowler_traits, ctx, collector)
+
+
+def _make_environment_hook(conditions, ctx):
+    """Per-ball weight hook for the dynamic conditions (dew/weather/overs).
+
+    Thin wrapper over services.pitch_report so a missing module never crashes a
+    delivery — returns None (no-op) on any failure or when there are no
+    conditions to apply."""
+    if not conditions:
+        return None
+    try:
+        from services.pitch_report import make_environment_hook
+        return make_environment_hook(conditions, ctx)
+    except Exception:
+        logger.exception("environment hook build failed; ignoring conditions")
+        return None
+
+
+def _compose_hooks(*hooks):
+    """Combine weight hooks into one, applied left to right. Drops Nones and
+    returns the single hook (or None) when zero/one remain."""
+    real = [h for h in hooks if h is not None]
+    if not real:
+        return None
+    if len(real) == 1:
+        return real[0]
+
+    def _composed(raw_weights):
+        w = raw_weights
+        for h in real:
+            out = h(w)
+            if out:
+                w = out
+        return w
+
+    return _composed
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -762,6 +801,14 @@ def simulate_over(state):
                 {"over": state["current_over"], "total_overs": overs_total,
                  "rrr": required_rr, "bat_balls_faced": bs["balls"]},
                 collector=over_traits)
+            # Dynamic conditions hook (dew/weather/overs progression) for
+            # Challenge League matches. None for callers without conditions, and
+            # composed after traits so it layers on the final weights.
+            env_hook = _make_environment_hook(
+                state.get("conditions"),
+                {"over": state["current_over"], "total_overs": overs_total,
+                 "innings": innings})
+            weight_hook = _compose_hooks(env_hook, trait_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=over_idx, batter_runs=bs["runs"],
@@ -771,7 +818,7 @@ def simulate_over(state):
                 batting_position=state["striker_idx"] + 1,
                 format_config=engine_fmt,
                 batting_approach=bat_app, bowling_approach=bowl_app,
-                weight_hook=trait_hook))
+                weight_hook=weight_hook))
 
         otype = oc.get("type")
         runs = oc.get("runs", 0)

@@ -539,13 +539,32 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
     draft["pitch_type"] = pitch
     await query.answer(f"Pitch: {pitch}")
 
-    desc = _PITCH_DESC.get(pitch)
-    confirm = (
-        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
-        "═════════════════════════════\n"
-        f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
-        f"🌱 <b>Pitch:</b> {pitch}" + (f" — {desc}" if desc else "")
-    )
+    # Generate the dynamic conditions + Pitch Report for this surface. The same
+    # conditions dict is threaded into the live match (handlers/cipl_play.py) so
+    # the weather actually nudges ball outcomes — not just flavour text.
+    try:
+        from services.pitch_report import build_pitch_report
+        report_text, conditions = build_pitch_report(pitch)
+        draft["conditions"] = conditions
+    except Exception:
+        logger.exception("Failed to build pitch report")
+        report_text = None
+
+    if report_text:
+        confirm = (
+            f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
+            "═════════════════════════════\n"
+            f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n\n"
+            f"{report_text}"
+        )
+    else:
+        desc = _PITCH_DESC.get(pitch)
+        confirm = (
+            f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
+            "═════════════════════════════\n"
+            f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
+            f"🌱 <b>Pitch:</b> {pitch}" + (f" — {desc}" if desc else "")
+        )
     try:
         await query.edit_message_text(confirm, parse_mode="HTML")
     except Exception:
