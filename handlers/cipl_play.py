@@ -672,12 +672,16 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Honour the host's chosen pitch (selected during setup); fall back to the
         # randomised surface only when no pitch was picked.
         chosen_pitch = draft.get("pitch_type") or settings["pitch_type"]
+        # Conditions were generated alongside the Pitch Report at pitch selection.
+        # Reuse their weather/temperature so the live match matches the report.
+        conditions = draft.get("conditions") or {}
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
             overs=overs, toss_winner_id=winner.id, toss_decision=decision,
             batting_first_id=bat_user.id, bowling_first_id=bowl_user.id,
             stadium=settings["stadium"], pitch_type=chosen_pitch,
-            weather=settings["weather"], temperature=settings["temperature"],
+            weather=conditions.get("weather") or settings["weather"],
+            temperature=conditions.get("temperature") or settings["temperature"],
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
             expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
@@ -753,7 +757,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         chat_id=chat_id, pitch_type=pitch_type,
         is_private=chat_id > 0, stadium=match.stadium,
         bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
-        bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji)
+        bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
+        conditions=(draft or {}).get("conditions"))
     state["user_names"] = {
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
@@ -815,12 +820,23 @@ def _match_start_announcement(state):
     pitch = html.escape(str(state.get("pitch_type") or "Hard"))
     overs = state.get("overs", 20)
     rule = "━" * 15
+    # Compact live-conditions strip (weather · temp · dew) from the Pitch Report.
+    cond = state.get("conditions") or {}
+    cond_line = ""
+    if cond.get("weather"):
+        bits = [f"🌤️ {html.escape(str(cond['weather']))}"]
+        if cond.get("temperature") is not None:
+            bits.append(f"🌡️ {cond['temperature']}°C")
+        if cond.get("dew"):
+            bits.append(f"❄️ {html.escape(str(cond['dew']))} dew")
+        cond_line = f"{'  ·  '.join(bits)}\n"
     return (
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
         f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
         f"{rule}\n"
         f"🏟️ {stadium} • {overs} overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
+        f"{cond_line}"
         f"🏏 {bat} batting first\n"
         f"{rule}\n"
         f"{bat_emoji} <b>{bat}</b>   vs   {bowl_emoji} <b>{bowl}</b>\n"
