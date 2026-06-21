@@ -35,10 +35,12 @@ _CAT_LABELS = dict(_CATEGORIES)
 
 
 def _sr(r):
+    """Batting strike rate (runs per 100 balls) for a stats row, 0 if no balls."""
     return ((r.bat_runs or 0) / r.bat_balls * 100.0) if r.bat_balls else 0.0
 
 
 def _econ(r):
+    """Bowling economy (runs per over) for a stats row, 0 if no balls bowled."""
     overs = (r.bowl_balls or 0) / 6.0
     return ((r.bowl_runs or 0) / overs) if overs else 0.0
 
@@ -68,6 +70,7 @@ def _leaders_for(session, tour, category):
 
 
 def _render(tour, category, rows):
+    """Format a Top-10 leaderboard message (HTML) for a category's ranked rows."""
     label = _CAT_LABELS.get(category, "Stats")
     lines = [f"🏆 <b>{html.escape(tour.name)}</b> — Tournament Stats",
              f"<b>{label}</b> · Top 10", ""]
@@ -83,6 +86,7 @@ def _render(tour, category, rows):
 
 
 def _keyboard(active, opener_tg):
+    """Build the category inline keyboard, marking the active one and binding the opener."""
     rows, row = [], []
     for key, label in _CATEGORIES:
         mark = "● " if key == active else ""
