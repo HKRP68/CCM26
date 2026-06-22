@@ -98,6 +98,7 @@ def generate_schedule(session, tournament_id):
     created = 0
 
     def _emit(pairs_by_round, *, stage, group_id):
+        """Write scheduled TournamentMatch rows for a list of rounds."""
         nonlocal match_no, created
         for rno, pairs in enumerate(pairs_by_round, start=1):
             for (a, b) in pairs:
@@ -109,6 +110,13 @@ def generate_schedule(session, tournament_id):
                 created += 1
 
     if fmt == "groups":
+        # Every participating team must belong to a group, else it would be
+        # silently dropped from fixtures and then blocked by fixture gating.
+        unassigned = [t.name for t in teams if t.group_id is None]
+        if unassigned:
+            raise ValueError(
+                "Assign every team to a group first. Unassigned: %s"
+                % ", ".join(unassigned))
         groups = (session.query(TournamentGroup).filter_by(tournament_id=tid)
                   .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
         for g in groups:
@@ -120,6 +128,9 @@ def generate_schedule(session, tournament_id):
         rounds = round_robin_rounds(team_ids, double=(fmt == "double_rr"))
         _emit(rounds, stage="league", group_id=None)
 
+    if created == 0:
+        raise ValueError("No fixtures were generated — add at least two teams "
+                         "(and, for groups, at least two teams per group).")
     tour.schedule_generated = True
     session.flush()
     logger.info("Generated %s fixtures for tournament %s (%s)", created, tid, fmt)
@@ -130,21 +141,44 @@ def generate_schedule(session, tournament_id):
 # Fixture editing (DB)
 # ──────────────────────────────────────────────────────────────────────
 
+def _require_team(session, tid, team_id):
+    """Return the team id if it belongs to this tournament, else raise."""
+    from models import TournamentTeam
+    if not team_id:
+        return None
+    tt = (session.query(TournamentTeam)
+          .filter_by(id=int(team_id), tournament_id=tid).first())
+    if not tt:
+        raise ValueError("Team %s is not a participant in this tournament." % team_id)
+    return tt.id
+
+
 def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round_no=0):
-    """Add a single scheduled fixture. Caller commits."""
+    """Add a single scheduled fixture. Caller commits.
+
+    Validates that both teams (and the group, if given) belong to this tournament
+    so a tampered request can't create cross-tournament links.
+    """
     from sqlalchemy import func
-    from models import Tournament, TournamentMatch
+    from models import Tournament, TournamentMatch, TournamentGroup
     tid = int(tournament_id)
     tour = session.query(Tournament).get(tid)
+    t1 = _require_team(session, tid, team1_id)
+    t2 = _require_team(session, tid, team2_id)
+    if not t1 or not t2:
+        raise ValueError("A fixture needs two teams.")
+    if t1 == t2:
+        raise ValueError("A fixture needs two different teams.")
+    gid = int(group_id) if group_id else None
+    if gid and not session.query(TournamentGroup).filter_by(
+            id=gid, tournament_id=tid).first():
+        raise ValueError("Group does not belong to this tournament.")
     stage = "group" if (tour and tour.league_format == "groups") else "league"
     max_no = (session.query(func.max(TournamentMatch.match_no))
               .filter_by(tournament_id=tid).scalar()) or 0
     tm = TournamentMatch(
-        tournament_id=tid,
-        team1_id=int(team1_id) if team1_id else None,
-        team2_id=int(team2_id) if team2_id else None,
-        status="scheduled", stage=stage,
-        group_id=int(group_id) if group_id else None,
+        tournament_id=tid, team1_id=t1, team2_id=t2,
+        status="scheduled", stage=stage, group_id=gid,
         round_no=int(round_no or 0), match_no=max_no + 1)
     session.add(tm)
     session.flush()
@@ -152,13 +186,14 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
 
 
 def delete_fixture(session, fixture_id):
-    """Delete a scheduled fixture (not a completed one). Caller commits."""
+    """Delete a *scheduled* fixture only. Caller commits."""
     from models import TournamentMatch
     tm = session.query(TournamentMatch).get(int(fixture_id))
     if not tm:
         return None
-    if tm.status == "completed":
-        raise ValueError("Use the match-delete action to remove a completed match.")
+    if tm.status != "scheduled":
+        raise ValueError("Only scheduled fixtures can be deleted "
+                         "(this one is %s)." % tm.status)
     tid = tm.tournament_id
     session.delete(tm)
     session.flush()
@@ -166,17 +201,22 @@ def delete_fixture(session, fixture_id):
 
 
 def swap_fixture_team(session, fixture_id, slot, new_team_id):
-    """Replace one side of a scheduled fixture. ``slot`` is 1 or 2. Caller commits."""
+    """Replace one side of a *scheduled* fixture. ``slot`` is 1 or 2. Caller commits."""
     from models import TournamentMatch
     tm = session.query(TournamentMatch).get(int(fixture_id))
     if not tm:
         return None
-    if tm.status == "completed":
-        raise ValueError("Cannot edit a completed match.")
-    new_id = int(new_team_id) if new_team_id else None
+    if tm.status != "scheduled":
+        raise ValueError("Only scheduled fixtures can be edited "
+                         "(this one is %s)." % tm.status)
+    new_id = _require_team(session, tm.tournament_id, new_team_id) if new_team_id else None
     if int(slot) == 1:
+        if new_id and tm.team2_id == new_id:
+            raise ValueError("A fixture needs two different teams.")
         tm.team1_id = new_id
     else:
+        if new_id and tm.team1_id == new_id:
+            raise ValueError("A fixture needs two different teams.")
         tm.team2_id = new_id
     session.flush()
     return tm
@@ -208,6 +248,71 @@ def find_open_fixture(session, tournament_id, team1_id, team2_id):
                 and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
                 and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
             .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
+
+
+def _team_id_by_name(session, tid, name):
+    """Return the TournamentTeam id with this name in the tournament, or None."""
+    from models import TournamentTeam
+    tt = (session.query(TournamentTeam).filter_by(tournament_id=tid)
+          .filter(TournamentTeam.name == name).first())
+    return tt.id if tt else None
+
+
+def reserve_fixture(session, tournament_id, team1_id, team2_id):
+    """Atomically claim the earliest *scheduled* fixture for a pair (scheduled->live).
+
+    Returns the reserved ``TournamentMatch`` or None when there's no open fixture
+    or another draft just claimed it. The claim is an ``UPDATE ... WHERE
+    status='scheduled'`` so two concurrent drafts can't both reserve the same
+    fixture. Caller commits.
+    """
+    from sqlalchemy import or_, and_
+    from models import TournamentMatch
+    tid = int(tournament_id)
+    a, b = int(team1_id), int(team2_id)
+    fx = (session.query(TournamentMatch)
+          .filter_by(tournament_id=tid, status="scheduled")
+          .filter(or_(
+              and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
+              and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
+          .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
+    if not fx:
+        return None
+    claimed = (session.query(TournamentMatch)
+               .filter(TournamentMatch.id == fx.id,
+                       TournamentMatch.status == "scheduled")
+               .update({TournamentMatch.status: "live"}, synchronize_session=False))
+    if not claimed:
+        return None
+    session.flush()
+    session.refresh(fx)
+    return fx
+
+
+def reserve_fixture_by_names(session, tournament_id, name1, name2):
+    """Name-based wrapper around ``reserve_fixture`` for the bot draft flow."""
+    tid = int(tournament_id)
+    a = _team_id_by_name(session, tid, name1)
+    b = _team_id_by_name(session, tid, name2)
+    if not a or not b:
+        return None
+    return reserve_fixture(session, tid, a, b)
+
+
+def release_fixture(session, fixture_id):
+    """Revert a reserved fixture (live -> scheduled) when a match is abandoned.
+
+    No-ops if the fixture isn't currently ``live`` (e.g. already completed or
+    released). Caller commits.
+    """
+    from models import TournamentMatch
+    if not fixture_id:
+        return
+    (session.query(TournamentMatch)
+     .filter(TournamentMatch.id == int(fixture_id),
+             TournamentMatch.status == "live")
+     .update({TournamentMatch.status: "scheduled"}, synchronize_session=False))
+    session.flush()
 
 
 def remaining_opponents(session, tournament_id, tournament_team_id):

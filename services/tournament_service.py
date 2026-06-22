@@ -116,6 +116,7 @@ def reset_tournament(session, tournament_id):
     tour = session.query(Tournament).get(tid)
     if tour:
         tour.knockout_generated = False
+        tour.completed_at = None
         if tour.status not in ("cancelled",):
             tour.status = "draft" if not tour.is_active else "active"
     return tour
@@ -422,7 +423,28 @@ def delete_tournament_match(session, tournament_match_id):
     if not tm:
         return None
     tid = tm.tournament_id
-    session.delete(tm)
+    # Undo any knockout advancement this result caused, so the next round doesn't
+    # keep showing the now-removed team as qualified.
+    try:
+        from services import knockout_service
+        knockout_service.retract_bracket(session, tm)
+    except Exception:
+        logger.exception("retract_bracket failed for tournament %s", tid)
+    if tm.match_no and tm.match_no > 0:
+        # A real scheduled/knockout fixture — revert it to a pending fixture so the
+        # pair can replay it, rather than dropping it from the schedule entirely.
+        tm.status = "scheduled"
+        tm.match_id = None
+        tm.winner_team_id = None
+        tm.result_text = None
+        tm.inn1_runs = tm.inn1_wickets = tm.inn1_balls = None
+        tm.inn2_runs = tm.inn2_wickets = tm.inn2_balls = None
+        tm.host_user_id = tm.target_user_id = None
+        tm.scorecard_json = None
+        tm.completed_at = None
+    else:
+        # Fallback-recorded row (unscheduled tournament) — hard delete.
+        session.delete(tm)
     session.flush()
     recompute_tournament(session, tid)
     return tid
@@ -490,12 +512,21 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             wname = (win_team.name if win_team else None) or "Winner"
             result_text = f"{wname} won"
 
-    # If a schedule was generated, fill the pre-created fixture for this pair in
-    # place instead of inserting a duplicate row. Otherwise (un-scheduled
-    # tournament) fall back to the original insert path for back-compat.
+    # If a schedule or knockout bracket was generated, fill the pre-created
+    # fixture for this pair in place instead of inserting a duplicate row. When a
+    # fixture is required but none is open (e.g. the pair already played it, or a
+    # stale draft launched after the fixture was consumed) we must NOT fall back
+    # to inserting a fresh league row — that would double-count standings and
+    # leave the bracket unadvanced. Only truly unscheduled tournaments insert.
     tm = None
-    if tour.schedule_generated and t_inn1 and t_inn2:
+    fixture_required = bool(tour.schedule_generated or tour.knockout_generated)
+    if fixture_required and t_inn1 and t_inn2:
         tm = _find_open_fixture(session, tid, t_inn1.id, t_inn2.id)
+    if fixture_required and tm is None:
+        logger.warning(
+            "No open tournament fixture for tournament %s (%s vs %s); not recording.",
+            tid, getattr(t_inn1, "id", None), getattr(t_inn2, "id", None))
+        return None
 
     if tm is not None:
         tm.match_id = match_id
@@ -567,10 +598,12 @@ def points_table(session, tournament_id, group_id=None):
 
     out = []
     for tt in rows:
-        tt._nrr = round(nrr(tt), 3)
+        tt._nrr_sort = nrr(tt)          # full precision for ordering
+        tt._nrr = round(tt._nrr_sort, 3)  # rounded for display
         out.append(tt)
     # Tie-break: points, then wins, then net run-rate (standard cricket order).
-    out.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr), reverse=True)
+    # Sort on the unrounded NRR so near-equal teams aren't mis-seeded.
+    out.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr_sort), reverse=True)
     return out
 
 

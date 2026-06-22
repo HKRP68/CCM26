@@ -433,6 +433,15 @@ async def _forfeit_live_match(context, mid, state, expected):
                              coins_change=charged_coins, gems_change=charged_gems)
         else:
             charged_coins = charged_gems = 0
+        # A forfeit doesn't record a tournament result, so free the reserved
+        # fixture (live → scheduled) — otherwise that pairing could never replay.
+        rfx = state.get("reserved_fixture_id") if isinstance(state, dict) else None
+        if rfx:
+            try:
+                from services import league_schedule_service
+                league_schedule_service.release_fixture(session, rfx)
+            except Exception:
+                logger.exception("releasing reserved fixture failed for match %s", mid)
         session.commit()
     except Exception:
         session.rollback()
@@ -650,6 +659,20 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             target_cid = _resolve_challenge_team_id(target_team, league_key, session)
             tournament_id = tid
             draft["tournament_team_by_user"] = {host.id: host_cid, target.id: target_cid}
+            # For a fixture-gated tournament, atomically reserve this pair's open
+            # fixture (scheduled → live) so a concurrent draft in another chat can't
+            # play the same fixture. find_open_fixture later fills the 'live' row.
+            from models import Tournament as _Tourn
+            from services import league_schedule_service as _lss
+            _tour = session.query(_Tourn).get(int(tid))
+            if _tour and (_tour.schedule_generated or _tour.knockout_generated):
+                _fx = _lss.reserve_fixture_by_names(session, tid, host_team, target_team)
+                if not _fx:
+                    await q.answer(
+                        "That fixture has already been taken or played. Restart and "
+                        "pick a scheduled opponent.", show_alert=True)
+                    return
+                draft["reserved_fixture_id"] = _fx.id
 
         bat_side = "host" if bat_is_host else "target"
         bowl_side = "target" if bat_is_host else "host"
@@ -768,6 +791,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
     if draft:
         state["tournament_id"] = draft.get("tournament_id")
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
+        state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
     _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.

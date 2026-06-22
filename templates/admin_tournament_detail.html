@@ -152,7 +152,7 @@
               <option value="double" {{ 'selected' if g.rr_mode == 'double' else '' }}>Double RR</option>
             </select>
           </form>
-          <form method="POST" style="display:inline;" onsubmit="return confirm('Delete {{ g.name }}? Its teams stay in the tournament, unassigned.');">
+          <form method="POST" style="display:inline;" onsubmit='return confirm("Delete " + {{ g.name|tojson }} + "? Its teams stay in the tournament, unassigned.");'>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="delete_group">
             <input type="hidden" name="group_id" value="{{ g.id }}">

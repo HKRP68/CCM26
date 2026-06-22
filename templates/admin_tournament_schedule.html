@@ -25,11 +25,10 @@
       <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Schedule</span>
     </div>
     <h2 style="margin:0;">Schedule — {{ t.name }}</h2>
-    {% set played = fixtures|selectattr('status','equalto','completed')|list|length %}
     <p style="color:var(--muted); margin:.25rem 0 0;">
       League stage: <strong>{{ t.league_format }}</strong>
       {% if t.league_format == 'groups' %} • {{ t.group_points_mode }} points{% endif %}
-      • {{ played }}/{{ fixtures|length }} played
+      • {{ league_played }}/{{ league_total }} played
     </p>
   </div>
 
@@ -58,7 +57,7 @@
       <span class="status-pill {{ fx.status }}">{{ fx.status }}</span>
       {% if fx.group_id and g_map.get(fx.group_id) %}<span style="color:var(--muted); font-size:.78rem;">{{ g_map.get(fx.group_id).name }}</span>{% endif %}
 
-      {% if fx.status == 'completed' %}
+      {% if fx.status != 'scheduled' %}
         <span>{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else 'TBD' }}</span>
         <span class="vs">vs</span>
         <span>{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else 'TBD' }}</span>
@@ -109,7 +108,7 @@
       <span class="vs">vs</span>
       <span>{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else (fx.slot2_label or 'TBD') }}</span>
       {% if fx.result_text %}<span style="color:var(--muted); font-size:.8rem;">— {{ fx.result_text }}</span>{% endif %}
-      {% if fx.status != 'completed' %}
+      {% if fx.status == 'scheduled' %}
       <form method="POST" style="display:inline; margin-left:auto;" onsubmit="return confirm('Delete this knockout match?');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="delete_fixture">
