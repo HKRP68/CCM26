@@ -225,6 +225,13 @@
       Generate it once the league is complete; play the knockout matches with the same tournament
       command (each becomes playable once both its teams are known). Winners advance automatically.
     </p>
+    {% if league_total %}
+      <p style="font-size:.82rem; margin:0 0 .7rem;">
+        League stage:
+        {% if league_played >= league_total %}<span style="color:#86efac;">✅ complete ({{ league_played }}/{{ league_total }})</span>
+        {% else %}<span style="color:#fde68a;">⏳ in progress ({{ league_played }}/{{ league_total }} played)</span> — seeding now uses partial standings.{% endif %}
+      </p>
+    {% endif %}
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="save_knockout">

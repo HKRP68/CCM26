@@ -25,10 +25,11 @@
       <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Schedule</span>
     </div>
     <h2 style="margin:0;">Schedule — {{ t.name }}</h2>
+    {% set played = fixtures|selectattr('status','equalto','completed')|list|length %}
     <p style="color:var(--muted); margin:.25rem 0 0;">
       League stage: <strong>{{ t.league_format }}</strong>
       {% if t.league_format == 'groups' %} • {{ t.group_points_mode }} points{% endif %}
-      • {{ fixtures|length }} fixture(s)
+      • {{ played }}/{{ fixtures|length }} played
     </p>
   </div>
 

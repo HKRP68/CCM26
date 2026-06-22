@@ -12472,8 +12472,12 @@ def admin_tournament_detail(tournament_id):
                     log_admin(db, "tournament_knockout_save", "tournament", t.id, t.name)
                     flash("✅ Saved knockout settings.", "success")
                 elif action == "generate_knockout":
-                    from services import knockout_service
+                    from services import knockout_service, tournament_service
                     try:
+                        if not tournament_service.league_stage_complete(db, t.id):
+                            played, total = tournament_service.league_progress(db, t.id)
+                            flash(f"⚠️ League stage not finished ({played}/{total} played) — "
+                                  "the bracket was seeded from current standings.", "info")
                         n = knockout_service.generate_knockout(db, t.id)
                         log_admin(db, "tournament_knockout_generate", "tournament", t.id, t.name)
                         flash(f"✅ Generated {n} knockout match(es).", "success")
@@ -12625,8 +12629,11 @@ def admin_tournament_detail(tournament_id):
                          if ct.id not in part_cids]
         groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
                   .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        from services import tournament_service
+        lg_played, lg_total = tournament_service.league_progress(db, t.id)
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
-                               available=available, groups=groups)
+                               available=available, groups=groups,
+                               league_played=lg_played, league_total=lg_total)
     finally:
         db.close()
 
@@ -12682,10 +12689,13 @@ def admin_tournament_dashboard(tournament_id):
             except Exception:
                 lines = []
             match_cards.append((m, lines))
+        champion = tournament_service.tournament_champion(db, t.id)
+        played, total = tournament_service.league_progress(db, t.id)
         return render_template(
             "admin_tournament_dashboard.html",
             t=t, table=table, group_tables=group_tables, leaders=leaders,
-            match_cards=match_cards, tt_map=tt_map, players=players)
+            match_cards=match_cards, tt_map=tt_map, players=players,
+            champion=champion, league_played=played, league_total=total)
     finally:
         db.close()
 

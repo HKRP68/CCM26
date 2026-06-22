@@ -569,8 +569,43 @@ def points_table(session, tournament_id, group_id=None):
     for tt in rows:
         tt._nrr = round(nrr(tt), 3)
         out.append(tt)
-    out.sort(key=lambda t: (t.points or 0, t._nrr), reverse=True)
+    # Tie-break: points, then wins, then net run-rate (standard cricket order).
+    out.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr), reverse=True)
     return out
+
+
+def league_progress(session, tournament_id):
+    """Return ``(played, total)`` for the league/group-stage fixtures."""
+    tid = int(tournament_id)
+    base = (session.query(TournamentMatch)
+            .filter_by(tournament_id=tid)
+            .filter(TournamentMatch.stage.in_(("league", "group"))))
+    total = base.count()
+    played = base.filter(TournamentMatch.status == "completed").count()
+    return played, total
+
+
+def league_stage_complete(session, tournament_id):
+    """True once the league/group stage has fixtures and none remain unplayed.
+
+    Used to tell the admin when a knockout bracket can be seeded from final
+    standings rather than partial ones.
+    """
+    played, total = league_progress(session, tournament_id)
+    return total > 0 and played >= total
+
+
+def tournament_champion(session, tournament_id):
+    """The ``TournamentTeam`` that won a completed final, or None."""
+    tid = int(tournament_id)
+    fin = (session.query(TournamentMatch)
+           .filter_by(tournament_id=tid, stage="final", status="completed")
+           .filter(TournamentMatch.winner_team_id.isnot(None))
+           .order_by(TournamentMatch.match_no.desc(), TournamentMatch.id.desc())
+           .first())
+    if not fin:
+        return None
+    return session.query(TournamentTeam).get(fin.winner_team_id)
 
 
 def _stat_rows(session, tournament_id):

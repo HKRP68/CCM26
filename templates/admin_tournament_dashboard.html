@@ -44,8 +44,15 @@ details.match-card summary { cursor:pointer; }
       <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Dashboard</span>
     </div>
     <h2 style="margin:0;">📊 {{ t.name }} Dashboard</h2>
-    <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • status: {{ t.status }}{% if t.is_active %} • ● active{% endif %}</p>
+    <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • status: {{ t.status }}{% if t.is_active %} • ● active{% endif %}
+      {% if league_total %} • League stage: {{ league_played }}/{{ league_total }} played{% if league_played >= league_total %} ✅{% endif %}{% endif %}</p>
   </div>
+
+  {% if champion %}
+  <section class="tour-card" style="border-color:rgba(249,209,96,.5); background:linear-gradient(180deg, rgba(249,209,96,.08), transparent);">
+    <h3 style="margin:0; display:flex; align-items:center; gap:.5rem;">🏆 Champions: <span style="color:var(--accent);">{{ champion.name }}</span></h3>
+  </section>
+  {% endif %}
 
   <!-- Points table(s) -->
   {% macro points_tbl(rows) %}
