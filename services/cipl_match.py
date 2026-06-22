@@ -561,6 +561,63 @@ def _make_environment_hook(conditions, ctx):
         return None
 
 
+# Progressive throttle on the Wicket weight once wickets have already fallen in
+# the CURRENT over. The momentum/collapse/consecutive-wicket layers in the
+# game-state engine are recomputed after every ball, so each fresh wicket pushes
+# the next ball's wicket chance up — left unchecked they stack toward the GSME
+# clamp and produce unrealistic 4-5 wicket overs. Real T20 overs almost never
+# yield more than two wickets; three is hat-trick-grade, four-plus effectively
+# never. These scales keep the occasional double (and rare triple) without the
+# cascade. Indexed by wickets already taken THIS over; 3+ falls back to the last.
+_WICKET_OVER_THROTTLE = {1: 0.50, 2: 0.22, 3: 0.08}
+
+
+def _make_wicket_cluster_hook(wkts_this_over):
+    """Damp the per-ball Wicket weight after the first wicket of the over, so a
+    single over can't realistically produce the 4-5 wicket cascades the raw
+    momentum/collapse layers can otherwise stack up. Returns None (no-op) before
+    the over's first wicket, so a normal delivery is completely unaffected."""
+    if wkts_this_over <= 0:
+        return None
+    scale = _WICKET_OVER_THROTTLE.get(wkts_this_over, 0.08)
+
+    def _hook(raw_weights):
+        if "Wicket" not in raw_weights:
+            return raw_weights
+        rw = dict(raw_weights)
+        rw["Wicket"] *= scale
+        return rw
+
+    return _hook
+
+
+def _make_last_over_drama_hook(is_last_over, is_live_chase):
+    """Mild final-over uplift so the last over of an innings swings harder — more
+    big hits and late wickets, the tension of a finish coming down to the wire.
+    A touch stronger during a live chase. Returns None (no-op) for every over
+    except the innings' final over, so earlier overs are unchanged."""
+    if not is_last_over:
+        return None
+    six = 1.18 if is_live_chase else 1.12
+    four = 1.12 if is_live_chase else 1.08
+    wkt = 1.15 if is_live_chase else 1.10
+    dot = 0.90
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        if "Six" in rw:
+            rw["Six"] *= six
+        if "Four" in rw:
+            rw["Four"] *= four
+        if "Wicket" in rw:
+            rw["Wicket"] *= wkt
+        if "Dot" in rw:
+            rw["Dot"] *= dot
+        return rw
+
+    return _hook
+
+
 def _compose_hooks(*hooks):
     """Combine weight hooks into one, applied left to right. Drops Nones and
     returns the single hook (or None) when zero/one remain."""
@@ -808,7 +865,18 @@ def simulate_over(state):
                 state.get("conditions"),
                 {"over": state["current_over"], "total_overs": overs_total,
                  "innings": innings})
-            weight_hook = _compose_hooks(trait_hook, env_hook)
+            # Anti-cascade: throttle the wicket weight once wickets have already
+            # fallen in THIS over, so the recomputed momentum/collapse layers
+            # can't stack into a 4-5 wicket over (see _make_wicket_cluster_hook).
+            wicket_hook = _make_wicket_cluster_hook(
+                state["total_wickets"] - wkts_before)
+            # A little extra drama in the innings' final over (more boundaries /
+            # late wickets), nudged up further when a live chase is on.
+            drama_hook = _make_last_over_drama_hook(
+                state["current_over"] >= overs_total,
+                bool(target) and not chased)
+            weight_hook = _compose_hooks(trait_hook, env_hook,
+                                         wicket_hook, drama_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=over_idx, batter_runs=bs["runs"],
