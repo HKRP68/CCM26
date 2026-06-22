@@ -217,6 +217,13 @@ def _migrate_add_columns():
     _try_add("challenge_leagues", "tournament_command", "VARCHAR(60)")
     _try_add("matches", "tournament_id", "INTEGER")
 
+    # Overseas-player rules: league home country + min/max overseas in the XI,
+    # and the per-challenge-player overseas flag.
+    _try_add("challenge_leagues", "home_country", "VARCHAR(60)")
+    _try_add("challenge_leagues", "min_overseas", "INTEGER DEFAULT 0")
+    _try_add("challenge_leagues", "max_overseas", "INTEGER DEFAULT 11")
+    _try_add("challenge_players", "is_overseas", "BOOLEAN DEFAULT FALSE")
+
     # Fantasy league configuration fields added after the original fantasy
     # launch. New eligibility/rule tables are handled by create_all above.
     _try_add("fantasy_leagues", "description", "TEXT")

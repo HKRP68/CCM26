@@ -39,6 +39,8 @@
 .player-filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:.7rem; }
 .player-list { max-height:720px; overflow:auto; display:flex; flex-direction:column; gap:.45rem; padding-right:.25rem; }
 .player-option, .assigned-player { display:grid; grid-template-columns:auto minmax(180px,1fr) repeat(4, minmax(70px,auto)); gap:.7rem; align-items:center; background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.7rem; }
+.assigned-player { grid-template-columns:minmax(160px,1fr) repeat(5, minmax(64px,auto)) auto; }
+.assigned-player.is-overseas { border-color:rgba(56,189,248,.5); box-shadow:inset 3px 0 0 rgba(56,189,248,.7); }
 .player-option.disabled { opacity:.55; }
 .player-rating { font-weight:800; color:var(--accent); }
 @media (max-width: 900px) { .cm-row, .league-row, .player-option, .assigned-player { grid-template-columns:1fr; } .cm-actions { justify-content:flex-start; } .league-command code { width:auto; } }
@@ -75,6 +77,9 @@
       <div><label>Tournament Command</label><input name="tournament_command" placeholder="/cipl_tournament"></div>
       <div><label>Sort</label><input type="number" name="league_sort_order" value="0"></div>
       <div><label>League image</label><input type="file" name="league_image" accept="image/*"></div>
+      <div><label>Home country ✈️</label><input name="home_country" placeholder="India"></div>
+      <div><label>Min overseas in XI</label><input type="number" name="min_overseas" value="0" min="0" max="11"></div>
+      <div><label>Max overseas in XI</label><input type="number" name="max_overseas" value="11" min="0" max="11"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" checked style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" checked style="width:auto;"> Same-team allowed</label>
       <button class="btn btn-primary" type="submit">+ Add League</button>
@@ -91,6 +96,8 @@
           <span>{{ league.short_code or 'No short code' }}</span>
           <span>·</span><span>Sort {{ league.sort_order }}</span>
           <span>·</span><span>{{ 'Same-team allowed' if league.same_team_allowed else 'Same-team blocked' }}</span>
+          {% if league.min_overseas or league.max_overseas < 11 %}<span>·</span><span>✈️ Overseas {{ league.min_overseas }}–{{ league.max_overseas }}</span>{% endif %}
+          {% if league.home_country %}<span>·</span><span>🏠 {{ league.home_country }}</span>{% endif %}
         </div>
       </div>
       <div class="league-command">
@@ -127,6 +134,9 @@
       <div><label>Tournament Command</label><input name="tournament_command" value="{{ league.tournament_command or '' }}" placeholder="/cipl_tournament"></div>
       <div><label>Sort</label><input type="number" name="league_sort_order" value="{{ league.sort_order }}"></div>
       <div><label>League image</label><input type="file" name="league_image" accept="image/*"></div>
+      <div><label>Home country ✈️</label><input name="home_country" value="{{ league.home_country or '' }}" placeholder="India"></div>
+      <div><label>Min overseas in XI</label><input type="number" name="min_overseas" value="{{ league.min_overseas }}" min="0" max="11"></div>
+      <div><label>Max overseas in XI</label><input type="number" name="max_overseas" value="{{ league.max_overseas }}" min="0" max="11"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" {{ 'checked' if league.is_active else '' }} style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" {{ 'checked' if league.same_team_allowed else '' }} style="width:auto;"> Same-team challenge allowed</label>
       {% if league.image_url %}<label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="remove_image" style="width:auto;"> Remove current image</label>{% endif %}
@@ -193,14 +203,17 @@
     <div style="display:flex;flex-direction:column;gap:.55rem;">
       {% for cp in challenge_players %}
       {% set src = cp.source_player %}
-      <div class="assigned-player">
-        <strong>{{ cp.name }}</strong>
+      <div class="assigned-player {{ 'is-overseas' if cp.is_overseas else '' }}">
+        <strong>{{ cp.name }} {% if cp.is_overseas %}<span title="Overseas player">✈️</span>{% endif %}</strong>
         <span>{{ src.country if src else 'Master player missing' }}</span>
         <span>{{ src.category if src else '—' }}</span>
         <span>Bat <b>{{ src.bat_rating if src else '—' }}</b></span>
         <span>Bowl <b>{{ src.bowl_rating if src else '—' }}</b></span>
         <span>OVR <b class="player-rating">{{ src.rating if src else '—' }}</b></span>
-        <form method="POST" onsubmit="return confirm('Remove {{ cp.name }} from {{ team.name }}?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_player"><input type="hidden" name="player_id" value="{{ cp.id }}"><button class="btn btn-red btn-sm" type="submit">Remove</button></form>
+        <div class="cm-actions" style="justify-content:flex-end;">
+          <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="toggle_overseas"><input type="hidden" name="player_id" value="{{ cp.id }}"><button class="btn btn-ghost btn-sm" type="submit" title="Toggle overseas status">{{ '✈️ Overseas' if cp.is_overseas else 'Mark Overseas' }}</button></form>
+          <form method="POST" onsubmit="return confirm('Remove {{ cp.name }} from {{ team.name }}?');" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_player"><input type="hidden" name="player_id" value="{{ cp.id }}"><button class="btn btn-red btn-sm" type="submit">Remove</button></form>
+        </div>
       </div>
       {% else %}
       <div class="empty-state">No players added to {{ team.name }} yet.</div>

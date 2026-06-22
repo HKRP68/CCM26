@@ -843,7 +843,32 @@ def _challenge_is_bowling_option(player):
     return "bowler" in category or "all rounder" in category or "allrounder" in category
 
 
-def _challenge_xi_validation(players):
+def _challenge_is_overseas(player):
+    """True when the challenge player is flagged overseas.
+
+    Prefers the ``is_overseas`` column (set by the admin toggle) and falls back to
+    the ``is_overseas`` key inside ``details_json`` for rows that predate the column.
+    """
+    flag = getattr(player, "is_overseas", None)
+    if flag is not None:
+        return bool(flag)
+    return bool(_challenge_player_details(player).get("is_overseas"))
+
+
+def _challenge_overseas_limits(draft):
+    """Return ``(min_overseas, max_overseas)`` for the draft, defaulting to 0/11."""
+    try:
+        lo = int(draft.get("overseas_min") or 0)
+    except (TypeError, ValueError):
+        lo = 0
+    try:
+        hi = int(draft.get("overseas_max", 11))
+    except (TypeError, ValueError):
+        hi = 11
+    return lo, hi
+
+
+def _challenge_xi_validation(players, min_overseas=0, max_overseas=11):
     if len(players) != 11:
         return False, "Select exactly 11 players."
     if not any(_challenge_is_wicket_keeper(player) for player in players):
@@ -851,6 +876,11 @@ def _challenge_xi_validation(players):
     bowling_options = sum(1 for player in players if _challenge_is_bowling_option(player))
     if bowling_options < 5:
         return False, "At least 5 Bowling Option Must (Bowlers + Allrounders)"
+    overseas = sum(1 for player in players if _challenge_is_overseas(player))
+    if overseas > max_overseas:
+        return False, f"Max {max_overseas} overseas ✈️ allowed in XI (you have {overseas})"
+    if overseas < min_overseas:
+        return False, f"Min {min_overseas} overseas ✈️ required in XI (you have {overseas})"
     return True, ""
 
 
@@ -902,6 +932,8 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
     selected_players.sort(key=lambda player: selected_ids.index(int(getattr(player, "id"))))
     keeper_count = sum(1 for player in selected_players if _challenge_is_wicket_keeper(player))
     bowling_options = sum(1 for player in selected_players if _challenge_is_bowling_option(player))
+    min_overseas, max_overseas = _challenge_overseas_limits(draft)
+    overseas_count = sum(1 for player in selected_players if _challenge_is_overseas(player))
     lines = [
         f"🏏 <b>{team_name} Playing XI Selection</b>",
         f"{_mention(owner.get('tg_id'), owner.get('name') or 'Player')}, select exactly 11 players.",
@@ -913,8 +945,15 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
         "<b>Rules:</b>",
         f"{_challenge_rule_checkbox(keeper_count >= 1)} 1 Wicket Keeper ({keeper_count}/1)",
         f"{_challenge_rule_checkbox(bowling_options >= 5)} At least 5 Bowling Options ({bowling_options}/5)",
-        "• Selection order becomes batting order",
     ]
+    # Only surface the overseas rule when the league actually configured a limit.
+    if min_overseas > 0 or max_overseas < 11:
+        overseas_ok = min_overseas <= overseas_count <= max_overseas
+        lines.append(
+            f"{_challenge_rule_checkbox(overseas_ok)} Overseas ✈️ {overseas_count} "
+            f"(min {min_overseas} / max {max_overseas})"
+        )
+    lines.append("• Selection order becomes batting order")
     if selected_players:
         lines.extend(["", "<b>Batting order:</b>"])
         lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
@@ -1980,6 +2019,12 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     session = get_session()
     try:
         players = _challenge_team_players(session, draft, side)
+        # Cache the league overseas limits on the draft so the picker render and
+        # confirm callbacks can enforce them without re-hitting the DB.
+        league = _get_challenge_league_record(session, draft.get("league_key"))
+        if league is not None:
+            draft["overseas_min"] = int(getattr(league, "min_overseas", 0) or 0)
+            draft["overseas_max"] = int(getattr(league, "max_overseas", 11) or 11)
     finally:
         session.close()
     if not players:
@@ -2053,7 +2098,7 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
         proposed_ids = selected_ids + [player_id]
         proposed_players = [player_map[pid] for pid in proposed_ids if pid in player_map]
         if len(proposed_ids) == 11:
-            valid, error = _challenge_xi_validation(proposed_players)
+            valid, error = _challenge_xi_validation(proposed_players, *_challenge_overseas_limits(draft))
             if not valid:
                 await query.answer(error, show_alert=True)
                 return
@@ -2109,7 +2154,7 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         return
 
     selected_players = [player_map[pid] for pid in selected_ids if pid in player_map]
-    valid, error = _challenge_xi_validation(selected_players)
+    valid, error = _challenge_xi_validation(selected_players, *_challenge_overseas_limits(draft))
     if not valid:
         await query.answer(error, show_alert=True)
         return
@@ -2307,7 +2352,7 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     # A full XI must satisfy the rules; a partial pick (<11) is accepted as-is
     # and simply won't surface the Confirm XI button until it reaches 11.
     if len(numbers) == 11:
-        valid, error = _challenge_xi_validation(selected_players)
+        valid, error = _challenge_xi_validation(selected_players, *_challenge_overseas_limits(draft))
         if not valid:
             await message.reply_text(f"❌ {error}")
             return
@@ -2400,7 +2445,7 @@ async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     new_players = [pid_map[pid] for pid in new_ids if pid in pid_map]
-    valid, error = _challenge_xi_validation(new_players)
+    valid, error = _challenge_xi_validation(new_players, *_challenge_overseas_limits(draft))
     if not valid:
         await message.reply_text(f"❌ {error}\nNo change made.")
         return

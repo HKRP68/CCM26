@@ -11783,7 +11783,34 @@ def _ensure_default_challenge_mode(db):
     return mode
 
 
-def _challenge_player_details_from_source(player):
+def _is_overseas_for_league(player, league):
+    """True when ``player``'s country differs from the league home country.
+
+    Returns False when the league has no ``home_country`` configured, so leagues
+    that don't care about overseas players never auto-flag anyone.
+    """
+    home = (getattr(league, "home_country", None) or "").strip().lower()
+    if not home:
+        return False
+    return (player.country or "").strip().lower() != home
+
+
+def _apply_overseas_league_form(league):
+    """Read + clamp the league overseas fields from the request form onto ``league``.
+
+    ``min``/``max`` are clamped to 0..11 and min is never allowed above max so the
+    XI picker can't be handed an unsatisfiable rule.
+    """
+    league.home_country = (request.form.get("home_country") or "").strip()[:60] or None
+    lo = max(0, min(11, _int_form("min_overseas")))
+    hi = max(0, min(11, _int_form("max_overseas", 11)))
+    if hi < lo:
+        hi = lo
+    league.min_overseas = lo
+    league.max_overseas = hi
+
+
+def _challenge_player_details_from_source(player, is_overseas=False):
     return json.dumps({
         "source_player_id": player.id,
         "name": player.name,
@@ -11797,6 +11824,7 @@ def _challenge_player_details_from_source(player):
         "bat_hand": player.bat_hand,
         "bowl_hand": player.bowl_hand,
         "bowl_style": player.bowl_style,
+        "is_overseas": bool(is_overseas),
     }, separators=(",", ":"))
 
 
@@ -11810,6 +11838,7 @@ def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
     team = db.query(ChallengeTeam).get(team_id)
     if not team:
         return 0, ["Team not found"]
+    league = team.league
 
     added = 0
     skipped = []
@@ -11853,11 +11882,13 @@ def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
 
         max_sort += 1
         existing_ids.add(source.id)
+        overseas = _is_overseas_for_league(source, league)
         db.add(ChallengePlayer(
             team_id=team_id,
             source_player_id=source.id,
             name=source.name[:150],
-            details_json=_challenge_player_details_from_source(source),
+            details_json=_challenge_player_details_from_source(source, overseas),
+            is_overseas=overseas,
             sort_order=max_sort,
         ))
         added += 1
@@ -11970,6 +12001,7 @@ def admin_challenge_data():
                             is_active=_checked("league_is_active", True),
                             same_team_allowed=_checked("same_team_allowed", True),
                         )
+                        _apply_overseas_league_form(league)
                         image_url = _save_challenge_league_image(request.files.get("league_image"))
                         if image_url:
                             league.image_url = image_url
@@ -12040,6 +12072,7 @@ def admin_challenge_league_detail(league_id):
                     league.sort_order = _int_form("league_sort_order")
                     league.is_active = _checked("league_is_active")
                     league.same_team_allowed = _checked("same_team_allowed")
+                    _apply_overseas_league_form(league)
                     if request.form.get("remove_image") == "on":
                         league.image_url = None
                     image_url = _save_challenge_league_image(request.files.get("league_image"))
@@ -12152,11 +12185,13 @@ def admin_challenge_team_detail(league_id, team_id):
                         if source.id in existing_ids:
                             continue
                         max_sort += 1
+                        overseas = _is_overseas_for_league(source, league)
                         db.add(ChallengePlayer(
                             team_id=team.id,
                             source_player_id=source.id,
                             name=source.name[:150],
-                            details_json=_challenge_player_details_from_source(source),
+                            details_json=_challenge_player_details_from_source(source, overseas),
+                            is_overseas=overseas,
                             sort_order=max_sort,
                         ))
                         added += 1
@@ -12179,11 +12214,13 @@ def admin_challenge_team_detail(league_id, team_id):
                             flash(f"{source.name} is already in {team.name}.", "info")
                         else:
                             max_sort = db.query(func.max(ChallengePlayer.sort_order)).filter(ChallengePlayer.team_id == team.id).scalar() or 0
+                            overseas = _is_overseas_for_league(source, league)
                             db.add(ChallengePlayer(
                                 team_id=team.id,
                                 source_player_id=source.id,
                                 name=source.name[:150],
-                                details_json=_challenge_player_details_from_source(source),
+                                details_json=_challenge_player_details_from_source(source, overseas),
+                                is_overseas=overseas,
                                 sort_order=max_sort + 1,
                             ))
                             log_admin(db, "challenge_player_add", "challenge_team", team.id, team.name, f"player={source.name}")
@@ -12201,6 +12238,27 @@ def admin_challenge_team_detail(league_id, team_id):
                             if len(skipped) > 5:
                                 msg += f" (+{len(skipped) - 5} more)"
                         flash(msg, "success" if added else "info")
+                elif action == "toggle_overseas":
+                    player = (db.query(ChallengePlayer)
+                                .filter(ChallengePlayer.id == _int_form("player_id"), ChallengePlayer.team_id == team.id)
+                                .first())
+                    if not player:
+                        flash("Player assignment not found.", "error")
+                    else:
+                        player.is_overseas = not bool(player.is_overseas)
+                        # Mirror into details_json so the match-side XI picker,
+                        # which reads the blob, stays in sync.
+                        try:
+                            data = json.loads(player.details_json) if player.details_json else {}
+                            if not isinstance(data, dict):
+                                data = {}
+                        except Exception:
+                            data = {}
+                        data["is_overseas"] = bool(player.is_overseas)
+                        player.details_json = json.dumps(data, separators=(",", ":"))
+                        log_admin(db, "challenge_player_overseas_toggle", "challenge_player", player.id, player.name,
+                                  f"overseas={player.is_overseas}")
+                        flash(f"{player.name} is {'now ✈️ Overseas' if player.is_overseas else 'no longer overseas'}.", "info")
                 elif action == "delete_player":
                     player = (db.query(ChallengePlayer)
                                 .filter(ChallengePlayer.id == _int_form("player_id"), ChallengePlayer.team_id == team.id)
