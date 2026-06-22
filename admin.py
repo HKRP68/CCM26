@@ -37,7 +37,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     MessageTemplate,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
-                    Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats)
+                    Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
+                    TournamentGroup)
 
 app = Flask(__name__)
 
@@ -12440,11 +12441,46 @@ def admin_tournament_detail(tournament_id):
             return redirect(url_for("admin_tournaments_list"))
         if request.method == "POST":
             action = request.form.get("action", "")
+
+            def _allow_structural_edit():
+                """Gate edits that would invalidate an existing schedule.
+
+                If any league/group match has been completed, block the edit (the
+                admin must Reset first). Otherwise, if a schedule was generated,
+                clear the stale unplayed fixtures and drop the flag so the new
+                structure can be re-generated cleanly. Returns True if the edit
+                may proceed.
+                """
+                from services.tournament_service import league_progress
+                played, total = league_progress(db, t.id)
+                if played > 0:
+                    flash("Reset the tournament before changing the league "
+                          "structure — completed matches exist.", "error")
+                    return False
+                if t.schedule_generated or total > 0:
+                    (db.query(TournamentMatch)
+                     .filter_by(tournament_id=t.id)
+                     .filter(TournamentMatch.stage.in_(("league", "group")))
+                     .filter(TournamentMatch.status != "completed")
+                     .delete(synchronize_session=False))
+                    t.schedule_generated = False
+                    flash("Existing unplayed schedule cleared — regenerate it after "
+                          "your changes.", "info")
+                return True
+
             try:
                 if action == "save_settings":
                     t.name = (request.form.get("name") or t.name).strip()[:120]
                     t.description = (request.form.get("description") or "").strip() or None
                     t.format = (request.form.get("format") or t.format).strip()[:40]
+                    lf = (request.form.get("league_format") or t.league_format or "single_rr").strip()
+                    if lf in ("single_rr", "double_rr", "groups") and lf != t.league_format:
+                        # Changing the league format invalidates any existing schedule.
+                        if _allow_structural_edit():
+                            t.league_format = lf
+                    gpm = (request.form.get("group_points_mode") or t.group_points_mode or "separate").strip()
+                    if gpm in ("separate", "combined"):
+                        t.group_points_mode = gpm
                     t.overs = _int_form("overs", t.overs)
                     t.max_teams = _int_form("max_teams", t.max_teams)
                     t.points_win = _int_form("points_win", t.points_win)
@@ -12455,6 +12491,111 @@ def admin_tournament_detail(tournament_id):
                     t.min_balls_for_econ = _int_form("min_balls_for_econ", t.min_balls_for_econ)
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "save_knockout":
+                    kt = (request.form.get("knockout_type") or "").strip()
+                    valid = {"top4_sf", "ipl_playoffs", "groups_top2_sf",
+                             "groups_top4_qf", "custom"}
+                    t.knockout_type = kt if kt in valid else None
+                    cfg = (request.form.get("knockout_config_json") or "").strip()
+                    t.knockout_config_json = cfg or None
+                    log_admin(db, "tournament_knockout_save", "tournament", t.id, t.name)
+                    flash("✅ Saved knockout settings.", "success")
+                elif action == "generate_knockout":
+                    from services import knockout_service, tournament_service
+                    try:
+                        if not tournament_service.league_stage_complete(db, t.id):
+                            played, total = tournament_service.league_progress(db, t.id)
+                            flash(f"⚠️ League stage not finished ({played}/{total} played) — "
+                                  "the bracket was seeded from current standings.", "info")
+                        n = knockout_service.generate_knockout(db, t.id)
+                        log_admin(db, "tournament_knockout_generate", "tournament", t.id, t.name)
+                        flash(f"✅ Generated {n} knockout match(es).", "success")
+                    except ValueError as ke:
+                        db.rollback()
+                        flash(f"⚠️ {ke}", "error")
+                elif action == "add_group":
+                    gname = (request.form.get("group_name") or "").strip()[:60]
+                    if not gname:
+                        flash("Group name required.", "error")
+                    elif db.query(TournamentGroup).filter_by(tournament_id=t.id, name=gname).first():
+                        flash("A group with that name already exists.", "info")
+                    elif _allow_structural_edit():
+                        rr = (request.form.get("group_rr_mode") or "single").strip()
+                        db.add(TournamentGroup(
+                            tournament_id=t.id, name=gname,
+                            rr_mode=("double" if rr == "double" else "single"),
+                            sort_order=_int_form("group_sort_order", 0) or 0))
+                        log_admin(db, "tournament_group_add", "tournament", t.id, gname)
+                        flash(f"✅ Added {gname}.", "success")
+                elif action == "set_group_rr":
+                    g = db.query(TournamentGroup).get(_int_form("group_id"))
+                    if g and g.tournament_id == t.id and _allow_structural_edit():
+                        rr = (request.form.get("group_rr_mode") or "single").strip()
+                        g.rr_mode = "double" if rr == "double" else "single"
+                        flash(f"✅ {g.name}: {g.rr_mode} round-robin.", "success")
+                elif action == "delete_group":
+                    g = db.query(TournamentGroup).get(_int_form("group_id"))
+                    if g and g.tournament_id == t.id and _allow_structural_edit():
+                        # Unassign its teams first so they remain in the tournament.
+                        for tt in db.query(TournamentTeam).filter_by(
+                                tournament_id=t.id, group_id=g.id).all():
+                            tt.group_id = None
+                        nm = g.name
+                        db.delete(g)
+                        log_admin(db, "tournament_group_delete", "tournament", t.id, nm)
+                        flash(f"Removed {nm}.", "info")
+                elif action == "assign_team_group":
+                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    gid = _int_form("group_id")
+                    if tt and tt.tournament_id == t.id and _allow_structural_edit():
+                        if gid:
+                            g = db.query(TournamentGroup).get(gid)
+                            tt.group_id = g.id if (g and g.tournament_id == t.id) else None
+                        else:
+                            tt.group_id = None
+                        flash(f"✅ Updated group for {tt.name}.", "success")
+                elif action == "generate_schedule":
+                    from services import league_schedule_service
+                    try:
+                        n = league_schedule_service.generate_schedule(db, t.id)
+                        log_admin(db, "tournament_schedule_generate", "tournament", t.id, t.name)
+                        flash(f"✅ Generated {n} fixtures.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "add_fixture":
+                    from services import league_schedule_service
+                    try:
+                        league_schedule_service.add_fixture(
+                            db, t.id, _int_form("team1_id"), _int_form("team2_id"),
+                            group_id=_int_form("group_id"), round_no=_int_form("round_no", 0))
+                        flash("✅ Fixture added.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "delete_fixture":
+                    from services import league_schedule_service
+                    try:
+                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        if not fx or fx.tournament_id != t.id:
+                            raise ValueError("Fixture not found in this tournament.")
+                        league_schedule_service.delete_fixture(db, fx.id)
+                        flash("Fixture removed.", "info")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "swap_team":
+                    from services import league_schedule_service
+                    try:
+                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        if not fx or fx.tournament_id != t.id:
+                            raise ValueError("Fixture not found in this tournament.")
+                        league_schedule_service.swap_fixture_team(
+                            db, fx.id, _int_form("slot", 1), _int_form("new_team_id"))
+                        flash("✅ Fixture updated.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
                 elif action == "add_team":
                     ct = db.query(ChallengeTeam).get(_int_form("challenge_team_id")) \
                         if _int_form("challenge_team_id") else None
@@ -12524,7 +12665,13 @@ def admin_tournament_detail(tournament_id):
                          .filter(ChallengeTeam.league_id == t.league_id)
                          .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()
                          if ct.id not in part_cids]
-        return render_template("admin_tournament_detail.html", t=t, teams=teams, available=available)
+        groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
+                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        from services import tournament_service
+        lg_played, lg_total = tournament_service.league_progress(db, t.id)
+        return render_template("admin_tournament_detail.html", t=t, teams=teams,
+                               available=available, groups=groups,
+                               league_played=lg_played, league_total=lg_total)
     finally:
         db.close()
 
@@ -12558,8 +12705,16 @@ def admin_tournament_dashboard(tournament_id):
                 db.rollback()
                 logger.exception("tournament dashboard recompute failed for %s", t.id)
         table = tournament_service.points_table(db, t.id)
+        # Per-group tables when the tournament uses groups with separate tables.
+        group_tables = None
+        if t.league_format == "groups" and t.group_points_mode == "separate":
+            groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
+                      .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+            group_tables = [(g, tournament_service.points_table(db, t.id, group_id=g.id))
+                            for g in groups]
         leaders = tournament_service.stat_leaders(db, t.id)
         matches = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
+                   .filter(TournamentMatch.status == "completed")
                    .order_by(TournamentMatch.id.desc()).all())
         tt_map = {tt.id: tt.name for tt in
                   db.query(TournamentTeam).filter_by(tournament_id=t.id).all()}
@@ -12572,10 +12727,52 @@ def admin_tournament_dashboard(tournament_id):
             except Exception:
                 lines = []
             match_cards.append((m, lines))
+        champion = tournament_service.tournament_champion(db, t.id)
+        played, total = tournament_service.league_progress(db, t.id)
         return render_template(
             "admin_tournament_dashboard.html",
-            t=t, table=table, leaders=leaders, match_cards=match_cards,
-            tt_map=tt_map, players=players)
+            t=t, table=table, group_tables=group_tables, leaders=leaders,
+            match_cards=match_cards, tt_map=tt_map, players=players,
+            champion=champion, league_played=played, league_total=total)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/schedule")
+@login_required
+def admin_tournament_schedule(tournament_id):
+    """Render the fixture schedule grid grouped by round for editing."""
+    from services import league_schedule_service
+    db = get_session()
+    try:
+        t = _get_tournament_or_404(db, tournament_id)
+        if not t:
+            return redirect(url_for("admin_tournaments_list"))
+        teams = (db.query(TournamentTeam).filter_by(tournament_id=t.id)
+                 .order_by(TournamentTeam.sort_order, TournamentTeam.name).all())
+        tt_map = {tt.id: tt for tt in teams}
+        groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
+                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        g_map = {g.id: g for g in groups}
+        fixtures = league_schedule_service.list_fixtures(db, t.id)
+        from services.knockout_service import KNOCKOUT_STAGES
+        # League/group fixtures grouped by round; knockout matches listed in order.
+        rounds = {}
+        knockout = []
+        for fx in fixtures:
+            if fx.stage in KNOCKOUT_STAGES:
+                knockout.append(fx)
+            else:
+                rounds.setdefault(fx.round_no or 0, []).append(fx)
+        rounds = sorted(rounds.items())
+        knockout.sort(key=lambda m: (m.round_no or 0, m.match_no or 0, m.id))
+        # League-stage-only progress (exclude knockout rows so the count is honest).
+        league_total = sum(len(fxs) for _, fxs in rounds)
+        league_played = sum(1 for _, fxs in rounds for fx in fxs if fx.status == "completed")
+        return render_template("admin_tournament_schedule.html", t=t, teams=teams,
+                               tt_map=tt_map, groups=groups, g_map=g_map,
+                               rounds=rounds, fixtures=fixtures, knockout=knockout,
+                               league_played=league_played, league_total=league_total)
     finally:
         db.close()
 

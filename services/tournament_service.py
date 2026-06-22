@@ -77,16 +77,48 @@ def set_status(session, tournament_id, status):
 
 
 def reset_tournament(session, tournament_id):
-    """Clear all match records, player stats and standings — keep config/teams."""
+    """Clear all results, player stats and standings — keep config/teams.
+
+    If a schedule was generated (fixtures have ``match_no > 0``), those fixtures
+    are reverted to ``scheduled`` with their results cleared so the schedule is
+    preserved. Any fallback-recorded rows (un-scheduled, ``match_no == 0``) are
+    deleted outright.
+    """
     tid = int(tournament_id)
-    session.query(TournamentMatch).filter_by(tournament_id=tid).delete(synchronize_session=False)
+    # Knockout fixtures are reseeded from final standings, so drop them entirely
+    # and let the admin regenerate the bracket after replaying the league stage.
+    (session.query(TournamentMatch)
+     .filter_by(tournament_id=tid)
+     .filter(TournamentMatch.stage.notin_(("league", "group")))
+     .delete(synchronize_session=False))
+    # Delete only the fallback-recorded league rows; revert real schedule fixtures.
+    (session.query(TournamentMatch)
+     .filter_by(tournament_id=tid)
+     .filter(TournamentMatch.match_no == 0)
+     .delete(synchronize_session=False))
+    for fx in (session.query(TournamentMatch)
+               .filter_by(tournament_id=tid)
+               .filter(TournamentMatch.match_no > 0)
+               .filter(TournamentMatch.stage.in_(("league", "group"))).all()):
+        fx.status = "scheduled"
+        fx.match_id = None
+        fx.winner_team_id = None
+        fx.result_text = None
+        fx.inn1_runs = fx.inn1_wickets = fx.inn1_balls = None
+        fx.inn2_runs = fx.inn2_wickets = fx.inn2_balls = None
+        fx.host_user_id = fx.target_user_id = None
+        fx.scorecard_json = None
+        fx.completed_at = None
     session.query(TournamentPlayerStats).filter_by(tournament_id=tid).delete(synchronize_session=False)
     for tt in session.query(TournamentTeam).filter_by(tournament_id=tid).all():
         tt.played = tt.won = tt.lost = tt.tied = tt.no_result = tt.points = 0
         tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
     tour = session.query(Tournament).get(tid)
-    if tour and tour.status not in ("cancelled",):
-        tour.status = "draft" if not tour.is_active else "active"
+    if tour:
+        tour.knockout_generated = False
+        tour.completed_at = None
+        if tour.status not in ("cancelled",):
+            tour.status = "draft" if not tour.is_active else "active"
     return tour
 
 
@@ -107,6 +139,23 @@ def participating_team_names(session, tournament_id):
     """Return the set of participating ChallengeTeam names for a tournament."""
     rows = session.query(TournamentTeam).filter_by(tournament_id=int(tournament_id)).all()
     return {(r.name or "").strip() for r in rows if (r.name or "").strip()}
+
+
+def _find_open_fixture(session, tournament_id, team1_id, team2_id):
+    """Earliest uncompleted scheduled fixture for an (unordered) pair, or None.
+
+    Kept local to avoid an import cycle with ``league_schedule_service``; mirrors
+    that module's ``find_open_fixture``.
+    """
+    from sqlalchemy import or_, and_
+    tid, a, b = int(tournament_id), int(team1_id), int(team2_id)
+    return (session.query(TournamentMatch)
+            .filter_by(tournament_id=tid)
+            .filter(TournamentMatch.status != "completed")
+            .filter(or_(
+                and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
+                and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
+            .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -323,7 +372,14 @@ def recompute_standings(session, tournament_id):
     if not tour:
         return
     pw, ptie, pl = (tour.points_win or 0), (tour.points_tie or 0), (tour.points_loss or 0)
-    for m in session.query(TournamentMatch).filter_by(tournament_id=tid).all():
+    # Only completed league/group-stage fixtures contribute league points —
+    # unplayed schedule rows and knockout matches must never move the table.
+    league_matches = (session.query(TournamentMatch)
+                      .filter_by(tournament_id=tid)
+                      .filter(TournamentMatch.status == "completed")
+                      .filter(TournamentMatch.stage.in_(("league", "group")))
+                      .all())
+    for m in league_matches:
         t1 = teams.get(m.team1_id)
         t2 = teams.get(m.team2_id)
         i1r, i1b = int(m.inn1_runs or 0), int(m.inn1_balls or 0)
@@ -367,7 +423,28 @@ def delete_tournament_match(session, tournament_match_id):
     if not tm:
         return None
     tid = tm.tournament_id
-    session.delete(tm)
+    # Undo any knockout advancement this result caused, so the next round doesn't
+    # keep showing the now-removed team as qualified.
+    try:
+        from services import knockout_service
+        knockout_service.retract_bracket(session, tm)
+    except Exception:
+        logger.exception("retract_bracket failed for tournament %s", tid)
+    if tm.match_no and tm.match_no > 0:
+        # A real scheduled/knockout fixture — revert it to a pending fixture so the
+        # pair can replay it, rather than dropping it from the schedule entirely.
+        tm.status = "scheduled"
+        tm.match_id = None
+        tm.winner_team_id = None
+        tm.result_text = None
+        tm.inn1_runs = tm.inn1_wickets = tm.inn1_balls = None
+        tm.inn2_runs = tm.inn2_wickets = tm.inn2_balls = None
+        tm.host_user_id = tm.target_user_id = None
+        tm.scorecard_json = None
+        tm.completed_at = None
+    else:
+        # Fallback-recorded row (unscheduled tournament) — hard delete.
+        session.delete(tm)
     session.flush()
     recompute_tournament(session, tid)
     return tid
@@ -435,26 +512,63 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             wname = (win_team.name if win_team else None) or "Winner"
             result_text = f"{wname} won"
 
-    tm = TournamentMatch(
-        tournament_id=tid,
-        match_id=match_id,
-        team1_id=t_inn1.id if t_inn1 else None,
-        team2_id=t_inn2.id if t_inn2 else None,
-        winner_team_id=win_team.id if win_team else None,
-        stage="league",
-        result_text=result_text[:300] if result_text else None,
-        inn1_runs=inn1_runs, inn1_wickets=inn1_wkts, inn1_balls=inn1_balls,
-        inn2_runs=inn2_runs, inn2_wickets=inn2_wkts, inn2_balls=inn2_balls,
-        host_user_id=inn1_bat_uid, target_user_id=inn2_bat_uid,
-        scorecard_json=json.dumps(lines, default=str),
-        completed_at=datetime.utcnow(),
-    )
-    session.add(tm)
+    # If a schedule or knockout bracket was generated, fill the pre-created
+    # fixture for this pair in place instead of inserting a duplicate row. When a
+    # fixture is required but none is open (e.g. the pair already played it, or a
+    # stale draft launched after the fixture was consumed) we must NOT fall back
+    # to inserting a fresh league row — that would double-count standings and
+    # leave the bracket unadvanced. Only truly unscheduled tournaments insert.
+    tm = None
+    fixture_required = bool(tour.schedule_generated or tour.knockout_generated)
+    if fixture_required and t_inn1 and t_inn2:
+        tm = _find_open_fixture(session, tid, t_inn1.id, t_inn2.id)
+    if fixture_required and tm is None:
+        logger.warning(
+            "No open tournament fixture for tournament %s (%s vs %s); not recording.",
+            tid, getattr(t_inn1, "id", None), getattr(t_inn2, "id", None))
+        return None
+
+    if tm is not None:
+        tm.match_id = match_id
+        tm.team1_id = t_inn1.id if t_inn1 else None
+        tm.team2_id = t_inn2.id if t_inn2 else None
+        tm.winner_team_id = win_team.id if win_team else None
+        tm.status = "completed"
+        tm.result_text = result_text[:300] if result_text else None
+        tm.inn1_runs, tm.inn1_wickets, tm.inn1_balls = inn1_runs, inn1_wkts, inn1_balls
+        tm.inn2_runs, tm.inn2_wickets, tm.inn2_balls = inn2_runs, inn2_wkts, inn2_balls
+        tm.host_user_id, tm.target_user_id = inn1_bat_uid, inn2_bat_uid
+        tm.scorecard_json = json.dumps(lines, default=str)
+        tm.completed_at = datetime.utcnow()
+    else:
+        tm = TournamentMatch(
+            tournament_id=tid,
+            match_id=match_id,
+            team1_id=t_inn1.id if t_inn1 else None,
+            team2_id=t_inn2.id if t_inn2 else None,
+            winner_team_id=win_team.id if win_team else None,
+            status="completed",
+            stage="league",
+            result_text=result_text[:300] if result_text else None,
+            inn1_runs=inn1_runs, inn1_wickets=inn1_wkts, inn1_balls=inn1_balls,
+            inn2_runs=inn2_runs, inn2_wickets=inn2_wkts, inn2_balls=inn2_balls,
+            host_user_id=inn1_bat_uid, target_user_id=inn2_bat_uid,
+            scorecard_json=json.dumps(lines, default=str),
+            completed_at=datetime.utcnow(),
+        )
+        session.add(tm)
 
     # Rebuild standings + per-player aggregates from all recorded matches (incl.
     # this one). Flush so the new match row is visible to the rebuild queries.
     session.flush()
     recompute_tournament(session, tid)
+
+    # If this was a knockout match, advance the winner/loser into the next round.
+    try:
+        from services import knockout_service
+        knockout_service.advance_bracket(session, tm)
+    except Exception:
+        logger.exception("Knockout advancement failed for tournament %s", tid)
 
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
     return tm
@@ -464,9 +578,16 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
 # Dashboard queries
 # ──────────────────────────────────────────────────────────────────────
 
-def points_table(session, tournament_id):
-    """Teams ordered by points, then net run-rate."""
-    rows = session.query(TournamentTeam).filter_by(tournament_id=int(tournament_id)).all()
+def points_table(session, tournament_id, group_id=None):
+    """Teams ordered by points, then net run-rate.
+
+    Pass ``group_id`` to restrict to one group's teams (used to render separate
+    per-group tables); ``None`` returns every participating team (combined table).
+    """
+    q = session.query(TournamentTeam).filter_by(tournament_id=int(tournament_id))
+    if group_id is not None:
+        q = q.filter(TournamentTeam.group_id == int(group_id))
+    rows = q.all()
 
     def nrr(tt):
         of = (tt.balls_for or 0) / 6.0
@@ -477,10 +598,47 @@ def points_table(session, tournament_id):
 
     out = []
     for tt in rows:
-        tt._nrr = round(nrr(tt), 3)
+        tt._nrr_sort = nrr(tt)          # full precision for ordering
+        tt._nrr = round(tt._nrr_sort, 3)  # rounded for display
         out.append(tt)
-    out.sort(key=lambda t: (t.points or 0, t._nrr), reverse=True)
+    # Tie-break: points, then wins, then net run-rate (standard cricket order).
+    # Sort on the unrounded NRR so near-equal teams aren't mis-seeded.
+    out.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr_sort), reverse=True)
     return out
+
+
+def league_progress(session, tournament_id):
+    """Return ``(played, total)`` for the league/group-stage fixtures."""
+    tid = int(tournament_id)
+    base = (session.query(TournamentMatch)
+            .filter_by(tournament_id=tid)
+            .filter(TournamentMatch.stage.in_(("league", "group"))))
+    total = base.count()
+    played = base.filter(TournamentMatch.status == "completed").count()
+    return played, total
+
+
+def league_stage_complete(session, tournament_id):
+    """True once the league/group stage has fixtures and none remain unplayed.
+
+    Used to tell the admin when a knockout bracket can be seeded from final
+    standings rather than partial ones.
+    """
+    played, total = league_progress(session, tournament_id)
+    return total > 0 and played >= total
+
+
+def tournament_champion(session, tournament_id):
+    """The ``TournamentTeam`` that won a completed final, or None."""
+    tid = int(tournament_id)
+    fin = (session.query(TournamentMatch)
+           .filter_by(tournament_id=tid, stage="final", status="completed")
+           .filter(TournamentMatch.winner_team_id.isnot(None))
+           .order_by(TournamentMatch.match_no.desc(), TournamentMatch.id.desc())
+           .first())
+    if not fin:
+        return None
+    return session.query(TournamentTeam).get(fin.winner_team_id)
 
 
 def _stat_rows(session, tournament_id):

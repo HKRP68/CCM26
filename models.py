@@ -1753,6 +1753,24 @@ class Tournament(Base):
     overs = Column(Integer, default=20, nullable=False)
     max_teams = Column(Integer, default=8, nullable=False)
 
+    # League-stage structure (the new driver; legacy ``format`` is kept untouched).
+    #   single_rr  – one round-robin across all teams
+    #   double_rr  – home/away round-robin across all teams
+    #   groups     – teams split into TournamentGroups, each round-robin internally
+    league_format = Column(String(20), default="single_rr", nullable=False)
+    # When ``league_format == 'groups'``: keep one points table per group
+    # ("separate") or roll every group into a single combined table ("combined").
+    group_points_mode = Column(String(20), default="separate", nullable=False)
+    # True once a fixture schedule has been generated. While true, the bot only
+    # lets two teams play if an uncompleted scheduled fixture exists for the pair.
+    schedule_generated = Column(Boolean, default=False, nullable=False)
+
+    # Knockout / playoff configuration (Phase 2).
+    #   top4_sf | ipl_playoffs | groups_top2_sf | groups_top4_qf | custom
+    knockout_type = Column(String(30), nullable=True)
+    knockout_config_json = Column(Text, nullable=True)
+    knockout_generated = Column(Boolean, default=False, nullable=False)
+
     # Points rules
     points_win = Column(Integer, default=2, nullable=False)
     points_tie = Column(Integer, default=1, nullable=False)
@@ -1771,6 +1789,8 @@ class Tournament(Base):
     league = relationship("ChallengeLeague")
     teams = relationship("TournamentTeam", back_populates="tournament",
                          cascade="all, delete-orphan")
+    groups = relationship("TournamentGroup", back_populates="tournament",
+                          cascade="all, delete-orphan")
     matches = relationship("TournamentMatch", back_populates="tournament",
                            cascade="all, delete-orphan")
     player_stats = relationship("TournamentPlayerStats", back_populates="tournament",
@@ -1778,6 +1798,29 @@ class Tournament(Base):
 
     __table_args__ = (
         Index("ix_tournament_status_active", "status", "is_active"),
+    )
+
+
+class TournamentGroup(Base):
+    """A group inside a ``groups``-format tournament (e.g. "Group A").
+
+    Each group is round-robin internally; ``rr_mode`` decides single vs double.
+    Teams are linked via ``TournamentTeam.group_id``.
+    """
+    __tablename__ = "tournament_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    name = Column(String(60), nullable=False)
+    rr_mode = Column(String(10), default="single", nullable=False)  # single | double
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    tournament = relationship("Tournament", back_populates="groups")
+
+    __table_args__ = (
+        Index("ix_tournament_group_unique", "tournament_id", "name", unique=True),
     )
 
 
@@ -1790,6 +1833,9 @@ class TournamentTeam(Base):
                            nullable=False, index=True)
     challenge_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"),
                                nullable=True, index=True)
+    # Group assignment for ``groups``-format tournaments; NULL otherwise.
+    group_id = Column(Integer, ForeignKey("tournament_groups.id", ondelete="SET NULL"),
+                      nullable=True, index=True)
     name = Column(String(120), nullable=False)
     short_name = Column(String(30), nullable=True)
     logo_url = Column(String(500), nullable=True)
@@ -1831,9 +1877,28 @@ class TournamentMatch(Base):
     team2_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"), nullable=True)
     winner_team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"), nullable=True)
 
-    # Room for playoffs/finals later; league-stage for now.
+    # Lifecycle of this fixture: scheduled (planned, not yet played) | live |
+    # completed (result recorded). Defaults to "completed" so every pre-existing
+    # recorded match row keeps counting in the standings without a backfill.
+    status = Column(String(20), default="completed", nullable=False, index=True)
+    # Group this fixture belongs to (groups-format league stage); NULL otherwise.
+    group_id = Column(Integer, ForeignKey("tournament_groups.id", ondelete="SET NULL"),
+                      nullable=True, index=True)
+    # Schedule ordering / display.
+    round_no = Column(Integer, default=0, nullable=False)
+    match_no = Column(Integer, default=0, nullable=False)
+
+    # Stage: league | group | quarterfinal | semifinal | qualifier1 | eliminator |
+    # qualifier2 | final. Only league/group rows contribute league points.
     stage = Column(String(30), default="league", nullable=False)
     result_text = Column(String(300), nullable=True)
+
+    # Knockout bracket wiring (Phase 2): where this fixture's winner/loser advances,
+    # plus human labels for slots that are still "To Be Decided".
+    feeds_winner_to_id = Column(Integer, ForeignKey("tournament_matches.id", ondelete="SET NULL"), nullable=True)
+    feeds_loser_to_id = Column(Integer, ForeignKey("tournament_matches.id", ondelete="SET NULL"), nullable=True)
+    slot1_label = Column(String(60), nullable=True)
+    slot2_label = Column(String(60), nullable=True)
 
     inn1_runs = Column(Integer, nullable=True)
     inn1_wickets = Column(Integer, nullable=True)
