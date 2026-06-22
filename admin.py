@@ -12247,15 +12247,20 @@ def admin_challenge_team_detail(league_id, team_id):
                     else:
                         player.is_overseas = not bool(player.is_overseas)
                         # Mirror into details_json so the match-side XI picker,
-                        # which reads the blob, stays in sync.
-                        try:
-                            data = json.loads(player.details_json) if player.details_json else {}
-                            if not isinstance(data, dict):
-                                data = {}
-                        except Exception:
+                        # which reads the blob, stays in sync. The is_overseas
+                        # column is the source of truth, so if the blob can't be
+                        # parsed as a dict we leave it untouched rather than
+                        # clobbering any stored player metadata.
+                        if player.details_json:
+                            try:
+                                data = json.loads(player.details_json)
+                            except (TypeError, ValueError):
+                                data = None
+                        else:
                             data = {}
-                        data["is_overseas"] = bool(player.is_overseas)
-                        player.details_json = json.dumps(data, separators=(",", ":"))
+                        if isinstance(data, dict):
+                            data["is_overseas"] = bool(player.is_overseas)
+                            player.details_json = json.dumps(data, separators=(",", ":"))
                         log_admin(db, "challenge_player_overseas_toggle", "challenge_player", player.id, player.name,
                                   f"overseas={player.is_overseas}")
                         flash(f"{player.name} is {'now ✈️ Overseas' if player.is_overseas else 'no longer overseas'}.", "info")

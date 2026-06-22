@@ -2023,8 +2023,12 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # confirm callbacks can enforce them without re-hitting the DB.
         league = _get_challenge_league_record(session, draft.get("league_key"))
         if league is not None:
-            draft["overseas_min"] = int(getattr(league, "min_overseas", 0) or 0)
-            draft["overseas_max"] = int(getattr(league, "max_overseas", 11) or 11)
+            # Fall back to defaults only for missing/NULL values — an explicit 0
+            # (e.g. "no overseas allowed") is a real cap and must be preserved.
+            min_raw = getattr(league, "min_overseas", None)
+            max_raw = getattr(league, "max_overseas", None)
+            draft["overseas_min"] = int(min_raw) if min_raw is not None else 0
+            draft["overseas_max"] = int(max_raw) if max_raw is not None else 11
     finally:
         session.close()
     if not players:
