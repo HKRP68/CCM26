@@ -1293,6 +1293,27 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+def _fixture_open_for_pair(tournament_id, name1, name2):
+    """True if the two team names still have an open scheduled fixture.
+
+    Returns True (unrestricted) when the tournament has no generated schedule, so
+    free-play tournaments behave exactly as before.
+    """
+    if not tournament_id or not name1 or not name2:
+        return True
+    from services import league_schedule_service
+    from models import Tournament
+    session = get_session()
+    try:
+        tour = session.query(Tournament).get(int(tournament_id))
+        if not tour or not tour.schedule_generated:
+            return True
+        opts = league_schedule_service.remaining_opponent_names(session, tournament_id, name1)
+        return name2 in opts
+    finally:
+        session.close()
+
+
 async def _handle_tournament_command(update, context, session, league):
     """Gate + start a Challenge League Tournament match from a tournament command.
 
@@ -1456,6 +1477,18 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
     if turn == "target" and selected_team == draft.get("host_team") and not same_team_allowed:
         await query.answer("This team is already selected. Please choose another team.", show_alert=True)
         return
+
+    # Schedule gating: in a tournament with a generated schedule, the two chosen
+    # teams must still have an uncompleted scheduled fixture between them. This is
+    # what enforces "a team can't play again once its match is done".
+    if turn == "target" and draft.get("is_tournament") and draft.get("tournament_id"):
+        host_team = draft.get("host_team")
+        if not _fixture_open_for_pair(draft.get("tournament_id"), host_team, selected_team):
+            await query.answer(
+                f"No scheduled fixture left between {host_team} and {selected_team}. "
+                "Pick a team they're still scheduled to play.",
+                show_alert=True)
+            return
 
     if turn == "host":
         draft["host_team"] = selected_team

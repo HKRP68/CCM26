@@ -217,6 +217,25 @@ def _migrate_add_columns():
     _try_add("challenge_leagues", "tournament_command", "VARCHAR(60)")
     _try_add("matches", "tournament_id", "INTEGER")
 
+    # League Tournament Structure: league formats, groups, schedule + knockouts.
+    # New table ``tournament_groups`` is created by create_all above; these add the
+    # new columns on the existing tournament_* tables.
+    _try_add("tournaments", "league_format", "VARCHAR(20) DEFAULT 'single_rr'")
+    _try_add("tournaments", "group_points_mode", "VARCHAR(20) DEFAULT 'separate'")
+    _try_add("tournaments", "schedule_generated", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournaments", "knockout_type", "VARCHAR(30)")
+    _try_add("tournaments", "knockout_config_json", "TEXT")
+    _try_add("tournaments", "knockout_generated", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournament_teams", "group_id", "INTEGER")
+    _try_add("tournament_matches", "status", "VARCHAR(20) DEFAULT 'completed'")
+    _try_add("tournament_matches", "group_id", "INTEGER")
+    _try_add("tournament_matches", "round_no", "INTEGER DEFAULT 0")
+    _try_add("tournament_matches", "match_no", "INTEGER DEFAULT 0")
+    _try_add("tournament_matches", "feeds_winner_to_id", "INTEGER")
+    _try_add("tournament_matches", "feeds_loser_to_id", "INTEGER")
+    _try_add("tournament_matches", "slot1_label", "VARCHAR(60)")
+    _try_add("tournament_matches", "slot2_label", "VARCHAR(60)")
+
     # Overseas-player rules: league home country + min/max overseas in the XI,
     # and the per-challenge-player overseas flag.
     _try_add("challenge_leagues", "home_country", "VARCHAR(60)")

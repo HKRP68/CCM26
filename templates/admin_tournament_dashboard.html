@@ -47,18 +47,26 @@ details.match-card summary { cursor:pointer; }
     <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • status: {{ t.status }}{% if t.is_active %} • ● active{% endif %}</p>
   </div>
 
-  <!-- Points table -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">🏅 Points Table</h3>
-    {% if table %}
+  <!-- Points table(s) -->
+  {% macro points_tbl(rows) %}
     <table class="tbl">
       <thead><tr><th>#</th><th>Team</th><th class="num">P</th><th class="num">W</th><th class="num">L</th><th class="num">T</th><th class="num">Pts</th><th class="num">NRR</th></tr></thead>
       <tbody>
-        {% for tt in table %}
+        {% for tt in rows %}
         <tr><td>{{ loop.index }}</td><td>{{ tt.name }}</td><td class="num">{{ tt.played }}</td><td class="num">{{ tt.won }}</td><td class="num">{{ tt.lost }}</td><td class="num">{{ tt.tied }}</td><td class="num"><strong>{{ tt.points }}</strong></td><td class="num">{{ '%+.3f'|format(tt._nrr) }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
+  {% endmacro %}
+  <section class="tour-card">
+    <h3 style="margin-top:0;">🏅 Points Table</h3>
+    {% if group_tables %}
+      {% for g, rows in group_tables %}
+      <h4 style="margin:.6rem 0 .3rem;">{{ g.name }} <span class="empty">({{ g.rr_mode }} RR)</span></h4>
+      {% if rows %}{{ points_tbl(rows) }}{% else %}<div class="empty">No teams in this group.</div>{% endif %}
+      {% endfor %}
+    {% elif table %}
+      {{ points_tbl(table) }}
     {% else %}<div class="empty">No teams / results yet.</div>{% endif %}
   </section>
 

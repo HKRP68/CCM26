@@ -37,7 +37,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     MessageTemplate,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
-                    Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats)
+                    Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
+                    TournamentGroup)
 
 app = Flask(__name__)
 
@@ -12445,6 +12446,12 @@ def admin_tournament_detail(tournament_id):
                     t.name = (request.form.get("name") or t.name).strip()[:120]
                     t.description = (request.form.get("description") or "").strip() or None
                     t.format = (request.form.get("format") or t.format).strip()[:40]
+                    lf = (request.form.get("league_format") or t.league_format or "single_rr").strip()
+                    if lf in ("single_rr", "double_rr", "groups"):
+                        t.league_format = lf
+                    gpm = (request.form.get("group_points_mode") or t.group_points_mode or "separate").strip()
+                    if gpm in ("separate", "combined"):
+                        t.group_points_mode = gpm
                     t.overs = _int_form("overs", t.overs)
                     t.max_teams = _int_form("max_teams", t.max_teams)
                     t.points_win = _int_form("points_win", t.points_win)
@@ -12455,6 +12462,80 @@ def admin_tournament_detail(tournament_id):
                     t.min_balls_for_econ = _int_form("min_balls_for_econ", t.min_balls_for_econ)
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "add_group":
+                    gname = (request.form.get("group_name") or "").strip()[:60]
+                    if not gname:
+                        flash("Group name required.", "error")
+                    elif db.query(TournamentGroup).filter_by(tournament_id=t.id, name=gname).first():
+                        flash("A group with that name already exists.", "info")
+                    else:
+                        rr = (request.form.get("group_rr_mode") or "single").strip()
+                        db.add(TournamentGroup(
+                            tournament_id=t.id, name=gname,
+                            rr_mode=("double" if rr == "double" else "single"),
+                            sort_order=_int_form("group_sort_order", 0) or 0))
+                        log_admin(db, "tournament_group_add", "tournament", t.id, gname)
+                        flash(f"✅ Added {gname}.", "success")
+                elif action == "set_group_rr":
+                    g = db.query(TournamentGroup).get(_int_form("group_id"))
+                    if g and g.tournament_id == t.id:
+                        rr = (request.form.get("group_rr_mode") or "single").strip()
+                        g.rr_mode = "double" if rr == "double" else "single"
+                        flash(f"✅ {g.name}: {g.rr_mode} round-robin.", "success")
+                elif action == "delete_group":
+                    g = db.query(TournamentGroup).get(_int_form("group_id"))
+                    if g and g.tournament_id == t.id:
+                        # Unassign its teams first so they remain in the tournament.
+                        for tt in db.query(TournamentTeam).filter_by(
+                                tournament_id=t.id, group_id=g.id).all():
+                            tt.group_id = None
+                        nm = g.name
+                        db.delete(g)
+                        log_admin(db, "tournament_group_delete", "tournament", t.id, nm)
+                        flash(f"Removed {nm}.", "info")
+                elif action == "assign_team_group":
+                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    gid = _int_form("group_id")
+                    if tt and tt.tournament_id == t.id:
+                        if gid:
+                            g = db.query(TournamentGroup).get(gid)
+                            tt.group_id = g.id if (g and g.tournament_id == t.id) else None
+                        else:
+                            tt.group_id = None
+                        flash(f"✅ Updated group for {tt.name}.", "success")
+                elif action == "generate_schedule":
+                    from services import league_schedule_service
+                    try:
+                        n = league_schedule_service.generate_schedule(db, t.id)
+                        log_admin(db, "tournament_schedule_generate", "tournament", t.id, t.name)
+                        flash(f"✅ Generated {n} fixtures.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "add_fixture":
+                    from services import league_schedule_service
+                    league_schedule_service.add_fixture(
+                        db, t.id, _int_form("team1_id"), _int_form("team2_id"),
+                        group_id=_int_form("group_id"), round_no=_int_form("round_no", 0))
+                    flash("✅ Fixture added.", "success")
+                elif action == "delete_fixture":
+                    from services import league_schedule_service
+                    try:
+                        league_schedule_service.delete_fixture(db, _int_form("fixture_id"))
+                        flash("Fixture removed.", "info")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "swap_team":
+                    from services import league_schedule_service
+                    try:
+                        league_schedule_service.swap_fixture_team(
+                            db, _int_form("fixture_id"), _int_form("slot", 1),
+                            _int_form("new_team_id"))
+                        flash("✅ Fixture updated.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
                 elif action == "add_team":
                     ct = db.query(ChallengeTeam).get(_int_form("challenge_team_id")) \
                         if _int_form("challenge_team_id") else None
@@ -12524,7 +12605,10 @@ def admin_tournament_detail(tournament_id):
                          .filter(ChallengeTeam.league_id == t.league_id)
                          .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()
                          if ct.id not in part_cids]
-        return render_template("admin_tournament_detail.html", t=t, teams=teams, available=available)
+        groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
+                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        return render_template("admin_tournament_detail.html", t=t, teams=teams,
+                               available=available, groups=groups)
     finally:
         db.close()
 
@@ -12558,8 +12642,16 @@ def admin_tournament_dashboard(tournament_id):
                 db.rollback()
                 logger.exception("tournament dashboard recompute failed for %s", t.id)
         table = tournament_service.points_table(db, t.id)
+        # Per-group tables when the tournament uses groups with separate tables.
+        group_tables = None
+        if t.league_format == "groups" and t.group_points_mode == "separate":
+            groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
+                      .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+            group_tables = [(g, tournament_service.points_table(db, t.id, group_id=g.id))
+                            for g in groups]
         leaders = tournament_service.stat_leaders(db, t.id)
         matches = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
+                   .filter(TournamentMatch.status == "completed")
                    .order_by(TournamentMatch.id.desc()).all())
         tt_map = {tt.id: tt.name for tt in
                   db.query(TournamentTeam).filter_by(tournament_id=t.id).all()}
@@ -12574,8 +12666,37 @@ def admin_tournament_dashboard(tournament_id):
             match_cards.append((m, lines))
         return render_template(
             "admin_tournament_dashboard.html",
-            t=t, table=table, leaders=leaders, match_cards=match_cards,
-            tt_map=tt_map, players=players)
+            t=t, table=table, group_tables=group_tables, leaders=leaders,
+            match_cards=match_cards, tt_map=tt_map, players=players)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/schedule")
+@login_required
+def admin_tournament_schedule(tournament_id):
+    """Render the fixture schedule grid grouped by round for editing."""
+    from services import league_schedule_service
+    db = get_session()
+    try:
+        t = _get_tournament_or_404(db, tournament_id)
+        if not t:
+            return redirect(url_for("admin_tournaments_list"))
+        teams = (db.query(TournamentTeam).filter_by(tournament_id=t.id)
+                 .order_by(TournamentTeam.sort_order, TournamentTeam.name).all())
+        tt_map = {tt.id: tt for tt in teams}
+        groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
+                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        g_map = {g.id: g for g in groups}
+        fixtures = league_schedule_service.list_fixtures(db, t.id)
+        # Group fixtures by round for a tidy grid.
+        rounds = {}
+        for fx in fixtures:
+            rounds.setdefault(fx.round_no or 0, []).append(fx)
+        rounds = sorted(rounds.items())
+        return render_template("admin_tournament_schedule.html", t=t, teams=teams,
+                               tt_map=tt_map, groups=groups, g_map=g_map,
+                               rounds=rounds, fixtures=fixtures)
     finally:
         db.close()
 
