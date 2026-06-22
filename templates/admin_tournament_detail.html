@@ -217,6 +217,50 @@
     {% if t.schedule_generated %}<p style="color:#86efac; font-size:.82rem; margin:.6rem 0 0;">✅ A schedule has been generated for this tournament.</p>{% endif %}
   </section>
 
+  <!-- Knockout -->
+  <section class="tour-card">
+    <h3 style="margin-top:0;">Knockout / Playoffs</h3>
+    <p style="color:var(--muted); font-size:.84rem; margin:.1rem 0 .7rem;">
+      Set up after the league stage is decided — the bracket is seeded from the final standings.
+      Generate it once the league is complete; play the knockout matches with the same tournament
+      command (each becomes playable once both its teams are known). Winners advance automatically.
+    </p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_knockout">
+      <div class="tour-form-grid">
+        <div><label>Knockout type</label>
+          <select name="knockout_type">
+            <option value="" {{ 'selected' if not t.knockout_type else '' }}>— None —</option>
+            <option value="top4_sf" {{ 'selected' if t.knockout_type == 'top4_sf' else '' }}>Top 4 → Semifinals → Final</option>
+            <option value="ipl_playoffs" {{ 'selected' if t.knockout_type == 'ipl_playoffs' else '' }}>IPL Playoffs (Q1 / Eliminator / Q2 / Final)</option>
+            <option value="groups_top2_sf" {{ 'selected' if t.knockout_type == 'groups_top2_sf' else '' }}>Groups: Top 2 each → Semifinals → Final</option>
+            <option value="groups_top4_qf" {{ 'selected' if t.knockout_type == 'groups_top4_qf' else '' }}>Groups: Top 4 each → Quarters → Semis → Final</option>
+            <option value="custom" {{ 'selected' if t.knockout_type == 'custom' else '' }}>Custom (JSON)</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:.6rem;">
+        <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Custom bracket JSON (only for “Custom”)</label>
+        <textarea name="knockout_config_json" rows="4" style="width:100%; font-family:monospace;" placeholder='{"matches":[{"key":"sf1","stage":"semifinal","slot1":{"seed":1},"slot2":{"seed":4}},{"key":"sf2","stage":"semifinal","slot1":{"seed":2},"slot2":{"seed":3}},{"key":"final","stage":"final","slot1":{"winner_of":"sf1"},"slot2":{"winner_of":"sf2"}}]}'>{{ t.knockout_config_json or '' }}</textarea>
+        <p style="color:var(--muted); font-size:.78rem; margin:.3rem 0 0;">
+          Slots: <code>{"seed":N}</code> (combined standings), <code>{"group":"Group A","rank":1}</code>,
+          <code>{"winner_of":"key"}</code> or <code>{"loser_of":"key"}</code>.
+        </p>
+      </div>
+      <button class="btn btn-primary" type="submit" style="margin-top:.7rem;">Save knockout settings</button>
+    </form>
+    <div class="lifecycle" style="margin-top:.8rem;">
+      <form method="POST" style="display:inline;" onsubmit="return confirm('Generate the knockout bracket from the current standings? Existing unplayed knockout matches are replaced.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="generate_knockout">
+        <button class="btn btn-primary" type="submit">🏆 Generate bracket</button>
+      </form>
+      <a class="btn" href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">📅 View bracket on schedule</a>
+    </div>
+    {% if t.knockout_generated %}<p style="color:#86efac; font-size:.82rem; margin:.6rem 0 0;">✅ A knockout bracket has been generated.</p>{% endif %}
+  </section>
+
   <!-- Data management -->
   <section class="tour-card">
     <h3 style="margin-top:0;">Data management</h3>

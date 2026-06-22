@@ -12462,6 +12462,24 @@ def admin_tournament_detail(tournament_id):
                     t.min_balls_for_econ = _int_form("min_balls_for_econ", t.min_balls_for_econ)
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "save_knockout":
+                    kt = (request.form.get("knockout_type") or "").strip()
+                    valid = {"top4_sf", "ipl_playoffs", "groups_top2_sf",
+                             "groups_top4_qf", "custom"}
+                    t.knockout_type = kt if kt in valid else None
+                    cfg = (request.form.get("knockout_config_json") or "").strip()
+                    t.knockout_config_json = cfg or None
+                    log_admin(db, "tournament_knockout_save", "tournament", t.id, t.name)
+                    flash("✅ Saved knockout settings.", "success")
+                elif action == "generate_knockout":
+                    from services import knockout_service
+                    try:
+                        n = knockout_service.generate_knockout(db, t.id)
+                        log_admin(db, "tournament_knockout_generate", "tournament", t.id, t.name)
+                        flash(f"✅ Generated {n} knockout match(es).", "success")
+                    except Exception as ke:
+                        db.rollback()
+                        flash(f"⚠️ {ke}", "error")
                 elif action == "add_group":
                     gname = (request.form.get("group_name") or "").strip()[:60]
                     if not gname:
@@ -12689,14 +12707,20 @@ def admin_tournament_schedule(tournament_id):
                   .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
         g_map = {g.id: g for g in groups}
         fixtures = league_schedule_service.list_fixtures(db, t.id)
-        # Group fixtures by round for a tidy grid.
+        from services.knockout_service import KNOCKOUT_STAGES
+        # League/group fixtures grouped by round; knockout matches listed in order.
         rounds = {}
+        knockout = []
         for fx in fixtures:
-            rounds.setdefault(fx.round_no or 0, []).append(fx)
+            if fx.stage in KNOCKOUT_STAGES:
+                knockout.append(fx)
+            else:
+                rounds.setdefault(fx.round_no or 0, []).append(fx)
         rounds = sorted(rounds.items())
+        knockout.sort(key=lambda m: (m.round_no or 0, m.match_no or 0, m.id))
         return render_template("admin_tournament_schedule.html", t=t, teams=teams,
                                tt_map=tt_map, groups=groups, g_map=g_map,
-                               rounds=rounds, fixtures=fixtures)
+                               rounds=rounds, fixtures=fixtures, knockout=knockout)
     finally:
         db.close()
 

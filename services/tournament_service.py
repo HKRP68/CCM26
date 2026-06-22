@@ -85,14 +85,21 @@ def reset_tournament(session, tournament_id):
     deleted outright.
     """
     tid = int(tournament_id)
-    # Delete only the fallback-recorded rows; revert real schedule fixtures.
+    # Knockout fixtures are reseeded from final standings, so drop them entirely
+    # and let the admin regenerate the bracket after replaying the league stage.
+    (session.query(TournamentMatch)
+     .filter_by(tournament_id=tid)
+     .filter(TournamentMatch.stage.notin_(("league", "group")))
+     .delete(synchronize_session=False))
+    # Delete only the fallback-recorded league rows; revert real schedule fixtures.
     (session.query(TournamentMatch)
      .filter_by(tournament_id=tid)
      .filter(TournamentMatch.match_no == 0)
      .delete(synchronize_session=False))
     for fx in (session.query(TournamentMatch)
                .filter_by(tournament_id=tid)
-               .filter(TournamentMatch.match_no > 0).all()):
+               .filter(TournamentMatch.match_no > 0)
+               .filter(TournamentMatch.stage.in_(("league", "group"))).all()):
         fx.status = "scheduled"
         fx.match_id = None
         fx.winner_team_id = None
@@ -107,8 +114,10 @@ def reset_tournament(session, tournament_id):
         tt.played = tt.won = tt.lost = tt.tied = tt.no_result = tt.points = 0
         tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
     tour = session.query(Tournament).get(tid)
-    if tour and tour.status not in ("cancelled",):
-        tour.status = "draft" if not tour.is_active else "active"
+    if tour:
+        tour.knockout_generated = False
+        if tour.status not in ("cancelled",):
+            tour.status = "draft" if not tour.is_active else "active"
     return tour
 
 
@@ -522,6 +531,13 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # this one). Flush so the new match row is visible to the rebuild queries.
     session.flush()
     recompute_tournament(session, tid)
+
+    # If this was a knockout match, advance the winner/loser into the next round.
+    try:
+        from services import knockout_service
+        knockout_service.advance_bracket(session, tm)
+    except Exception:
+        logger.exception("Knockout advancement failed for tournament %s", tid)
 
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
     return tm

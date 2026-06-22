@@ -97,6 +97,31 @@
   </section>
   {% endif %}
 
+  {% if knockout %}
+  <section class="tour-card">
+    <h3 style="margin-top:0;">🏆 Knockout bracket</h3>
+    {% for fx in knockout %}
+    <div class="fx-row" style="margin-bottom:.4rem;">
+      <span class="status-pill {{ fx.status }}">{{ fx.status }}</span>
+      <span style="color:var(--muted); font-size:.78rem; text-transform:capitalize;">{{ fx.stage|replace('_',' ') }}</span>
+      <span>{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else (fx.slot1_label or 'TBD') }}</span>
+      <span class="vs">vs</span>
+      <span>{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else (fx.slot2_label or 'TBD') }}</span>
+      {% if fx.result_text %}<span style="color:var(--muted); font-size:.8rem;">— {{ fx.result_text }}</span>{% endif %}
+      {% if fx.status != 'completed' %}
+      <form method="POST" style="display:inline; margin-left:auto;" onsubmit="return confirm('Delete this knockout match?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="delete_fixture">
+        <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+        <button class="btn danger" type="submit">Delete</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <p style="color:var(--muted); font-size:.8rem; margin:.5rem 0 0;">Winners advance automatically as each match is played.</p>
+  </section>
+  {% endif %}
+
   <!-- Add a manual fixture -->
   <section class="tour-card">
     <h3 style="margin-top:0;">Add a fixture</h3>
