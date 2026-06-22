@@ -1658,6 +1658,12 @@ class ChallengeLeague(Base):
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     same_team_allowed = Column(Boolean, default=True, nullable=False)
+    # Overseas-player rules. ``home_country`` (when set) auto-flags any player
+    # whose country differs from it as overseas when added to a team. The XI
+    # picker then enforces ``min_overseas``/``max_overseas`` (11 = no cap).
+    home_country = Column(String(60), nullable=True)
+    min_overseas = Column(Integer, default=0, nullable=False)
+    max_overseas = Column(Integer, default=11, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1702,6 +1708,9 @@ class ChallengePlayer(Base):
     source_player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(150), nullable=False)
     details_json = Column(Text, nullable=True)
+    # Counts toward the league's overseas-in-XI limit. Defaulted from the
+    # league's home_country at add time; admin can toggle it per player.
+    is_overseas = Column(Boolean, default=False, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

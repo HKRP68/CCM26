@@ -1040,5 +1040,49 @@ class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("full Playing XI", msg.reply_text.await_args.args[0])
 
 
+class OverseasXiValidationTests(unittest.TestCase):
+    """Min/Max overseas-in-XI enforcement in _challenge_xi_validation."""
+
+    @staticmethod
+    def _valid_eleven(overseas=0):
+        """11 players satisfying keeper + 5 bowling-option rules.
+
+        The first ``overseas`` players are flagged overseas via details_json so the
+        column-less test stubs still resolve through _challenge_is_overseas.
+        """
+        roles = (["Wicket Keeper"] + ["Bowler"] * 5 + ["Batsman"] * 5)
+        players = []
+        for i, role in enumerate(roles):
+            is_os = "true" if i < overseas else "false"
+            players.append(SimpleNamespace(
+                id=i + 1,
+                name=f"P{i + 1}",
+                details_json=f'{{"category":"{role}","is_overseas":{is_os}}}',
+            ))
+        return players
+
+    def test_no_limits_allows_any_overseas_count(self):
+        valid, _ = challenge._challenge_xi_validation(self._valid_eleven(overseas=7))
+        self.assertTrue(valid)
+
+    def test_max_overseas_blocks_excess(self):
+        valid, error = challenge._challenge_xi_validation(
+            self._valid_eleven(overseas=5), min_overseas=0, max_overseas=4)
+        self.assertFalse(valid)
+        self.assertIn("Max 4 overseas", error)
+
+    def test_min_overseas_blocks_shortfall(self):
+        valid, error = challenge._challenge_xi_validation(
+            self._valid_eleven(overseas=0), min_overseas=1, max_overseas=4)
+        self.assertFalse(valid)
+        self.assertIn("Min 1 overseas", error)
+
+    def test_within_limits_passes(self):
+        valid, error = challenge._challenge_xi_validation(
+            self._valid_eleven(overseas=3), min_overseas=1, max_overseas=4)
+        self.assertTrue(valid)
+        self.assertEqual(error, "")
+
+
 if __name__ == "__main__":
     unittest.main()
