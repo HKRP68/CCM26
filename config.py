@@ -133,9 +133,11 @@ BUY_SELL = {
 }
 
 def get_buy_value(rating: int) -> int:
+    """Coin cost to buy a player of the given rating (falls back to base 260)."""
     return BUY_SELL.get(rating, (260, 72))[0]
 
 def get_sell_value(rating: int) -> int:
+    """Coins returned for selling/releasing a player of the given rating."""
     return BUY_SELL.get(rating, (260, 72))[1]
 
 def get_tier_colour(rating: int) -> tuple:

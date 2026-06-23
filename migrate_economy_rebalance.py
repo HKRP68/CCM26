@@ -44,14 +44,17 @@ GSPIN_CHANGES = {
     "Gem Drop": {"amount_min": (10, 3), "amount_max": (500, 150)},
 }
 
-# GameConfig single-row economy values.
+# GameConfig single-row economy values. OLD values are the original GameConfig
+# column / DEFAULTS values that existing DB rows actually hold; NEW values match
+# the authoritative rebalanced constants in config.py (so every config source
+# agrees: gspin gems 3-150, daily 1500, debut 1500/30).
 GAMECONFIG_CHANGES = {
-    "gspin_gem_min": (5, 2),
-    "gspin_gem_max": (50, 15),
-    "daily_coins": (1000, 300),
+    "gspin_gem_min": (5, 3),
+    "gspin_gem_max": (50, 150),
+    "daily_coins": (1000, 1500),
     "daily_streak_bonus_coins": (200, 60),
-    "debut_coins": (100000, 30000),
-    "debut_gems": (20, 6),
+    "debut_coins": (100000, 1500),
+    "debut_gems": (20, 30),
 }
 
 
