@@ -837,6 +837,9 @@ class GameConfig(Base):
     # Comma-separated telegram IDs allowed to use commands during maintenance
     # (admins testing the bot, for example).
     maintenance_bypass_ids = Column(String(500), nullable=True)
+    # Comma-separated telegram IDs allowed to use the Challenge League Tournament
+    # command. Empty/None = open to everyone (restriction off).
+    tournament_allowed_ids = Column(String(500), nullable=True)
     # Global gameplay style for all newly started matches: original Telegram
     # callback buttons (default) or the optional Mini App live board.
     match_style = Column(String(20), default="telegram", nullable=False)

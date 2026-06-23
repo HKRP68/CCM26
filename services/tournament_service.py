@@ -26,6 +26,95 @@ TERMINAL_STATUSES = ("completed", "cancelled")
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Tournament-command access control
+# ──────────────────────────────────────────────────────────────────────
+
+def parse_allowed_ids(raw):
+    """Parse a comma/space/newline separated Telegram-ID string into a set[int].
+
+    Lenient like maintenance_service._bypass_ids — junk tokens are skipped and
+    only positive integer user IDs are kept.
+    """
+    out = set()
+    if not raw:
+        return out
+    normalized = str(raw).replace(";", ",").replace("\n", ",").replace(" ", ",")
+    for token in normalized.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            continue
+        if value > 0:
+            out.add(value)
+    return out
+
+
+def _user_is_admin(telegram_id):
+    """True if the user is a configured bot admin (always allowed)."""
+    try:
+        from services.admin_ids import configured_admin_ids
+        return int(telegram_id) in configured_admin_ids()
+    except Exception:
+        logger.exception("Failed to load admin IDs for tournament access check")
+        return False
+
+
+def _read_allowed_ids_raw():
+    """Read the raw allowlist string fresh from the DB.
+
+    Returns ``(raw_value, ok)``. ``ok=False`` means the config could not be
+    read (e.g. a DB/migration problem) — callers must fail closed rather than
+    treat that as an empty (open-to-everyone) allowlist. A missing config row
+    (fresh install) is a legitimate empty allowlist and returns ``(None, True)``.
+
+    Reads fresh (not the process-local cache) so a save from the standalone
+    admin-website process is picked up by the bot process without a restart —
+    matching the other cross-process getters in ``services.config_service``.
+    """
+    from database import get_session
+    from models import GameConfig
+    session = get_session()
+    try:
+        row = session.query(GameConfig).first()
+        return (row.tournament_allowed_ids if row else None), True
+    except Exception:
+        logger.exception("Failed to read tournament allowlist config")
+        return None, False
+    finally:
+        session.close()
+
+
+def is_tournament_command_allowed(telegram_id, cfg=None):
+    """Whether ``telegram_id`` may use the Challenge League Tournament command.
+
+    - Empty allowlist  → True (feature off; open to everyone, today's behavior).
+    - Non-empty list   → True only if the user is in the list OR a bot admin.
+    - Config unavailable → fail closed: only bot admins may proceed, so a
+      degraded DB never silently disables a configured restriction.
+
+    ``cfg`` (a config dict) may be passed to bypass the DB read — used by tests
+    and callers that already hold a fresh config snapshot.
+    """
+    if telegram_id is None:
+        return False
+    if cfg is not None:
+        raw, ok = cfg.get("tournament_allowed_ids"), True
+    else:
+        raw, ok = _read_allowed_ids_raw()
+    if not ok:
+        return _user_is_admin(telegram_id)
+    allowed = parse_allowed_ids(raw)
+    if not allowed:
+        return True
+    if int(telegram_id) in allowed:
+        return True
+    return _user_is_admin(telegram_id)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Lifecycle
 # ──────────────────────────────────────────────────────────────────────
 

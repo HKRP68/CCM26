@@ -289,6 +289,8 @@ def _migrate_add_columns():
         "maintenance_until": "TIMESTAMP",
         "maintenance_started_at": "TIMESTAMP",
         "maintenance_bypass_ids": "VARCHAR(500)",
+        # Telegram IDs allowed to use the Challenge League Tournament command.
+        "tournament_allowed_ids": "VARCHAR(500)",
     }
     for col, coltype in new_gameconfig_cols.items():
         _try_add("game_config", col, coltype)

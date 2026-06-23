@@ -12896,6 +12896,50 @@ def admin_maintenance():
                               detail=f"msg={'custom' if msg else 'default'}")
                     db.commit()
                     flash("✅ Maintenance settings saved", "success")
+
+                elif action == "save_tournament_access":
+                    # Manage the Challenge League Tournament command allowlist —
+                    # independent of maintenance state. Empty = open to everyone.
+                    # Canonicalize the input so junk like "abc" or ", ," (which is
+                    # non-empty in the form but parses to no IDs) doesn't silently
+                    # leave the command open to everyone.
+                    from services import tournament_service
+                    # Parse the FULL value (never pre-slice the raw text — a cut
+                    # landing mid-ID would fabricate a wrong positive ID). Then fit
+                    # only whole IDs within the column's 500-char limit.
+                    raw_ids = (request.form.get("tournament_allowed_ids", "") or "").strip()
+                    parsed_ids = sorted(tournament_service.parse_allowed_ids(raw_ids))
+                    kept, canonical = [], ""
+                    for i in parsed_ids:
+                        candidate = f"{canonical}, {i}" if canonical else str(i)
+                        if len(candidate) > 500:
+                            break
+                        canonical, kept = candidate, kept + [i]
+                    dropped = len(parsed_ids) - len(kept)
+                    row.tournament_allowed_ids = canonical or None
+                    row.updated_at = datetime.utcnow()
+                    db.commit()
+                    _refresh_cfg(db)
+                    log_admin(db, "tournament_access_edit", target_type="config",
+                              target_name="tournament_allowed_ids",
+                              detail=f"ids={len(kept)} allowed" if kept else "cleared")
+                    db.commit()
+                    if raw_ids and not parsed_ids:
+                        # Non-empty input with no valid IDs would otherwise look
+                        # "ON" while leaving the command open — warn instead.
+                        flash("⚠️ No valid Telegram IDs found — tournament access "
+                              "is now OFF (open to everyone). Enter numeric user IDs.",
+                              "error")
+                    elif dropped:
+                        flash(f"⚠️ Allowlist too long — saved the first {len(kept)} "
+                              f"ID(s); {dropped} dropped. Please shorten the list.",
+                              "error")
+                    elif kept:
+                        flash(f"✅ Tournament command restricted to {len(kept)} "
+                              f"allowed user(s).", "success")
+                    else:
+                        flash("✅ Tournament command access cleared — open to everyone.",
+                              "success")
             except Exception as e:
                 db.rollback()
                 logger.exception("maintenance toggle failed")
@@ -12912,6 +12956,7 @@ def admin_maintenance():
             "maintenance_until": row.maintenance_until,
             "maintenance_started_at": row.maintenance_started_at,
             "maintenance_bypass_ids": row.maintenance_bypass_ids or "",
+            "tournament_allowed_ids": row.tournament_allowed_ids or "",
         }
         # Convert UTC → IST for the datetime-local input value
         until_ist_str = ""

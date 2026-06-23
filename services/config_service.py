@@ -54,6 +54,7 @@ DEFAULTS = {
     "maintenance_until": None,
     "maintenance_started_at": None,
     "maintenance_bypass_ids": None,
+    "tournament_allowed_ids": None,
     # Match gameplay style. Telegram restores the original in-chat buttons;
     # webapp opts every newly started match into the Mini App board.
     "match_style": "telegram",

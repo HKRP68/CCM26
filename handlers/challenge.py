@@ -1323,6 +1323,14 @@ async def _handle_tournament_command(update, context, session, league):
     """
     from services import tournament_service
 
+    user = update.effective_user
+    if not tournament_service.is_tournament_command_allowed(user.id if user else None):
+        await update.message.reply_text(
+            "⛔ The Challenge League Tournament Command is restricted.\n"
+            "Only approved players can start tournament matches. "
+            "Contact an admin to be added.")
+        return
+
     active = tournament_service.get_active_tournament(session)
     if not active:
         await update.message.reply_text(

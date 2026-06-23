@@ -218,6 +218,27 @@
 </div>
 {% endif %}
 
+<!-- Tournament command access panel (independent of maintenance) -->
+<div class="panel">
+  <h3>🏆 Tournament Command Access</h3>
+  <p style="color:var(--muted);font-size:.9rem;margin-top:0;">
+    Restrict who can use the <strong>Challenge League Tournament command</strong>
+    to start tournament matches. Leave empty to allow everyone (restriction off).
+    Bot admins are always allowed.
+    {% if cfg.tournament_allowed_ids %}<br><strong>Status: ON</strong> — only the listed IDs (and admins) may use it.{% else %}<br><strong>Status: OFF</strong> — open to everyone.{% endif %}
+  </p>
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_tournament_access">
+    <div class="form-row">
+      <label>Allowed user IDs (comma-separated)</label>
+      <input type="text" name="tournament_allowed_ids" value="{{ cfg.tournament_allowed_ids }}" placeholder="123456789, 987654321">
+      <div class="hint">Telegram user IDs allowed to use the Challenge League Tournament command.</div>
+    </div>
+    <button type="submit" class="btn btn-blue">💾 Save Tournament Access</button>
+  </form>
+</div>
+
 <!-- Preview -->
 {% if preview %}
 <div class="panel">
