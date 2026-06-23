@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 # 7-day reward ladder. Day 7 is the jackpot (a free pack grant + big coins).
 # kind: 'coins' | 'gems' | 'coins_gems' | 'pack'
 LADDER = [
-    {"day": 1, "kind": "coins",      "coins": 500,   "gems": 0,  "label": "500 coins"},
-    {"day": 2, "kind": "coins",      "coins": 1000,  "gems": 0,  "label": "1,000 coins"},
-    {"day": 3, "kind": "coins_gems", "coins": 1500,  "gems": 1,  "label": "1,500 coins + 1 gem"},
-    {"day": 4, "kind": "coins",      "coins": 2500,  "gems": 0,  "label": "2,500 coins"},
-    {"day": 5, "kind": "coins_gems", "coins": 3000,  "gems": 2,  "label": "3,000 coins + 2 gems"},
-    {"day": 6, "kind": "coins",      "coins": 5000,  "gems": 0,  "label": "5,000 coins"},
-    {"day": 7, "kind": "coins_gems", "coins": 10000, "gems": 5,  "label": "10,000 coins + 5 gems"},
+    {"day": 1, "kind": "coins",      "coins": 150,  "gems": 0,  "label": "150 coins"},
+    {"day": 2, "kind": "coins",      "coins": 300,  "gems": 0,  "label": "300 coins"},
+    {"day": 3, "kind": "coins_gems", "coins": 500,  "gems": 1,  "label": "500 coins + 1 gem"},
+    {"day": 4, "kind": "coins",      "coins": 750,  "gems": 0,  "label": "750 coins"},
+    {"day": 5, "kind": "coins_gems", "coins": 1000, "gems": 1,  "label": "1,000 coins + 1 gem"},
+    {"day": 6, "kind": "coins",      "coins": 1500, "gems": 0,  "label": "1,500 coins"},
+    {"day": 7, "kind": "coins_gems", "coins": 3000, "gems": 2,  "label": "3,000 coins + 2 gems"},
 ]
 
 LADDER_LENGTH = len(LADDER)

@@ -754,12 +754,12 @@ class GameConfig(Base):
     match_loss_coins_per_over = Column(Integer, default=150)
     match_loss_gems_per_over = Column(Float, default=0.5)
     # GSpin gem range (for blue outcome)
-    gspin_gem_min = Column(Integer, default=5)
-    gspin_gem_max = Column(Integer, default=50)
+    gspin_gem_min = Column(Integer, default=3)
+    gspin_gem_max = Column(Integer, default=150)
     # Daily reward
-    daily_coins = Column(Integer, default=1000)
+    daily_coins = Column(Integer, default=1500)
     daily_gems = Column(Integer, default=0)
-    daily_streak_bonus_coins = Column(Integer, default=200)    # extra per day of streak
+    daily_streak_bonus_coins = Column(Integer, default=60)    # extra per day of streak
     daily_streak_bonus_gems = Column(Integer, default=0)
     # ── Mini App ad-gated quotas (per 24h cycle) ──
     # Number of AD-watched spins/dailies allowed per cycle (in addition to
@@ -791,8 +791,8 @@ class GameConfig(Base):
     welcome_message = Column(Text, nullable=True)
     branding_tagline = Column(String(200), nullable=True)
     # Debut bonus
-    debut_coins = Column(Integer, default=100000)
-    debut_gems = Column(Integer, default=20)                    # was 100
+    debut_coins = Column(Integer, default=1500)
+    debut_gems = Column(Integer, default=30)
 
     # ── Simulation tuning (additive percentage points applied at end) ──
     # These nudge final probabilities to fix systemic biases (e.g. too many dots).
