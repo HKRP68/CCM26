@@ -754,12 +754,12 @@ class GameConfig(Base):
     match_loss_coins_per_over = Column(Integer, default=150)
     match_loss_gems_per_over = Column(Float, default=0.5)
     # GSpin gem range (for blue outcome)
-    gspin_gem_min = Column(Integer, default=5)
-    gspin_gem_max = Column(Integer, default=50)
+    gspin_gem_min = Column(Integer, default=2)
+    gspin_gem_max = Column(Integer, default=15)
     # Daily reward
-    daily_coins = Column(Integer, default=1000)
+    daily_coins = Column(Integer, default=300)
     daily_gems = Column(Integer, default=0)
-    daily_streak_bonus_coins = Column(Integer, default=200)    # extra per day of streak
+    daily_streak_bonus_coins = Column(Integer, default=60)    # extra per day of streak
     daily_streak_bonus_gems = Column(Integer, default=0)
     # ── Mini App ad-gated quotas (per 24h cycle) ──
     # Number of AD-watched spins/dailies allowed per cycle (in addition to

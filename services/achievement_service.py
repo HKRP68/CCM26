@@ -129,189 +129,189 @@ CATALOG = [
 
     {"key": "roster_10", "emoji": "📋", "name": "Squad Ready",
      "desc": "Have 10 players on your roster",
-     "category": "Collection", "coins": 5000, "gems": 0,
+     "category": "Collection", "coins": 1500, "gems": 0,
      "check": lambda s, u: u.roster_count >= 10},
 
     {"key": "roster_25", "emoji": "👥", "name": "Full Squad",
      "desc": "Fill your roster to 25 players",
-     "category": "Collection", "coins": 25000, "gems": 5,
+     "category": "Collection", "coins": 7500, "gems": 1,
      "check": lambda s, u: u.roster_count >= 25},
 
     {"key": "first_legend", "emoji": "🌟", "name": "Legend Acquired",
      "desc": "Own a player rated 95+",
-     "category": "Collection", "coins": 0, "gems": 10,
+     "category": "Collection", "coins": 0, "gems": 3,
      "check": _has_legend},
 
     {"key": "five_legends", "emoji": "💫", "name": "Hall of Fame",
      "desc": "Own 5 different 95+ rated players",
-     "category": "Collection", "coins": 0, "gems": 50,
+     "category": "Collection", "coins": 0, "gems": 15,
      "check": lambda s, u: _has_n_players_ge(s, u, 5, 95)},
 
     {"key": "elite_squad", "emoji": "⭐", "name": "Elite Squad",
      "desc": "Have 11 players rated 85+",
-     "category": "Collection", "coins": 50000, "gems": 0,
+     "category": "Collection", "coins": 15000, "gems": 0,
      "check": lambda s, u: _has_n_players_ge(s, u, 11, 85)},
 
     # ── MATCH RESULTS ───────────────────────────────────────────────
     {"key": "first_match", "emoji": "🎯", "name": "Debut Match",
      "desc": "Play your first match",
-     "category": "Match", "coins": 1000, "gems": 0,
+     "category": "Match", "coins": 300, "gems": 0,
      "check": lambda s, u: (u.matches_played or 0) >= 1},
 
     {"key": "first_win", "emoji": "🏆", "name": "First Victory",
      "desc": "Win your first match",
-     "category": "Match", "coins": 5000, "gems": 1,
+     "category": "Match", "coins": 1500, "gems": 1,
      "check": lambda s, u: (u.matches_won or 0) >= 1},
 
     {"key": "ten_wins", "emoji": "🎖️", "name": "Ten Wins",
      "desc": "Win 10 matches",
-     "category": "Match", "coins": 25000, "gems": 5,
+     "category": "Match", "coins": 7500, "gems": 1,
      "check": lambda s, u: (u.matches_won or 0) >= 10},
 
     {"key": "fifty_wins", "emoji": "👑", "name": "Half Century of Wins",
      "desc": "Win 50 matches",
-     "category": "Match", "coins": 100000, "gems": 25,
+     "category": "Match", "coins": 30000, "gems": 7,
      "check": lambda s, u: (u.matches_won or 0) >= 50},
 
     {"key": "hundred_wins", "emoji": "🏅", "name": "Century Maker",
      "desc": "Win 100 matches",
-     "category": "Match", "coins": 250000, "gems": 100,
+     "category": "Match", "coins": 75000, "gems": 30,
      "check": lambda s, u: (u.matches_won or 0) >= 100},
 
     {"key": "ten_played", "emoji": "🎮", "name": "Regular Player",
      "desc": "Play 10 matches",
-     "category": "Match", "coins": 10000, "gems": 0,
+     "category": "Match", "coins": 3000, "gems": 0,
      "check": lambda s, u: (u.matches_played or 0) >= 10},
 
     {"key": "fifty_played", "emoji": "🎟️", "name": "Veteran",
      "desc": "Play 50 matches",
-     "category": "Match", "coins": 30000, "gems": 10,
+     "category": "Match", "coins": 9000, "gems": 3,
      "check": lambda s, u: (u.matches_played or 0) >= 50},
 
     # ── STREAKS ─────────────────────────────────────────────────────
     {"key": "streak_3", "emoji": "🔥", "name": "Hot Streak",
      "desc": "Win 3 matches in a row",
-     "category": "Streak", "coins": 5000, "gems": 1,
+     "category": "Streak", "coins": 1500, "gems": 1,
      "check": lambda s, u: (u.best_streak or 0) >= 3},
 
     {"key": "streak_5", "emoji": "🌋", "name": "On Fire",
      "desc": "Win 5 matches in a row",
-     "category": "Streak", "coins": 15000, "gems": 5,
+     "category": "Streak", "coins": 4500, "gems": 1,
      "check": lambda s, u: (u.best_streak or 0) >= 5},
 
     {"key": "streak_10", "emoji": "🚀", "name": "Unstoppable",
      "desc": "Win 10 matches in a row",
-     "category": "Streak", "coins": 50000, "gems": 25,
+     "category": "Streak", "coins": 15000, "gems": 7,
      "check": lambda s, u: (u.best_streak or 0) >= 10},
 
     # ── BATTING ─────────────────────────────────────────────────────
     {"key": "first_fifty", "emoji": "5️⃣0️⃣", "name": "Half Century",
      "desc": "Score 50+ in a single match",
-     "category": "Batting", "coins": 2000, "gems": 0,
+     "category": "Batting", "coins": 600, "gems": 0,
      "check": lambda s, u: _max_individual_score(s, u) >= 50},
 
     {"key": "first_hundred", "emoji": "💯", "name": "Centurion",
      "desc": "Score 100+ in a single match",
-     "category": "Batting", "coins": 10000, "gems": 5,
+     "category": "Batting", "coins": 3000, "gems": 1,
      "check": lambda s, u: _max_individual_score(s, u) >= 100},
 
     {"key": "double_century", "emoji": "2️⃣0️⃣0️⃣", "name": "Double Century",
      "desc": "Score 200+ in a single match",
-     "category": "Batting", "coins": 50000, "gems": 25,
+     "category": "Batting", "coins": 15000, "gems": 7,
      "check": lambda s, u: _max_individual_score(s, u) >= 200},
 
     {"key": "runs_1k", "emoji": "🏏", "name": "1000 Run Club",
      "desc": "Total 1,000 career runs",
-     "category": "Batting", "coins": 5000, "gems": 0,
+     "category": "Batting", "coins": 1500, "gems": 0,
      "check": lambda s, u: _total_runs(s, u) >= 1000},
 
     {"key": "runs_5k", "emoji": "📈", "name": "5K Striker",
      "desc": "Total 5,000 career runs",
-     "category": "Batting", "coins": 25000, "gems": 10,
+     "category": "Batting", "coins": 7500, "gems": 3,
      "check": lambda s, u: _total_runs(s, u) >= 5000},
 
     {"key": "runs_10k", "emoji": "🎢", "name": "10K Run Machine",
      "desc": "Total 10,000 career runs",
-     "category": "Batting", "coins": 100000, "gems": 50,
+     "category": "Batting", "coins": 30000, "gems": 15,
      "check": lambda s, u: _total_runs(s, u) >= 10000},
 
     # ── BOWLING ─────────────────────────────────────────────────────
     {"key": "five_for", "emoji": "🎳", "name": "Five-Wicket Haul",
      "desc": "Take 5 wickets in a match",
-     "category": "Bowling", "coins": 10000, "gems": 5,
+     "category": "Bowling", "coins": 3000, "gems": 1,
      "check": lambda s, u: _max_individual_wickets(s, u) >= 5},
 
     {"key": "wickets_50", "emoji": "💀", "name": "Wicket Hunter",
      "desc": "Take 50 career wickets",
-     "category": "Bowling", "coins": 5000, "gems": 0,
+     "category": "Bowling", "coins": 1500, "gems": 0,
      "check": lambda s, u: _total_wickets(s, u) >= 50},
 
     {"key": "wickets_250", "emoji": "🩸", "name": "Wicket Machine",
      "desc": "Take 250 career wickets",
-     "category": "Bowling", "coins": 25000, "gems": 10,
+     "category": "Bowling", "coins": 7500, "gems": 3,
      "check": lambda s, u: _total_wickets(s, u) >= 250},
 
     {"key": "wickets_1k", "emoji": "⚰️", "name": "Wicket Legend",
      "desc": "Take 1,000 career wickets",
-     "category": "Bowling", "coins": 100000, "gems": 50,
+     "category": "Bowling", "coins": 30000, "gems": 15,
      "check": lambda s, u: _total_wickets(s, u) >= 1000},
 
     # ── ECONOMY ─────────────────────────────────────────────────────
     {"key": "coins_100k", "emoji": "💰", "name": "Wealthy",
      "desc": "Have 100,000 coins at once",
-     "category": "Economy", "coins": 0, "gems": 5,
+     "category": "Economy", "coins": 0, "gems": 1,
      "check": lambda s, u: (u.total_coins or 0) >= 100000},
 
     {"key": "coins_1m", "emoji": "💎", "name": "Millionaire",
      "desc": "Have 1,000,000 coins at once",
-     "category": "Economy", "coins": 0, "gems": 25,
+     "category": "Economy", "coins": 0, "gems": 7,
      "check": lambda s, u: (u.total_coins or 0) >= 1000000},
 
     {"key": "gems_100", "emoji": "💍", "name": "Gem Collector",
      "desc": "Have 100 gems at once",
-     "category": "Economy", "coins": 5000, "gems": 0,
+     "category": "Economy", "coins": 1500, "gems": 0,
      "check": lambda s, u: (u.total_gems or 0) >= 100},
 
     {"key": "gems_500", "emoji": "💠", "name": "Gem Hoarder",
      "desc": "Have 500 gems at once",
-     "category": "Economy", "coins": 25000, "gems": 0,
+     "category": "Economy", "coins": 7500, "gems": 0,
      "check": lambda s, u: (u.total_gems or 0) >= 500},
 
     # ── TRAITS ──────────────────────────────────────────────────────
     {"key": "first_trait", "emoji": "✨", "name": "Trait Trained",
      "desc": "Apply your first trait",
-     "category": "Traits", "coins": 1000, "gems": 1,
+     "category": "Traits", "coins": 300, "gems": 1,
      "check": lambda s, u: _trait_count(s, u) >= 1},
 
     {"key": "five_traits", "emoji": "🔮", "name": "Trait Tactician",
      "desc": "Have 5 active player-trait bindings",
-     "category": "Traits", "coins": 5000, "gems": 5,
+     "category": "Traits", "coins": 1500, "gems": 1,
      "check": lambda s, u: _trait_count(s, u) >= 5},
 
     {"key": "trait_l5", "emoji": "🌠", "name": "Maxed Out",
      "desc": "Get any trait to Level 5",
-     "category": "Traits", "coins": 10000, "gems": 10,
+     "category": "Traits", "coins": 3000, "gems": 3,
      "check": lambda s, u: _max_trait_level(s, u) >= 5},
 
     # ── ENGAGEMENT ──────────────────────────────────────────────────
     {"key": "active_7", "emoji": "📅", "name": "Week-Long Player",
      "desc": "Be active 7 different days",
-     "category": "Engagement", "coins": 5000, "gems": 1,
+     "category": "Engagement", "coins": 1500, "gems": 1,
      "check": lambda s, u: (u.active_days or 0) >= 7},
 
     {"key": "active_30", "emoji": "🗓️", "name": "Monthly Devotee",
      "desc": "Be active 30 different days",
-     "category": "Engagement", "coins": 25000, "gems": 10,
+     "category": "Engagement", "coins": 7500, "gems": 3,
      "check": lambda s, u: (u.active_days or 0) >= 30},
 
     {"key": "first_trade", "emoji": "🤝", "name": "Trader",
      "desc": "Complete your first trade",
-     "category": "Social", "coins": 2000, "gems": 1,
+     "category": "Social", "coins": 600, "gems": 1,
      "check": lambda s, u: _trade_count(s, u) >= 1},
 
     {"key": "ten_trades", "emoji": "🔄", "name": "Deal Maker",
      "desc": "Complete 10 trades",
-     "category": "Social", "coins": 15000, "gems": 5,
+     "category": "Social", "coins": 4500, "gems": 1,
      "check": lambda s, u: _trade_count(s, u) >= 10},
 ]
 
