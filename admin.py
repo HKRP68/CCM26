@@ -12904,15 +12904,25 @@ def admin_maintenance():
                     # non-empty in the form but parses to no IDs) doesn't silently
                     # leave the command open to everyone.
                     from services import tournament_service
-                    raw_ids = (request.form.get("tournament_allowed_ids", "") or "").strip()[:500]
+                    # Parse the FULL value (never pre-slice the raw text — a cut
+                    # landing mid-ID would fabricate a wrong positive ID). Then fit
+                    # only whole IDs within the column's 500-char limit.
+                    raw_ids = (request.form.get("tournament_allowed_ids", "") or "").strip()
                     parsed_ids = sorted(tournament_service.parse_allowed_ids(raw_ids))
-                    row.tournament_allowed_ids = ", ".join(str(i) for i in parsed_ids) or None
+                    kept, canonical = [], ""
+                    for i in parsed_ids:
+                        candidate = f"{canonical}, {i}" if canonical else str(i)
+                        if len(candidate) > 500:
+                            break
+                        canonical, kept = candidate, kept + [i]
+                    dropped = len(parsed_ids) - len(kept)
+                    row.tournament_allowed_ids = canonical or None
                     row.updated_at = datetime.utcnow()
                     db.commit()
                     _refresh_cfg(db)
                     log_admin(db, "tournament_access_edit", target_type="config",
                               target_name="tournament_allowed_ids",
-                              detail=f"ids={len(parsed_ids)} allowed" if parsed_ids else "cleared")
+                              detail=f"ids={len(kept)} allowed" if kept else "cleared")
                     db.commit()
                     if raw_ids and not parsed_ids:
                         # Non-empty input with no valid IDs would otherwise look
@@ -12920,8 +12930,12 @@ def admin_maintenance():
                         flash("⚠️ No valid Telegram IDs found — tournament access "
                               "is now OFF (open to everyone). Enter numeric user IDs.",
                               "error")
-                    elif parsed_ids:
-                        flash(f"✅ Tournament command restricted to {len(parsed_ids)} "
+                    elif dropped:
+                        flash(f"⚠️ Allowlist too long — saved the first {len(kept)} "
+                              f"ID(s); {dropped} dropped. Please shorten the list.",
+                              "error")
+                    elif kept:
+                        flash(f"✅ Tournament command restricted to {len(kept)} "
                               f"allowed user(s).", "success")
                     else:
                         flash("✅ Tournament command access cleared — open to everyone.",
