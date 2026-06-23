@@ -64,7 +64,12 @@ def _save_ids(session, row, ids):
     """Persist a set of IDs back to the row (sorted) and invalidate the cache."""
     row.tournament_allowed_ids = ", ".join(str(i) for i in sorted(ids)) or None
     session.commit()
-    _refresh_cfg(session)
+    # The write is already committed; a cache-refresh hiccup must not make the
+    # caller report failure and roll back a persisted change.
+    try:
+        _refresh_cfg(session)
+    except Exception:
+        logger.exception("Tournament allowlist saved, but config cache refresh failed")
 
 
 async def tourallow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

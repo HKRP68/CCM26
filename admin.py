@@ -12900,16 +12900,32 @@ def admin_maintenance():
                 elif action == "save_tournament_access":
                     # Manage the Challenge League Tournament command allowlist —
                     # independent of maintenance state. Empty = open to everyone.
-                    tour_ids_str = (request.form.get("tournament_allowed_ids", "") or "").strip()[:500]
-                    row.tournament_allowed_ids = tour_ids_str or None
+                    # Canonicalize the input so junk like "abc" or ", ," (which is
+                    # non-empty in the form but parses to no IDs) doesn't silently
+                    # leave the command open to everyone.
+                    from services import tournament_service
+                    raw_ids = (request.form.get("tournament_allowed_ids", "") or "").strip()[:500]
+                    parsed_ids = sorted(tournament_service.parse_allowed_ids(raw_ids))
+                    row.tournament_allowed_ids = ", ".join(str(i) for i in parsed_ids) or None
                     row.updated_at = datetime.utcnow()
                     db.commit()
                     _refresh_cfg(db)
                     log_admin(db, "tournament_access_edit", target_type="config",
                               target_name="tournament_allowed_ids",
-                              detail=f"ids={'set' if tour_ids_str else 'cleared'}")
+                              detail=f"ids={len(parsed_ids)} allowed" if parsed_ids else "cleared")
                     db.commit()
-                    flash("✅ Tournament command access saved", "success")
+                    if raw_ids and not parsed_ids:
+                        # Non-empty input with no valid IDs would otherwise look
+                        # "ON" while leaving the command open — warn instead.
+                        flash("⚠️ No valid Telegram IDs found — tournament access "
+                              "is now OFF (open to everyone). Enter numeric user IDs.",
+                              "error")
+                    elif parsed_ids:
+                        flash(f"✅ Tournament command restricted to {len(parsed_ids)} "
+                              f"allowed user(s).", "success")
+                    else:
+                        flash("✅ Tournament command access cleared — open to everyone.",
+                              "success")
             except Exception as e:
                 db.rollback()
                 logger.exception("maintenance toggle failed")

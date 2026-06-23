@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from handlers import forward_broadcast
+from services import admin_ids
 
 
 class DummyStatus:
@@ -42,7 +43,9 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
         for name in forward_broadcast.ADMIN_ID_ENV_VARS:
             os.environ.pop(name, None)
         os.environ["FORWARD_BROADCAST_DELAY_SECONDS"] = "0"
-        self._config_patch = patch.object(forward_broadcast, "get_config", return_value={})
+        # Admin-ID aggregation now lives in services.admin_ids; patch get_config
+        # there so the env-var-driven assertions stay isolated from real config.
+        self._config_patch = patch.object(admin_ids, "get_config", return_value={})
         self._config_patch.start()
 
     def tearDown(self):

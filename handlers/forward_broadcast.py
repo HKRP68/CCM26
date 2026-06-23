@@ -22,8 +22,13 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import BotChat
-from services.config_service import get_config
-from services.admin_ids import ADMIN_ID_ENV_VARS, parse_id_list as _parse_id_list
+# Single source of truth for "who is a bot admin" — shared with the rest of the
+# codebase so authorization behavior can't drift between modules.
+from services.admin_ids import (
+    ADMIN_ID_ENV_VARS,  # re-exported for callers/tests that reference it here
+    configured_admin_ids,
+    is_admin as is_forward_admin,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,29 +44,6 @@ class ForwardResult:
     total: int
     sent: int
     failed: int
-
-
-def configured_admin_ids() -> set[int]:
-    """Return global bot-admin Telegram user IDs from env and admin config.
-
-    The environment variables are the primary source. As a convenience for
-    deployments that already maintain Telegram admin IDs in the maintenance
-    settings, ``maintenance_bypass_ids`` is also accepted.
-    """
-    raw_values = [os.getenv(name) for name in ADMIN_ID_ENV_VARS]
-    try:
-        raw_values.append((get_config() or {}).get("maintenance_bypass_ids"))
-    except Exception:
-        logger.exception("Failed to load maintenance bypass admin IDs")
-    return _parse_id_list(raw_values)
-
-
-def is_forward_admin(user_id: int | None, admin_ids: set[int] | None = None) -> bool:
-    """Check whether a Telegram user may run forward-broadcast commands."""
-    if user_id is None:
-        return False
-    allowed = admin_ids if admin_ids is not None else configured_admin_ids()
-    return int(user_id) in allowed
 
 
 def _target_chat_ids(chat_types: tuple[str, ...]) -> list[int]:
