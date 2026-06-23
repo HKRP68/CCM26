@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from telegram import Update
@@ -24,17 +23,9 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import BotChat
 from services.config_service import get_config
+from services.admin_ids import ADMIN_ID_ENV_VARS, parse_id_list as _parse_id_list
 
 logger = logging.getLogger(__name__)
-
-ADMIN_ID_ENV_VARS = (
-    "BOT_ADMIN_IDS",
-    "ADMIN_IDS",
-    "ADMIN_USER_IDS",
-    "SUDO_USERS",
-    "OWNER_IDS",
-    "ADMIN_CHAT_ID",
-)
 
 GROUP_CHAT_TYPES = ("group", "supergroup")
 PRIVATE_CHAT_TYPES = ("private",)
@@ -48,28 +39,6 @@ class ForwardResult:
     total: int
     sent: int
     failed: int
-
-
-def _parse_id_list(raw_values: Iterable[str | None]) -> set[int]:
-    """Parse comma/space separated positive Telegram user IDs."""
-    ids: set[int] = set()
-    for raw in raw_values:
-        if not raw:
-            continue
-        normalized = str(raw).replace(";", ",").replace("\n", ",")
-        for part in normalized.replace(" ", ",").split(","):
-            token = part.strip()
-            if not token:
-                continue
-            try:
-                value = int(token)
-            except ValueError:
-                continue
-            # Negative IDs are groups/channels (for example ADMIN_CHAT_ID can be
-            # a staff group). They cannot identify an individual command sender.
-            if value > 0:
-                ids.add(value)
-    return ids
 
 
 def configured_admin_ids() -> set[int]:

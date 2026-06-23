@@ -12896,6 +12896,20 @@ def admin_maintenance():
                               detail=f"msg={'custom' if msg else 'default'}")
                     db.commit()
                     flash("✅ Maintenance settings saved", "success")
+
+                elif action == "save_tournament_access":
+                    # Manage the Challenge League Tournament command allowlist —
+                    # independent of maintenance state. Empty = open to everyone.
+                    tour_ids_str = (request.form.get("tournament_allowed_ids", "") or "").strip()[:500]
+                    row.tournament_allowed_ids = tour_ids_str or None
+                    row.updated_at = datetime.utcnow()
+                    db.commit()
+                    _refresh_cfg(db)
+                    log_admin(db, "tournament_access_edit", target_type="config",
+                              target_name="tournament_allowed_ids",
+                              detail=f"ids={'set' if tour_ids_str else 'cleared'}")
+                    db.commit()
+                    flash("✅ Tournament command access saved", "success")
             except Exception as e:
                 db.rollback()
                 logger.exception("maintenance toggle failed")
@@ -12912,6 +12926,7 @@ def admin_maintenance():
             "maintenance_until": row.maintenance_until,
             "maintenance_started_at": row.maintenance_started_at,
             "maintenance_bypass_ids": row.maintenance_bypass_ids or "",
+            "tournament_allowed_ids": row.tournament_allowed_ids or "",
         }
         # Convert UTC → IST for the datetime-local input value
         until_ist_str = ""

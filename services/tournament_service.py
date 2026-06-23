@@ -26,6 +26,58 @@ TERMINAL_STATUSES = ("completed", "cancelled")
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Tournament-command access control
+# ──────────────────────────────────────────────────────────────────────
+
+def parse_allowed_ids(raw):
+    """Parse a comma/space/newline separated Telegram-ID string into a set[int].
+
+    Lenient like maintenance_service._bypass_ids — junk tokens are skipped and
+    only positive integer user IDs are kept.
+    """
+    out = set()
+    if not raw:
+        return out
+    normalized = str(raw).replace(";", ",").replace("\n", ",").replace(" ", ",")
+    for token in normalized.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            continue
+        if value > 0:
+            out.add(value)
+    return out
+
+
+def is_tournament_command_allowed(telegram_id, cfg=None):
+    """Whether ``telegram_id`` may use the Challenge League Tournament command.
+
+    - Empty allowlist  → True (feature off; open to everyone, today's behavior).
+    - Non-empty list   → True only if the user is in the list OR a bot admin.
+    """
+    if telegram_id is None:
+        return False
+    if cfg is None:
+        from services.config_service import get_config
+        cfg = get_config()
+    allowed = parse_allowed_ids((cfg or {}).get("tournament_allowed_ids"))
+    if not allowed:
+        return True
+    if int(telegram_id) in allowed:
+        return True
+    # Bot admins are always allowed, even when not explicitly listed.
+    try:
+        from services.admin_ids import configured_admin_ids
+        return int(telegram_id) in configured_admin_ids()
+    except Exception:
+        logger.exception("Failed to load admin IDs for tournament access check")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Lifecycle
 # ──────────────────────────────────────────────────────────────────────
 

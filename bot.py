@@ -250,6 +250,9 @@ from handlers.cartel import (
 )
 from handlers.feedback import feedback_handler
 from handlers.forward_broadcast import frwd_grp_handler, frwd_prvt_handler
+from handlers.tournament_access import (
+    tourallow_handler, tourblock_handler, tourallowlist_handler,
+)
 from handlers.setcardid import setcardid_handler
 
 # Fantasy League handlers
@@ -878,6 +881,11 @@ def main():
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
         app.add_handler(CommandHandler("frwd_prvt", frwd_prvt_handler))
+
+        # ── Admin: Challenge League Tournament command allowlist ─────
+        app.add_handler(CommandHandler("tourallow", tourallow_handler))
+        app.add_handler(CommandHandler("tourblock", tourblock_handler))
+        app.add_handler(CommandHandler("tourallowlist", tourallowlist_handler))
 
         # ── Admin: manually seed a player card file_id ───────────────
         app.add_handler(CommandHandler("setcardid", setcardid_handler))
