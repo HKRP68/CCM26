@@ -20,7 +20,7 @@ Key principles:
 import random
 import logging
 from datetime import datetime
-from sqlalchemy import select, update, or_
+from sqlalchemy import select, update
 
 from models import (
     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
@@ -45,14 +45,9 @@ PLAYER_RATING_BUCKETS = [           # (weight, low, high)
 
 def _pick_player_for_slot(session, min_rating=None):
     """Pick a random player at or above min_rating. Excludes inactive + variants."""
-    # Treat NULL restricted_from_buypl as "available" (== False) to match the
-    # rest of the app (admin filter, /buypl guard) — only TRUE is blocked.
-    not_restricted = or_(Player.restricted_from_buypl == False,
-                         Player.restricted_from_buypl.is_(None))
     q = (session.query(Player)
          .filter(Player.is_active == True,
-                 Player.parent_player_id.is_(None),
-                 not_restricted))
+                 Player.parent_player_id.is_(None)))
     if min_rating is not None:
         q = q.filter(Player.rating >= min_rating)
     pool = q.all()
@@ -60,8 +55,7 @@ def _pick_player_for_slot(session, min_rating=None):
         # Drop the rating filter as a fallback
         pool = (session.query(Player)
                 .filter(Player.is_active == True,
-                        Player.parent_player_id.is_(None),
-                        not_restricted)
+                        Player.parent_player_id.is_(None))
                 .all())
     return random.choice(pool) if pool else None
 
@@ -279,10 +273,6 @@ def add_player_to_market(session, player_id, custom_price=None):
         return False, "Player not found."
     if not player.is_active:
         return False, "Player is inactive."
-    # Don't list players the admin toggled off — buy_player() would block them,
-    # leaving an unsellable slot users can see but never purchase.
-    if getattr(player, "restricted_from_buypl", False):
-        return False, f"{player.name} is not available to buy."
 
     # Don't allow duplicates of the same player_id in the market
     existing = (session.query(GlobalPlayerMarket)
@@ -335,10 +325,6 @@ def buy_player(session, user, slot_index):
     player = session.query(Player).get(slot.player_id)
     if not player:
         return False, "Player no longer available."
-
-    # Honor the admin "not available to buy" toggle (restricted_from_buypl).
-    if getattr(player, "restricted_from_buypl", False):
-        return False, f"🚫 {player.name} is not available to buy."
 
     # Block if user owns ANY version of this player
     try:

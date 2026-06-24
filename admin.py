@@ -5327,10 +5327,8 @@ def webapp_market_buy(slot_id):
         if not player:
             return {"ok": False, "error": "player_missing"}, 404
 
-        # Restrictions
-        if getattr(player, "restricted_from_buypl", False):
-            return {"ok": False, "error": "restricted",
-                    "message": "This player isn't available for purchase."}, 400
+        # Note: restricted_from_buypl only blocks /buypl direct-name purchase,
+        # NOT the Player Market — market buys are always allowed.
 
         # Ownership: prevent double-owning the same version
         owned = (db.query(UserRoster)
