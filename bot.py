@@ -1,5 +1,6 @@
 """Cricket Simulator Telegram Bot — main entry point (Phase 1 + 2 + Admin)."""
 
+import asyncio
 import os
 import logging
 import threading
@@ -702,25 +703,30 @@ def main():
                 last = user_sync_cache.get(user.id)
                 if last is not None and now - last < user_sync_ttl:
                     return  # synced recently — skip the blocking DB write
-            try:
+            # The user sync is a blocking DB write. Run it in a worker thread so
+            # it never freezes the event loop (and every other update queued on
+            # it) while waiting on the database round-trip.
+            def _do_user_sync():
                 session = get_session()
                 try:
                     sync_update_users(session, update)
                     session.commit()
-                    if user is not None:
-                        user_sync_cache[user.id] = now
-                        # Opportunistic prune so the cache can't grow without
-                        # bound on a long-running, high-traffic bot.
-                        if len(user_sync_cache) > 10000:
-                            cutoff = now - user_sync_ttl
-                            for uid in [u for u, ts in user_sync_cache.items()
-                                        if ts < cutoff]:
-                                user_sync_cache.pop(uid, None)
                 except Exception:
                     session.rollback()
                     raise
                 finally:
                     session.close()
+            try:
+                await asyncio.to_thread(_do_user_sync)
+                if user is not None:
+                    user_sync_cache[user.id] = now
+                    # Opportunistic prune so the cache can't grow without
+                    # bound on a long-running, high-traffic bot.
+                    if len(user_sync_cache) > 10000:
+                        cutoff = now - user_sync_ttl
+                        for uid in [u for u, ts in user_sync_cache.items()
+                                    if ts < cutoff]:
+                            user_sync_cache.pop(uid, None)
             except Exception:
                 logger.exception("Failed to sync Telegram user details")
         app.add_handler(TypeHandler(_TGUpdate, _bind_reply_context), group=-4)
@@ -790,9 +796,10 @@ def main():
             if cached and now - cached[0] < ban_cache_ttl:
                 is_banned, reason = cached[1], cached[2]
             else:
-                is_banned = False
-                reason = ""
-                try:
+                # Cold cache: the ban lookup is a blocking DB query. Offload it
+                # to a worker thread so it doesn't stall the loop before the real
+                # handler (or button acknowledgement) can run.
+                def _query_ban():
                     from database import get_session as _gs
                     from models import User as _User
                     s = _gs()
@@ -801,10 +808,12 @@ def main():
                              .filter(_User.telegram_id == user.id)
                              .first())
                         if u and u.is_banned:
-                            is_banned = True
-                            reason = (u.ban_reason or "").strip()
+                            return True, (u.ban_reason or "").strip()
+                        return False, ""
                     finally:
                         s.close()
+                try:
+                    is_banned, reason = await asyncio.to_thread(_query_ban)
                     ban_cache[user.id] = (now, is_banned, reason)
                 except Exception:
                     logger.exception("Ban-check middleware failed (non-fatal)")

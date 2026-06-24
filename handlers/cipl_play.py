@@ -155,13 +155,23 @@ def _resolve_team_identity(team_name, league_key, session):
 # Small helpers
 # ════════════════════════════════════════════════════════════════════
 
-def _gs(ctx, mid):
-    return _gs_store(ctx, mid)
+# The state store (get_state/save_state) is backed by synchronous, blocking DB
+# I/O. Run it in a worker thread so a slow DB round-trip can't freeze the event
+# loop — and therefore every other user's command and button acknowledgement —
+# while one Challenge League pick is being processed.
+async def _gs(ctx, mid):
+    return await asyncio.to_thread(_gs_store, ctx, mid)
 
 
-def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None):
-    _ss_store(ctx, mid, s, next_action=next_action,
-              last_prompt_msg_id=last_prompt_msg_id)
+async def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None):
+    await asyncio.to_thread(
+        lambda: _ss_store(ctx, mid, s, next_action=next_action,
+                          last_prompt_msg_id=last_prompt_msg_id))
+
+
+async def _get_next_action(ctx, mid):
+    """Off-loop wrapper for the blocking next_action read."""
+    return await asyncio.to_thread(get_next_action, ctx, mid)
 
 
 def _mention_tg(state, tg_id, fallback="Player"):
@@ -342,9 +352,9 @@ async def _on_remind(context):
     mid = d["mid"]
     expected = d["expected"]
     async with get_match_lock(mid):
-        if get_next_action(context, mid) != expected:
+        if await _get_next_action(context, mid) != expected:
             return  # already acted — no nag
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if not state:
             return
         _, idle_tg, idle_name, _, _, _ = _idle_actor(state, expected)
@@ -363,7 +373,7 @@ async def _on_remind(context):
                 f"(−{CIPL_FORFEIT_COINS:,} 🪙 −{CIPL_FORFEIT_GEMS} 💎).",
                 parse_mode="HTML")
             state["action_remind_msg_id"] = sent.message_id
-            _ss(context, mid, state)
+            await _ss(context, mid, state)
         except Exception:
             logger.exception("cipl reminder send failed for match %s", mid)
 
@@ -373,9 +383,9 @@ async def _on_timeout(context):
     mid = d["mid"]
     expected = d["expected"]
     async with get_match_lock(mid):
-        if get_next_action(context, mid) != expected:
+        if await _get_next_action(context, mid) != expected:
             return  # the user already acted
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if not state:
             return
         try:
@@ -463,7 +473,7 @@ async def _forfeit_live_match(context, mid, state, expected):
         except Exception:
             logger.exception("cipl forfeit announce failed for match %s", mid)
 
-    _ss(context, mid, state, next_action=A_COMPLETED)
+    await _ss(context, mid, state, next_action=A_COMPLETED)
     cleanup_state(context, mid)
     release_match_lock(mid)
 
@@ -792,7 +802,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["tournament_id"] = draft.get("tournament_id")
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
         state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
-    _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
+    await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
     await _cleanup_setup_and_announce(context, state, draft)
@@ -885,7 +895,7 @@ def _header(state):
 
 async def _prompt_bowler(context, mid, state=None, first=False):
     if state is None:
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
     if not state:
         return
     if not first:
@@ -912,7 +922,7 @@ async def _prompt_bowler(context, mid, state=None, first=False):
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
             f"for over {state['current_over']}:{part_time_note}")
     await _new_action_message(context, state, text, rows)
-    _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+    await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
     _arm_timer(context, mid, A_PICK_CIPL_BOWLER)
 
 
@@ -927,7 +937,7 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
             f"{_mention_tg(state, state['bowl_user_tg'])}, choose your "
             f"<b>Bowling Approach</b>:")
     await _edit_action_message(context, state, text, rows)
-    _ss(context, mid, state, next_action=A_PICK_BOWL_APPROACH)
+    await _ss(context, mid, state, next_action=A_PICK_BOWL_APPROACH)
     _arm_timer(context, mid, A_PICK_BOWL_APPROACH)
 
 
@@ -942,7 +952,7 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
             f"🏏 {_mention_tg(state, state['bat_user_tg'])}, choose your "
             f"<b>Batting Approach</b>:")
     await _edit_action_message(context, state, text, rows)
-    _ss(context, mid, state, next_action=A_PICK_BAT_APPROACH)
+    await _ss(context, mid, state, next_action=A_PICK_BAT_APPROACH)
     _arm_timer(context, mid, A_PICK_BAT_APPROACH)
 
 
@@ -981,7 +991,7 @@ async def cipl_resume(context, mid, state=None):
     # callback or the inactivity timer (both of which lock) and rewind the flow
     # to an older action. Re-read state under the lock for the same reason.
     async with get_match_lock(mid):
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if not is_cipl_state(state):
             return False
         # While a Super Over is live the main over-by-over flow is suspended —
@@ -989,7 +999,7 @@ async def cipl_resume(context, mid, state=None):
         # regulation overs and overwrite the tie with a wrong result).
         if _super_over_active(context, mid):
             return False
-        action = get_next_action(context, mid)
+        action = await _get_next_action(context, mid)
         if action == A_COMPLETED:
             return False
         try:
@@ -1017,7 +1027,7 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     cid = chat.id
 
-    found_mid, found_state = _find_cipl_match_in_chat(context, cid)
+    found_mid, found_state = await _find_cipl_match_in_chat(context, cid)
     if found_mid is None:
         await update.message.reply_text(
             "❌ No active Challenge League or Lets Play match in this chat to "
@@ -1059,7 +1069,7 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "If it stays stuck, ask an admin to /removematch you.")
 
 
-def _find_cipl_match_in_chat(context, cid):
+async def _find_cipl_match_in_chat(context, cid):
     """Return (match_id, state) for a live Challenge League match in ``cid``.
 
     Checks the in-memory state cache first (picking the most recent match by id),
@@ -1080,22 +1090,27 @@ def _find_cipl_match_in_chat(context, cid):
                 best_mid, best_state = kid, v
     if best_mid is not None:
         return best_mid, best_state
+
     # DB fallback — find unfinished matches in this chat and rehydrate state.
-    session = get_session()
-    try:
-        rows = (session.query(Match)
-                .filter(Match.chat_id == cid,
-                        Match.status.in_(("playing", "active", "toss", "selecting")))
-                .order_by(Match.id.desc())
-                .all())
-        mids = [m.id for m in rows]
-    except Exception:
-        logger.exception("cipl resume DB lookup failed for chat %s", cid)
-        mids = []
-    finally:
-        session.close()
+    # Run the blocking query in a worker thread so /rcl can't freeze the loop.
+    def _query_open_mids():
+        session = get_session()
+        try:
+            rows = (session.query(Match)
+                    .filter(Match.chat_id == cid,
+                            Match.status.in_(("playing", "active", "toss", "selecting")))
+                    .order_by(Match.id.desc())
+                    .all())
+            return [m.id for m in rows]
+        except Exception:
+            logger.exception("cipl resume DB lookup failed for chat %s", cid)
+            return []
+        finally:
+            session.close()
+
+    mids = await asyncio.to_thread(_query_open_mids)
     for mid in mids:
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if is_cipl_state(state):
             return mid, state
     return None, None
@@ -1114,7 +1129,7 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer("Invalid selection.", show_alert=True)
         return
     async with get_match_lock(mid):
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if not state:
             await q.answer("Match not found.", show_alert=True)
             return
@@ -1125,7 +1140,7 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if q.from_user.id != state["bowl_user_tg"]:
             await q.answer("Only the bowling captain picks the bowler.", show_alert=True)
             return
-        if get_next_action(context, mid) != A_PICK_CIPL_BOWLER:
+        if await _get_next_action(context, mid) != A_PICK_CIPL_BOWLER:
             await q.answer("Bowler already chosen.", show_alert=True)
             return
         # Enforce eligibility server-side too: a stale button (or tampered
@@ -1142,7 +1157,7 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer()
         _cancel_timer(context, mid)
         state["current_bowler"] = bowler
-        _ss(context, mid, state)
+        await _ss(context, mid, state)
         await _prompt_bowl_approach(context, mid, state)
 
 
@@ -1155,7 +1170,7 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await q.answer("Invalid selection.", show_alert=True)
         return
     async with get_match_lock(mid):
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if not state:
             await q.answer("Match not found.", show_alert=True)
             return
@@ -1166,7 +1181,7 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if q.from_user.id != state["bowl_user_tg"]:
             await q.answer("Only the bowling captain picks this.", show_alert=True)
             return
-        if get_next_action(context, mid) != A_PICK_BOWL_APPROACH:
+        if await _get_next_action(context, mid) != A_PICK_BOWL_APPROACH:
             await q.answer("Already chosen.", show_alert=True)
             return
         if not (0 <= idx < len(BOWLING_APPROACHES)):
@@ -1175,7 +1190,7 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await q.answer()
         _cancel_timer(context, mid)
         state["bowling_approach"] = BOWLING_APPROACHES[idx][0]
-        _ss(context, mid, state)
+        await _ss(context, mid, state)
         await _prompt_bat_approach(context, mid, state)
 
 
@@ -1188,7 +1203,7 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer("Invalid selection.", show_alert=True)
         return
     async with get_match_lock(mid):
-        state = _gs(context, mid)
+        state = await _gs(context, mid)
         if not state:
             await q.answer("Match not found.", show_alert=True)
             return
@@ -1199,7 +1214,7 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if q.from_user.id != state["bat_user_tg"]:
             await q.answer("Only the batting captain picks this.", show_alert=True)
             return
-        if get_next_action(context, mid) != A_PICK_BAT_APPROACH:
+        if await _get_next_action(context, mid) != A_PICK_BAT_APPROACH:
             await q.answer("Already chosen.", show_alert=True)
             return
         if not (0 <= idx < len(BATTING_APPROACHES)):
@@ -1208,7 +1223,7 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer()
         _cancel_timer(context, mid)
         state["batting_approach"] = BATTING_APPROACHES[idx][0]
-        _ss(context, mid, state)
+        await _ss(context, mid, state)
         await _run_over(context, mid, state)
 
 
@@ -1224,8 +1239,11 @@ async def _run_over(context, mid, state):
         f"{_header(state)}\n\n⏳ Simulating over {state['current_over']} — "
         f"{bowler_name} bowling…", None)
 
-    summary = cipl_match.simulate_over(state)
-    _ss(context, mid, state)
+    # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
+    # engines). Run it in a worker thread so it can't block the event loop — and
+    # every other user's command/button — for the duration of the over.
+    summary = await asyncio.to_thread(cipl_match.simulate_over, state)
+    await _ss(context, mid, state)
 
     await _post_tracked(context, state, _render_over_summary(state, summary),
                         keyboard=_miniapp_row(state))
@@ -1416,7 +1434,7 @@ async def _innings_break(context, mid, state):
 
     summary_text = _innings_scorecard(state, innings_label="1st Innings")
     cipl_match.end_first_innings(state)
-    _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+    await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
     target = state["target"]
     text = (f"🛑 <b>Innings Break</b>\n\n{summary_text}\n\n"
             f"🎯 <b>{state['bat_team_name']}</b> need <b>{target}</b> to win "
@@ -1437,7 +1455,7 @@ async def _complete_match(context, mid, state):
     # Clear the final over's "simulating…" prompt + summary before the result is
     # posted — even when the chase is won mid-over, the last over message goes.
     await _delete_prev_over(context, state)
-    _ss(context, mid, state)
+    await _ss(context, mid, state)
 
     result = cipl_match.compute_result(state)
     # A tied match triggers a Super Over (interactive, user-vs-user, ball by
@@ -1452,89 +1470,97 @@ async def _complete_match(context, mid, state):
                 "text": (f"🤝 Scores level at {cipl_match.format_score(state)} — "
                          f"it's a SUPER OVER! 🔥"),
             })
-            _ss(context, mid, state)
+            await _ss(context, mid, state)
             from handlers.super_over import start_super_over
             if await start_super_over(context, mid, state):
                 return
         except Exception:
             logger.exception("Super Over kickoff failed for match %s — "
                              "falling back to a tied result", mid)
-    # Per-over Win/Loss prize handed out below (None on a tie / award failure).
-    prize_info = None
-    # Persist career stats + finalize Match row.
-    session = get_session()
-    try:
+    # Persist career stats + finalize the Match row. This is a batch of blocking
+    # DB work (stat persistence, Match update, reward payout, scorecard snapshot,
+    # tournament recording) — run it all in a worker thread so completing one
+    # Challenge League match doesn't freeze the event loop (and every other
+    # user's command/button) for the duration of the commit.
+    def _finalize_match_db():
+        # Per-over Win/Loss prize handed out below (None on a tie / award failure).
+        prize = None
+        session = get_session()
         try:
-            from services.player_stats_service import persist_player_game_stats
-            persist_player_game_stats(session, state)
+            try:
+                from services.player_stats_service import persist_player_game_stats
+                persist_player_game_stats(session, state)
+            except Exception:
+                logger.exception("cipl stat persistence failed for match %s", mid)
+
+            match = session.query(Match).get(mid)
+            if match:
+                match.status = "completed"
+                match.completed_at = datetime.utcnow()
+                match.inn1_runs = state.get("inn1_runs")
+                match.inn1_wickets = state.get("inn1_wickets")
+                match.inn2_runs = state.get("total_runs")
+                match.inn2_wickets = state.get("total_wickets")
+                if not result["tie"]:
+                    # innings-2 batting side = state['bat_team_id'] (chaser)
+                    chaser_uid = state["bat_team_id"]
+                    defender_uid = state["bowl_team_id"]
+                    won_by_chaser = result["margin_type"] == "wickets"
+                    match.winner_id = chaser_uid if won_by_chaser else defender_uid
+                    match.loser_id = defender_uid if won_by_chaser else chaser_uid
+                    match.margin_type = result["margin_type"]
+                    match.margin_value = result["margin"]
+
+                    # Per-over Win/Loss prize — the user who won/lost the match with
+                    # their League team gets coins/gems. Uses the same website-tunable
+                    # economy as /wpm, /cm, /vsbot and /playmatch
+                    # (config_service.match_*_per_over via award_match_rewards_core).
+                    try:
+                        from services.match_rewards import award_match_rewards_core
+                        overs = state.get("overs") or CIPL_OVERS
+                        w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
+                            session, match.winner_id, match.loser_id, overs,
+                            is_vsbot=False)
+                        prize = {
+                            "w_coins": w_coins, "w_gems": w_gems,
+                            "l_coins": l_coins, "l_gems": l_gems,
+                        }
+                    except Exception:
+                        logger.exception("cipl prize award failed for match %s", mid)
+
+            # Snapshot the final scorecard + Arena board so the "View Match" Mini App
+            # stays viewable after the live state is cleaned up below (same mechanism
+            # /wpm uses). Must run while the live state still exists.
+            try:
+                if result["tie"]:
+                    result_text = "Match Tied"
+                else:
+                    result_text = (f"{result['winner']} beat {result['loser']} by "
+                                   f"{result['margin']} {result['margin_type']}")
+                from services.match_webapp_service import save_final_scorecard
+                save_final_scorecard(session, mid, result_text=result_text)
+            except Exception:
+                logger.exception("cipl final scorecard snapshot failed for match %s", mid)
+
+            # Record the official tournament result (standings + per-player stats).
+            # No-op for casual Challenge League matches (no tournament_id in state).
+            # A tie reaching here did NOT go to a Super Over, so it is recorded as a tie.
+            try:
+                if state.get("tournament_id"):
+                    from services import tournament_service
+                    tournament_service.record_tournament_match(session, state)
+            except Exception:
+                logger.exception("tournament match recording failed for %s", mid)
+
+            session.commit()
         except Exception:
-            logger.exception("cipl stat persistence failed for match %s", mid)
+            session.rollback()
+            logger.exception("cipl match finalization failed for match %s", mid)
+        finally:
+            session.close()
+        return prize
 
-        match = session.query(Match).get(mid)
-        if match:
-            match.status = "completed"
-            match.completed_at = datetime.utcnow()
-            match.inn1_runs = state.get("inn1_runs")
-            match.inn1_wickets = state.get("inn1_wickets")
-            match.inn2_runs = state.get("total_runs")
-            match.inn2_wickets = state.get("total_wickets")
-            if not result["tie"]:
-                # innings-2 batting side = state['bat_team_id'] (chaser)
-                chaser_uid = state["bat_team_id"]
-                defender_uid = state["bowl_team_id"]
-                won_by_chaser = result["margin_type"] == "wickets"
-                match.winner_id = chaser_uid if won_by_chaser else defender_uid
-                match.loser_id = defender_uid if won_by_chaser else chaser_uid
-                match.margin_type = result["margin_type"]
-                match.margin_value = result["margin"]
-
-                # Per-over Win/Loss prize — the user who won/lost the match with
-                # their League team gets coins/gems. Uses the same website-tunable
-                # economy as /wpm, /cm, /vsbot and /playmatch
-                # (config_service.match_*_per_over via award_match_rewards_core).
-                try:
-                    from services.match_rewards import award_match_rewards_core
-                    overs = state.get("overs") or CIPL_OVERS
-                    w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
-                        session, match.winner_id, match.loser_id, overs,
-                        is_vsbot=False)
-                    prize_info = {
-                        "w_coins": w_coins, "w_gems": w_gems,
-                        "l_coins": l_coins, "l_gems": l_gems,
-                    }
-                except Exception:
-                    logger.exception("cipl prize award failed for match %s", mid)
-
-        # Snapshot the final scorecard + Arena board so the "View Match" Mini App
-        # stays viewable after the live state is cleaned up below (same mechanism
-        # /wpm uses). Must run while the live state still exists.
-        try:
-            if result["tie"]:
-                result_text = "Match Tied"
-            else:
-                result_text = (f"{result['winner']} beat {result['loser']} by "
-                               f"{result['margin']} {result['margin_type']}")
-            from services.match_webapp_service import save_final_scorecard
-            save_final_scorecard(session, mid, result_text=result_text)
-        except Exception:
-            logger.exception("cipl final scorecard snapshot failed for match %s", mid)
-
-        # Record the official tournament result (standings + per-player stats).
-        # No-op for casual Challenge League matches (no tournament_id in state).
-        # A tie reaching here did NOT go to a Super Over, so it is recorded as a tie.
-        try:
-            if state.get("tournament_id"):
-                from services import tournament_service
-                tournament_service.record_tournament_match(session, state)
-        except Exception:
-            logger.exception("tournament match recording failed for %s", mid)
-
-        session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("cipl match finalization failed for match %s", mid)
-    finally:
-        session.close()
+    prize_info = await asyncio.to_thread(_finalize_match_db)
 
     # "Who beat who" line uses clickable @user mentions alongside the team
     # names: @winner (Team) beat @loser (Team).
@@ -1590,7 +1616,7 @@ async def _complete_match(context, mid, state):
         except Exception:
             pass
 
-    _ss(context, mid, state, next_action=A_COMPLETED)
+    await _ss(context, mid, state, next_action=A_COMPLETED)
     cleanup_state(context, mid)
     release_match_lock(mid)
 
