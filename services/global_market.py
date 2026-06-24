@@ -20,7 +20,7 @@ Key principles:
 import random
 import logging
 from datetime import datetime
-from sqlalchemy import select, update
+from sqlalchemy import select, update, or_
 
 from models import (
     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
@@ -45,10 +45,14 @@ PLAYER_RATING_BUCKETS = [           # (weight, low, high)
 
 def _pick_player_for_slot(session, min_rating=None):
     """Pick a random player at or above min_rating. Excludes inactive + variants."""
+    # Treat NULL restricted_from_buypl as "available" (== False) to match the
+    # rest of the app (admin filter, /buypl guard) — only TRUE is blocked.
+    not_restricted = or_(Player.restricted_from_buypl == False,
+                         Player.restricted_from_buypl.is_(None))
     q = (session.query(Player)
          .filter(Player.is_active == True,
                  Player.parent_player_id.is_(None),
-                 Player.restricted_from_buypl == False))
+                 not_restricted))
     if min_rating is not None:
         q = q.filter(Player.rating >= min_rating)
     pool = q.all()
@@ -57,7 +61,7 @@ def _pick_player_for_slot(session, min_rating=None):
         pool = (session.query(Player)
                 .filter(Player.is_active == True,
                         Player.parent_player_id.is_(None),
-                        Player.restricted_from_buypl == False)
+                        not_restricted)
                 .all())
     return random.choice(pool) if pool else None
 
