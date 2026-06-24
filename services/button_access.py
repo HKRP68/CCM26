@@ -121,6 +121,15 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "treject_",
     "tac_",
     "tdc_",
+    # /trade two-player flow: player-selection (t1p_/t2p_), confirm (tcfrm_) and
+    # cancel (tcancel_) buttons live on one message that is edited between user1's
+    # and user2's turns. handlers/trade.py validates every click by telegram_id,
+    # so both participants must reach those handlers instead of being owner-locked
+    # to user1 (who triggered the original send).
+    "t1p_",
+    "t2p_",
+    "tcfrm_",
+    "tcancel_",
     "us_join",
     "us_ans_",
     "mh_join_",

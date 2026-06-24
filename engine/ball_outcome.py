@@ -18,7 +18,7 @@ EXTRA_ERROR_FLOOR = 0.30
 EXTRA_WEIGHT_MULTIPLIER = 2.2
 
 # Free hit boundary boost applied independently to Four and Six weights.
-FREE_HIT_BOUNDARY_BOOST = 1.10
+FREE_HIT_BOUNDARY_BOOST = 1.75
 
 # -----------------------------------------------------------------------------
 # ball_outcome.py
@@ -703,7 +703,7 @@ _POS_BATTING_MULT: dict = {
 # instead of the old additive 60/40 blend that flattened ratings 55-90.
 #
 # Scale every exponent with SKILL_MODEL_STRENGTH for one-knob tuning.
-SKILL_MODEL_STRENGTH = 1.0
+SKILL_MODEL_STRENGTH = 1.5
 _SKILL_RUN_EXP = {
     "Dot":    -0.42,
     "Single":  0.10,
