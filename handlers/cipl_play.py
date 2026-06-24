@@ -1301,7 +1301,7 @@ def _render_over_summary(state, summary):
         f"{summary['over_wickets']} wkt(s)",
         "",
         f"🏏 <b>{state['bat_team_name']}</b> {cipl_match.format_score(state)} "
-        f"({cipl_match.format_overs(state)}/{state['overs']})",
+        f"({_progress(state)})",
         f"• {s_line}",
         f"• {n_line}",
         f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",

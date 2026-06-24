@@ -48,8 +48,8 @@ WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
 
 # ── Match-format spec ────────────────────────────────────────────────
 # Both supported formats are an innings of **20 units**, one captain turn per
-# unit, with a strike end-change at unit boundaries. T20 = 20 overs × 6 balls
-# (120). The Hundred = 20 sets × 5 balls (100), where the strike changes ends
+# unit, with a strike end-change at unit boundaries. T20 = 20 overs x 6 balls
+# (120). The Hundred = 20 sets x 5 balls (100), where the strike changes ends
 # only every 2nd set (10 balls) and a bowler may bowl two consecutive sets
 # (a 10-ball spell) but not a third. ``state["overs"]`` stays 20 (the unit
 # count) for both; only the per-unit ball count and rotation rules differ.
@@ -76,7 +76,7 @@ def balls_per_unit(state):
 
 
 def total_balls(state):
-    """Legal balls in a full innings (overs × balls-per-unit) — 120 or 100."""
+    """Legal balls in a full innings (overs x balls-per-unit) -- 120 or 100."""
     return int(state.get("overs", 20)) * balls_per_unit(state)
 
 
@@ -281,6 +281,11 @@ def _maybe_enable_scenario(state):
     state["scenario"] = None
     if ScenarioEngine is None:
         return
+    # The Hundred keeps overs == 20 but is a 100-ball innings; the scenario
+    # engine's finish corridors are calibrated in 6-ball overs (finish balls up
+    # to ~119), so never arm it for Hundred matches.
+    if is_hundred(state):
+        return
     if int(state.get("overs", 0)) != 20:
         return
     if not state.get("target"):
@@ -367,7 +372,7 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
     return {
         "mode": "cipl_approach",
         "match_id": match_id, "overs": overs,
-        # Match format: "T20" (20 overs × 6 balls) or "The100" (20 sets × 5).
+        # Match format: "T20" (20 overs x 6 balls) or "The100" (20 sets x 5).
         "ball_format": ball_format if ball_format in FORMAT_SPECS else "T20",
         # Bowling-spell tracker for The Hundred's 5/10-ball consecutive rule.
         "spell_rid": None, "spell_units": 0,
@@ -507,8 +512,15 @@ def eligible_bowlers(state):
     if pool:
         return _sorted(pool)
 
-    # 3) Everyone is at quota / only the previous bowler is left: relax the
-    #    back-to-back rule, then the quota, so play can always continue.
+    # 3) Everyone is at quota / only the blocked bowler is left.
+    if is_hundred(state):
+        # Keep The Hundred's 20-ball-per-bowler cap strict — never relax quota
+        # (which would offer an illegal 5th set). Only as a final resort relax
+        # the 10-ball consecutive-spell rule so a set can still be bowled; with a
+        # normal XI (44 sets of capacity vs 20 needed) this branch is unreachable.
+        pool = _avail(xi, enforce_prev=False) or list(xi)
+        return _sorted(pool)
+    # T20: relax the back-to-back rule, then the quota, so play can always continue.
     pool = (_avail(xi, enforce_prev=False)
             or _avail(xi, enforce_quota=False, enforce_prev=False)
             or list(xi))
@@ -706,7 +718,7 @@ def chase_chance_now(state):
     steering and safe to surface read-only — it never decides the result."""
     if state.get("innings") != 2 or not state.get("target"):
         return None
-    balls_left = state["overs"] * 6 - balls_bowled(state)
+    balls_left = total_balls(state) - balls_bowled(state)
     runs_needed = int(state["target"]) - int(state["total_runs"])
     if balls_left <= 0 or runs_needed <= 0:
         return None
@@ -960,7 +972,7 @@ def simulate_over(state):
                                          wicket_hook, drama_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
-                streak=streak, over_number=over_idx, batter_runs=bs["runs"],
+                streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
                 innings=innings, pressure_effects=pressure_effects,
                 allow_extras=True, free_hit=free_hit, balls_faced=bs["balls"],
                 game_state=game_state, pitch_wear=pitch_wear,

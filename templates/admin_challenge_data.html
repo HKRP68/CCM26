@@ -143,8 +143,13 @@
       <div><label>Min overseas in XI</label><input type="number" name="min_overseas" value="{{ league.min_overseas }}" min="0" max="11"></div>
       <div><label>Max overseas in XI</label><input type="number" name="max_overseas" value="{{ league.max_overseas }}" min="0" max="11"></div>
       <div><label>Match format 🏏</label><select name="match_format">
-        <option value="T20" {{ 'selected' if (league.match_format or 'T20') != 'The100' else '' }}>20 Over (T20)</option>
-        <option value="The100" {{ 'selected' if league.match_format == 'The100' else '' }}>The Hundred (100-ball)</option>
+        {% if league.match_format == 'The100' %}
+          <option value="T20">20 Over (T20)</option>
+          <option value="The100" selected>The Hundred (100-ball)</option>
+        {% else %}
+          <option value="T20" selected>20 Over (T20)</option>
+          <option value="The100">The Hundred (100-ball)</option>
+        {% endif %}
       </select></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" {{ 'checked' if league.is_active else '' }} style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" {{ 'checked' if league.same_team_allowed else '' }} style="width:auto;"> Same-team challenge allowed</label>
