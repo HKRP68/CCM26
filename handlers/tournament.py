@@ -27,6 +27,7 @@ _CATEGORIES = [
     ("sixes", "6️⃣ Most Sixes"),
     ("fours", "4️⃣ Most Fours"),
     ("hs", "⭐ Highest Score"),
+    ("avg", "📊 Batting Average"),
     ("fig", "💥 Best Figure"),
     ("sr", "⚡ Best Strike Rate"),
     ("econ", "🛡️ Best Economy"),
@@ -58,7 +59,10 @@ def _leaders_for(session, tour, category):
     elif category == "fours":
         out = [(r.name, r.team_name, str(r.bat_fours)) for r in leaders["most_fours"]]
     elif category == "hs":
-        out = [(r.name, r.team_name, str(r.highest_score)) for r in leaders["highest_score"]]
+        out = [(r.name, r.team_name, f"{r.highest_score}{'*' if r.not_out else ''}")
+               for r in leaders["highest_score"]]
+    elif category == "avg":
+        out = [(r.name, r.team_name, f"{v:.2f}") for r, v in leaders["top_average"]]
     elif category == "fig":
         out = [(r.name, r.team_name, f"{r.best_bowl_wickets}/{r.best_bowl_runs}")
                for r in leaders["best_figure"]]
@@ -185,10 +189,12 @@ async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    if r.best_bowl_wickets is not None and r.best_bowl_runs is not None
                    and r.best_bowl_runs >= 0 else "—")
             team = f" · {html.escape(r.team_name)}" if r.team_name else ""
+            avg = tournament_service.batting_average(r)
+            avg_s = f"{avg:.2f}" if avg is not None else "—"
             blocks.append(
                 f"\n👤 <b>{html.escape(r.name or 'Player')}</b>{team}\n"
                 f"🎮 Matches: {r.matches}\n"
-                f"🏏 Runs: {r.bat_runs} ({r.bat_balls}b) · SR {_sr(r):.1f}\n"
+                f"🏏 Runs: {r.bat_runs} ({r.bat_balls}b) · SR {_sr(r):.1f} · Avg {avg_s}\n"
                 f"   4s: {r.bat_fours} · 6s: {r.bat_sixes} · HS: {r.highest_score}\n"
                 f"🎯 Wickets: {r.bowl_wickets} · Runs: {r.bowl_runs} · Econ {_econ(r):.2f}\n"
                 f"   Best: {fig}")
