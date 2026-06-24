@@ -2070,6 +2070,9 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
             max_raw = getattr(league, "max_overseas", None)
             draft["overseas_min"] = int(min_raw) if min_raw is not None else 0
             draft["overseas_max"] = int(max_raw) if max_raw is not None else 11
+            # Cache the league's match format so the live match honours the
+            # Hundred / 20-over toggle without another DB hit at launch.
+            draft["ball_format"] = getattr(league, "match_format", "T20") or "T20"
     finally:
         session.close()
     if not players:

@@ -1040,15 +1040,27 @@ def calculate_outcome(
             # Powerplay boosts
             pp_start = _pp_cfg.get("overs_start", 0)
             pp_end = _pp_cfg.get("overs_end", 5)
+            # Death-over boosts (last 4 overs: 17-20)
+            death_start = _death_cfg.get("overs_start", 16)
+            death_end = _death_cfg.get("overs_end", 19)
+            # The Hundred (100 balls mapped onto ~17 six-ball overs) carries its
+            # own powerplay (first 25 balls) and death window in the FormatConfig;
+            # honour those instead of the T20 over ranges. Strictly gated to the
+            # Hundred so T20 / custom-over /sim / ListA paths are unchanged.
+            if format_config is not None and format_config.name == "The100":
+                if format_config.powerplay_phases:
+                    pp_start = format_config.powerplay_phases[0].start
+                    pp_end = format_config.powerplay_phases[-1].end
+                if format_config.death_phase is not None:
+                    death_start = format_config.death_phase.start
+                    death_end = format_config.death_phase.end
+
             if pp_start <= over_number <= pp_end:
                 if outcome in ("Four", "Six"):
                     pp_boost = _pp_cfg.get("boundary_multiplier", 1.25)
                     logger.debug(f"  [Powerplay] Boosting {outcome} by {pp_boost}x")
                     weight *= pp_boost
 
-            # Death-over boosts (last 4 overs: 17-20)
-            death_start = _death_cfg.get("overs_start", 16)
-            death_end = _death_cfg.get("overs_end", 19)
             in_death = death_start <= over_number <= death_end
 
             if in_death:

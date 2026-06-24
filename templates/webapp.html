@@ -6618,7 +6618,7 @@ function inlineScorecardHtml(s) {
   return `<div class="lm-panel">
     <div class="lm-panel-title">${escapeHtml(s.bat_team_name||'Batting')} — Innings ${s.innings||1}</div>
     <div style="font-size:1.4rem;font-weight:900;">${sc.runs||0}/${sc.wickets||0}
-      <span class="sub" style="font-size:0.8rem;color:var(--muted);">(${sc.overs_str||'0.0'} ov)</span></div>
+      <span class="sub" style="font-size:0.8rem;color:var(--muted);">(${sc.overs_str||'0.0'}${s.ball_format==='The100'?' balls':' ov'})</span></div>
     ${sc.target?`<div class="lm-target">🎯 Target ${sc.target}</div>`:''}
     <button class="spin-button" style="width:100%;margin-top:0.8rem;" onclick="openScorecard()">Open full scorecard</button>
   </div>`;
@@ -6650,7 +6650,7 @@ function scorebarHtml(s) {
     <div class="lm-scorebar">
       <div class="lm-teams">
         <span class="lm-bat-team">${escapeHtml(s.bat_team_name)}</span>
-        <span class="lm-overs">Inns ${s.innings} · ${s.score.overs_str}/${s.overs_limit} ov</span>
+        <span class="lm-overs">Inns ${s.innings} · ${s.ball_format==='The100' ? `${s.score.overs_str}/100 balls` : `${s.score.overs_str}/${s.overs_limit} ov`}</span>
       </div>
       <div class="lm-score">${s.score.runs}/${s.score.wickets}</div>
       ${tgt}
@@ -6674,7 +6674,7 @@ function bowlerHtml(s) {
   const b = s.bowler;
   return `<div class="lm-bowler">
     <span>🎳 <b>${escapeHtml(b.name)}</b> <span class="sub" style="color:var(--muted);font-size:0.7rem;">${escapeHtml(b.bowl_style||'')}</span></span>
-    <span>${b.wickets}-${b.runs} (${b.overs} ov)</span>
+    <span>${b.wickets}-${b.runs} (${b.overs}${s.ball_format==='The100'?'':' ov'})</span>
   </div>`;
 }
 
@@ -6988,7 +6988,7 @@ function renderScorecard() {
 
   document.getElementById('lm-drawer-body').innerHTML = `
     <div style="font-weight:800;margin-bottom:0.5rem;">
-      ${escapeHtml(inn.bat_team)} — ${inn.runs}/${inn.wickets} (${inn.overs} ov)
+      ${escapeHtml(inn.bat_team)} — ${inn.runs}/${inn.wickets} (${inn.overs}${d.ball_format==='The100'?'':' ov'})
     </div>
     <table class="lm-sc-table">
       <thead><tr><th>Batter</th><th style="text-align:right;">R</th><th style="text-align:right;">B</th><th style="text-align:right;">4s</th><th style="text-align:right;">6s</th><th style="text-align:right;">SR</th></tr></thead>

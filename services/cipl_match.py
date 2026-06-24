@@ -46,6 +46,45 @@ except Exception:  # pragma: no cover - defensive import guard
 
 WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
 
+# ── Match-format spec ────────────────────────────────────────────────
+# Both supported formats are an innings of **20 units**, one captain turn per
+# unit, with a strike end-change at unit boundaries. T20 = 20 overs x 6 balls
+# (120). The Hundred = 20 sets x 5 balls (100), where the strike changes ends
+# only every 2nd set (10 balls) and a bowler may bowl two consecutive sets
+# (a 10-ball spell) but not a third. ``state["overs"]`` stays 20 (the unit
+# count) for both; only the per-unit ball count and rotation rules differ.
+FORMAT_SPECS = {
+    "T20": {
+        "balls_per_unit": 6, "swap_balls": 6, "powerplay_units": 6,
+        "max_consecutive_units": 1, "unit_word": "over", "label": "20 Overs",
+    },
+    "The100": {
+        "balls_per_unit": 5, "swap_balls": 10, "powerplay_units": 5,
+        "max_consecutive_units": 2, "unit_word": "set", "label": "The Hundred",
+    },
+}
+
+
+def _spec(state):
+    """Return the FORMAT_SPECS entry for a state (defaults to the T20/over rules)."""
+    return FORMAT_SPECS.get((state or {}).get("ball_format"), FORMAT_SPECS["T20"])
+
+
+def balls_per_unit(state):
+    """Legal balls in one captain turn (6 for an over, 5 for a Hundred set)."""
+    return _spec(state)["balls_per_unit"]
+
+
+def total_balls(state):
+    """Legal balls in a full innings (overs x balls-per-unit) -- 120 or 100."""
+    return int(state.get("overs", 20)) * balls_per_unit(state)
+
+
+def is_hundred(state):
+    """True when the state is a The-Hundred (100-ball) match."""
+    return (state or {}).get("ball_format") == "The100"
+
+
 # Chase-chance steering: nudge ball outcomes toward the matrix-estimated
 # chasing/defending chance in the back end of a chase (the matrix is an
 # end-of-innings model — apply it over roughly the last 8 overs, "until the
@@ -242,6 +281,11 @@ def _maybe_enable_scenario(state):
     state["scenario"] = None
     if ScenarioEngine is None:
         return
+    # The Hundred keeps overs == 20 but is a 100-ball innings; the scenario
+    # engine's finish corridors are calibrated in 6-ball overs (finish balls up
+    # to ~119), so never arm it for Hundred matches.
+    if is_hundred(state):
+        return
     if int(state.get("overs", 0)) != 20:
         return
     if not state.get("target"):
@@ -320,13 +364,18 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      bat_team_name, bowl_team_name, chat_id,
                      pitch_type="Hard", is_private=False, stadium=None,
                      bat_team_code="", bowl_team_code="",
-                     bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=None):
+                     bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=None,
+                     ball_format="T20"):
     """Build the initial state dict for a Challenge League approach match."""
     bat_stats = {str(p["roster_id"]): _new_bat_stat() for p in bat_xi}
     bowl_stats = {str(p["roster_id"]): _new_bowl_stat() for p in bowl_xi}
     return {
         "mode": "cipl_approach",
         "match_id": match_id, "overs": overs,
+        # Match format: "T20" (20 overs x 6 balls) or "The100" (20 sets x 5).
+        "ball_format": ball_format if ball_format in FORMAT_SPECS else "T20",
+        # Bowling-spell tracker for The Hundred's 5/10-ball consecutive rule.
+        "spell_rid": None, "spell_units": 0,
         # Team identity for the broadcast-style scorecard card
         "bat_team_code": bat_team_code, "bowl_team_code": bowl_team_code,
         "bat_team_emoji": bat_team_emoji or "🏏",
@@ -370,12 +419,17 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
 # ════════════════════════════════════════════════════════════════════
 
 def max_bowler_overs(state):
-    """Per-bowler over quota — ceil(overs / 5), as in standard limited-overs."""
+    """Per-bowler unit quota — ceil(units / 5), as in standard limited-overs.
+
+    Both formats are 20 units, so this is 4 units for either — i.e. 24 balls in
+    T20 (4 overs) and 20 balls in The Hundred (4 sets), exactly the real caps.
+    """
     return max(1, -(-state["overs"] // 5))
 
 
 def _overs_bowled(state, rid):
-    return state["bowl_stats"].get(str(rid), {}).get("balls", 0) // 6
+    """Units (overs / sets) a bowler has completed so far."""
+    return state["bowl_stats"].get(str(rid), {}).get("balls", 0) // balls_per_unit(state)
 
 
 # Emergency part-time bowlers (batsmen) are capped well below the regular quota
@@ -421,15 +475,24 @@ def eligible_bowlers(state):
     Within each tier, highest bowl_rating first.
     """
     xi = state.get("bowl_xi") or []
-    prev = state.get("prev_bowler_rid")
+    # Which bowler is blocked from taking the next unit. In T20 it is simply the
+    # previous over's bowler (no back-to-back overs). In The Hundred a bowler may
+    # bowl two consecutive sets (a 10-ball spell), so only block them once that
+    # spell hits the format's consecutive-unit cap.
+    if is_hundred(state):
+        spell_rid = state.get("spell_rid")
+        spell_units = int(state.get("spell_units", 0) or 0)
+        blocked = spell_rid if spell_units >= _spec(state)["max_consecutive_units"] else None
+    else:
+        blocked = state.get("prev_bowler_rid")
 
     def _avail(pool, enforce_quota=True, enforce_prev=True):
         out = list(pool)
         if enforce_quota:
             out = [p for p in out
                    if _overs_bowled(state, p["roster_id"]) < quota_for(state, p)]
-        if enforce_prev and prev is not None:
-            out = [p for p in out if p["roster_id"] != prev]
+        if enforce_prev and blocked is not None:
+            out = [p for p in out if p["roster_id"] != blocked]
         return out
 
     def _sorted(pool):
@@ -449,8 +512,15 @@ def eligible_bowlers(state):
     if pool:
         return _sorted(pool)
 
-    # 3) Everyone is at quota / only the previous bowler is left: relax the
-    #    back-to-back rule, then the quota, so play can always continue.
+    # 3) Everyone is at quota / only the blocked bowler is left.
+    if is_hundred(state):
+        # Keep The Hundred's 20-ball-per-bowler cap strict — never relax quota
+        # (which would offer an illegal 5th set). Only as a final resort relax
+        # the 10-ball consecutive-spell rule so a set can still be bowled; with a
+        # normal XI (44 sets of capacity vs 20 needed) this branch is unreachable.
+        pool = _avail(xi, enforce_prev=False) or list(xi)
+        return _sorted(pool)
+    # T20: relax the back-to-back rule, then the quota, so play can always continue.
     pool = (_avail(xi, enforce_prev=False)
             or _avail(xi, enforce_quota=False, enforce_prev=False)
             or list(xi))
@@ -648,7 +718,7 @@ def chase_chance_now(state):
     steering and safe to surface read-only — it never decides the result."""
     if state.get("innings") != 2 or not state.get("target"):
         return None
-    balls_left = state["overs"] * 6 - balls_bowled(state)
+    balls_left = total_balls(state) - balls_bowled(state)
     runs_needed = int(state["target"]) - int(state["total_runs"])
     if balls_left <= 0 or runs_needed <= 0:
         return None
@@ -674,11 +744,15 @@ def chase_chance_now(state):
 
 
 def balls_bowled(state):
-    return (state["current_over"] - 1) * 6 + state["current_ball"]
+    bpu = balls_per_unit(state)
+    return (state["current_over"] - 1) * bpu + state["current_ball"]
 
 
 def format_overs(state):
     b = balls_bowled(state)
+    if is_hundred(state):
+        # The Hundred has no overs — progress is shown as a ball count.
+        return f"{b} balls"
     return f"{b // 6}.{b % 6}"
 
 
@@ -699,7 +773,7 @@ def chase(state):
         return None
     target = int(state["target"])
     runs_req = max(0, target - int(state["total_runs"]))
-    balls_left = max(0, state["overs"] * 6 - balls_bowled(state))
+    balls_left = max(0, total_balls(state) - balls_bowled(state))
     rrr = (runs_req / balls_left * 6.0) if balls_left > 0 else 0.0
     return {"target": target, "runs_required": runs_req,
             "balls_remaining": balls_left, "rrr": rrr}
@@ -711,7 +785,7 @@ def is_innings_over(state):
         return True
     if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
         return True
-    if balls_bowled(state) >= state["overs"] * 6:
+    if balls_bowled(state) >= total_balls(state):
         return True
     return False
 
@@ -734,7 +808,24 @@ def simulate_over(state):
     over_idx = state["current_over"] - 1
     innings = state["innings"]
     target = state.get("target")
-    engine_fmt = _fmt_to_engine_fmt(None, overs_total)
+    # ── Format ──────────────────────────────────────────────────────
+    bpu = balls_per_unit(state)            # 6 (over) or 5 (Hundred set)
+    innings_balls = total_balls(state)     # 120 or 100
+    hundred = is_hundred(state)
+    swap_balls = _spec(state)["swap_balls"]  # change ends every N legal balls
+    # The SimCricketX engine is natively over-based (6 balls/over). For The
+    # Hundred we map the 100-ball innings onto ~17 six-ball overs so the
+    # pressure / momentum / par-score curves operate over the right ball count.
+    # The per-ball engine calls below feed it a divmod-by-6 view of the absolute
+    # ball count, which is identical to the over view for T20.
+    if hundred:
+        engine_overs = max(1, round(innings_balls / 6))  # 100 → 17
+        engine_fmt = _fmt_to_engine_fmt(
+            {"label": "The100", "overs": engine_overs, "max_bowler_overs": 4,
+             "powerplay_end": 4, "death_start": max(2, engine_overs - 3)}, overs_total)
+    else:
+        engine_overs = overs_total
+        engine_fmt = _fmt_to_engine_fmt(None, overs_total)
     pressure_eng = PressureEngine(format_config=engine_fmt)
     # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
     # chase, else None (and the per-ball logic below is a no-op).
@@ -766,7 +857,7 @@ def simulate_over(state):
     # Commentary: announce the bowler taking the new over (into attack / returns).
     _emit_bowler_card(state, bowler)
 
-    while balls_this_over < 6 and not chased:
+    while balls_this_over < bpu and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
             break
         deliveries += 1
@@ -783,16 +874,18 @@ def simulate_over(state):
         is_free_hit_ball = bool(free_hit)
         fh_prefix = "🆓 FREE HIT — " if is_free_hit_ball else ""
 
-        # Pressure
-        balls_left = overs_total * 6 - balls_bowled(state)
+        # Pressure. Use the actual ball count for the required rate, and feed the
+        # engine its native 6-ball-over view of the innings (divmod by 6).
+        balls_left = innings_balls - balls_bowled(state)
+        eng_over_idx, eng_ball = divmod(balls_bowled(state), 6)
         required_rr = 0.0
         if target is not None and balls_left > 0:
             required_rr = max(0, target - state["total_runs"]) / balls_left * 6.0
         match_state = {
-            "innings": innings, "current_over": over_idx,
+            "innings": innings, "current_over": eng_over_idx,
             "score": state["total_runs"], "wickets": state["total_wickets"],
             "required_run_rate": required_rr,
-            "overs_remaining": overs_total - over_idx,
+            "overs_remaining": engine_overs - eng_over_idx,
         }
         risk = pressure_eng.calculate_unified_risk_factor(match_state)
         pressure_score = min(100.0, max(0.0, (risk - 1.0) * 50.0))
@@ -810,8 +903,8 @@ def simulate_over(state):
         # wicket count instead of being overwhelmed by a cascade.
         game_state = compute_game_state_vector(
             ball_history=ball_history[-BALL_HISTORY_WINDOW:],
-            score=state["total_runs"], current_over=over_idx,
-            current_ball=balls_this_over, wickets=state["total_wickets"],
+            score=state["total_runs"], current_over=eng_over_idx,
+            current_ball=eng_ball, wickets=state["total_wickets"],
             innings=innings, target=target or 0, pitch=pitch,
             partnership_balls=state.get("partnership_balls", 0),
             partnership_runs=state.get("partnership_runs", 0),
@@ -840,7 +933,7 @@ def simulate_over(state):
                 # Layer 1: mild always-on chasing assist → ~50-50 baseline.
                 _merge_pressure(pressure_effects, CHASE_BASELINE_ASSIST)
                 # Layer 2: matrix steer in the back overs (situational realism).
-                _balls_left_now = overs_total * 6 - balls_bowled(state)
+                _balls_left_now = innings_balls - balls_bowled(state)
                 if 0 < _balls_left_now <= CHASE_STEER_BALLS:
                     _cc = chase_chance_now(state)
                     if _cc:
@@ -849,7 +942,7 @@ def simulate_over(state):
                                             _cc["chasing_chance"],
                                             strength=CHASE_STEER_STRENGTH))
 
-            pitch_wear = min(1.0, balls_bowled(state) / max(1, overs_total * 6))
+            pitch_wear = min(1.0, balls_bowled(state) / max(1, innings_balls))
             # /letsplay traits: build a per-ball weight hook from the striker's
             # and bowler's active traits (None for Challenge League players, who
             # carry no traits — so the engine call is unchanged for /cipl).
@@ -879,7 +972,7 @@ def simulate_over(state):
                                          wicket_hook, drama_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
-                streak=streak, over_number=over_idx, batter_runs=bs["runs"],
+                streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
                 innings=innings, pressure_effects=pressure_effects,
                 allow_extras=True, free_hit=free_hit, balls_faced=bs["balls"],
                 game_state=game_state, pitch_wear=pitch_wear,
@@ -1041,8 +1134,8 @@ def simulate_over(state):
                 streaks[srid] = {"boundaries": 0}
             over_timeline.append(str(runs))
             over_events.append({"sym": str(runs), "text": _run_text(runs, striker_name, bowler["name"])})
-            # Maiden = full over of dots with no runs off it yet.
-            _maiden = (balls_this_over >= 6 and over_runs_before == 0 and runs == 0)
+            # Maiden = full over/set of dots with no runs off it yet.
+            _maiden = (balls_this_over >= bpu and over_runs_before == 0 and runs == 0)
             _run_key = ("dot_ball" if runs == 0 else "four" if runs == 4
                         else "six" if runs == 6 else None)
             _push_commentary(state, _run_event(runs), striker_name,
@@ -1066,9 +1159,9 @@ def simulate_over(state):
     # ── End of over bookkeeping ──
     over_runs = state["total_runs"] - runs_before
     over_wkts = state["total_wickets"] - wkts_before
-    if balls_this_over >= 6 and over_runs == 0:
+    if balls_this_over >= bpu and over_runs == 0:
         bws["maidens"] += 1
-    bws["overs_done"] = bws["balls"] // 6
+    bws["overs_done"] = bws["balls"] // bpu
     bws["this_over_balls"] = 0
     state["over_runs"].append(over_runs)
     # Snapshot this over for the approach-prompt scorecard card.
@@ -1078,6 +1171,16 @@ def simulate_over(state):
     state["ball_history"] = ball_history
     state["batter_streaks"] = streaks
     state["prev_bowler_rid"] = bowler["roster_id"]
+    over_completed = balls_this_over >= bpu
+    # Track the current bowling spell for The Hundred's 5/10-ball rule: a bowler
+    # may bowl up to two consecutive sets, then must hand the ball over. (Unused
+    # for T20, where prev_bowler_rid already enforces no back-to-back overs.)
+    if over_completed:
+        if state.get("spell_rid") == bowler["roster_id"]:
+            state["spell_units"] = int(state.get("spell_units", 0) or 0) + 1
+        else:
+            state["spell_rid"] = bowler["roster_id"]
+            state["spell_units"] = 1
     # Persist the scenario engine's mutable state (script, ball index, active
     # flag) so it survives the JSON round-trip to the next over.
     _save_scenario_engine(state, scenario_eng)
@@ -1085,9 +1188,10 @@ def simulate_over(state):
     momentum_after = _compute_momentum(ball_history)
     state["momentum_prev"] = momentum_after
 
-    # Swap strike at end of over (unless innings is ending)
-    over_completed = balls_this_over >= 6
-    if over_completed and not is_innings_over(state):
+    # Change ends only at a format end-change boundary: every over (6 balls) in
+    # T20, every 2nd set (10 balls) in The Hundred — so the batters keep their
+    # ends after the first five-ball set.
+    if over_completed and not is_innings_over(state) and balls_bowled(state) % swap_balls == 0:
         _swap_strike(state)
 
     # Mini App commentary: post an end-of-over summary card when the over is
@@ -1105,7 +1209,7 @@ def simulate_over(state):
         "over_timeline": over_timeline,
         "over_events": over_events,
         "momentum_shift": momentum_after - momentum_before,
-        "bowler_figures": _bowler_figures(bws),
+        "bowler_figures": _bowler_figures(bws, bpu),
         "traits_activated": {"bat": sorted(over_traits["bat"]),
                              "bowl": sorted(over_traits["bowl"])},
     }
@@ -1139,8 +1243,11 @@ def _run_text(runs, batsman, bowler):
     return f"{runs} run(s), {batsman}."
 
 
-def _bowler_figures(bws):
-    overs = f"{bws['balls'] // 6}.{bws['balls'] % 6}"
+def _bowler_figures(bws, bpu=6):
+    balls = bws.get("balls", 0)
+    if bpu != 6:  # The Hundred — figures are shown in balls, not overs.
+        return f"{balls}b-{bws['runs']}-{bws['wickets']}"
+    overs = f"{balls // 6}.{balls % 6}"
     return f"{overs}-{bws.get('maidens', 0)}-{bws['runs']}-{bws['wickets']}"
 
 
@@ -1249,7 +1356,8 @@ def _emit_bowler_card(state, bowler):
     if bws.get("balls", 0) > 0:
         _push_card(state, {
             "type": "returning_bowler", "name": bowler["name"],
-            "text": f"{bowler['name']} returns to bowl ({_bowler_figures(bws)})."})
+            "text": f"{bowler['name']} returns to bowl "
+                    f"({_bowler_figures(bws, balls_per_unit(state))})."})
     else:
         style = bowler.get("bowl_style") or ""
         suffix = f" — {style}" if style else ""
@@ -1267,14 +1375,17 @@ def _emit_new_batsman_card(state, player):
 
 def _emit_end_of_over_card(state, bowler, over_no, over_runs):
     """Cricbuzz-style end-of-over summary card (+ a one-line bowler figure)."""
+    bpu = balls_per_unit(state)
+    unit = _spec(state)["unit_word"]  # "over" or "set"
     bws = state["bowl_stats"].get(str(bowler["roster_id"]), {})
     balls = bws.get("balls", 0)
-    overs_str = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+    overs_str = (f"{balls}b" if bpu != 6
+                 else (f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)))
     striker = state["batting_order"][state["striker_idx"]]
     non_striker = state["batting_order"][state["non_striker_idx"]]
     _push_card(state, {
         "type": "end_of_over",
-        "text": f"End of over {over_no}: {over_runs} run(s), "
+        "text": f"End of {unit} {over_no}: {over_runs} run(s), "
                 f"{state['total_runs']}/{state['total_wickets']}.",
         "overNumber": over_no,
         "runsScored": over_runs,
@@ -1287,7 +1398,7 @@ def _emit_end_of_over_card(state, bowler, over_no, over_runs):
     })
     _push_card(state, {
         "type": "over_complete", "name": bowler["name"],
-        "text": f"{bowler['name']} completes the over ({_bowler_figures(bws)})."})
+        "text": f"{bowler['name']} completes the {unit} ({_bowler_figures(bws, bpu)})."})
 
 
 def _pick_fielder(state, bowler, allow_bowler=False):
@@ -1399,6 +1510,9 @@ def end_first_innings(state):
     state["striker_idx"], state["non_striker_idx"], state["next_batsman_idx"] = 0, 1, 2
     state["current_bowler"] = None
     state["prev_bowler_rid"] = None
+    # Reset the bowling-spell tracker for the new innings (The Hundred rule).
+    state["spell_rid"] = None
+    state["spell_units"] = 0
     state["batting_approach"] = None
     state["bowling_approach"] = None
     state["timeline"] = []

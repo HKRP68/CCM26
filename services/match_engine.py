@@ -91,12 +91,16 @@ def chase_requirements(s):
     """
     if s.get("innings") != 2 or not s.get("target"):
         return None
-    balls_played = ((s.get("current_over", 1) - 1) * 6
+    # The Hundred is played as 20 units of 5 balls (100); every other format is
+    # 6-ball overs. Non-Hundred states carry no ball_format, so this is a no-op
+    # for the standard /wpm, /cm and tournament paths.
+    bpu = 5 if s.get("ball_format") == "The100" else 6
+    balls_played = ((s.get("current_over", 1) - 1) * bpu
                     + s.get("current_ball", 0))
     return {
         "target": int(s["target"]),
         "runs_required": max(0, int(s["target"]) - int(s.get("total_runs", 0))),
-        "balls_remaining": max(0, int(s.get("overs", 0)) * 6 - balls_played),
+        "balls_remaining": max(0, int(s.get("overs", 0)) * bpu - balls_played),
     }
 
 

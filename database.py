@@ -241,6 +241,8 @@ def _migrate_add_columns():
     _try_add("challenge_leagues", "home_country", "VARCHAR(60)")
     _try_add("challenge_leagues", "min_overseas", "INTEGER DEFAULT 0")
     _try_add("challenge_leagues", "max_overseas", "INTEGER DEFAULT 11")
+    # Per-league match format: "T20" (20-over) or "The100" (The Hundred, 100 balls).
+    _try_add("challenge_leagues", "match_format", "VARCHAR(20) DEFAULT 'T20'")
     _try_add("challenge_players", "is_overseas", "BOOLEAN DEFAULT FALSE")
 
     # Fantasy league configuration fields added after the original fantasy
@@ -394,6 +396,11 @@ def _migrate_add_columns():
         "UPDATE user_quest_progress SET assigned = TRUE WHERE assigned IS NULL",
         "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET DEFAULT TRUE",
         "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET NOT NULL",
+        # match_format is non-nullable in the model; backfill legacy NULLs and
+        # enforce the NOT NULL invariant on already-migrated databases too.
+        "UPDATE challenge_leagues SET match_format = 'T20' WHERE match_format IS NULL",
+        "ALTER TABLE challenge_leagues ALTER COLUMN match_format SET DEFAULT 'T20'",
+        "ALTER TABLE challenge_leagues ALTER COLUMN match_format SET NOT NULL",
     ):
         try:
             with engine.begin() as conn:
