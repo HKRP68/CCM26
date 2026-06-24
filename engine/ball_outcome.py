@@ -18,7 +18,7 @@ EXTRA_ERROR_FLOOR = 0.30
 EXTRA_WEIGHT_MULTIPLIER = 2.2
 
 # Free hit boundary boost applied independently to Four and Six weights.
-FREE_HIT_BOUNDARY_BOOST = 1.10
+FREE_HIT_BOUNDARY_BOOST = 1.75
 
 # -----------------------------------------------------------------------------
 # ball_outcome.py
@@ -703,7 +703,7 @@ _POS_BATTING_MULT: dict = {
 # instead of the old additive 60/40 blend that flattened ratings 55-90.
 #
 # Scale every exponent with SKILL_MODEL_STRENGTH for one-knob tuning.
-SKILL_MODEL_STRENGTH = 1.0
+SKILL_MODEL_STRENGTH = 1.5
 _SKILL_RUN_EXP = {
     "Dot":    -0.42,
     "Single":  0.10,
@@ -713,8 +713,11 @@ _SKILL_RUN_EXP = {
     "Six":     0.78,
 }
 _SKILL_WICKET_EXP = 0.40
-# Clamp the ratio so freak mismatches can't produce absurd weights.
-_SKILL_RATIO_CLAMP = (0.35, 2.8)
+# Clamp the ratio so freak mismatches can't produce absurd weights. Bounds span
+# the full 30-100 rating range (30/100 = 0.30 .. 100/30 = 3.33, a reciprocal
+# pair) so even lopsided-but-legal matchups keep scaling; values outside the
+# rating range are still guarded.
+_SKILL_RATIO_CLAMP = (0.30, 3.33)
 # Hard pitch keeps a mild batting tilt (true track, pace gets less help).
 _HARD_BAT_RATIO_BOOST = 1.04
 _HARD_WICKET_SKILL_MULT = 0.92
