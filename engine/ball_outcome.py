@@ -713,8 +713,11 @@ _SKILL_RUN_EXP = {
     "Six":     0.78,
 }
 _SKILL_WICKET_EXP = 0.40
-# Clamp the ratio so freak mismatches can't produce absurd weights.
-_SKILL_RATIO_CLAMP = (0.35, 2.8)
+# Clamp the ratio so freak mismatches can't produce absurd weights. Bounds span
+# the full 30-100 rating range (30/100 = 0.30 .. 100/30 = 3.33, a reciprocal
+# pair) so even lopsided-but-legal matchups keep scaling; values outside the
+# rating range are still guarded.
+_SKILL_RATIO_CLAMP = (0.30, 3.33)
 # Hard pitch keeps a mild batting tilt (true track, pace gets less help).
 _HARD_BAT_RATIO_BOOST = 1.04
 _HARD_WICKET_SKILL_MULT = 0.92
