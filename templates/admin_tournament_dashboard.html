@@ -85,10 +85,13 @@ details.match-card summary { cursor:pointer; }
       <div class="leader-box"><h4>🎯 Most Wickets</h4>{{ leaders_list(leaders.most_wickets, 'bowl_wickets') }}</div>
       <div class="leader-box"><h4>6️⃣ Most Sixes</h4>{{ leaders_list(leaders.most_sixes, 'bat_sixes') }}</div>
       <div class="leader-box"><h4>4️⃣ Most Fours</h4>{{ leaders_list(leaders.most_fours, 'bat_fours') }}</div>
-      <div class="leader-box"><h4>⭐ Highest Score</h4>{{ leaders_list(leaders.highest_score, 'highest_score') }}</div>
+      <div class="leader-box"><h4>⭐ Highest Score</h4>
+        {% if leaders.highest_score %}{% for r in leaders.highest_score %}<div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r.highest_score }}{{ '*' if r.not_out else '' }}</span></div>{% endfor %}{% else %}<div class="empty">No data yet.</div>{% endif %}
+      </div>
       <div class="leader-box"><h4>💥 Best Figure</h4>
         {% if leaders.best_figure %}{% for r in leaders.best_figure %}<div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r.best_bowl_wickets }}/{{ r.best_bowl_runs }}</span></div>{% endfor %}{% else %}<div class="empty">No data yet.</div>{% endif %}
       </div>
+      <div class="leader-box"><h4>📊 Top Batting Average</h4>{{ leaders_pairs(leaders.top_average) }}</div>
       <div class="leader-box"><h4>⚡ Best Strike Rate</h4>{{ leaders_pairs(leaders.best_strike_rate) }}</div>
       <div class="leader-box"><h4>🛡️ Best Economy</h4>{{ leaders_pairs(leaders.best_economy) }}</div>
     </div>
@@ -100,7 +103,7 @@ details.match-card summary { cursor:pointer; }
     {% if players %}
     <div style="overflow:auto;">
     <table class="tbl">
-      <thead><tr><th>Player</th><th>Team</th><th class="num">M</th><th class="num">Runs</th><th class="num">Balls</th><th class="num">4s</th><th class="num">6s</th><th class="num">HS</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Runs</th><th class="num">Econ</th><th class="num">Best</th></tr></thead>
+      <thead><tr><th>Player</th><th>Team</th><th class="num">M</th><th class="num">Runs</th><th class="num">Balls</th><th class="num">4s</th><th class="num">6s</th><th class="num">HS</th><th class="num">Avg</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Runs</th><th class="num">Econ</th><th class="num">Best</th></tr></thead>
       <tbody>
         {% for p in players %}
         <tr>
@@ -108,6 +111,7 @@ details.match-card summary { cursor:pointer; }
           <td class="num">{{ p.matches }}</td>
           <td class="num">{{ p.bat_runs }}</td><td class="num">{{ p.bat_balls }}</td>
           <td class="num">{{ p.bat_fours }}</td><td class="num">{{ p.bat_sixes }}</td><td class="num">{{ p.highest_score }}</td>
+          <td class="num">{{ '%.2f'|format(p.bat_runs / p.bat_outs) if p.bat_outs else '—' }}</td>
           <td class="num">{{ '%.1f'|format(p.bat_runs / p.bat_balls * 100) if p.bat_balls else '—' }}</td>
           <td class="num">{{ p.bowl_wickets }}</td><td class="num">{{ p.bowl_runs }}</td>
           <td class="num">{{ '%.2f'|format(p.bowl_runs / (p.bowl_balls/6)) if p.bowl_balls else '—' }}</td>

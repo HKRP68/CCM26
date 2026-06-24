@@ -12,6 +12,7 @@ all others. Completed / inactive tournaments retain all their rows untouched.
 import json
 import logging
 from datetime import datetime
+from types import SimpleNamespace
 
 from models import (
     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
@@ -735,6 +736,79 @@ def _stat_rows(session, tournament_id):
         tournament_id=int(tournament_id)).all()
 
 
+def _innings_lines(session, tournament_id):
+    """Yield every per-match player scorecard line for the tournament.
+
+    Unlike the aggregated ``TournamentPlayerStats`` rows (one per player), these
+    are *per innings*, so a single batsman's separate knocks (e.g. 120, 118 and
+    110 across three matches) each surface as their own entry. Used to build the
+    per-innings Highest Score and Best Bowling Figures boards, which should rank
+    individual performances rather than collapse each player to a single best.
+    """
+    tid = int(tournament_id)
+    matches = (session.query(TournamentMatch)
+               .filter_by(tournament_id=tid)
+               .order_by(TournamentMatch.id).all())
+    for m in matches:
+        if not m.scorecard_json:
+            continue
+        try:
+            lines = json.loads(m.scorecard_json)
+        except Exception:
+            logger.exception("Bad scorecard_json on tournament_match %s", m.id)
+            continue
+        for line in lines or []:
+            yield line
+
+
+def _innings_highest_scores(session, tournament_id, limit):
+    """Top individual batting innings, one entry per knock (not per player)."""
+    entries = []
+    for line in _innings_lines(session, tournament_id):
+        if not line.get("batted"):
+            continue
+        runs = int(line.get("bat_runs", 0) or 0)
+        entries.append(SimpleNamespace(
+            name=line.get("name"),
+            team_name=line.get("team_name"),
+            highest_score=runs,
+            bat_balls=int(line.get("bat_balls", 0) or 0),
+            not_out=not bool(line.get("bat_out")),
+        ))
+    # Highest runs first; on a tie an unbeaten knock ranks ahead, then fewer balls.
+    entries.sort(key=lambda e: (e.highest_score, e.not_out, -e.bat_balls), reverse=True)
+    return entries[:limit]
+
+
+def _innings_best_figures(session, tournament_id, limit):
+    """Top individual bowling spells, one entry per spell (not per player)."""
+    entries = []
+    for line in _innings_lines(session, tournament_id):
+        if not line.get("bowled"):
+            continue
+        entries.append(SimpleNamespace(
+            name=line.get("name"),
+            team_name=line.get("team_name"),
+            best_bowl_wickets=int(line.get("bowl_wickets", 0) or 0),
+            best_bowl_runs=int(line.get("bowl_runs", 0) or 0),
+        ))
+    # Most wickets first; on a tie fewer runs conceded is the better figure.
+    entries.sort(key=lambda e: (e.best_bowl_wickets, -e.best_bowl_runs), reverse=True)
+    return entries[:limit]
+
+
+def batting_average(row):
+    """Batting average (runs per dismissal), or ``None`` when never dismissed.
+
+    By cricket convention an average is undefined until the batsman has been out
+    at least once, so callers should treat ``None`` as "not yet qualified".
+    """
+    outs = row.bat_outs or 0
+    if outs <= 0:
+        return None
+    return (row.bat_runs or 0) / outs
+
+
 def stat_leaders(session, tournament_id, limit=10):
     """Return a dict of leaderboard lists for the dashboard."""
     rows = _stat_rows(session, tournament_id)
@@ -759,12 +833,15 @@ def stat_leaders(session, tournament_id, limit=10):
         "most_wickets": top(lambda r: (r.bowl_wickets or 0, -(r.bowl_runs or 0))),
         "most_sixes": top(lambda r: (r.bat_sixes or 0)),
         "most_fours": top(lambda r: (r.bat_fours or 0)),
-        "highest_score": top(lambda r: (r.highest_score or 0)),
-        "best_figure": top(lambda r: (r.best_bowl_wickets or 0,
-                                      -(r.best_bowl_runs if r.best_bowl_runs is not None and r.best_bowl_runs >= 0 else 9999)),
-                           filt=lambda r: (r.best_bowl_runs is not None and r.best_bowl_runs >= 0)),
+        # Per-innings boards: rank individual knocks/spells so a batsman's 120,
+        # 118 and 110 all appear, not just his single best.
+        "highest_score": _innings_highest_scores(session, tournament_id, limit),
+        "best_figure": _innings_best_figures(session, tournament_id, limit),
         "best_strike_rate": [(r, round(sr(r), 2)) for r in top(
             sr, filt=lambda r: (r.bat_balls or 0) >= min_sr)],
         "best_economy": [(r, round(econ(r), 2)) for r in top(
             econ, reverse=False, filt=lambda r: (r.bowl_balls or 0) >= min_econ)],
+        "top_average": [(r, round(batting_average(r), 2)) for r in top(
+            lambda r: batting_average(r) or 0.0,
+            filt=lambda r: batting_average(r) is not None)],
     }
