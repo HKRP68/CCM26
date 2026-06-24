@@ -757,8 +757,14 @@ def _innings_lines(session, tournament_id):
         except Exception:
             logger.exception("Bad scorecard_json on tournament_match %s", m.id)
             continue
-        for line in lines or []:
-            yield line
+        if not isinstance(lines, list):
+            logger.warning("scorecard_json on tournament_match %s is not a list", m.id)
+            continue
+        for line in lines:
+            # Defensive: a stored scorecard could contain non-dict entries; skip
+            # them so a single malformed line can't crash the leaderboard build.
+            if isinstance(line, dict):
+                yield line
 
 
 def _innings_highest_scores(session, tournament_id, limit):
