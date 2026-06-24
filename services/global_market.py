@@ -275,6 +275,10 @@ def add_player_to_market(session, player_id, custom_price=None):
         return False, "Player not found."
     if not player.is_active:
         return False, "Player is inactive."
+    # Don't list players the admin toggled off — buy_player() would block them,
+    # leaving an unsellable slot users can see but never purchase.
+    if getattr(player, "restricted_from_buypl", False):
+        return False, f"{player.name} is not available to buy."
 
     # Don't allow duplicates of the same player_id in the market
     existing = (session.query(GlobalPlayerMarket)
