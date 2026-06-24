@@ -155,22 +155,27 @@ def _resolve_team_identity(team_name, league_key, session):
 # Small helpers
 # ════════════════════════════════════════════════════════════════════
 
-# The state store (get_state/save_state) is backed by synchronous, blocking DB
-# I/O. Run it in a worker thread so a slow DB round-trip can't freeze the event
-# loop — and therefore every other user's command and button acknowledgement —
-# while one Challenge League pick is being processed.
+# get_state / save_state keep the per-match snapshot in ctx.bot_data, which is
+# owned by the event-loop thread and read/iterated by other handlers there
+# (e.g. _find_cipl_match_in_chat, cleanup_state). They must therefore run ON the
+# loop — offloading them to a worker thread would mutate bot_data off-thread and
+# can race those iterations (RuntimeError: dictionary changed size during
+# iteration). They stay async so call sites await them uniformly; the heavy,
+# bot_data-free work (the over simulation, the match-finalisation DB batch, the
+# cold-path DB reads in the middleware) is what actually moves off-loop.
 async def _gs(ctx, mid):
-    return await asyncio.to_thread(_gs_store, ctx, mid)
+    return _gs_store(ctx, mid)
 
 
 async def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None):
-    await asyncio.to_thread(
-        lambda: _ss_store(ctx, mid, s, next_action=next_action,
-                          last_prompt_msg_id=last_prompt_msg_id))
+    _ss_store(ctx, mid, s, next_action=next_action,
+              last_prompt_msg_id=last_prompt_msg_id)
 
 
 async def _get_next_action(ctx, mid):
-    """Off-loop wrapper for the blocking next_action read."""
+    """Off-loop wrapper for the blocking next_action read. Safe to offload:
+    get_next_action only touches the lock-guarded shared cache and the DB — it
+    never writes ctx.bot_data."""
     return await asyncio.to_thread(get_next_action, ctx, mid)
 
 
@@ -1528,20 +1533,6 @@ async def _complete_match(context, mid, state):
                     except Exception:
                         logger.exception("cipl prize award failed for match %s", mid)
 
-            # Snapshot the final scorecard + Arena board so the "View Match" Mini App
-            # stays viewable after the live state is cleaned up below (same mechanism
-            # /wpm uses). Must run while the live state still exists.
-            try:
-                if result["tie"]:
-                    result_text = "Match Tied"
-                else:
-                    result_text = (f"{result['winner']} beat {result['loser']} by "
-                                   f"{result['margin']} {result['margin_type']}")
-                from services.match_webapp_service import save_final_scorecard
-                save_final_scorecard(session, mid, result_text=result_text)
-            except Exception:
-                logger.exception("cipl final scorecard snapshot failed for match %s", mid)
-
             # Record the official tournament result (standings + per-player stats).
             # No-op for casual Challenge League matches (no tournament_id in state).
             # A tie reaching here did NOT go to a Super Over, so it is recorded as a tie.
@@ -1561,6 +1552,31 @@ async def _complete_match(context, mid, state):
         return prize
 
     prize_info = await asyncio.to_thread(_finalize_match_db)
+
+    # Snapshot the final scorecard + Arena board ON the event loop. This persists
+    # a MatchScorecard row AND schedules the Telegram text-archive upload, which
+    # relies on asyncio.get_running_loop() — so it must NOT run in a worker thread
+    # (there get_running_loop() raises and the MatchNo<id>.txt upload is silently
+    # skipped). The single-row write is cheap; it must run while the live state
+    # still exists (before the cleanup below).
+    try:
+        if result["tie"]:
+            result_text = "Match Tied"
+        else:
+            result_text = (f"{result['winner']} beat {result['loser']} by "
+                           f"{result['margin']} {result['margin_type']}")
+        from services.match_webapp_service import save_final_scorecard
+        sc_session = get_session()
+        try:
+            save_final_scorecard(sc_session, mid, result_text=result_text)
+            sc_session.commit()
+        except Exception:
+            sc_session.rollback()
+            raise
+        finally:
+            sc_session.close()
+    except Exception:
+        logger.exception("cipl final scorecard snapshot failed for match %s", mid)
 
     # "Who beat who" line uses clickable @user mentions alongside the team
     # names: @winner (Team) beat @loser (Team).
