@@ -47,7 +47,8 @@ def _pick_player_for_slot(session, min_rating=None):
     """Pick a random player at or above min_rating. Excludes inactive + variants."""
     q = (session.query(Player)
          .filter(Player.is_active == True,
-                 Player.parent_player_id.is_(None)))
+                 Player.parent_player_id.is_(None),
+                 Player.restricted_from_buypl == False))
     if min_rating is not None:
         q = q.filter(Player.rating >= min_rating)
     pool = q.all()
@@ -55,7 +56,8 @@ def _pick_player_for_slot(session, min_rating=None):
         # Drop the rating filter as a fallback
         pool = (session.query(Player)
                 .filter(Player.is_active == True,
-                        Player.parent_player_id.is_(None))
+                        Player.parent_player_id.is_(None),
+                        Player.restricted_from_buypl == False)
                 .all())
     return random.choice(pool) if pool else None
 
@@ -105,8 +107,8 @@ def reroll_player_market(session, num_slots=None, min_rating=None):
         if not p:
             continue
         base_price = _calc_player_price(p)
-        # Flat 10% discount off normal sell price
-        discount_pct = 10
+        # Flat 5% discount off normal sell price
+        discount_pct = 5
         final_price = int(base_price * (1 - discount_pct / 100))
         row = GlobalPlayerMarket(
             slot_index=slot,
@@ -286,7 +288,7 @@ def add_player_to_market(session, player_id, custom_price=None):
     next_slot = (max_slot[0] + 1) if max_slot else 0
 
     base_price = custom_price if custom_price else _calc_player_price(player)
-    final_price = custom_price if custom_price else int(base_price * 0.9)
+    final_price = custom_price if custom_price else int(base_price * 0.95)
     row = GlobalPlayerMarket(
         slot_index=next_slot,
         player_id=player.id,
@@ -325,6 +327,10 @@ def buy_player(session, user, slot_index):
     player = session.query(Player).get(slot.player_id)
     if not player:
         return False, "Player no longer available."
+
+    # Honor the admin "not available to buy" toggle (restricted_from_buypl).
+    if getattr(player, "restricted_from_buypl", False):
+        return False, f"🚫 {player.name} is not available to buy."
 
     # Block if user owns ANY version of this player
     try:

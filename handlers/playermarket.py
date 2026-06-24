@@ -145,7 +145,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         caption = (
             f"💰 <b>{user.total_coins:,}</b> 🪙 · "
             f"📊 {user.roster_count}/25 roster\n"
-            f"🏷️ All cards <b>10% off</b> · Refreshes every 24h"
+            f"🏷️ All cards <b>5% off</b> · Refreshes every 24h"
         )
 
         if img_bytes:
