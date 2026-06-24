@@ -280,7 +280,38 @@ def _team_active_xi_key(state, user_id):
     return None
 
 
+def _state_bpu(state):
+    """Legal balls per unit for a match state: 5 for The Hundred, else 6.
+
+    Only Challenge League "The Hundred" matches set ``ball_format``; every other
+    Mini-App match (``/wpm``, ``/cm``, tournaments) is unaffected and stays on
+    6-ball overs.
+    """
+    return 5 if (state or {}).get("ball_format") == "The100" else 6
+
+
+def _is_hundred_state(state):
+    return (state or {}).get("ball_format") == "The100"
+
+
+def _live_balls_bowled(state):
+    """Legal balls bowled in the current innings, format-aware."""
+    bpu = _state_bpu(state)
+    return (state.get("current_over", 1) - 1) * bpu + state.get("current_ball", 0)
+
+
+def _overs_display(state):
+    """Innings progress for the Mini App: ``"12.3"`` for over formats, or the
+    raw ball count (e.g. ``"63"``) for The Hundred, which has no overs."""
+    balls = _live_balls_bowled(state)
+    if _is_hundred_state(state):
+        return str(balls)
+    return f"{balls // 6}.{balls % 6}"
+
+
 def _current_over_label(state):
+    if _is_hundred_state(state):
+        return f"{_live_balls_bowled(state)} balls"
     return f"{max(0, state.get('current_over', 1) - 1)}.{state.get('current_ball', 0)} ov"
 
 
@@ -801,7 +832,10 @@ def _bowler_card(state):
     bs = _stat_row(state.get("bowl_stats"), b["roster_id"])
     overs_done = bs.get("overs_done", 0)
     this_over = bs.get("this_over_balls", 0)
-    ov_str = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
+    if _is_hundred_state(state):
+        ov_str = f"{bs.get('balls', 0)}b"   # The Hundred: balls, not overs
+    else:
+        ov_str = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
     return {
         "roster_id": b["roster_id"], "name": b["name"],
         "rating": b.get("rating"), "bowl_rating": b.get("bowl_rating"),
@@ -860,12 +894,15 @@ def build_snapshot(session, match_id, user_id, state_override=None):
         "turn": turn,
         "innings": state.get("innings", 1),
         "overs_limit": state.get("overs"),
+        # "T20" (6-ball overs) or "The100" (5-ball sets) so the client can label
+        # progress correctly; absent/"T20" keeps the standard over-based UI.
+        "ball_format": state.get("ball_format", "T20"),
         "score": {
             "runs": state.get("total_runs", 0),
             "wickets": state.get("total_wickets", 0),
             "over": state.get("current_over", 1) - 1,
             "ball": state.get("current_ball", 0),
-            "overs_str": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
+            "overs_str": _overs_display(state),
             "target": state.get("target"),
             "runs_required": chase.get("runs_required") if chase else None,
             "balls_remaining": chase.get("balls_remaining") if chase else None,
@@ -2186,7 +2223,10 @@ def build_scorecard(match_id, user_id):
             st = _stat_row(stats, p["roster_id"])
             if not st.get("balls"):
                 continue
-            overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))
+            if _is_hundred_state(state):
+                overs = f"{st.get('balls', 0)}b"   # The Hundred: balls, not overs
+            else:
+                overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))
             econ = round(st.get("runs", 0) / (st.get("balls", 1) / 6), 2) if st.get("balls") else 0
             rows.append({
                 "name": p["name"], "overs": overs,
@@ -2208,7 +2248,7 @@ def build_scorecard(match_id, user_id):
         inn1_bowl_team = state.get("bowl_team_name", "")
         inn1_runs = state.get("total_runs", 0)
         inn1_wkts = state.get("total_wickets", 0)
-        inn1_overs = f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}"
+        inn1_overs = _overs_display(state)
     else:
         inn1_bat_xi = state.get("inn1_bat_xi", [])
         inn1_bat_stats = state.get("inn1_bat_stats", {})
@@ -2233,13 +2273,14 @@ def build_scorecard(match_id, user_id):
             "number": 2, "bat_team": state.get("bat_team_name", ""),
             "bowl_team": state.get("bowl_team_name", ""),
             "runs": state.get("total_runs", 0), "wickets": state.get("total_wickets", 0),
-            "overs": f"{max(0, state.get('current_over',1)-1)}.{state.get('current_ball',0)}",
+            "overs": _overs_display(state),
             "batting": _batting(state.get("bat_xi", []), state.get("bat_stats", {})),
             "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {})),
         })
 
     return {"ok": True, "innings": innings, "current_innings": cur_inn,
             "target": state.get("target"),
+            "ball_format": state.get("ball_format", "T20"),
             "impact_players": _impact_player_summary(state)}
 
 
@@ -2818,17 +2859,22 @@ def _balls_bowled_total(state):
     the live over/ball counters."""
     if not state:
         return 0
+    bpu = _state_bpu(state)
     inn = state.get("innings", 1)
-    cur = (state.get("current_over", 1) - 1) * 6 + state.get("current_ball", 0)
+    cur = (state.get("current_over", 1) - 1) * bpu + state.get("current_ball", 0)
     if inn == 1:
         return cur
-    # innings 2: add the completed first-innings balls
-    i1_over = state.get("inn1_overs")  # stored as "x.y" string
+    # innings 2: add the completed first-innings balls. The first-innings figure
+    # is stored as "x.y" for over formats or "N balls" for The Hundred.
+    i1_over = state.get("inn1_overs")
     i1_balls = 0
-    if isinstance(i1_over, str) and "." in i1_over:
+    if isinstance(i1_over, str):
         try:
-            o, b = i1_over.split(".")
-            i1_balls = int(o) * 6 + int(b)
+            if "ball" in i1_over:                 # The Hundred: "63 balls"
+                i1_balls = int(i1_over.split()[0])
+            elif "." in i1_over:                  # over format: "12.3"
+                o, b = i1_over.split(".")
+                i1_balls = int(o) * 6 + int(b)
         except Exception:
             i1_balls = 0
     return i1_balls + cur

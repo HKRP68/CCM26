@@ -491,5 +491,30 @@ class CommentaryEngineTests(unittest.TestCase):
         self.assertIsInstance(s.get("wkt_marks"), list)
 
 
+class HundredSpectatorTests(unittest.TestCase):
+    """The read-only Watch Match Mini App must show Hundred progress in balls
+    (not 6-ball overs) and compute balls-remaining against 100, not 120."""
+
+    def test_chase_requirements_balls_remaining_format_aware(self):
+        from services.match_engine import chase_requirements
+        base = {"innings": 2, "target": 80, "total_runs": 40, "overs": 20,
+                "current_over": 11, "current_ball": 0}
+        hundred = dict(base, ball_format="The100")  # 10 sets = 50 of 100 balls
+        self.assertEqual(chase_requirements(hundred)["balls_remaining"], 50)
+        t20 = dict(base, ball_format="T20")          # 10 overs = 60 of 120 balls
+        self.assertEqual(chase_requirements(t20)["balls_remaining"], 60)
+        # No ball_format (standard /wpm, /cm) behaves exactly like T20.
+        self.assertEqual(chase_requirements(dict(base))["balls_remaining"], 60)
+
+    def test_overs_display_and_bpu(self):
+        from services.match_webapp_service import _overs_display, _state_bpu
+        hundred = {"ball_format": "The100", "current_over": 9, "current_ball": 3}
+        self.assertEqual(_state_bpu(hundred), 5)
+        self.assertEqual(_overs_display(hundred), "43")   # (8*5)+3 balls
+        over_fmt = {"current_over": 9, "current_ball": 3}  # no ball_format → T20
+        self.assertEqual(_state_bpu(over_fmt), 6)
+        self.assertEqual(_overs_display(over_fmt), "8.3")  # 51 balls → 8.3 overs
+
+
 if __name__ == "__main__":
     unittest.main()
