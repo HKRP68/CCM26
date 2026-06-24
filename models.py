@@ -1667,6 +1667,10 @@ class ChallengeLeague(Base):
     home_country = Column(String(60), nullable=True)
     min_overseas = Column(Integer, default=0, nullable=False)
     max_overseas = Column(Integer, default=11, nullable=False)
+    # Match format for league play: "T20" (20 overs × 6 balls) or "The100"
+    # (The Hundred — 100 balls as 20 sets of 5). Drives the ball-by-ball engine
+    # in services/cipl_match.py via the JSON match-state's ``ball_format`` key.
+    match_format = Column(String(20), default="T20", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

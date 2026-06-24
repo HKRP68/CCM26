@@ -704,8 +704,11 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                bowl_user.username, bowl_user.first_name)
         winner_tg_val = winner.telegram_id
 
-        # Challenge League / League Battle is always a 20-over contest.
+        # Challenge League is 20 units — either 20 overs (T20) or 20 sets of 5
+        # balls (The Hundred). The per-league format is cached on the draft at
+        # XI selection; default to the over-based format if it is missing.
         overs = CIPL_OVERS
+        ball_format = draft.get("ball_format", "T20")
         settings = random_match_settings()
         # Honour the host's chosen pitch (selected during setup); fall back to the
         # randomised surface only when no pitch was picked.
@@ -759,11 +762,13 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.debug("challenge draft lock release failed", exc_info=True)
     await q.answer()
     winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
+    fmt_label = "The Hundred (100 balls)" if ball_format == "The100" else f"{match_obj.overs} overs"
+    unit_flow = "set by set" if ball_format == "The100" else "over by over"
     await q.edit_message_text(
         f"✅ {_mention(winner_tg_val, winner_name)} "
         f"elected to <b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n"
-        f"🏟️ {match_obj.stadium} • {pitch_type} pitch • {match_obj.overs} overs\n\n"
-        f"The match begins below — play over by over!",
+        f"🏟️ {match_obj.stadium} • {pitch_type} pitch • {fmt_label}\n\n"
+        f"The match begins below — play {unit_flow}!",
         parse_mode="HTML")
     # The toss-result message (this one) is kept; every other setup message is
     # swept away when the match starts.
@@ -775,7 +780,7 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                            pitch_type,
                            bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
                            bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
-                           draft=draft)
+                           draft=draft, ball_format=ball_format)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -785,7 +790,8 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
                            pitch_type, bat_team_code="", bowl_team_code="",
-                           bat_team_emoji="🏏", bowl_team_emoji="🏏", draft=None):
+                           bat_team_emoji="🏏", bowl_team_emoji="🏏", draft=None,
+                           ball_format="T20"):
     state = cipl_match.build_cipl_state(
         match_id=match.id, overs=match.overs,
         bat_user_id=bat_user.id, bowl_user_id=bowl_user.id,
@@ -796,7 +802,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         is_private=chat_id > 0, stadium=match.stadium,
         bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
         bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
-        conditions=(draft or {}).get("conditions"))
+        conditions=(draft or {}).get("conditions"), ball_format=ball_format)
     state["user_names"] = {
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
@@ -858,6 +864,7 @@ def _match_start_announcement(state):
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
     pitch = html.escape(str(state.get("pitch_type") or "Hard"))
     overs = state.get("overs", 20)
+    overs_label = "The Hundred (100 balls)" if state.get("ball_format") == "The100" else f"{overs} overs"
     rule = "━" * 15
     # Compact live-conditions strip (weather · temp · dew) from the Pitch Report.
     cond = state.get("conditions") or {}
@@ -873,7 +880,7 @@ def _match_start_announcement(state):
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
         f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
         f"{rule}\n"
-        f"🏟️ {stadium} • {overs} overs\n"
+        f"🏟️ {stadium} • {overs_label}\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"{cond_line}"
         f"🏏 {bat} batting first\n"
@@ -887,15 +894,28 @@ def _match_start_announcement(state):
 # Per-over prompts
 # ════════════════════════════════════════════════════════════════════
 
+def _unit_word(state, cap=False):
+    """'over' (T20) or 'set' (The Hundred) — the per-turn unit of play."""
+    w = "set" if state.get("ball_format") == "The100" else "over"
+    return w.capitalize() if cap else w
+
+
+def _progress(state):
+    """Innings progress: '12.3/20' for T20, '63/100 balls' for The Hundred."""
+    if state.get("ball_format") == "The100":
+        return f"{cipl_match.balls_bowled(state)}/{cipl_match.total_balls(state)} balls"
+    return f"{cipl_match.format_overs(state)}/{state['overs']}"
+
+
 def _header(state):
     inn = state.get("innings", 1)
     line = (f"🏏 <b>{state['bat_team_name']}</b> {cipl_match.format_score(state)} "
-            f"({cipl_match.format_overs(state)}/{state['overs']})")
+            f"({_progress(state)})")
     c = cipl_match.chase(state)
     if c:
         line += (f"\n🎯 Need <b>{c['runs_required']}</b> off "
                  f"{c['balls_remaining']} • RRR {c['rrr']:.2f}")
-    return f"Innings {inn} • Over {state['current_over']}\n{line}"
+    return f"Innings {inn} • {_unit_word(state, cap=True)} {state['current_over']}\n{line}"
 
 
 async def _prompt_bowler(context, mid, state=None, first=False):
@@ -925,7 +945,7 @@ async def _prompt_bowler(context, mid, state=None, first=False):
                       "bowlers (🧤) are left.</i>" if only_part_timers else "")
     text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
-            f"for over {state['current_over']}:{part_time_note}")
+            f"for {_unit_word(state)} {state['current_over']}:{part_time_note}")
     await _new_action_message(context, state, text, rows)
     await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
     _arm_timer(context, mid, A_PICK_CIPL_BOWLER)
@@ -1241,7 +1261,7 @@ async def _run_over(context, mid, state):
     bowler_name = state["current_bowler"]["name"]
     await _edit_action_message(
         context, state,
-        f"{_header(state)}\n\n⏳ Simulating over {state['current_over']} — "
+        f"{_header(state)}\n\n⏳ Simulating {_unit_word(state)} {state['current_over']} — "
         f"{bowler_name} bowling…", None)
 
     # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
@@ -1275,9 +1295,9 @@ def _render_over_summary(state, summary):
     # Bowling/Batting approaches are deliberately NOT shown in the public over
     # summary — revealing them would let the opponent read each captain's plan.
     lines = [
-        f"<b>End of Over {summary['over_no']}</b> — {summary['bowler']['name']}",
+        f"<b>End of {_unit_word(state, cap=True)} {summary['over_no']}</b> — {summary['bowler']['name']}",
         f"Timeline: {timeline}",
-        f"This over: <b>{summary['over_runs']}</b> run(s), "
+        f"This {_unit_word(state)}: <b>{summary['over_runs']}</b> run(s), "
         f"{summary['over_wickets']} wkt(s)",
         "",
         f"🏏 <b>{state['bat_team_name']}</b> {cipl_match.format_score(state)} "
@@ -1637,7 +1657,7 @@ async def _complete_match(context, mid, state):
     release_match_lock(mid)
 
 
-def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi):
+def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi, bpu=6):
     """Top batters/bowlers for one innings, in the match-summary card format."""
     bats = []
     for p in bat_xi or []:
@@ -1651,9 +1671,10 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi):
         st = bowl_stats.get(str(p["roster_id"]), {})
         balls = st.get("balls", 0)
         if balls > 0:
+            # The Hundred shows bowler workload in balls; T20 in overs.balls.
+            overs = f"{balls}b" if bpu != 6 else f"{balls // 6}.{balls % 6}"
             bowls.append({"name": p["name"], "wickets": st.get("wickets", 0),
-                          "runs": st.get("runs", 0),
-                          "overs": f"{balls // 6}.{balls % 6}"})
+                          "runs": st.get("runs", 0), "overs": overs})
     bowls.sort(key=lambda b: b["wickets"], reverse=True)
     return bats[:4], bowls[:4]
 
@@ -1801,12 +1822,13 @@ def _build_cipl_summary_image(state, result):
         logger.exception("cipl summary text settings load failed")
         text_settings = None
 
+    _bpu = cipl_match.balls_per_unit(state)
     inn1_bats, inn1_bowls = _summary_rows(
         state.get("inn1_bat_stats", {}), state.get("inn1_bat_xi", []),
-        state.get("inn1_bowl_stats", {}), state.get("inn1_bowl_xi", []))
+        state.get("inn1_bowl_stats", {}), state.get("inn1_bowl_xi", []), bpu=_bpu)
     inn2_bats, inn2_bowls = _summary_rows(
         state.get("bat_stats", {}), state.get("bat_xi", []),
-        state.get("bowl_stats", {}), state.get("bowl_xi", []))
+        state.get("bowl_stats", {}), state.get("bowl_xi", []), bpu=_bpu)
 
     if result["tie"]:
         winner_name, margin_text = "Match Tied", "Match Tied"

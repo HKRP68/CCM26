@@ -66,13 +66,14 @@ def _mk(rid, name, cat, bat, bowl, style="Fast"):
             "bowl_style": style, "bowl_hand": "Right", "bat_hand": "Right"}
 
 
-def _make_state(overs=5):
+def _make_state(overs=5, ball_format="T20"):
     bat_xi = ([_mk(i, "Bat%d" % i, "Batsman", 80 - i, 30) for i in range(1, 8)]
               + [_mk(i, "AR%d" % i, "All-rounder", 60, 70, "Off spin") for i in range(8, 12)])
     bowl_xi = ([_mk(100 + i, "Bwl%d" % i, "Bowler", 30, 80 - i, "Fast") for i in range(1, 7)]
                + [_mk(100 + i, "BAR%d" % i, "All-rounder", 60, 70, "Leg spin") for i in range(7, 12)])
     return cm.build_cipl_state(1, overs, 10, 20, 111, 222, bat_xi, bowl_xi,
-                               "Team A", "Team B", -100, "Hard", False)
+                               "Team A", "Team B", -100, "Hard", False,
+                               ball_format=ball_format)
 
 
 class CiplMatchTests(unittest.TestCase):
@@ -166,6 +167,118 @@ class CiplMatchTests(unittest.TestCase):
         for e in s["last_over_commentary"]:
             self.assertIn("over", e)
             self.assertIn("text", e)
+
+
+class HundredFormatTests(unittest.TestCase):
+    """The Hundred (100-ball) format on the Challenge League engine: 20 sets of
+    5 balls, strike ends change every 10 balls, a bowler may bowl two consecutive
+    sets (a 10-ball spell) but not a third, and an innings ends at 100 balls."""
+
+    def _hundred(self, overs=20):
+        return _make_state(overs=overs, ball_format="The100")
+
+    def test_unit_and_total_balls(self):
+        h = self._hundred()
+        self.assertEqual(cm.balls_per_unit(h), 5)
+        self.assertEqual(cm.total_balls(h), 100)
+        t = _make_state(overs=20)  # T20 is unchanged
+        self.assertEqual(cm.balls_per_unit(t), 6)
+        self.assertEqual(cm.total_balls(t), 120)
+
+    def test_innings_ends_at_100_balls_not_120(self):
+        h = self._hundred()
+        h["current_over"], h["current_ball"] = 20, 0   # 19 sets done → 95 balls
+        self.assertEqual(cm.balls_bowled(h), 95)
+        self.assertFalse(cm.is_innings_over(h))
+        h["current_over"], h["current_ball"] = 20, 5   # 20 sets done → 100 balls
+        self.assertEqual(cm.balls_bowled(h), 100)
+        self.assertTrue(cm.is_innings_over(h))
+
+    def test_format_overs_shows_ball_count(self):
+        h = self._hundred()
+        h["current_over"], h["current_ball"] = 9, 3    # (8*5)+3 = 43 balls
+        self.assertEqual(cm.balls_bowled(h), 43)
+        self.assertEqual(cm.format_overs(h), "43 balls")
+
+    def test_powerplay_spec_is_25_balls(self):
+        spec = cm.FORMAT_SPECS["The100"]
+        self.assertEqual(spec["powerplay_units"] * spec["balls_per_unit"], 25)
+        t20 = cm.FORMAT_SPECS["T20"]
+        self.assertEqual(t20["powerplay_units"] * t20["balls_per_unit"], 36)
+
+    def test_bowler_quota_is_20_balls(self):
+        h = self._hundred()
+        self.assertEqual(cm.max_bowler_overs(h), 4)    # 4 sets = 20 balls
+        b = cm.eligible_bowlers(h)[0]
+        rid = b["roster_id"]
+        h["bowl_stats"][str(rid)]["balls"] = 20        # at the 20-ball cap
+        self.assertNotIn(rid, [p["roster_id"] for p in cm.eligible_bowlers(h)])
+        h["bowl_stats"][str(rid)]["balls"] = 15        # 3 sets — still has a set left
+        self.assertIn(rid, [p["roster_id"] for p in cm.eligible_bowlers(h)])
+
+    def test_bowler_may_bowl_two_consecutive_sets_not_three(self):
+        h = self._hundred()
+        rid = cm.eligible_bowlers(h)[0]["roster_id"]
+        # One set into the spell → may return for a 2nd consecutive set.
+        h["spell_rid"], h["spell_units"] = rid, 1
+        h["bowl_stats"][str(rid)]["balls"] = 5
+        self.assertIn(rid, [p["roster_id"] for p in cm.eligible_bowlers(h)])
+        # Two consecutive sets bowled → blocked from a 3rd.
+        h["spell_units"] = 2
+        h["bowl_stats"][str(rid)]["balls"] = 10
+        self.assertNotIn(rid, [p["roster_id"] for p in cm.eligible_bowlers(h)])
+
+    def test_t20_still_blocks_back_to_back_overs(self):
+        t = _make_state(overs=20)  # T20 rotation rule is unchanged
+        first = cm.eligible_bowlers(t)[0]
+        t["prev_bowler_rid"] = first["roster_id"]
+        self.assertNotIn(first["roster_id"],
+                         [p["roster_id"] for p in cm.eligible_bowlers(t)])
+
+    def test_strike_changes_every_10_balls_not_after_first_set(self):
+        # Force every delivery to a dot so there are no mid-set odd-run swaps —
+        # isolating the end-change rule (every 10 legal balls in The Hundred).
+        h = self._hundred()
+        dot = {"type": "run", "runs": 0, "is_extra": False, "batter_out": False}
+        orig = cm.calculate_outcome
+        cm.calculate_outcome = lambda *a, **k: dict(dot)
+        try:
+            start = h["striker_idx"]
+            h["current_bowler"] = cm.eligible_bowlers(h)[0]
+            h["bowling_approach"] = h["batting_approach"] = "balanced"
+            cm.simulate_over(h)                       # set 1 (5 balls) — no end change
+            self.assertEqual(h["striker_idx"], start)
+            h["current_bowler"] = cm.eligible_bowlers(h)[0]
+            h["bowling_approach"] = h["batting_approach"] = "balanced"
+            cm.simulate_over(h)                       # set 2 (10 balls) — ends change
+            self.assertNotEqual(h["striker_idx"], start)
+        finally:
+            cm.calculate_outcome = orig
+
+    def test_full_hundred_match_completes(self):
+        random.seed(123)
+        h = self._hundred()
+        guard = 0
+        while not cm.is_innings_over(h) and guard < 60:
+            h["current_bowler"] = cm.eligible_bowlers(h)[0]
+            h["bowling_approach"] = "balanced"
+            h["batting_approach"] = "aggressive"
+            cm.simulate_over(h)
+            guard += 1
+        # An innings never runs past 100 balls.
+        self.assertLessEqual(cm.balls_bowled(h), 100)
+        cm.end_first_innings(h)
+        self.assertEqual(h["innings"], 2)
+        self.assertEqual(h["spell_units"], 0)         # spell tracker reset at the break
+        guard = 0
+        while not cm.is_innings_over(h) and guard < 60:
+            h["current_bowler"] = cm.eligible_bowlers(h)[0]
+            h["bowling_approach"] = "defensive"
+            h["batting_approach"] = "balanced"
+            cm.simulate_over(h)
+            guard += 1
+        result = cm.compute_result(h)
+        self.assertIn(result["margin_type"], ("runs", "wickets", "tie"))
 
 
 class MiniAppSpectateOnlyTests(unittest.TestCase):

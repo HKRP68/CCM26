@@ -241,6 +241,8 @@ def _migrate_add_columns():
     _try_add("challenge_leagues", "home_country", "VARCHAR(60)")
     _try_add("challenge_leagues", "min_overseas", "INTEGER DEFAULT 0")
     _try_add("challenge_leagues", "max_overseas", "INTEGER DEFAULT 11")
+    # Per-league match format: "T20" (20-over) or "The100" (The Hundred, 100 balls).
+    _try_add("challenge_leagues", "match_format", "VARCHAR(20) DEFAULT 'T20'")
     _try_add("challenge_players", "is_overseas", "BOOLEAN DEFAULT FALSE")
 
     # Fantasy league configuration fields added after the original fantasy

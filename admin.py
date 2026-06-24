@@ -11807,6 +11807,10 @@ def _apply_overseas_league_form(league):
         hi = lo
     league.min_overseas = lo
     league.max_overseas = hi
+    # Match format: "T20" (20-over) or "The100" (The Hundred). Unknown values
+    # fall back to the over-based default so league play always has a valid mode.
+    fmt = (request.form.get("match_format") or "T20").strip()
+    league.match_format = fmt if fmt in {"T20", "The100"} else "T20"
 
 
 def _challenge_player_details_from_source(player, is_overseas=False):
