@@ -1852,6 +1852,17 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if m:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
+            # If this was a Challenge League Tour match, reset its series slot to
+            # pending so the tour stays playable (an early /endmatch records no
+            # winner). No-op for non-tour matches.
+            try:
+                from models import CLTourMatch
+                (session.query(CLTourMatch)
+                 .filter(CLTourMatch.match_id == mid)
+                 .update({CLTourMatch.match_id: None, CLTourMatch.status: "pending"},
+                         synchronize_session=False))
+            except Exception:
+                logger.exception("endmatch: CL-tour-match reset failed (non-fatal)")
         session.commit()
         u_mention = _mention(u) if u else "Player"
         comp_line = ""
@@ -2112,6 +2123,16 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                          synchronize_session=False))
             except Exception:
                 logger.exception("removematch: tour-match reset failed (non-fatal)")
+            # Same for Challenge League Tour slots — a cleared /cipl tour match
+            # must return to pending so the series can be replayed.
+            try:
+                from models import CLTourMatch
+                (session.query(CLTourMatch)
+                 .filter(CLTourMatch.match_id.in_(removed_ids))
+                 .update({CLTourMatch.match_id: None, CLTourMatch.status: "pending"},
+                         synchronize_session=False))
+            except Exception:
+                logger.exception("removematch: CL-tour-match reset failed (non-fatal)")
         session.commit()
         target_label = _user_label(target)
     except Exception:

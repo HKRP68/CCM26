@@ -602,10 +602,12 @@ async def cltour_play_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         from handlers.challenge import (
-            launch_cl_tour_match, _get_challenge_league_record, normalize_challenge_league)
+            launch_cl_tour_match, normalize_challenge_league)
         league = session.query(ChallengeLeague).get(tour.league_id)
         league_key = normalize_challenge_league(league.short_code or league.name) if league else None
-        league_record = _get_challenge_league_record(session, league_key)
+        # Use the tour's actual league row (active or not) — a league deactivated
+        # mid-tour must still resolve the correct league-scoped roster/format.
+        league_record = league
         league_name = league.name if league else "Challenge League"
 
         await q.answer()

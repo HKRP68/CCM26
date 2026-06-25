@@ -366,6 +366,24 @@ def _get_challenge_league_record(session, league_key):
     return None
 
 
+def _resolve_draft_league(session, draft):
+    """Resolve the ChallengeLeague for a draft.
+
+    Prefer the draft's pinned ``league_id`` (set for CL Tour matches) so the
+    league is found by id even if it has been deactivated mid-tour; fall back to
+    the active-only key lookup for normal /cipl drafts that carry no league_id.
+    """
+    league_id = (draft or {}).get("league_id")
+    if league_id:
+        try:
+            league = session.get(ChallengeLeague, int(league_id))
+            if league is not None:
+                return league
+        except Exception:
+            logger.exception("Failed to load draft league by id %s", league_id)
+    return _get_challenge_league_record(session, (draft or {}).get("league_key"))
+
+
 def _league_image_url(league_record):
     return (getattr(league_record, "image_url", None) or "").strip() or None
 
@@ -720,7 +738,7 @@ def _resolve_team_id(session, draft, side):
     if not team_name:
         return None
     try:
-        league = _get_challenge_league_record(session, draft.get("league_key"))
+        league = _resolve_draft_league(session, draft)
         if league is None:
             # No resolvable league means we can't pin the team to one league;
             # disable XI memory rather than risk a same-named team in another
@@ -771,7 +789,7 @@ def _challenge_team_players(session, draft, side):
         return []
     try:
         query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
-        league = _get_challenge_league_record(session, draft.get("league_key"))
+        league = _resolve_draft_league(session, draft)
         if league is not None:
             query = query.filter(ChallengeTeam.league_id == league.id)
         team = query.first()
@@ -1329,6 +1347,10 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     # /cipl flow sets these lazily when the XI picker opens, but pinning them here
     # removes any reliance on that and the toss-time `ball_format` fallback.
     if league_record is not None:
+        # Pin the league by id so roster/format/overseas resolution doesn't rely on
+        # active-only league_key matching — a league deactivated mid-tour still
+        # resolves correctly (see _resolve_draft_league).
+        draft["league_id"] = league_record.id
         draft["ball_format"] = getattr(league_record, "match_format", "T20") or "T20"
         draft["overseas_min"] = int(getattr(league_record, "min_overseas", 0) or 0)
         draft["overseas_max"] = int(getattr(league_record, "max_overseas", 11) or 11)
@@ -2246,7 +2268,7 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         team_id = _resolve_team_id(session, draft, side)
         # Cache the league overseas limits on the draft so the picker render and
         # confirm callbacks can enforce them without re-hitting the DB.
-        league = _get_challenge_league_record(session, draft.get("league_key"))
+        league = _resolve_draft_league(session, draft)
         if league is not None:
             # Fall back to defaults only for missing/NULL values — an explicit 0
             # (e.g. "no overseas allowed") is a real cap and must be preserved.
