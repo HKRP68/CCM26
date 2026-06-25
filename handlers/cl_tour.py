@@ -26,10 +26,12 @@ import html
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import User, CLTour, CLTourMatch, ChallengeLeague, ChallengeTeam
+from models import (
+    User, CLTour, ChallengeLeague, ChallengeTeam, ChallengePlayer)
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from handlers.match import _mention
 from services.cl_tour_service import (
@@ -286,6 +288,36 @@ async def cltset_guestteam_callback(update: Update, context: ContextTypes.DEFAUL
         session.close()
 
 
+def _team_xi_issue(session, team_id, team_label, min_overseas, max_overseas):
+    """Return a human-readable reason this team can't field a legal XI, else None.
+
+    A CL-tour locks both players (``is_user_in_active_cl_tour``) until it ends,
+    so a fixed team that can never satisfy the XI rules would otherwise leave the
+    pair stuck — every Play attempt would fail at XI selection. Validating the
+    roster up front (mirroring ``_challenge_xi_validation``'s rules at the roster
+    level) keeps such a tour from ever being created.
+    """
+    from handlers.challenge import (
+        _challenge_is_wicket_keeper, _challenge_is_bowling_option,
+        _challenge_is_overseas)
+    players = (session.query(ChallengePlayer)
+               .filter(ChallengePlayer.team_id == team_id).all())
+    if len(players) < 11:
+        return f"{team_label} needs at least 11 players (has {len(players)})."
+    if not any(_challenge_is_wicket_keeper(p) for p in players):
+        return f"{team_label} has no wicket-keeper — can't field a legal XI."
+    if sum(1 for p in players if _challenge_is_bowling_option(p)) < 5:
+        return f"{team_label} needs at least 5 bowling options (bowlers/all-rounders)."
+    overseas = sum(1 for p in players if _challenge_is_overseas(p))
+    domestic = len(players) - overseas
+    # The overseas count achievable in any 11-man XI is bounded by
+    # [max(0, 11 - domestic), min(11, overseas)]; it must overlap the league cap.
+    if max(0, 11 - domestic) > max_overseas or min(11, overseas) < min_overseas:
+        return (f"{team_label} can't satisfy the league's overseas rule "
+                f"(min {min_overseas} / max {max_overseas}).")
+    return None
+
+
 async def cltset_count_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cltset_n_<host_tg>_<count> — create the tour and post the invite."""
     q = update.callback_query
@@ -307,6 +339,20 @@ async def cltset_count_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     session = get_session()
     try:
+        # Refuse to create a tour with a team that can never field a legal XI —
+        # otherwise both players would be locked in an unplayable active tour.
+        league = session.query(ChallengeLeague).get(draft["league_id"])
+        min_raw = getattr(league, "min_overseas", None) if league else None
+        max_raw = getattr(league, "max_overseas", None) if league else None
+        min_ov = int(min_raw) if min_raw is not None else 0
+        max_ov = int(max_raw) if max_raw is not None else 11
+        for team_id, label in ((draft["host_team_id"], draft["host_team_name"]),
+                               (draft["guest_team_id"], draft["guest_team_name"])):
+            issue = _team_xi_issue(session, team_id, label, min_ov, max_ov)
+            if issue:
+                await q.answer(issue, show_alert=True)
+                return
+
         tour, err = create_cl_tour(
             session,
             host_id=draft["host_uid"], guest_id=draft["guest_uid"],
@@ -368,8 +414,8 @@ async def cltset_cancel_callback(update: Update, context: ContextTypes.DEFAULT_T
     await q.answer("Cancelled")
     try:
         await q.edit_message_text("❌ CL Tour setup cancelled.")
-    except Exception:
-        pass
+    except TelegramError:
+        logger.debug("Failed to edit CL tour setup-cancelled message", exc_info=True)
 
 
 def _team_rows(teams, prefix):
@@ -396,8 +442,8 @@ async def _cltour_invite_auto_expire(ctx):
             try:
                 await ctx.bot.send_message(ctx.job.data["chat_id"],
                                            "⏰ CL Tour invite expired.")
-            except Exception:
-                pass
+            except TelegramError:
+                logger.debug("Failed to send CL tour invite-expired message", exc_info=True)
     except Exception:
         session.rollback()
     finally:
@@ -442,8 +488,8 @@ async def cltour_accept_callback(update: Update, context: ContextTypes.DEFAULT_T
                 "✅ <b>CL TOUR ACCEPTED!</b>\n\n" + text + "\n\n"
                 "<i>Either player can run /cltour to play the next match.</i>",
                 parse_mode="HTML")
-        except Exception:
-            pass
+        except TelegramError:
+            logger.debug("Failed to edit CL tour accepted message", exc_info=True)
     except Exception:
         session.rollback()
         logger.exception("cltour_accept_callback err")
@@ -478,8 +524,8 @@ async def cltour_decline_callback(update: Update, context: ContextTypes.DEFAULT_
         session.commit()
         try:
             await q.edit_message_text("❌ CL Tour declined.")
-        except Exception:
-            pass
+        except TelegramError:
+            logger.debug("Failed to edit CL tour declined message", exc_info=True)
     except Exception:
         session.rollback()
         logger.exception("cltour_decline_callback err")
@@ -616,8 +662,8 @@ async def cltour_play_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await q.edit_message_text(
                     "❌ <b>CL Tour cancelled</b> — its league or team data was "
                     "removed by an admin.", parse_mode="HTML")
-            except Exception:
-                pass
+            except TelegramError:
+                logger.debug("Failed to edit CL tour data-removed message", exc_info=True)
             return
         if not (host and guest):
             await q.answer("Tour data missing", show_alert=True)
@@ -640,13 +686,13 @@ async def cltour_play_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if not ok and err:
             try:
                 await context.bot.send_message(q.message.chat_id, err, parse_mode="HTML")
-            except Exception:
-                pass
+            except TelegramError:
+                logger.debug("Failed to send CL tour launch-error message", exc_info=True)
     except Exception:
         logger.exception("cltour_play_callback err")
         try:
             await context.bot.send_message(q.message.chat_id, "⚠️ Error starting match.")
-        except Exception:
-            pass
+        except TelegramError:
+            logger.debug("Failed to send CL tour generic-error message", exc_info=True)
     finally:
         session.close()

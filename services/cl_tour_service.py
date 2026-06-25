@@ -168,12 +168,20 @@ def get_cl_tour_matches(session, tour_id):
 
 
 def next_pending_match(session, tour_id):
-    """The next sequential match still to be played, or None."""
-    return (session.query(CLTourMatch)
-            .filter(CLTourMatch.cl_tour_id == tour_id,
-                    CLTourMatch.status == "pending")
+    """The next sequential match still to be played, or None.
+
+    Returns None while any match in the series is already ``playing`` — a
+    best-of series runs strictly one match at a time. Otherwise two matches
+    could be launched concurrently, and a result that clinches the series could
+    mark an already-live later slot ``done`` while its real Match keeps running.
+    """
+    rows = (session.query(CLTourMatch)
+            .filter(CLTourMatch.cl_tour_id == tour_id)
             .order_by(CLTourMatch.match_number)
-            .first())
+            .all())
+    if any(tm.status == "playing" for tm in rows):
+        return None
+    return next((tm for tm in rows if tm.status == "pending"), None)
 
 
 def link_match_to_cl_tour(session, cl_tour_match_id, match_id):
