@@ -220,6 +220,36 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             context.bot_data.get(challenge._challenge_draft_chat_key(-100)), draft_id)
 
+    async def test_draft_pins_league_id_from_resolved_record(self):
+        # Regression: a /cipl draft must pin the resolved league's id so the XI
+        # step resolves the *same* league whose teams populated the picker. Without
+        # this the XI callback re-resolves by league_key alone and can land on a
+        # different active league sharing the key — whose id has no matching team —
+        # producing a spurious "No players are configured" alert.
+        reply_user = SimpleNamespace(id=2, is_bot=False)
+        message = DummyMessage("/cipl", reply_user=reply_user)
+        update = SimpleNamespace(
+            effective_message=message,
+            message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        host = SimpleNamespace(id=10, telegram_id=1)
+        target = SimpleNamespace(id=20, telegram_id=2)
+        context = SimpleNamespace(bot_data={})
+        league_record = SimpleNamespace(
+            id=77, name="IPL", short_code="IPL", image_url=None)
+
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "sync_telegram_user", side_effect=[target, host]), \
+             patch.object(challenge, "_get_challenge_league_record", return_value=league_record), \
+             patch.object(challenge, "_league_teams", return_value=list(challenge.IPL_TEAM_NAMES)):
+            await challenge.challenge_league_handler(update, context)
+
+        draft = next(v for k, v in context.bot_data.items()
+                     if k.startswith("challenge_team_draft_"))
+        self.assertEqual(draft.get("league_id"), 77)
+
     async def test_second_league_command_blocked_while_draft_in_progress(self):
         reply_user = SimpleNamespace(id=3, is_bot=False)
         message = DummyMessage("/cipl", reply_user=reply_user)

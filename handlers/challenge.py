@@ -1233,6 +1233,13 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     # Lock this chat to the new draft so a concurrent league challenge is refused.
     context.bot_data[_challenge_draft_chat_key(update.effective_chat.id)] = draft_id
     draft = context.bot_data[_challenge_team_draft_key(draft_id)]
+    # Pin the league by id (mirrors the CL-tour path) so roster/team resolution at
+    # XI-selection time uses the exact league whose teams populated this picker.
+    # Without this the XI step re-resolves the league from league_key alone, which
+    # can land on a different active league sharing the same key/command — whose id
+    # has no matching team — yielding a spurious "No players are configured" alert.
+    if league_record is not None:
+        draft["league_id"] = league_record.id
     caption = _team_picker_prompt(draft, "host")
     markup = _team_keyboard(draft_id, teams, team_codes=team_codes)
     image_url = _league_image_url(league_record)
