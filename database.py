@@ -62,6 +62,7 @@ def init_db():
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer, UserTeamLastXI,
+        CLTour, CLTourMatch,
         Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,

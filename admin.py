@@ -12104,6 +12104,71 @@ def admin_challenge_league_detail(league_id):
                         db.flush()
                         log_admin(db, "challenge_team_add", "challenge_team", team.id, team.name)
                         flash(f"✅ Added team {team.name}.", "success")
+                elif action == "copy_teams":
+                    # "Add Current Teams" — duplicate teams (with all their players)
+                    # from another league into this one. Existing team names are
+                    # skipped (the (league_id, name) unique constraint).
+                    selected_ids = [int(tid) for tid in request.form.getlist("source_team_ids") if str(tid).isdigit()]
+                    existing_names = {(t.name or "").strip().lower()
+                                      for t in db.query(ChallengeTeam.name).filter(ChallengeTeam.league_id == league.id).all()}
+                    max_sort = db.query(func.max(ChallengeTeam.sort_order)).filter(ChallengeTeam.league_id == league.id).scalar() or 0
+                    copied_teams = 0
+                    copied_players = 0
+                    skipped = 0
+                    sources = (db.query(ChallengeTeam)
+                                 .filter(ChallengeTeam.id.in_(selected_ids),
+                                         ChallengeTeam.league_id != league.id)
+                                 .all()) if selected_ids else []
+                    for src in sources:
+                        if (src.name or "").strip().lower() in existing_names:
+                            skipped += 1
+                            continue
+                        max_sort += 1
+                        new_team = ChallengeTeam(
+                            league_id=league.id,
+                            name=(src.name or "")[:120],
+                            short_name=src.short_name,
+                            logo_url=src.logo_url,
+                            primary_color=src.primary_color,
+                            secondary_color=src.secondary_color,
+                            sort_order=max_sort,
+                            is_active=True,
+                        )
+                        db.add(new_team)
+                        db.flush()
+                        existing_names.add((new_team.name or "").strip().lower())
+                        copied_teams += 1
+                        # Copy the source team's players, re-evaluating overseas
+                        # against the target league when the master player exists.
+                        src_players = (db.query(ChallengePlayer)
+                                         .filter(ChallengePlayer.team_id == src.id)
+                                         .order_by(ChallengePlayer.sort_order)
+                                         .all())
+                        for sp in src_players:
+                            overseas = sp.is_overseas
+                            details = sp.details_json
+                            if sp.source_player_id:
+                                master = db.query(Player).get(sp.source_player_id)
+                                if master:
+                                    overseas = _is_overseas_for_league(master, league)
+                                    details = _challenge_player_details_from_source(master, overseas)
+                            db.add(ChallengePlayer(
+                                team_id=new_team.id,
+                                source_player_id=sp.source_player_id,
+                                name=(sp.name or "")[:150],
+                                details_json=details,
+                                is_overseas=overseas,
+                                sort_order=sp.sort_order,
+                            ))
+                            copied_players += 1
+                        log_admin(db, "challenge_team_copy", "challenge_team", new_team.id, new_team.name)
+                    if copied_teams:
+                        flash(f"✅ Copied {copied_teams} team(s) with {copied_players} player(s)."
+                              + (f" Skipped {skipped} already present." if skipped else ""), "success")
+                    elif skipped:
+                        flash(f"All {skipped} selected team(s) already exist in this league.", "info")
+                    else:
+                        flash("No teams selected to copy.", "error")
                 elif action in {"save_team", "toggle_team", "delete_team"}:
                     team = _get_team_or_404(db, league.id, _int_form("team_id"))
                     if team:
@@ -12140,11 +12205,25 @@ def admin_challenge_league_detail(league_id):
                    .order_by(ChallengeTeam.sort_order, ChallengeTeam.name)
                    .all())
         _hydrate_team_counts(teams)
+        # Candidate teams from every OTHER league, for the "Add Current Teams"
+        # multi-select. Annotate each with its league name + player count for
+        # display, and whether a team of the same name already exists here.
+        existing_names = {(t.name or "").strip().lower() for t in teams}
+        other_teams = (db.query(ChallengeTeam)
+                         .filter(ChallengeTeam.league_id != league.id)
+                         .order_by(ChallengeTeam.league_id, ChallengeTeam.sort_order, ChallengeTeam.name)
+                         .all())
+        _hydrate_team_counts(other_teams)
+        league_names = {lg.id: lg.name for lg in db.query(ChallengeLeague).all()}
+        for t in other_teams:
+            t._league_name = league_names.get(t.league_id, "?")
+            t._already_here = (t.name or "").strip().lower() in existing_names
         return render_template(
             "admin_challenge_data.html",
             page="league",
             league=league,
             teams=teams,
+            other_teams=other_teams,
             total_leagues=1,
             total_teams=len(teams),
             total_players=sum(team._player_count for team in teams),

@@ -686,16 +686,27 @@ def _challenge_created_text(draft, session=None):
     target_code = _team_short_code(target_team, draft.get("league_key"), session)
     host_team_line = f"{_team_emoji(host_team)} <b>{host_team}</b> ({host_code})" if host_code else f"{_team_emoji(host_team)} <b>{host_team}</b>"
     target_team_line = f"{_team_emoji(target_team)} <b>{target_team}</b> ({target_code})" if target_code else f"{_team_emoji(target_team)} <b>{target_team}</b>"
-    return (
-        f"🏏 <b>{draft.get('league_name') or 'IPL'} Challenge Created!</b>\n"
-        f"👑 <b>Host:</b> {_mention(host.get('tg_id'), host.get('name') or 'User 1')}\n"
-        f"⚔️ <b>Guest:</b> {_mention(target.get('tg_id'), target.get('name') or 'User 2')}\n"
-        f"{host_team_line}\n"
-        "vs\n"
-        f"{target_team_line}\n"
-        "🔥 The battle is ready!\n\n"
-        "Now both players must select their Playing XI."
-    )
+    lines = [
+        f"🏏 <b>{(draft.get('league_name') or 'IPL').upper()} — CHALLENGE</b>",
+    ]
+    # CL Tour matches show their series position right under the title.
+    if draft.get("cl_tour_id"):
+        lines.append(
+            f"🏆 <i>CL Tour · Match {draft.get('cl_tour_match_no')}"
+            f"/{draft.get('cl_tour_match_count')}</i>")
+    lines.extend([
+        "═════════════════════════════",
+        f"👑 <b>Host:</b>  {_mention(host.get('tg_id'), host.get('name') or 'User 1')}",
+        f"    {host_team_line}",
+        "         ⚔️  <b>VS</b>  ⚔️",
+        f"⚔️ <b>Guest:</b> {_mention(target.get('tg_id'), target.get('name') or 'User 2')}",
+        f"    {target_team_line}",
+        "═════════════════════════════",
+        "🔥 <b>The battle is set!</b>",
+        "",
+        "🎽 Both captains — tap your team below to pick your <b>Playing XI</b>.",
+    ])
+    return "\n".join(lines)
 
 
 def _resolve_team_id(session, draft, side):
@@ -1244,6 +1255,101 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
 
     # Start the per-turn selection clock on the host (they pick their team first).
     await _arm_selection_timer(context, draft, [draft.get("host_tg_id")], "team")
+
+
+async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
+                              league_key, league_name, league_record,
+                              host_team, target_team, session,
+                              cl_tour_id, cl_tour_match_id, cl_tour_match_no,
+                              cl_tour_match_count):
+    """Open a Challenge League Tour match.
+
+    The league and both teams are fixed at tour-creation time, so this builds a
+    Challenge League draft that is already at the ``turn == "complete"`` state and
+    jumps straight to the host's pitch-selection step. From there the regular
+    /cipl flow (pitch → Playing XI → toss → over-by-over) runs unchanged. The
+    ``cl_tour_*`` tags ride the draft → match state so the result is recorded
+    back into the series (see handlers/cipl_play.py).
+
+    Returns (ok, error_message). On a guard failure ok is False and the caller
+    surfaces error_message.
+    """
+    # Same concurrency guards as a normal league challenge: one setup per chat,
+    # one live match per chat, one live match per player.
+    if _active_draft_in_chat(context.bot_data, chat_id) or _waiting_cm_lobby_in_chat(context.bot_data, chat_id):
+        return False, ("⚠️ A Challenge League team selection is already in progress "
+                       "in this chat. Finish, cancel, or deny it first.")
+    if session is not None:
+        chat_busy = _active_match_in_chat(session, chat_id) or _active_cric_match_in_chat(session, chat_id)
+        if chat_busy:
+            return False, _chat_busy_message(chat_busy)
+        if _active_match_for_user(session, host.id):
+            return False, _user_busy_message(_active_match_for_user(session, host.id))
+        if _active_match_for_user(session, target.id):
+            return False, (f"⚠️ {_user_label(target)} is already in an active match. "
+                           "They must finish it first.")
+
+    draft_id = random.randint(100000, 999999)
+    while context.bot_data.get(_challenge_team_draft_key(draft_id)):
+        draft_id = random.randint(100000, 999999)
+
+    teams = [host_team, target_team]
+    team_codes = {t: (_team_short_code(t, league_key, session) or t) for t in teams}
+    context.bot_data[_challenge_team_draft_key(draft_id)] = {
+        "draft_id": draft_id,
+        "chat_id": chat_id,
+        "host_user_id": host.id,
+        "host_tg_id": host.telegram_id,
+        "target_user_id": target.id,
+        "target_tg_id": target.telegram_id,
+        "league_key": league_key,
+        "league_name": league_name,
+        "is_tournament": False,
+        "tournament_id": None,
+        "teams": teams,
+        "team_codes": team_codes,
+        "turn": "complete",
+        "host_team": host_team,
+        "target_team": target_team,
+        "host": {"user_id": host.id, "tg_id": host.telegram_id, "name": _user_label(host)},
+        "target": {"user_id": target.id, "tg_id": target.telegram_id, "name": _user_label(target)},
+        # CL Tour wiring — threaded through to the live match state for result
+        # recording, and shown in the challenge-created recap.
+        "cl_tour_id": cl_tour_id,
+        "cl_tour_match_id": cl_tour_match_id,
+        "cl_tour_match_no": cl_tour_match_no,
+        "cl_tour_match_count": cl_tour_match_count,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    context.bot_data[_challenge_draft_chat_key(chat_id)] = draft_id
+    draft = context.bot_data[_challenge_team_draft_key(draft_id)]
+
+    # The teams are already set, so the next step is the host's pitch pick —
+    # exactly the message the normal flow posts once both teams are chosen.
+    sent = None
+    try:
+        sent = await message_obj.reply_text(
+            _pitch_prompt(draft), parse_mode="HTML",
+            reply_markup=_pitch_keyboard(draft_id))
+    except Exception:
+        logger.exception("Failed to send CL tour pitch prompt; releasing draft lock")
+        _release_draft_chat_lock(context.bot_data, draft)
+        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+        return False, "⚠️ Could not start the match. Try again."
+    _track_setup_msg(draft, sent)
+
+    try:
+        if context.job_queue:
+            context.job_queue.run_once(
+                _expire_challenge_draft, CHALLENGE_DRAFT_EXPIRE,
+                name=f"cl_draft_{draft_id}",
+                data={"draft_id": draft_id, "chat_id": chat_id,
+                      "message_id": sent.message_id})
+    except Exception:
+        logger.exception("Failed to schedule CL tour draft expiry")
+
+    await _arm_selection_timer(context, draft, [host.telegram_id], "pitch")
+    return True, None
 
 
 async def _start_challenge_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE,

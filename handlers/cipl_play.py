@@ -731,6 +731,14 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         session.add(match)
         session.commit()
         launch_committed = True
+        # CL Tour: bind this Match to its series slot (marks the slot 'playing').
+        if draft.get("cl_tour_match_id"):
+            try:
+                from services.cl_tour_service import link_match_to_cl_tour
+                link_match_to_cl_tour(session, draft["cl_tour_match_id"], match.id)
+                session.commit()
+            except Exception:
+                logger.exception("Failed to link CL tour match %s", draft.get("cl_tour_match_id"))
         # The live Match row now exists — only now does the chat belong to an
         # active match rather than to setup, so flip `match_launched` (the flag
         # the draft expiry job keys off) here, not before the commit.
@@ -813,6 +821,9 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["tournament_id"] = draft.get("tournament_id")
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
         state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
+        # Carry CL Tour identity so the series score updates when the match ends.
+        state["cl_tour_id"] = draft.get("cl_tour_id")
+        state["cl_tour_match_id"] = draft.get("cl_tour_match_id")
     await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
@@ -1562,6 +1573,17 @@ async def _complete_match(context, mid, state):
                     tournament_service.record_tournament_match(session, state)
             except Exception:
                 logger.exception("tournament match recording failed for %s", mid)
+
+            # Record the CL Tour series result. Ties reaching here (not resolved
+            # by a Super Over) leave the match replayable — record_cl_match_result
+            # treats a None winner as a no-op.
+            try:
+                if state.get("cl_tour_match_id") and not result["tie"]:
+                    from services.cl_tour_service import record_cl_match_result
+                    record_cl_match_result(
+                        session, state["cl_tour_match_id"], match.winner_id)
+            except Exception:
+                logger.exception("CL tour result recording failed for %s", mid)
 
             session.commit()
         except Exception:

@@ -173,6 +173,32 @@
     </form>
   </section>
 
+  <section class="cm-card">
+    <h3 style="margin-top:0;">Add Current Teams</h3>
+    <p style="color:var(--muted);margin-top:0;">Copy existing teams (with all their players) from another league into <strong>{{ league.name }}</strong>. Teams already present here are disabled.</p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="copy_teams">
+      <div class="player-toolbar">
+        <strong>{{ other_teams|length }} team(s) available</strong>
+        <button class="btn btn-primary" type="submit">Copy Selected Teams</button>
+      </div>
+      <div class="player-list">
+        {% for t in other_teams %}
+        <label class="player-option {{ 'disabled' if t._already_here else '' }}">
+          <input type="checkbox" name="source_team_ids" value="{{ t.id }}" {{ 'disabled' if t._already_here else '' }}>
+          <span><strong>{{ t.name }}</strong> {{ t.short_name or '' }}</span>
+          <span style="color:var(--muted);">{{ t._league_name }}</span>
+          <span style="color:var(--muted);">{{ t._player_count }} players</span>
+          <span>{{ '✓ already here' if t._already_here else '' }}</span>
+        </label>
+        {% else %}
+        <div class="empty-state">No teams in other leagues yet.</div>
+        {% endfor %}
+      </div>
+    </form>
+  </section>
+
   <section class="cm-grid">
     {% for team in teams %}
     <article class="cm-card cm-row">
