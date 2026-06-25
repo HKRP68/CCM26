@@ -525,7 +525,7 @@ def _render_cl_tour_view(session, tour, viewer_tg):
     lines = [
         f"🏆 <b>CL TOUR — {_esc(league.name) if league else ''}</b>",
         f"👑 {_u_label(u1)} <b>{_esc(host_team.name) if host_team else ''}</b>"
-        f"  📊 <b>{tour.user1_wins}–{tour.user2_wins}</b>  "
+        f"  📊 <b>{tour.user1_wins}-{tour.user2_wins}</b>  "
         f"<b>{_esc(guest_team.name) if guest_team else ''}</b> {_u_label(u2)} ⚔️",
         f"<i>Best of {tour.match_count}</i>",
         "━━━━━━━━━━━━━━━━━━━",

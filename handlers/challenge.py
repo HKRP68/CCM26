@@ -1306,6 +1306,20 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
         if _active_match_for_user(session, target.id):
             return False, (f"⚠️ {_user_label(target)} is already in an active match. "
                            "They must finish it first.")
+        # Also block a live Mini-App cric match for either player (DB-backed).
+        if _active_cric_match_for_user(session, host.id):
+            return False, "⚠️ You already have an active match — finish it first."
+        if _active_cric_match_for_user(session, target.id):
+            return False, (f"⚠️ {_user_label(target)} already has an active match — "
+                           "they must finish it first.")
+    # Block if either player is tied up in an in-memory lobby (a /wpm cric lobby
+    # or a /cm lobby) that hasn't produced a Match row yet — otherwise the second
+    # flow to launch is only rejected later at toss, stranding this setup.
+    if _cric_lobby_for_user(context.bot_data, host.id) or _cm_user_lobby(context.bot_data, host.id):
+        return False, "⚠️ You already have a waiting match lobby — finish it first."
+    if _cric_lobby_for_user(context.bot_data, target.id) or _cm_user_lobby(context.bot_data, target.id):
+        return False, (f"⚠️ {_user_label(target)} already has a waiting match lobby — "
+                       "they must finish it first.")
 
     draft_id = random.randint(100000, 999999)
     while context.bot_data.get(_challenge_team_draft_key(draft_id)):
@@ -1352,8 +1366,12 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
         # resolves correctly (see _resolve_draft_league).
         draft["league_id"] = league_record.id
         draft["ball_format"] = getattr(league_record, "match_format", "T20") or "T20"
-        draft["overseas_min"] = int(getattr(league_record, "min_overseas", 0) or 0)
-        draft["overseas_max"] = int(getattr(league_record, "max_overseas", 11) or 11)
+        # Default only when the value is actually absent — an explicit 0 cap
+        # ("no overseas allowed") must be preserved (matches the XI callback).
+        min_raw = getattr(league_record, "min_overseas", None)
+        max_raw = getattr(league_record, "max_overseas", None)
+        draft["overseas_min"] = int(min_raw) if min_raw is not None else 0
+        draft["overseas_max"] = int(max_raw) if max_raw is not None else 11
 
     # The teams are already set, so the next step is the host's pitch pick —
     # exactly the message the normal flow posts once both teams are chosen. Send

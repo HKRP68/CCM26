@@ -1103,9 +1103,13 @@ class CLTour(Base):
     user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # guest
     chat_id = Column(BigInteger, nullable=True)  # group chat where tour was created
 
-    league_id = Column(Integer, ForeignKey("challenge_leagues.id"), nullable=False)
-    host_team_id = Column(Integer, ForeignKey("challenge_teams.id"), nullable=False)
-    guest_team_id = Column(Integer, ForeignKey("challenge_teams.id"), nullable=False)
+    # SET NULL on delete (and nullable) so admins can still delete a retired
+    # league/team that an old CL tour referenced — the tour's win record and
+    # per-match results survive; the view already tolerates missing names. The
+    # service requires these at creation, so live tours always have them set.
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"), nullable=True)
+    host_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"), nullable=True)
+    guest_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"), nullable=True)
 
     match_count = Column(Integer, nullable=False)  # 3, 5, or 7
 

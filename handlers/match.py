@@ -1850,17 +1850,24 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
                          f"Opponent ended match #{mid} ({balls} balls): +{charged_coins} coins, +{charged_gems} gems",
                          coins_change=charged_coins, gems_change=charged_gems)
         if m:
+            was_active = m.status in ACTIVE_MATCH_STATUSES
             m.status = "completed"
             m.completed_at = datetime.utcnow()
             # If this was a Challenge League Tour match, reset its series slot to
             # pending so the tour stays playable (an early /endmatch records no
-            # winner). No-op for non-tour matches.
+            # winner). Gate on the match having been active and the slot still
+            # 'playing' so a stale confirmation can't revert a finished slot.
             try:
                 from models import CLTourMatch
-                (session.query(CLTourMatch)
-                 .filter(CLTourMatch.match_id == mid)
-                 .update({CLTourMatch.match_id: None, CLTourMatch.status: "pending"},
-                         synchronize_session=False))
+                if was_active:
+                    (session.query(CLTourMatch)
+                     .filter(CLTourMatch.match_id == mid,
+                             CLTourMatch.status == "playing")
+                     .update({CLTourMatch.match_id: None,
+                              CLTourMatch.status: "pending",
+                              CLTourMatch.winner_id: None,
+                              CLTourMatch.completed_at: None},
+                             synchronize_session=False))
             except Exception:
                 logger.exception("endmatch: CL-tour-match reset failed (non-fatal)")
         session.commit()
@@ -2128,8 +2135,12 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 from models import CLTourMatch
                 (session.query(CLTourMatch)
-                 .filter(CLTourMatch.match_id.in_(removed_ids))
-                 .update({CLTourMatch.match_id: None, CLTourMatch.status: "pending"},
+                 .filter(CLTourMatch.match_id.in_(removed_ids),
+                         CLTourMatch.status == "playing")
+                 .update({CLTourMatch.match_id: None,
+                          CLTourMatch.status: "pending",
+                          CLTourMatch.winner_id: None,
+                          CLTourMatch.completed_at: None},
                          synchronize_session=False))
             except Exception:
                 logger.exception("removematch: CL-tour-match reset failed (non-fatal)")

@@ -435,7 +435,10 @@ async def _forfeit_live_match(context, mid, state, expected):
         if isinstance(state, dict) and state.get("cl_tour_match_id") and win_uid:
             try:
                 from services.cl_tour_service import record_cl_match_result
-                record_cl_match_result(session, state["cl_tour_match_id"], win_uid)
+                # Savepoint-isolate this best-effort write: if its flush fails it
+                # must not leave the session inactive and break the main commit.
+                with session.begin_nested():
+                    record_cl_match_result(session, state["cl_tour_match_id"], win_uid)
             except Exception:
                 logger.exception("CL tour forfeit recording failed for %s", mid)
         idle_user = session.query(User).get(idle_uid) if idle_uid else None
@@ -1591,8 +1594,11 @@ async def _complete_match(context, mid, state):
                 if state.get("cl_tour_match_id"):
                     from services.cl_tour_service import record_cl_match_result
                     winner_for_tour = None if result["tie"] else match.winner_id
-                    record_cl_match_result(
-                        session, state["cl_tour_match_id"], winner_for_tour)
+                    # Savepoint-isolate: a flush failure here must not poison the
+                    # main finalization commit below.
+                    with session.begin_nested():
+                        record_cl_match_result(
+                            session, state["cl_tour_match_id"], winner_for_tour)
             except Exception:
                 logger.exception("CL tour result recording failed for %s", mid)
 
