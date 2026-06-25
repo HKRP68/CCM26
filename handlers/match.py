@@ -2003,6 +2003,30 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             m.winner_id = None
             m.loser_id = None
             cleared.append(m.id)
+        # Cleared matches end with no winner, so any tour slot linked to one can
+        # never finish normally — free it back to pending (mirrors removematch) so
+        # the series stays playable and both players aren't stuck in an active tour.
+        if cleared:
+            try:
+                from models import TourMatch
+                (session.query(TourMatch)
+                 .filter(TourMatch.match_id.in_(cleared))
+                 .update({TourMatch.match_id: None, TourMatch.status: "pending"},
+                         synchronize_session=False))
+            except Exception:
+                logger.exception("clearmatches: tour-match reset failed (non-fatal)")
+            try:
+                from models import CLTourMatch
+                (session.query(CLTourMatch)
+                 .filter(CLTourMatch.match_id.in_(cleared),
+                         CLTourMatch.status == "playing")
+                 .update({CLTourMatch.match_id: None,
+                          CLTourMatch.status: "pending",
+                          CLTourMatch.winner_id: None,
+                          CLTourMatch.completed_at: None},
+                         synchronize_session=False))
+            except Exception:
+                logger.exception("clearmatches: CL-tour-match reset failed (non-fatal)")
         session.commit()
     except Exception:
         session.rollback()

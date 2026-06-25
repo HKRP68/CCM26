@@ -288,33 +288,61 @@ async def cltset_guestteam_callback(update: Update, context: ContextTypes.DEFAUL
         session.close()
 
 
+def _can_field_legal_xi(players, min_overseas, max_overseas):
+    """True when some 11 of ``players`` satisfies *all* XI rules at once.
+
+    The rules interact — a keeper/bowler can also be overseas — so checking each
+    rule independently is unsound (e.g. a roster whose only 5 bowling options are
+    all overseas can't reach 5 bowlers within a low overseas cap). This is a small
+    reachable-state search over (selected, overseas, bowling capped at 5, keeper
+    0/1): branches that would exceed ``max_overseas`` are pruned, so the state
+    space stays ≲2k regardless of roster size. A reachable state with selected==11,
+    overseas in [min, max], bowling≥5 and a keeper means a legal XI exists.
+    """
+    from handlers.challenge import (
+        _challenge_is_wicket_keeper, _challenge_is_bowling_option,
+        _challenge_is_overseas)
+    # state = (selected, overseas, bowling_capped@5, has_keeper)
+    states = {(0, 0, 0, 0)}
+    for p in players:
+        k = 1 if _challenge_is_wicket_keeper(p) else 0
+        b = 1 if _challenge_is_bowling_option(p) else 0
+        o = 1 if _challenge_is_overseas(p) else 0
+        nxt = set(states)
+        for sel, ov, bw, kp in states:
+            if sel >= 11 or ov + o > max_overseas:
+                continue  # taking this player can't lead anywhere legal
+            nxt.add((sel + 1, ov + o, min(5, bw + b), kp or k))
+        states = nxt
+    return any(sel == 11 and min_overseas <= ov <= max_overseas and bw >= 5 and kp
+               for sel, ov, bw, kp in states)
+
+
 def _team_xi_issue(session, team_id, team_label, min_overseas, max_overseas):
     """Return a human-readable reason this team can't field a legal XI, else None.
 
     A CL-tour locks both players (``is_user_in_active_cl_tour``) until it ends,
     so a fixed team that can never satisfy the XI rules would otherwise leave the
     pair stuck — every Play attempt would fail at XI selection. Validating the
-    roster up front (mirroring ``_challenge_xi_validation``'s rules at the roster
-    level) keeps such a tour from ever being created.
+    roster up front (mirroring ``_challenge_xi_validation``'s rules) keeps such a
+    tour from ever being created.
     """
     from handlers.challenge import (
-        _challenge_is_wicket_keeper, _challenge_is_bowling_option,
-        _challenge_is_overseas)
+        _challenge_is_wicket_keeper, _challenge_is_bowling_option)
     players = (session.query(ChallengePlayer)
                .filter(ChallengePlayer.team_id == team_id).all())
+    # Fast, specific rejects for the common cases (friendlier than the generic
+    # message below). These are necessary conditions; the DP enforces them jointly.
     if len(players) < 11:
         return f"{team_label} needs at least 11 players (has {len(players)})."
     if not any(_challenge_is_wicket_keeper(p) for p in players):
         return f"{team_label} has no wicket-keeper — can't field a legal XI."
     if sum(1 for p in players if _challenge_is_bowling_option(p)) < 5:
         return f"{team_label} needs at least 5 bowling options (bowlers/all-rounders)."
-    overseas = sum(1 for p in players if _challenge_is_overseas(p))
-    domestic = len(players) - overseas
-    # The overseas count achievable in any 11-man XI is bounded by
-    # [max(0, 11 - domestic), min(11, overseas)]; it must overlap the league cap.
-    if max(0, 11 - domestic) > max_overseas or min(11, overseas) < min_overseas:
-        return (f"{team_label} can't satisfy the league's overseas rule "
-                f"(min {min_overseas} / max {max_overseas}).")
+    # Joint feasibility: the rules above plus the league's overseas cap, together.
+    if not _can_field_legal_xi(players, min_overseas, max_overseas):
+        return (f"{team_label} can't field a legal XI under the league's rules "
+                f"together (overseas min {min_overseas} / max {max_overseas}).")
     return None
 
 

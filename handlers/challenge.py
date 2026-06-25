@@ -467,11 +467,13 @@ _PITCH_DESC = {
 }
 
 
-def _pitch_keyboard(draft_id):
+def _pitch_keyboard(draft_id, allow_deny=True):
     """Pitch-selection keyboard: host picks a surface, guest may Deny the match.
 
     Two surfaces per row, with a guest-only Deny Match button on its own row at
-    the bottom. challenge.py validates the clicker for each button.
+    the bottom. challenge.py validates the clicker for each button. Pass
+    ``allow_deny=False`` for CL-tour matches: the series is already agreed, so
+    there is nothing to deny and the deny handler wouldn't free the tour slot.
     """
     rows, row = [], []
     for idx, pitch in enumerate(PITCH_TYPES):
@@ -482,8 +484,9 @@ def _pitch_keyboard(draft_id):
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(
-        "❌ Deny Match", callback_data=f"cl_denymatch_{draft_id}")])
+    if allow_deny:
+        rows.append([InlineKeyboardButton(
+            "❌ Deny Match", callback_data=f"cl_denymatch_{draft_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1381,7 +1384,7 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     try:
         sent = await context.bot.send_message(
             chat_id=chat_id, text=_pitch_prompt(draft), parse_mode="HTML",
-            reply_markup=_pitch_keyboard(draft_id))
+            reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
     except Exception:
         logger.exception("Failed to send CL tour pitch prompt; releasing draft lock")
         _release_draft_chat_lock(context.bot_data, draft)
