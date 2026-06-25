@@ -13,6 +13,8 @@ match flow, so writes catch and log rather than raise.
 import json
 import logging
 
+from sqlalchemy.exc import IntegrityError
+
 from database import get_session
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,27 @@ def save_last_xi(tg_id, team_id, player_ids):
             row.player_ids = payload
         session.commit()
         return True
+    except IntegrityError:
+        # A concurrent request inserted the (user_tg_id, team_id) row between our
+        # read and commit. Roll back, re-read the winner, and apply our payload so
+        # the newer XI isn't silently lost.
+        try:
+            session.rollback()
+            row = (session.query(UserTeamLastXI)
+                   .filter(UserTeamLastXI.user_tg_id == tg_id,
+                           UserTeamLastXI.team_id == team_id)
+                   .first())
+            if row is not None:
+                row.player_ids = payload
+                session.commit()
+                return True
+        except Exception:
+            logger.exception("Failed to save last XI (retry) for tg=%s team=%s", tg_id, team_id)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        return False
     except Exception:
         logger.exception("Failed to save last XI for tg=%s team=%s", tg_id, team_id)
         try:

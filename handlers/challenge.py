@@ -709,15 +709,39 @@ def _resolve_team_id(session, draft, side):
     if not team_name:
         return None
     try:
-        query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
         league = _get_challenge_league_record(session, draft.get("league_key"))
-        if league is not None:
-            query = query.filter(ChallengeTeam.league_id == league.id)
-        team = query.first()
+        if league is None:
+            # No resolvable league means we can't pin the team to one league;
+            # disable XI memory rather than risk a same-named team in another
+            # league and break per-team isolation.
+            return None
+        team = (session.query(ChallengeTeam)
+                .filter(ChallengeTeam.name == team_name,
+                        ChallengeTeam.league_id == league.id)
+                .first())
         return team.id if team else None
     except Exception:
         logger.exception("Failed to resolve challenge team id for XI memory")
         return None
+
+
+def _persist_last_xi(draft, side, tg_id, player_ids):
+    """Remember ``player_ids`` as ``tg_id``'s last confirmed XI for this team.
+
+    Best-effort — resolving the team or saving must never interrupt match flow.
+    Shared by the confirm path and post-confirm /change so a swap or reorder made
+    after confirming still updates the saved XI.
+    """
+    try:
+        session = get_session()
+        try:
+            team_id = _resolve_team_id(session, draft, side)
+        finally:
+            session.close()
+        if team_id:
+            save_last_xi(tg_id, team_id, player_ids)
+    except Exception:
+        logger.exception("Failed to persist last XI")
 
 
 def _valid_saved_subset(saved_ids, players):
@@ -2354,16 +2378,7 @@ async def _finalize_xi_confirm(context, query, draft, draft_id, side, team_name,
 
     # Remember this XI so next time the same team is picked it can be reused with
     # one tap. Best-effort — a save failure must not interrupt the match flow.
-    try:
-        session = get_session()
-        try:
-            team_id = _resolve_team_id(session, draft, side)
-        finally:
-            session.close()
-        if team_id:
-            save_last_xi(query.from_user.id, team_id, selected_ids)
-    except Exception:
-        logger.exception("Failed to persist last XI on confirm")
+    _persist_last_xi(draft, side, query.from_user.id, selected_ids)
 
     # This side is done; keep waiting on the other side (or stop if both are in).
     if _challenge_xi_ready(draft):
@@ -2658,6 +2673,11 @@ async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT
     await _touch_selection_timer(context, draft)
     draft_id = draft.get("draft_id")
     confirmed = bool(selection.get("confirmed"))
+
+    # If the XI was already confirmed, keep the saved "last XI" in sync with this
+    # post-confirm edit so the next match reuses the swapped/reordered lineup.
+    if confirmed:
+        _persist_last_xi(draft, side, user.id, new_ids)
 
     # Edit the tracked XI message in place (no new message), falling back to a reply.
     edited = False

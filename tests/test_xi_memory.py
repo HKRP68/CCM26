@@ -7,12 +7,18 @@ import unittest
 
 
 class XiMemoryServiceTest(unittest.TestCase):
+    _MODULE_NAMES = ("database", "models", "config", "services.xi_memory_service")
+
     @classmethod
     def setUpClass(cls):
         # Other test modules stub database/models/config in the shared sys.modules
         # (no conftest isolates them); drop any such stubs so we import the real
         # SQLAlchemy-backed modules regardless of test ordering under discover.
-        for name in ("database", "models", "config", "services.xi_memory_service"):
+        # Save what we evict (and DATABASE_URL) so tearDownClass can restore the
+        # process-wide state and not strand later tests on our temp-bound modules.
+        cls._prev_database_url = os.environ.get("DATABASE_URL")
+        cls._saved_modules = {name: sys.modules.get(name) for name in cls._MODULE_NAMES}
+        for name in cls._MODULE_NAMES:
             sys.modules.pop(name, None)
 
         # Point the whole stack at an isolated temp SQLite file before importing
@@ -34,6 +40,22 @@ class XiMemoryServiceTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        # Dispose the temp-bound engine before unlinking, then restore the
+        # global env/module state we mutated in setUpClass so the temp DB and
+        # modules don't leak into later tests.
+        try:
+            cls.engine.dispose()
+        except Exception:
+            pass
+        if cls._prev_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = cls._prev_database_url
+        for name, module in cls._saved_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
         try:
             os.unlink(cls._tmp.name)
         except OSError:
