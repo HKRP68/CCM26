@@ -2,7 +2,8 @@
 
 from datetime import datetime, timedelta
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text
+    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text,
+    UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -1157,6 +1158,8 @@ class CLTourMatch(Base):
     completed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("cl_tour_id", "match_number",
+                         name="uq_cl_tour_matches_tour_match_number"),
         Index("ix_cl_tour_matches_tour", "cl_tour_id", "match_number"),
     )
 

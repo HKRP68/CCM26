@@ -1324,12 +1324,23 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     context.bot_data[_challenge_draft_chat_key(chat_id)] = draft_id
     draft = context.bot_data[_challenge_team_draft_key(draft_id)]
 
+    # Carry the league's format + overseas limits onto the draft up front so the
+    # match uses the league's real format (T20/The100) and XI rules — the normal
+    # /cipl flow sets these lazily when the XI picker opens, but pinning them here
+    # removes any reliance on that and the toss-time `ball_format` fallback.
+    if league_record is not None:
+        draft["ball_format"] = getattr(league_record, "match_format", "T20") or "T20"
+        draft["overseas_min"] = int(getattr(league_record, "min_overseas", 0) or 0)
+        draft["overseas_max"] = int(getattr(league_record, "max_overseas", 11) or 11)
+
     # The teams are already set, so the next step is the host's pitch pick —
-    # exactly the message the normal flow posts once both teams are chosen.
+    # exactly the message the normal flow posts once both teams are chosen. Send
+    # it to the tour chat (not wherever the Play button was tapped) so the whole
+    # setup + match runs in the group the tour belongs to.
     sent = None
     try:
-        sent = await message_obj.reply_text(
-            _pitch_prompt(draft), parse_mode="HTML",
+        sent = await context.bot.send_message(
+            chat_id=chat_id, text=_pitch_prompt(draft), parse_mode="HTML",
             reply_markup=_pitch_keyboard(draft_id))
     except Exception:
         logger.exception("Failed to send CL tour pitch prompt; releasing draft lock")

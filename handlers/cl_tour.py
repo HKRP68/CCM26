@@ -22,6 +22,7 @@ Callback patterns (owner/viewer telegram id embedded for gating across restarts)
   cltplay_<tour_id>_<match_no>_<viewer_tg> — play the next match in the series
 """
 
+import html
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -43,13 +44,21 @@ logger = logging.getLogger(__name__)
 _SETUP_KEY = "cltour_setup_{}"
 
 
+def _esc(value):
+    """HTML-escape a dynamic string for parse_mode='HTML' Telegram messages."""
+    return html.escape(str(value)) if value is not None else ""
+
+
 def _u_label(user):
+    """Display label for a user (@username or first name), HTML-escaped so a name
+    containing <, > or & can't break message delivery or inject formatting."""
     if not user:
         return "User"
-    return f"@{user.username}" if user.username else (user.first_name or "User")
+    return _esc(f"@{user.username}" if user.username else (user.first_name or "User"))
 
 
 def _active_leagues(session):
+    """Active Challenge Leagues, ordered for the league picker."""
     return (session.query(ChallengeLeague)
             .filter(ChallengeLeague.is_active == True)  # noqa: E712
             .order_by(ChallengeLeague.sort_order, ChallengeLeague.name)
@@ -57,6 +66,7 @@ def _active_leagues(session):
 
 
 def _league_teams(session, league_id):
+    """Active teams in a league, ordered for the team picker."""
     return (session.query(ChallengeTeam)
             .filter(ChallengeTeam.league_id == league_id,
                     ChallengeTeam.is_active == True)  # noqa: E712
@@ -69,6 +79,8 @@ def _league_teams(session, league_id):
 # ════════════════════════════════════════════════════════════════════
 
 async def cltour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cltour entry point: with a target user it starts tour creation; with no
+    target it shows the caller's active tour."""
     tg = update.effective_user
     session = get_session()
     try:
@@ -174,12 +186,12 @@ async def cltset_league_callback(update: Update, context: ContextTypes.DEFAULT_T
             await q.answer("This league needs at least 2 teams.", show_alert=True)
             return
         draft["league_id"] = league_id
-        draft["league_name"] = league.name
+        draft["league_name"] = _esc(league.name)
         await q.answer()
         rows = _team_rows(teams, f"cltset_ht_{host_tg}")
         rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cltset_x_{host_tg}")])
         await q.edit_message_text(
-            f"🏆 <b>NEW CL TOUR — {league.name}</b>\n"
+            f"🏆 <b>NEW CL TOUR — {_esc(league.name)}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👑 {draft['host_name']}, pick <b>your team</b>:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
@@ -211,7 +223,7 @@ async def cltset_hostteam_callback(update: Update, context: ContextTypes.DEFAULT
             return
         league = session.query(ChallengeLeague).get(draft["league_id"])
         draft["host_team_id"] = team_id
-        draft["host_team_name"] = team.name
+        draft["host_team_name"] = _esc(team.name)
         await q.answer(f"You picked {team.name}")
 
         teams = _league_teams(session, draft["league_id"])
@@ -223,7 +235,7 @@ async def cltset_hostteam_callback(update: Update, context: ContextTypes.DEFAULT
         await q.edit_message_text(
             f"🏆 <b>NEW CL TOUR — {draft['league_name']}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"👑 Host: {draft['host_name']} — <b>{team.name}</b>\n\n"
+            f"👑 Host: {draft['host_name']} — <b>{_esc(team.name)}</b>\n\n"
             f"⚔️ {draft['guest_name']}, pick <b>your team</b>:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
     finally:
@@ -257,7 +269,7 @@ async def cltset_guestteam_callback(update: Update, context: ContextTypes.DEFAUL
             await q.answer("That team is taken — pick another.", show_alert=True)
             return
         draft["guest_team_id"] = team_id
-        draft["guest_team_name"] = team.name
+        draft["guest_team_name"] = _esc(team.name)
         await q.answer(f"You picked {team.name}")
 
         rows = [[InlineKeyboardButton(str(n), callback_data=f"cltset_n_{host_tg}_{n}")
@@ -267,7 +279,7 @@ async def cltset_guestteam_callback(update: Update, context: ContextTypes.DEFAUL
             f"🏆 <b>NEW CL TOUR — {draft['league_name']}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👑 {draft['host_name']} — <b>{draft['host_team_name']}</b>\n"
-            f"⚔️ {draft['guest_name']} — <b>{team.name}</b>\n\n"
+            f"⚔️ {draft['guest_name']} — <b>{_esc(team.name)}</b>\n\n"
             f"👑 {draft['host_name']}, how many matches in the tour?",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
     finally:
@@ -375,6 +387,7 @@ def _team_rows(teams, prefix):
 
 
 async def _cltour_invite_auto_expire(ctx):
+    """JobQueue callback: expire a pending invite that was never answered in time."""
     session = get_session()
     try:
         tour = expire_pending_invite(session, ctx.job.data["tour_id"])
@@ -416,7 +429,10 @@ async def cltour_accept_callback(update: Update, context: ContextTypes.DEFAULT_T
         await q.answer()
         tour, err = accept_cl_tour(session, tour_id, u.id)
         if err:
-            session.rollback()
+            # accept_cl_tour may have flipped an overdue invite to 'expired' before
+            # returning the error — commit (not rollback) so that state persists and
+            # both users stop being blocked by the pending-tour guard.
+            session.commit()
             await q.edit_message_text(f"❌ {err}")
             return
         session.commit()
@@ -476,6 +492,7 @@ async def cltour_decline_callback(update: Update, context: ContextTypes.DEFAULT_
 # ════════════════════════════════════════════════════════════════════
 
 async def _show_my_tour(update, session, user):
+    """Reply with the caller's active tour view, or recent/empty-state guidance."""
     tour = get_active_cl_tour(session, user.id)
     if not tour:
         # Show the most recent finished tour, if any, else guidance.
@@ -506,10 +523,10 @@ def _render_cl_tour_view(session, tour, viewer_tg):
     matches = get_cl_tour_matches(session, tour.id)
 
     lines = [
-        f"🏆 <b>CL TOUR — {league.name if league else ''}</b>",
-        f"👑 {_u_label(u1)} <b>{host_team.name if host_team else ''}</b>"
+        f"🏆 <b>CL TOUR — {_esc(league.name) if league else ''}</b>",
+        f"👑 {_u_label(u1)} <b>{_esc(host_team.name) if host_team else ''}</b>"
         f"  📊 <b>{tour.user1_wins}–{tour.user2_wins}</b>  "
-        f"<b>{guest_team.name if guest_team else ''}</b> {_u_label(u2)} ⚔️",
+        f"<b>{_esc(guest_team.name) if guest_team else ''}</b> {_u_label(u2)} ⚔️",
         f"<i>Best of {tour.match_count}</i>",
         "━━━━━━━━━━━━━━━━━━━",
     ]

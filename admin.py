@@ -12148,7 +12148,7 @@ def admin_challenge_league_detail(league_id):
                             overseas = sp.is_overseas
                             details = sp.details_json
                             if sp.source_player_id:
-                                master = db.query(Player).get(sp.source_player_id)
+                                master = db.get(Player, sp.source_player_id)
                                 if master:
                                     overseas = _is_overseas_for_league(master, league)
                                     details = _challenge_player_details_from_source(master, overseas)
@@ -12209,8 +12209,12 @@ def admin_challenge_league_detail(league_id):
         # multi-select. Annotate each with its league name + player count for
         # display, and whether a team of the same name already exists here.
         existing_names = {(t.name or "").strip().lower() for t in teams}
+        # Eager-load players so _hydrate_team_counts (which reads team.players for
+        # each row) doesn't fire one query per team (N+1).
+        from sqlalchemy.orm import selectinload
         other_teams = (db.query(ChallengeTeam)
                          .filter(ChallengeTeam.league_id != league.id)
+                         .options(selectinload(ChallengeTeam.players))
                          .order_by(ChallengeTeam.league_id, ChallengeTeam.sort_order, ChallengeTeam.name)
                          .all())
         _hydrate_team_counts(other_teams)

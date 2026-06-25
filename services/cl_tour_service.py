@@ -23,14 +23,25 @@ ALLOWED_MATCH_COUNTS = [3, 5, 7]
 
 
 def is_user_in_active_cl_tour(session, user_id):
-    """Return the user's active or pending CL tour (CLTour|None).
+    """Return the user's active or *live* pending CL tour (CLTour|None).
 
-    Both states block the user from starting another CL tour.
+    Active tours always block. A pending invite blocks only while it hasn't
+    timed out — an overdue pending invite (its JobQueue expiry was lost on a
+    restart, say) is treated as not blocking so users can never be locked out of
+    starting a new tour. This self-heals without needing a startup sweep.
     """
-    return (session.query(CLTour)
-            .filter(or_(CLTour.user1_id == user_id, CLTour.user2_id == user_id),
-                    CLTour.status.in_(["pending", "active"]))
-            .first())
+    now = datetime.utcnow()
+    candidates = (session.query(CLTour)
+                  .filter(or_(CLTour.user1_id == user_id, CLTour.user2_id == user_id),
+                          CLTour.status.in_(["pending", "active"]))
+                  .all())
+    for tour in candidates:
+        if tour.status == "active":
+            return tour
+        # pending: only blocks if the invite window is still open
+        if tour.expires_at is None or tour.expires_at > now:
+            return tour
+    return None
 
 
 def create_cl_tour(session, host_id, guest_id, league_id, host_team_id,
@@ -196,7 +207,14 @@ def record_cl_match_result(session, cl_tour_match_id, winner_user_id):
         return tour
 
     if winner_user_id is None:
-        # Tie not resolved by Super Over — leave the match pending/replayable.
+        # Tie not resolved by a Super Over: the slot was marked 'playing' at
+        # launch, so reset it to a clean pending state or next_pending_match()
+        # never offers it again and the series stalls.
+        tm.match_id = None
+        tm.winner_id = None
+        tm.completed_at = None
+        tm.status = "pending"
+        session.flush()
         return tour
 
     tm.winner_id = winner_user_id
