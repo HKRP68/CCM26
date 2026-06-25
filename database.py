@@ -61,7 +61,7 @@ def init_db():
         MessageTemplate, Bowlout, BowloutBall,
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
-        ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
+        ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer, UserTeamLastXI,
         Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,

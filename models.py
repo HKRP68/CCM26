@@ -1732,6 +1732,29 @@ class ChallengePlayer(Base):
     )
 
 
+class UserTeamLastXI(Base):
+    """Remembers a user's last confirmed Playing XI for a single challenge team.
+
+    Keyed by Telegram id + ``team_id`` (a league-scoped ``ChallengeTeam.id``), so a
+    user accumulates one saved XI per team they have captained — independently across
+    leagues. Re-confirming the same team overwrites only that team's row, giving the
+    "last XI" semantics. ``player_ids`` is a JSON list of ``ChallengePlayer`` ids in
+    batting order.
+    """
+    __tablename__ = "user_team_last_xi"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_tg_id = Column(BigInteger, nullable=False, index=True)
+    team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    player_ids = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_user_team_last_xi_user_team", "user_tg_id", "team_id", unique=True),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # CHALLENGE LEAGUE TOURNAMENTS — admin-run structured competitions
 # ══════════════════════════════════════════════════════════════════════
