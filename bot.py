@@ -195,6 +195,14 @@ from handlers.tours import (
     mytours_stats_callback, mytours_back_callback,
 )
 
+# Challenge League Tours handlers
+from handlers.cl_tour import (
+    cltour_handler,
+    cltset_league_callback, cltset_hostteam_callback, cltset_guestteam_callback,
+    cltset_count_callback, cltset_cancel_callback,
+    cltour_accept_callback, cltour_decline_callback, cltour_play_callback,
+)
+
 # Achievements handlers
 from handlers.achievements import (
     achievements_handler,
@@ -330,6 +338,7 @@ BOT_MENU_COMMANDS = (
     ("openpack", "Open a pack from your inventory"),
     ("cmtours", "Create a tournament"),
     ("mytours", "View your tournaments"),
+    ("cltour", "Challenge League Tour — best-of series vs a friend"),
     ("vsbot", "Play a match against a bot"),
     ("wpmbot", "Play a bot in the Mini App"),
     ("myquest", "View and claim quest rewards"),
@@ -1075,6 +1084,19 @@ def main():
         app.add_handler(CallbackQueryHandler(mytours_info_callback, pattern=r"^mti_"))
         app.add_handler(CallbackQueryHandler(mytours_stats_callback, pattern=r"^mts_"))
         app.add_handler(CallbackQueryHandler(mytours_back_callback, pattern=r"^mtb_"))
+
+        # ── Challenge League Tours ─────────────────────────────────────
+        # /cltour with a target creates a tour; without one it shows your tour.
+        # Prefixes are distinct from the CIPL `cl_*` callbacks (these start `clt`).
+        app.add_handler(CommandHandler(["cltour", "cltours"], cltour_handler))
+        app.add_handler(CallbackQueryHandler(cltset_league_callback, pattern=r"^cltset_lg_"))
+        app.add_handler(CallbackQueryHandler(cltset_hostteam_callback, pattern=r"^cltset_ht_"))
+        app.add_handler(CallbackQueryHandler(cltset_guestteam_callback, pattern=r"^cltset_gt_"))
+        app.add_handler(CallbackQueryHandler(cltset_count_callback, pattern=r"^cltset_n_"))
+        app.add_handler(CallbackQueryHandler(cltset_cancel_callback, pattern=r"^cltset_x_"))
+        app.add_handler(CallbackQueryHandler(cltour_accept_callback, pattern=r"^clt_acc_"))
+        app.add_handler(CallbackQueryHandler(cltour_decline_callback, pattern=r"^clt_dec_"))
+        app.add_handler(CallbackQueryHandler(cltour_play_callback, pattern=r"^cltplay_"))
 
         # ── vsbot ────────────────────────────────────────────────────
         app.add_handler(CommandHandler(["vsbot", "vsb"], vsbot_handler))

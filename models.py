@@ -2,7 +2,8 @@
 
 from datetime import datetime, timedelta
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text
+    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text,
+    UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -1088,6 +1089,82 @@ class TourMatch(Base):
 
     __table_args__ = (
         Index("ix_tour_matches_tour", "tour_id", "match_number"),
+    )
+
+
+class CLTour(Base):
+    """A Challenge League Tour: a best-of series (3/5/7 matches) between two
+    users using fixed Challenge-League teams. Each match reuses the /cipl engine
+    (host picks pitch, both pick Playing XI, toss, over-by-over play)."""
+    __tablename__ = "cl_tours"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user1_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # host
+    user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # guest
+    chat_id = Column(BigInteger, nullable=True)  # group chat where tour was created
+
+    # SET NULL on delete (and nullable) so admins can still delete a retired
+    # league/team that an old CL tour referenced — the tour's win record and
+    # per-match results survive; the view already tolerates missing names. The
+    # service requires these at creation, so live tours always have them set.
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"), nullable=True)
+    host_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"), nullable=True)
+    guest_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"), nullable=True)
+
+    match_count = Column(Integer, nullable=False)  # 3, 5, or 7
+
+    # Status flow:
+    #   pending  → invite sent, awaiting guest's accept
+    #   active   → guest accepted; matches being played
+    #   completed→ a side clinched the series (or all matches played)
+    #   declined → guest explicitly declined
+    #   expired  → invite not accepted in time
+    status = Column(String(20), default="pending", index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    accepted_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)  # invite expiry
+    completed_at = Column(DateTime, nullable=True)
+
+    # Series score (denormalized)
+    user1_wins = Column(Integer, default=0)
+    user2_wins = Column(Integer, default=0)
+    winner_id = Column(Integer, nullable=True)  # null = ongoing OR drawn
+
+    user1 = relationship("User", foreign_keys=[user1_id])
+    user2 = relationship("User", foreign_keys=[user2_id])
+    league = relationship("ChallengeLeague")
+    host_team = relationship("ChallengeTeam", foreign_keys=[host_team_id])
+    guest_team = relationship("ChallengeTeam", foreign_keys=[guest_team_id])
+
+    __table_args__ = (
+        Index("ix_cl_tours_user1_status", "user1_id", "status"),
+        Index("ix_cl_tours_user2_status", "user2_id", "status"),
+    )
+
+
+class CLTourMatch(Base):
+    """A single match within a Challenge League Tour."""
+    __tablename__ = "cl_tour_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cl_tour_id = Column(Integer, ForeignKey("cl_tours.id"), nullable=False, index=True)
+    match_number = Column(Integer, nullable=False)  # 1, 2, 3, ...
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=True)  # null until played
+
+    # Status:
+    #   pending → not started yet
+    #   playing → a /cipl draft is live for this match
+    #   done    → match completed
+    status = Column(String(20), default="pending")
+
+    winner_id = Column(Integer, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("cl_tour_id", "match_number",
+                         name="uq_cl_tour_matches_tour_match_number"),
+        Index("ix_cl_tour_matches_tour", "cl_tour_id", "match_number"),
     )
 
 

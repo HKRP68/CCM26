@@ -3056,6 +3056,21 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
     except Exception:
         logger.exception("Tour-result hook (forfeit) failed (non-fatal)")
 
+    # CL Tour result hook — a forfeit from the Mini App still decides the match,
+    # so record it for the series too; otherwise the linked CLTourMatch stays
+    # 'playing' and the best-of series can never advance. Look the slot up by
+    # match_id so it works regardless of whether the live state carried the tag.
+    try:
+        from models import CLTourMatch
+        from services.cl_tour_service import record_cl_match_result
+        ctm = (session.query(CLTourMatch)
+               .filter(CLTourMatch.match_id == match_id,
+                       CLTourMatch.status == "playing").first())
+        if ctm is not None:
+            record_cl_match_result(session, ctm.id, winner_id)
+    except Exception:
+        logger.exception("CL-tour-result hook (forfeit) failed (non-fatal)")
+
     session.commit()
     try:
         from services.match_state_store import cleanup_state

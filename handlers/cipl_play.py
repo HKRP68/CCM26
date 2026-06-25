@@ -430,6 +430,17 @@ async def _forfeit_live_match(context, mid, state, expected):
             match.loser_id = idle_uid
             match.margin_type = "forfeit"
             match.margin_value = 0
+        # CL Tour: a forfeit decides the match, so record it for the series too
+        # (otherwise the slot stays 'playing' and the tour stalls).
+        if isinstance(state, dict) and state.get("cl_tour_match_id") and win_uid:
+            try:
+                from services.cl_tour_service import record_cl_match_result
+                # Savepoint-isolate this best-effort write: if its flush fails it
+                # must not leave the session inactive and break the main commit.
+                with session.begin_nested():
+                    record_cl_match_result(session, state["cl_tour_match_id"], win_uid)
+            except Exception:
+                logger.exception("CL tour forfeit recording failed for %s", mid)
         idle_user = session.query(User).get(idle_uid) if idle_uid else None
         win_user = session.query(User).get(win_uid) if win_uid else None
         if idle_user:
@@ -729,6 +740,15 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             tournament_id=tournament_id,
         )
         session.add(match)
+        # CL Tour: bind this Match to its series slot (marks the slot 'playing')
+        # in the SAME transaction as match creation — flush to get match.id, link,
+        # then commit once, so the Match and its tour slot can never diverge.
+        session.flush()
+        if draft.get("cl_tour_match_id"):
+            from services.cl_tour_service import link_match_to_cl_tour
+            if link_match_to_cl_tour(session, draft["cl_tour_match_id"], match.id) is None:
+                raise RuntimeError(
+                    f"CL tour match {draft['cl_tour_match_id']} not found")
         session.commit()
         launch_committed = True
         # The live Match row now exists — only now does the chat belong to an
@@ -813,6 +833,9 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["tournament_id"] = draft.get("tournament_id")
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
         state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
+        # Carry CL Tour identity so the series score updates when the match ends.
+        state["cl_tour_id"] = draft.get("cl_tour_id")
+        state["cl_tour_match_id"] = draft.get("cl_tour_match_id")
     await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
@@ -1562,6 +1585,22 @@ async def _complete_match(context, mid, state):
                     tournament_service.record_tournament_match(session, state)
             except Exception:
                 logger.exception("tournament match recording failed for %s", mid)
+
+            # Record the CL Tour series result. A tie reaching here means no Super
+            # Over ran (it would have returned earlier), so record None — which
+            # resets the slot to pending/replayable rather than leaving it stuck
+            # 'playing'. A decided match records the winner.
+            try:
+                if state.get("cl_tour_match_id"):
+                    from services.cl_tour_service import record_cl_match_result
+                    winner_for_tour = None if result["tie"] else match.winner_id
+                    # Savepoint-isolate: a flush failure here must not poison the
+                    # main finalization commit below.
+                    with session.begin_nested():
+                        record_cl_match_result(
+                            session, state["cl_tour_match_id"], winner_for_tour)
+            except Exception:
+                logger.exception("CL tour result recording failed for %s", mid)
 
             session.commit()
         except Exception:

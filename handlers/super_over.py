@@ -1205,6 +1205,21 @@ async def _finalize(context, mid, winner_uid, loser_uid):
                     result_text=f"{win['name']} won (Super Over)")
         except Exception:
             logger.exception("tournament Super Over recording failed (%s)", mid)
+        # Record the CL Tour series result — a Super Over decides a tied tour
+        # match, so the winner here is the series winner. The CL Tour tags live on
+        # the saved live state under "main_state" ("main" above is only the
+        # scoreline dict, which carries no cl_tour_match_id).
+        try:
+            cl_state = so.get("main_state") or {}
+            if cl_state.get("cl_tour_match_id"):
+                from services.cl_tour_service import record_cl_match_result
+                # Savepoint-isolate so a flush failure can't roll back the Super
+                # Over finalization committed just below.
+                with session.begin_nested():
+                    record_cl_match_result(
+                        session, cl_state["cl_tour_match_id"], winner_uid)
+        except Exception:
+            logger.exception("CL tour Super Over recording failed (%s)", mid)
         session.commit()
     except Exception:
         session.rollback()
