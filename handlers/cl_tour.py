@@ -593,17 +593,36 @@ async def cltour_play_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.answer("Play the matches in order.", show_alert=True)
             return
 
+        from handlers.challenge import (
+            launch_cl_tour_match, normalize_challenge_league)
         host = session.query(User).get(tour.user1_id)
         guest = session.query(User).get(tour.user2_id)
-        host_team = session.query(ChallengeTeam).get(tour.host_team_id)
-        guest_team = session.query(ChallengeTeam).get(tour.guest_team_id)
-        if not (host and guest and host_team and guest_team):
+        # FKs may be NULL after an admin deleted the league/team (ondelete SET
+        # NULL) — guard the lookups so we don't query on a NULL primary key.
+        host_team = session.query(ChallengeTeam).get(tour.host_team_id) if tour.host_team_id else None
+        guest_team = session.query(ChallengeTeam).get(tour.guest_team_id) if tour.guest_team_id else None
+        league = session.query(ChallengeLeague).get(tour.league_id) if tour.league_id else None
+        # If an admin deleted the league/team mid-tour, the SET NULL FKs leave the
+        # series unplayable. Retire the tour so both players are unblocked rather
+        # than leaving them stuck in a permanently-active tour they can't play.
+        if not (league and host_team and guest_team):
+            tour.status = "expired"
+            tour.completed_at = datetime.utcnow()
+            session.commit()
+            await q.answer(
+                "This tour's league or team data was removed — the tour has been "
+                "cancelled.", show_alert=True)
+            try:
+                await q.edit_message_text(
+                    "❌ <b>CL Tour cancelled</b> — its league or team data was "
+                    "removed by an admin.", parse_mode="HTML")
+            except Exception:
+                pass
+            return
+        if not (host and guest):
             await q.answer("Tour data missing", show_alert=True)
             return
 
-        from handlers.challenge import (
-            launch_cl_tour_match, normalize_challenge_league)
-        league = session.query(ChallengeLeague).get(tour.league_id)
         league_key = normalize_challenge_league(league.short_code or league.name) if league else None
         # Use the tour's actual league row (active or not) — a league deactivated
         # mid-tour must still resolve the correct league-scoped roster/format.
