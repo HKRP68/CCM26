@@ -14,6 +14,7 @@ from database import get_session
 from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
 from services.match_constants import MATCH_EXPIRE, PITCH_TYPES, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
+from services.xi_memory_service import load_last_xi, save_last_xi
 from handlers.match import (
     _active_cric_match_for_user,
     _active_cric_match_in_chat,
@@ -697,6 +698,38 @@ def _challenge_created_text(draft, session=None):
     )
 
 
+def _resolve_team_id(session, draft, side):
+    """Return the ChallengeTeam.id for ``side``'s team in this draft, or None.
+
+    League-scoped (filters by the draft's league), so the same team name in two
+    leagues maps to two distinct ids — the key used to remember a user's last XI
+    per team.
+    """
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    if not team_name:
+        return None
+    try:
+        query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
+        league = _get_challenge_league_record(session, draft.get("league_key"))
+        if league is not None:
+            query = query.filter(ChallengeTeam.league_id == league.id)
+        team = query.first()
+        return team.id if team else None
+    except Exception:
+        logger.exception("Failed to resolve challenge team id for XI memory")
+        return None
+
+
+def _valid_saved_subset(saved_ids, players):
+    """Saved player ids that still exist in the team's current roster, in saved
+    (batting) order. Drops any player removed since the XI was saved, so a stale
+    saved XI degrades gracefully instead of being discarded."""
+    if not saved_ids:
+        return []
+    current = {int(getattr(p, "id")) for p in players}
+    return [int(pid) for pid in saved_ids if int(pid) in current]
+
+
 def _challenge_team_players(session, draft, side):
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
     if not team_name:
@@ -980,12 +1013,21 @@ def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
     return _join_within_limit(lines)
 
 
-def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids):
+def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids,
+                                  saved_available=False, team_code=""):
     """Numbered name buttons (2/row), e.g. "1. Dhoni". A ✅ marks picked players;
     the button text carries the roster number + name, the callback carries
-    player_id so the toggle handler is unchanged. Confirm XI shows only at 11."""
+    player_id so the toggle handler is unchanged. Confirm XI shows only at 11.
+
+    When ``saved_available`` is set and nothing is picked yet, a one-tap
+    "⚡ Use my last {CODE} XI" button is shown on top — it loads (and, if fully
+    valid, instantly confirms) the user's last saved XI for this team."""
     selected_set = {int(pid) for pid in selected_ids}
     rows = []
+    if saved_available and not selected_ids:
+        label = f"⚡ Use my last {team_code} XI" if team_code else "⚡ Use my last XI"
+        rows.append([InlineKeyboardButton(
+            label, callback_data=f"cl_useprev_{draft_id}_{side}")])
     row = []
     for idx, player in enumerate(players, start=1):
         player_id = int(getattr(player, "id"))
@@ -2060,6 +2102,7 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     session = get_session()
     try:
         players = _challenge_team_players(session, draft, side)
+        team_id = _resolve_team_id(session, draft, side)
         # Cache the league overseas limits on the draft so the picker render and
         # confirm callbacks can enforce them without re-hitting the DB.
         league = _get_challenge_league_record(session, draft.get("league_key"))
@@ -2081,6 +2124,11 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     selection = _challenge_xi_selection(draft, side)
     selected_ids = selection.setdefault("player_ids", [])
+    # Surface the user's last saved XI for this team as a one-tap option. Only the
+    # players still on the roster are offered (stale picks are dropped).
+    saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
+    draft.setdefault("saved_xi", {})[side] = saved_subset
+    team_code = _team_short_code(team_name, draft.get("league_key"))
     draft.setdefault("xi_started", {})[side] = True
     await _touch_selection_timer(context, draft)
     await query.answer(f"Select your {team_name} Playing XI.")
@@ -2088,11 +2136,91 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         sent = await query.message.reply_text(
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
             parse_mode="HTML",
-            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
+            reply_markup=_challenge_xi_player_keyboard(
+                draft_id, side, players, selected_ids,
+                saved_available=bool(saved_subset), team_code=team_code),
         )
         _store_xi_message_ref(selection, sent)
     except Exception:
         logger.exception("Failed to send challenge XI player selection buttons")
+
+
+async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cl_useprev_{draft_id}_{side} — load this user's last saved XI for the team.
+
+    One tap: if the saved XI is still fully valid (all 11 on the roster, rules
+    pass) it is selected AND confirmed immediately. If it is partially stale, the
+    still-valid players are pre-checked and the user fills the remaining gaps.
+    """
+    query = update.callback_query
+    try:
+        _, _, draft_id, side = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid button.", show_alert=True)
+        return
+    if side not in ("host", "target"):
+        await query.answer("Invalid button.", show_alert=True)
+        return
+
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or draft.get("turn") != "complete":
+        await query.answer("This Playing XI selection is no longer active.", show_alert=True)
+        return
+    if query.from_user.id != (draft.get(side) or {}).get("tg_id"):
+        await query.answer("This XI selection is not for you.", show_alert=True)
+        return
+
+    selection = _challenge_xi_selection(draft, side)
+    if selection.get("confirmed"):
+        await query.answer("Your Playing XI is already confirmed.", show_alert=True)
+        return
+
+    team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
+    session = get_session()
+    try:
+        players = _challenge_team_players(session, draft, side)
+        team_id = _resolve_team_id(session, draft, side)
+    finally:
+        session.close()
+
+    # Prefer the subset cached when the picker opened; re-derive from the DB if
+    # the draft was rebuilt in between.
+    saved_subset = (draft.get("saved_xi") or {}).get(side)
+    if saved_subset is None:
+        saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
+    if not saved_subset:
+        await query.answer("No saved XI to load for this team yet.", show_alert=True)
+        return
+
+    player_map = {int(getattr(p, "id")): p for p in players}
+    selection["player_ids"] = list(saved_subset)
+    await _touch_selection_timer(context, draft)
+
+    # Fully valid saved XI → one-tap select + confirm.
+    if len(saved_subset) == 11:
+        selected_players = [player_map[pid] for pid in saved_subset if pid in player_map]
+        valid, _error = _challenge_xi_validation(selected_players, *_challenge_overseas_limits(draft))
+        if valid:
+            await query.answer("Loaded & confirmed your last XI!")
+            await _finalize_xi_confirm(context, query, draft, draft_id, side,
+                                       team_name, players, saved_subset)
+            return
+
+    # Partially valid (or rules changed) → pre-check what's valid, let them finish.
+    if len(saved_subset) == 11:
+        await query.answer("Loaded your last XI — review and Confirm.")
+    else:
+        await query.answer(f"Loaded {len(saved_subset)}/11 from your last XI — fill the rest.")
+    _store_xi_message_ref(selection, getattr(query, "message", None))
+    try:
+        await query.edit_message_text(
+            _challenge_xi_text(draft, side, team_name, players, saved_subset),
+            parse_mode="HTML",
+            reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, saved_subset),
+        )
+    except Exception:
+        logger.exception("Failed to render loaded last-XI selection message")
 
 
 async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2207,7 +2335,36 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         await query.answer(error, show_alert=True)
         return
 
+    await query.answer("Playing XI confirmed!")
+    await _finalize_xi_confirm(context, query, draft, draft_id, side, team_name,
+                               players, selected_ids)
+
+
+async def _finalize_xi_confirm(context, query, draft, draft_id, side, team_name,
+                               players, selected_ids):
+    """Mark a side's XI confirmed, persist it as the user's last XI for this team,
+    render the confirmed view, and post the match-ready message once both sides
+    are in. Shared by the Confirm button and the one-tap "Use last XI" button.
+
+    The caller must have already validated ``selected_ids`` (exactly 11, rules
+    pass) and answered the callback query.
+    """
+    selection = _challenge_xi_selection(draft, side)
     selection["confirmed"] = True
+
+    # Remember this XI so next time the same team is picked it can be reused with
+    # one tap. Best-effort — a save failure must not interrupt the match flow.
+    try:
+        session = get_session()
+        try:
+            team_id = _resolve_team_id(session, draft, side)
+        finally:
+            session.close()
+        if team_id:
+            save_last_xi(query.from_user.id, team_id, selected_ids)
+    except Exception:
+        logger.exception("Failed to persist last XI on confirm")
+
     # This side is done; keep waiting on the other side (or stop if both are in).
     if _challenge_xi_ready(draft):
         await _disarm_selection_timer(context, draft)
@@ -2215,7 +2372,6 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         other_tg = (draft.get("target_tg_id") if side == "host"
                     else draft.get("host_tg_id"))
         await _arm_selection_timer(context, draft, [other_tg], "xi")
-    await query.answer("Playing XI confirmed!")
     # Edit is still allowed until the match-ready message is posted (both sides in).
     edit_allowed = not _challenge_xi_ready(draft) and not draft.get("match_ready_sent")
     _store_xi_message_ref(selection, getattr(query, "message", None))
