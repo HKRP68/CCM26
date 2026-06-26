@@ -110,13 +110,17 @@ def _bowl_career_line(p):
 
 
 def _bowl_match_fig(state, p):
-    """This-match bowling figures as 'overs-runs-wickets' (e.g. '3-31-2')."""
+    """This-match bowling figures as 'overs-runs-wickets' (e.g. '3-31-2'),
+    or 'balls-runs-wickets' (e.g. '10b-31-2') for The Hundred."""
     if not p:
         return "0-0-0"
     bws = _stat_row(state.get("bowl_stats"), p.get("roster_id"))
-    ov = bws.get("overs_done", 0)
-    tb = bws.get("this_over_balls", 0)
-    ov_lbl = f"{ov}.{tb}" if tb else f"{ov}"
+    if _is_hundred_state(state):
+        ov_lbl = f"{bws.get('balls', 0)}b"
+    else:
+        ov = bws.get("overs_done", 0)
+        tb = bws.get("this_over_balls", 0)
+        ov_lbl = f"{ov}.{tb}" if tb else f"{ov}"
     return f"{ov_lbl}-{bws.get('runs', 0)}-{bws.get('wickets', 0)}"
 
 
@@ -1963,7 +1967,8 @@ def _append_commentary_log(state, res, striker, bowler, text):
                 "name": bowler.get("name") if bowler else "",
                 "wickets": bws.get("wickets", 0),
                 "runsConceded": bws.get("runs", 0),
-                "overs": f"{b_overs_done}.{b_this}" if b_this else f"{b_overs_done}",
+                "overs": b_overs_done,
+                "balls": b_this,
             },
         })
         # Gray one-liner with the bowler's match figures.
@@ -1984,7 +1989,8 @@ def _append_commentary_log(state, res, striker, bowler, text):
             "inningsIdx": innings_idx,
             "runs": state.get("total_runs", 0),
             "wickets": state.get("total_wickets", 0),
-            "overs": f"{overs_done}.{balls}",
+            "overs": overs_done,
+            "balls": balls,
             "target": state.get("target"),
             "winner": None,   # filled on the result screen via result.motm
             "motm": None,
