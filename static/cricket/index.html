@@ -164,7 +164,7 @@
             <div class="live-runs" id="live-runs-display">0/0</div>
             <div class="crr-over-row">
               <span class="crr-badge">CRR: <span id="live-crr">0.0</span></span>
-              <span class="overs-display"><span id="live-overs">0.0</span>/<span id="total-overs">1</span> OV</span>
+              <span class="overs-display"><span id="live-overs">0.0</span>/<span id="total-overs">1</span> <span class="ov-unit">OV</span></span>
               <span class="proj-badge hidden" id="proj-badge">PROJ: <span id="live-projected">0</span></span>
             </div>
           </div>
@@ -297,13 +297,13 @@
           <!-- Bowling Team Section -->
           <div class="scorecard-section-title" id="scorecard-bowling-title" style="margin-top: 16px;">BOWLING</div>
           <div class="scorecard-table">
-            <div class="th-row">
+            <div class="th-row" id="scorecard-bowling-header">
               <span class="th-player">BOWLING</span>
-              <span class="th-num">O</span>
-              <span class="th-num">M</span>
-              <span class="th-num">R</span>
-              <span class="th-num">W</span>
-              <span class="th-num">ER</span>
+              <span class="th-num" id="th-bowl-1">O</span>
+              <span class="th-num" id="th-bowl-2">M</span>
+              <span class="th-num" id="th-bowl-3">R</span>
+              <span class="th-num" id="th-bowl-4">W</span>
+              <span class="th-num" id="th-bowl-5">ER</span>
             </div>
             <div class="tb-rows" id="scorecard-bowling-rows">
               <!-- Dynamically populated -->

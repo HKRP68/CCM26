@@ -32,6 +32,7 @@ from services.match_webapp_service import (
     SETUP_INNINGS_BREAK, INNINGS_BREAK_SECONDS,
     _is_processing, action_in_progress,
 )
+from services.cipl_match import is_hundred as _is_hundred, balls_per_unit
 from services.perf_log import perf_span
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,14 @@ def _merge_stats(state, innings_filter=None):
             ws_alt = _stat(inn1_bowl, k)
             if any(ws_alt.values()):
                 ws = ws_alt
+        bpu = balls_per_unit(state)
+        w_balls = ws.get("balls", 0)
+        overs_done = ws.get("overs_done", 0)
+        this_over = ws.get("this_over_balls", 0)
+        if _is_hundred(state):
+            overs_display = f"{w_balls}b"
+        else:
+            overs_display = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
         out[k] = {
             "runs": bs.get("runs", 0),
             "balls": bs.get("balls", 0),
@@ -218,8 +227,11 @@ def _merge_stats(state, innings_filter=None):
             "how_out": _full_dismissal(bs),
             "wickets": ws.get("wickets", 0),
             "runsConceded": ws.get("runs", 0),
-            "overs": ws.get("overs_done", 0),
-            "ballsBowled": ws.get("balls", 0),
+            "maidens": ws.get("maidens", 0),
+            "overs": overs_done,  # whole units completed — used for bowling-quota comparisons
+            "oversDisplay": overs_display,  # "10b" (Hundred) or "1.4"/"2" (over formats)
+            "ballsBowled": w_balls,
+            "economy": round(ws.get("runs", 0) / (w_balls / bpu), 2) if w_balls else 0,
         }
     return out
 
@@ -232,13 +244,22 @@ def _card(state, player, kind):
     rid = player.get("roster_id")
     if kind == "bowler":
         ws = _stat(state.get("bowl_stats", {}), rid)
+        bpu = balls_per_unit(state)
+        w_balls = ws.get("balls", 0)
         overs_done = ws.get("overs_done", 0)
         this_over = ws.get("this_over_balls", 0)
+        if _is_hundred(state):
+            overs_display = f"{w_balls}b"
+        else:
+            overs_display = f"{overs_done}.{this_over}" if this_over else f"{overs_done}"
         base["stats"] = {
             "runsConceded": ws.get("runs", 0),
             "wickets": ws.get("wickets", 0),
-            "overs": f"{overs_done}.{this_over}" if this_over else f"{overs_done}",
-            "balls": ws.get("balls", 0),
+            "maidens": ws.get("maidens", 0),
+            "overs": overs_done,  # whole units completed — used for bowling-quota comparisons
+            "oversDisplay": overs_display,
+            "balls": w_balls,
+            "economy": round(ws.get("runs", 0) / (w_balls / bpu), 2) if w_balls else 0,
         }
     else:
         bs = _stat(state.get("bat_stats", {}), rid)
@@ -457,6 +478,8 @@ def _serialize_match_state_impl(session, match, viewer_user):
     guest = _team_block(u2)
 
     # ── score / innings ──
+    is_hundred_match = _is_hundred(state)
+    bpu = balls_per_unit(state)
     cur_runs = state.get("total_runs", 0)
     cur_wkts = state.get("total_wickets", 0)
     cur_overs = max(0, state.get("current_over", 1) - 1)
@@ -467,8 +490,8 @@ def _serialize_match_state_impl(session, match, viewer_user):
 
     # Projected score — extrapolate the current run rate across the remaining
     # balls of the innings. 1st innings only (2nd innings shows the target bar).
-    total_balls = (state.get("overs", 0) or 0) * 6
-    balls_bowled = cur_overs * 6 + cur_balls
+    total_balls = (state.get("overs", 0) or 0) * bpu
+    balls_bowled = cur_overs * bpu + cur_balls
     projected = None
     if innings_no == 1 and balls_bowled:
         projected = round(cur_runs + (cur_runs / balls_bowled) * max(0, total_balls - balls_bowled))
@@ -476,6 +499,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
     score = {
         "runs": cur_runs, "wickets": cur_wkts,
         "balls": cur_balls, "overs": cur_overs,
+        "ballsBowled": balls_bowled,
         "target": target,
         "batTeamName": state.get("bat_team_name"),
         "bowlTeamName": state.get("bowl_team_name"),
@@ -694,6 +718,12 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "chatId": state.get("chat_id"),
         "pitch": (match.pitch_type or state.get("pitch_type") or "normal"),
         "totalOvers": state.get("overs"),
+        # "T20" (6-ball overs) or "The100" (5-ball sets, 100 balls/innings) so
+        # the client can label progress correctly; absent/"T20" keeps the
+        # standard over-based UI.
+        "ballFormat": state.get("ball_format", "T20"),
+        "isHundred": is_hundred_match,
+        "totalBalls": total_balls,
         "status": status,
         "tossWinnerId": toss_winner_tg,
         "tossDecision": match.toss_decision,
@@ -832,7 +862,7 @@ def _build_result(session, state, match, tg_of, host, guest):
             "runs": st.get("runs", 0),
             "balls": st.get("balls", 0),
             "wickets": st.get("wickets", 0),
-            "overs": st.get("overs", 0),
+            "overs": st.get("oversDisplay", 0),
             "impactPoints": persisted_motm.get("impact_points", best_score),
         }
 

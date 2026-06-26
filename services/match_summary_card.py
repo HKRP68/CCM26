@@ -332,7 +332,7 @@ def _draw_rows(draw, x, y, w, rows, *, color, right_accent, text_settings, potm_
 
 def _draw_innings(draw, x, y, w, text_settings, *, team, runs, wickets,
                   overs, overs_total, batters, bowlers, bat_color,
-                  bowl_color, potm_name):
+                  bowl_color, potm_name, is_hundred=False):
     block_h = INNINGS_H
     title_h = 74
     _rounded(draw, [x, y, x + w, y + block_h], 22, (6, 11, 18, 242), BORDER, 1)
@@ -346,7 +346,9 @@ def _draw_innings(draw, x, y, w, text_settings, *, team, runs, wickets,
     _draw_shadowed_text(draw, _xy(text_settings, "innings_team", x + 32, y + 4),
                         team_txt, f_team, tracking=3)
 
-    meta_txt = _text(text_settings, "innings_meta", f"OVERS {overs}/{overs_total}.0").upper()
+    default_meta = (f"{overs}/{overs_total} BALLS" if is_hundred
+                    else f"OVERS {overs}/{overs_total}.0")
+    meta_txt = _text(text_settings, "innings_meta", default_meta).upper()
     score_txt = _text(text_settings, "innings_score", f"{runs}/{wickets}").upper()
     score_w = _tracked_width(draw, score_txt, f_score, 4)
     meta_w = _tracked_width(draw, meta_txt, f_meta, 2)
@@ -422,6 +424,7 @@ def generate_match_summary(*,
     inn2_team, inn2_runs, inn2_wickets, inn2_overs,
     winner_name, win_margin_text,
     overs_total,
+    is_hundred=False,
     potm_name=None, potm_rating=None, potm_team=None,
     potm_stats=None, potm_impact=None,
     top_scorer=None,
@@ -458,14 +461,14 @@ def generate_match_summary(*,
         _draw_innings(draw, x, INNINGS_1_Y, w, text_settings,
                       team=inn1_data.get("team") or inn1_team,
                       runs=inn1_runs, wickets=inn1_wickets, overs=inn1_overs,
-                      overs_total=overs_total,
+                      overs_total=overs_total, is_hundred=is_hundred,
                       batters=inn1_data.get("batters", []),
                       bowlers=inn1_data.get("bowlers", []),
                       bat_color=BLUE, bowl_color=RED, potm_name=potm_name)
         _draw_innings(draw, x, INNINGS_2_Y, w, text_settings,
                       team=inn2_data.get("team") or inn2_team,
                       runs=inn2_runs, wickets=inn2_wickets, overs=inn2_overs,
-                      overs_total=overs_total,
+                      overs_total=overs_total, is_hundred=is_hundred,
                       batters=inn2_data.get("batters", []),
                       bowlers=inn2_data.get("bowlers", []),
                       bat_color=RED, bowl_color=BLUE, potm_name=potm_name)

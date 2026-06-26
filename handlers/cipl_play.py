@@ -17,6 +17,7 @@ import asyncio
 import html
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -1887,18 +1888,30 @@ def _build_cipl_summary_image(state, result):
         logger.exception("cipl POTM calculation failed for match %s", state.get("match_id"))
         potm_name, potm_stats, potm_team = None, None, None
 
+    is_hundred = cipl_match.is_hundred(state)
+    if is_hundred:
+        inn1_overs_val = re.match(r"(\d+)", str(state.get("inn1_overs", "0")))
+        inn1_overs_val = int(inn1_overs_val.group(1)) if inn1_overs_val else 0
+        inn2_overs_val = cipl_match.balls_bowled(state)
+        overs_total_val = cipl_match.total_balls(state)
+    else:
+        inn1_overs_val = state.get("inn1_overs", "0.0")
+        inn2_overs_val = cipl_match.format_overs(state)
+        overs_total_val = state.get("overs", 0)
+
     return generate_match_summary(
         inn1_team=inn1_team,
         inn1_runs=state.get("inn1_runs", 0),
         inn1_wickets=state.get("inn1_wickets", 0),
-        inn1_overs=state.get("inn1_overs", "0.0"),
+        inn1_overs=inn1_overs_val,
         inn2_team=inn2_team,
         inn2_runs=state.get("total_runs", 0),
         inn2_wickets=state.get("total_wickets", 0),
-        inn2_overs=cipl_match.format_overs(state),
+        inn2_overs=inn2_overs_val,
         winner_name=winner_name,
         win_margin_text=margin_text,
-        overs_total=state.get("overs", 0),
+        overs_total=overs_total_val,
+        is_hundred=is_hundred,
         stadium=state.get("stadium"),
         potm_name=potm_name,
         potm_stats=potm_stats,
@@ -1914,8 +1927,9 @@ def _build_cipl_summary_image(state, result):
 
 def _innings_scorecard(state, innings_label=""):
     """Compact scorecard for the innings currently in ``state``."""
+    ov_suffix = "" if state.get("ball_format") == "The100" else " ov"
     lines = [f"<b>{state['bat_team_name']}</b> — {cipl_match.format_score(state)} "
-             f"({cipl_match.format_overs(state)} ov){'  · ' + innings_label if innings_label else ''}"]
+             f"({cipl_match.format_overs(state)}{ov_suffix}){'  · ' + innings_label if innings_label else ''}"]
     bs = state["bat_stats"]
     batted = [p for p in state["batting_order"]
               if bs.get(str(p["roster_id"]), {}).get("balls", 0) > 0

@@ -27,6 +27,25 @@ const BALL_FLOW_DELAY_MS = 150;
 // the next ball quickly instead of holding on the celebratory GIF/text.
 const EVENT_FLASH_MS = 350;
 
+// The Hundred (5-ball "sets", 100 balls/innings) vs T20 (6-ball overs) helpers.
+// matchState.isHundred / matchState.totalBalls come straight from the backend.
+function isHundredFormat() {
+  return !!(matchState && matchState.isHundred);
+}
+function ballsPerUnit() {
+  return isHundredFormat() ? 5 : 6;
+}
+// "63b" for The Hundred, "12.3" for over formats.
+function formatBowlingUnit(overs, balls) {
+  return isHundredFormat() ? `${(overs || 0) * 5 + (balls || 0)}b` : `${overs || 0}.${balls || 0}`;
+}
+// "63 Balls" for The Hundred, "12.3 Ov" for over formats.
+function formatInningsProgress(overs, balls) {
+  return isHundredFormat()
+    ? `${(overs || 0) * 5 + (balls || 0)} Balls`
+    : `${overs || 0}.${balls || 0} Ov`;
+}
+
 // Selected actions
 let selectedDelivery = null;
 let selectedSpeed = 'normal';
@@ -805,13 +824,22 @@ function renderGameplayScreen() {
   document.getElementById('live-runs-display').innerText = 
     `${matchState.score.runs}/${matchState.score.wickets}`;
 
-  // Overs
-  document.getElementById('live-overs').innerText = 
-    `${matchState.score.overs}.${matchState.score.balls}`;
-  document.getElementById('total-overs').innerText = matchState.totalOvers;
+  // Overs / Balls
+  const totalBallsBowled = matchState.score.ballsBowled ??
+    ((matchState.score.overs * ballsPerUnit()) + matchState.score.balls);
+  const oversUnitEl = document.querySelector('.overs-display .ov-unit');
+  if (isHundredFormat()) {
+    document.getElementById('live-overs').innerText = totalBallsBowled;
+    document.getElementById('total-overs').innerText = matchState.totalBalls || (matchState.totalOvers * 5);
+    if (oversUnitEl) oversUnitEl.innerText = 'BALLS';
+  } else {
+    document.getElementById('live-overs').innerText =
+      `${matchState.score.overs}.${matchState.score.balls}`;
+    document.getElementById('total-overs').innerText = matchState.totalOvers;
+    if (oversUnitEl) oversUnitEl.innerText = 'OV';
+  }
 
-  // CRR
-  const totalBallsBowled = (matchState.score.overs * 6) + matchState.score.balls;
+  // CRR (always per-6-balls, regardless of the unit shown above)
   const crr = totalBallsBowled > 0 ? ((matchState.score.runs / totalBallsBowled) * 6).toFixed(1) : "0.0";
   document.getElementById('live-crr').innerText = crr;
 
@@ -848,7 +876,7 @@ function renderGameplayScreen() {
   if (matchState.status === 'innings2' && matchState.score.target !== null) {
     targetDisplay.classList.remove('hidden');
     const runsNeeded = Math.max(0, matchState.score.target - matchState.score.runs);
-    const totalBalls = matchState.totalOvers * 6;
+    const totalBalls = matchState.totalBalls || (matchState.totalOvers * ballsPerUnit());
     const ballsRemaining = Math.max(0, totalBalls - totalBallsBowled);
     
     document.getElementById('target-runs-needed').innerText = runsNeeded;
@@ -1884,7 +1912,7 @@ function renderCommentaryFeed() {
               ${comm.nonStriker ? `<span>${comm.nonStriker.name}: <b>${comm.nonStriker.runs}</b>(${comm.nonStriker.balls}b)</span>` : ''}
             </div>
             <div class="stat-bowler">
-              ${comm.bowler ? `<span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${comm.bowler.overs}ov)</span>` : ''}
+              ${comm.bowler ? `<span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${formatBowlingUnit(comm.bowler.overs, comm.bowler.balls)})</span>` : ''}
             </div>
           </div>
         </div>
@@ -1896,7 +1924,7 @@ function renderCommentaryFeed() {
           🎯 INNINGS ${comm.inningsIdx + 1} COMPLETE
         </div>
         <div class="innings-end-body">
-          <div class="total-score">Total: <b>${comm.runs}/${comm.wickets}</b> in ${comm.overs} ov</div>
+          <div class="total-score">Total: <b>${comm.runs}/${comm.wickets}</b> in ${formatInningsProgress(comm.overs, comm.balls)}</div>
           ${comm.target ? `<div class="target-needed">🏹 Target: <b>${comm.target} runs</b></div>` : ''}
           ${comm.winner ? `<div class="match-winner">🏆 <b>${comm.winner} WIN!</b></div>` : ''}
           ${comm.motm ? `<div class="match-motm">⭐ MOTM: <b>${comm.motm.name}</b> — ${comm.motm.runs}R ${comm.motm.wickets}W</div>` : ''}
@@ -1983,8 +2011,18 @@ function getSecondInningsBattingId() {
     : matchState.host.telegramId;
 }
 
+// Bowling table header: B/M/W/R/E for The Hundred, O/M/R/W/ER for over formats.
+function renderBowlingHeader() {
+  const labels = isHundredFormat() ? ['B', 'M', 'W', 'R', 'E'] : ['O', 'M', 'R', 'W', 'ER'];
+  labels.forEach((label, i) => {
+    const el = document.getElementById(`th-bowl-${i + 1}`);
+    if (el) el.innerText = label;
+  });
+}
+
 // Render Tab panels
 function renderScorecardPanel() {
+  renderBowlingHeader();
   const hostLabel = document.getElementById('scorecard-tab-host');
   const guestLabel = document.getElementById('scorecard-tab-guest');
 
@@ -2095,7 +2133,7 @@ function renderScorecardPanel() {
   // Extras & total
   document.getElementById('scorecard-extras').innerText = `Extras ${activeInnings.extras || 0} (w 0, nb 0, lb 0, b 0)`;
   document.getElementById('scorecard-total').innerText =
-    `TOTAL ${activeInnings.runs}/${activeInnings.wickets} (${activeInnings.overs}.${activeInnings.balls} Ov)`;
+    `TOTAL ${activeInnings.runs}/${activeInnings.wickets} (${formatInningsProgress(activeInnings.overs, activeInnings.balls)})`;
 
   // Yet to bat
   const activeIds = [
@@ -2126,23 +2164,34 @@ function renderScorecardPanel() {
     const isCurrent = matchState.bowler && matchState.bowler.id && matchState.bowler.id.toString() === pid;
     const pStat = (pid && statsPool[pid]) ? statsPool[pid] : null;
 
-    const overs = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.overs : (pStat ? pStat.overs : 0);
-    const runsC = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.runsConceded : (pStat ? pStat.runsConceded : 0);
-    const wkts = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats.wickets : (pStat ? pStat.wickets : 0);
+    const bStats = (isCurrent && matchState.bowler.stats) ? matchState.bowler.stats : pStat;
+    const oversDisplay = bStats ? bStats.oversDisplay : 0;
+    const runsC = bStats ? (bStats.runsConceded ?? bStats.runs ?? 0) : 0;
+    const wkts = bStats ? bStats.wickets : 0;
+    const maidens = bStats ? (bStats.maidens || 0) : 0;
+    const er = bStats && bStats.economy != null ? bStats.economy.toFixed(2) : '0.00';
 
-    if (!isCurrent && (parseFloat(overs) === 0 && runsC === 0 && wkts === 0)) return;
-
-    const er = parseFloat(overs) > 0 ? (runsC / parseFloat(overs)).toFixed(2) : '0.00';
+    if (!isCurrent && (parseFloat(oversDisplay) === 0 && runsC === 0 && wkts === 0)) return;
 
     const row = document.createElement('div');
     row.className = 'tb-row';
-    row.innerHTML = `
+    row.innerHTML = isHundredFormat() ? `
       <span class="tb-row-name">
         <span class="tb-row-name-text">${player.name}</span>
         ${isCurrent ? '<span class="tb-row-status active">bowling*</span>' : ''}
       </span>
-      <span class="tb-num-val">${overs || '0'}</span>
-      <span class="tb-num-val">0</span>
+      <span class="tb-num-val">${oversDisplay || '0b'}</span>
+      <span class="tb-num-val">${maidens}</span>
+      <span class="tb-num-val">${wkts}</span>
+      <span class="tb-num-val">${runsC}</span>
+      <span class="tb-num-val">${er}</span>
+    ` : `
+      <span class="tb-row-name">
+        <span class="tb-row-name-text">${player.name}</span>
+        ${isCurrent ? '<span class="tb-row-status active">bowling*</span>' : ''}
+      </span>
+      <span class="tb-num-val">${oversDisplay || '0'}</span>
+      <span class="tb-num-val">${maidens}</span>
       <span class="tb-num-val">${runsC}</span>
       <span class="tb-num-val">${wkts}</span>
       <span class="tb-num-val">${er}</span>
@@ -2213,11 +2262,11 @@ function renderInningsBreakScreen() {
   const chasingTeam = (settingTeam === matchState.host) ? (matchState.guest || aiTeam) : matchState.host;
 
   document.getElementById('ib-score-title').innerText =
-    `${inn1.runs}/${inn1.wickets} (${inn1.overs}.${inn1.balls} ov)`;
+    `${inn1.runs}/${inn1.wickets} (${formatInningsProgress(inn1.overs, inn1.balls)})`;
   document.getElementById('ib-team-line').innerText =
     `${(settingTeam.teamName || settingTeam.username || 'Team 1').toUpperCase()} set the target`;
 
-  const ballsLeft = matchState.totalOvers ? matchState.totalOvers * 6 : null;
+  const ballsLeft = matchState.totalBalls || (matchState.totalOvers ? matchState.totalOvers * ballsPerUnit() : null);
   const targetText = document.getElementById('ib-target-text');
   targetText.innerText = target
     ? `🎯 ${(chasingTeam.teamName || chasingTeam.username || 'Chasing side').toUpperCase()} need ${target} run${target === 1 ? '' : 's'} to win${ballsLeft ? ` from ${ballsLeft} balls` : ''}`
@@ -2304,9 +2353,9 @@ function renderResultScreen() {
   const inn2 = matchState.innings[1] || { runs: 0, wickets: 0, overs: 0, balls: 0 };
 
   document.getElementById('result-inn1-score').innerText =
-    `${inn1.runs}/${inn1.wickets} (${inn1.overs}.${inn1.balls} ov)`;
+    `${inn1.runs}/${inn1.wickets} (${formatInningsProgress(inn1.overs, inn1.balls)})`;
   document.getElementById('result-inn2-score').innerText =
-    `${inn2.runs}/${inn2.wickets} (${inn2.overs}.${inn2.balls} ov)`;
+    `${inn2.runs}/${inn2.wickets} (${formatInningsProgress(inn2.overs, inn2.balls)})`;
 
   // Super Over (if the match was decided in one): show each Super Over innings'
   // total and the winner, after the two main innings. Guarded so normal matches
@@ -2340,7 +2389,7 @@ function renderResultScreen() {
     motmSection.classList.remove('hidden');
     document.getElementById('result-motm-name').innerText = result.motm.name;
     document.getElementById('result-motm-stats').innerText = 
-      `${result.motm.impactPoints || 0} Impact Points · ${result.motm.runs} runs (${result.motm.balls}b) & ${result.motm.wickets} wickets (${result.motm.overs} ov)`;
+      `${result.motm.impactPoints || 0} Impact Points · ${result.motm.runs} runs (${result.motm.balls}b) & ${result.motm.wickets} wickets (${result.motm.overs}${isHundredFormat() ? '' : ' ov'})`;
   } else {
     motmSection.classList.add('hidden');
   }
