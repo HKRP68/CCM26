@@ -121,6 +121,15 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "treject_",
     "tac_",
     "tdc_",
+    # /cltour (Challenge League Tour) setup + invite: the league/team/count wizard
+    # and the Accept/Decline invite all live on one message first sent while
+    # handling the HOST's command, so it would otherwise be owner-locked to the
+    # host. The guest's team pick (cltset_gt_) and the invite responses
+    # (clt_acc_/clt_dec_) are driven by the *guest*, so they must be shared.
+    # handlers/cl_tour.py validates every click by host_tg/guest_tg/user2_id.
+    "cltset_gt_",
+    "clt_acc_",
+    "clt_dec_",
     # /trade two-player flow: player-selection (t1p_/t2p_), confirm (tcfrm_) and
     # cancel (tcancel_) buttons live on one message that is edited between user1's
     # and user2's turns. handlers/trade.py validates every click by telegram_id,

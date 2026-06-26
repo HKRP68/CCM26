@@ -104,6 +104,34 @@ class ButtonAccessTests(unittest.TestCase):
                 update = DummyUpdate(DummyQuery(222, callback_data))
                 self.assertTrue(button_access.check_callback_owner(update))
 
+    def test_cltour_guest_buttons_are_shared_for_guest_validation(self):
+        # The /cltour setup + invite message is first sent while handling the
+        # HOST's command, so it's owned by the host. The guest's team pick and
+        # the Accept/Decline invite responses are pressed by the GUEST, so the
+        # owner guard must let them through (the reported "not for you" bug);
+        # handlers/cl_tour.py validates the clicker by host_tg/guest_tg/user2_id.
+        button_access.register_button_owner(100, 200, 111)
+        guest_callbacks = [
+            "cltset_gt_111_45",  # guest picks team
+            "clt_acc_7",         # guest accepts invite
+            "clt_dec_7",         # guest declines invite
+        ]
+        for callback_data in guest_callbacks:
+            with self.subTest(callback_data=callback_data):
+                update = DummyUpdate(DummyQuery(222, callback_data))
+                self.assertTrue(button_access.check_callback_owner(update))
+
+    def test_cltour_host_only_buttons_stay_owner_locked(self):
+        # Host-driven setup buttons live on the host-owned message, so they keep
+        # the owner guard as defense-in-depth (a non-host press is blocked here
+        # before the handler's own host_tg gate even runs).
+        button_access.register_button_owner(100, 200, 111)
+        for callback_data in ("cltset_lg_111_2", "cltset_ht_111_45",
+                              "cltset_n_111_5", "cltset_x_111"):
+            with self.subTest(callback_data=callback_data):
+                update = DummyUpdate(DummyQuery(222, callback_data))
+                self.assertFalse(button_access.check_callback_owner(update))
+
     def test_playmatch_flow_buttons_are_shared_for_both_players(self):
         # The invited player (and, downstream, the other player on alternating
         # turns) clicks buttons on a message "owned" by the command sender, so
