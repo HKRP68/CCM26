@@ -1298,8 +1298,21 @@ def _engine_text(state, oc, striker, bowler, over_idx, innings, target,
             "is_maiden_over": is_maiden,
             "_fmt_last_over": max(0, overs_total - 1),
             "_fmt_death_start": max(0, overs_total - 4),
+            # Sequence-aware fields reflect the *previous* delivery.
+            "last_ball_boundary": bool(state.get("last_ball_boundary")),
+            "last_ball_wicket": bool(state.get("last_ball_wicket")),
+            "consecutive_dots": int(state.get("cmt_consec_dots", 0)),
         }
         text = (_COMMENTARY.get_commentary(ball_context, match_state) or "").strip()
+        # Record this ball so the next delivery's commentary can reference it.
+        _runs = oc.get("runs", 0)
+        _scoring = (not is_wkt) and (not ball_context["is_extra"])
+        state["last_ball_boundary"] = bool(_scoring and _runs in (4, 6))
+        state["last_ball_wicket"] = bool(is_wkt)
+        if _scoring and _runs == 0:
+            state["cmt_consec_dots"] = int(state.get("cmt_consec_dots", 0)) + 1
+        else:
+            state["cmt_consec_dots"] = 0
         return text or None
     except Exception:
         logger.exception("cipl engine commentary failed")

@@ -1216,6 +1216,21 @@
       "Powerplay is on! Only two fielders allowed outside the circle. The batters will be looking to capitalize.",
       "Inside the powerplay, fielding restrictions in play. This is where the batting side needs to set the platform.",
       "Powerplay cricket! Aggressive fields, attacking bowling, this is the most exciting phase of the game."
+    ],
+    "back_to_back_boundary": [
+      "Back-to-back boundaries! {batter} is in the mood and {bowler} is feeling the heat.",
+      "Two in two! {batter} follows one stroke with another and the runs are flowing now.",
+      "{bowler} under pressure — consecutive boundaries from {batter} and the momentum has swung."
+    ],
+    "responded_after_wicket": [
+      "What a response! {batter} answers the wicket with a boundary — no hiding from the moment.",
+      "Straight back at them! A boundary off the very next ball after the wicket. {batter} means business.",
+      "{bowler} took the wicket but {batter} replies in style — that's how you release the pressure."
+    ],
+    "dot_pressure_streak": [
+      "Dot after dot! {bowler} is strangling the scoring and the pressure is building on {batter}.",
+      "The pressure cooker is on — {bowler} reeling off the dots and {batter} can't find the gap.",
+      "Brilliant squeeze from {bowler}! Three on the bounce with nothing off them, {batter} getting bogged down."
     ]
   }
 }

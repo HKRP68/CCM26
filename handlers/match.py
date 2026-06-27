@@ -3824,7 +3824,10 @@ async def _process_shot_core(context, mid, si, *, q=None):
             })
 
             # Snapshot pre-ball values for milestone detection (fifty/hundred)
+            # and rich commentary narratives (partnership / big-over context).
             prev_bat_runs = bs.get("runs", 0)
+            prev_partnership = s.get("partnership_runs", 0)
+            prev_over_runs = bws.get("this_over_runs", 0)
 
             oc = _calc(s, striker, bowler, shot, dl)
             legal = True
@@ -3933,8 +3936,15 @@ async def _process_shot_core(context, mid, si, *, q=None):
             if activated:
                 unique_act = list(dict.fromkeys(activated))[:3]
                 traits_line = "\n💎 " + " · ".join(unique_act)
-            commentary_line = _maybe_pick_commentary(oc, striker, bowler,
-                                                     runs_for_commentary=oc.get("runs", 0))
+            # Prefer the rich SimCricketX engine (situation + sequence aware);
+            # fall back to the configured per-event line when it yields nothing.
+            commentary_line = _engine_commentary(
+                s, oc, striker, bowler,
+                prev_bat_runs, prev_partnership, prev_over_runs)
+            if not commentary_line:
+                commentary_line = _maybe_pick_commentary(
+                    oc, striker, bowler, runs_for_commentary=oc.get("runs", 0))
+            _update_commentary_sequence(s, oc)
             commentary_block = f"\n💬 <i>{commentary_line}</i>" if commentary_line else ""
             head = (
                 f"🎳 {bowler['name']} → {dl}\n"
@@ -4202,6 +4212,107 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
             ses.close()
     except Exception:
         return None
+
+
+try:
+    from engine.commentary_engine import CommentaryEngine as _CommentaryEngine
+    _COMMENTARY_ENGINE = _CommentaryEngine()
+except Exception:  # pragma: no cover - engine is best-effort
+    _COMMENTARY_ENGINE = None
+
+
+def _engine_commentary(s, oc, striker, bowler, prev_bat_runs,
+                       prev_partnership, prev_over_runs):
+    """Rich SimCricketX commentary for /playmatch (micro template + narrative,
+    including sequence-aware lines). Returns None on any failure so the caller
+    falls back to the configured per-event line."""
+    if _COMMENTARY_ENGINE is None:
+        return None
+    try:
+        otype = oc.get("type")
+        runs = oc.get("runs", 0)
+        is_wkt = (otype == "wicket")
+        extra_type = {"wide": "wide", "noball": "noball",
+                      "legbye": "legbye"}.get(otype, "")
+        is_extra = bool(extra_type)
+        how = (oc.get("how") or "").lower()
+        if "run out" in how or "runout" in how:
+            wkt_type = "run_out"
+        elif "lbw" in how:
+            wkt_type = "lbw"
+        elif "stump" in how:
+            wkt_type = "stumped"
+        elif "bowled" in how:
+            wkt_type = "bowled"
+        else:
+            wkt_type = "caught"
+
+        ball_context = {
+            "type": "wicket" if is_wkt else "run",
+            "runs": runs,
+            "is_extra": is_extra,
+            "extra_type": extra_type,
+            "wicket_type": wkt_type,
+            "batter": striker.get("name", "The batter"),
+            "bowler": bowler.get("name", "The bowler"),
+            "bowling_type": (bowler.get("bowl_style") or "").lower(),
+            "batting_team": s.get("bat_team_name", "The batting side"),
+            "bowling_team": s.get("bowl_team_name", "The fielding side"),
+            "batter_out": is_wkt,
+        }
+
+        innings = s.get("innings", 1)
+        overs_total = s.get("overs", 20)
+        required_rr = 0.0
+        if innings == 2 and s.get("target"):
+            try:
+                from services.match_engine import chase_requirements
+                ch = chase_requirements(s)
+                brem = ch.get("balls_remaining", 0)
+                if brem:
+                    required_rr = ch.get("runs_required", 0) * 6.0 / brem
+            except Exception:
+                required_rr = 0.0
+        runs_needed = (max(0, int(s.get("target")) - int(s.get("total_runs", 0)))
+                       if s.get("target") else 999)
+
+        match_state = {
+            "current_over": max(0, s.get("current_over", 1) - 1),
+            "current_ball": s.get("current_ball", 0),
+            "innings": innings,
+            "score": s.get("total_runs", 0),
+            "wickets": s.get("total_wickets", 0),
+            "batter_runs": prev_bat_runs,
+            "partnership_runs": prev_partnership,
+            "current_over_runs": prev_over_runs,
+            "recent_wickets_match": s.get("consec_wickets", 0),
+            "required_run_rate": required_rr,
+            "runs_needed": runs_needed,
+            "_fmt_last_over": max(0, overs_total - 1),
+            "_fmt_death_start": max(0, overs_total - 4),
+            # Sequence-aware fields (reflect the *previous* delivery).
+            "last_ball_boundary": bool(s.get("last_ball_boundary")),
+            "last_ball_wicket": bool(s.get("last_ball_wicket")),
+            "consecutive_dots": int(s.get("cmt_consec_dots", 0)),
+        }
+        text = (_COMMENTARY_ENGINE.get_commentary(ball_context, match_state) or "").strip()
+        return text or None
+    except Exception:
+        logger.exception("playmatch engine commentary failed")
+        return None
+
+
+def _update_commentary_sequence(s, oc):
+    """Record this delivery so the next ball's commentary can reference it."""
+    otype = oc.get("type")
+    runs = oc.get("runs", 0)
+    is_boundary = (otype == "runs" and runs in (4, 6))
+    s["last_ball_boundary"] = is_boundary
+    s["last_ball_wicket"] = (otype == "wicket")
+    if otype == "runs" and runs == 0:
+        s["cmt_consec_dots"] = int(s.get("cmt_consec_dots", 0)) + 1
+    else:
+        s["cmt_consec_dots"] = 0
 
 
 def _calc(s, striker, bowler, shot, delivery):

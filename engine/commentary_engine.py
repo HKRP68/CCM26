@@ -232,6 +232,36 @@ class CommentaryEngine:
                                                      team=batting_team,
                                                      fielding_team=bowling_team))
 
+        # --- 12. Back-to-back boundary (this ball + the previous one) ---
+        # These three are sequence-aware and only fire when the caller supplies
+        # the relevant fields, so older callers stay unaffected.
+        if (runs in (4, 6) and not context.get("is_extra")
+                and state.get("last_ball_boundary")):
+            triggers.extend(self._format_narratives("back_to_back_boundary",
+                                                     batter=batter, bowler=bowler,
+                                                     team=batting_team,
+                                                     fielding_team=bowling_team))
+
+        # --- 13. Responded after a wicket (a boundary right after one fell) ---
+        if (runs in (4, 6) and not context.get("is_extra")
+                and context.get("type") != "wicket"
+                and state.get("last_ball_wicket")):
+            triggers.extend(self._format_narratives("responded_after_wicket",
+                                                     batter=batter, bowler=bowler,
+                                                     team=batting_team,
+                                                     fielding_team=bowling_team))
+
+        # --- 14. Dot-ball pressure streak (3+ dots in a row including this) ---
+        # ``consecutive_dots`` is the run of dots *before* this delivery, so a
+        # value of 2 plus another dot makes three on the bounce.
+        if (runs == 0 and not context.get("is_extra")
+                and context.get("type") != "wicket"
+                and state.get("consecutive_dots", 0) >= 2):
+            triggers.extend(self._format_narratives("dot_pressure_streak",
+                                                     batter=batter, bowler=bowler,
+                                                     team=batting_team,
+                                                     fielding_team=bowling_team))
+
         # --- 11. High pressure dot (2nd innings, RRR >= 10, dot ball) ---
         if (innings == 2 and runs == 0 and not context.get("is_extra")
                 and state.get("required_run_rate", 0) >= 10
