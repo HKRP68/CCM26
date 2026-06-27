@@ -506,6 +506,45 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "projected": projected,
     }
 
+    # Live win probability for a chase (2nd innings). Reuses the engine's
+    # chase-chance model (matrix + batter/bowler/pitch/momentum modifiers +
+    # feasibility for the balls left) so the broadcast bar agrees with the
+    # in-match steer. None in the 1st innings / once the chase is settled.
+    win_probability = None
+    if innings_no == 2 and target is not None and balls_bowled < total_balls:
+        try:
+            from engine import chase_chance as cc
+            runs_needed = max(0, int(target) - int(cur_runs))
+            balls_left = max(0, total_balls - balls_bowled)
+            if balls_left > 0:
+                order = state.get("batting_order") or []
+                striker_p = _by_idx(order, state.get("striker_idx", 0)) or {}
+                non_striker_p = _by_idx(order, state.get("non_striker_idx", 1)) or {}
+                bowler_p = state.get("current_bowler") or {}
+                bat_stats = state.get("bat_stats", {})
+                striker_runs = (bat_stats.get(str(striker_p.get("roster_id")), {})
+                                or {}).get("runs", 0) if isinstance(striker_p, dict) else 0
+                rrr = runs_needed * 6.0 / balls_left
+                window = state.get("recent_runs_window") or []
+                info = cc.final_chase_chance(
+                    runs_needed, cur_wkts,
+                    batter_mod=cc.batter_modifier(striker_p, non_striker_p, striker_runs),
+                    bowler_mod=cc.bowler_modifier(bowler_p),
+                    pitch_mod=cc.pitch_modifier(state.get("pitch_type")),
+                    momentum_mod=cc.momentum_modifier(
+                        rrr, sum(window) if window else None,
+                        len(window) if window else None),
+                )
+                info = cc.apply_feasibility(info, runs_needed, balls_left)
+                win_probability = {
+                    "batting": info["chasing_chance"],
+                    "bowling": info["defending_chance"],
+                    "battingTeam": state.get("bat_team_name"),
+                    "bowlingTeam": state.get("bowl_team_name"),
+                }
+        except Exception:
+            logger.exception("arena win probability failed")
+
     # Recent-ball timeline → structured chips for the Mini App's doodle row.
     # Reuses the emoji symbols already maintained in state["timeline"] (SYM dict).
     _TL_MAP = {
@@ -779,6 +818,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "inn2OverRuns": inn2_over_runs,
         "inn1PartnershipHistory": inn1_partnerships,
         "inn2PartnershipHistory": inn2_partnerships,
+        "winProbability": win_probability,
     }
 
 

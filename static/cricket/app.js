@@ -885,6 +885,24 @@ function renderGameplayScreen() {
     targetDisplay.classList.add('hidden');
   }
 
+  // Win-probability bar — broadcast-style bat-vs-bowl split during a chase.
+  const winProb = document.getElementById('win-prob');
+  if (winProb) {
+    const wp = matchState.winProbability;
+    if (matchState.status === 'innings2' && wp && wp.batting != null) {
+      winProb.classList.remove('hidden');
+      const bat = Math.max(0, Math.min(100, Math.round(wp.batting)));
+      const bowl = 100 - bat;
+      document.getElementById('winprob-fill').style.width = bat + '%';
+      const batTeam = (wp.battingTeam || 'BAT').toUpperCase().substring(0, 10);
+      const bowlTeam = (wp.bowlingTeam || 'BOWL').toUpperCase().substring(0, 10);
+      document.getElementById('winprob-bat-label').innerText = `${batTeam} ${bat}%`;
+      document.getElementById('winprob-bowl-label').innerText = `${bowl}% ${bowlTeam}`;
+    } else {
+      winProb.classList.add('hidden');
+    }
+  }
+
   // Free hit banner — armed after a no-ball (UnderCover /cric parity)
   const freeHitBanner = document.getElementById('free-hit-banner');
   if (freeHitBanner) {
