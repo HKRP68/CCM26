@@ -35,6 +35,7 @@ def _load_challenge_with_stubs():
     models.User = type("User", (), {})
     class ChallengeLeague:
         is_active = True
+        id = "id"
     models.ChallengeLeague = ChallengeLeague
     models.ChallengeTeam = type("ChallengeTeam", (), {"league_id": "league_id", "sort_order": "sort_order", "name": "name"})
     models.ChallengePlayer = type("ChallengePlayer", (), {"team_id": "team_id", "sort_order": "sort_order", "name": "name"})
@@ -73,8 +74,14 @@ class DummyQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def order_by(self, *args, **kwargs):
+        return self
+
     def all(self):
         return []
+
+    def first(self):
+        return None
 
 
 class DummySession:
@@ -249,6 +256,83 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         draft = next(v for k, v in context.bot_data.items()
                      if k.startswith("challenge_team_draft_"))
         self.assertEqual(draft.get("league_id"), 77)
+
+    def test_league_resolution_prefers_league_with_roster(self):
+        # Regression: when two active leagues normalize to the same key (a
+        # duplicate/leftover sharing a short_code), resolution must deterministically
+        # prefer the one that actually has a populated roster. Landing on the empty
+        # duplicate makes the team picker fall back to built-in names that don't exist
+        # in that league, so the XI step surfaces a spurious "No players are configured"
+        # alert. A team shell with no players must not win, either.
+        empty_league = SimpleNamespace(id=9, name="IPL Old", short_code="IPL", command=None)
+        full_league = SimpleNamespace(id=5, name="IPL", short_code="IPL", command=None)
+
+        class _LeagueQuery:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def order_by(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return self._rows
+
+        class _FakeSession:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def query(self, *args, **kwargs):
+                return _LeagueQuery(self._rows)
+
+            def close(self):
+                pass
+
+        has_players = lambda session, lid: lid == full_league.id
+        # The empty duplicate is yielded first; the league with players must still win.
+        for order in ([empty_league, full_league], [full_league, empty_league]):
+            with patch.object(challenge, "_league_has_players", side_effect=has_players):
+                resolved = challenge._get_challenge_league_record(
+                    _FakeSession(order), "ipl")
+            self.assertIs(resolved, full_league)
+
+    def test_league_resolution_roster_check_error_avoids_known_empty(self):
+        # If the roster check errors for one duplicate (transient DB blip) and another
+        # is *known* empty, prefer the indeterminate one rather than pinning the league
+        # we positively know has no roster — a failure must not read as "empty".
+        known_empty = SimpleNamespace(id=3, name="IPL Old", short_code="IPL", command=None)
+        blips = SimpleNamespace(id=7, name="IPL", short_code="IPL", command=None)
+
+        class _LeagueQuery:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def order_by(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return self._rows
+
+        class _FakeSession:
+            def query(self, *args, **kwargs):
+                return _LeagueQuery([known_empty, blips])
+
+            def close(self):
+                pass
+
+        def roster(session, lid):
+            if lid == blips.id:
+                raise RuntimeError("connection reset")
+            return False
+
+        with patch.object(challenge, "_league_has_players", side_effect=roster):
+            resolved = challenge._get_challenge_league_record(_FakeSession(), "ipl")
+        self.assertIs(resolved, blips)
 
     async def test_second_league_command_blocked_while_draft_in_progress(self):
         reply_user = SimpleNamespace(id=3, is_bot=False)
@@ -593,7 +677,7 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         update = SimpleNamespace(callback_query=query)
 
         with patch.object(challenge, "get_session", return_value=DummySession()), \
-             patch.object(challenge, "_challenge_team_players", return_value=players):
+             patch.object(challenge, "_query_team_players", return_value=players):
             await challenge.challenge_xi_callback(update, context)
 
         self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
@@ -602,6 +686,75 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(buttons), 12)
         self.assertEqual(buttons[0].text, "1. MI Player 1")
         self.assertEqual(buttons[0].callback_data, "cl_pick_123456_host_1")
+
+    async def test_xi_button_retries_transient_db_error_then_renders(self):
+        # Regression: a transient DB error while loading the squad must NOT surface
+        # as "No players are configured" (which looked random across teams/leagues).
+        # The squad-open path retries with a fresh session and renders on success.
+        players = [SimpleNamespace(id=i, name=f"MI Player {i}", details_json='{"category":"Batsman"}') for i in range(1, 13)]
+        message = DummyMessage("xi")
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_xi_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            message=message,
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        # First attempt blows up (connection recycled/killed); second succeeds.
+        load = patch.object(
+            challenge, "_query_team_players",
+            side_effect=[RuntimeError("connection reset"), players])
+        # A *fresh* session per attempt — the retry must not reuse the failed one.
+        sessions = [DummySession(), DummySession()]
+        with patch.object(challenge, "get_session", side_effect=sessions) as get_session, load:
+            await challenge.challenge_xi_callback(update, context)
+
+        self.assertEqual(get_session.call_count, 2)
+        # Rendered the squad — never told the user the team had no players.
+        self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
+        for call in query.answer.await_args_list:
+            self.assertNotIn("No players are configured", str(call))
+
+    async def test_xi_button_shows_retry_hint_when_load_keeps_failing(self):
+        # When every attempt errors out, the user gets a retriable hint, never the
+        # misleading "No players are configured" alert.
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_xi_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            message=DummyMessage("xi"),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        load = patch.object(
+            challenge, "_query_team_players",
+            side_effect=RuntimeError("connection reset"))
+        with patch.object(challenge, "get_session", return_value=DummySession()), load:
+            await challenge.challenge_xi_callback(update, context)
+
+        (alert_text, kwargs), = [c.args and (c.args[0], c.kwargs) or (None, c.kwargs)
+                                 for c in query.answer.await_args_list]
+        self.assertIn("tap Select XI again", alert_text)
+        self.assertNotIn("No players are configured", alert_text)
 
     async def test_xi_selection_enforces_order_count_and_confirm_button(self):
         categories = ["Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder"] + ["Batsman"] * 5
