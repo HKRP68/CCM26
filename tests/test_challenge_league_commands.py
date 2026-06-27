@@ -640,7 +640,7 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         update = SimpleNamespace(callback_query=query)
 
         with patch.object(challenge, "get_session", return_value=DummySession()), \
-             patch.object(challenge, "_challenge_team_players", return_value=players):
+             patch.object(challenge, "_query_team_players", return_value=players):
             await challenge.challenge_xi_callback(update, context)
 
         self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
@@ -649,6 +649,72 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(buttons), 12)
         self.assertEqual(buttons[0].text, "1. MI Player 1")
         self.assertEqual(buttons[0].callback_data, "cl_pick_123456_host_1")
+
+    async def test_xi_button_retries_transient_db_error_then_renders(self):
+        # Regression: a transient DB error while loading the squad must NOT surface
+        # as "No players are configured" (which looked random across teams/leagues).
+        # The squad-open path retries with a fresh session and renders on success.
+        players = [SimpleNamespace(id=i, name=f"MI Player {i}", details_json='{"category":"Batsman"}') for i in range(1, 13)]
+        message = DummyMessage("xi")
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_xi_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            message=message,
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        # First attempt blows up (connection recycled/killed); second succeeds.
+        load = patch.object(
+            challenge, "_query_team_players",
+            side_effect=[RuntimeError("connection reset"), players])
+        with patch.object(challenge, "get_session", return_value=DummySession()), load:
+            await challenge.challenge_xi_callback(update, context)
+
+        # Rendered the squad — never told the user the team had no players.
+        self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
+        for call in query.answer.await_args_list:
+            self.assertNotIn("No players are configured", str(call))
+
+    async def test_xi_button_shows_retry_hint_when_load_keeps_failing(self):
+        # When every attempt errors out, the user gets a retriable hint, never the
+        # misleading "No players are configured" alert.
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "turn": "complete",
+                "host_team": challenge.IPL_TEAM_NAMES[0],
+                "target_team": challenge.IPL_TEAM_NAMES[1],
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+            }
+        })
+        query = SimpleNamespace(
+            data="cl_xi_123456_host",
+            from_user=SimpleNamespace(id=1),
+            answer=AsyncMock(),
+            message=DummyMessage("xi"),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        load = patch.object(
+            challenge, "_query_team_players",
+            side_effect=RuntimeError("connection reset"))
+        with patch.object(challenge, "get_session", return_value=DummySession()), load:
+            await challenge.challenge_xi_callback(update, context)
+
+        (alert_text, kwargs), = [c.args and (c.args[0], c.kwargs) or (None, c.kwargs)
+                                 for c in query.answer.await_args_list]
+        self.assertIn("tap Select XI again", alert_text)
+        self.assertNotIn("No players are configured", alert_text)
 
     async def test_xi_selection_enforces_order_count_and_confirm_button(self):
         categories = ["Wicket Keeper", "Bowler", "Bowler", "Bowler", "Bowler", "All-rounder"] + ["Batsman"] * 5

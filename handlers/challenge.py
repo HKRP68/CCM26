@@ -815,25 +815,83 @@ def _valid_saved_subset(saved_ids, players):
     return [int(pid) for pid in saved_ids if int(pid) in current]
 
 
-def _challenge_team_players(session, draft, side):
+def _query_team_players(session, draft, side):
+    """Load a team's players for ``side``. Returns a (possibly empty) list when the
+    team genuinely has no roster, but lets DB errors propagate so the caller can tell
+    a real "no players" apart from a transient load failure (see below)."""
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
     if not team_name:
         return []
+    query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
+    league = _resolve_draft_league(session, draft)
+    if league is not None:
+        query = query.filter(ChallengeTeam.league_id == league.id)
+    team = query.first()
+    if not team:
+        return []
+    return (session.query(ChallengePlayer)
+            .filter(ChallengePlayer.team_id == team.id)
+            .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
+            .all())
+
+
+def _challenge_team_players(session, draft, side):
+    """Backward-compatible loader that swallows errors into an empty list.
+
+    Kept for the post-open callbacks (toggle/confirm/quick-select) that run only
+    after the squad has already loaded once. The squad-open path uses
+    ``_load_team_players_with_retry`` instead so a transient DB blip there is not
+    mistaken for a genuinely empty team and shown as "No players are configured".
+    """
     try:
-        query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
-        league = _resolve_draft_league(session, draft)
-        if league is not None:
-            query = query.filter(ChallengeTeam.league_id == league.id)
-        team = query.first()
-        if not team:
-            return []
-        return (session.query(ChallengePlayer)
-                .filter(ChallengePlayer.team_id == team.id)
-                .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
-                .all())
+        return _query_team_players(session, draft, side)
     except Exception:
         logger.exception("Failed to load challenge team players for XI selection")
         return []
+
+
+class _TeamPlayersLoadError(Exception):
+    """Raised when a team's players could not be loaded due to a transient DB error
+    (connection recycled/killed, pool timeout, etc.) rather than the team being empty."""
+
+
+def _load_team_players_with_retry(draft, side, attempts=2):
+    """Load a team's players using a fresh session per attempt, retrying once on a
+    transient DB error before giving up.
+
+    Returns ``(players, team_id, league_cfg)`` where ``league_cfg`` is ``None`` or a
+    dict of the league's overseas/format settings read while the session is open (so
+    no detached-instance access happens after it closes). Raises
+    ``_TeamPlayersLoadError`` only when every attempt failed with an error — never for
+    a genuinely empty roster (which comes back as an empty ``players`` list). This lets
+    the squad-open path show a "tap again" hint on a transient blip instead of a
+    misleading "no players" alert.
+    """
+    last_exc = None
+    for _ in range(max(1, attempts)):
+        session = get_session()
+        try:
+            players = _query_team_players(session, draft, side)
+            team_id = _resolve_team_id(session, draft, side)
+            league = _resolve_draft_league(session, draft)
+            league_cfg = None
+            if league is not None:
+                # Read scalars now, before the session closes — defaults apply only to
+                # missing/NULL values so an explicit 0 ("no overseas") is preserved.
+                min_raw = getattr(league, "min_overseas", None)
+                max_raw = getattr(league, "max_overseas", None)
+                league_cfg = {
+                    "overseas_min": int(min_raw) if min_raw is not None else 0,
+                    "overseas_max": int(max_raw) if max_raw is not None else 11,
+                    "ball_format": getattr(league, "match_format", "T20") or "T20",
+                }
+            return players, team_id, league_cfg
+        except Exception as exc:  # transient DB failure — retry with a fresh session
+            last_exc = exc
+            logger.exception("Failed to load challenge XI squad; will retry if attempts remain")
+        finally:
+            session.close()
+    raise _TeamPlayersLoadError() from last_exc
 
 
 
@@ -2319,25 +2377,22 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
-    session = get_session()
+    # Load the squad with a one-shot retry on a transient DB error. A blip here used
+    # to be swallowed into an empty list and shown as "No players are configured",
+    # which looked random (any team, any league) and falsely blamed the roster.
     try:
-        players = _challenge_team_players(session, draft, side)
-        team_id = _resolve_team_id(session, draft, side)
-        # Cache the league overseas limits on the draft so the picker render and
-        # confirm callbacks can enforce them without re-hitting the DB.
-        league = _resolve_draft_league(session, draft)
-        if league is not None:
-            # Fall back to defaults only for missing/NULL values — an explicit 0
-            # (e.g. "no overseas allowed") is a real cap and must be preserved.
-            min_raw = getattr(league, "min_overseas", None)
-            max_raw = getattr(league, "max_overseas", None)
-            draft["overseas_min"] = int(min_raw) if min_raw is not None else 0
-            draft["overseas_max"] = int(max_raw) if max_raw is not None else 11
-            # Cache the league's match format so the live match honours the
-            # Hundred / 20-over toggle without another DB hit at launch.
-            draft["ball_format"] = getattr(league, "match_format", "T20") or "T20"
-    finally:
-        session.close()
+        players, team_id, league_cfg = _load_team_players_with_retry(draft, side)
+    except _TeamPlayersLoadError:
+        await query.answer(
+            "⚠️ Couldn't load the squad just now. Please tap Select XI again.",
+            show_alert=True)
+        return
+    if league_cfg is not None:
+        # Cache the league's overseas limits + match format on the draft so the
+        # picker render and confirm callbacks enforce them without re-hitting the DB.
+        draft["overseas_min"] = league_cfg["overseas_min"]
+        draft["overseas_max"] = league_cfg["overseas_max"]
+        draft["ball_format"] = league_cfg["ball_format"]
     if not players:
         await query.answer(f"No players are configured for {team_name} yet.", show_alert=True)
         return
