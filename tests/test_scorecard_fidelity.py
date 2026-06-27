@@ -9,6 +9,11 @@ import types
 import unittest
 
 
+# Only stub PIL when it's genuinely absent (bare test env); removed in
+# tearDownModule so we don't clobber a real Pillow under `discover`.
+_INJECTED = []
+
+
 def _load_scorecard_with_pil_stub():
     if "PIL" not in sys.modules:
         pil = types.ModuleType("PIL")
@@ -17,12 +22,19 @@ def _load_scorecard_with_pil_stub():
         pil.ImageFont = types.SimpleNamespace(truetype=lambda *a, **k: None,
                                               load_default=lambda *a, **k: None)
         sys.modules["PIL"] = pil
+        _INJECTED.append("PIL")
     sys.modules.pop("services.scorecard_card", None)
     from services.scorecard_card import _extras_breakdown
     return _extras_breakdown
 
 
 _extras_breakdown = _load_scorecard_with_pil_stub()
+
+
+def tearDownModule():
+    for name in _INJECTED:
+        sys.modules.pop(name, None)
+    sys.modules.pop("services.scorecard_card", None)
 
 
 class ExtrasBreakdownTests(unittest.TestCase):

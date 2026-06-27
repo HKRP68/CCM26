@@ -11,36 +11,67 @@ import unittest
 from types import SimpleNamespace
 
 
+# Modules we inject only when the real one is missing (bare test env). They are
+# removed in tearDownModule so we never clobber real modules under `discover`
+# in an environment where telegram/sqlalchemy ARE installed.
+_INJECTED = []
+
+
+def _stub(name, build):
+    if name not in sys.modules:
+        sys.modules[name] = build()
+        _INJECTED.append(name)
+
+
 def _load_h2h_with_stubs():
-    telegram = types.ModuleType("telegram")
-    telegram.Update = type("Update", (), {})
-    sys.modules["telegram"] = telegram
+    def _telegram():
+        m = types.ModuleType("telegram")
+        m.Update = type("Update", (), {})
+        return m
 
-    telegram_ext = types.ModuleType("telegram.ext")
-    telegram_ext.ContextTypes = SimpleNamespace(DEFAULT_TYPE=object)
-    sys.modules["telegram.ext"] = telegram_ext
+    def _telegram_ext():
+        m = types.ModuleType("telegram.ext")
+        m.ContextTypes = SimpleNamespace(DEFAULT_TYPE=object)
+        return m
 
-    sqlalchemy = types.ModuleType("sqlalchemy")
-    sqlalchemy.or_ = lambda *a, **k: None
-    sqlalchemy.and_ = lambda *a, **k: None
-    sys.modules["sqlalchemy"] = sqlalchemy
+    def _sqlalchemy():
+        m = types.ModuleType("sqlalchemy")
+        m.or_ = lambda *a, **k: None
+        m.and_ = lambda *a, **k: None
+        return m
 
-    database = types.ModuleType("database")
-    database.get_session = lambda: None
-    sys.modules["database"] = database
+    def _database():
+        m = types.ModuleType("database")
+        m.get_session = lambda: None
+        return m
 
-    models = types.ModuleType("models")
-    models.Match = type("Match", (), {})
-    models.User = type("User", (), {})
-    sys.modules["models"] = models
+    def _models():
+        m = types.ModuleType("models")
+        m.Match = type("Match", (), {})
+        m.User = type("User", (), {})
+        return m
 
-    tus = types.ModuleType("services.telegram_user_service")
-    tus.resolve_command_target = lambda *a, **k: (None, "missing")
-    sys.modules["services.telegram_user_service"] = tus
+    def _tus():
+        m = types.ModuleType("services.telegram_user_service")
+        m.resolve_command_target = lambda *a, **k: (None, "missing")
+        return m
+
+    _stub("telegram", _telegram)
+    _stub("telegram.ext", _telegram_ext)
+    _stub("sqlalchemy", _sqlalchemy)
+    _stub("database", _database)
+    _stub("models", _models)
+    _stub("services.telegram_user_service", _tus)
 
     sys.modules.pop("handlers.h2h", None)
     from handlers.h2h import tally_h2h, _plain_name
     return tally_h2h, _plain_name
+
+
+def tearDownModule():
+    for name in _INJECTED:
+        sys.modules.pop(name, None)
+    sys.modules.pop("handlers.h2h", None)
 
 
 tally_h2h, _plain_name = _load_h2h_with_stubs()
