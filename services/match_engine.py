@@ -22,13 +22,13 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
     bat_stats = {}
     for p in bat_xi:
         bat_stats[str(p["roster_id"])] = {
-            "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
+            "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dots": 0,
             "out": False, "how_out": "", "bowled_by": "",
         }
     bowl_stats = {}
     for p in bowl_xi:
         bowl_stats[str(p["roster_id"])] = {
-            "balls": 0, "runs": 0, "wickets": 0,
+            "balls": 0, "runs": 0, "wickets": 0, "dots": 0,
             "overs_done": 0, "this_over_balls": 0,
             "maidens": 0,
             "this_over_runs": 0,

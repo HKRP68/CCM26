@@ -3856,6 +3856,9 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 runs = oc.get("runs", 0); s["total_runs"] += runs; s["total_wickets"] += 1
                 bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
                 bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
+                # A wicket off a no-run delivery is also a dot ball for the bowler.
+                if runs == 0:
+                    bws["dots"] = bws.get("dots", 0) + 1
                 how_raw = oc.get("how", "Bowled")
                 bs["how_out"] = how_raw
                 bs["bowled_by"] = bowler["name"]
@@ -3881,6 +3884,10 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
                 if runs == 4: bs["fours"] += 1
                 elif runs == 6: bs["sixes"] += 1
+                if runs == 0:
+                    # Genuine dot ball off the bat — credit batsman and bowler.
+                    bs["dots"] = bs.get("dots", 0) + 1
+                    bws["dots"] = bws.get("dots", 0) + 1
                 add_to_timeline(s, SYM.get(runs, str(runs)))
                 if runs == 0:
                     rtxt = "0️⃣ <b>DOT!</b>"
@@ -4832,6 +4839,7 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                 "balls": balls,
                 "fours": bs.get("fours", 0),
                 "sixes": bs.get("sixes", 0),
+                "dots": bs.get("dots", 0),
                 "strike_rate": round(sr, 1),
                 "status": status,
             })
@@ -4847,14 +4855,19 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             ball_rem = balls % 6
             overs_str_bw = f"{overs_complete}.{ball_rem}" if ball_rem else str(overs_complete)
             runs_conceded = bws.get("runs", 0)
+            wkts = bws.get("wickets", 0)
             econ = (runs_conceded / balls * 6) if balls > 0 else 0.0
+            # Bowling strike rate = balls per wicket (blank when wicketless).
+            bowl_sr = round(balls / wkts, 1) if wkts else None
             bowlers_rows.append({
                 "name": p.get("name", "?"),
                 "overs": overs_str_bw,
                 "maidens": bws.get("maidens", 0),
+                "dots": bws.get("dots", 0),
                 "runs_conceded": runs_conceded,
-                "wickets": bws.get("wickets", 0),
+                "wickets": wkts,
                 "economy": round(econ, 2),
+                "strike_rate": bowl_sr,
             })
 
         # Extras

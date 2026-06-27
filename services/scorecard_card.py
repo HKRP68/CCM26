@@ -352,6 +352,22 @@ def _overs_to_balls(overs):
         return 0
 
 
+def _extras_breakdown(extras_dict):
+    """Human-readable extras split, e.g. ``"wd 5 · nb 1 · lb 3"``.
+
+    Falls back to the generic label when nothing has been conceded so the panel
+    never reads as an empty string. Used as the default EXTRAS note; an admin
+    override in text_settings still takes precedence.
+    """
+    extras_dict = extras_dict or {}
+    parts = []
+    for key, label in (("wd", "wd"), ("nb", "nb"), ("b", "b"), ("lb", "lb")):
+        val = int(extras_dict.get(key, 0) or 0)
+        if val:
+            parts.append(f"{label} {val}")
+    return " · ".join(parts) if parts else "wides, no-balls, byes"
+
+
 def _draw_section_title(draw, x, y, w, title, subtitle, accent):
     """Add a compact section banner between the hero and the score table."""
     h = 42
@@ -930,7 +946,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
              _text_from_setting(text_settings, "batting", "extras_subtitle", "ADDITIONAL RUNS"),
              _text_from_setting(text_settings, "batting", "extras_value", str(extras_dict.get("total", 0))),
              _text_from_setting(text_settings, "batting", "extras_label", "EXTRAS"),
-             _text_from_setting(text_settings, "batting", "extras_note", "wides, no-balls, byes"), gold, False),
+             _text_from_setting(text_settings, "batting", "extras_note", _extras_breakdown(extras_dict)), gold, False),
             ("overs_subtitle", "overs_value", "overs_label", "overs_note",
              _text_from_setting(text_settings, "batting", "overs_subtitle", "PROGRESS"),
              _text_from_setting(text_settings, "batting", "overs_value", str(overs_str)),
