@@ -349,16 +349,20 @@ def _validate_user_xi(session, user_id):
     return valid, errors, len(roster)
 
 
-def _league_has_teams(session, league_id):
-    """True if ``league_id`` has at least one (active) ChallengeTeam configured."""
-    try:
-        query = session.query(ChallengeTeam).filter(ChallengeTeam.league_id == league_id)
-        if hasattr(ChallengeTeam, "is_active"):
-            query = query.filter(ChallengeTeam.is_active == True)
-        return query.first() is not None
-    except Exception:
-        logger.exception("Failed to check teams for league %s", league_id)
-        return False
+def _league_has_players(session, league_id):
+    """True if ``league_id`` has at least one player on an active team.
+
+    Checks for ``ChallengePlayer`` rows (not just empty ``ChallengeTeam`` shells) so a
+    duplicate league that has team names but no roster is not preferred over the league
+    that actually holds the players. Lets DB errors propagate so the caller can tell a
+    query failure apart from a genuinely empty league rather than guessing.
+    """
+    query = (session.query(ChallengePlayer.id)
+             .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
+             .filter(ChallengeTeam.league_id == league_id))
+    if hasattr(ChallengeTeam, "is_active"):
+        query = query.filter(ChallengeTeam.is_active)
+    return query.first() is not None
 
 
 def _get_challenge_league_record(session, league_key):
@@ -367,13 +371,13 @@ def _get_challenge_league_record(session, league_key):
     try:
         # Order by id so the scan is deterministic. When two active leagues share a
         # key (a duplicate/leftover sharing a short_code or command), prefer the one
-        # that actually has teams configured — otherwise resolution could land on an
+        # that actually has a populated roster — otherwise resolution could land on an
         # empty duplicate, the team picker would silently fall back to built-in names
         # that don't exist in that league, and the XI step would surface a spurious
         # "No players are configured for <team> yet." alert.
         candidates = []
         for league in (session.query(ChallengeLeague)
-                       .filter(ChallengeLeague.is_active == True)
+                       .filter(ChallengeLeague.is_active)
                        .order_by(ChallengeLeague.id)
                        .all()):
             if normalize_challenge_league(league.short_code or league.name) == league_key:
@@ -384,12 +388,29 @@ def _get_challenge_league_record(session, league_key):
                 candidates.append(league)
         if not candidates:
             return None
+        if len(candidates) == 1:
+            # The overwhelmingly common case: a single matching league. Return it
+            # directly so a transient roster-check error can never second-guess it.
+            return candidates[0]
+        # Multiple active leagues share this key. Prefer one with an actual roster so
+        # the picker + XI step don't land on an empty shell. A roster check that errors
+        # is treated as "unknown" (preferred over a *known*-empty league) so a transient
+        # DB blip doesn't cause us to pin the empty duplicate.
+        known_empty = None
+        indeterminate = None
         for league in candidates:
-            if _league_has_teams(session, league.id):
+            try:
+                has_players = _league_has_players(session, league.id)
+            except Exception:
+                logger.exception("Roster check failed for league %s during resolution", league.id)
+                if indeterminate is None:
+                    indeterminate = league
+                continue
+            if has_players:
                 return league
-        # No matching league has teams yet — return the first match so callers fall
-        # back to built-in teams deterministically.
-        return candidates[0]
+            if known_empty is None:
+                known_empty = league
+        return indeterminate or known_empty or candidates[0]
     except Exception:
         logger.exception("Failed to load challenge league record")
     return None

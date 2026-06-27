@@ -257,12 +257,13 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
                      if k.startswith("challenge_team_draft_"))
         self.assertEqual(draft.get("league_id"), 77)
 
-    def test_league_resolution_prefers_league_with_teams(self):
+    def test_league_resolution_prefers_league_with_roster(self):
         # Regression: when two active leagues normalize to the same key (a
         # duplicate/leftover sharing a short_code), resolution must deterministically
-        # prefer the one that actually has teams. Landing on the empty duplicate makes
-        # the team picker fall back to built-in names that don't exist in that league,
-        # so the XI step surfaces a spurious "No players are configured" alert.
+        # prefer the one that actually has a populated roster. Landing on the empty
+        # duplicate makes the team picker fall back to built-in names that don't exist
+        # in that league, so the XI step surfaces a spurious "No players are configured"
+        # alert. A team shell with no players must not win, either.
         empty_league = SimpleNamespace(id=9, name="IPL Old", short_code="IPL", command=None)
         full_league = SimpleNamespace(id=5, name="IPL", short_code="IPL", command=None)
 
@@ -289,13 +290,49 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             def close(self):
                 pass
 
-        has_teams = lambda session, lid: lid == full_league.id
-        # The empty duplicate is yielded first; the league with teams must still win.
+        has_players = lambda session, lid: lid == full_league.id
+        # The empty duplicate is yielded first; the league with players must still win.
         for order in ([empty_league, full_league], [full_league, empty_league]):
-            with patch.object(challenge, "_league_has_teams", side_effect=has_teams):
+            with patch.object(challenge, "_league_has_players", side_effect=has_players):
                 resolved = challenge._get_challenge_league_record(
                     _FakeSession(order), "ipl")
             self.assertIs(resolved, full_league)
+
+    def test_league_resolution_roster_check_error_avoids_known_empty(self):
+        # If the roster check errors for one duplicate (transient DB blip) and another
+        # is *known* empty, prefer the indeterminate one rather than pinning the league
+        # we positively know has no roster — a failure must not read as "empty".
+        known_empty = SimpleNamespace(id=3, name="IPL Old", short_code="IPL", command=None)
+        blips = SimpleNamespace(id=7, name="IPL", short_code="IPL", command=None)
+
+        class _LeagueQuery:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def order_by(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return self._rows
+
+        class _FakeSession:
+            def query(self, *args, **kwargs):
+                return _LeagueQuery([known_empty, blips])
+
+            def close(self):
+                pass
+
+        def roster(session, lid):
+            if lid == blips.id:
+                raise RuntimeError("connection reset")
+            return False
+
+        with patch.object(challenge, "_league_has_players", side_effect=roster):
+            resolved = challenge._get_challenge_league_record(_FakeSession(), "ipl")
+        self.assertIs(resolved, blips)
 
     async def test_second_league_command_blocked_while_draft_in_progress(self):
         reply_user = SimpleNamespace(id=3, is_bot=False)
@@ -677,9 +714,12 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         load = patch.object(
             challenge, "_query_team_players",
             side_effect=[RuntimeError("connection reset"), players])
-        with patch.object(challenge, "get_session", return_value=DummySession()), load:
+        # A *fresh* session per attempt — the retry must not reuse the failed one.
+        sessions = [DummySession(), DummySession()]
+        with patch.object(challenge, "get_session", side_effect=sessions) as get_session, load:
             await challenge.challenge_xi_callback(update, context)
 
+        self.assertEqual(get_session.call_count, 2)
         # Rendered the squad — never told the user the team had no players.
         self.assertIn("<b>Selected:</b> 0/11", message.replies[0][0])
         for call in query.answer.await_args_list:
