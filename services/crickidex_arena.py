@@ -516,7 +516,9 @@ def _serialize_match_state_impl(session, match, viewer_user):
             from engine import chase_chance as cc
             runs_needed = max(0, int(target) - int(cur_runs))
             balls_left = max(0, total_balls - balls_bowled)
-            if balls_left > 0:
+            # Skip once the chase is already settled (runs_needed clamped to 0),
+            # so a won chase with balls left doesn't emit a stale 99/1 payload.
+            if runs_needed > 0 and balls_left > 0:
                 order = state.get("batting_order") or []
                 striker_p = _by_idx(order, state.get("striker_idx", 0)) or {}
                 non_striker_p = _by_idx(order, state.get("non_striker_idx", 1)) or {}

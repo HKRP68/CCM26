@@ -8,6 +8,7 @@ Display names are rendered WITHOUT an @-mention or tg:// link on purpose, so
 running /h2h never pings the players it talks about.
 """
 
+import html
 import logging
 
 from telegram import Update
@@ -76,7 +77,7 @@ async def h2h_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ You haven't played yet. Use /debut to start, then /playmatch.")
             return
 
-        target, reason = resolve_command_target(session, update, context, "h2h")
+        target, _reason = resolve_command_target(session, update, context, "h2h")
         if not target:
             await update.message.reply_text(
                 "🏏 <b>Head-to-Head</b>\n\n"
@@ -98,8 +99,11 @@ async def h2h_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    .order_by(Match.completed_at.desc().nullslast(), Match.id.desc())
                    .all())
 
-        me_name = _plain_name(me)
-        opp_name = _plain_name(target)
+        # Escape — names come from user-controlled first_name/team_name and go
+        # into an HTML-parsed message; without this a crafted name could inject
+        # markup or a tg:// link and break the deliberate "no ping" guarantee.
+        me_name = html.escape(_plain_name(me))
+        opp_name = html.escape(_plain_name(target))
 
         if not matches:
             await update.message.reply_text(

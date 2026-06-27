@@ -3828,6 +3828,10 @@ async def _process_shot_core(context, mid, si, *, q=None):
             prev_bat_runs = bs.get("runs", 0)
             prev_partnership = s.get("partnership_runs", 0)
             prev_over_runs = bws.get("this_over_runs", 0)
+            # Pre-ball over position, so first-ball / over-end narratives
+            # (powerplay, death, last-over, maiden) key off the right ball.
+            pre_over = s.get("current_over", 1)
+            pre_ball = s.get("current_ball", 0)
 
             oc = _calc(s, striker, bowler, shot, dl)
             legal = True
@@ -3859,9 +3863,12 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 runs = oc.get("runs", 0); s["total_runs"] += runs; s["total_wickets"] += 1
                 bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
                 bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
-                # A wicket off a no-run delivery is also a dot ball for the bowler.
+                # A wicket off a no-run delivery is a dot ball for both the
+                # bowler and the (dismissed) batter, so the batting-card dot
+                # count stays in sync with balls faced.
                 if runs == 0:
                     bws["dots"] = bws.get("dots", 0) + 1
+                    bs["dots"] = bs.get("dots", 0) + 1
                 how_raw = oc.get("how", "Bowled")
                 bs["how_out"] = how_raw
                 bs["bowled_by"] = bowler["name"]
@@ -3940,7 +3947,8 @@ async def _process_shot_core(context, mid, si, *, q=None):
             # fall back to the configured per-event line when it yields nothing.
             commentary_line = _engine_commentary(
                 s, oc, striker, bowler,
-                prev_bat_runs, prev_partnership, prev_over_runs)
+                prev_bat_runs, prev_partnership, prev_over_runs,
+                pre_over=pre_over, pre_ball=pre_ball, is_maiden=is_maiden)
             if not commentary_line:
                 commentary_line = _maybe_pick_commentary(
                     oc, striker, bowler, runs_for_commentary=oc.get("runs", 0))
@@ -4222,10 +4230,16 @@ except Exception:  # pragma: no cover - engine is best-effort
 
 
 def _engine_commentary(s, oc, striker, bowler, prev_bat_runs,
-                       prev_partnership, prev_over_runs):
+                       prev_partnership, prev_over_runs,
+                       pre_over=None, pre_ball=None, is_maiden=False):
     """Rich SimCricketX commentary for /playmatch (micro template + narrative,
     including sequence-aware lines). Returns None on any failure so the caller
-    falls back to the configured per-event line."""
+    falls back to the configured per-event line.
+
+    ``pre_over``/``pre_ball`` are the over position *before* this delivery (the
+    live ``current_over``/``current_ball`` have already advanced by call time),
+    so first-ball / over-end narratives key off the correct ball. Falls back to
+    the live state when not supplied."""
     if _COMMENTARY_ENGINE is None:
         return None
     try:
@@ -4276,15 +4290,20 @@ def _engine_commentary(s, oc, striker, bowler, prev_bat_runs,
         runs_needed = (max(0, int(s.get("target")) - int(s.get("total_runs", 0)))
                        if s.get("target") else 999)
 
+        # The engine is over-based and 0-indexed (over 0 = first over). Use the
+        # pre-ball position when supplied, else the (already-advanced) live one.
+        eng_over = (pre_over - 1) if pre_over is not None else max(0, s.get("current_over", 1) - 1)
+        eng_ball = pre_ball if pre_ball is not None else s.get("current_ball", 0)
         match_state = {
-            "current_over": max(0, s.get("current_over", 1) - 1),
-            "current_ball": s.get("current_ball", 0),
+            "current_over": max(0, eng_over),
+            "current_ball": eng_ball,
             "innings": innings,
             "score": s.get("total_runs", 0),
             "wickets": s.get("total_wickets", 0),
             "batter_runs": prev_bat_runs,
             "partnership_runs": prev_partnership,
             "current_over_runs": prev_over_runs,
+            "is_maiden_over": bool(is_maiden),
             "recent_wickets_match": s.get("consec_wickets", 0),
             "required_run_rate": required_rr,
             "runs_needed": runs_needed,

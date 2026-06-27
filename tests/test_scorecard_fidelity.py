@@ -4,6 +4,7 @@ Only the pure extras-breakdown helper is exercised here; PIL is stubbed so the
 module imports without the Pillow dependency installed.
 """
 
+import importlib.util
 import sys
 import types
 import unittest
@@ -15,7 +16,7 @@ _INJECTED = []
 
 
 def _load_scorecard_with_pil_stub():
-    if "PIL" not in sys.modules:
+    if importlib.util.find_spec("PIL") is None:
         pil = types.ModuleType("PIL")
         pil.Image = types.SimpleNamespace(new=lambda *a, **k: None)
         pil.ImageDraw = types.SimpleNamespace(Draw=lambda *a, **k: None)

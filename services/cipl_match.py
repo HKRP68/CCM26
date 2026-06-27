@@ -861,6 +861,20 @@ def simulate_over(state):
     # revised target before a ball is bowled this over.
     target = _maybe_rain_interrupt(state, over_idx, overs_total, innings, target)
     chased = bool(target) and state["total_runs"] >= target
+    # If rain shortened the innings, recompute the over-derived inputs so this
+    # over's balls-left / required-rate / phase boundaries match the new length.
+    if state["overs"] != overs_total:
+        overs_total = state["overs"]
+        innings_balls = total_balls(state)
+        if hundred:
+            engine_overs = max(1, round(innings_balls / 6))
+            engine_fmt = _fmt_to_engine_fmt(
+                {"label": "The100", "overs": engine_overs, "max_bowler_overs": 4,
+                 "powerplay_end": 4, "death_start": max(2, engine_overs - 3)}, overs_total)
+        else:
+            engine_overs = overs_total
+            engine_fmt = _fmt_to_engine_fmt(None, overs_total)
+        pressure_eng = PressureEngine(format_config=engine_fmt)
 
     while balls_this_over < bpu and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
@@ -1598,6 +1612,12 @@ def end_first_innings(state):
     state["partnership_balls"] = 0
     state["wkt_marks"] = []
     state["momentum_prev"] = 0.0
+    # Clear sequence-aware commentary flags so innings-1's final ball can't
+    # trigger a back-to-back / post-wicket / dot-streak line on the first
+    # delivery of the chase.
+    state["last_ball_boundary"] = False
+    state["last_ball_wicket"] = False
+    state["cmt_consec_dots"] = 0
     # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.
     state["last_over_timeline"] = []
     state["last_over_commentary"] = []
@@ -1612,6 +1632,10 @@ def compute_result(state):
     inn1 = state.get("inn1_runs", 0)
     inn2 = state.get("total_runs", 0)
     target = state.get("target") or (inn1 + 1)
+    # Par is one run short of the target. In a normal match this equals inn1
+    # (target == inn1 + 1); after a DLS rain revision it's the revised par, so
+    # ties and run margins are judged against the target the chase actually had.
+    par = target - 1
     # Side that batted second is the current bat side.
     second_batting = state["bat_team_name"]
     first_batting = state.get("inn1_bat_team", state["bowl_team_name"])
@@ -1620,8 +1644,8 @@ def compute_result(state):
         return {"winner": second_batting, "loser": first_batting,
                 "margin_type": "wickets", "margin": max(0, wickets_in_hand),
                 "tie": False}
-    if inn2 == inn1:
+    if inn2 == par:
         return {"winner": None, "loser": None, "margin_type": "tie",
                 "margin": 0, "tie": True}
     return {"winner": first_batting, "loser": second_batting,
-            "margin_type": "runs", "margin": inn1 - inn2, "tie": False}
+            "margin_type": "runs", "margin": par - inn2, "tie": False}

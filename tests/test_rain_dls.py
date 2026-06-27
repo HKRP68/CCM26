@@ -96,5 +96,43 @@ class RainInterruptTests(unittest.TestCase):
         self.assertNotIn("rain_done", s)
 
 
+class ComputeResultWithDlsTests(unittest.TestCase):
+    """compute_result must judge ties/run-margins against the (possibly revised)
+    target, not the raw first-innings score."""
+
+    def _state(self, *, inn1, target, inn2, wickets=4):
+        return {
+            "inn1_runs": inn1, "target": target, "total_runs": inn2,
+            "total_wickets": wickets, "wicket_limit": 10,
+            "bat_team_name": "Chasers", "bowl_team_name": "Defenders",
+            "inn1_bat_team": "Defenders",
+        }
+
+    def test_normal_match_runs_margin_unchanged(self):
+        # No revision: target == inn1 + 1, so par == inn1.
+        r = cipl_match.compute_result(self._state(inn1=180, target=181, inn2=170))
+        self.assertEqual(r["margin_type"], "runs")
+        self.assertEqual(r["margin"], 10)
+        self.assertEqual(r["winner"], "Defenders")
+
+    def test_dls_revised_loss_margin_uses_par(self):
+        # 180 revised to a target of 150 (par 149); chase ends 140 -> lose by 9.
+        r = cipl_match.compute_result(self._state(inn1=180, target=150, inn2=140))
+        self.assertEqual(r["margin_type"], "runs")
+        self.assertEqual(r["margin"], 9)
+        self.assertEqual(r["winner"], "Defenders")
+
+    def test_dls_revised_tie_at_par(self):
+        # Chase ends exactly on par (149) under a revised target of 150 -> tie.
+        r = cipl_match.compute_result(self._state(inn1=180, target=150, inn2=149))
+        self.assertTrue(r["tie"])
+        self.assertIsNone(r["winner"])
+
+    def test_dls_revised_win_by_wickets(self):
+        r = cipl_match.compute_result(self._state(inn1=180, target=150, inn2=150, wickets=3))
+        self.assertEqual(r["margin_type"], "wickets")
+        self.assertEqual(r["winner"], "Chasers")
+
+
 if __name__ == "__main__":
     unittest.main()

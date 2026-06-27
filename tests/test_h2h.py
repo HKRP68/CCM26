@@ -5,6 +5,7 @@ The handler module imports telegram/database/models at import time, so we stub
 those (mirroring tests/test_challenge_league_commands.py) before importing it.
 """
 
+import importlib.util
 import sys
 import types
 import unittest
@@ -17,8 +18,25 @@ from types import SimpleNamespace
 _INJECTED = []
 
 
+def _is_available(name):
+    """True if the real module actually imports.
+
+    We attempt a real import rather than just `find_spec`, because local modules
+    like `database`/`models` exist as files (so find_spec succeeds) yet fail to
+    import when their third-party deps (sqlalchemy) are absent — exactly the case
+    where we still want to inject a stub.
+    """
+    if name in sys.modules:
+        return True
+    try:
+        importlib.import_module(name)
+        return True
+    except Exception:
+        return False
+
+
 def _stub(name, build):
-    if name not in sys.modules:
+    if not _is_available(name):
         sys.modules[name] = build()
         _INJECTED.append(name)
 

@@ -306,6 +306,12 @@ def transition_to_second_innings(s):
     s["delivery_history"] = []
     s["recent_runs_window"] = []
     s["consec_wickets"] = 0
+    # Clear sequence-aware commentary flags so the first ball of the chase
+    # can't inherit innings-1's last delivery (back-to-back / post-wicket /
+    # dot-streak narratives).
+    s["last_ball_boundary"] = False
+    s["last_ball_wicket"] = False
+    s["cmt_consec_dots"] = 0
     s["bat_team_id"], s["bowl_team_id"] = s.get("bowl_team_id"), s.get("bat_team_id")
     s["bat_user_tg"], s["bowl_user_tg"] = s.get("bowl_user_tg"), s.get("bat_user_tg")
     s["bat_team_name"], s["bowl_team_name"] = s["bowl_team_name"], s["bat_team_name"]
