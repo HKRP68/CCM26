@@ -441,6 +441,36 @@ body {
   text-shadow: var(--glow-accent);
 }
 
+/* Win-probability bar — broadcast-style bat-vs-bowl split during a chase */
+.winprob {
+  margin: 12px 0 4px;
+}
+.winprob-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-bottom: 5px;
+}
+.winprob-bat { color: var(--success-accent); }
+.winprob-bowl { color: var(--primary-accent); }
+.winprob-track {
+  height: 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  /* The track itself is the bowling colour; the fill is the batting colour. */
+  background: rgba(var(--accent-rgb), 0.30);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+.winprob-fill {
+  height: 100%;
+  background: linear-gradient(90deg,
+    rgba(var(--success-rgb), 0.65), rgba(var(--success-rgb), 0.95));
+  border-radius: 999px 0 0 999px;
+  transition: width 0.6s ease;
+}
+
 /* Free hit banner (UnderCover /cric parity) */
 .free-hit-bar {
   background: rgba(var(--gold-rgb), 0.10);

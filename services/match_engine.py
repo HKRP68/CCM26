@@ -22,13 +22,13 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
     bat_stats = {}
     for p in bat_xi:
         bat_stats[str(p["roster_id"])] = {
-            "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
+            "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dots": 0,
             "out": False, "how_out": "", "bowled_by": "",
         }
     bowl_stats = {}
     for p in bowl_xi:
         bowl_stats[str(p["roster_id"])] = {
-            "balls": 0, "runs": 0, "wickets": 0,
+            "balls": 0, "runs": 0, "wickets": 0, "dots": 0,
             "overs_done": 0, "this_over_balls": 0,
             "maidens": 0,
             "this_over_runs": 0,
@@ -306,6 +306,12 @@ def transition_to_second_innings(s):
     s["delivery_history"] = []
     s["recent_runs_window"] = []
     s["consec_wickets"] = 0
+    # Clear sequence-aware commentary flags so the first ball of the chase
+    # can't inherit innings-1's last delivery (back-to-back / post-wicket /
+    # dot-streak narratives).
+    s["last_ball_boundary"] = False
+    s["last_ball_wicket"] = False
+    s["cmt_consec_dots"] = 0
     s["bat_team_id"], s["bowl_team_id"] = s.get("bowl_team_id"), s.get("bat_team_id")
     s["bat_user_tg"], s["bowl_user_tg"] = s.get("bowl_user_tg"), s.get("bat_user_tg")
     s["bat_team_name"], s["bowl_team_name"] = s["bowl_team_name"], s["bat_team_name"]
