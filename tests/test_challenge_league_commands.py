@@ -35,6 +35,7 @@ def _load_challenge_with_stubs():
     models.User = type("User", (), {})
     class ChallengeLeague:
         is_active = True
+        id = "id"
     models.ChallengeLeague = ChallengeLeague
     models.ChallengeTeam = type("ChallengeTeam", (), {"league_id": "league_id", "sort_order": "sort_order", "name": "name"})
     models.ChallengePlayer = type("ChallengePlayer", (), {"team_id": "team_id", "sort_order": "sort_order", "name": "name"})
@@ -73,8 +74,14 @@ class DummyQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def order_by(self, *args, **kwargs):
+        return self
+
     def all(self):
         return []
+
+    def first(self):
+        return None
 
 
 class DummySession:
@@ -249,6 +256,46 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
         draft = next(v for k, v in context.bot_data.items()
                      if k.startswith("challenge_team_draft_"))
         self.assertEqual(draft.get("league_id"), 77)
+
+    def test_league_resolution_prefers_league_with_teams(self):
+        # Regression: when two active leagues normalize to the same key (a
+        # duplicate/leftover sharing a short_code), resolution must deterministically
+        # prefer the one that actually has teams. Landing on the empty duplicate makes
+        # the team picker fall back to built-in names that don't exist in that league,
+        # so the XI step surfaces a spurious "No players are configured" alert.
+        empty_league = SimpleNamespace(id=9, name="IPL Old", short_code="IPL", command=None)
+        full_league = SimpleNamespace(id=5, name="IPL", short_code="IPL", command=None)
+
+        class _LeagueQuery:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def order_by(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return self._rows
+
+        class _FakeSession:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def query(self, *args, **kwargs):
+                return _LeagueQuery(self._rows)
+
+            def close(self):
+                pass
+
+        has_teams = lambda session, lid: lid == full_league.id
+        # The empty duplicate is yielded first; the league with teams must still win.
+        for order in ([empty_league, full_league], [full_league, empty_league]):
+            with patch.object(challenge, "_league_has_teams", side_effect=has_teams):
+                resolved = challenge._get_challenge_league_record(
+                    _FakeSession(order), "ipl")
+            self.assertIs(resolved, full_league)
 
     async def test_second_league_command_blocked_while_draft_in_progress(self):
         reply_user = SimpleNamespace(id=3, is_bot=False)

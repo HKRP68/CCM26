@@ -349,18 +349,47 @@ def _validate_user_xi(session, user_id):
     return valid, errors, len(roster)
 
 
+def _league_has_teams(session, league_id):
+    """True if ``league_id`` has at least one (active) ChallengeTeam configured."""
+    try:
+        query = session.query(ChallengeTeam).filter(ChallengeTeam.league_id == league_id)
+        if hasattr(ChallengeTeam, "is_active"):
+            query = query.filter(ChallengeTeam.is_active == True)
+        return query.first() is not None
+    except Exception:
+        logger.exception("Failed to check teams for league %s", league_id)
+        return False
+
+
 def _get_challenge_league_record(session, league_key):
     if not league_key:
         return None
     try:
+        # Order by id so the scan is deterministic. When two active leagues share a
+        # key (a duplicate/leftover sharing a short_code or command), prefer the one
+        # that actually has teams configured — otherwise resolution could land on an
+        # empty duplicate, the team picker would silently fall back to built-in names
+        # that don't exist in that league, and the XI step would surface a spurious
+        # "No players are configured for <team> yet." alert.
+        candidates = []
         for league in (session.query(ChallengeLeague)
                        .filter(ChallengeLeague.is_active == True)
+                       .order_by(ChallengeLeague.id)
                        .all()):
             if normalize_challenge_league(league.short_code or league.name) == league_key:
-                return league
+                candidates.append(league)
+                continue
             command = (league.command or "").strip().lower().lstrip("/").split("@", 1)[0]
             if command and is_challenge_league_command(command, session)[0] == league_key:
+                candidates.append(league)
+        if not candidates:
+            return None
+        for league in candidates:
+            if _league_has_teams(session, league.id):
                 return league
+        # No matching league has teams yet — return the first match so callers fall
+        # back to built-in teams deterministically.
+        return candidates[0]
     except Exception:
         logger.exception("Failed to load challenge league record")
     return None
