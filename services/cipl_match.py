@@ -857,6 +857,11 @@ def simulate_over(state):
     # Commentary: announce the bowler taking the new over (into attack / returns).
     _emit_bowler_card(state, bowler)
 
+    # Rare rain break (2nd innings only): may shorten the chase and set a DLS
+    # revised target before a ball is bowled this over.
+    target = _maybe_rain_interrupt(state, over_idx, overs_total, innings, target)
+    chased = bool(target) and state["total_runs"] >= target
+
     while balls_this_over < bpu and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
             break
@@ -1384,6 +1389,61 @@ def _emit_new_batsman_card(state, player):
     _push_card(state, {
         "type": "new_batsman", "name": player["name"],
         "text": f"{player['name']} comes to the crease."})
+
+
+def _maybe_rain_interrupt(state, over_idx, overs_total, innings, target):
+    """Rare 2nd-innings rain break that shortens the chase and applies a DLS
+    revised target. Fires at most once per match and never inside the last few
+    overs. Returns the (possibly revised) runs-to-win target so the caller can
+    refresh its local copy.
+
+    Rarity is controlled by ``CIPL_RAIN_PROB`` (default 0.02 per eligible over);
+    tests can force it by setting that to 1.
+    """
+    if innings != 2 or not target or state.get("rain_done"):
+        return target
+    overs_left_before = overs_total - over_idx
+    # Need enough overs left that losing some still leaves a real chase.
+    if overs_left_before <= 3:
+        return target
+    import os
+    import random
+    try:
+        prob = float(os.getenv("CIPL_RAIN_PROB", "0.02") or 0.02)
+    except (TypeError, ValueError):
+        prob = 0.02
+    if random.random() >= prob:
+        return target
+
+    overs_lost = 1 if overs_left_before <= 6 else random.choice([1, 2])
+    new_total = overs_total - overs_lost
+    overs_left_after = new_total - over_idx
+    wkts = state.get("total_wickets", 0)
+    team1_score = int(target) - 1
+    try:
+        from engine import dls
+        revised = dls.revised_target(team1_score, overs_total,
+                                     overs_left_before, overs_left_after, wkts)
+    except Exception:
+        logger.exception("DLS revised target failed; keeping original target")
+        return target
+
+    state["overs"] = new_total
+    state["target"] = revised
+    state["rain_done"] = True
+    state.setdefault("rain_interruptions", []).append({
+        "over": over_idx, "overs_lost": overs_lost,
+        "runs": state.get("total_runs", 0), "wickets": wkts,
+        "new_overs": new_total, "revised_target": revised,
+    })
+    need = max(0, revised - state.get("total_runs", 0))
+    _push_card(state, {
+        "type": "rain", "name": "Rain",
+        "text": (f"🌧 Rain stops play! {overs_lost} over(s) lost. "
+                 f"DLS revised target: {revised} from {new_total} overs. "
+                 f"{state.get('bat_team_name', 'Batting')} now need {need} "
+                 f"off {overs_left_after} over(s).")})
+    return revised
 
 
 def _emit_end_of_over_card(state, bowler, over_no, over_runs):
