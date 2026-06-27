@@ -106,6 +106,7 @@ from handlers.match import (
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
     testwpm_handler,
 )
+from handlers.h2h import h2h_handler
 
 # Auto-simulated match handler (/sim)
 from handlers.sim import sim_handler
@@ -314,6 +315,7 @@ BOT_MENU_COMMANDS = (
     ("botstatus", "Bot ping, uptime & status"),
     ("lastmatch", "View your last match"),
     ("recentmatches", "View your recent matches"),
+    ("h2h", "Head-to-head record vs another player"),
     ("matchinfo", "View active match information"),
     ("report", "Send feedback or report an issue"),
     ("cmuundo", "Undo your latest eligible action"),
@@ -892,6 +894,7 @@ def main():
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
         app.add_handler(CommandHandler(["recentmatches", "recent", "matches"], recentmatches_handler))
+        app.add_handler(CommandHandler(["h2h", "headtohead"], h2h_handler))
         app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
 
         # ── User feedback ────────────────────────────────────────────
