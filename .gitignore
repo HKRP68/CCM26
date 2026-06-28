@@ -13,3 +13,6 @@ __pycache__/
 # Logs
 logs/
 *.log
+
+# Runtime card-template state (admin-saved; committing it shadows pinned state)
+data/card_templates/state.json

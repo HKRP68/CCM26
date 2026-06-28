@@ -391,7 +391,18 @@ def get_template_config(session=None, variant="base"):
         logger.exception("card-template storage state unavailable")
         state = {}
     cfg = {} if state else get_config(session)
-    style = state.get("card_style") or cfg.get("card_style") or "tier"
+    image_path = template_image_path(session, variant)
+    # Style resolution priority: an admin-saved choice (runtime/pinned state) wins;
+    # otherwise a committed/uploaded template image activates the template style by
+    # default — so committing a template needs no admin save and no baked state.json
+    # (which would shadow admin-saved/pinned state on storage-backed deploys);
+    # otherwise fall back to legacy config or the procedural tier card.
+    if state.get("card_style"):
+        style = state["card_style"]
+    elif image_path:
+        style = "template"
+    else:
+        style = cfg.get("card_style") or "tier"
     show_portrait = state.get("show_portrait", cfg.get("card_template_show_portrait", True))
     settings = state.get("settings", cfg.get("card_template_settings"))
     font_path = None
@@ -405,7 +416,7 @@ def get_template_config(session=None, variant="base"):
     return {
         "style": str(style or "tier").lower(),
         "variant": normalise_template_variant(variant),
-        "image_path": template_image_path(session, variant),
+        "image_path": image_path,
         "area_code": cfg.get("card_template_area_code") or "",
         "regions": parse_area_code(cfg.get("card_template_area_code") or ""),
         "show_portrait": bool(show_portrait),

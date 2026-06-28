@@ -123,8 +123,19 @@ async def send_player_card(
     # ── Strategy 1.5: Cached file_id (generated card) ──
     # Player.card_file_id holds the file_id from the last auto-generated send.
     # Skipped when generated cards are disabled — it is not a custom card.
+    # Also skipped when the website template style is active: a cached id may
+    # point at a stale procedural render, so regenerate the template instead.
     if not cached_file_id and allow_generated:
-        cached_file_id = getattr(player, "card_file_id", None)
+        template_active = False
+        try:
+            from services.card_template_service import (get_template_config,
+                                                        player_template_variant)
+            template_active = (get_template_config(
+                variant=player_template_variant(player)).get("style") == "template")
+        except Exception:
+            template_active = False
+        if not template_active:
+            cached_file_id = getattr(player, "card_file_id", None)
 
     if cached_file_id:
         try:

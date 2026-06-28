@@ -1,8 +1,11 @@
 # Card templates
 
 The bot draws every player's info onto a blank template image when the player has
-**no** admin-uploaded custom card. `state.json` here sets `card_style: "template"` so
-this is the default output.
+**no** admin-uploaded custom card. Committing a `template.*` image here (below) makes
+the website **template** style the default output automatically — no admin save and
+no committed `state.json`, so admin-saved layout (stored in the Telegram-pinned state
+on storage-backed deploys) is never shadowed on redeploy. An explicit `card_style`
+saved from the admin page always wins.
 
 ## Add your template
 
@@ -25,6 +28,7 @@ Star/Legend versions; without them those players fall back to `template.*`.
 
 ## Adjust field positions
 
-Field coordinates live in `state.json` under `settings` (seeded from the v7.1
-defaults). Fine-tune them live on the admin card-template page — saving there
-overwrites `state.json`, no redeploy needed.
+Field coordinates default to the v7.1 layout (`DEFAULT_TEMPLATE_SETTINGS` in
+`services/card_template_service.py`). Fine-tune them live on the admin card-template
+page — saving there persists to the runtime state (local `state.json` + Telegram-pinned
+state on storage-backed deploys), no redeploy needed.
