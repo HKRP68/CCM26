@@ -369,6 +369,26 @@ def template_image_path(session=None, variant="base", fallback_to_base=True):
     return template_image_path(session, variant="base")
 
 
+def template_file_path(variant="base"):
+    """Path to a committed/admin-uploaded template *file* for this variant.
+
+    Checks only the on-disk template files in ``TEMPLATES_ROOT`` (with the base
+    fallback for Star/Legend), excluding the legacy ``GameConfig`` image path.
+    Used to decide whether to auto-activate the template style: an actual template
+    file is a clear "use this" signal, whereas a legacy DB image path is not — for
+    the latter we keep respecting the saved ``card_style``.
+    """
+    variant = normalise_template_variant(variant)
+    stem = "template" if variant == "base" else f"template_{variant}"
+    for ext in ALLOWED_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+        if os.path.isfile(path):
+            return path
+    if variant != "base":
+        return template_file_path("base")
+    return None
+
+
 def list_template_variants(session=None):
     """Describe each selectable rarity tab and whether it has its own upload."""
     result = {}
@@ -392,14 +412,17 @@ def get_template_config(session=None, variant="base"):
         state = {}
     cfg = {} if state else get_config(session)
     image_path = template_image_path(session, variant)
-    # Style resolution priority: an admin-saved choice (runtime/pinned state) wins;
-    # otherwise a committed/uploaded template image activates the template style by
-    # default — so committing a template needs no admin save and no baked state.json
-    # (which would shadow admin-saved/pinned state on storage-backed deploys);
-    # otherwise fall back to legacy config or the procedural tier card.
+    # Style resolution priority:
+    #  1. An admin-saved choice (runtime/pinned state) always wins.
+    #  2. A committed/admin-uploaded template *file* auto-activates the template
+    #     style — so committing a template needs no admin save and no baked
+    #     state.json (which would shadow pinned state on storage-backed deploys).
+    #     The legacy GameConfig image path does NOT auto-activate; there we respect
+    #     the saved card_style (which may be an explicit "tier").
+    #  3. Otherwise fall back to legacy config or the procedural tier card.
     if state.get("card_style"):
         style = state["card_style"]
-    elif image_path:
+    elif template_file_path(variant):
         style = "template"
     else:
         style = cfg.get("card_style") or "tier"
