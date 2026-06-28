@@ -604,3 +604,34 @@ def invalidate_template_card_cache(player_id=None):
         for key in tuple(_TEMPLATE_CARD_CACHE):
             if key[0] == player_id:
                 _TEMPLATE_CARD_CACHE.pop(key, None)
+
+
+def clear_persisted_card_file_ids(player_id=None):
+    """NULL the persisted Player.card_file_id so the next send re-caches a fresh
+    render's Telegram file_id.
+
+    A cached file_id lets repeat sends skip the re-upload, but it points at a
+    specific rendered image. When the card template image, layout, or style
+    changes, those ids become stale — call this so the next send regenerates and
+    re-caches. Player edits already clear card_file_id at the edit site; this
+    covers the template/style-change paths (and a one-time rollout migration).
+
+    Returns the number of rows cleared (best effort; 0 on error).
+    """
+    try:
+        from database import get_session
+        from models import Player
+        session = get_session()
+        try:
+            query = session.query(Player).filter(Player.card_file_id.isnot(None))
+            if player_id is not None:
+                query = query.filter(Player.id == player_id)
+            cleared = query.update({Player.card_file_id: None},
+                                   synchronize_session=False)
+            session.commit()
+            return cleared
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("clear_persisted_card_file_ids failed")
+        return 0
