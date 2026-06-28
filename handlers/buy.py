@@ -192,7 +192,6 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         sent = await send_player_card(
             bot=context.bot, chat_id=chat_id, player=player,
             caption=caption, reply_markup=keyboard, session=None,
-            allow_generated=False,
         )
         if sent is None:
             await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
@@ -220,8 +219,18 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
             except Exception:
                 custom_bytes = None
 
-        if custom_fid or custom_bytes:
-            media_src = custom_fid or _io.BytesIO(custom_bytes)
+        # No custom card → render the template/generated card so paging still
+        # shows an image instead of falling back to plain text.
+        gen_bytes = None
+        if not custom_fid and not custom_bytes:
+            try:
+                from services.card_generator import generate_card
+                gen_bytes = await asyncio.to_thread(generate_card, player)
+            except Exception:
+                gen_bytes = None
+
+        if custom_fid or custom_bytes or gen_bytes:
+            media_src = custom_fid or _io.BytesIO(custom_bytes or gen_bytes)
             if is_photo_msg:
                 try:
                     from telegram import InputMediaPhoto
@@ -258,7 +267,6 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     sent = await send_player_card(
         bot=context.bot, chat_id=chat_id, player=player,
         caption=caption, reply_markup=keyboard, session=session,
-        allow_generated=False,
     )
     if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)

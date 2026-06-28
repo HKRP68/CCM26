@@ -114,6 +114,20 @@ async def _send_player_card(session, user, player, target, owner_tg):
         except Exception:
             logger.exception("Custom image send failed, falling back to text")
 
+    # No custom card → render the template/generated card instead of text-only.
+    try:
+        gen_bytes = await asyncio.to_thread(generate_card, player)
+    except Exception:
+        gen_bytes = None
+    if gen_bytes:
+        try:
+            await target.reply_photo(
+                photo=io.BytesIO(gen_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
+            )
+            return
+        except Exception:
+            logger.exception("Generated card send failed, falling back to text")
+
     await target.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 

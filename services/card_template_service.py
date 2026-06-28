@@ -356,7 +356,9 @@ def template_image_path(session=None, variant="base"):
         # Legacy fallback for deployments that still have the old DB path.
         from services.config_service import get_config
         return template_asset_path(get_config(session).get("card_template_image_path"))
-    return None
+    # Star/Legend with no variant-specific upload fall back to the base template
+    # so a single committed blank covers every rarity.
+    return template_image_path(session, variant="base")
 
 
 def list_template_variants(session=None):

@@ -242,9 +242,6 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=keyboard,
             reply_to_message_id=update.message.message_id,
             session=session,
-            # Only players with an admin-uploaded custom card get an image;
-            # others are sent as text only.
-            allow_generated=False,
         )
 
         # Schedule auto-release timer (optional)
