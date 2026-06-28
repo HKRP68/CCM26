@@ -12,7 +12,8 @@ ids so every player re-renders the current card.
 
 WARNING: this clears EVERY ``Player.card_file_id``, including admin ``/setcardid``
 pins. Only run it if you do not rely on ``/setcardid`` (re-pin afterwards if you
-do).
+do). The existing values are first written to a timestamped
+``card_file_id_backup_*.json`` so any pins can be restored.
 
 Usage:
     python migrate_clear_card_file_ids.py
@@ -20,7 +21,10 @@ Usage:
 Idempotent: re-running after a successful pass clears nothing (no-op).
 """
 
+import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 
 from database import SessionLocal
 from models import Player
@@ -32,6 +36,30 @@ log = logging.getLogger("clear_card_file_ids")
 def main():
     session = SessionLocal()
     try:
+        # Snapshot existing values first so any /setcardid pins can be restored.
+        rows = (session.query(Player.id, Player.name, Player.version, Player.card_file_id)
+                .filter(Player.card_file_id.isnot(None))
+                .all())
+        if rows:
+            backup_path = Path(
+                f"card_file_id_backup_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"
+            )
+            backup_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": row.id,
+                            "name": row.name,
+                            "version": row.version,
+                            "card_file_id": row.card_file_id,
+                        }
+                        for row in rows
+                    ],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            log.info("Backed up %s card_file_id value(s) to %s.", len(rows), backup_path)
         cleared = (session.query(Player)
                    .filter(Player.card_file_id.isnot(None))
                    .update({Player.card_file_id: None}, synchronize_session=False))
