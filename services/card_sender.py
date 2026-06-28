@@ -22,6 +22,8 @@ import logging
 import os
 from typing import Optional
 
+from telegram.error import TelegramError
+
 logger = logging.getLogger(__name__)
 
 
@@ -190,7 +192,7 @@ async def send_player_card(
     if manual_file_id:
         try:
             return await bot.send_photo(photo=manual_file_id, **common_kwargs)
-        except Exception as e:
+        except TelegramError as e:
             # Transient failure or a rotated id — render a fresh card for this
             # send without wiping the admin's pinned value.
             logger.warning(f"manual card_file_id send failed ({e!r}), rendering instead")
@@ -205,7 +207,7 @@ async def send_player_card(
     if gen_file_id:
         try:
             return await bot.send_photo(photo=gen_file_id, **common_kwargs)
-        except Exception as e:
+        except TelegramError as e:
             logger.warning(f"generated file_id send failed ({e!r}), re-rendering")
             drop_generated_card_file_id(player.id)
 

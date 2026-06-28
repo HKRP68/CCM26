@@ -234,14 +234,37 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         if custom_fid or custom_bytes or manual_fid or gen_bytes:
             media_src = custom_fid or manual_fid or _io.BytesIO(custom_bytes or gen_bytes)
             if is_photo_msg:
+                from telegram import InputMediaPhoto
                 try:
-                    from telegram import InputMediaPhoto
                     await edit_query.edit_message_media(
                         media=InputMediaPhoto(media=media_src, caption=caption, parse_mode="HTML"),
                         reply_markup=keyboard,
                     )
                 except Exception:
-                    logger.exception("edit_version_page media edit failed")
+                    # A stale Telegram file_id wedges paging on the old card. If we
+                    # sent one, re-render to bytes and retry once before giving up.
+                    if custom_fid or manual_fid:
+                        logger.warning("edit_version_page media edit failed; retrying with rendered bytes")
+                        retry_bytes = custom_bytes or gen_bytes
+                        if retry_bytes is None:
+                            try:
+                                from services.card_generator import generate_card
+                                retry_bytes = await asyncio.to_thread(generate_card, player)
+                            except Exception:
+                                retry_bytes = None
+                        if retry_bytes:
+                            try:
+                                await edit_query.edit_message_media(
+                                    media=InputMediaPhoto(media=_io.BytesIO(retry_bytes),
+                                                          caption=caption, parse_mode="HTML"),
+                                    reply_markup=keyboard,
+                                )
+                            except Exception:
+                                logger.exception("edit_version_page media retry failed")
+                        else:
+                            logger.exception("edit_version_page media edit failed (no retry bytes)")
+                    else:
+                        logger.exception("edit_version_page media edit failed")
             else:
                 # Text → photo isn't editable; replace the message.
                 await _replace_paged_message(
