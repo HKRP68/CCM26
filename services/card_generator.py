@@ -583,14 +583,44 @@ _CARD_CACHE = {}
 # the template image, font, layout controls, or the underlying player.
 _TEMPLATE_CARD_CACHE = {}
 
+# In-memory cache of Telegram file_ids for *generated* (procedural/template)
+# cards, so repeat sends within a process skip the re-upload (the "send quick"
+# fast path). Keyed by player_id. Deliberately separate from Player.card_file_id,
+# which is the admin /setcardid manual override — a generated id must never be
+# written there or it would clobber that override. Cleared whenever the card
+# could change (player edit or template/style change via the invalidate hooks
+# below) and lost on restart (re-uploaded once per player, then re-cached).
+_GENERATED_FILE_ID_CACHE = {}
+
+
+def get_generated_card_file_id(player_id):
+    """Return the cached Telegram file_id for a player's generated card, or None."""
+    return _GENERATED_FILE_ID_CACHE.get(player_id)
+
+
+def set_generated_card_file_id(player_id, file_id):
+    """Cache the Telegram file_id of a freshly uploaded generated card."""
+    if player_id is None or not file_id:
+        return
+    if len(_GENERATED_FILE_ID_CACHE) > 2000:
+        _GENERATED_FILE_ID_CACHE.clear()
+    _GENERATED_FILE_ID_CACHE[player_id] = file_id
+
+
+def drop_generated_card_file_id(player_id):
+    """Forget a cached generated file_id (e.g. after a stale-send failure)."""
+    _GENERATED_FILE_ID_CACHE.pop(player_id, None)
+
 
 def invalidate_card_cache(player_id=None):
     """Drop procedural and website-template cards after a player edit."""
     if player_id is None:
         _CARD_CACHE.clear()
         _TEMPLATE_CARD_CACHE.clear()
+        _GENERATED_FILE_ID_CACHE.clear()
     else:
         _CARD_CACHE.pop(player_id, None)
+        _GENERATED_FILE_ID_CACHE.pop(player_id, None)
         for key in tuple(_TEMPLATE_CARD_CACHE):
             if key[0] == player_id:
                 _TEMPLATE_CARD_CACHE.pop(key, None)
@@ -600,38 +630,9 @@ def invalidate_template_card_cache(player_id=None):
     """Drop cached template cards after editing an image, font, or layout."""
     if player_id is None:
         _TEMPLATE_CARD_CACHE.clear()
+        _GENERATED_FILE_ID_CACHE.clear()
     else:
+        _GENERATED_FILE_ID_CACHE.pop(player_id, None)
         for key in tuple(_TEMPLATE_CARD_CACHE):
             if key[0] == player_id:
                 _TEMPLATE_CARD_CACHE.pop(key, None)
-
-
-def clear_persisted_card_file_ids(player_id=None):
-    """NULL the persisted Player.card_file_id so the next send re-caches a fresh
-    render's Telegram file_id.
-
-    A cached file_id lets repeat sends skip the re-upload, but it points at a
-    specific rendered image. When the card template image, layout, or style
-    changes, those ids become stale — call this so the next send regenerates and
-    re-caches. Player edits already clear card_file_id at the edit site; this
-    covers the template/style-change paths (and a one-time rollout migration).
-
-    Returns the number of rows cleared (best effort; 0 on error).
-    """
-    try:
-        from database import get_session
-        from models import Player
-        session = get_session()
-        try:
-            query = session.query(Player).filter(Player.card_file_id.isnot(None))
-            if player_id is not None:
-                query = query.filter(Player.id == player_id)
-            cleared = query.update({Player.card_file_id: None},
-                                   synchronize_session=False)
-            session.commit()
-            return cleared
-        finally:
-            session.close()
-    except Exception:
-        logger.exception("clear_persisted_card_file_ids failed")
-        return 0

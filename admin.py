@@ -14968,13 +14968,12 @@ def admin_card_template_save():
             pass
         try:
             from services.card_generator import (invalidate_card_cache,
-                                                  invalidate_template_card_cache,
-                                                  clear_persisted_card_file_ids)
+                                                  invalidate_template_card_cache)
+            # The render changed → also drops the in-memory generated file_id
+            # cache, so the next send re-uploads the new card. Admin /setcardid
+            # overrides (Player.card_file_id) are left untouched.
             invalidate_card_cache()
             invalidate_template_card_cache()
-            # The render changed → drop cached Telegram file_ids so the next send
-            # re-uploads the new card instead of a stale one.
-            clear_persisted_card_file_ids()
         except Exception:
             pass
 
@@ -15020,11 +15019,9 @@ def admin_card_template_remove_image():
         from services import config_service as _cs
         _cs._CACHE["data"] = None
         from services.card_generator import (invalidate_card_cache,
-                                              invalidate_template_card_cache,
-                                              clear_persisted_card_file_ids)
+                                              invalidate_template_card_cache)
         invalidate_card_cache()
         invalidate_template_card_cache()
-        clear_persisted_card_file_ids()
     except Exception:
         pass
     flash(f"✅ Removed the {variant.title()} Card template.", "info")
