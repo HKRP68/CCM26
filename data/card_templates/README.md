@@ -9,7 +9,7 @@ this is the default output.
 Commit the **blank** card frame (static labels/borders only — no player photo, name,
 or numbers; those are drawn by the engine) as:
 
-```
+```text
 data/card_templates/template.jpeg      # or .png / .webp
 ```
 

@@ -344,8 +344,14 @@ def player_template_variant(player):
     return "base"
 
 
-def template_image_path(session=None, variant="base"):
-    """Return the uploaded image for exactly one rarity template, if present."""
+def template_image_path(session=None, variant="base", fallback_to_base=True):
+    """Return the template image to render for one rarity variant, if present.
+
+    By default Star/Legend variants without their own upload fall back to the
+    base template so a single committed blank covers every rarity at render time.
+    Callers that need to know whether *this* variant has its own asset (upload
+    state, not render source) pass ``fallback_to_base=False`` for an exact lookup.
+    """
     variant = normalise_template_variant(variant)
     stem = "template" if variant == "base" else f"template_{variant}"
     for ext in ALLOWED_EXT:
@@ -356,6 +362,8 @@ def template_image_path(session=None, variant="base"):
         # Legacy fallback for deployments that still have the old DB path.
         from services.config_service import get_config
         return template_asset_path(get_config(session).get("card_template_image_path"))
+    if not fallback_to_base:
+        return None
     # Star/Legend with no variant-specific upload fall back to the base template
     # so a single committed blank covers every rarity.
     return template_image_path(session, variant="base")
@@ -365,7 +373,11 @@ def list_template_variants(session=None):
     """Describe each selectable rarity tab and whether it has its own upload."""
     result = {}
     for variant in CARD_TEMPLATE_VARIANTS:
-        result[variant] = {"uploaded": bool(template_image_path(session, variant))}
+        # Report each variant's own upload state — not the render-time base
+        # fallback — so the admin page shows accurate per-variant status.
+        result[variant] = {
+            "uploaded": bool(template_image_path(session, variant, fallback_to_base=False))
+        }
     return result
 
 
