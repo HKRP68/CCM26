@@ -219,18 +219,20 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
             except Exception:
                 custom_bytes = None
 
-        # No custom card → render the template/generated card so paging still
-        # shows an image instead of falling back to plain text.
+        # No custom card → honor an admin /setcardid manual override, else render
+        # the template/generated card so paging still shows an image instead of
+        # replacing a pinned card or falling back to plain text.
+        manual_fid = None if (custom_fid or custom_bytes) else getattr(player, "card_file_id", None)
         gen_bytes = None
-        if not custom_fid and not custom_bytes:
+        if not custom_fid and not custom_bytes and not manual_fid:
             try:
                 from services.card_generator import generate_card
                 gen_bytes = await asyncio.to_thread(generate_card, player)
             except Exception:
                 gen_bytes = None
 
-        if custom_fid or custom_bytes or gen_bytes:
-            media_src = custom_fid or _io.BytesIO(custom_bytes or gen_bytes)
+        if custom_fid or custom_bytes or manual_fid or gen_bytes:
+            media_src = custom_fid or manual_fid or _io.BytesIO(custom_bytes or gen_bytes)
             if is_photo_msg:
                 try:
                     from telegram import InputMediaPhoto

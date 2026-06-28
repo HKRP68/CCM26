@@ -72,6 +72,9 @@ def _player_to_dict(player):
         "bat_hand": player.bat_hand, "bowl_hand": player.bowl_hand,
         "bowl_style": player.bowl_style, "bat_rating": player.bat_rating,
         "bowl_rating": player.bowl_rating, "version": player.version,
+        # Needed by the card renderer/sender so the snapshot draws the player's
+        # portrait cutout (image_url) and honours an admin /setcardid pin.
+        "image_url": player.image_url, "card_file_id": player.card_file_id,
     }
 
 
