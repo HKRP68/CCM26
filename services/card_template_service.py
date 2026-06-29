@@ -344,8 +344,14 @@ def player_template_variant(player):
     return "base"
 
 
-def template_image_path(session=None, variant="base"):
-    """Return the uploaded image for exactly one rarity template, if present."""
+def template_image_path(session=None, variant="base", fallback_to_base=True):
+    """Return the template image to render for one rarity variant, if present.
+
+    By default Star/Legend variants without their own upload fall back to the
+    base template so a single committed blank covers every rarity at render time.
+    Callers that need to know whether *this* variant has its own asset (upload
+    state, not render source) pass ``fallback_to_base=False`` for an exact lookup.
+    """
     variant = normalise_template_variant(variant)
     stem = "template" if variant == "base" else f"template_{variant}"
     for ext in ALLOWED_EXT:
@@ -356,6 +362,30 @@ def template_image_path(session=None, variant="base"):
         # Legacy fallback for deployments that still have the old DB path.
         from services.config_service import get_config
         return template_asset_path(get_config(session).get("card_template_image_path"))
+    if not fallback_to_base:
+        return None
+    # Star/Legend with no variant-specific upload fall back to the base template
+    # so a single committed blank covers every rarity.
+    return template_image_path(session, variant="base")
+
+
+def template_file_path(variant="base"):
+    """Path to a committed/admin-uploaded template *file* for this variant.
+
+    Checks only the on-disk template files in ``TEMPLATES_ROOT`` (with the base
+    fallback for Star/Legend), excluding the legacy ``GameConfig`` image path.
+    Used to decide whether to auto-activate the template style: an actual template
+    file is a clear "use this" signal, whereas a legacy DB image path is not — for
+    the latter we keep respecting the saved ``card_style``.
+    """
+    variant = normalise_template_variant(variant)
+    stem = "template" if variant == "base" else f"template_{variant}"
+    for ext in ALLOWED_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+        if os.path.isfile(path):
+            return path
+    if variant != "base":
+        return template_file_path("base")
     return None
 
 
@@ -363,7 +393,11 @@ def list_template_variants(session=None):
     """Describe each selectable rarity tab and whether it has its own upload."""
     result = {}
     for variant in CARD_TEMPLATE_VARIANTS:
-        result[variant] = {"uploaded": bool(template_image_path(session, variant))}
+        # Report each variant's own upload state — not the render-time base
+        # fallback — so the admin page shows accurate per-variant status.
+        result[variant] = {
+            "uploaded": bool(template_image_path(session, variant, fallback_to_base=False))
+        }
     return result
 
 
@@ -377,7 +411,21 @@ def get_template_config(session=None, variant="base"):
         logger.exception("card-template storage state unavailable")
         state = {}
     cfg = {} if state else get_config(session)
-    style = state.get("card_style") or cfg.get("card_style") or "tier"
+    image_path = template_image_path(session, variant)
+    # Style resolution priority:
+    #  1. An admin-saved choice (runtime/pinned state) always wins.
+    #  2. A committed/admin-uploaded template *file* auto-activates the template
+    #     style — so committing a template needs no admin save and no baked
+    #     state.json (which would shadow pinned state on storage-backed deploys).
+    #     The legacy GameConfig image path does NOT auto-activate; there we respect
+    #     the saved card_style (which may be an explicit "tier").
+    #  3. Otherwise fall back to legacy config or the procedural tier card.
+    if state.get("card_style"):
+        style = state["card_style"]
+    elif template_file_path(variant):
+        style = "template"
+    else:
+        style = cfg.get("card_style") or "tier"
     show_portrait = state.get("show_portrait", cfg.get("card_template_show_portrait", True))
     settings = state.get("settings", cfg.get("card_template_settings"))
     font_path = None
@@ -391,7 +439,7 @@ def get_template_config(session=None, variant="base"):
     return {
         "style": str(style or "tier").lower(),
         "variant": normalise_template_variant(variant),
-        "image_path": template_image_path(session, variant),
+        "image_path": image_path,
         "area_code": cfg.get("card_template_area_code") or "",
         "regions": parse_area_code(cfg.get("card_template_area_code") or ""),
         "show_portrait": bool(show_portrait),

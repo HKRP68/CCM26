@@ -168,6 +168,14 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("Stats custom card load failed for %s", player.id)
 
+        # No custom card → render the template/generated card instead of text-only.
+        if not card_bytes:
+            try:
+                from services.card_generator import generate_card
+                card_bytes = await asyncio.to_thread(generate_card, player)
+            except Exception:
+                logger.exception("Stats generated card fallback failed for %s", player.id)
+
         if card_bytes:
             caption = (
                 f"📛 <b>{player.name}</b> {flag}\n"
@@ -423,6 +431,14 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 card_bytes = await asyncio.to_thread(get_custom_image_bytes, cp_id)
         except Exception:
             logger.exception("statscl custom card load failed for %s", name)
+
+        # No custom card → render the template/generated card instead of text-only.
+        if not card_bytes and card_player is not None:
+            try:
+                from services.card_generator import generate_card
+                card_bytes = await asyncio.to_thread(generate_card, card_player)
+            except Exception:
+                logger.exception("statscl generated card fallback failed for %s", name)
 
         if card_bytes:
             caption = (

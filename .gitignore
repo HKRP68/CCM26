@@ -13,3 +13,9 @@ __pycache__/
 # Logs
 logs/
 *.log
+
+# Runtime card-template state (admin-saved; committing it shadows pinned state)
+data/card_templates/state.json
+
+# Backup written by migrate_clear_card_file_ids.py
+card_file_id_backup_*.json

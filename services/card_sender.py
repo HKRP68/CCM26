@@ -22,6 +22,8 @@ import logging
 import os
 from typing import Optional
 
+from telegram.error import TelegramError
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,9 +73,8 @@ async def send_player_card(
 
     When ``allow_generated`` is False, only a genuine admin-uploaded custom
     image is sent as a photo; players without a custom card fall straight
-    through to the text reply (no auto-generated or basic card image). The
-    cached *generated* card (``Player.card_file_id``) is also skipped in that
-    mode, since it is not a custom card.
+    through to the text reply (no /setcardid override, generated, or basic card
+    image), since those are not custom cards.
 
     Args:
       bot: a `telegram.Bot` (or PTB Update.message.reply_photo via context)
@@ -120,19 +121,13 @@ async def send_player_card(
         except Exception:
             pass
 
-    # ── Strategy 1.5: Cached file_id (generated card) ──
-    # Player.card_file_id holds the file_id from the last auto-generated send.
-    # Skipped when generated cards are disabled — it is not a custom card.
-    if not cached_file_id and allow_generated:
-        cached_file_id = getattr(player, "card_file_id", None)
-
     if cached_file_id:
         try:
             return await bot.send_photo(photo=cached_file_id, **common_kwargs)
         except Exception as e:
-            # file_id might be stale (e.g. channel deleted, file rotated).
-            # Clear whichever cache held it and fall through.
-            logger.warning(f"file_id send failed ({e!r}), falling back")
+            # Custom-image file_id might be stale (channel deleted, file rotated).
+            # Clear it and fall through to the bytes path.
+            logger.warning(f"custom file_id send failed ({e!r}), falling back")
             try:
                 from models import PlayerImage
                 if session is not None:
@@ -140,8 +135,6 @@ async def send_player_card(
                            .filter(PlayerImage.player_id == player.id).first())
                     if row:
                         row.tg_file_id = None
-                    if getattr(player, "card_file_id", None) == cached_file_id:
-                        player.card_file_id = None
                         session.flush()
             except Exception:
                 pass
@@ -191,9 +184,34 @@ async def send_player_card(
             logger.exception("Text-only player card send failed")
             return None
 
-    # ── Strategy 3: Auto-generated card ──
+    # ── Strategy 3: Manual /setcardid override (Player.card_file_id) ──
+    # A photo file_id pinned by the admin /setcardid command. Only that command
+    # writes this column (generated cards are cached in memory, not here), so it
+    # is honoured directly. Custom uploads above take precedence over it.
+    manual_file_id = getattr(player, "card_file_id", None)
+    if manual_file_id:
+        try:
+            return await bot.send_photo(photo=manual_file_id, **common_kwargs)
+        except TelegramError as e:
+            # Transient failure or a rotated id — render a fresh card for this
+            # send without wiping the admin's pinned value.
+            logger.warning(f"manual card_file_id send failed ({e!r}), rendering instead")
+
+    # ── Strategy 4: Generated/template card ──
+    from services.card_generator import (generate_card,
+                                          get_generated_card_file_id,
+                                          set_generated_card_file_id,
+                                          drop_generated_card_file_id)
+    # Fast path: reuse the in-process file_id from a previous send (no re-upload).
+    gen_file_id = get_generated_card_file_id(player.id)
+    if gen_file_id:
+        try:
+            return await bot.send_photo(photo=gen_file_id, **common_kwargs)
+        except TelegramError as e:
+            logger.warning(f"generated file_id send failed ({e!r}), re-rendering")
+            drop_generated_card_file_id(player.id)
+
     try:
-        from services.card_generator import generate_card
         # Pillow rendering is CPU-bound and synchronous — run it off the event
         # loop so a cache-miss render doesn't freeze the whole bot.
         gen_bytes = await asyncio.to_thread(generate_card, player)
@@ -204,25 +222,12 @@ async def send_player_card(
         try:
             gen_msg = await bot.send_photo(
                 photo=io.BytesIO(gen_bytes), **common_kwargs)
-            # Cache the returned file_id so future sends skip the upload.
+            # Cache the file_id in memory so future sends skip the re-upload.
             try:
-                if gen_msg and gen_msg.photo and not getattr(player, "card_file_id", None):
-                    new_fid = gen_msg.photo[-1].file_id
-                    if session is not None:
-                        player.card_file_id = new_fid
-                        session.flush()
-                    else:
-                        from database import SessionLocal
-                        from models import Player as _Player
-                        with SessionLocal() as _s:
-                            _p = _s.query(_Player).get(player.id)
-                            if _p and not _p.card_file_id:
-                                _p.card_file_id = new_fid
-                                _s.commit()
-                        player.card_file_id = new_fid  # update in-memory obj too
-                    logger.info(f"Cached generated card file_id for player {player.id}")
+                if gen_msg and gen_msg.photo:
+                    set_generated_card_file_id(player.id, gen_msg.photo[-1].file_id)
             except Exception:
-                logger.exception("Generated card file_id capture failed (non-fatal)")
+                logger.exception("Generated card file_id cache failed (non-fatal)")
             return gen_msg
         except Exception:
             logger.warning("Generated card send failed, trying basic card fallback")

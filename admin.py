@@ -14969,6 +14969,9 @@ def admin_card_template_save():
         try:
             from services.card_generator import (invalidate_card_cache,
                                                   invalidate_template_card_cache)
+            # The render changed → also drops the in-memory generated file_id
+            # cache, so the next send re-uploads the new card. Admin /setcardid
+            # overrides (Player.card_file_id) are left untouched.
             invalidate_card_cache()
             invalidate_template_card_cache()
         except Exception:

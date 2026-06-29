@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -192,7 +193,6 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         sent = await send_player_card(
             bot=context.bot, chat_id=chat_id, player=player,
             caption=caption, reply_markup=keyboard, session=None,
-            allow_generated=False,
         )
         if sent is None:
             await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
@@ -220,17 +220,63 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
             except Exception:
                 custom_bytes = None
 
-        if custom_fid or custom_bytes:
-            media_src = custom_fid or _io.BytesIO(custom_bytes)
+        # No custom card → honor an admin /setcardid manual override, else render
+        # the template/generated card so paging still shows an image instead of
+        # replacing a pinned card or falling back to plain text.
+        manual_fid = None if (custom_fid or custom_bytes) else getattr(player, "card_file_id", None)
+        gen_bytes = None
+        if not custom_fid and not custom_bytes and not manual_fid:
+            try:
+                from services.card_generator import generate_card
+                gen_bytes = await asyncio.to_thread(generate_card, player)
+            except Exception:
+                gen_bytes = None
+
+        if custom_fid or custom_bytes or manual_fid or gen_bytes:
+            media_src = custom_fid or manual_fid or _io.BytesIO(custom_bytes or gen_bytes)
             if is_photo_msg:
+                from telegram import InputMediaPhoto
                 try:
-                    from telegram import InputMediaPhoto
                     await edit_query.edit_message_media(
                         media=InputMediaPhoto(media=media_src, caption=caption, parse_mode="HTML"),
                         reply_markup=keyboard,
                     )
-                except Exception:
-                    logger.exception("edit_version_page media edit failed")
+                except TelegramError:
+                    # A stale Telegram file_id wedges paging on the old card. If we
+                    # sent one, re-render to bytes and retry; if editing still fails,
+                    # replace the message so paging never sticks on the old card.
+                    if custom_fid or manual_fid:
+                        logger.warning("edit_version_page media edit failed; retrying with rendered bytes")
+                        retry_bytes = custom_bytes or gen_bytes
+                        if retry_bytes is None:
+                            try:
+                                from services.card_generator import generate_card
+                                retry_bytes = await asyncio.to_thread(generate_card, player)
+                            except Exception:
+                                retry_bytes = None
+                        if retry_bytes:
+                            try:
+                                await edit_query.edit_message_media(
+                                    media=InputMediaPhoto(media=_io.BytesIO(retry_bytes),
+                                                          caption=caption, parse_mode="HTML"),
+                                    reply_markup=keyboard,
+                                )
+                            except TelegramError:
+                                logger.warning("edit_version_page media retry failed; replacing message")
+                                await _replace_paged_message(
+                                    context, edit_query, photo=_io.BytesIO(retry_bytes),
+                                    caption=caption, keyboard=keyboard)
+                        else:
+                            logger.warning("edit_version_page media edit failed; replacing with text")
+                            await _replace_paged_message(
+                                context, edit_query, photo=None,
+                                caption=caption, keyboard=keyboard)
+                    else:
+                        # media_src was rendered bytes — re-send fresh bytes.
+                        logger.warning("edit_version_page media edit failed; replacing message")
+                        await _replace_paged_message(
+                            context, edit_query, photo=_io.BytesIO(custom_bytes or gen_bytes),
+                            caption=caption, keyboard=keyboard)
             else:
                 # Text → photo isn't editable; replace the message.
                 await _replace_paged_message(
@@ -258,7 +304,6 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     sent = await send_player_card(
         bot=context.bot, chat_id=chat_id, player=player,
         caption=caption, reply_markup=keyboard, session=session,
-        allow_generated=False,
     )
     if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
