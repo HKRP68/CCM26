@@ -54,6 +54,7 @@ from handlers.trade import (
 
 # Phase 3 handlers
 from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback, autobuild_handler
+from handlers.ximage import ximage_handler
 from handlers.search import (
     searchpl_handler, searchovr_handler,
     searchpl_page_callback, searchovr_page_callback,
@@ -291,6 +292,7 @@ BOT_MENU_COMMANDS = (
     ("releasemultiple", "Release multiple roster players"),
     ("trade", "Trade players with another user"),
     ("playingxi", "View or manage your playing XI"),
+    ("ximage", "View your Playing XI as an image"),
     ("autobuild", "Build your best available playing XI"),
     ("swapplayers", "Swap two players in your lineup"),
     ("setcaptain", "Set your team captain"),
@@ -514,6 +516,7 @@ async def start_handler(update, context):
         "/gspin /gs - Spin the wheel (8h)\n"
         "/myroster /mr - View your roster\n"
         "/playingxi /pxi /xi - Playing XI\n"
+        "/ximage /xiimg - Playing XI as an image\n"
         "/playerinfo /pi [name] - Player details\n"
         "/stats /st [name] - Player game stats\n"
         "/searchpl /sp [name] - Search player\n"
@@ -865,6 +868,7 @@ def main():
         app.add_handler(CommandHandler(["releasemultiple", "relm", "rm"], releasemultiple_handler))
         app.add_handler(CommandHandler(["trade", "tr"], trade_handler))
         app.add_handler(CommandHandler(["playingxi", "pxi", "xi"], playingxi_handler))
+        app.add_handler(CommandHandler(["ximage", "xiimg", "xipic"], ximage_handler))
         app.add_handler(CommandHandler(["autobuild", "ab", "best11"], autobuild_handler))
         app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
         app.add_handler(CommandHandler(["setcaptain", "captain", "cap"], setcaptain_handler))
