@@ -54,6 +54,7 @@ def _font(size, *, display=False):
 
 
 def _text_w(draw, text, font):
+    """Return the rendered pixel width of ``text`` in ``font``."""
     bbox = draw.textbbox((0, 0), text, font=font)
     return bbox[2] - bbox[0]
 
@@ -101,23 +102,35 @@ def build_xi_image(xi_pairs, *, team_name, captain_roster_id=None,
         try:
             b = generate_card(player)
             if not b:
-                continue
+                # Bail out rather than render a short XI with renumbered cards
+                # and a Team OVR computed from incomplete data — the caller
+                # falls back to the text XI when this returns None.
+                logger.warning("Missing card bytes for player %s",
+                               getattr(player, "id", "?"))
+                return None
             img = Image.open(io.BytesIO(b)).convert("RGB")
             cards.append((entry, player, img))
         except Exception:
             logger.exception("Failed to render card for player %s",
                              getattr(player, "id", "?"))
+            return None
 
     if not cards:
         return None
 
-    # ── Card sizing ──
-    # Cards are 700x420 (5:3). Pick a width that keeps the grid phone-friendly.
+    # ── Card cell sizing ──
+    # Fixed cell shape based on the standard generated card (700x420). Each card
+    # is scaled to FIT inside its cell while keeping its own aspect ratio, then
+    # centered — template (1536x1024), procedural (700x420), and admin custom
+    # images can all differ, so we never stretch the card art.
     card_w = 260
-    src_ratio = cards[0][2].size[1] / cards[0][2].size[0]
-    card_h = int(card_w * src_ratio)
-    resized = [(e, p, im.resize((card_w, card_h), Image.LANCZOS))
-               for e, p, im in cards]
+    card_h = int(card_w * 420 / 700)
+    resized = []  # (entry, player, fitted_img, off_x, off_y)
+    for e, p, im in cards:
+        scale = min(card_w / im.size[0], card_h / im.size[1])
+        nw, nh = max(1, int(im.size[0] * scale)), max(1, int(im.size[1] * scale))
+        fitted = im.resize((nw, nh), Image.LANCZOS)
+        resized.append((e, p, fitted, (card_w - nw) // 2, (card_h - nh) // 2))
 
     # ── Layout geometry ──
     pad = 22                      # gap between cards
@@ -146,7 +159,7 @@ def build_xi_image(xi_pairs, *, team_name, captain_roster_id=None,
     draw.text((side + 4, 92), sub[:48], fill=_ACCENT, font=sub_font)
 
     # ── Team OVR badge (top-right) ──
-    ratings = [getattr(p, "rating", 0) or 0 for _, p, _ in resized]
+    ratings = [getattr(p, "rating", 0) or 0 for _, p, *_ in resized]
     team_ovr = round(sum(ratings) / len(ratings)) if ratings else 0
     badge_r = 46
     bx, by = width - side - badge_r, header_h // 2
@@ -172,8 +185,9 @@ def build_xi_image(xi_pairs, *, team_name, captain_roster_id=None,
             break
         row_px = len(row_cards) * card_w + (len(row_cards) - 1) * pad
         x = (width - row_px) // 2
-        for entry, player, im in row_cards:
-            canvas.paste(im, (x, y))
+        for entry, player, im, off_x, off_y in row_cards:
+            # Center the (aspect-preserved) card art inside its fixed cell.
+            canvas.paste(im, (x + off_x, y + off_y))
 
             is_captain = (captain_roster_id is not None
                           and entry.id == captain_roster_id)

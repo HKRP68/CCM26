@@ -8,6 +8,7 @@ real cards and card design; only the surrounding frame is new.
 import asyncio
 import io
 import logging
+from html import escape
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -23,23 +24,28 @@ logger = logging.getLogger(__name__)
 
 
 async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Render the caller's (or a targeted user's) Playing XI as an image.
+
+    Falls back to the text XI (``format_xi_text``) if image generation fails, so
+    the command never hard-errors for a user with a valid 11-player roster.
+    """
     tg_user = update.effective_user
     session = get_session()
     try:
-        # Optional: view another user's XI by replying / mentioning, like /pxi.
-        target_user = None
-        if context.args:
-            target_user, target_source = resolve_command_target(
-                session, update, context, "ximage")
-            if not target_user:
-                if target_source == "not_mention":
-                    await update.message.reply_text(
-                        "❌ Reply to a user or use a real @username mention.")
-                else:
-                    await update.message.reply_text(
-                        "❌ User not found. If they changed or don't have a "
-                        "username, reply to their message and run /ximage.")
-                return
+        # Optional: view another user's XI by arg, reply, or mention, like /pxi.
+        # resolve_command_target handles the no-args reply/mention case and
+        # returns reason "missing" when no target was attempted at all.
+        target_user, target_source = resolve_command_target(
+            session, update, context, "ximage")
+        if not target_user and target_source != "missing":
+            if target_source == "not_mention":
+                await update.message.reply_text(
+                    "❌ Reply to a user or use a real @username mention.")
+            else:
+                await update.message.reply_text(
+                    "❌ User not found. If they changed or don't have a "
+                    "username, reply to their message and run /ximage.")
+            return
 
         viewer = sync_telegram_user(session, tg_user)
         if not viewer:
@@ -64,23 +70,28 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         handle = (f"@{view_user.username}" if view_user.username
                   else (view_user.team_name or view_user.first_name))
+        # team_name/first_name are user-controlled — escape before sending in any
+        # parse_mode="HTML" text. (The raw handle is fine for the PIL image, which
+        # draws plain text.)
+        safe_handle = escape(handle or "Unknown")
         captain_rid = view_user.captain_roster_id
 
-        # Snapshot data needed for the (text) fallback before the session closes.
         total_ovr = sum(p.rating for _, p in xi_pairs)
         avg_ovr = round(total_ovr / 11, 1)
-        session.commit()
 
         await update.message.reply_chat_action("upload_photo")
 
-        # Pillow is CPU-bound — render off the event loop.
+        # Pillow is CPU-bound — render off the event loop. Keep the ORM objects
+        # un-expired during the threaded render (SessionLocal defaults to
+        # expire_on_commit=True), so commit only AFTER rendering finishes.
         png = await asyncio.to_thread(
             build_xi_image, xi_pairs,
             team_name=handle, captain_roster_id=captain_rid)
+        session.commit()
 
         if png:
             caption = (
-                f"🏏 <b>PLAYING XI — {handle}</b>\n"
+                f"🏏 <b>PLAYING XI — {safe_handle}</b>\n"
                 f"📊 <b>XI Rating:</b> <code>{total_ovr} OVR</code> "
                 f"(avg <b>{avg_ovr}</b>)\n\n"
                 f"💡 <i>Use /swap to reorder · /setcaptain to set captain.</i>")
@@ -90,7 +101,7 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Image render failed — never hard-fail; fall back to the text XI.
         logger.warning("build_xi_image returned None; falling back to text XI")
-        text = format_xi_text(roster, handle, captain_rid, show_bench=False,
+        text = format_xi_text(roster, safe_handle, captain_rid, show_bench=False,
                               origin_chat_id=update.effective_chat.id)
         await update.message.reply_text(text, parse_mode="HTML",
                                         disable_web_page_preview=True)
