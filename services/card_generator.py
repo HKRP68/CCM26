@@ -380,7 +380,7 @@ def generate_template_card(player, force_global_portrait=False, template_variant
         draw.line((1030, 939, 1442, 939), fill=_LINE_GREEN, width=2)
 
         buf = io.BytesIO()
-        base.convert("RGB").save(buf, format="PNG", quality=95)
+        base.convert("RGB").save(buf, format="JPEG", quality=90, optimize=True)
         result = buf.getvalue()
         if len(_TEMPLATE_CARD_CACHE) > 500:
             _TEMPLATE_CARD_CACHE.clear()
@@ -560,7 +560,7 @@ def generate_card(player) -> bytes | None:
 
         # ── Export ──────────────────────────────────────────────────
         buf = io.BytesIO()
-        img.save(buf, format="PNG", quality=95)
+        img.save(buf, format="JPEG", quality=90, optimize=True)
         buf.seek(0)
         result = buf.getvalue()
         # Cache so we don't regenerate this card. Cap to avoid runaway memory.

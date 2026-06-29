@@ -60,7 +60,7 @@ def _basic_card_bytes(player) -> bytes:
     draw.text((224, 318), country, fill=(203, 213, 225), font=small_font)
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, format="JPEG", quality=90, optimize=True)
     return buf.getvalue()
 
 
