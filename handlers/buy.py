@@ -224,16 +224,23 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         # the template/generated card so paging still shows an image instead of
         # replacing a pinned card or falling back to plain text.
         manual_fid = None if (custom_fid or custom_bytes) else getattr(player, "card_file_id", None)
+        # Prefer a persisted generated-card file_id (skips the Pillow render);
+        # only render fresh bytes on a cache miss.
+        gen_fid = None
         gen_bytes = None
         if not custom_fid and not custom_bytes and not manual_fid:
-            try:
-                from services.card_generator import generate_card
-                gen_bytes = await asyncio.to_thread(generate_card, player)
-            except Exception:
-                gen_bytes = None
+            from services.card_generator import get_generated_card_file_id
+            gen_fid = get_generated_card_file_id(player.id)
+            if not gen_fid:
+                try:
+                    from services.card_generator import generate_card
+                    gen_bytes = await asyncio.to_thread(generate_card, player)
+                except Exception:
+                    gen_bytes = None
 
-        if custom_fid or custom_bytes or manual_fid or gen_bytes:
-            media_src = custom_fid or manual_fid or _io.BytesIO(custom_bytes or gen_bytes)
+        if custom_fid or custom_bytes or manual_fid or gen_fid or gen_bytes:
+            media_src = (custom_fid or manual_fid or gen_fid
+                         or _io.BytesIO(custom_bytes or gen_bytes))
             if is_photo_msg:
                 from telegram import InputMediaPhoto
                 try:
@@ -245,8 +252,13 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
                     # A stale Telegram file_id wedges paging on the old card. If we
                     # sent one, re-render to bytes and retry; if editing still fails,
                     # replace the message so paging never sticks on the old card.
-                    if custom_fid or manual_fid:
+                    if custom_fid or manual_fid or gen_fid:
                         logger.warning("edit_version_page media edit failed; retrying with rendered bytes")
+                        if gen_fid:
+                            # Persisted generated id was stale — forget it so the
+                            # next send re-renders + re-caches a fresh one.
+                            from services.card_generator import drop_generated_card_file_id
+                            drop_generated_card_file_id(player.id)
                         retry_bytes = custom_bytes or gen_bytes
                         if retry_bytes is None:
                             try:

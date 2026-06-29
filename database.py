@@ -300,6 +300,8 @@ def _migrate_add_columns():
 
     # Player versions support
     _try_add("players", "parent_player_id", "INTEGER")
+    # Persistent generated-card file_id cache (survives restarts; skips re-render)
+    _try_add("players", "gen_card_file_id", "VARCHAR(200)")
     # Per-player block on /buypl direct purchase
     _try_add("players", "restricted_from_buypl", "BOOLEAN DEFAULT FALSE")
     # Spin/daily quota system (1 free + N ad uses per 24h cycle)

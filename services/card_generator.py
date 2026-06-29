@@ -1,5 +1,6 @@
 """Premium player card generator matching reference design."""
 
+import asyncio
 import io
 import logging
 from PIL import Image, ImageDraw, ImageFont
@@ -583,33 +584,143 @@ _CARD_CACHE = {}
 # the template image, font, layout controls, or the underlying player.
 _TEMPLATE_CARD_CACHE = {}
 
-# In-memory cache of Telegram file_ids for *generated* (procedural/template)
+# In-memory L1 cache of Telegram file_ids for *generated* (procedural/template)
 # cards, so repeat sends within a process skip the re-upload (the "send quick"
 # fast path). Keyed by player_id. Deliberately separate from Player.card_file_id,
 # which is the admin /setcardid manual override — a generated id must never be
-# written there or it would clobber that override. Cleared whenever the card
-# could change (player edit or template/style change via the invalidate hooks
-# below) and lost on restart (re-uploaded once per player, then re-cached).
+# written there or it would clobber that override. Backed by an L2 store in the
+# DB column ``Player.gen_card_file_id`` so the cache survives restarts/redeploys
+# (the first send after a cold start reuses the persisted id instead of paying a
+# full Pillow re-render + photo re-upload). Cleared whenever the card could
+# change (player edit or template/style change via the invalidate hooks below).
 _GENERATED_FILE_ID_CACHE = {}
 
 
+def _is_persistable_player_id(player_id):
+    """Only real player rows (positive int ids) are persisted in the DB.
+
+    Synthetic cards (e.g. /statscl's negative-id SimpleNamespace players) still
+    use the in-memory L1 cache but have no row to write to.
+    """
+    return isinstance(player_id, int) and not isinstance(player_id, bool) and player_id > 0
+
+
+def _db_get_gen_file_id(player_id):
+    if not _is_persistable_player_id(player_id):
+        return None
+    try:
+        from database import SessionLocal
+        from models import Player
+        with SessionLocal() as s:
+            row = (s.query(Player.gen_card_file_id)
+                   .filter(Player.id == player_id).first())
+            return row[0] if row else None
+    except Exception:
+        logger.debug("read gen_card_file_id failed", exc_info=True)
+        return None
+
+
+def _db_set_gen_file_id(player_id, file_id):
+    if not _is_persistable_player_id(player_id):
+        return
+    try:
+        from database import SessionLocal
+        from models import Player
+        with SessionLocal() as s:
+            s.query(Player).filter(Player.id == player_id).update(
+                {Player.gen_card_file_id: file_id}, synchronize_session=False)
+            s.commit()
+    except Exception:
+        logger.debug("persist gen_card_file_id failed", exc_info=True)
+
+
+def _db_clear_all_gen_file_ids():
+    try:
+        from database import SessionLocal
+        from models import Player
+        with SessionLocal() as s:
+            (s.query(Player)
+             .filter(Player.gen_card_file_id.isnot(None))
+             .update({Player.gen_card_file_id: None}, synchronize_session=False))
+            s.commit()
+    except Exception:
+        logger.debug("bulk clear gen_card_file_id failed", exc_info=True)
+
+
 def get_generated_card_file_id(player_id):
-    """Return the cached Telegram file_id for a player's generated card, or None."""
-    return _GENERATED_FILE_ID_CACHE.get(player_id)
+    """Return the cached Telegram file_id for a player's generated card, or None.
+
+    Checks the in-memory L1 cache first, then the persistent DB column. A DB hit
+    is promoted into L1 so subsequent sends in this process skip the query.
+    """
+    if player_id in _GENERATED_FILE_ID_CACHE:
+        return _GENERATED_FILE_ID_CACHE[player_id]
+    file_id = _db_get_gen_file_id(player_id)
+    if file_id:
+        if len(_GENERATED_FILE_ID_CACHE) > 2000:
+            _GENERATED_FILE_ID_CACHE.clear()
+        _GENERATED_FILE_ID_CACHE[player_id] = file_id
+    return file_id
 
 
 def set_generated_card_file_id(player_id, file_id):
-    """Cache the Telegram file_id of a freshly uploaded generated card."""
+    """Cache the Telegram file_id of a freshly uploaded generated card (L1 + DB)."""
     if player_id is None or not file_id:
         return
     if len(_GENERATED_FILE_ID_CACHE) > 2000:
         _GENERATED_FILE_ID_CACHE.clear()
     _GENERATED_FILE_ID_CACHE[player_id] = file_id
+    _db_set_gen_file_id(player_id, file_id)
 
 
 def drop_generated_card_file_id(player_id):
     """Forget a cached generated file_id (e.g. after a stale-send failure)."""
     _GENERATED_FILE_ID_CACHE.pop(player_id, None)
+    _db_set_gen_file_id(player_id, None)
+
+
+def cache_sent_card_file_id(player_id, sent_msg):
+    """Best-effort: persist the file_id Telegram returned for a sent photo."""
+    try:
+        if sent_msg is not None and getattr(sent_msg, "photo", None) and player_id is not None:
+            set_generated_card_file_id(player_id, sent_msg.photo[-1].file_id)
+    except Exception:
+        logger.debug("cache_sent_card_file_id failed", exc_info=True)
+
+
+async def send_generated_card(reply_photo, player, **photo_kwargs):
+    """Send a player's generated/template card, preferring a cached file_id.
+
+    ``reply_photo`` is any async callable accepting ``photo=`` plus the given
+    keyword args (e.g. ``update.message.reply_photo`` or a bound ``send_photo``).
+    Tries the cached Telegram file_id first (zero render, zero upload); on a
+    miss it renders once off-thread, sends the bytes, and persists the returned
+    file_id. Returns the sent Message, or None if no card could be sent.
+    """
+    pid = getattr(player, "id", None)
+    file_id = get_generated_card_file_id(pid) if pid is not None else None
+    if file_id:
+        try:
+            return await reply_photo(photo=file_id, **photo_kwargs)
+        except Exception:
+            # Stale id (file rotated / channel cleared) — drop and re-render.
+            logger.warning("cached generated file_id send failed; re-rendering")
+            drop_generated_card_file_id(pid)
+
+    try:
+        gen_bytes = await asyncio.to_thread(generate_card, player)
+    except Exception:
+        gen_bytes = None
+    if not gen_bytes:
+        return None
+
+    try:
+        sent = await reply_photo(photo=io.BytesIO(gen_bytes), **photo_kwargs)
+    except Exception:
+        logger.warning("generated card bytes send failed")
+        return None
+    cache_sent_card_file_id(pid, sent)
+    return sent
 
 
 def invalidate_card_cache(player_id=None):
@@ -618,9 +729,11 @@ def invalidate_card_cache(player_id=None):
         _CARD_CACHE.clear()
         _TEMPLATE_CARD_CACHE.clear()
         _GENERATED_FILE_ID_CACHE.clear()
+        _db_clear_all_gen_file_ids()
     else:
         _CARD_CACHE.pop(player_id, None)
         _GENERATED_FILE_ID_CACHE.pop(player_id, None)
+        _db_set_gen_file_id(player_id, None)
         for key in tuple(_TEMPLATE_CARD_CACHE):
             if key[0] == player_id:
                 _TEMPLATE_CARD_CACHE.pop(key, None)
@@ -631,8 +744,10 @@ def invalidate_template_card_cache(player_id=None):
     if player_id is None:
         _TEMPLATE_CARD_CACHE.clear()
         _GENERATED_FILE_ID_CACHE.clear()
+        _db_clear_all_gen_file_ids()
     else:
         _GENERATED_FILE_ID_CACHE.pop(player_id, None)
+        _db_set_gen_file_id(player_id, None)
         for key in tuple(_TEMPLATE_CARD_CACHE):
             if key[0] == player_id:
                 _TEMPLATE_CARD_CACHE.pop(key, None)
