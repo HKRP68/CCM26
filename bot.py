@@ -261,7 +261,9 @@ from handlers.cartel import (
     cartel_message_handler,
 )
 from handlers.feedback import feedback_handler
-from handlers.forward_broadcast import frwd_grp_handler, frwd_prvt_handler
+from handlers.forward_broadcast import (
+    frwd_grp_handler, frwd_prvt_handler, track_album_message,
+)
 from handlers.tournament_access import (
     tourallow_handler, tourblock_handler, tourallowlist_handler,
 )
@@ -907,6 +909,17 @@ def main():
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
         app.add_handler(CommandHandler("frwd_prvt", frwd_prvt_handler))
+        # Buffer album (media-group) parts admins send to the bot DM so the
+        # forward commands can copy every image, not just the replied one.
+        # Own group (7) so it's purely additive — PTB runs one handler per
+        # group, and this must not starve other private-message handlers.
+        from telegram.ext import MessageHandler as _AlbumMsgHandler
+        from telegram.ext import filters as _album_filters
+        app.add_handler(_AlbumMsgHandler(
+            (_album_filters.PHOTO | _album_filters.VIDEO | _album_filters.Document.ALL)
+            & _album_filters.ChatType.PRIVATE,
+            track_album_message,
+        ), group=7)
 
         # ── Admin: Challenge League Tournament command allowlist ─────
         app.add_handler(CommandHandler("tourallow", tourallow_handler))

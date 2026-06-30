@@ -857,12 +857,9 @@ def simulate_over(state):
     # Commentary: announce the bowler taking the new over (into attack / returns).
     _emit_bowler_card(state, bowler)
 
-    # Rare rain break (2nd innings only): may shorten the chase and set a DLS
-    # revised target before a ball is bowled this over.
-    target = _maybe_rain_interrupt(state, over_idx, overs_total, innings, target)
-    chased = bool(target) and state["total_runs"] >= target
-    # If rain shortened the innings, recompute the over-derived inputs so this
-    # over's balls-left / required-rate / phase boundaries match the new length.
+    # Defensive: if some other code path shortened the innings, recompute the
+    # over-derived inputs so this over's balls-left / required-rate / phase
+    # boundaries match the current length.
     if state["overs"] != overs_total:
         overs_total = state["overs"]
         innings_balls = total_balls(state)
@@ -1405,61 +1402,6 @@ def _emit_new_batsman_card(state, player):
         "text": f"{player['name']} comes to the crease."})
 
 
-def _maybe_rain_interrupt(state, over_idx, overs_total, innings, target):
-    """Rare 2nd-innings rain break that shortens the chase and applies a DLS
-    revised target. Fires at most once per match and never inside the last few
-    overs. Returns the (possibly revised) runs-to-win target so the caller can
-    refresh its local copy.
-
-    Rarity is controlled by ``CIPL_RAIN_PROB`` (default 0.02 per eligible over);
-    tests can force it by setting that to 1.
-    """
-    if innings != 2 or not target or state.get("rain_done"):
-        return target
-    overs_left_before = overs_total - over_idx
-    # Need enough overs left that losing some still leaves a real chase.
-    if overs_left_before <= 3:
-        return target
-    import os
-    import random
-    try:
-        prob = float(os.getenv("CIPL_RAIN_PROB", "0.02") or 0.02)
-    except (TypeError, ValueError):
-        prob = 0.02
-    if random.random() >= prob:
-        return target
-
-    overs_lost = 1 if overs_left_before <= 6 else random.choice([1, 2])
-    new_total = overs_total - overs_lost
-    overs_left_after = new_total - over_idx
-    wkts = state.get("total_wickets", 0)
-    team1_score = int(target) - 1
-    try:
-        from engine import dls
-        revised = dls.revised_target(team1_score, overs_total,
-                                     overs_left_before, overs_left_after, wkts)
-    except Exception:
-        logger.exception("DLS revised target failed; keeping original target")
-        return target
-
-    state["overs"] = new_total
-    state["target"] = revised
-    state["rain_done"] = True
-    state.setdefault("rain_interruptions", []).append({
-        "over": over_idx, "overs_lost": overs_lost,
-        "runs": state.get("total_runs", 0), "wickets": wkts,
-        "new_overs": new_total, "revised_target": revised,
-    })
-    need = max(0, revised - state.get("total_runs", 0))
-    _push_card(state, {
-        "type": "rain", "name": "Rain",
-        "text": (f"🌧 Rain stops play! {overs_lost} over(s) lost. "
-                 f"DLS revised target: {revised} from {new_total} overs. "
-                 f"{state.get('bat_team_name', 'Batting')} now need {need} "
-                 f"off {overs_left_after} over(s).")})
-    return revised
-
-
 def _emit_end_of_over_card(state, bowler, over_no, over_runs):
     """Cricbuzz-style end-of-over summary card (+ a one-line bowler figure)."""
     bpu = balls_per_unit(state)
@@ -1632,9 +1574,8 @@ def compute_result(state):
     inn1 = state.get("inn1_runs", 0)
     inn2 = state.get("total_runs", 0)
     target = state.get("target") or (inn1 + 1)
-    # Par is one run short of the target. In a normal match this equals inn1
-    # (target == inn1 + 1); after a DLS rain revision it's the revised par, so
-    # ties and run margins are judged against the target the chase actually had.
+    # Par is one run short of the target, which equals the first-innings score
+    # (target == inn1 + 1), so ties and run margins are judged against it.
     par = target - 1
     # Side that batted second is the current bat side.
     second_batting = state["bat_team_name"]

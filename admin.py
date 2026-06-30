@@ -999,6 +999,77 @@ def players_download():
 
 # ── Bulk upload players via CSV text ─────────────────────────────────
 
+# Shared abbreviation maps for the bulk-upload / data-change CSV parsers.
+_CSV_CAT_MAP = {
+    "bat": "Batsman", "batsman": "Batsman", "bats": "Batsman",
+    "bowl": "Bowler", "bowler": "Bowler",
+    "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
+    "wicket keeper": "Wicket Keeper", "wicketkeeper": "Wicket Keeper",
+    "ar": "All-rounder", "all-rounder": "All-rounder",
+    "allrounder": "All-rounder", "all rounder": "All-rounder",
+}
+_CSV_HAND_MAP = {"r": "Right", "right": "Right", "l": "Left", "left": "Left",
+                 "rh": "Right", "lh": "Left"}
+
+
+def _normalize_player_csv_row(cols):
+    """Normalize one CSV row (a list of already-stripped cells) into a dict of
+    Player field values. Column order matches the Bulk Upload / "Download All"
+    format::
+
+        Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style,
+        Bat Rating, Bowl Rating, Version, Is Active
+
+    Returns ``None`` when the row has no name. Shared by both the bulk-upload
+    (create) and data-change (override) flows so parsing stays identical.
+    """
+    while len(cols) < 11:
+        cols.append("")
+
+    name = cols[0]
+    if not name:
+        return None
+
+    # Version — column 10 (index 9). Default "Base". Strip stray quotes.
+    version_raw = cols[9].strip().strip('"').strip("'")
+    version = version_raw if version_raw else "Base"
+
+    # Is Active — column 11 (index 10). "0"/"false"/"no" → inactive.
+    is_active = cols[10].strip().lower() not in ("0", "false", "no", "n", "inactive")
+
+    try:
+        rating = int(cols[1]) if cols[1] else 70
+    except ValueError:
+        rating = 70
+
+    category = cols[2] if cols[2] else "Batsman"
+    category = _CSV_CAT_MAP.get(category.lower(), category)
+
+    country = cols[3] if cols[3] else "Unknown"
+    bat_hand = cols[4] if cols[4] else "Right"
+    bowl_hand = cols[5] if cols[5] else "Right"
+    bowl_style = cols[6] if cols[6] else "Medium Pacer"
+
+    try:
+        bat_rating = int(cols[7]) if cols[7] else rating
+    except ValueError:
+        bat_rating = rating
+    try:
+        bowl_rating = int(cols[8]) if cols[8] else rating
+    except ValueError:
+        bowl_rating = rating
+
+    bat_hand = _CSV_HAND_MAP.get(bat_hand.lower(), bat_hand)
+    bowl_hand = _CSV_HAND_MAP.get(bowl_hand.lower(), bowl_hand)
+
+    return {
+        "name": name, "version": version, "is_active": is_active,
+        "rating": rating, "category": category, "country": country,
+        "bat_hand": bat_hand, "bowl_hand": bowl_hand, "bowl_style": bowl_style,
+        "bat_rating": bat_rating, "bowl_rating": bowl_rating,
+    }
+
+
 @app.route("/players/bulk-upload", methods=["GET", "POST"])
 @login_required
 def players_bulk_upload():
@@ -1039,24 +1110,11 @@ def players_bulk_upload():
                     #         Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
                     # Min required: Name. Version + Is Active are optional (default Base, 1).
                     cols = [c.strip() for c in row]
-                    while len(cols) < 11:
-                        cols.append("")
-
-                    name = cols[0]
-                    if not name:
+                    data = _normalize_player_csv_row(cols)
+                    if data is None:
                         continue
-
-                    # Version — column 10 (index 9). Default "Base" if empty/missing.
-                    # Strip surrounding quotes some spreadsheet exports add.
-                    version_raw = cols[9].strip().strip('"').strip("'")
-                    version = version_raw if version_raw else "Base"
-
-                    # Is Active — column 11 (index 10). "0", "false", "no" → inactive.
-                    is_active_raw = cols[10].strip().lower()
-                    if is_active_raw in ("0", "false", "no", "n", "inactive"):
-                        is_active = False
-                    else:
-                        is_active = True  # default
+                    name = data["name"]
+                    version = data["version"]
 
                     # Duplicate check by (name, version) pair — multiple versions
                     # of the same player are allowed by design.
@@ -1067,43 +1125,6 @@ def players_bulk_upload():
                     if existing:
                         skipped += 1
                         continue
-
-                    try:
-                        rating = int(cols[1]) if cols[1] else 70
-                    except ValueError:
-                        rating = 70
-
-                    category = cols[2] if cols[2] else "Batsman"
-                    # Normalize category
-                    cat_map = {
-                        "bat": "Batsman", "batsman": "Batsman", "bats": "Batsman",
-                        "bowl": "Bowler", "bowler": "Bowler",
-                        "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
-                        "wicket keeper": "Wicket Keeper", "wicketkeeper": "Wicket Keeper",
-                        "ar": "All-rounder", "all-rounder": "All-rounder",
-                        "allrounder": "All-rounder", "all rounder": "All-rounder",
-                    }
-                    category = cat_map.get(category.lower(), category)
-
-                    country = cols[3] if cols[3] else "Unknown"
-                    bat_hand = cols[4] if cols[4] else "Right"
-                    bowl_hand = cols[5] if cols[5] else "Right"
-                    bowl_style = cols[6] if cols[6] else "Medium Pacer"
-
-                    try:
-                        bat_rating = int(cols[7]) if cols[7] else rating
-                    except ValueError:
-                        bat_rating = rating
-                    try:
-                        bowl_rating = int(cols[8]) if cols[8] else rating
-                    except ValueError:
-                        bowl_rating = rating
-
-                    # Normalize hand
-                    hand_map = {"r": "Right", "right": "Right", "l": "Left", "left": "Left",
-                                "rh": "Right", "lh": "Left"}
-                    bat_hand = hand_map.get(bat_hand.lower(), bat_hand)
-                    bowl_hand = hand_map.get(bowl_hand.lower(), bowl_hand)
 
                     # For variant versions (non-Base): try to link to base card via
                     # parent_player_id. Look up the existing Base row with same name.
@@ -1125,13 +1146,7 @@ def players_bulk_upload():
                         # still saves with the right `version` value. Caller can
                         # upload Base first if they want the link.
 
-                    p = Player(
-                        name=name, rating=rating, category=category, country=country,
-                        bat_hand=bat_hand, bowl_hand=bowl_hand, bowl_style=bowl_style,
-                        bat_rating=bat_rating, bowl_rating=bowl_rating,
-                        version=version, parent_player_id=parent_player_id,
-                        is_active=is_active,
-                    )
+                    p = Player(parent_player_id=parent_player_id, **data)
                     db.add(p)
                     # If this is a Base row, flush so its id is set, then cache
                     # it for any subsequent variant rows in this batch.
@@ -1193,6 +1208,121 @@ def players_bulk_upload():
             db.close()
 
     return render_template("bulk_upload.html")
+
+
+# ── Data change: bulk OVERRIDE existing players via CSV text ─────────
+
+@app.route("/players/data-change", methods=["GET", "POST"])
+@login_required
+def players_data_change():
+    """Same input flow as Bulk Upload, but each row OVERRIDES an existing
+    player instead of creating a new one. Players are matched by (Name,
+    Version). Rows that match no existing player are skipped and reported;
+    nothing new is created. Edits propagate to Challenge League data via
+    ``_resync_challenge_players`` so admins no longer delete & re-add players.
+    """
+    if request.method == "POST":
+        csv_text = request.form.get("csv_text", "").strip()
+        if not csv_text:
+            flash("Please paste some CSV data.", "error")
+            return redirect(url_for("players_data_change"))
+
+        db = get_session()
+        try:
+            updated = 0
+            not_found = []          # (name, version) rows with no match
+            errors = []
+            updated_players = []     # for cache bust + Challenge League re-sync
+            cl_synced = 0
+
+            reader = csv.reader(io.StringIO(csv_text))
+            rows = list(reader)
+
+            has_header = False
+            if rows and rows[0]:
+                first = rows[0][0].strip().lower()
+                if first in ("name", "player", "player_name", "player name"):
+                    has_header = True
+            start_idx = 1 if has_header else 0
+
+            # Fields the override controls. Name & Version are the match key, so
+            # they're intentionally NOT overwritten here.
+            override_fields = ("rating", "category", "country", "bat_hand",
+                               "bowl_hand", "bowl_style", "bat_rating",
+                               "bowl_rating", "is_active")
+
+            for i, row in enumerate(rows[start_idx:], start=start_idx + 1):
+                if not row or not row[0].strip():
+                    continue
+                try:
+                    cols = [c.strip() for c in row]
+                    data = _normalize_player_csv_row(cols)
+                    if data is None:
+                        continue
+                    name = data["name"]
+                    version = data["version"]
+
+                    player = (db.query(Player)
+                              .filter(Player.name == name,
+                                      Player.version == version)
+                              .first())
+                    if not player:
+                        not_found.append(f"{name} ({version})")
+                        continue
+
+                    for f in override_fields:
+                        setattr(player, f, data[f])
+                    # Force the generated card to re-render with the new data.
+                    player.card_file_id = None
+                    updated += 1
+                    updated_players.append(player)
+                except Exception as e:
+                    errors.append(f"Row {i}: {str(e)[:80]}")
+
+            # Re-sync Challenge League snapshots for every overridden player.
+            for p in updated_players:
+                try:
+                    cl_synced += _resync_challenge_players(db, p)
+                except Exception:
+                    logger.exception("Challenge League re-sync failed (non-fatal)")
+
+            log_admin(db, "data_change",
+                      detail=f"Updated {updated}, {len(not_found)} not found, "
+                             f"{len(errors)} errors; CL synced {cl_synced}")
+            db.commit()
+
+            # Bust caches for every changed player.
+            try:
+                from services.player_cache import invalidate as _inv_pc
+                from services.card_generator import invalidate_card_cache
+                _inv_pc()
+                for p in updated_players:
+                    invalidate_card_cache(p.id)
+            except Exception:
+                pass
+
+            msg = f"✅ Updated {updated} player(s)"
+            if cl_synced:
+                msg += f" · synced {cl_synced} Challenge League entr(y/ies)"
+            if not_found:
+                msg += f" · {len(not_found)} not found (skipped)"
+            if errors:
+                msg += f" · {len(errors)} errors"
+            flash(msg, "success")
+            for nf in not_found[:10]:
+                flash(f"Not found (skipped): {nf}", "info")
+            for e in errors[:5]:
+                flash(e, "error")
+
+            return redirect(url_for("players_list"))
+        except Exception as e:
+            db.rollback()
+            flash(f"Data change failed: {e}", "error")
+            return redirect(url_for("players_data_change"))
+        finally:
+            db.close()
+
+    return render_template("data_change.html")
 
 
 # ── Admin activity log ───────────────────────────────────────────────
@@ -1343,6 +1473,14 @@ def player_edit(player_id):
                       target_name=player.name, detail=detail)
             # Clear cached generated-card file_id so the next send re-renders.
             player.card_file_id = None
+            # Propagate the edit into Challenge League snapshots so admins no
+            # longer have to delete & re-add the player there. (UserRoster keeps
+            # only a player_id FK, so it already reflects edits via JOIN.)
+            cl_updated = 0
+            try:
+                cl_updated = _resync_challenge_players(db, player)
+            except Exception:
+                logger.exception("Challenge League re-sync failed (non-fatal)")
             db.commit()
             # Bust in-memory caches — the player row changed
             try:
@@ -1352,7 +1490,10 @@ def player_edit(player_id):
                 invalidate_card_cache(player.id)
             except Exception:
                 pass
-            flash(f"Player '{player.name}' updated", "success")
+            msg = f"Player '{player.name}' updated"
+            if cl_updated:
+                msg += f" · synced {cl_updated} Challenge League entr(y/ies)"
+            flash(msg, "success")
             return redirect(url_for("players_list"))
 
         from services.player_image_service import get_metadata
@@ -1712,6 +1853,87 @@ def admin_player_version_delete(version_id):
 
 # ── Delete player ────────────────────────────────────────────────────
 
+def _purge_player_references(db, player):
+    """Remove every row that references ``player`` so the player row can be
+    deleted without tripping a ForeignKeyViolation.
+
+    Roster owners are refunded the player's sell value (mirroring a normal
+    release): equipped traits return to inventory, trade/captain pointers are
+    cleared, coins are credited, and an activity row is logged. CASCADE tables
+    (challenge_players, tournament_player_stats, fantasy_league_players) clean
+    themselves up when the player row is finally deleted — that is how the
+    player leaves Challenge League data. Returns the number of users refunded.
+    """
+    from models import (
+        UserRoster, Trade, PlayerTrait, TraitInventory,
+        PlayerGameStats, PlayerMarket, GlobalPlayerMarket, BotTeamPlayer,
+        PlayerFormHistory, PlayerImage, PlayerMatchStats,
+        FantasyPlayerScore, FantasyPick,
+    )
+    from config import get_sell_value
+    from services.activity_service import log_activity
+
+    pid = player.id
+    name = player.name
+    rating = player.rating
+
+    # 1) Roster rows — refund owners, return traits, clear trade/captain refs.
+    roster_rows = db.query(UserRoster).filter(UserRoster.player_id == pid).all()
+    roster_ids = [r.id for r in roster_rows]
+    refunded_users = 0
+    if roster_ids:
+        # Equipped traits go back to the owner's inventory rather than vanishing.
+        for pt in db.query(PlayerTrait).filter(PlayerTrait.roster_id.in_(roster_ids)).all():
+            db.add(TraitInventory(user_id=pt.user_id, trait_id=pt.trait_id, level=pt.level))
+            db.delete(pt)
+        # Null roster pointers held by trades (FK is NO ACTION → would block).
+        for t in (db.query(Trade)
+                    .filter((Trade.initiator_roster_id.in_(roster_ids)) |
+                            (Trade.receiver_roster_id.in_(roster_ids))).all()):
+            if t.initiator_roster_id in roster_ids:
+                t.initiator_roster_id = None
+            if t.receiver_roster_id in roster_ids:
+                t.receiver_roster_id = None
+        db.flush()
+        for row in roster_rows:
+            user = db.query(User).get(row.user_id)
+            if user:
+                sv = get_sell_value(rating)
+                user.total_coins = (user.total_coins or 0) + sv
+                user.roster_count = max(0, (user.roster_count or 0) - 1)
+                if user.captain_roster_id == row.id:
+                    user.captain_roster_id = None
+                try:
+                    log_activity(db, user.id, "release",
+                                 f"Player '{name}' ({rating}) removed by admin · refunded {sv:,}",
+                                 coins_change=sv, player_name=name, player_rating=rating)
+                except Exception:
+                    pass
+                refunded_users += 1
+            db.delete(row)
+        db.flush()
+
+    # 2) Trades that reference the player directly (player_id is NOT NULL, so it
+    #    can't be nulled — drop the historical trade rows instead).
+    (db.query(Trade)
+       .filter((Trade.initiator_player_id == pid) | (Trade.receiver_player_id == pid))
+       .delete(synchronize_session=False))
+
+    # 3) Remaining blocking references (no CASCADE in the model).
+    for Model in (PlayerGameStats, PlayerMarket, GlobalPlayerMarket, BotTeamPlayer,
+                  PlayerFormHistory, PlayerImage, PlayerMatchStats,
+                  FantasyPlayerScore, FantasyPick):
+        db.query(Model).filter(Model.player_id == pid).delete(synchronize_session=False)
+
+    # 4) Detach child variants (self-FK parent_player_id, no CASCADE).
+    (db.query(Player)
+       .filter(Player.parent_player_id == pid)
+       .update({Player.parent_player_id: None}, synchronize_session=False))
+
+    db.flush()
+    return refunded_users
+
+
 @app.route("/players/<int:player_id>/delete", methods=["POST"])
 @login_required
 def player_delete(player_id):
@@ -1724,8 +1946,10 @@ def player_delete(player_id):
 
         name = player.name
         rating = player.rating
+        refunded_users = _purge_player_references(db, player)
         log_admin(db, "player_delete", target_type="player", target_id=player.id,
-                  target_name=name, detail=f"Rating {rating}, {player.category}")
+                  target_name=name,
+                  detail=f"Rating {rating}, {player.category}; refunded {refunded_users} roster owner(s)")
         db.delete(player)
         db.commit()
         try:
@@ -1735,7 +1959,10 @@ def player_delete(player_id):
             invalidate_card_cache(player_id)
         except Exception:
             pass
-        flash(f"Player '{name}' deleted", "success")
+        msg = f"Player '{name}' deleted"
+        if refunded_users:
+            msg += f" · refunded sell value to {refunded_users} roster owner(s)"
+        flash(msg, "success")
     except Exception as e:
         db.rollback()
         flash(f"Error deleting player: {e}", "error")
@@ -11829,6 +12056,30 @@ def _challenge_player_details_from_source(player, is_overseas=False):
         "bowl_style": player.bowl_style,
         "is_overseas": bool(is_overseas),
     }, separators=(",", ":"))
+
+
+def _resync_challenge_players(db, player):
+    """Refresh the denormalised Challenge League snapshots for ``player``.
+
+    ChallengePlayer stores a copy of the master Player's name plus a
+    ``details_json`` blob (the match engine reads ratings/handedness/style from
+    that blob via ``cipl_match.cp_to_player_dict``). Editing the master Player
+    therefore does NOT reach Challenge League data unless we rewrite those
+    snapshots — which is why admins previously had to delete & re-add players.
+    Overseas status is league-specific, so it's recomputed per team's league.
+    Returns the number of ChallengePlayer rows updated.
+    """
+    rows = (db.query(ChallengePlayer)
+              .filter(ChallengePlayer.source_player_id == player.id).all())
+    updated = 0
+    for cp in rows:
+        league = cp.team.league if cp.team else None
+        overseas = _is_overseas_for_league(player, league) if league else bool(cp.is_overseas)
+        cp.name = (player.name or "")[:150]
+        cp.details_json = _challenge_player_details_from_source(player, overseas)
+        cp.is_overseas = overseas
+        updated += 1
+    return updated
 
 
 def _bulk_add_challenge_players(db, team_id, player_names_or_ids):

@@ -6,6 +6,7 @@
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
     <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
     <a href="{{ url_for('players_bulk_upload') }}" class="btn btn-green">📤 Bulk Upload</a>
+    <a href="{{ url_for('players_data_change') }}" class="btn btn-green">♻️ Data Change</a>
     <a href="{{ url_for('players_download', q=q, category=category, country=country_filter, rating_range=rating_range) }}" class="btn btn-blue">⬇ Download CSV</a>
     <a href="{{ url_for('admin_logs') }}" class="btn btn-ghost">📋 Logs</a>
   </div>

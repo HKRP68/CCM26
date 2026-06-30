@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Data Change Players{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+  <h2>♻️ Data Change (Override Players)</h2>
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost">← Back to Players</a>
+</div>
+
+<div style="background:var(--card);padding:1.25rem;border-radius:.5rem;margin-bottom:1rem;">
+  <h3 style="margin-top:0;">CSV Format</h3>
+  <p style="color:var(--muted);margin:.5rem 0;">
+    Same format as Bulk Upload, but each row <strong>overrides an existing player's data</strong>
+    instead of creating a new one. Players are matched by <strong>Name + Version</strong>.
+    Rows that match no existing player are <strong>skipped and reported</strong> — nothing new is created.
+    Changes also propagate to <strong>Challenge League</strong> data automatically.
+  </p>
+
+  <p style="margin:.5rem 0;font-weight:600;">Column order:</p>
+  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;">
+Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
+  </code>
+
+  <p style="margin:1rem 0 .5rem;font-weight:600;">Example:</p>
+  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;white-space:pre;">Virat Kohli, 98, Batsman, India, Right, Right, Medium Pacer, 97, 32, Base, 1
+Jasprit Bumrah, 97, Bowler, India, Right, Right, Fast, 21, 96, Base, 1</code>
+
+  <div style="margin-top:1rem;padding:.75rem;background:#2e2a1a;border-left:3px solid #d4a000;border-radius:.25rem;">
+    <p style="margin:0;font-size:.9rem;line-height:1.6;">
+      <strong>⚠️ How it works:</strong><br>
+      • Each row's <strong>Name + Version</strong> is the lookup key — it identifies which existing player to update<br>
+      • Every other field (Rating, Category, Country, Hands, Bowl Style, Bat/Bowl Rating, Is Active) is <strong>overwritten</strong> with the value you provide<br>
+      • To rename a player or change its Version, use the player's <strong>Edit</strong> page instead (those are the match key here)<br>
+      • Rows with no matching player are <strong>skipped</strong> and listed back to you — they are NOT created<br>
+      • Updated players' cards re-render automatically and Challenge League entries are re-synced<br>
+      • First row can be a header (auto-detected and skipped)
+    </p>
+  </div>
+</div>
+
+<form method="POST" action="{{ url_for('players_data_change') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label style="display:block;margin-bottom:.5rem;font-weight:600;">Paste CSV data:</label>
+  <textarea
+    name="csv_text"
+    rows="15"
+    style="width:100%;font-family:monospace;font-size:.9rem;padding:.75rem;background:#0d1117;color:#c9d1d9;border:1px solid var(--border);border-radius:.5rem;"
+    placeholder="Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
+Virat Kohli, 98, Batsman, India, Right, Right, Medium Pacer, 97, 32, Base, 1
+..."></textarea>
+
+  <div style="margin-top:1rem;display:flex;gap:.5rem;">
+    <button type="submit" class="btn btn-primary">♻️ Override Players</button>
+    <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Cancel</a>
+  </div>
+</form>
+
+{% endblock %}
