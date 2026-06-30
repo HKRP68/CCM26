@@ -17,10 +17,12 @@ class DummyStatus:
 
 
 class DummyMessage:
-    def __init__(self, chat_id=10, message_id=20, reply_to_message=None):
+    def __init__(self, chat_id=10, message_id=20, reply_to_message=None,
+                 media_group_id=None):
         self.chat_id = chat_id
         self.message_id = message_id
         self.reply_to_message = reply_to_message
+        self.media_group_id = media_group_id
         self.replies = []
 
     async def reply_text(self, text):
@@ -31,10 +33,15 @@ class DummyMessage:
 
 class DummyBot:
     def __init__(self):
-        self.forwarded = []
+        # copied: single copy_message calls; copied_groups: copy_messages calls.
+        self.copied = []
+        self.copied_groups = []
 
-    async def forward_message(self, chat_id, from_chat_id, message_id):
-        self.forwarded.append((chat_id, from_chat_id, message_id))
+    async def copy_message(self, chat_id, from_chat_id, message_id):
+        self.copied.append((chat_id, from_chat_id, message_id))
+
+    async def copy_messages(self, chat_id, from_chat_id, message_ids):
+        self.copied_groups.append((chat_id, from_chat_id, tuple(message_ids)))
 
 
 class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
@@ -47,6 +54,7 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
         # there so the env-var-driven assertions stay isolated from real config.
         self._config_patch = patch.object(admin_ids, "get_config", return_value={})
         self._config_patch.start()
+        forward_broadcast._album_cache.clear()
 
     def tearDown(self):
         for name, value in self._old_env.items():
@@ -79,7 +87,39 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.total, 2)
         self.assertEqual(result.sent, 2)
         self.assertEqual(result.failed, 0)
-        self.assertEqual(bot.forwarded, [(-1001, 777, 55), (-1002, 777, 55)])
+        # copy_message (not forward_message) → no "Forwarded from" attribution.
+        self.assertEqual(bot.copied, [(-1001, 777, 55), (-1002, 777, 55)])
+        self.assertEqual(bot.copied_groups, [])
+
+    async def test_album_is_copied_as_a_group(self):
+        bot = DummyBot()
+        context = SimpleNamespace(bot=bot)
+
+        result = await forward_broadcast.forward_replied_message(
+            context,
+            chat_ids=[-1001, -1002],
+            from_chat_id=777,
+            message_id=55,
+            message_ids=[55, 56, 57],
+        )
+
+        self.assertEqual(result.sent, 2)
+        # Whole album copied per target; no single-message copies.
+        self.assertEqual(bot.copied, [])
+        self.assertEqual(bot.copied_groups, [
+            (-1001, 777, (55, 56, 57)),
+            (-1002, 777, (55, 56, 57)),
+        ])
+
+    def test_album_buffer_collects_and_sorts_ids(self):
+        forward_broadcast.remember_album_message(999, "mg1", 57)
+        forward_broadcast.remember_album_message(999, "mg1", 55)
+        forward_broadcast.remember_album_message(999, "mg1", 56)
+        forward_broadcast.remember_album_message(999, "mg1", 55)  # dup ignored
+        self.assertEqual(forward_broadcast.get_album_message_ids(999, "mg1"),
+                         [55, 56, 57])
+        # Unknown group → empty.
+        self.assertEqual(forward_broadcast.get_album_message_ids(999, "nope"), [])
 
     async def test_group_command_requires_admin(self):
         source = DummyMessage(chat_id=999, message_id=50)
@@ -94,7 +134,8 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
         await forward_broadcast.frwd_grp_handler(update, context)
 
         self.assertEqual(command.replies[0].text, "⛔ Only bot admins can use this command.")
-        self.assertEqual(context.bot.forwarded, [])
+        self.assertEqual(context.bot.copied, [])
+        self.assertEqual(context.bot.copied_groups, [])
 
     async def test_group_command_forwards_replied_dm_message_to_active_groups(self):
         os.environ["BOT_ADMIN_IDS"] = "999"
@@ -111,7 +152,7 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
             await forward_broadcast.frwd_grp_handler(update, context)
 
         targets.assert_called_once_with(forward_broadcast.GROUP_CHAT_TYPES)
-        self.assertEqual(context.bot.forwarded, [(-1001, 999, 50), (-1002, 999, 50)])
+        self.assertEqual(context.bot.copied, [(-1001, 999, 50), (-1002, 999, 50)])
         self.assertIn("Sent: 2/2", command.replies[0].edits[0])
 
     async def test_private_command_uses_private_targets(self):
@@ -129,7 +170,7 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
             await forward_broadcast.frwd_prvt_handler(update, context)
 
         targets.assert_called_once_with(forward_broadcast.PRIVATE_CHAT_TYPES)
-        self.assertEqual(context.bot.forwarded, [(1234, 999, 50)])
+        self.assertEqual(context.bot.copied, [(1234, 999, 50)])
 
 
 if __name__ == "__main__":

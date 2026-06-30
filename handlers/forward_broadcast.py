@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 from telegram import Update
@@ -35,6 +36,56 @@ logger = logging.getLogger(__name__)
 GROUP_CHAT_TYPES = ("group", "supergroup")
 PRIVATE_CHAT_TYPES = ("private",)
 DEFAULT_DELAY_SECONDS = 0.05
+
+# ── Album (media-group) buffering ────────────────────────────────────
+# Telegram delivers each photo of an album as a separate message that merely
+# shares a ``media_group_id``; there is no API to fetch "all messages in a
+# group". Replying to one of them therefore only knows that single message_id,
+# which is why /frwd_* used to forward just the first image. We remember the
+# message_ids of albums admins send to the bot's DM so the forward commands can
+# copy the whole group. Entries expire so the dict can't grow unbounded.
+ALBUM_CACHE_TTL_SECONDS = 1800
+_album_cache: dict[tuple[int, str], dict] = {}
+
+
+def remember_album_message(chat_id: int, media_group_id, message_id: int) -> None:
+    """Record one message of an album keyed by (chat_id, media_group_id)."""
+    if not media_group_id:
+        return
+    now = time.time()
+    # Prune stale groups opportunistically.
+    for key in [k for k, v in _album_cache.items()
+                if now - v["ts"] > ALBUM_CACHE_TTL_SECONDS]:
+        _album_cache.pop(key, None)
+    key = (int(chat_id), str(media_group_id))
+    entry = _album_cache.get(key)
+    if entry is None:
+        entry = {"ids": [], "ts": now}
+        _album_cache[key] = entry
+    mid = int(message_id)
+    if mid not in entry["ids"]:
+        entry["ids"].append(mid)
+    entry["ts"] = now
+
+
+def get_album_message_ids(chat_id: int, media_group_id) -> list[int]:
+    """Return the buffered, sorted message_ids for an album (empty if unknown)."""
+    if not media_group_id:
+        return []
+    entry = _album_cache.get((int(chat_id), str(media_group_id)))
+    return sorted(entry["ids"]) if entry else []
+
+
+async def track_album_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Message handler: buffer album parts admins send to the bot's DM so the
+    forward commands can later copy every image, not just the replied one."""
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not message.media_group_id or not user:
+        return
+    if not is_forward_admin(user.id):
+        return
+    remember_album_message(message.chat_id, message.media_group_id, message.message_id)
 
 
 @dataclass(frozen=True)
@@ -89,19 +140,34 @@ async def forward_replied_message(
     chat_ids: list[int],
     from_chat_id: int,
     message_id: int,
+    message_ids: list[int] | None = None,
 ) -> ForwardResult:
-    """Forward one source message to each target chat."""
+    """Copy one source message (or a whole album) to each target chat.
+
+    Uses ``copy_message`` / ``copy_messages`` rather than ``forward_message`` so
+    the broadcast carries **no** "Forwarded from …" sender attribution. When
+    ``message_ids`` holds more than one id (an album / media group), all of them
+    are copied as a group so multi-image posts keep every image and the caption.
+    """
     sent = 0
     failed = 0
     delay = _forward_delay_seconds()
+    album_ids = [int(m) for m in message_ids] if message_ids else []
 
     for chat_id in chat_ids:
         try:
-            await context.bot.forward_message(
-                chat_id=chat_id,
-                from_chat_id=from_chat_id,
-                message_id=message_id,
-            )
+            if len(album_ids) > 1:
+                await context.bot.copy_messages(
+                    chat_id=chat_id,
+                    from_chat_id=from_chat_id,
+                    message_ids=album_ids,
+                )
+            else:
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=from_chat_id,
+                    message_id=message_id,
+                )
             sent += 1
         except Forbidden as exc:
             failed += 1
@@ -157,14 +223,23 @@ async def _handle_forward_command(
         await message.reply_text(f"ℹ️ No active {target_label} chats found.")
         return
 
+    # If the replied message is part of an album, copy every buffered image of
+    # that media group — not just the one the admin happened to reply to.
+    message_ids = None
+    if getattr(source, "media_group_id", None):
+        message_ids = get_album_message_ids(source.chat_id, source.media_group_id) \
+            or [source.message_id]
+
+    album_note = f" (album of {len(message_ids)} items)" if message_ids and len(message_ids) > 1 else ""
     status = await message.reply_text(
-        f"🚀 Forwarding replied message to {len(chat_ids)} {target_label} chat(s)…"
+        f"🚀 Forwarding replied message{album_note} to {len(chat_ids)} {target_label} chat(s)…"
     )
     result = await forward_replied_message(
         context,
         chat_ids=chat_ids,
         from_chat_id=source.chat_id,
         message_id=source.message_id,
+        message_ids=message_ids,
     )
 
     summary = (
