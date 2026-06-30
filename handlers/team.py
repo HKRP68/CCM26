@@ -174,8 +174,12 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("Stats custom card load failed for %s", player.id)
 
         if custom_bytes:
-            await update.message.reply_photo(
-                photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
+            try:
+                await update.message.reply_photo(
+                    photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
+            except Exception:
+                # Don't let a failed image upload swallow the stats text below.
+                logger.exception("Stats custom card send failed; continuing with text")
         else:
             # Reuses a stored Telegram file_id when available (no re-render/upload).
             from services.card_generator import send_generated_card
@@ -435,8 +439,12 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("statscl custom card load failed for %s", name)
 
         if custom_bytes:
-            await update.message.reply_photo(
-                photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
+            try:
+                await update.message.reply_photo(
+                    photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
+            except Exception:
+                # Don't let a failed image upload swallow the stats text below.
+                logger.exception("statscl custom card send failed; continuing with text")
         elif card_player is not None:
             # Reuses a stored Telegram file_id when available (no re-render/upload).
             # Synthetic (negative-id) card players use the in-memory cache only.

@@ -606,6 +606,7 @@ def _is_persistable_player_id(player_id):
 
 
 def _db_get_gen_file_id(player_id):
+    """Read the persisted generated-card file_id for a real player row, or None."""
     if not _is_persistable_player_id(player_id):
         return None
     try:
@@ -621,6 +622,7 @@ def _db_get_gen_file_id(player_id):
 
 
 def _db_set_gen_file_id(player_id, file_id):
+    """Persist (or clear, when file_id is None) the generated-card file_id in the DB."""
     if not _is_persistable_player_id(player_id):
         return
     try:
@@ -697,13 +699,17 @@ async def send_generated_card(reply_photo, player, **photo_kwargs):
     miss it renders once off-thread, sends the bytes, and persists the returned
     file_id. Returns the sent Message, or None if no card could be sent.
     """
+    from telegram.error import TelegramError
     pid = getattr(player, "id", None)
     file_id = get_generated_card_file_id(pid) if pid is not None else None
     if file_id:
         try:
             return await reply_photo(photo=file_id, **photo_kwargs)
-        except Exception:
-            # Stale id (file rotated / channel cleared) — drop and re-render.
+        except TelegramError:
+            # A Telegram-side failure (most often a stale/rotated file_id) — drop
+            # the cached id and re-render. Non-Telegram errors (e.g. a malformed
+            # caption) would fail the bytes path too, so we let them propagate
+            # instead of needlessly evicting a still-valid file_id.
             logger.warning("cached generated file_id send failed; re-rendering")
             drop_generated_card_file_id(pid)
 
