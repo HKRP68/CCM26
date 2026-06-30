@@ -1,6 +1,5 @@
 """Handler for /playerinfo [name] — shows player card + version selector."""
 
-import asyncio
 import io
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -9,7 +8,6 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player, UserRoster
-from services.card_generator import generate_card
 from services.card_text import format_player_card
 from services.version_service import get_all_versions, user_owns_any_version
 
@@ -114,19 +112,15 @@ async def _send_player_card(session, user, player, target, owner_tg):
         except Exception:
             logger.exception("Custom image send failed, falling back to text")
 
-    # No custom card → render the template/generated card instead of text-only.
-    try:
-        gen_bytes = await asyncio.to_thread(generate_card, player)
-    except Exception:
-        gen_bytes = None
-    if gen_bytes:
-        try:
-            await target.reply_photo(
-                photo=io.BytesIO(gen_bytes), caption=text, parse_mode="HTML", reply_markup=kb,
-            )
-            return
-        except Exception:
-            logger.exception("Generated card send failed, falling back to text")
+    # No custom card → send the cached generated/template card (reuses a stored
+    # Telegram file_id when available, so we skip the Pillow render + re-upload).
+    from services.card_generator import send_generated_card
+    sent = await send_generated_card(
+        target.reply_photo, player,
+        caption=text, parse_mode="HTML", reply_markup=kb,
+    )
+    if sent is not None:
+        return
 
     await target.reply_text(text, parse_mode="HTML", reply_markup=kb)
 

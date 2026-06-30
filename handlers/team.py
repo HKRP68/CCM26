@@ -156,37 +156,38 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"</code>"
         )
 
-        # Lead with the player's card image only when there's an admin-uploaded
-        # custom card; otherwise send the stats as text only (no generated card).
-        # The stats block can exceed Telegram's 1024-char caption limit, so it is
-        # sent as a follow-up message rather than a caption.
-        card_bytes = None
+        # Lead with the player's card image (custom card if uploaded, else the
+        # cached generated/template card). The stats block can exceed Telegram's
+        # 1024-char caption limit, so it is sent as a follow-up message rather
+        # than a caption.
+        caption = (
+            f"📛 <b>{player.name}</b> {flag}\n"
+            f"⭐ {player.rating} OVR | {player.category}\n"
+            f"🏆 POTM(s): {gs.potm}"
+        )
+        custom_bytes = None
         try:
             from services.player_image_service import has_custom_card, get_custom_image_bytes
             if has_custom_card(player.id, session):
-                card_bytes = await asyncio.to_thread(get_custom_image_bytes, player.id)
+                custom_bytes = await asyncio.to_thread(get_custom_image_bytes, player.id)
         except Exception:
             logger.exception("Stats custom card load failed for %s", player.id)
 
-        # No custom card → render the template/generated card instead of text-only.
-        if not card_bytes:
+        if custom_bytes:
             try:
-                from services.card_generator import generate_card
-                card_bytes = await asyncio.to_thread(generate_card, player)
+                await update.message.reply_photo(
+                    photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
             except Exception:
-                logger.exception("Stats generated card fallback failed for %s", player.id)
-
-        if card_bytes:
-            caption = (
-                f"📛 <b>{player.name}</b> {flag}\n"
-                f"⭐ {player.rating} OVR | {player.category}\n"
-                f"🏆 POTM(s): {gs.potm}"
-            )
-            await update.message.reply_photo(
-                photo=io.BytesIO(card_bytes), caption=caption, parse_mode="HTML")
-            await update.message.reply_text(text, parse_mode="HTML")
+                # Don't let a failed image upload swallow the stats text below.
+                logger.exception("Stats custom card send failed; continuing with text")
         else:
-            await update.message.reply_text(text, parse_mode="HTML")
+            # Reuses a stored Telegram file_id when available (no re-render/upload).
+            from services.card_generator import send_generated_card
+            await send_generated_card(
+                update.message.reply_photo, player,
+                caption=caption, parse_mode="HTML")
+        # Stats text is the full info and is always sent (even if no card image).
+        await update.message.reply_text(text, parse_mode="HTML")
 
     except Exception:
         logger.exception(f"Stats error for {tg_user.id}")
@@ -421,36 +422,37 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 card_file_id=None,
             )
 
-        # Only show an image when the master player has an admin-uploaded custom
-        # card; otherwise send the stats as text only (no generated card).
-        card_bytes = None
+        # Lead with the player's card image (custom card if the master player
+        # has one, else the cached generated/template card).
+        caption = (
+            f"📛 <b>{name}</b> {flag}\n"
+            f"⭐ {head_rating} OVR | {head_category}\n"
+            f"📋 In {len(rows)} Challenge League{'s' if len(rows) != 1 else ''}"
+        )
+        custom_bytes = None
         try:
             from services.player_image_service import has_custom_card, get_custom_image_bytes
             cp_id = getattr(card_player, "id", None)
             if master is not None and cp_id and cp_id > 0 and has_custom_card(cp_id, session):
-                card_bytes = await asyncio.to_thread(get_custom_image_bytes, cp_id)
+                custom_bytes = await asyncio.to_thread(get_custom_image_bytes, cp_id)
         except Exception:
             logger.exception("statscl custom card load failed for %s", name)
 
-        # No custom card → render the template/generated card instead of text-only.
-        if not card_bytes and card_player is not None:
+        if custom_bytes:
             try:
-                from services.card_generator import generate_card
-                card_bytes = await asyncio.to_thread(generate_card, card_player)
+                await update.message.reply_photo(
+                    photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
             except Exception:
-                logger.exception("statscl generated card fallback failed for %s", name)
-
-        if card_bytes:
-            caption = (
-                f"📛 <b>{name}</b> {flag}\n"
-                f"⭐ {head_rating} OVR | {head_category}\n"
-                f"📋 In {len(rows)} Challenge League{'s' if len(rows) != 1 else ''}"
-            )
-            await update.message.reply_photo(
-                photo=io.BytesIO(card_bytes), caption=caption, parse_mode="HTML")
-            await update.message.reply_text(text, parse_mode="HTML")
-        else:
-            await update.message.reply_text(text, parse_mode="HTML")
+                # Don't let a failed image upload swallow the stats text below.
+                logger.exception("statscl custom card send failed; continuing with text")
+        elif card_player is not None:
+            # Reuses a stored Telegram file_id when available (no re-render/upload).
+            # Synthetic (negative-id) card players use the in-memory cache only.
+            from services.card_generator import send_generated_card
+            await send_generated_card(
+                update.message.reply_photo, card_player,
+                caption=caption, parse_mode="HTML")
+        await update.message.reply_text(text, parse_mode="HTML")
 
     except Exception:
         logger.exception("statscl error for search '%s'", search)
