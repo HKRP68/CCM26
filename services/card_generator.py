@@ -637,6 +637,7 @@ def _db_set_gen_file_id(player_id, file_id):
 
 
 def _db_clear_all_gen_file_ids():
+    """Clear every persisted generated-card file_id (bulk cache invalidation)."""
     try:
         from database import SessionLocal
         from models import Player
