@@ -166,12 +166,21 @@ async def playerinfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Find the player; if multiple versions exist, use the paginator UI
         from services.version_paginator import (
-            find_player_for_search, get_versions_ordered,
+            find_players_for_search, format_multiple_players_message,
+            get_versions_ordered,
         )
-        player = find_player_for_search(session, search_name)
-        if not player:
+        matches = find_players_for_search(session, search_name)
+        if not matches:
             await update.message.reply_text(f"❌ Player not found: {search_name}")
             return
+        # Several different players match (e.g. "Sachin" / "Kumar") → ask the
+        # user to narrow it down with the full name.
+        if len(matches) > 1:
+            await update.message.reply_text(
+                format_multiple_players_message("playerinfo", search_name, matches),
+                parse_mode="HTML")
+            return
+        player = matches[0]
 
         base_id = player.parent_player_id or player.id
         versions = get_versions_ordered(session, base_id)

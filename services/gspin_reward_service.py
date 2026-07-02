@@ -47,8 +47,13 @@ def reward_probability(row, all_enabled_rows):
     return max(1, row.weight or 1) / total
 
 
-def apply_reward(session, user, reward):
-    """Apply a GSpinReward row to a user. Reusable from /gspin and Mini App."""
+def apply_reward(session, user, reward, hold_overflow=False):
+    """Apply a GSpinReward row to a user. Reusable from /gspin and Mini App.
+
+    When ``hold_overflow`` is True and a rolled player can't fit a full roster,
+    it's parked as a pending RosterOverflowClaim (Mini App Replace flow) and the
+    claim is returned under ``overflow_claim`` instead of being discarded.
+    """
     import random
     from datetime import datetime
     from models import UserRoster, Player
@@ -63,6 +68,7 @@ def apply_reward(session, user, reward):
         "player_name": None,
         "player_rating": None,
         "squad_full": False,
+        "overflow_claim": None,
         "pack_id": None,
     }
 
@@ -128,6 +134,13 @@ def apply_reward(session, user, reward):
             out["squad_full"] = False
         else:
             out["squad_full"] = True
+            if hold_overflow:
+                # Persist the pending claim; if it fails, propagate so the caller
+                # rolls back the spin (and quota) instead of silently losing the
+                # rolled player.
+                from services.overflow_service import record_overflow
+                out["overflow_claim"] = record_overflow(
+                    session, user, player, source="gspin")
 
     elif t == "pack":
         out["pack_id"] = reward.pack_id

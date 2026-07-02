@@ -8,19 +8,28 @@ real cards and card design; only the surrounding frame is new.
 import asyncio
 import io
 import logging
+from datetime import datetime
 from html import escape
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from config import XIMAGE_COOLDOWN
 from database import get_session
+from models import UserStats
 from handlers.lineup import (_get_ordered_roster, _build_display_order,
                              format_xi_text)
+from services.cooldown_service import check_cooldown, format_remaining
 from services.telegram_user_service import (resolve_command_target,
                                             sync_telegram_user)
 from services.xi_image import build_xi_image
+from utils.idempotency import claim_once, release
 
 logger = logging.getLogger(__name__)
+
+# Guard TTL: comfortably longer than a render + upload so a duplicate in-flight
+# /ximage from the same user is blocked, but a legitimate later call isn't.
+_XIMAGE_GUARD_TTL = 60.0
 
 
 async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -31,6 +40,7 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     tg_user = update.effective_user
     session = get_session()
+    guard_key = None
     try:
         # Optional: view another user's XI by arg, reply, or mention, like /pxi.
         # resolve_command_target handles the no-args reply/mention case and
@@ -50,6 +60,37 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         viewer = sync_telegram_user(session, tg_user)
         if not viewer:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        # 1-hour cooldown on the (CPU-heavy) image render, per caller. Applies
+        # regardless of whose XI is being viewed so the command can't be spammed.
+        stats = session.query(UserStats).filter(
+            UserStats.user_id == viewer.id).first()
+        if not stats:
+            stats = UserStats(user_id=viewer.id)
+            session.add(stats)
+            session.flush()
+        from services.command_config_service import get_cooldown
+        effective_cooldown = get_cooldown(session, "ximage", XIMAGE_COOLDOWN)
+        ready, remaining = check_cooldown(stats, "last_ximage", effective_cooldown)
+        if not ready:
+            await update.message.reply_text(
+                f"⏳ <b>/ximage</b> is on cooldown.\n"
+                f"Try again in <b>{format_remaining(remaining)}</b>.\n"
+                f"<i>Tip: /pxi shows your Playing XI as text anytime.</i>",
+                parse_mode="HTML")
+            return
+
+        # Serialize concurrent renders from the same caller: the bot runs
+        # handlers across a thread pool (concurrent_updates), so two /ximage sent
+        # back-to-back could both pass the cooldown gate above and each kick off
+        # the CPU-heavy Pillow render. Hold a short in-process guard for the
+        # render window so only the first one proceeds.
+        guard_key = f"ximage_{viewer.id}"
+        if not claim_once(guard_key, ttl=_XIMAGE_GUARD_TTL):
+            guard_key = None  # not ours — don't release someone else's claim
+            await update.message.reply_text(
+                "⏳ Your Playing XI image is already being generated — hang tight.")
             return
 
         view_user = target_user or viewer
@@ -87,6 +128,8 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         png = await asyncio.to_thread(
             build_xi_image, xi_pairs,
             team_name=handle, captain_roster_id=captain_rid)
+        # Consume the cooldown now that the (expensive) render has run.
+        stats.last_ximage = datetime.utcnow()
         session.commit()
 
         if png:
@@ -111,4 +154,8 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚠️ Couldn't build the Playing XI image. Try /pxi.")
     finally:
+        # Release the render guard so a legitimate later /ximage isn't blocked
+        # (the 1-hour cooldown still governs normal spacing).
+        if guard_key:
+            release(guard_key)
         session.close()

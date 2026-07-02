@@ -35,13 +35,18 @@ def check_daily_ready(session, user):
     return False, int(effective_cd - elapsed)
 
 
-def claim_daily(session, user, source_label="bot", skip_cooldown=False):
+def claim_daily(session, user, source_label="bot", skip_cooldown=False,
+                hold_overflow=False):
     """Apply the daily reward. Caller must commit() afterwards.
 
     Args:
       skip_cooldown: when True, ignore the 24h last_daily check. Used by
         the Mini App's quota system which enforces its own 1-free-plus-5-ads
         limit independent of the legacy cooldown.
+      hold_overflow: when True, players that don't fit a full roster are parked
+        as pending RosterOverflowClaim rows (so the Mini App can offer Replace)
+        instead of being discarded. Each entry in ``players_skipped`` then
+        carries a ``claim_id``.
 
     Returns a dict describing what happened (see module docstring).
     If cooldown isn't ready (and skip_cooldown is False), returns
@@ -132,6 +137,13 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False):
                 "sell_value": get_sell_value(p.rating),
             })
         else:
+            if hold_overflow:
+                # Persist the pending claim; if it fails, propagate so the caller
+                # rolls back the whole daily claim rather than consuming the
+                # reward with no replace/release path for the player.
+                from services.overflow_service import record_overflow
+                skipped.append(record_overflow(session, user, p, source="daily"))
+                continue
             skipped.append({"name": p.name, "rating": p.rating, "id": p.id})
 
     stats.last_daily = datetime.utcnow()

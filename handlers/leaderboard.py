@@ -1,6 +1,7 @@
 """Handler for /cmuleaderboard — leaderboard with multiple views."""
 
 import logging
+from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from sqlalchemy import func, desc
@@ -9,6 +10,17 @@ from database import get_session
 from models import User, Player, UserRoster, Match, PlayerGameStats
 
 logger = logging.getLogger(__name__)
+
+
+def _display_name(user):
+    """Plain (non-tagging) display name for the leaderboard.
+
+    We deliberately drop the leading ``@`` so usernames don't render as
+    clickable mentions/pings. HTML-escaped since the leaderboard is sent with
+    parse_mode="HTML".
+    """
+    name = user.username or user.first_name or "Player"
+    return escape(name)
 
 
 def _build_keyboard(active):
@@ -113,11 +125,11 @@ def _format_leaderboard(metric, top_10, viewer_rank, viewer_val, unit, viewer):
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
             if metric == "batsman":
                 gs, player, user = row
-                lines.append(f"{medal} {player.name} | @{user.username or user.first_name} | <b>{gs.runs}</b>")
+                lines.append(f"{medal} {escape(player.name)} | {_display_name(user)} | <b>{gs.runs}</b>")
             else:
                 user, val = row
-                val_str = f"{val:,}" if unit == "coins" else f"{val:,}"
-                lines.append(f"{medal} @{user.username or user.first_name} | <b>{val_str}</b>")
+                val_str = f"{val:,}"
+                lines.append(f"{medal} {_display_name(user)} | <b>{val_str}</b>")
 
     lines.append("\n━━━━━━━━━━━━━━━━━━━")
     if viewer_rank:

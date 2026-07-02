@@ -12,6 +12,7 @@ The same component is used by /playerinfo, /buypl, and similar flows so
 the UX is consistent.
 """
 
+from html import escape as _html_escape
 from typing import List, Optional, Tuple
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -164,6 +165,83 @@ def find_player_for_search(session, search_term: str) -> Optional[Player]:
     return (session.query(Player)
             .filter(Player.name.ilike(f"%{search_term}%"),
                     Player.is_active == True).first())
+
+
+def find_players_for_search(session, search_term: str,
+                            limit: int = 12) -> List[Player]:
+    """Return the DISTINCT base players matching the search term.
+
+    Different *versions* of the same cricketer collapse into a single base
+    entry, so this returns one row per real player. It's used to disambiguate
+    broad searches like "Sachin" or "Kumar" that legitimately match several
+    different players (Sachin Verma, Sachin Tendulkar, …).
+
+    An exact (case-insensitive) full-name match short-circuits to just that
+    player, so "/buypl Sachin Tendulkar" keeps working even when many other
+    "Sachin" players exist.
+    """
+    term = (search_term or "").strip()
+    if not term:
+        return []
+
+    # Escape LIKE metacharacters so a literal % or _ in the user's input is
+    # matched literally instead of behaving as a SQL wildcard.
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    # Exact full-name match wins outright (ilike with no % = case-insensitive
+    # equality). Prefer the base card of that player.
+    exact = (session.query(Player)
+             .filter(Player.name.ilike(escaped, escape="\\"),
+                     Player.is_active == True)
+             .order_by(Player.parent_player_id.isnot(None), Player.id)
+             .first())
+    if exact:
+        base_id = exact.parent_player_id or exact.id
+        base = session.query(Player).get(base_id)
+        return [base or exact]
+
+    rows = (session.query(Player)
+            .filter(Player.name.ilike(f"%{escaped}%", escape="\\"),
+                    Player.is_active == True)
+            .order_by(Player.rating.desc(), Player.name)
+            .all())
+
+    seen = {}
+    for p in rows:
+        base_id = p.parent_player_id or p.id
+        if base_id in seen:
+            continue
+        base = (p if p.parent_player_id is None
+                else (session.query(Player).get(base_id) or p))
+        seen[base_id] = base
+        if len(seen) >= limit:
+            break
+    # Order by the RESOLVED base player's own rating (what the disambiguation
+    # message displays), not the matched edition's rating.
+    result = list(seen.values())
+    result.sort(key=lambda pl: (-(pl.rating or 0), pl.name or ""))
+    return result
+
+
+def format_multiple_players_message(command: str, search_term: str,
+                                    players: List[Player]) -> str:
+    """Build the "multiple players found — use the full name" prompt.
+
+    Lists each matching player as a tappable ``/command Full Name`` code block
+    so the user can re-run the command unambiguously.
+    """
+    term = _html_escape((search_term or "").strip())
+    lines = [
+        f"🔎 <b>Multiple players found</b> for “<i>{term}</i>”.",
+        "Run the command again with the <b>full name</b>:",
+        "",
+    ]
+    for p in players:
+        name = _html_escape(p.name)
+        country = _html_escape(p.country or "")
+        suffix = f" — {p.rating} OVR" + (f" · {country}" if country else "")
+        lines.append(f"• <code>/{command} {name}</code>{suffix}")
+    return "\n".join(lines)
 
 
 def page_number_for(versions: List[Player], player_id: int) -> int:

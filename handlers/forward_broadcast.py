@@ -157,18 +157,34 @@ async def forward_replied_message(
     for chat_id in chat_ids:
         try:
             if len(album_ids) > 1:
-                await context.bot.copy_messages(
+                copied = await context.bot.copy_messages(
                     chat_id=chat_id,
                     from_chat_id=from_chat_id,
                     message_ids=album_ids,
                 )
+                # copy_messages returns a sequence of MessageId; pin the first
+                # item of the album so the whole post is highlighted.
+                pinned_id = copied[0].message_id if copied else None
             else:
-                await context.bot.copy_message(
+                copied = await context.bot.copy_message(
                     chat_id=chat_id,
                     from_chat_id=from_chat_id,
                     message_id=message_id,
                 )
+                pinned_id = copied.message_id if copied else None
             sent += 1
+            # Pin the freshly-forwarded message in the target chat. Best-effort:
+            # a missing pin permission must never fail the broadcast itself.
+            if pinned_id is not None:
+                try:
+                    await context.bot.pin_chat_message(
+                        chat_id=chat_id,
+                        message_id=pinned_id,
+                        disable_notification=True,
+                    )
+                except TelegramError as exc:
+                    logger.info("Could not pin forwarded message in %s: %s",
+                                chat_id, exc)
         except Forbidden as exc:
             failed += 1
             logger.warning("Forward target %s is unavailable: %s", chat_id, exc)
