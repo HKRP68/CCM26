@@ -128,7 +128,7 @@ def _format_leaderboard(metric, top_10, viewer_rank, viewer_val, unit, viewer):
                 lines.append(f"{medal} {escape(player.name)} | {_display_name(user)} | <b>{gs.runs}</b>")
             else:
                 user, val = row
-                val_str = f"{val:,}" if unit == "coins" else f"{val:,}"
+                val_str = f"{val:,}"
                 lines.append(f"{medal} {_display_name(user)} | <b>{val_str}</b>")
 
     lines.append("\n━━━━━━━━━━━━━━━━━━━")

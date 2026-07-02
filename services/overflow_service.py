@@ -30,6 +30,33 @@ def _sell_value(rating):
         return 0
 
 
+def _is_expired(claim):
+    """True if a pending claim is older than the TTL."""
+    return bool(
+        claim.created_at
+        and (datetime.utcnow() - claim.created_at).total_seconds() > OVERFLOW_TTL_SECONDS
+    )
+
+
+def _lock_claim(session, user, claim_id):
+    """Fetch a user's pending claim, row-locking it so two concurrent
+    replace/release requests can't both redeem the same claim_id.
+
+    ``with_for_update`` is a no-op on SQLite (dev/tests) and a real ``SELECT …
+    FOR UPDATE`` on Postgres: the second request blocks until the first commits,
+    then re-reads and finds the row gone (returns None → "claim_not_found").
+    """
+    from models import RosterOverflowClaim
+    q = (session.query(RosterOverflowClaim)
+         .filter(RosterOverflowClaim.id == claim_id,
+                 RosterOverflowClaim.user_id == user.id))
+    try:
+        return q.with_for_update().first()
+    except Exception:
+        # Backend/dialect without row-locking support — fall back to a plain read.
+        return q.first()
+
+
 def prune_overflow(session, user_id):
     """Delete expired pending claims for a user. Caller commits."""
     from models import RosterOverflowClaim
@@ -100,15 +127,13 @@ def resolve_replace(session, user, claim_id, old_roster_id):
     """
     from models import RosterOverflowClaim, UserRoster, Player
 
-    claim = (session.query(RosterOverflowClaim)
-             .filter(RosterOverflowClaim.id == claim_id,
-                     RosterOverflowClaim.user_id == user.id).first())
+    claim = _lock_claim(session, user, claim_id)
     if not claim:
         return {"ok": False, "error": "claim_not_found",
                 "message": "That reward player is no longer pending."}
 
     # Expired?
-    if claim.created_at and (datetime.utcnow() - claim.created_at).total_seconds() > OVERFLOW_TTL_SECONDS:
+    if _is_expired(claim):
         session.delete(claim)
         return {"ok": False, "error": "expired",
                 "message": "This reward expired. Try the reward again."}
@@ -170,12 +195,17 @@ def resolve_release(session, user, claim_id):
     """Release a pending overflow player for its sell value. Caller commits."""
     from models import RosterOverflowClaim, Player
 
-    claim = (session.query(RosterOverflowClaim)
-             .filter(RosterOverflowClaim.id == claim_id,
-                     RosterOverflowClaim.user_id == user.id).first())
+    claim = _lock_claim(session, user, claim_id)
     if not claim:
         return {"ok": False, "error": "claim_not_found",
                 "message": "That reward player is no longer pending."}
+
+    # Reject stale claims (same TTL guard as resolve_replace) so a full-roster
+    # release can't credit coins for an expired reward.
+    if _is_expired(claim):
+        session.delete(claim)
+        return {"ok": False, "error": "expired",
+                "message": "This reward expired. Try the reward again."}
 
     player = session.query(Player).get(claim.player_id)
     name = player.name if player else "Player"

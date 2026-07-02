@@ -135,12 +135,12 @@ def apply_reward(session, user, reward, hold_overflow=False):
         else:
             out["squad_full"] = True
             if hold_overflow:
-                try:
-                    from services.overflow_service import record_overflow
-                    out["overflow_claim"] = record_overflow(
-                        session, user, player, source="gspin")
-                except Exception:
-                    logger.exception("gspin overflow hold failed")
+                # Persist the pending claim; if it fails, propagate so the caller
+                # rolls back the spin (and quota) instead of silently losing the
+                # rolled player.
+                from services.overflow_service import record_overflow
+                out["overflow_claim"] = record_overflow(
+                    session, user, player, source="gspin")
 
     elif t == "pack":
         out["pack_id"] = reward.pack_id

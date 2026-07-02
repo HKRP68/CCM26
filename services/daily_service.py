@@ -138,12 +138,12 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False,
             })
         else:
             if hold_overflow:
-                try:
-                    from services.overflow_service import record_overflow
-                    skipped.append(record_overflow(session, user, p, source="daily"))
-                    continue
-                except Exception:
-                    logger.exception("daily overflow hold failed")
+                # Persist the pending claim; if it fails, propagate so the caller
+                # rolls back the whole daily claim rather than consuming the
+                # reward with no replace/release path for the player.
+                from services.overflow_service import record_overflow
+                skipped.append(record_overflow(session, user, p, source="daily"))
+                continue
             skipped.append({"name": p.name, "rating": p.rating, "id": p.id})
 
     stats.last_daily = datetime.utcnow()

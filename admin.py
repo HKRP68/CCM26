@@ -5559,11 +5559,10 @@ def webapp_packs_open():
         from services.overflow_service import record_overflow
         overflow = []
         for p in result.get("players_to_claim", []):
-            try:
-                overflow.append(record_overflow(db, user, p, source="pack"))
-            except Exception:
-                logger.exception("pack overflow hold failed")
-                overflow.append({"id": p.id, "name": p.name, "rating": p.rating})
+            # If the pending claim can't be persisted, propagate so the whole
+            # transaction rolls back — otherwise the pack would be consumed while
+            # the overflow player has no replace/release path.
+            overflow.append(record_overflow(db, user, p, source="pack"))
 
         db.commit()
         _opened_pack_name = result["pack"].name if result.get("pack") else "Pack"

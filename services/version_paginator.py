@@ -184,10 +184,14 @@ def find_players_for_search(session, search_term: str,
     if not term:
         return []
 
+    # Escape LIKE metacharacters so a literal % or _ in the user's input is
+    # matched literally instead of behaving as a SQL wildcard.
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     # Exact full-name match wins outright (ilike with no % = case-insensitive
     # equality). Prefer the base card of that player.
     exact = (session.query(Player)
-             .filter(Player.name.ilike(term),
+             .filter(Player.name.ilike(escaped, escape="\\"),
                      Player.is_active == True)
              .order_by(Player.parent_player_id.isnot(None), Player.id)
              .first())
@@ -197,13 +201,12 @@ def find_players_for_search(session, search_term: str,
         return [base or exact]
 
     rows = (session.query(Player)
-            .filter(Player.name.ilike(f"%{term}%"),
+            .filter(Player.name.ilike(f"%{escaped}%", escape="\\"),
                     Player.is_active == True)
             .order_by(Player.rating.desc(), Player.name)
             .all())
 
     seen = {}
-    order: List[int] = []
     for p in rows:
         base_id = p.parent_player_id or p.id
         if base_id in seen:
@@ -211,10 +214,13 @@ def find_players_for_search(session, search_term: str,
         base = (p if p.parent_player_id is None
                 else (session.query(Player).get(base_id) or p))
         seen[base_id] = base
-        order.append(base_id)
-        if len(order) >= limit:
+        if len(seen) >= limit:
             break
-    return [seen[b] for b in order]
+    # Order by the RESOLVED base player's own rating (what the disambiguation
+    # message displays), not the matched edition's rating.
+    result = list(seen.values())
+    result.sort(key=lambda pl: (-(pl.rating or 0), pl.name or ""))
+    return result
 
 
 def format_multiple_players_message(command: str, search_term: str,

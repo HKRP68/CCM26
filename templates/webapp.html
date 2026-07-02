@@ -3490,18 +3490,22 @@ function renderOverflowLines(list, heading) {
   let html = `<div style="margin-top:0.6rem;">`;
   html += `<div style="color:var(--accent);font-size:0.85rem;margin-bottom:0.35rem;">⚠️ ${escapeHtml(heading || 'Squad full — replace a player or release for coins:')}</div>`;
   list.forEach(p => {
-    const sv = p.sell_value || 0;
-    const cid = p.claim_id;
+    const sv = Number(p.sell_value) || 0;
+    const cid = Number(p.claim_id) || 0;
+    const rating = Number(p.rating) || 0;
+    // JSON.stringify → a safe JS string literal for the inline onclick args
+    // (escapeHtmlAttr then keeps it valid inside the double-quoted attribute).
+    const nameArg = escapeHtmlAttr(JSON.stringify(String(p.name || '')));
     if (!cid) {
       // No pending claim id (legacy / error) → just note it.
-      html += `<div style="font-size:0.8rem;">• ${escapeHtml(p.name)} (${p.rating})</div>`;
+      html += `<div style="font-size:0.8rem;">• ${escapeHtml(p.name)} (${rating})</div>`;
       return;
     }
     html += `<div id="ov-${cid}" style="display:flex;align-items:center;justify-content:space-between;gap:0.4rem;margin:0.25rem 0;flex-wrap:wrap;">
-      <span style="font-size:0.9rem;">📥 ${escapeHtml(p.name)} (${p.rating})</span>
+      <span style="font-size:0.9rem;">📥 ${escapeHtml(p.name)} (${rating})</span>
       <span style="display:flex;gap:0.3rem;">
-        <button class="release-btn" onclick="openReplacePicker(${cid}, '${escapeHtmlAttr(p.name)}', ${p.rating})">🔄 Replace</button>
-        <button class="release-btn" onclick="releaseOverflow(${cid}, this, '${escapeHtmlAttr(p.name)}', ${sv})">✕ ${sv.toLocaleString()}🪙</button>
+        <button class="release-btn" onclick="openReplacePicker(${cid}, ${nameArg}, ${rating})">🔄 Replace</button>
+        <button class="release-btn" onclick="releaseOverflow(${cid}, this, ${nameArg}, ${sv})">✕ ${sv.toLocaleString()}🪙</button>
       </span>
     </div>`;
   });
