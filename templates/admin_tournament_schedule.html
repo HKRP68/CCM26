@@ -16,7 +16,46 @@
 .status-pill.live { color:#fde68a; border-color:rgba(253,230,138,.4); background:rgba(234,179,8,.12); }
 .danger { border-color:rgba(239,68,68,.4) !important; color:#fca5a5 !important; }
 .round-head { margin:.9rem 0 .4rem; color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; }
+.rr-form { width:100%; display:flex; flex-direction:column; gap:.55rem; margin-top:.5rem; padding:.6rem .7rem; background:var(--card); border:1px dashed var(--border); border-radius:12px; }
+.rr-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:end; }
+.rr-form label { display:block; color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.2rem; }
+.rr-form .rr-team { font-weight:700; color:var(--text, inherit); min-width:150px; align-self:center; }
+details.rr-toggle { flex-basis:100%; margin-top:.3rem; }
+details.rr-toggle > summary { cursor:pointer; color:var(--accent); font-size:.84rem; }
 </style>
+
+{# Manual result-entry form for a scheduled fixture whose two teams are known. #}
+{% macro result_form(fx) %}
+<form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="rr-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="action" value="record_result">
+  <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+  <div class="rr-row">
+    <span class="rr-team">{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else 'Team 1' }} <span class="empty" style="font-weight:400;">(bats 1st)</span></span>
+    <div><label>Runs</label><input type="number" name="inn1_runs" min="0" value="0" style="width:85px;"></div>
+    <div><label>Wickets</label><input type="number" name="inn1_wickets" min="0" max="10" value="0" style="width:80px;"></div>
+    <div><label>Overs</label><input type="text" name="inn1_overs" placeholder="e.g. 20 or 19.3" style="width:110px;"></div>
+  </div>
+  <div class="rr-row">
+    <span class="rr-team">{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else 'Team 2' }} <span class="empty" style="font-weight:400;">(bats 2nd)</span></span>
+    <div><label>Runs</label><input type="number" name="inn2_runs" min="0" value="0" style="width:85px;"></div>
+    <div><label>Wickets</label><input type="number" name="inn2_wickets" min="0" max="10" value="0" style="width:80px;"></div>
+    <div><label>Overs</label><input type="text" name="inn2_overs" placeholder="e.g. 20 or 19.3" style="width:110px;"></div>
+  </div>
+  <div class="rr-row">
+    <div><label>Winner</label>
+      <select name="winner_slot">
+        <option value="">Auto (higher score)</option>
+        <option value="1">{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else 'Team 1' }}</option>
+        <option value="2">{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else 'Team 2' }}</option>
+        <option value="tie">Tie</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" type="submit">✅ Save result &amp; update table</button>
+  </div>
+  <p class="empty" style="margin:0;">Overs use cricket notation (<code>19.3</code> = 19 overs 3 balls). This updates the points table &amp; net run-rate; per-player batting/bowling stats are only tracked for matches played through the bot.</p>
+</form>
+{% endmacro %}
 
 <div class="tour-shell">
   <div>
@@ -90,6 +129,12 @@
           <input type="hidden" name="fixture_id" value="{{ fx.id }}">
           <button class="btn danger" type="submit">Delete</button>
         </form>
+        {% if fx.team1_id and fx.team2_id %}
+        <details class="rr-toggle">
+          <summary>✍️ Mark completed / record result manually</summary>
+          {{ result_form(fx) }}
+        </details>
+        {% endif %}
       {% endif %}
     </div>
     {% endfor %}
@@ -115,6 +160,12 @@
         <input type="hidden" name="fixture_id" value="{{ fx.id }}">
         <button class="btn danger" type="submit">Delete</button>
       </form>
+      {% if fx.team1_id and fx.team2_id %}
+      <details class="rr-toggle">
+        <summary>✍️ Mark completed / record result manually</summary>
+        {{ result_form(fx) }}
+      </details>
+      {% endif %}
       {% endif %}
     </div>
     {% endfor %}
