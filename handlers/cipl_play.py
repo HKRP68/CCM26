@@ -262,6 +262,21 @@ async def _clear_action_reminder(context, state):
 
 async def _new_action_message(context, state, text, keyboard):
     await _clear_action_reminder(context, state)
+    # Remove any previous action/picker message BEFORE sending the new one. A
+    # re-prompt (a /rcl resume, or the edit-in-place fallback in
+    # _edit_action_message) must never leave two live pickers — each showing a
+    # different scorecard and both still tappable — in the chat at once.
+    prev = state.get("action_msg_id")
+    if prev:
+        try:
+            await context.bot.delete_message(state["chat_id"], prev)
+        except Exception:
+            pass
+        try:
+            (state.get("over_msg_ids") or []).remove(prev)
+        except ValueError:
+            pass
+        state["action_msg_id"] = None
     kb = _with_view_match(state, keyboard)
     sent = await context.bot.send_message(
         state["chat_id"], text, parse_mode="HTML",
@@ -1052,9 +1067,11 @@ async def cipl_resume(context, mid, state=None):
         if action == A_COMPLETED:
             return False
         try:
-            # Force a fresh action message so the buttons reappear even if the
-            # previous prompt message was deleted or is no longer editable.
-            state["action_msg_id"] = None
+            # Re-render the outstanding pick. Keep action_msg_id so an approach
+            # resume edits the existing prompt IN PLACE (no duplicate), and a
+            # bowler resume replaces it via _new_action_message (which deletes the
+            # old picker first). Either way the buttons reappear even if the
+            # previous prompt was deleted — the edit falls back to a fresh send.
             if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
                 await _prompt_bowl_approach(context, mid, state)
             elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
@@ -1292,12 +1309,23 @@ async def _run_over(context, mid, state):
     # engines). Run it in a worker thread so it can't block the event loop — and
     # every other user's command/button — for the duration of the over.
     summary = await asyncio.to_thread(cipl_match.simulate_over, state)
-    await _ss(context, mid, state)
+
+    innings_over = cipl_match.is_innings_over(state)
+    # Advance the resume pointer the instant the over is simulated — BEFORE the
+    # (fallible) summary send / next prompt. If a send here fails, next_action
+    # would otherwise still point at the just-consumed batting approach, and a
+    # later /rcl would re-show the approach picker on the now-advanced scorecard
+    # and re-simulate this over. For an innings-ending over the dedicated
+    # handlers below set the pointer themselves, so only persist the state here.
+    if innings_over:
+        await _ss(context, mid, state)
+    else:
+        await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
 
     await _post_tracked(context, state, _render_over_summary(state, summary),
                         keyboard=_miniapp_row(state))
 
-    if cipl_match.is_innings_over(state):
+    if innings_over:
         if state["innings"] == 1:
             await _innings_break(context, mid, state)
         else:
