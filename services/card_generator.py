@@ -3,9 +3,24 @@
 import asyncio
 import io
 import logging
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=256)
+def _cached_truetype(path, size):
+    """Parse a TTF once per (path, size) and reuse it.
+
+    Rendering a single card loads ~10 fonts; every scorecard/market/summary
+    render did the same. ``ImageFont.truetype`` re-reads and re-parses the
+    font file (allocating a fresh glyph table) on each call, so without a
+    cache the bot churns megabytes of short-lived font objects per image.
+    Fonts are immutable once loaded, so caching by (path, size) is safe.
+    lru_cache does not cache exceptions, so missing-path fallbacks still work.
+    """
+    return ImageFont.truetype(path, size)
 
 W, H = 700, 420
 
@@ -76,7 +91,7 @@ def _font(size, bold=False):
     ]
     for p in paths:
         try:
-            return ImageFont.truetype(p, size)
+            return _cached_truetype(p, size)
         except (OSError, IOError):
             continue
     return ImageFont.load_default()
@@ -165,7 +180,7 @@ def _template_font(tcfg, size):
         if not path:
             continue
         try:
-            return ImageFont.truetype(path, max(1, int(size)))
+            return _cached_truetype(path, max(1, int(size)))
         except (OSError, IOError):
             continue
     return ImageFont.load_default()

@@ -12,6 +12,7 @@ import io
 import logging
 import os
 from datetime import datetime
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 try:
@@ -79,6 +80,14 @@ def _first_existing(paths):
     return None
 
 
+@lru_cache(maxsize=256)
+def _cached_truetype(path, size):
+    # Parse each (path, size) font once and reuse it. Summary cards load many
+    # fonts per render and ``truetype`` re-parses the file each call; fonts are
+    # immutable so caching cuts memory churn. Exceptions aren't cached.
+    return ImageFont.truetype(path, size)
+
+
 def _font(size, bold=False, italic=False, family="body"):
     candidate = None
     if family == "display":
@@ -89,7 +98,7 @@ def _font(size, bold=False, italic=False, family="body"):
         )
     if candidate:
         try:
-            return ImageFont.truetype(candidate, size)
+            return _cached_truetype(candidate, size)
         except (OSError, IOError):
             logger.warning("Unable to load bundled summary-card font %s", candidate)
     if bold and italic:
@@ -101,7 +110,7 @@ def _font(size, bold=False, italic=False, family="body"):
     else:
         path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     try:
-        return ImageFont.truetype(path, size)
+        return _cached_truetype(path, size)
     except (OSError, IOError):
         return ImageFont.load_default()
 
