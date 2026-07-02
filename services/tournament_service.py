@@ -589,6 +589,12 @@ def record_manual_result(session, fixture_id, *,
     if tm.status == "completed":
         raise ValueError("This fixture is already completed — remove its result "
                          "first to re-enter it.")
+    if tm.status != "scheduled":
+        # A "live" fixture is mid-play via the bot and may already hold a
+        # per-ball scorecard; only untouched scheduled fixtures may be recorded
+        # by hand so a direct/racing submit can't clobber an in-progress match.
+        raise ValueError(f"Fixture is '{tm.status}' — only scheduled fixtures can "
+                         "have a manual result recorded.")
     if not tm.team1_id or not tm.team2_id:
         raise ValueError("Both teams must be set before recording a result.")
 
@@ -598,6 +604,17 @@ def record_manual_result(session, fixture_id, *,
     i2w = max(0, min(10, int(inn2_wickets or 0)))
     i1b = _overs_to_balls(inn1_overs)
     i2b = _overs_to_balls(inn2_overs)
+
+    # Reject an innings longer than the tournament's configured over limit — that
+    # would silently corrupt the net run-rate that recompute_standings derives
+    # from these ball counts (e.g. "50" typed into a 20-over tournament).
+    tour = session.query(Tournament).get(tm.tournament_id)
+    max_overs = tour.overs if tour else None
+    if max_overs:
+        max_balls = int(max_overs) * 6
+        if i1b > max_balls or i2b > max_balls:
+            raise ValueError(
+                f"Overs can't exceed this tournament's {max_overs}-over format.")
 
     ws = (str(winner_slot).strip().lower() if winner_slot not in (None, "") else "")
     if ws == "1":

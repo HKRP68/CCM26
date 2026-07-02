@@ -18,6 +18,7 @@ class OversToBallsTests(unittest.TestCase):
     def test_partial_over_is_balls_not_decimal(self):
         # 19.3 = 19 overs and 3 balls = 117 legal balls, not 19.3 * 6.
         self.assertEqual(_overs_to_balls("19.3"), 117)
+        self.assertEqual(_overs_to_balls(19.3), 117)  # float form, per the contract
         self.assertEqual(_overs_to_balls(0.5), 5)
 
     def test_blank_and_none_are_zero(self):
