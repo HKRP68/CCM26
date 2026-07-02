@@ -3160,10 +3160,14 @@ function updateHomeFreePack(data) {
   const badge = document.getElementById('freepack-ready-badge');
   const sub = document.getElementById('freepack-tile-sub');
   if (!tile || !badge || !sub || !data) return;
-  const ready = Boolean(data.ready && !data.roster_full);
+  // A full roster no longer blocks the free pack — the pull is held pending and
+  // the user Replaces/Releases it after opening, so "ready" ignores roster_full.
+  const ready = Boolean(data.ready);
   tile.classList.toggle('ready', ready);
   badge.style.display = ready ? '' : 'none';
-  sub.textContent = data.roster_full ? 'Roster is full' : (ready ? '🎁 Ready to open' : `⏱️ ${formatCountdown(data.remaining_seconds || 0)}`);
+  sub.textContent = ready
+    ? (data.roster_full ? '🎁 Ready (squad full)' : '🎁 Ready to open')
+    : `⏱️ ${formatCountdown(data.remaining_seconds || 0)}`;
   const isHomeOpen = document.getElementById('screen-home')?.classList.contains('active');
   if (ready && isHomeOpen && !sessionStorage.getItem('freepack_ready_seen')) {
     sessionStorage.setItem('freepack_ready_seen', '1');
@@ -3463,12 +3467,8 @@ function showDailyReward(r) {
     lines += `</div>`;
   }
   if (r.players_skipped && r.players_skipped.length) {
-    lines += `<div style="margin-top:0.5rem;color:var(--accent);font-size:0.85rem;">`;
-    lines += `⚠️ ${r.players_skipped.length} player${r.players_skipped.length === 1 ? '' : 's'} not added (squad full — release one first):<br>`;
-    r.players_skipped.forEach(p => {
-      lines += `<div style="font-size:0.8rem;">• ${escapeHtml(p.name)} (${p.rating})</div>`;
-    });
-    lines += `</div>`;
+    lines += renderOverflowLines(r.players_skipped,
+      `${r.players_skipped.length} player${r.players_skipped.length === 1 ? '' : 's'} didn't fit — replace or release:`);
   }
   el.innerHTML = `
     <div class="reward-banner">
@@ -3477,6 +3477,111 @@ function showDailyReward(r) {
       <div class="detail" style="text-align:left;">${lines}</div>
     </div>
   `;
+}
+
+// ════════════════ Roster-full overflow → Replace / Release ════════════════
+// Shared by Daily, Free Pack, Pack and GSpin reward reveals. When a rolled
+// player can't fit a full roster, the server parks it as a pending claim; here
+// the user can either Replace a squad player with it or Release it for coins —
+// mirroring the bot's /claim replace flow.
+
+function renderOverflowLines(list, heading) {
+  if (!list || !list.length) return '';
+  let html = `<div style="margin-top:0.6rem;">`;
+  html += `<div style="color:var(--accent);font-size:0.85rem;margin-bottom:0.35rem;">⚠️ ${escapeHtml(heading || 'Squad full — replace a player or release for coins:')}</div>`;
+  list.forEach(p => {
+    const sv = p.sell_value || 0;
+    const cid = p.claim_id;
+    if (!cid) {
+      // No pending claim id (legacy / error) → just note it.
+      html += `<div style="font-size:0.8rem;">• ${escapeHtml(p.name)} (${p.rating})</div>`;
+      return;
+    }
+    html += `<div id="ov-${cid}" style="display:flex;align-items:center;justify-content:space-between;gap:0.4rem;margin:0.25rem 0;flex-wrap:wrap;">
+      <span style="font-size:0.9rem;">📥 ${escapeHtml(p.name)} (${p.rating})</span>
+      <span style="display:flex;gap:0.3rem;">
+        <button class="release-btn" onclick="openReplacePicker(${cid}, '${escapeHtmlAttr(p.name)}', ${p.rating})">🔄 Replace</button>
+        <button class="release-btn" onclick="releaseOverflow(${cid}, this, '${escapeHtmlAttr(p.name)}', ${sv})">✕ ${sv.toLocaleString()}🪙</button>
+      </span>
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function markOverflowResolved(claimId, html) {
+  const el = document.getElementById('ov-' + claimId);
+  if (el) el.innerHTML = `<span style="color:var(--muted);font-size:0.85rem;">${html}</span>`;
+}
+
+async function openReplacePicker(claimId, name, rating) {
+  haptic('light');
+  const modal = document.getElementById('modal');
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  modal.classList.add('open');
+  const { ok, data } = await api('/api/webapp/roster', {});
+  if (!ok) {
+    body.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed to load roster')}</div>`;
+    return;
+  }
+  const roster = (data.roster || []).slice().sort((a, b) => a.rating - b.rating);
+  const rows = roster.map(r => {
+    const cap = r.is_captain ? ' 👑' : '';
+    const dis = r.is_captain ? 'disabled title="Set a new captain first"' : '';
+    return `<button class="release-btn" style="width:100%;text-align:left;margin:0.2rem 0;" ${dis}
+      onclick="doReplace(${claimId}, ${r.roster_id}, this)">🔄 Drop ${escapeHtml(r.name)} (${r.rating})${cap}</button>`;
+  }).join('');
+  body.innerHTML = `
+    <h2>Replace a player</h2>
+    <div style="color:var(--muted);font-size:0.9rem;margin-bottom:0.8rem;">
+      Squad is full (${data.count || 25}/${data.max || 25}). Pick a player to drop for
+      <strong>${escapeHtml(name)} (${rating})</strong>.
+    </div>
+    <div style="max-height:52vh;overflow-y:auto;">${rows || '<div class="empty">No players to drop.</div>'}</div>
+  `;
+}
+
+async function doReplace(claimId, rosterId, btn) {
+  haptic('medium');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Replacing…'; }
+  const { ok, data } = await api('/api/webapp/roster/overflow/replace',
+    { claim_id: claimId, roster_id: rosterId });
+  if (!ok) {
+    toast(data.message || 'Replace failed', 'error');
+    hapticNotif('error');
+    if (btn) { btn.disabled = false; }
+    // Ownership/expiry errors are terminal for this claim — reflect that.
+    if (data && (data.error === 'already_owned' || data.error === 'expired' || data.error === 'claim_not_found')) {
+      markOverflowResolved(claimId, escapeHtml(data.message || 'No longer available'));
+      closeModal();
+    }
+    return;
+  }
+  hapticNotif('success');
+  const np = data.new_player || {}, op = data.old_player || {};
+  toast(`🔁 ${np.name} replaced ${op.name}`, 'success');
+  closeModal();
+  markOverflowResolved(claimId,
+    `🔁 ${escapeHtml(np.name || '')} (${np.rating || ''}) replaced ${escapeHtml(op.name || '')}`);
+  refreshDashboard();
+}
+
+async function releaseOverflow(claimId, btn, name, sellValue) {
+  haptic('medium');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+  const { ok, data } = await api('/api/webapp/roster/overflow/release', { claim_id: claimId });
+  if (!ok) {
+    toast(data.message || 'Release failed', 'error');
+    hapticNotif('error');
+    if (btn) { btn.disabled = false; btn.innerHTML = `✕ ${(sellValue || 0).toLocaleString()}🪙`; }
+    return;
+  }
+  hapticNotif('success');
+  const coins = data.sell_value != null ? data.sell_value : (sellValue || 0);
+  toast(`✕ Released ${name} · +${coins.toLocaleString()}🪙`, 'success');
+  markOverflowResolved(claimId, `✕ ${escapeHtml(name)} released · +${coins.toLocaleString()}🪙`);
+  refreshDashboard();
 }
 
 // ════════════════ Quick Match v3 — phase-by-phase ════════════════
@@ -4271,6 +4376,11 @@ function showReward(r) {
       <div class="detail">${detail}</div>
     </div>
   `;
+  // Squad full → offer Replace / Release for the pulled player.
+  if (r.type === 'player' && r.squad_full && r.overflow_claim) {
+    el.innerHTML += renderOverflowLines([r.overflow_claim],
+      'Squad full — replace a player or release this pull:');
+  }
   // Celebration: confetti scaled to tier
   if (tier === 'legend') launchConfetti(120, 'legend');
   else if (tier === 'epic') launchConfetti(90, 'epic');
@@ -5419,24 +5529,18 @@ function renderFreePackAction() {
   const d = freePackState;
   if (!d) return;
 
-  if (d.roster_full) {
-    card.innerHTML = `
-      <div style="font-size:2.5rem;">🈵</div>
-      <p style="margin:0.6rem 0;font-weight:700;">Roster full</p>
-      <p style="color:var(--muted);font-size:0.82rem;margin:0 0 1rem;">
-        You have ${d.roster_count}/25 players. Release some to make room.
-      </p>
-      <button class="spin-button" onclick="navigate('roster')" style="width:100%;">
-        👥 Manage roster
-      </button>
-    `;
-    return;
-  }
-
   if (d.ready) {
+    // A full roster no longer blocks opening — the rolled player is parked as a
+    // pending claim and the user picks who to Replace (or releases it) after.
+    const fullNote = d.roster_full
+      ? `<p style="color:var(--accent);font-size:0.78rem;margin:0 0 0.8rem;">
+           Squad is full (${d.roster_count}/25) — you'll choose who to replace after opening.
+         </p>`
+      : '';
     card.innerHTML = `
       <div style="font-size:2.5rem;">📦</div>
-      <p style="margin:0.6rem 0 1rem;font-weight:700;">Your free pack is ready!</p>
+      <p style="margin:0.6rem 0 ${d.roster_full ? '0.4rem' : '1rem'};font-weight:700;">Your free pack is ready!</p>
+      ${fullNote}
       <button class="spin-button" id="freepack-open-btn" onclick="openFreePack()" style="width:100%;">
         📺 Watch ad &amp; open pack
       </button>
@@ -5500,16 +5604,23 @@ async function openFreePack() {
   }
 
   hapticNotif('success');
-  showFreePackReveal(data.player, data.band);
+  showFreePackReveal(data.player, data.band, data.overflow_claim);
   refreshDashboard();
 }
 
-function showFreePackReveal(player, band) {
+function showFreePackReveal(player, band, overflowClaim) {
   const tier = player.rating >= 84 ? 'elite' : (player.rating >= 81 ? 'rare' : (player.rating >= 75 ? 'std' : 'common'));
   const overlay = document.createElement('div');
   overlay.className = 'swap-overlay';
   overlay.id = 'freepack-reveal';
   overlay.onclick = (e) => { if (e.target === overlay) closeFreePackReveal(); };
+  // Roster full → player is held pending; show Replace / Release instead of the
+  // "added to roster" line.
+  const statusBlock = overflowClaim
+    ? renderOverflowLines([overflowClaim], 'Squad full — replace a player or release for coins:')
+    : `<p style="color:var(--muted);font-size:0.78rem;margin:0.8rem 0 0;">
+         Added to your roster · sell value ${formatNum(player.sell_value)} 🪙
+       </p>`;
   overlay.innerHTML = `
     <div class="swap-panel" style="text-align:center;">
       <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">
@@ -5524,9 +5635,7 @@ function showFreePackReveal(player, band) {
         </div>
         ${player.version && player.version !== 'Base' ? `<div style="font-size:0.72rem;color:var(--accent);margin-top:0.3rem;">${escapeHtml(player.version)}</div>` : ''}
       </div>
-      <p style="color:var(--muted);font-size:0.78rem;margin:0.8rem 0 0;">
-        Added to your roster · sell value ${formatNum(player.sell_value)} 🪙
-      </p>
+      <div style="text-align:left;">${statusBlock}</div>
       <button class="spin-button" onclick="closeFreePackReveal()" style="margin-top:1rem;width:100%;">
         ✓ Nice!
       </button>
@@ -5740,12 +5849,13 @@ function revealPackCards() {
     // Haptic burst as cards land
     sorted.forEach((p, i) => setTimeout(() => haptic('light'), i * 180));
 
-    // Overflow warning
+    // Overflow → Replace / Release picker (squad full)
     const overflow = pendingRevealPlayers.overflow || [];
     if (overflow.length) {
       const warn = document.createElement('div');
-      warn.style.cssText = 'width:100%;text-align:center;color:var(--red);font-size:0.78rem;margin-top:0.6rem;';
-      warn.textContent = `⚠️ ${overflow.length} player(s) couldn't fit — roster full!`;
+      warn.style.cssText = 'width:100%;margin-top:0.6rem;';
+      warn.innerHTML = renderOverflowLines(overflow,
+        `${overflow.length} player(s) couldn't fit — replace or release:`);
       cards.appendChild(warn);
     }
 

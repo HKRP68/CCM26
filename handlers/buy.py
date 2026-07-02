@@ -96,13 +96,22 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Find any matching player
         from services.version_paginator import (
-            find_player_for_search, get_versions_ordered,
-            build_pagination_keyboard, page_number_for, _format_version_label,
+            find_players_for_search, format_multiple_players_message,
+            get_versions_ordered, build_pagination_keyboard, page_number_for,
+            _format_version_label,
         )
-        player = find_player_for_search(session, search)
-        if not player:
+        matches = find_players_for_search(session, search)
+        if not matches:
             await update.message.reply_text(f"❌ No player found matching '{search}'")
             return
+        # Several different players match (e.g. "Sachin" / "Kumar") → ask the
+        # user to disambiguate with the full name instead of guessing.
+        if len(matches) > 1:
+            await update.message.reply_text(
+                format_multiple_players_message("buypl", search, matches),
+                parse_mode="HTML")
+            return
+        player = matches[0]
 
         # Build the version list and pick which page to start on
         base_id = player.parent_player_id or player.id

@@ -141,6 +141,8 @@ class UserStats(Base):
     last_claim = Column(DateTime, nullable=True)
     last_daily = Column(DateTime, nullable=True)
     last_gspin = Column(DateTime, nullable=True)
+    # /ximage Playing XI image render (1h cooldown)
+    last_ximage = Column(DateTime, nullable=True)
     # Free Pack (Mini App, ad-gated, 1h cooldown)
     last_free_pack = Column(DateTime, nullable=True)
     # Cooldown-ready notification flags. Set True once we've notified the user
@@ -2213,3 +2215,25 @@ class FantasyPick(Base):
     __table_args__ = (
         Index("ix_fp_entry_player", "entry_id", "player_id", unique=True),
     )
+
+
+class RosterOverflowClaim(Base):
+    """A player rolled from a Mini App reward (daily / free pack / pack / gspin)
+    that couldn't be auto-added because the roster was full (25/25).
+
+    Instead of silently discarding the overflow player, we hold it here so the
+    Mini App can offer a "Replace" flow (mirroring the bot's /claim replace):
+    the user picks a roster player to drop and the pending player takes its
+    slot. Rows are single-use (deleted on replace/release) and pruned after a
+    short TTL so they can't accumulate. Storing the pending player_id
+    server-side is what keeps the replace endpoint safe — a client can only
+    claim a player the server actually rolled for them.
+    """
+    __tablename__ = "roster_overflow_claims"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(20), default="reward", nullable=False)  # daily|free_pack|pack|gspin
+    sell_value = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)

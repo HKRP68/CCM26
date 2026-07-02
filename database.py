@@ -342,6 +342,8 @@ def _migrate_add_columns():
     _try_add("users", "quick_matches_today", "INTEGER DEFAULT 0")
     _try_add("users", "quick_matches_today_date", "VARCHAR(10)")
     _try_add("game_config", "daily_quick_match_limit", "INTEGER DEFAULT 5")
+    # /ximage render cooldown (1 hour)
+    _try_add("user_stats", "last_ximage", "TIMESTAMP")
     # Free Pack + cooldown-ready notifications
     _try_add("user_stats", "last_free_pack", "TIMESTAMP")
     _try_add("user_stats", "notified_daily_ready", "BOOLEAN DEFAULT FALSE")

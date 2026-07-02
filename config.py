@@ -22,6 +22,7 @@ MEDIA_STORAGE_CHAT_ID = os.getenv("MEDIA_STORAGE_CHAT_ID", "").strip()
 CLAIM_COOLDOWN = 3600
 DAILY_COOLDOWN = 86400
 GSPIN_COOLDOWN = 28800
+XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
 
 # ── Debut rewards ───────────────────────────────────────────────────
 DEBUT_COINS = 1500

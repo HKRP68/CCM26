@@ -8,14 +8,18 @@ real cards and card design; only the surrounding frame is new.
 import asyncio
 import io
 import logging
+from datetime import datetime
 from html import escape
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from config import XIMAGE_COOLDOWN
 from database import get_session
+from models import UserStats
 from handlers.lineup import (_get_ordered_roster, _build_display_order,
                              format_xi_text)
+from services.cooldown_service import check_cooldown, format_remaining
 from services.telegram_user_service import (resolve_command_target,
                                             sync_telegram_user)
 from services.xi_image import build_xi_image
@@ -50,6 +54,25 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         viewer = sync_telegram_user(session, tg_user)
         if not viewer:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        # 1-hour cooldown on the (CPU-heavy) image render, per caller. Applies
+        # regardless of whose XI is being viewed so the command can't be spammed.
+        stats = session.query(UserStats).filter(
+            UserStats.user_id == viewer.id).first()
+        if not stats:
+            stats = UserStats(user_id=viewer.id)
+            session.add(stats)
+            session.flush()
+        from services.command_config_service import get_cooldown
+        effective_cooldown = get_cooldown(session, "ximage", XIMAGE_COOLDOWN)
+        ready, remaining = check_cooldown(stats, "last_ximage", effective_cooldown)
+        if not ready:
+            await update.message.reply_text(
+                f"⏳ <b>/ximage</b> is on cooldown.\n"
+                f"Try again in <b>{format_remaining(remaining)}</b>.\n"
+                f"<i>Tip: /pxi shows your Playing XI as text anytime.</i>",
+                parse_mode="HTML")
             return
 
         view_user = target_user or viewer
@@ -87,6 +110,8 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         png = await asyncio.to_thread(
             build_xi_image, xi_pairs,
             team_name=handle, captain_roster_id=captain_rid)
+        # Consume the cooldown now that the (expensive) render has run.
+        stats.last_ximage = datetime.utcnow()
         session.commit()
 
         if png:

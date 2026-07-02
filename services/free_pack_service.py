@@ -119,14 +119,20 @@ def _pick_rating_in_band(band):
     return random.randint(lo, hi)
 
 
-def open_free_pack(session, user):
+def open_free_pack(session, user, hold_overflow=False):
     """Draw a player and add to roster. Returns result dict.
 
     Caller must have already verified the ad was watched + cooldown is ready.
     This function re-checks the cooldown defensively.
 
+    When ``hold_overflow`` is True and the roster is full, the pack still opens
+    (the ad/cooldown isn't wasted): the rolled player is parked as a pending
+    RosterOverflowClaim so the Mini App can offer a Replace flow, and the result
+    carries ``pending: True`` + ``overflow_claim``. When False, a full roster is
+    rejected up front (legacy behaviour).
+
     Returns:
-      {ok, error?, message?, player?, remaining_seconds?, band?}
+      {ok, error?, message?, player?, pending?, overflow_claim?, band?}
     """
     stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
     if not stats:
@@ -140,8 +146,10 @@ def open_free_pack(session, user):
                 "message": "Free Pack is on cooldown.",
                 "remaining_seconds": remaining}
 
-    # Roster full check
-    if (user.roster_count or 0) >= MAX_ROSTER:
+    # Roster full check. With hold_overflow we still open and park the player;
+    # without it we reject up front (legacy behaviour).
+    roster_full = (user.roster_count or 0) >= MAX_ROSTER
+    if roster_full and not hold_overflow:
         return {"ok": False, "error": "roster_full",
                 "message": f"Your roster is full ({MAX_ROSTER}). Release players first."}
 
@@ -182,26 +190,34 @@ def open_free_pack(session, user):
         return {"ok": False, "error": "no_player",
                 "message": "Couldn't find a player to award. Try again."}
 
-    # Add to roster
-    entry = UserRoster(
-        user_id=user.id, player_id=player.id,
-        order_position=(user.roster_count or 0) + 1,
-        acquired_date=datetime.utcnow(),
-    )
-    session.add(entry)
-    session.flush()
-    user.roster_count = (user.roster_count or 0) + 1
-
-    # Set cooldown + reset the "ready" notification flag
-    stats.last_free_pack = datetime.utcnow()
-    stats.notified_free_pack_ready = False
-
     # Sell value for display
     try:
         from config import get_sell_value
         sell_value = get_sell_value(player.rating)
     except Exception:
         sell_value = 0
+
+    # Add to roster — unless it's full, in which case park it as a pending
+    # overflow claim for the Mini App Replace flow.
+    entry_id = None
+    overflow_claim = None
+    if roster_full:
+        from services.overflow_service import record_overflow
+        overflow_claim = record_overflow(session, user, player, source="free_pack")
+    else:
+        entry = UserRoster(
+            user_id=user.id, player_id=player.id,
+            order_position=(user.roster_count or 0) + 1,
+            acquired_date=datetime.utcnow(),
+        )
+        session.add(entry)
+        session.flush()
+        user.roster_count = (user.roster_count or 0) + 1
+        entry_id = entry.id
+
+    # Set cooldown + reset the "ready" notification flag
+    stats.last_free_pack = datetime.utcnow()
+    stats.notified_free_pack_ready = False
 
     # Activity log
     try:
@@ -222,9 +238,11 @@ def open_free_pack(session, user):
     cooldown_min = get_cooldown_minutes(session)
     return {
         "ok": True,
+        "pending": overflow_claim is not None,
+        "overflow_claim": overflow_claim,
         "player": {
             "id": player.id,
-            "roster_id": entry.id,
+            "roster_id": entry_id,
             "name": player.name,
             "rating": player.rating,
             "category": player.category,

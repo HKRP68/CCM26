@@ -4379,6 +4379,116 @@ def webapp_roster():
         db.close()
 
 
+@app.route("/api/webapp/roster/overflow", methods=["POST"])
+@csrf_exempt
+def webapp_roster_overflow():
+    """List the user's pending overflow players (rewards that didn't fit a full
+    roster). Used by the Mini App Replace flow."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.overflow_service import list_overflow
+        pending = list_overflow(db, user)
+        db.commit()  # persist any pruning of expired claims
+        return {"ok": True, "pending": pending,
+                "roster_count": user.roster_count or 0, "max": 25}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_roster_overflow failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/roster/overflow/replace", methods=["POST"])
+@csrf_exempt
+def webapp_roster_overflow_replace():
+    """Replace a roster player with a pending overflow player.
+    Body: {claim_id, roster_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.overflow_service import resolve_replace
+        data = request.get_json(silent=True) or {}
+        try:
+            claim_id = int(data.get("claim_id") or 0)
+            roster_id = int(data.get("roster_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        if not claim_id or not roster_id:
+            return {"ok": False, "error": "bad_id",
+                    "message": "Missing claim_id or roster_id."}, 400
+
+        result = resolve_replace(db, user, claim_id, roster_id)
+        if not result.get("ok"):
+            db.commit()  # persist any consumed/expired claim cleanup
+            return result, 400
+
+        db.commit()
+        try:
+            np = result.get("new_player") or {}
+            post_miniapp_activity(user, "replace_player",
+                                  player_name=np.get("name"),
+                                  rating=np.get("rating"))
+        except Exception:
+            pass
+        result["balance"] = {
+            "coins": user.total_coins or 0,
+            "gems": user.total_gems or 0,
+            "roster_count": user.roster_count or 0,
+        }
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_roster_overflow_replace failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/roster/overflow/release", methods=["POST"])
+@csrf_exempt
+def webapp_roster_overflow_release():
+    """Release a pending overflow player for its sell value.
+    Body: {claim_id}"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.overflow_service import resolve_release
+        data = request.get_json(silent=True) or {}
+        try:
+            claim_id = int(data.get("claim_id") or 0)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_id"}, 400
+        if not claim_id:
+            return {"ok": False, "error": "bad_id", "message": "Missing claim_id."}, 400
+
+        result = resolve_release(db, user, claim_id)
+        if not result.get("ok"):
+            db.commit()
+            return result, 400
+
+        db.commit()
+        result["balance"] = {
+            "coins": user.total_coins or 0,
+            "gems": user.total_gems or 0,
+            "roster_count": user.roster_count or 0,
+        }
+        return result
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_roster_overflow_release failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/spin", methods=["POST"])
 @csrf_exempt
 def webapp_spin():
@@ -4463,7 +4573,9 @@ def webapp_spin():
             return {"ok": False, "error": "no_rewards_configured",
                     "message": "No spin rewards configured. Contact admin."}, 500
 
-        result = apply_reward(db, user, reward)
+        # hold_overflow=True → a squad-full player reward is parked as a pending
+        # claim (Replace flow) instead of being lost.
+        result = apply_reward(db, user, reward, hold_overflow=True)
         # Update legacy last_gspin (bot still references it) + consume quota slot
         stats.last_gspin = _dt.utcnow()
         quota_service.consume_slot(stats, "spin", slot_type)
@@ -4615,8 +4727,10 @@ def webapp_daily():
                         "cooldown_remaining": status["cycle_reset_in"]}, 429
 
         # ── Claim ── (skip the legacy 24h cooldown, quota_service handles limits)
+        # hold_overflow=True → parks squad-full players as pending claims so the
+        # Mini App can offer a Replace flow instead of discarding them.
         result = claim_daily(db, user, source_label=f"MiniApp/{slot_type}/{verified_via or 'free'}",
-                             skip_cooldown=True)
+                             skip_cooldown=True, hold_overflow=True)
         if not result["ok"]:
             return {"ok": False, "error": result.get("error", "internal"),
                     "message": "Daily claim failed unexpectedly."}, 500
@@ -5249,7 +5363,9 @@ def webapp_freepack_open():
             except Exception:
                 pass
 
-        result = open_free_pack(db, user)
+        # hold_overflow=True → open even when the roster is full and park the
+        # rolled player as a pending claim (Replace flow) so the ad isn't wasted.
+        result = open_free_pack(db, user, hold_overflow=True)
         if not result.get("ok"):
             db.rollback()
             return result, 400
@@ -5438,9 +5554,16 @@ def webapp_packs_open():
                 "sell_value": get_sell_value(player.rating),
             })
 
-        # Players that couldn't fit (roster full)
-        overflow = [{"id": p.id, "name": p.name, "rating": p.rating}
-                    for p in result.get("players_to_claim", [])]
+        # Players that couldn't fit (roster full) → park each as a pending claim
+        # so the Mini App can offer a Replace flow instead of discarding them.
+        from services.overflow_service import record_overflow
+        overflow = []
+        for p in result.get("players_to_claim", []):
+            try:
+                overflow.append(record_overflow(db, user, p, source="pack"))
+            except Exception:
+                logger.exception("pack overflow hold failed")
+                overflow.append({"id": p.id, "name": p.name, "rating": p.rating})
 
         db.commit()
         _opened_pack_name = result["pack"].name if result.get("pack") else "Pack"
