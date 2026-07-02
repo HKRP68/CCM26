@@ -180,6 +180,7 @@ def _migrate_add_columns():
         "ban_reason": "VARCHAR(500)",
         "banned_at": "TIMESTAMP",
         "last_miniapp_chat_id": "BIGINT",
+        "notifications_enabled": "BOOLEAN DEFAULT TRUE",
     }
     new_match_cols = {
         "winner_id": "INTEGER",

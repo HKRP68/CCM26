@@ -18,7 +18,7 @@ don't wake people up.
 
 import logging
 from datetime import datetime, timedelta
-from telegram import InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from services.miniapp_buttons import miniapp_button
 from services.quota_service import get_quota_status
 
@@ -128,9 +128,11 @@ async def run_cooldown_notifications(application):
         # Iterate users who have a stats row + are not banned.
         # We process in batches keyed by user id to spread load.
         # Pull users with at least one cooldown field set (i.e. they've played).
+        # Skip users who opted out via /notifications (NULL = still enabled).
         rows = (session.query(User, UserStats)
                 .join(UserStats, UserStats.user_id == User.id)
                 .filter(User.is_banned == False)
+                .filter(User.notifications_enabled.isnot(False))
                 .all())
 
         for user, stats in rows:
@@ -161,13 +163,19 @@ async def run_cooldown_notifications(application):
                 if ready and not flag_set:
                     # Newly ready → notify (unless quiet hours)
                     if not quiet:
-                        reply_markup = None
+                        kb_rows = []
                         if cd.get("miniapp_tab"):
                             btn = miniapp_button(
                                 cd["button_label"], cd["miniapp_tab"],
                                 is_private=True)
                             if btn is not None:
-                                reply_markup = InlineKeyboardMarkup([[btn]])
+                                kb_rows.append([btn])
+                        # Always offer a one-tap opt-out so users can silence
+                        # these reminders straight from the message.
+                        kb_rows.append([InlineKeyboardButton(
+                            "🔕 Turn off notifications",
+                            callback_data="notif_toggle:off")])
+                        reply_markup = InlineKeyboardMarkup(kb_rows)
                         ok = await _send_dm(application, user.telegram_id,
                                             cd["message"], reply_markup)
                         if ok:
