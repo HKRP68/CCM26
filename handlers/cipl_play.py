@@ -1542,6 +1542,18 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("cipl stat persistence failed for match %s", mid)
 
+            # Player-of-the-Match career credit. ``persist_player_game_stats``
+            # covers batting/bowling but not the POTM award, so bump it here
+            # (parity with the chat/webapp finalize) — otherwise /statscl always
+            # reports POTM(s): 0 for Challenge League players.
+            try:
+                winner_for_potm = None if result["tie"] else result.get("winner")
+                best = _cipl_potm_select(state, winner_for_potm)
+                if best and best.get("player_id"):
+                    _record_cipl_potm(session, state, best)
+            except Exception:
+                logger.exception("cipl POTM career credit failed for match %s", mid)
+
             match = session.query(Match).get(mid)
             if match:
                 match.status = "completed"
@@ -1719,12 +1731,13 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi, bpu=6):
     return bats[:4], bowls[:4]
 
 
-def _cipl_calc_potm(state, winner_name=None):
-    """Player of the Match for a finished /cipl match, by impact points.
+def _cipl_potm_select(state, winner_name=None):
+    """Pick the Player of the Match for a finished /cipl match, by impact points.
 
     Mirrors handlers/match.py:_calc_potm but reads CIPL state, whose batting/
-    bowling stats are keyed by ``str(roster_id)``. Returns
-    ``(name, stats_string, team)`` — all "" / None-safe — for the summary card.
+    bowling stats are keyed by ``str(roster_id)``. Returns the winning player's
+    data dict (``{"rid", "name", "team", "bat", "bowl", ...}``) or ``None`` when
+    no one batted or bowled.
 
     Batting impact: runs + 4s + 2·6s + strike-rate & milestone bonuses.
     Bowling impact: 25·wickets + economy·overs + milestone bonuses.
@@ -1786,7 +1799,8 @@ def _cipl_calc_potm(state, winner_name=None):
             rid = p["roster_id"]
             st = (stats or {}).get(str(rid), {})
             entry = players.setdefault(
-                rid, {"name": p.get("name", "Player"), "team": team,
+                rid, {"rid": rid, "player_id": p.get("player_id"),
+                      "name": p.get("name", "Player"), "team": team,
                       "bat": {}, "bowl": {}, "bat_impact": 0, "bowl_impact": 0})
             if is_bat:
                 entry["bat"] = st
@@ -1819,7 +1833,7 @@ def _cipl_calc_potm(state, winner_name=None):
         data["impact"] = base
 
     if not players:
-        return None, "", ""
+        return None
 
     ranked = sorted(players.values(), key=lambda d: d["impact"], reverse=True)
     best = ranked[0]
@@ -1831,7 +1845,17 @@ def _cipl_calc_potm(state, winner_name=None):
                                if d.get("team") == winner_name]
             if winners_in_top2:
                 best = max(winners_in_top2, key=lambda d: d["impact"])
+    return best
 
+
+def _cipl_calc_potm(state, winner_name=None):
+    """POTM name/stats/team for the summary card. See ``_cipl_potm_select``.
+
+    Returns ``(name, stats_string, team)`` — all "" / None-safe.
+    """
+    best = _cipl_potm_select(state, winner_name)
+    if not best:
+        return None, "", ""
     parts = []
     bs, bws = best["bat"], best["bowl"]
     if bs.get("balls", 0) > 0:
@@ -1842,6 +1866,39 @@ def _cipl_calc_potm(state, winner_name=None):
         ovr = f"{ov}.{rem}" if rem else str(ov)
         parts.append(f"{bws.get('wickets', 0)}/{bws.get('runs', 0)} ({ovr})")
     return best["name"], " | ".join(parts), best["team"]
+
+
+def _record_cipl_potm(session, state, best):
+    """Bump the POTM winner's career PlayerGameStats.potm for a /cipl match.
+
+    Finds the POTM player's owning side from the innings XI lists (the same
+    team_id → user_id mapping ``persist_player_game_stats`` uses), then keys the
+    award by the master ``player_id`` so /statscl's cross-league aggregate sees it.
+    """
+    from models import PlayerGameStats
+    rid = best.get("rid")
+    pid = best.get("player_id")
+    if rid is None or not pid:
+        return
+    owner_uid = None
+    for xi, owner in (
+        (state.get("inn1_bat_xi"), state.get("inn1_bat_team_id")),
+        (state.get("inn1_bowl_xi"), state.get("inn1_bowl_team_id")),
+        (state.get("bat_xi"), state.get("bat_team_id")),
+        (state.get("bowl_xi"), state.get("bowl_team_id")),
+    ):
+        if owner and any(p.get("roster_id") == rid for p in (xi or [])):
+            owner_uid = owner
+            break
+    if not owner_uid:
+        return
+    row = (session.query(PlayerGameStats)
+           .filter(PlayerGameStats.user_id == owner_uid,
+                   PlayerGameStats.player_id == pid).first())
+    if row:
+        row.potm = (row.potm or 0) + 1
+    else:
+        session.add(PlayerGameStats(user_id=owner_uid, player_id=pid, potm=1))
 
 
 def _build_cipl_summary_image(state, result):
