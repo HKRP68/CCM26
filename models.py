@@ -61,6 +61,10 @@ class User(Base):
     # (opening packs, GSpin, buying players, daily reward) can echo back into
     # that group even when a later launch carries no origin param.
     last_miniapp_chat_id = Column(BigInteger, nullable=True)
+    # Per-user notification opt-out. When False, the bot stops sending
+    # cooldown-ready DM nudges, scheduled FOMO push messages, and echoing
+    # this user's Mini App actions into groups. Toggled via /notifications.
+    notifications_enabled = Column(Boolean, default=True, nullable=False)
     # Ban / disable — banned users are refused by the bot's middleware
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)

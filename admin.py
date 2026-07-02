@@ -8123,6 +8123,10 @@ def post_miniapp_activity(user, action, **ctx):
     asynchronously so the request never blocks on Telegram.
     """
     try:
+        # Respect the user's /notifications opt-out — don't echo their actions
+        # into groups if they've muted notifications (NULL/unset = enabled).
+        if getattr(user, "notifications_enabled", True) is False:
+            return
         # Prefer the chat encoded in THIS request's launch param; otherwise fall
         # back to the last group the user opened the Mini App from (persisted on
         # the user row). This makes activities echo to the group even when the

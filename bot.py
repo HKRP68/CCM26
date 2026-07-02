@@ -261,6 +261,7 @@ from handlers.cartel import (
     cartel_message_handler,
 )
 from handlers.feedback import feedback_handler
+from handlers.notifications import notifications_handler, notifications_toggle_callback
 from handlers.forward_broadcast import (
     frwd_grp_handler, frwd_prvt_handler, track_album_message,
 )
@@ -364,6 +365,7 @@ BOT_MENU_COMMANDS = (
     ("mole", "Start a Mole Hunt social deduction game (group)"),
     ("cartel", "Start a Cricket Cartel multi-role deduction game (group)"),
     ("feedback", "Send feedback or a bug report"),
+    ("notifications", "Turn reminder notifications on or off"),
     ("fantasy", "Open the weekly fantasy cricket league"),
     ("myfantasy", "View your fantasy squad and points"),
     ("fantasyleaderboard", "Fantasy league leaderboard"),
@@ -1309,6 +1311,8 @@ def main():
         app.add_handler(CallbackQueryHandler(ct_vote_callback, pattern=r"^ct_vote"))
 
         app.add_handler(CommandHandler(["feedback", "fb"], feedback_handler))
+        app.add_handler(CommandHandler(["notifications", "notify", "notif"], notifications_handler))
+        app.add_handler(CallbackQueryHandler(notifications_toggle_callback, pattern=r"^notif_toggle:"))
 
         # ── Fantasy League ───────────────────────────────────────────
         app.add_handler(CommandHandler(["fantasy", "fl"], fantasy_handler))

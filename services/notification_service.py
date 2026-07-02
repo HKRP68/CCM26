@@ -153,7 +153,10 @@ def should_fire(schedule):
 
 def select_target_users(session, target_filter):
     """Return list of User objects matching the filter."""
-    q = session.query(User).filter(User.telegram_id != -1)  # exclude bot user
+    q = (session.query(User)
+         .filter(User.telegram_id != -1)  # exclude bot user
+         # Respect the per-user /notifications opt-out (NULL = still enabled).
+         .filter(User.notifications_enabled.isnot(False)))
 
     if target_filter == "all":
         return q.all()
