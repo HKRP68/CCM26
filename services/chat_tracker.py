@@ -22,6 +22,24 @@ RECORD_THROTTLE_SECONDS = 600  # 10 minutes
 # In-memory cache of {chat_id: last_record_at_datetime}
 _LAST_SEEN_MEM = {}
 
+# Prune the throttle cache once it grows past this many chats so it can't leak
+# an unbounded entry per chat the bot has ever seen.
+_LAST_SEEN_MEM_MAX = 10000
+
+
+def _prune_last_seen(now):
+    """Drop entries older than the throttle window — they no longer suppress
+    a write, so keeping them only wastes memory."""
+    cutoff = RECORD_THROTTLE_SECONDS
+    stale = [cid for cid, ts in _LAST_SEEN_MEM.items()
+             if (now - ts).total_seconds() >= cutoff]
+    for cid in stale:
+        _LAST_SEEN_MEM.pop(cid, None)
+    # If everything is still fresh (huge active chat count), hard-cap to avoid
+    # unbounded growth.
+    if len(_LAST_SEEN_MEM) > _LAST_SEEN_MEM_MAX:
+        _LAST_SEEN_MEM.clear()
+
 
 def record_chat(update: Update):
     """Backfill — every update upserts the chat into bot_chats.
@@ -39,6 +57,8 @@ def record_chat(update: Update):
         last = _LAST_SEEN_MEM.get(chat.id)
         if last is not None and (now - last).total_seconds() < RECORD_THROTTLE_SECONDS:
             return
+        if len(_LAST_SEEN_MEM) > _LAST_SEEN_MEM_MAX:
+            _prune_last_seen(now)
 
         from database import get_session
         from models import BotChat

@@ -13,8 +13,17 @@ new artwork.
 import io
 import logging
 import os
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=128)
+def _cached_truetype(path, size):
+    # Reuse parsed fonts across XI renders instead of re-parsing the TTF each
+    # call. Fonts are immutable, so caching by (path, size) is safe.
+    from PIL import ImageFont
+    return ImageFont.truetype(path, size)
 
 # Dark-navy palette, matching the bot's existing card / market aesthetic.
 _BG_TOP = (17, 20, 32)
@@ -47,7 +56,7 @@ def _font(size, *, display=False):
     ]
     for path in candidates:
         try:
-            return ImageFont.truetype(path, size)
+            return _cached_truetype(path, size)
         except (OSError, IOError):
             continue
     return ImageFont.load_default()

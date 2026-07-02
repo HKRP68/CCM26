@@ -10,11 +10,18 @@ when the market actually changes.
 import io
 import logging
 import os
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 
 from models import Player
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=128)
+def _cached_truetype(path, size):
+    # Reuse parsed fonts across renders instead of re-parsing the TTF each call.
+    return ImageFont.truetype(path, size)
 
 
 # Layout
@@ -49,7 +56,7 @@ def _font(size, bold=False):
     for path in candidates:
         if os.path.exists(path):
             try:
-                return ImageFont.truetype(path, size)
+                return _cached_truetype(path, size)
             except Exception:
                 continue
     return ImageFont.load_default()

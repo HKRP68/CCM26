@@ -23,6 +23,7 @@ import io
 import os
 import logging
 import json
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,11 @@ def _first_existing(paths):
     return None
 
 
+@lru_cache(maxsize=256)
 def _load_font(path, size):
+    # Cache parsed fonts by (path, size): a scorecard render loads dozens of
+    # fonts and ``truetype`` re-parses the file (fresh glyph table) each call.
+    # Fonts are immutable, so reusing them cuts steady-state memory and churn.
     try:
         if path:
             return ImageFont.truetype(path, size)
@@ -106,10 +111,7 @@ def _font(size, bold=False, italic=False, family="body"):
         path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
     else:
         path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    try:
-        return ImageFont.truetype(path, size)
-    except (OSError, IOError):
-        return ImageFont.load_default()
+    return _load_font(path, size) or ImageFont.load_default()
 
 
 def _tw(draw, text, font):
