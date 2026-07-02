@@ -1220,6 +1220,17 @@ async def _finalize(context, mid, winner_uid, loser_uid):
                         session, cl_state["cl_tour_match_id"], winner_uid)
         except Exception:
             logger.exception("CL tour Super Over recording failed (%s)", mid)
+        # Player-of-the-Match career credit — taken from the MAIN match (same as
+        # the reward text) with the Super Over winner as the winning team, so
+        # /statscl's POTM(s) count reflects Super-Over-decided matches too.
+        try:
+            from handlers.cipl_play import _cipl_potm_select, _record_cipl_potm
+            main_state = so.get("main_state") or {}
+            best = _cipl_potm_select(main_state, win["name"])
+            if best and best.get("player_id"):
+                _record_cipl_potm(session, main_state, best)
+        except Exception:
+            logger.exception("Super Over POTM career credit failed (%s)", mid)
         session.commit()
     except Exception:
         session.rollback()

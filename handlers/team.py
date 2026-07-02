@@ -21,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 TEAM_NAME_REGEX = re.compile(r"^[a-zA-Z0-9 '\-]{3,50}$")
 
+# Telegram caps photo captions at 1024 characters, measured on the *visible*
+# text (HTML tags are parsed into entities and don't count) in UTF-16 code units.
+TG_CAPTION_LIMIT = 1024
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _caption_fits(html_text, limit=TG_CAPTION_LIMIT):
+    """True if ``html_text`` fits within a Telegram photo caption.
+
+    Lets us send the card image and its stats as a single message when the
+    stats are short enough, falling back to a separate follow-up text otherwise.
+    """
+    visible = _HTML_TAG_RE.sub("", html_text)
+    visible = (visible.replace("&lt;", "<").replace("&gt;", ">")
+               .replace("&amp;", "&"))
+    return len(visible.encode("utf-16-le")) // 2 <= limit
+
 
 async def teamname_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
@@ -157,14 +174,18 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Lead with the player's card image (custom card if uploaded, else the
-        # cached generated/template card). The stats block can exceed Telegram's
-        # 1024-char caption limit, so it is sent as a follow-up message rather
-        # than a caption.
-        caption = (
+        # cached generated/template card). Send the image and stats as ONE
+        # message by using the full stats block as the photo caption whenever it
+        # fits Telegram's 1024-char cap; only fall back to a short caption + a
+        # separate stats message when the block is too long.
+        full_in_caption = _caption_fits(text)
+        short_caption = (
             f"📛 <b>{player.name}</b> {flag}\n"
             f"⭐ {player.rating} OVR | {player.category}\n"
             f"🏆 POTM(s): {gs.potm}"
         )
+        photo_caption = text if full_in_caption else short_caption
+
         custom_bytes = None
         try:
             from services.player_image_service import has_custom_card, get_custom_image_bytes
@@ -173,21 +194,26 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("Stats custom card load failed for %s", player.id)
 
+        photo_sent = False
         if custom_bytes:
             try:
                 await update.message.reply_photo(
-                    photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
+                    photo=io.BytesIO(custom_bytes), caption=photo_caption, parse_mode="HTML")
+                photo_sent = True
             except Exception:
                 # Don't let a failed image upload swallow the stats text below.
                 logger.exception("Stats custom card send failed; continuing with text")
         else:
             # Reuses a stored Telegram file_id when available (no re-render/upload).
             from services.card_generator import send_generated_card
-            await send_generated_card(
+            sent = await send_generated_card(
                 update.message.reply_photo, player,
-                caption=caption, parse_mode="HTML")
-        # Stats text is the full info and is always sent (even if no card image).
-        await update.message.reply_text(text, parse_mode="HTML")
+                caption=photo_caption, parse_mode="HTML")
+            photo_sent = sent is not None
+        # Send the stats as a follow-up only when they weren't already carried in
+        # the photo caption (or when no card image could be sent at all).
+        if not (photo_sent and full_in_caption):
+            await update.message.reply_text(text, parse_mode="HTML")
 
     except Exception:
         logger.exception(f"Stats error for {tg_user.id}")
@@ -382,7 +408,11 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📛 <b>{name}</b> {flag}\n"
             f"📋 In <b>{len(rows)}</b> Challenge League{'s' if len(rows) != 1 else ''}\n\n"
         )
-        text = header + "\n\n".join(league_lines) + more + "\n\n"
+        # Keep the per-league breakdown tidy in chat by tucking it inside an
+        # expandable quote — the header and career stats stay visible, the league
+        # cards expand on tap.
+        leagues_block = "\n\n".join(league_lines) + more
+        text = header + f"<blockquote expandable>{leagues_block}</blockquote>\n\n"
         if played:
             text += (
                 f"<b>📊 Match Career</b> (all leagues)\n"
@@ -423,12 +453,19 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         # Lead with the player's card image (custom card if the master player
-        # has one, else the cached generated/template card).
-        caption = (
+        # has one, else the cached generated/template card). Send the image and
+        # stats as ONE message by using the full stats block as the photo caption
+        # whenever it fits Telegram's 1024-char cap; only fall back to a short
+        # caption + a separate stats message when the block is too long (e.g. a
+        # player featuring in many leagues).
+        full_in_caption = _caption_fits(text)
+        short_caption = (
             f"📛 <b>{name}</b> {flag}\n"
             f"⭐ {head_rating} OVR | {head_category}\n"
             f"📋 In {len(rows)} Challenge League{'s' if len(rows) != 1 else ''}"
         )
+        photo_caption = text if full_in_caption else short_caption
+
         custom_bytes = None
         try:
             from services.player_image_service import has_custom_card, get_custom_image_bytes
@@ -438,10 +475,12 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("statscl custom card load failed for %s", name)
 
+        photo_sent = False
         if custom_bytes:
             try:
                 await update.message.reply_photo(
-                    photo=io.BytesIO(custom_bytes), caption=caption, parse_mode="HTML")
+                    photo=io.BytesIO(custom_bytes), caption=photo_caption, parse_mode="HTML")
+                photo_sent = True
             except Exception:
                 # Don't let a failed image upload swallow the stats text below.
                 logger.exception("statscl custom card send failed; continuing with text")
@@ -449,10 +488,14 @@ async def statscl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Reuses a stored Telegram file_id when available (no re-render/upload).
             # Synthetic (negative-id) card players use the in-memory cache only.
             from services.card_generator import send_generated_card
-            await send_generated_card(
+            sent = await send_generated_card(
                 update.message.reply_photo, card_player,
-                caption=caption, parse_mode="HTML")
-        await update.message.reply_text(text, parse_mode="HTML")
+                caption=photo_caption, parse_mode="HTML")
+            photo_sent = sent is not None
+        # Send the stats as a follow-up only when they weren't already carried in
+        # the photo caption (or when no card image could be sent at all).
+        if not (photo_sent and full_in_caption):
+            await update.message.reply_text(text, parse_mode="HTML")
 
     except Exception:
         logger.exception("statscl error for search '%s'", search)
