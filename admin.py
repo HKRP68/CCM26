@@ -12932,6 +12932,27 @@ def admin_tournament_detail(tournament_id):
                     except ValueError as ve:
                         db.rollback()
                         flash(f"⚠️ {ve}", "error")
+                elif action == "record_result":
+                    try:
+                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        if not fx or fx.tournament_id != t.id:
+                            raise ValueError("Fixture not found in this tournament.")
+                        tournament_service.record_manual_result(
+                            db, fx.id,
+                            inn1_runs=_int_form("inn1_runs", 0),
+                            inn1_wickets=_int_form("inn1_wickets", 0),
+                            inn1_overs=request.form.get("inn1_overs"),
+                            inn2_runs=_int_form("inn2_runs", 0),
+                            inn2_wickets=_int_form("inn2_wickets", 0),
+                            inn2_overs=request.form.get("inn2_overs"),
+                            winner_slot=request.form.get("winner_slot"))
+                        _tournament_recompute_at.pop(t.id, None)
+                        log_admin(db, "tournament_manual_result", "tournament", t.id,
+                                  f"fixture {fx.id}")
+                        flash("✅ Result recorded — points table updated.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
                 elif action == "add_team":
                     ct = db.query(ChallengeTeam).get(_int_form("challenge_team_id")) \
                         if _int_form("challenge_team_id") else None

@@ -260,6 +260,34 @@ def _legal_balls(stats_map):
     return total
 
 
+def _overs_to_balls(overs):
+    """Convert a cricket overs value to a count of legal balls bowled.
+
+    Accepts an int/float/str in the usual notation where the fractional part is
+    balls-in-the-current-over, not a true decimal: ``19.3`` = 19 overs 3 balls =
+    ``19*6 + 3 = 117`` balls. A missing/blank value is 0; the balls digit is
+    clamped to 0–5 so a typo like ``19.9`` can't inflate the over.
+    """
+    if overs is None:
+        return 0
+    s = str(overs).strip()
+    if not s:
+        return 0
+    try:
+        if "." in s:
+            whole, frac = s.split(".", 1)
+            o = int(whole or 0)
+            b = int((frac or "0")[:1])  # first decimal digit = balls this over
+        else:
+            o = int(s)
+            b = 0
+    except (TypeError, ValueError):
+        return 0
+    o = max(0, o)
+    b = max(0, min(5, b))
+    return o * 6 + b
+
+
 def _collect_player_lines(state):
     """Aggregate per (user_id, player identity) batting+bowling for this match.
 
@@ -540,6 +568,100 @@ def delete_tournament_match(session, tournament_match_id):
     return tid
 
 
+def record_manual_result(session, fixture_id, *,
+                          inn1_runs, inn1_wickets, inn1_overs,
+                          inn2_runs, inn2_wickets, inn2_overs,
+                          winner_slot=None):
+    """Manually record a scheduled fixture's result (no per-ball simulation).
+
+    Lets an admin mark a scheduled fixture completed by typing the two innings
+    scorelines, so the points table (and NRR, and any knockout advancement)
+    updates exactly as it would for a bot-played match. ``team1`` is treated as
+    batting first (innings 1) and ``team2`` second — the same orientation
+    ``recompute_standings`` uses. The winner is derived from the runs unless
+    ``winner_slot`` ('1' | '2' | 'tie') overrides it (e.g. a super-over decider
+    with level scores). No per-player scorecard is captured, so batting/bowling
+    leaderboards are unaffected. Caller commits.
+    """
+    tm = session.query(TournamentMatch).get(int(fixture_id))
+    if not tm:
+        raise ValueError("Fixture not found.")
+    if tm.status == "completed":
+        raise ValueError("This fixture is already completed — remove its result "
+                         "first to re-enter it.")
+    if tm.status != "scheduled":
+        # A "live" fixture is mid-play via the bot and may already hold a
+        # per-ball scorecard; only untouched scheduled fixtures may be recorded
+        # by hand so a direct/racing submit can't clobber an in-progress match.
+        raise ValueError(f"Fixture is '{tm.status}' — only scheduled fixtures can "
+                         "have a manual result recorded.")
+    if not tm.team1_id or not tm.team2_id:
+        raise ValueError("Both teams must be set before recording a result.")
+
+    i1r = max(0, int(inn1_runs or 0))
+    i2r = max(0, int(inn2_runs or 0))
+    i1w = max(0, min(10, int(inn1_wickets or 0)))
+    i2w = max(0, min(10, int(inn2_wickets or 0)))
+    i1b = _overs_to_balls(inn1_overs)
+    i2b = _overs_to_balls(inn2_overs)
+
+    # Reject an innings longer than the tournament's configured over limit — that
+    # would silently corrupt the net run-rate that recompute_standings derives
+    # from these ball counts (e.g. "50" typed into a 20-over tournament).
+    tour = session.query(Tournament).get(tm.tournament_id)
+    max_overs = tour.overs if tour else None
+    if max_overs:
+        max_balls = int(max_overs) * 6
+        if i1b > max_balls or i2b > max_balls:
+            raise ValueError(
+                f"Overs can't exceed this tournament's {max_overs}-over format.")
+
+    ws = (str(winner_slot).strip().lower() if winner_slot not in (None, "") else "")
+    if ws == "1":
+        win_id = tm.team1_id
+    elif ws == "2":
+        win_id = tm.team2_id
+    elif ws == "tie":
+        win_id = None
+    elif i1r > i2r:
+        win_id = tm.team1_id
+    elif i2r > i1r:
+        win_id = tm.team2_id
+    else:
+        win_id = None  # level scores with no explicit winner → tie
+
+    teams = {tt.id: tt for tt in session.query(TournamentTeam)
+             .filter_by(tournament_id=tm.tournament_id).all()}
+
+    def _name(team_id):
+        tt = teams.get(team_id)
+        return (tt.name if tt else None) or "Team"
+
+    result_text = "Match Tied" if win_id is None else f"{_name(win_id)} won"
+
+    tm.status = "completed"
+    tm.winner_team_id = win_id
+    tm.result_text = result_text[:300]
+    tm.inn1_runs, tm.inn1_wickets, tm.inn1_balls = i1r, i1w, i1b
+    tm.inn2_runs, tm.inn2_wickets, tm.inn2_balls = i2r, i2w, i2b
+    tm.scorecard_json = None  # manual entry has no per-player lines
+    tm.completed_at = datetime.utcnow()
+
+    session.flush()
+    recompute_standings(session, tm.tournament_id)
+
+    # Manual knockout results still need the bracket advanced (recompute_standings
+    # ignores non-league stages, so the winner would otherwise never move on).
+    try:
+        from services import knockout_service
+        knockout_service.advance_bracket(session, tm)
+    except Exception:
+        logger.exception("Knockout advancement failed for tournament %s", tm.tournament_id)
+
+    logger.info("Manually recorded tournament fixture %s (winner_team=%s)", tm.id, win_id)
+    return tm
+
+
 def record_tournament_match(session, state, winner_user_id=None, result_text=None):
     """Record a completed tournament match: standings + per-player stats.
 
@@ -803,6 +925,38 @@ def _innings_best_figures(session, tournament_id, limit):
     return entries[:limit]
 
 
+def _milestone_rows(lines):
+    """Aggregate fifties (50–99) and hundreds (100+) per player from innings lines.
+
+    ``lines`` is any iterable of per-innings scorecard dicts (as yielded by
+    ``_innings_lines``). A knock of 100+ counts only as a hundred, never also as a
+    fifty — matching the scorecard convention that a century isn't double-counted
+    as a half-century. Returns a dict keyed by the stable player identity so the
+    same player's milestones accumulate across matches. Pure (no DB) for testing.
+    """
+    agg = {}
+    for line in lines:
+        if not isinstance(line, dict) or not line.get("batted"):
+            continue
+        runs = int(line.get("bat_runs", 0) or 0)
+        key = _player_identity(line)
+        entry = agg.get(key)
+        if entry is None:
+            entry = {"name": line.get("name"), "team_name": line.get("team_name"),
+                     "fifties": 0, "hundreds": 0}
+            agg[key] = entry
+        # Latest non-empty display snapshots win (mirrors ``_apply_line``).
+        if line.get("name"):
+            entry["name"] = line["name"]
+        if line.get("team_name"):
+            entry["team_name"] = line["team_name"]
+        if runs >= 100:
+            entry["hundreds"] += 1
+        elif runs >= 50:
+            entry["fifties"] += 1
+    return agg
+
+
 def batting_average(row):
     """Batting average (runs per dismissal), or ``None`` when never dismissed.
 
@@ -834,11 +988,22 @@ def stat_leaders(session, tournament_id, limit=10):
         overs = (r.bowl_balls or 0) / 6.0
         return (r.bowl_runs / overs) if overs else 0.0
 
+    # Fifties (50–99) and hundreds (100+) are counted per innings, so a batsman's
+    # three separate fifties across matches all tally into one leaderboard row.
+    milestones = [SimpleNamespace(**e) for e in
+                  _milestone_rows(_innings_lines(session, tournament_id)).values()]
+    most_fifties = sorted((r for r in milestones if r.fifties),
+                          key=lambda r: (r.fifties, r.hundreds), reverse=True)[:limit]
+    most_hundreds = sorted((r for r in milestones if r.hundreds),
+                           key=lambda r: (r.hundreds, r.fifties), reverse=True)[:limit]
+
     return {
         "most_runs": top(lambda r: (r.bat_runs or 0, r.bat_sixes or 0)),
         "most_wickets": top(lambda r: (r.bowl_wickets or 0, -(r.bowl_runs or 0))),
         "most_sixes": top(lambda r: (r.bat_sixes or 0)),
         "most_fours": top(lambda r: (r.bat_fours or 0)),
+        "most_fifties": most_fifties,
+        "most_hundreds": most_hundreds,
         # Per-innings boards: rank individual knocks/spells so a batsman's 120,
         # 118 and 110 all appear, not just his single best.
         "highest_score": _innings_highest_scores(session, tournament_id, limit),

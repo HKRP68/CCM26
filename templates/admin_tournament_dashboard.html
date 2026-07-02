@@ -85,6 +85,8 @@ details.match-card summary { cursor:pointer; }
       <div class="leader-box"><h4>🎯 Most Wickets</h4>{{ leaders_list(leaders.most_wickets, 'bowl_wickets') }}</div>
       <div class="leader-box"><h4>6️⃣ Most Sixes</h4>{{ leaders_list(leaders.most_sixes, 'bat_sixes') }}</div>
       <div class="leader-box"><h4>4️⃣ Most Fours</h4>{{ leaders_list(leaders.most_fours, 'bat_fours') }}</div>
+      <div class="leader-box"><h4>5️⃣0️⃣ Most 50s <span class="empty">(50–99)</span></h4>{{ leaders_list(leaders.most_fifties, 'fifties') }}</div>
+      <div class="leader-box"><h4>💯 Most 100s <span class="empty">(100+)</span></h4>{{ leaders_list(leaders.most_hundreds, 'hundreds') }}</div>
       <div class="leader-box"><h4>⭐ Highest Score</h4>
         {% if leaders.highest_score %}{% for r in leaders.highest_score %}<div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r.highest_score }}{{ '*' if r.not_out else '' }}</span></div>{% endfor %}{% else %}<div class="empty">No data yet.</div>{% endif %}
       </div>
