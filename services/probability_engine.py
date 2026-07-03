@@ -4,13 +4,19 @@ Design targets:
   - Average 1st innings score: 170-240 runs in 20 overs (8.5-12 RPO)
   - Equal-rating teams converge near 195 (median)
   - Higher-rated team consistently wins (rating diff dominates)
+  - Absolute rating level shapes the cricket: 40-vs-40 is a scrappy,
+    low-boundary affair; 90-vs-90 is an elite contest with more sixes
+    AND tighter bowling (see _apply_rating_diff's absolute layer)
+  - Batters settle in: vulnerable in their first few balls, more
+    dangerous once set (see _apply_batter_context)
   - All outcomes possible from any combination, with sensible weights
 
 Outcome types: dot, 1, 2, 3, 4, 6, W, wide, noball, legbye
 
 Pipeline:
   base → bowler-type mod → variation/delivery mod → length mod (pacers only)
-  → pitch mod → phase mod → shot mod → rating-diff mod → traits → normalize → roll
+  → pitch mod → phase mod → shot mod → rating mod (diff + absolute)
+  → batter context → traits → dynamic mods → normalize → roll
 """
 
 import random
@@ -22,14 +28,14 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════
 # BASE PROBABILITIES (percent points — must sum near 100)
 # ═══════════════════════════════════════════════════════════════════════
-# Tuned so equal-rated teams average ~9.5 RPO over 20 overs.
-# Expected runs/ball ≈ 0.30(1) + 0.18(2) + 0.06(3) + 0.56(4) + 0.48(6) = 1.58 → 9.5 RPO
+# Tuned so equal-rated (75) teams average ~9.5-10 RPO over 20 overs.
+# Threes are kept genuinely rare (~1 per innings), matching real T20 cricket.
 
 BASE = {
     "dot":    20.0,   # fewer dots keeps /wpm and /cm moving
-    "1":      33.0,   # more singles for constant strike rotation
-    "2":      10.5,   # extra twos make running between wickets matter
-    "3":       3.5,   # more threes for aggressive running and strike changes
+    "1":      34.7,   # more singles for constant strike rotation
+    "2":      11.3,   # extra twos make running between wickets matter
+    "3":       1.0,   # threes are genuinely rare in real cricket (~1-2/innings)
     "4":      16.8,   # slight boundary lift for excitement
     "6":      10.0,   # slight six-hitting lift without turning arcade-only
     "W":       4.0,   # wicket
@@ -327,19 +333,28 @@ def _get_shot_mods(shot):
 # Higher-rated player dominates. Magnitude scales with diff.
 
 def _apply_rating_diff(probs: dict, bat_rating: int, bowl_rating: int):
-    """Adjust probs based on (bat_rating - bowl_rating).
+    """Adjust probs from the two ratings: the GAP decides who wins the duel,
+    and the ABSOLUTE level decides what the cricket looks like.
 
-    Diff scale (DOMINANT):
+    Diff scale (DOMINANT, saturates at ±40):
       diff = +30  → batsman utterly dominates (e.g. 95 vs 65) → big score
       diff = +15  → batsman favored (e.g. 90 vs 75)
       diff =   0  → even
       diff = -15  → bowler favored (e.g. 75 vs 90)
       diff = -30  → bowler dominates (e.g. 65 vs 95) → low score, many wickets
 
-    Doubled magnitude vs prior version so rating actually drives match outcomes.
+    Absolute layer (NEW): two 40-rated players no longer produce the same
+    match as two 90-rated players. Batter class powers boundaries; bowler
+    class powers dots/control; weak batters get themselves out while weak
+    bowlers rarely strike and spray more extras. Anchored at rating 75 so a
+    75-vs-75 contest is unchanged from the pure-diff model.
     """
-    diff = bat_rating - bowl_rating
-    factor = diff / 25.0  # at diff=25, factor=1.0 (significant)
+    bat = max(20.0, min(99.0, float(bat_rating or 50)))
+    bowl = max(20.0, min(99.0, float(bowl_rating or 50)))
+    diff = bat - bowl
+    # Saturate: past a 40-point gap the mismatch is already total; letting the
+    # shift grow unbounded produced 330+ scores with zero wickets.
+    factor = max(-1.6, min(1.6, diff / 25.0))
 
     # Scaling
     boundary_shift = 7.0 * factor    # at factor=1.0 → +7% to boundaries
@@ -356,14 +371,60 @@ def _apply_rating_diff(probs: dict, bat_rating: int, bowl_rating: int):
     probs["2"] = max(1.0, probs["2"] + running_shift * 0.8)
     probs["3"] = max(0.5, probs["3"] + running_shift * 0.2)
 
-    # Extra wickets when bowler dominates a lot
+    # Extra wickets when bowler dominates a lot (capped like the main factor)
     if diff < -15:
-        probs["W"] += abs(diff + 15) * 0.15  # extra wickets for big-mismatch bowler dominance
-        probs["dot"] += abs(diff + 15) * 0.2
+        over = min(25.0, abs(diff + 15))
+        probs["W"] += over * 0.15  # extra wickets for big-mismatch bowler dominance
+        probs["dot"] += over * 0.2
     # Extra boundaries when batsman dominates a lot
     if diff > 15:
-        probs["4"] += (diff - 15) * 0.15
-        probs["6"] += (diff - 15) * 0.10
+        over = min(25.0, diff - 15)
+        probs["4"] += over * 0.15
+        probs["6"] += over * 0.10
+
+    # ── Absolute quality layer ──
+    # Boundary power scales with the batter's own class: stars clear the rope
+    # even against elite bowling, tail-enders rarely do even against pies.
+    probs["6"] *= (bat / 75.0) ** 0.85
+    probs["4"] *= (bat / 75.0) ** 0.55
+    # Bowler class = control: good bowlers bowl more dots and fewer freebies.
+    probs["dot"] *= (bowl / 75.0) ** 0.35
+    probs["wide"] *= (75.0 / bowl) ** 0.5
+    probs["noball"] *= (75.0 / bowl) ** 0.5
+    # Wickets need a bowler good enough to take them AND a batter loose enough
+    # to give them: near-neutral at parity, sharp in mismatches.
+    probs["W"] *= (bowl / 75.0) ** 0.45 * (75.0 / bat) ** 0.35
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BATTER INNINGS CONTEXT — settling in, getting set
+# ═══════════════════════════════════════════════════════════════════════
+# Real batters are vulnerable early and dangerous once set. Callers that
+# track per-batter stats (/wpm, /wpmbot via handlers.match._calc) pass
+# balls_faced/batter_runs; legacy callers pass nothing and are unaffected.
+
+def _apply_batter_context(probs: dict, balls_faced, batter_runs):
+    """Multiplicative early-innings vulnerability + set-batter confidence."""
+    if balls_faced is not None:
+        if balls_faced <= 2:
+            # Fresh at the crease: edges, playing the wrong line.
+            probs["W"] *= 1.30
+            probs["4"] *= 0.80
+            probs["6"] *= 0.70
+            probs["dot"] *= 1.25
+        elif balls_faced <= 5:
+            probs["W"] *= 1.12
+            probs["6"] *= 0.85
+            probs["dot"] *= 1.10
+    if batter_runs is not None:
+        if batter_runs >= 50:
+            probs["4"] *= 1.12
+            probs["6"] *= 1.12
+            probs["W"] *= 0.90
+        elif batter_runs >= 30:
+            probs["4"] *= 1.08
+            probs["6"] *= 1.08
+            probs["W"] *= 0.93
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -495,7 +556,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       striker_traits=None, bowler_traits=None, trait_ctx=None,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
-                      pressure=0.0):
+                      pressure=0.0, balls_faced=None, batter_runs=None):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -506,6 +567,10 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
       recent_runs     — runs scored over the last ~12 balls (batting momentum)
       consec_wickets  — wickets in a row for the bowling side (bowling momentum)
       delivery_repeat — times this exact delivery was bowled in a row (spam)
+
+    Batter innings context (None → no-op, so legacy callers are unchanged):
+      balls_faced     — balls this batter has faced (early vulnerability)
+      batter_runs     — runs this batter has scored (set-batter confidence)
 
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
                    "runs": int, "how": str, "traits_activated": [..],
@@ -547,8 +612,11 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     # Layer 7: Shot — use DB-backed mods if available, fallback to SHOT_MODS
     _apply_mods(probs, _get_shot_mods(shot))
 
-    # Layer 8: Rating differential — the dominance modifier
+    # Layer 8: Rating differential + absolute quality — the dominance modifier
     _apply_rating_diff(probs, bat_rating, bowl_rating)
+
+    # Layer 8b: Batter innings context (new at crease / set batter)
+    _apply_batter_context(probs, balls_faced, batter_runs)
 
     # Layer 9: Traits (optional)
     traits_activated = []

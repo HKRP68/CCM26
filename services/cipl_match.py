@@ -527,6 +527,26 @@ def eligible_bowlers(state):
     return _sorted(pool)
 
 
+def _fielding_quality(xi):
+    """Average fielding quality (35-95) of a fielding XI.
+
+    Players carry no dedicated fielding rating, so overall ``rating`` is the
+    proxy (falling back to the bat/bowl mean). Feeds the drop-catch and
+    misfield mechanics in engine/ball_outcome.calculate_outcome.
+    """
+    vals = []
+    for p in xi or []:
+        v = (p.get("fielding_rating") or p.get("rating")
+             or (float(p.get("bat_rating") or 50) + float(p.get("bowl_rating") or 40)) / 2)
+        try:
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if not vals:
+        return 65.0
+    return max(35.0, min(95.0, sum(vals) / len(vals)))
+
+
 def find_player(xi, roster_id):
     for p in xi:
         if p["roster_id"] == roster_id:
@@ -832,6 +852,9 @@ def simulate_over(state):
     scenario_eng = _load_scenario_engine(state)
 
     bowl_adapted = _adapt_player(bowler)
+    # Fielding side quality — activates dropped catches / misfields in the
+    # engine (computed once per over; the XI doesn't change mid-over).
+    fielding_q = _fielding_quality(state.get("bowl_xi"))
     bws = state["bowl_stats"].setdefault(bowler_rid, _new_bowl_stat())
     bws["this_over_balls"] = 0
     bws["this_over_runs"] = 0
@@ -993,6 +1016,7 @@ def simulate_over(state):
                 allow_extras=True, free_hit=free_hit, balls_faced=bs["balls"],
                 game_state=game_state, pitch_wear=pitch_wear,
                 batting_position=state["striker_idx"] + 1,
+                fielding_quality=fielding_q,
                 format_config=engine_fmt,
                 batting_approach=bat_app, bowling_approach=bowl_app,
                 weight_hook=weight_hook))
@@ -1154,10 +1178,23 @@ def simulate_over(state):
             _maiden = (balls_this_over >= bpu and over_runs_before == 0 and runs == 0)
             _run_key = ("dot_ball" if runs == 0 else "four" if runs == 4
                         else "six" if runs == 6 else None)
-            _push_commentary(state, _run_event(runs), striker_name,
-                             fh_prefix + (_ec(is_maiden=_maiden)
-                                          or _run_text(runs, striker_name, bowler["name"])),
-                             runs=runs, event_key=_run_key)
+            # A dropped catch converts a wicket into runs in the engine —
+            # call it out, it's one of the most dramatic balls in cricket.
+            if oc.get("dropped_catch"):
+                _drop_text = (f"DROPPED! {striker_name} gets a life — "
+                              f"the chance goes down and they scamper {runs}."
+                              if runs else
+                              f"DROPPED! {striker_name} gets a life — "
+                              f"a costly miss in the field.")
+                over_events.append({"sym": str(runs), "text": f"Dropped catch! {striker_name} survives"})
+                _push_commentary(state, _run_event(runs), striker_name,
+                                 fh_prefix + _drop_text,
+                                 runs=runs, event_key=_run_key)
+            else:
+                _push_commentary(state, _run_event(runs), striker_name,
+                                 fh_prefix + (_ec(is_maiden=_maiden)
+                                              or _run_text(runs, striker_name, bowler["name"])),
+                                 runs=runs, event_key=_run_key)
             # A free hit is consumed by this one legal delivery — clear it even if
             # the batter found the boundary (otherwise the free-hit run-out lock
             # would wrongly carry on to the next ball).

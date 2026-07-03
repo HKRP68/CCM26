@@ -4449,6 +4449,8 @@ def _calc(s, striker, bowler, shot, delivery):
         consec_wickets=consec_wickets,
         delivery_repeat=delivery_repeat,
         pressure=pressure,
+        balls_faced=bat_balls_faced,
+        batter_runs=bs.get("runs", 0),
     )
 
 

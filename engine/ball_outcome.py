@@ -722,6 +722,30 @@ _SKILL_RATIO_CLAMP = (0.30, 3.33)
 _HARD_BAT_RATIO_BOOST = 1.04
 _HARD_WICKET_SKILL_MULT = 0.92
 
+# Absolute-class layer. The skill RATIO above is 1.0 at parity regardless of
+# level, which made a 60-vs-60 match statistically identical to a 90-vs-90
+# one. These exponents key selected outcomes to the batter's (or bowler's)
+# absolute rating, anchored at 75: elite line-ups hit more boundaries and
+# leave fewer balls dead; weak line-ups scratch around for singles.
+_LEVEL_ANCHOR = 75.0
+# Upper bound leaves headroom for confidence/position multipliers on 90+
+# batters (otherwise a set 90 and a set 99 clamp to the same level).
+_LEVEL_RATIO_CLAMP = (0.45, 1.50)
+_LEVEL_RUN_EXP = {
+    "Six":    0.50,
+    "Four":   0.32,
+    "Double": 0.15,
+    "Dot":   -0.22,
+}
+# Wicket: quality bowling strikes more, but a classy batter resists — the two
+# nearly cancel at parity so the wicket rate stays calibrated across levels.
+_LEVEL_WICKET_BOWL_EXP = 0.25
+_LEVEL_WICKET_BAT_EXP = 0.15
+
+# T20 wicket realism lift (non-ListA path only) — see the recalibration note
+# where it is applied in calculate_outcome.
+T20_WICKET_REALISM_MULT = 1.30
+
 
 def _skill_multiplier(outcome_type: str, effective_batting: float,
                       bowling: float, pitch: str, bowling_type: str,
@@ -730,11 +754,16 @@ def _skill_multiplier(outcome_type: str, effective_batting: float,
     model. ``skill_ratio`` is batting/bowling for run outcomes (bowling/batting
     for wickets), so the factor is 1.0 at rating parity and scales smoothly."""
     lo, hi = _SKILL_RATIO_CLAMP
+    lvl_lo, lvl_hi = _LEVEL_RATIO_CLAMP
+    bat_level = max(lvl_lo, min(lvl_hi, effective_batting / _LEVEL_ANCHOR))
+    bowl_level = max(lvl_lo, min(lvl_hi, bowling / _LEVEL_ANCHOR))
     if outcome_type == "Wicket":
         ratio = max(lo, min(hi, bowling / max(1.0, effective_batting)))
         skill_mult = ratio ** (_SKILL_WICKET_EXP * SKILL_MODEL_STRENGTH)
         if pitch == "Hard":
             skill_mult *= _HARD_WICKET_SKILL_MULT
+        skill_mult *= (bowl_level ** _LEVEL_WICKET_BOWL_EXP
+                       / bat_level ** _LEVEL_WICKET_BAT_EXP)
         pitch_factor = get_pitch_wicket_multiplier(pitch, bowling_type, config=config)
     else:
         ratio = effective_batting / max(1.0, bowling)
@@ -743,6 +772,7 @@ def _skill_multiplier(outcome_type: str, effective_batting: float,
         ratio = max(lo, min(hi, ratio))
         exp = _SKILL_RUN_EXP.get(outcome_type, 0.0) * SKILL_MODEL_STRENGTH
         skill_mult = ratio ** exp
+        skill_mult *= bat_level ** _LEVEL_RUN_EXP.get(outcome_type, 0.0)
         pitch_factor = get_pitch_run_multiplier(pitch, config=config)
     return pitch_factor * skill_mult
 
@@ -1141,6 +1171,11 @@ def calculate_outcome(
         if pitch_wear > 0.0:
             raw_weights = _apply_pitch_wear(raw_weights, pitch, pitch_wear)
             logger.debug("[PitchWear=%.3f] Applied T20 pitch deterioration.", pitch_wear)
+        # Realism recalibration: measured wicket rate at rating parity was
+        # ~3 per 20 overs (real T20 sits near 6). Lift the wicket weight so
+        # innings feel like a contest instead of a 220/3 batting parade; the
+        # drop-catch mechanic gives some of these lives straight back.
+        raw_weights["Wicket"] = raw_weights.get("Wicket", 0.0) * T20_WICKET_REALISM_MULT
 
     # 3.4) Rating-based performance gating — ListA only.
     # The T20 / legacy path uses the multiplicative skill model in
