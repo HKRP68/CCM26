@@ -160,7 +160,7 @@ def pick_bot_shot(striker, bowler, over, total_overs,
     else:
         prefs = BATTING_PHASE_PREFS[phase]
 
-    shots = prefs["shots"]
+    shots = list(prefs["shots"])
     weights = list(prefs["weights"])
 
     # Easy difficulty: less Slog (lower wicket risk)
@@ -171,6 +171,34 @@ def pick_bot_shot(striker, bowler, over, total_overs,
     # Legendary: more aggressive
     if difficulty == "Legendary":
         weights = [w * 1.5 if s in ("Slog", "Loft", "Pull") else w
+                   for s, w in zip(shots, weights)]
+
+    # ── Rating-aware shot selection ──
+    # A tail-ender shouldn't tee off like an opener: weak batters play
+    # within themselves (unless the chase is truly desperate), stars back
+    # their power game. Keeps a bot XI's innings shaped like a real one.
+    _AGGRESSIVE = ("Slog", "Loft", "Pull")
+    bat_rating = 50.0
+    try:
+        bat_rating = float(striker.get("bat_rating") or striker.get("rating") or 50)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    desperate = rrr > 12  # must swing regardless of ability
+    if bat_rating < 45 and not desperate:
+        weights = [w * 0.35 if s in _AGGRESSIVE else w
+                   for s, w in zip(shots, weights)]
+        # Survival instinct: the rabbit blocks and nudges for singles.
+        if "Defend" not in shots:
+            shots.append("Defend")
+            weights.append(2.5)
+        if "Flick" not in shots:
+            shots.append("Flick")
+            weights.append(2.0)
+    elif bat_rating < 60 and not desperate:
+        weights = [w * 0.7 if s in _AGGRESSIVE else w
+                   for s, w in zip(shots, weights)]
+    elif bat_rating >= 85:
+        weights = [w * 1.3 if s in _AGGRESSIVE else w
                    for s, w in zip(shots, weights)]
 
     chosen_shot = random.choices(shots, weights=weights, k=1)[0]

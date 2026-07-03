@@ -428,6 +428,25 @@ def _apply_batter_context(probs: dict, balls_faced, batter_runs):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# FIELDING — dropped catches and misfields
+# ═══════════════════════════════════════════════════════════════════════
+# Same curves as engine/ball_outcome (the /cipl engine) so both engines
+# field alike: quality 90 → ~3% drops / ~1.5% misfields; quality 60 →
+# ~10% / ~5%; quality 30 → ~19% / ~10%. Only active when the caller
+# passes fielding_quality (None = old behaviour for legacy callers).
+
+_CATCHABLE_HOWS = ("Caught", "Caught Behind", "Caught & Bowled", "Stumped")
+
+
+def _drop_probability(fielding_quality: float) -> float:
+    return max(0.02, 0.22 - (fielding_quality / 100.0) * 0.19)
+
+
+def _misfield_probability(fielding_quality: float) -> float:
+    return max(0.01, 0.115 - (fielding_quality / 100.0) * 0.105)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -556,7 +575,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       striker_traits=None, bowler_traits=None, trait_ctx=None,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
-                      pressure=0.0, balls_faced=None, batter_runs=None):
+                      pressure=0.0, balls_faced=None, batter_runs=None,
+                      fielding_quality=None):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -571,6 +591,11 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     Batter innings context (None → no-op, so legacy callers are unchanged):
       balls_faced     — balls this batter has faced (early vulnerability)
       batter_runs     — runs this batter has scored (set-batter confidence)
+
+    fielding_quality (None → no-op): the fielding side's quality (0-100).
+      Catch/stumping dismissals can be DROPPED (converted to runs, flagged
+      "dropped_catch"), and dots/singles can leak a misfield extra run
+      (flagged "misfield").
 
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
                    "runs": int, "how": str, "traits_activated": [..],
@@ -711,15 +736,30 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         # 5% chance of run-out on any wicket
         if random.random() < 0.05:
             return _ret({"type": "wicket", "runs": random.choice([0, 1]), "how": "Run Out"})
-        return _ret({"type": "wicket", "runs": 0, "how": random.choice(base_hows)})
+        how = random.choice(base_hows)
+        # Fielding: a catch or stumping can go down — the batter gets a life
+        # and steals some runs off the loose ball.
+        if how in _CATCHABLE_HOWS and fielding_quality is not None:
+            if random.random() < _drop_probability(fielding_quality):
+                return _ret({"type": "runs",
+                             "runs": random.choices([1, 2, 4], weights=[35, 35, 30])[0],
+                             "dropped_catch": True})
+        return _ret({"type": "wicket", "runs": 0, "how": how})
+
+    def _maybe_misfield(runs):
+        """Poor fielding sides leak an extra run on dots and singles."""
+        if fielding_quality is not None and \
+                random.random() < _misfield_probability(fielding_quality):
+            return _ret({"type": "runs", "runs": runs + 1, "misfield": True})
+        return _ret({"type": "runs", "runs": runs})
 
     cumul += probs["dot"]
     if r < cumul:
-        return _ret({"type": "runs", "runs": 0})
+        return _maybe_misfield(0)
 
     cumul += probs["1"]
     if r < cumul:
-        return _ret({"type": "runs", "runs": 1})
+        return _maybe_misfield(1)
 
     cumul += probs["2"]
     if r < cumul:

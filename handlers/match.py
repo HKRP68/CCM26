@@ -4127,6 +4127,32 @@ def _traits_for(s, roster_id):
     return cache[key]
 
 
+def _fielding_quality_for(s):
+    """Fielding quality (35-95) of the current bowling side, cached per innings.
+
+    Players carry no dedicated fielding rating, so overall ``rating`` is the
+    proxy (falling back to the bat/bowl mean). Returns None when the state has
+    no bowling XI (defensive: engine treats None as "no fielding mechanics").
+    """
+    innings = s.get("innings", 1)
+    cache = s.setdefault("_fielding_q_cache", {})
+    key = str(innings)
+    if key in cache:
+        return cache[key]
+    xi = s.get("bowl_xi") or []
+    vals = []
+    for p in xi:
+        v = (p.get("fielding_rating") or p.get("rating")
+             or (float(p.get("bat_rating") or 50) + float(p.get("bowl_rating") or 40)) / 2)
+        try:
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    quality = max(35.0, min(95.0, sum(vals) / len(vals))) if vals else None
+    cache[key] = quality
+    return quality
+
+
 def _form_mod_for(s, roster_id):
     """Per-match cached form rating modifier for a real roster entry.
 
@@ -4167,6 +4193,17 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
     try:
         otype = oc.get("type")
         runs = oc.get("runs", 0)
+
+        # Fielding drama has its own lines — a drop is a wicket that got away,
+        # a misfield is a freebie; neither fits the per-run templates.
+        if oc.get("dropped_catch"):
+            name = striker.get("name", "The batter")
+            return (f"🫳 DROPPED! {name} gets a life — the chance goes down "
+                    f"and they steal {runs}!" if runs else
+                    f"🫳 DROPPED! {name} gets a life — a costly miss in the field!")
+        if oc.get("misfield"):
+            name = striker.get("name", "The batter")
+            return f"Misfield! {name} pinches an extra run — sloppy in the field."
 
         # Map outcome to event_key
         if oc.get("free_hit") and otype == "runs" and runs in (4, 6):
@@ -4422,6 +4459,11 @@ def _calc(s, striker, bowler, shot, delivery):
         else:
             break
 
+    # Fielding side quality — activates dropped catches / misfields in the
+    # engine. Derived from the bowling XI's overall ratings (players carry no
+    # dedicated fielding rating) and cached per innings on the state.
+    fielding_quality = _fielding_quality_for(s)
+
     # Chase pressure (required rate + death overs). Honest for human deliveries
     # too — it only reflects the match situation, not who is batting.
     try:
@@ -4451,6 +4493,7 @@ def _calc(s, striker, bowler, shot, delivery):
         pressure=pressure,
         balls_faced=bat_balls_faced,
         batter_runs=bs.get("runs", 0),
+        fielding_quality=fielding_quality,
     )
 
 
