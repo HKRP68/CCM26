@@ -576,7 +576,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
                       pressure=0.0, balls_faced=None, batter_runs=None,
-                      fielding_quality=None):
+                      fielding_quality=None, bat_profile=None,
+                      bowl_profile=None):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -596,6 +597,11 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
       Catch/stumping dismissals can be DROPPED (converted to runs, flagged
       "dropped_catch"), and dots/singles can leak a misfield extra run
       (flagged "misfield").
+
+    bat_profile / bowl_profile (None → no-op): derived skill profiles from
+      services.player_profile — power/timing/technique/running/matchups/
+      finishing for the batter, threat/control/death/new-ball for the
+      bowler. Makes same-rated players play differently.
 
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
                    "runs": int, "how": str, "traits_activated": [..],
@@ -642,6 +648,26 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
 
     # Layer 8b: Batter innings context (new at crease / set batter)
     _apply_batter_context(probs, balls_faced, batter_runs)
+
+    # Layer 8c: Derived skill profiles ("hardcore" ratings). No-op when the
+    # caller passes no profiles, so legacy callers are unchanged.
+    if bat_profile or bowl_profile:
+        try:
+            from services.player_profile import profile_multipliers
+            pm = profile_multipliers(
+                bat_profile, bowl_profile,
+                bowler_is_spin=bowler_key in ("Off Spinner", "Leg Spinner"),
+                phase=phase)
+            probs["6"] *= pm["six"]
+            probs["4"] *= pm["four"]
+            probs["2"] *= pm["two"]
+            probs["3"] *= pm["three"]
+            probs["dot"] *= pm["dot"]
+            probs["W"] *= pm["wicket"]
+            probs["wide"] *= pm["extras"]
+            probs["noball"] *= pm["extras"]
+        except Exception:
+            logger.exception("player_profile layer failed; ignoring this ball")
 
     # Layer 9: Traits (optional)
     traits_activated = []

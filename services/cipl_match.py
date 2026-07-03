@@ -708,6 +708,48 @@ def _make_last_over_drama_hook(is_last_over, is_live_chase):
     return _hook
 
 
+def _make_profile_hook(striker, bowler, over_unit, total_units, powerplay_units):
+    """Weight hook applying derived skill profiles ("hardcore" ratings).
+
+    Expands each player's scalar ratings into stable sub-skills (power vs
+    timing, technique, pace/spin matchups, finishing; bowler threat/control/
+    death/new-ball) via services.player_profile and maps the resulting
+    multipliers onto the engine's raw outcome weights. Deterministic per
+    player, zero-sum by construction — it redistributes HOW a player scores,
+    never their card strength. Returns None on any failure so a profile bug
+    can never cost a delivery.
+    """
+    try:
+        from services.player_profile import (
+            batting_profile, bowling_profile, profile_multipliers)
+        bp = batting_profile(striker)
+        wp = bowling_profile(bowler)
+        style = (bowler.get("bowl_style") or "").lower()
+        is_spin = any(t in style for t in ("spin", "orthodox", "chinaman"))
+        if over_unit <= powerplay_units:
+            phase = "powerplay"
+        elif over_unit > total_units * 0.8:
+            phase = "death"
+        else:
+            phase = "middle"
+        pm = profile_multipliers(bp, wp, bowler_is_spin=is_spin, phase=phase)
+    except Exception:
+        logger.exception("profile hook build failed; skipping profiles")
+        return None
+
+    keymap = {"Six": "six", "Four": "four", "Double": "two", "Three": "three",
+              "Dot": "dot", "Wicket": "wicket", "Extras": "extras"}
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        for wk, mk in keymap.items():
+            if wk in rw:
+                rw[wk] *= pm[mk]
+        return rw
+
+    return _hook
+
+
 def _compose_hooks(*hooks):
     """Combine weight hooks into one, applied left to right. Drops Nones and
     returns the single hook (or None) when zero/one remain."""
@@ -1007,7 +1049,12 @@ def simulate_over(state):
             drama_hook = _make_last_over_drama_hook(
                 state["current_over"] >= overs_total,
                 bool(target) and not chased)
-            weight_hook = _compose_hooks(trait_hook, env_hook,
+            # Derived skill profiles: power/timing/technique/matchups for the
+            # striker, threat/control/death/new-ball for the bowler.
+            profile_hook = _make_profile_hook(
+                striker, bowler, state["current_over"], overs_total,
+                _spec(state)["powerplay_units"])
+            weight_hook = _compose_hooks(profile_hook, trait_hook, env_hook,
                                          wicket_hook, drama_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
