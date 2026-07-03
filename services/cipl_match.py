@@ -708,48 +708,6 @@ def _make_last_over_drama_hook(is_last_over, is_live_chase):
     return _hook
 
 
-def _make_profile_hook(striker, bowler, over_unit, total_units, powerplay_units):
-    """Weight hook applying derived skill profiles ("hardcore" ratings).
-
-    Expands each player's scalar ratings into stable sub-skills (power vs
-    timing, technique, pace/spin matchups, finishing; bowler threat/control/
-    death/new-ball) via services.player_profile and maps the resulting
-    multipliers onto the engine's raw outcome weights. Deterministic per
-    player, zero-sum by construction — it redistributes HOW a player scores,
-    never their card strength. Returns None on any failure so a profile bug
-    can never cost a delivery.
-    """
-    try:
-        from services.player_profile import (
-            batting_profile, bowling_profile, profile_multipliers)
-        bp = batting_profile(striker)
-        wp = bowling_profile(bowler)
-        style = (bowler.get("bowl_style") or "").lower()
-        is_spin = any(t in style for t in ("spin", "orthodox", "chinaman"))
-        if over_unit <= powerplay_units:
-            phase = "powerplay"
-        elif over_unit > total_units * 0.8:
-            phase = "death"
-        else:
-            phase = "middle"
-        pm = profile_multipliers(bp, wp, bowler_is_spin=is_spin, phase=phase)
-    except Exception:
-        logger.exception("profile hook build failed; skipping profiles")
-        return None
-
-    keymap = {"Six": "six", "Four": "four", "Double": "two", "Three": "three",
-              "Dot": "dot", "Wicket": "wicket", "Extras": "extras"}
-
-    def _hook(raw_weights):
-        rw = dict(raw_weights)
-        for wk, mk in keymap.items():
-            if wk in rw:
-                rw[wk] *= pm[mk]
-        return rw
-
-    return _hook
-
-
 def _compose_hooks(*hooks):
     """Combine weight hooks into one, applied left to right. Drops Nones and
     returns the single hook (or None) when zero/one remain."""
@@ -1049,12 +1007,7 @@ def simulate_over(state):
             drama_hook = _make_last_over_drama_hook(
                 state["current_over"] >= overs_total,
                 bool(target) and not chased)
-            # Derived skill profiles: power/timing/technique/matchups for the
-            # striker, threat/control/death/new-ball for the bowler.
-            profile_hook = _make_profile_hook(
-                striker, bowler, state["current_over"], overs_total,
-                _spec(state)["powerplay_units"])
-            weight_hook = _compose_hooks(profile_hook, trait_hook, env_hook,
+            weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
@@ -1237,6 +1190,19 @@ def simulate_over(state):
                 _push_commentary(state, _run_event(runs), striker_name,
                                  fh_prefix + _drop_text,
                                  runs=runs, event_key=_run_key)
+            elif oc.get("duel") == "beaten" and runs == 0:
+                # The bowler won this ball's rating duel outright — say so.
+                _push_commentary(
+                    state, _run_event(runs), striker_name,
+                    fh_prefix + f"Beaten! {bowler['name']} squares "
+                    f"{striker_name} up completely — pure class wins the duel.",
+                    runs=runs, event_key=_run_key)
+            elif oc.get("duel") == "punished" and runs in (4, 6):
+                _push_commentary(
+                    state, _run_event(runs), striker_name,
+                    fh_prefix + f"PUNISHED! The moment {bowler['name']} "
+                    f"missed the mark, {striker_name} put it away for {runs}.",
+                    runs=runs, event_key=_run_key)
             else:
                 _push_commentary(state, _run_event(runs), striker_name,
                                  fh_prefix + (_ec(is_maiden=_maiden)

@@ -4127,27 +4127,6 @@ def _traits_for(s, roster_id):
     return cache[key]
 
 
-def _profiles_for(s, striker, bowler):
-    """Derived skill profiles for this ball's duel, cached per roster id.
-
-    Profiles are deterministic per player (services.player_profile), so the
-    cache is purely an allocation saver; entries are plain float dicts and
-    survive the JSON round-trip of the state store.
-    """
-    try:
-        from services.player_profile import batting_profile, bowling_profile
-        cache = s.setdefault("_profile_cache", {})
-        bkey = f"bat:{striker.get('roster_id')}"
-        if bkey not in cache:
-            cache[bkey] = batting_profile(striker)
-        wkey = f"bowl:{bowler.get('roster_id')}"
-        if wkey not in cache:
-            cache[wkey] = bowling_profile(bowler)
-        return cache[bkey], cache[wkey]
-    except Exception:
-        return None, None
-
-
 def _fielding_quality_for(s):
     """Fielding quality (35-95) of the current bowling side, cached per innings.
 
@@ -4214,6 +4193,24 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
     try:
         otype = oc.get("type")
         runs = oc.get("runs", 0)
+
+        # Execution-duel drama: only voice the duel when the outcome matches
+        # it (a "beaten" flag on a ball that still went for four reads wrong).
+        duel = oc.get("duel")
+        if duel == "beaten" and otype == "runs" and runs == 0:
+            name = striker.get("name", "The batter")
+            return random.choice([
+                f"Beaten all ends up! {name} has no clue about that one.",
+                f"Beauty from {bowler.get('name', 'the bowler')} — {name} plays and misses!",
+                f"Squared up completely — {name} beaten by sheer class.",
+            ])
+        if duel == "punished" and otype == "runs" and runs in (4, 6):
+            name = striker.get("name", "The batter")
+            return random.choice([
+                f"PUNISHED! A rare loose ball and {name} puts it away in style.",
+                f"That's too easy — {name} was waiting for it and dispatched it!",
+                f"No mercy! The moment the length was off, {name} pounced.",
+            ])
 
         # Fielding drama has its own lines — a drop is a wicket that got away,
         # a misfield is a freebie; neither fits the per-run templates.
@@ -4485,10 +4482,6 @@ def _calc(s, striker, bowler, shot, delivery):
     # dedicated fielding rating) and cached per innings on the state.
     fielding_quality = _fielding_quality_for(s)
 
-    # Derived skill profiles ("hardcore" ratings): power/timing/technique/
-    # matchups for the batter, threat/control/death/new-ball for the bowler.
-    bat_profile, bowl_profile = _profiles_for(s, striker, bowler)
-
     # Chase pressure (required rate + death overs). Honest for human deliveries
     # too — it only reflects the match situation, not who is batting.
     try:
@@ -4519,8 +4512,6 @@ def _calc(s, striker, bowler, shot, delivery):
         balls_faced=bat_balls_faced,
         batter_runs=bs.get("runs", 0),
         fielding_quality=fielding_quality,
-        bat_profile=bat_profile,
-        bowl_profile=bowl_profile,
     )
 
 

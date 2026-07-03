@@ -333,28 +333,35 @@ def _get_shot_mods(shot):
 # Higher-rated player dominates. Magnitude scales with diff.
 
 def _apply_rating_diff(probs: dict, bat_rating: int, bowl_rating: int):
-    """Adjust probs from the two ratings: the GAP decides who wins the duel,
-    and the ABSOLUTE level decides what the cricket looks like.
+    """The hardcore rating-vs-rating layer: a steep continuous gap curve,
+    discrete class tiers, and an absolute-quality layer.
 
-    Diff scale (DOMINANT, saturates at ±40):
-      diff = +30  → batsman utterly dominates (e.g. 95 vs 65) → big score
-      diff = +15  → batsman favored (e.g. 90 vs 75)
-      diff =   0  → even
-      diff = -15  → bowler favored (e.g. 75 vs 90)
-      diff = -30  → bowler dominates (e.g. 65 vs 95) → low score, many wickets
+    Gap curve (EXTREME dominance, tanh S-curve — every rating point counts,
+    smooth saturation instead of a hard clamp):
+      diff = +10  → batsman clearly on top (factor ~1.05)
+      diff = +17  → batsman dominates (factor ~1.5)
+      diff = +30+ → total mismatch (factor → ~2.0)
+      (negative diffs mirror for the bowler)
 
-    Absolute layer (NEW): two 40-rated players no longer produce the same
-    match as two 90-rated players. Batter class powers boundaries; bowler
-    class powers dots/control; weak batters get themselves out while weak
-    bowlers rarely strike and spray more extras. Anchored at rating 75 so a
-    75-vs-75 contest is unchanged from the pure-diff model.
+    Class tiers (engine.rating_duel): crossing 80/85/90/95 (or falling
+    below 65/50) stacks a small extra multiplier per step on BOTH
+    disciplines, so an 89 → 90 upgrade is a felt jump.
+
+    Absolute layer: two 40-rated players don't produce the same match as
+    two 90-rated players. Batter class powers boundaries; bowler class
+    powers dots/control; weak batters get themselves out while weak
+    bowlers rarely strike and spray more extras. Anchored at rating 75 so
+    a 75-vs-75 contest is pure parity.
     """
+    from engine.rating_duel import gap_factor, batting_tier_mults, bowling_tier_mults
     bat = max(20.0, min(99.0, float(bat_rating or 50)))
     bowl = max(20.0, min(99.0, float(bowl_rating or 50)))
     diff = bat - bowl
-    # Saturate: past a 40-point gap the mismatch is already total; letting the
-    # shift grow unbounded produced 330+ scores with zero wickets.
-    factor = max(-1.6, min(1.6, diff / 25.0))
+    # Steep S-curve: 1.4 * tanh(diff / 17). Stronger than the old linear
+    # diff/25 through the realistic range, saturating near ±1.4. (2.0 was
+    # measured to make a +5 gap win ~95% of matches — past even the extreme
+    # target once the duel layer stacks on top.)
+    factor = 1.4 * gap_factor(bat, bowl)
 
     # Scaling
     boundary_shift = 7.0 * factor    # at factor=1.0 → +7% to boundaries
@@ -394,6 +401,21 @@ def _apply_rating_diff(probs: dict, bat_rating: int, bowl_rating: int):
     # Wickets need a bowler good enough to take them AND a batter loose enough
     # to give them: near-neutral at parity, sharp in mismatches.
     probs["W"] *= (bowl / 75.0) ** 0.45 * (75.0 / bat) ** 0.35
+
+    # ── Class tiers ──
+    # Discrete ladder bonuses stacking per threshold crossed (80/85/90/95
+    # up, 65/50 down) — see engine.rating_duel.tier_steps.
+    bt = batting_tier_mults(bat)
+    probs["4"] *= bt["four"]
+    probs["6"] *= bt["six"]
+    probs["W"] *= bt["wicket"]
+    wt = bowling_tier_mults(bowl)
+    probs["W"] *= wt["wicket"]
+    probs["dot"] *= wt["dot"]
+    probs["4"] *= wt["four"]
+    probs["6"] *= wt["six"]
+    probs["wide"] *= wt["extras"]
+    probs["noball"] *= wt["extras"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -576,8 +598,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
                       pressure=0.0, balls_faced=None, batter_runs=None,
-                      fielding_quality=None, bat_profile=None,
-                      bowl_profile=None):
+                      fielding_quality=None):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -597,11 +618,6 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
       Catch/stumping dismissals can be DROPPED (converted to runs, flagged
       "dropped_catch"), and dots/singles can leak a misfield extra run
       (flagged "misfield").
-
-    bat_profile / bowl_profile (None → no-op): derived skill profiles from
-      services.player_profile — power/timing/technique/running/matchups/
-      finishing for the batter, threat/control/death/new-ball for the
-      bowler. Makes same-rated players play differently.
 
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
                    "runs": int, "how": str, "traits_activated": [..],
@@ -649,25 +665,28 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     # Layer 8b: Batter innings context (new at crease / set batter)
     _apply_batter_context(probs, balls_faced, batter_runs)
 
-    # Layer 8c: Derived skill profiles ("hardcore" ratings). No-op when the
-    # caller passes no profiles, so legacy callers are unchanged.
-    if bat_profile or bowl_profile:
-        try:
-            from services.player_profile import profile_multipliers
-            pm = profile_multipliers(
-                bat_profile, bowl_profile,
-                bowler_is_spin=bowler_key in ("Off Spinner", "Leg Spinner"),
-                phase=phase)
-            probs["6"] *= pm["six"]
-            probs["4"] *= pm["four"]
-            probs["2"] *= pm["two"]
-            probs["3"] *= pm["three"]
-            probs["dot"] *= pm["dot"]
-            probs["W"] *= pm["wicket"]
-            probs["wide"] *= pm["extras"]
-            probs["noball"] *= pm["extras"]
-        except Exception:
-            logger.exception("player_profile layer failed; ignoring this ball")
+    # Layer 8c: Execution duel — this ball's explicit rating contest.
+    # The bowler tries to execute, the batter tries to read; who wins the
+    # exchange reshapes this delivery's outcome weights (engine.rating_duel).
+    # State odds are pure functions of the two ratings, so a big rating edge
+    # wins far more of these exchanges — that's the dominance engine.
+    duel_state = None
+    try:
+        from engine.rating_duel import resolve_duel, shot_risk_class
+        duel_state, _dm = resolve_duel(bat_rating, bowl_rating,
+                                       shot_risk_class(shot))
+        probs["dot"] *= _dm["dot"]
+        probs["1"] *= _dm["one"]
+        probs["2"] *= _dm["two"]
+        probs["3"] *= _dm["three"]
+        probs["4"] *= _dm["four"]
+        probs["6"] *= _dm["six"]
+        probs["W"] *= _dm["wicket"]
+        probs["wide"] *= _dm["extras"]
+        probs["noball"] *= _dm["extras"]
+        probs["legbye"] *= _dm["extras"]
+    except Exception:
+        logger.exception("rating duel failed; ignoring this ball")
 
     # Layer 9: Traits (optional)
     traits_activated = []
@@ -728,6 +747,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
             d["free_hit"] = True
         if mystery:
             d["mystery"] = True
+        if duel_state:
+            d["duel"] = duel_state
         return d
 
     # Order: extras → wicket → runs (dot first since most common)
