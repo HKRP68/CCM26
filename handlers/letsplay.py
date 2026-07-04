@@ -745,8 +745,26 @@ def _letsplay_draft_in_chat(context, chat_id, statuses=None):
     return None
 
 
+async def _notify_change_applied(context, draft):
+    """Lightweight fallback when the XI card can't be refreshed after a /change.
+
+    The swap is already committed to the draft snapshot by the time we get here,
+    so if the full card fails to rebuild we still tell both players the lineup
+    changed rather than leaving them staring at a stale card."""
+    try:
+        await context.bot.send_message(
+            draft["chat_id"],
+            "✅ Playing XI updated. (Couldn't refresh the XI card — your new "
+            "lineup is saved and will be used when the match starts.)")
+    except Exception:
+        logger.debug("letsplay /change fallback notice failed", exc_info=True)
+
+
 async def _rerender_show_xi(context, draft):
-    """Rebuild and edit the 'Playing XI' card in place from the current snapshots."""
+    """Rebuild and edit the 'Playing XI' card in place from the current snapshots.
+
+    On any failure (rebuild raised, produced no text, or the message could not be
+    sent) a lightweight notice is posted so the players know the XI did change."""
     session = get_session()
     text = None
     try:
@@ -760,10 +778,12 @@ async def _rerender_show_xi(context, draft):
         session.commit()
     except Exception:
         logger.exception("letsplay: re-render show XI failed")
+        await _notify_change_applied(context, draft)
         return
     finally:
         session.close()
     if not text:
+        await _notify_change_applied(context, draft)
         return
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(
         "🪙 Start Toss", callback_data=f"lp_starttoss_{draft['invite_id']}")]])
@@ -777,9 +797,14 @@ async def _rerender_show_xi(context, draft):
             return
         except Exception:
             logger.debug("letsplay /change in-place edit failed", exc_info=True)
-    sent = await context.bot.send_message(
-        draft["chat_id"], text, parse_mode="HTML", reply_markup=kb,
-        disable_web_page_preview=True)
+    try:
+        sent = await context.bot.send_message(
+            draft["chat_id"], text, parse_mode="HTML", reply_markup=kb,
+            disable_web_page_preview=True)
+    except Exception:
+        logger.exception("letsplay: re-render show XI send failed")
+        await _notify_change_applied(context, draft)
+        return
     if sent and getattr(sent, "message_id", None):
         draft["showxi_msg_id"] = sent.message_id
 
