@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 # /ximage from the same user is blocked, but a legitimate later call isn't.
 _XIMAGE_GUARD_TTL = 60.0
 
+# Process-wide serialization of the (CPU-bound, thread-offloaded) XI render.
+# The bot runs handlers across a thread pool (concurrent_updates), so two users
+# firing /ximage at the same instant would each spawn a Pillow render on its own
+# thread. Those renders share process-global PIL state (notably the cached
+# TrueType font objects, which are NOT thread-safe to draw with concurrently),
+# which could corrupt one render or make both messages carry the same picture.
+# A single asyncio lock queues the renders so each caller waits its turn and
+# always gets its OWN XI back. Renders are ~sub-second, so the wait is tiny.
+_XIMAGE_RENDER_LOCK = asyncio.Lock()
+
 
 async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Render the caller's (or a targeted user's) Playing XI as an image.
@@ -125,9 +135,13 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Pillow is CPU-bound — render off the event loop. Keep the ORM objects
         # un-expired during the threaded render (SessionLocal defaults to
         # expire_on_commit=True), so commit only AFTER rendering finishes.
-        png = await asyncio.to_thread(
-            build_xi_image, xi_pairs,
-            team_name=handle, captain_roster_id=captain_rid)
+        # Serialize the render process-wide (see _XIMAGE_RENDER_LOCK) so two
+        # users' concurrent /ximage calls can't share PIL font state and end up
+        # both receiving the same XI image.
+        async with _XIMAGE_RENDER_LOCK:
+            png = await asyncio.to_thread(
+                build_xi_image, xi_pairs,
+                team_name=handle, captain_roster_id=captain_rid)
         # Consume the cooldown now that the (expensive) render has run.
         stats.last_ximage = datetime.utcnow()
         session.commit()

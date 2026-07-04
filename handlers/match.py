@@ -1983,12 +1983,6 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     cid = chat.id
 
-    if not await _is_chat_admin(context, chat, tg.id):
-        await update.message.reply_text(
-            "🚫 <b>Admins only.</b> Only a group admin can use /clearmatches.",
-            parse_mode="HTML")
-        return
-
     session = get_session()
     cleared = []
     try:
@@ -1996,6 +1990,35 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 .filter(Match.chat_id == cid,
                         Match.status.in_(ACTIVE_MATCH_STATUSES))
                 .all())
+
+        # Only the users who were actually playing a match in this chat (either
+        # side) — plus a configured global bot admin ("me") — may clear it. Group
+        # admins no longer qualify just for being admins; they must have been in
+        # the match. When there is nothing to clear anyone may run the command
+        # (it's harmless and just reports the chat is already clear).
+        if rows:
+            allowed = False
+            try:
+                from handlers.forward_broadcast import is_forward_admin
+                if is_forward_admin(tg.id):
+                    allowed = True
+            except Exception:
+                pass
+            if not allowed:
+                me = (session.query(User)
+                      .filter(User.telegram_id == tg.id).first())
+                if me is not None:
+                    my_uid = me.id
+                    allowed = any(m.user1_id == my_uid or m.user2_id == my_uid
+                                  for m in rows)
+            if not allowed:
+                await update.message.reply_text(
+                    "🚫 <b>Only the players in the match can clear it.</b>\n"
+                    "Ask one of the two players who were playing "
+                    "(or a bot admin) to run /clearmatches.",
+                    parse_mode="HTML")
+                return
+
         for m in rows:
             m.status = "completed"
             m.completed_at = datetime.utcnow()

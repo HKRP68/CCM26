@@ -147,21 +147,52 @@ def _xi_to_engine(session, pairs):
     return out
 
 
-def _format_batting_order(pairs, header):
-    """Numbered 1-11 batting order (roster order positions) for the XI card."""
+def _cat_tag(player):
+    cat = player.category or ""
+    if cat == "Wicket Keeper":
+        return " 🧤"
+    if cat == "All-rounder":
+        return " ⚡"
+    if cat == "Bowler":
+        return " 🎯"
+    return ""
+
+
+def _format_batting_order(pairs, header, bench_pairs=None):
+    """Numbered 1-11 batting order for the XI card, with an optional bench list.
+
+    Bench players are numbered from 12 upward (same scheme as /change) so a user
+    can read a bench slot straight off the card and swap it in.
+    """
     lines = [header]
     for i, (_entry, player) in enumerate(pairs[:11], start=1):
-        cat = player.category or ""
-        tag = ""
-        if cat == "Wicket Keeper":
-            tag = " 🧤"
-        elif cat == "All-rounder":
-            tag = " ⚡"
-        elif cat == "Bowler":
-            tag = " 🎯"
         nm = html.escape(str(player.name))
-        lines.append(f"{i:>2}. {nm} <i>({player.rating})</i>{tag}")
+        lines.append(f"{i:>2}. {nm} <i>({player.rating})</i>{_cat_tag(player)}")
+    if bench_pairs is not None:
+        if bench_pairs:
+            lines.append("   🪑 <i>Bench:</i>")
+            for i, (_entry, player) in enumerate(bench_pairs, start=12):
+                nm = html.escape(str(player.name))
+                lines.append(f"{i:>2}. {nm} <i>({player.rating})</i>{_cat_tag(player)}")
+        else:
+            lines.append("   🪑 <i>Bench: none (exactly 11 players)</i>")
     return "\n".join(lines)
+
+
+def _sort_batting_order(pairs):
+    """Order (entry, player) pairs by batting rating (high → low) — the same
+    auto batting order /letsplay applies everywhere else."""
+    return sorted(
+        pairs,
+        key=lambda ep: (int(ep[1].bat_rating or 0), int(ep[1].rating or 0),
+                        str(ep[1].name or "")),
+        reverse=True)
+
+
+def _bench_pairs(full_pairs, xi_ids):
+    """Roster (entry, player) pairs NOT in the XI, kept in roster order."""
+    xi_set = {int(i) for i in xi_ids}
+    return [(e, p) for e, p in full_pairs if int(e.id) not in xi_set]
 
 
 def _pairs_from_roster_ids(session, user_id, roster_ids):
@@ -568,8 +599,42 @@ def _ordered_xi_for_side(session, user_id):
     return ordered, []
 
 
-def _show_xi_text(draft, host_pairs, guest_pairs):
-    """The 'both XIs locked' card shown before the toss."""
+def _xi_bench_for_side(session, user_id, xi_ids=None):
+    """Return ``(xi_pairs, bench_pairs, errors)`` for a side's roster.
+
+    ``xi_pairs`` is 11 (entry, player) in batting order (auto by batting rating,
+    high → low). When ``xi_ids`` is given (e.g. a set edited via /change) the XI
+    is pinned to exactly those roster entries; if any pinned player has since
+    disappeared the XI falls back to the auto top-11. ``bench_pairs`` is every
+    other roster entry, kept in roster order. On any problem ``xi_pairs`` is
+    None and ``errors`` explains why (mirrors ``_ordered_xi_for_side``)."""
+    full = _get_ordered_roster(session, user_id)
+    if len(full) < 11:
+        return None, [], [f"Need 11 players, have {len(full)}"]
+    xi = None
+    if xi_ids:
+        by_id = {int(e.id): (e, p) for e, p in full}
+        picked = [by_id[int(i)] for i in xi_ids if int(i) in by_id]
+        if len(picked) == 11:
+            xi = picked
+    if xi is None:
+        xi = full[:11]
+    ok, errors = validate_xi(xi)
+    if not ok:
+        return None, [], errors
+    xi = _sort_batting_order(xi)
+    xi_set = {int(e.id) for e, _ in xi}
+    bench = [(e, p) for e, p in full if int(e.id) not in xi_set]
+    return xi, bench, []
+
+
+def _show_xi_text(draft, host_pairs, guest_pairs,
+                  host_bench=None, guest_bench=None):
+    """The 'both XIs locked' card shown before the toss.
+
+    Shows each side's Playing XI (batting order) plus its bench, and explains how
+    to swap a bench player into the XI with /change before the toss.
+    """
     pitch = draft.get("pitch_type", "Hard")
     parts = [
         "🧾 <b>LETS PLAY — Playing XI</b>",
@@ -577,13 +642,18 @@ def _show_xi_text(draft, host_pairs, guest_pairs):
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • 20 overs",
         "<i>Batting order auto-set by batting rating (high → low).</i>",
         "",
-        _format_batting_order(host_pairs, f"👤 <b>{html.escape(draft['host']['name'])}</b> (Host)"),
+        _format_batting_order(
+            host_pairs, f"👤 <b>{html.escape(draft['host']['name'])}</b> (Host)",
+            bench_pairs=host_bench),
         "",
-        _format_batting_order(guest_pairs, f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)"),
+        _format_batting_order(
+            guest_pairs, f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)",
+            bench_pairs=guest_bench),
         "",
         "━━━━━━━━━━━━━━━━━━━",
-        f"🔒 Both XIs locked — {_m(draft['guest'])}, tap "
-        "<b>Start Toss</b> to flip the coin!",
+        "✏️ Swap a bench player into your XI with "
+        "<code>/change &lt;out&gt; &lt;in&gt;</code> — e.g. <code>/change 2 13</code>.",
+        f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> to flip the coin!",
     ]
     return "\n".join(parts)
 
@@ -599,8 +669,10 @@ async def _prompt_show_xi(context, draft):
     session = get_session()
     text = host_ids = guest_ids = bad = errs = None
     try:
-        host_pairs, host_errs = _ordered_xi_for_side(session, draft["host"]["user_id"])
-        guest_pairs, guest_errs = _ordered_xi_for_side(session, draft["guest"]["user_id"])
+        host_pairs, host_bench, host_errs = _xi_bench_for_side(
+            session, draft["host"]["user_id"])
+        guest_pairs, guest_bench, guest_errs = _xi_bench_for_side(
+            session, draft["guest"]["user_id"])
         if host_pairs is None or guest_pairs is None:
             bad = draft["host"] if host_pairs is None else draft["guest"]
             errs = host_errs if host_pairs is None else guest_errs
@@ -611,7 +683,8 @@ async def _prompt_show_xi(context, draft):
             # DetachedInstanceError and leave the draft stuck until timeout.
             host_ids = [int(e.id) for e, _p in host_pairs]
             guest_ids = [int(e.id) for e, _p in guest_pairs]
-            text = _show_xi_text(draft, host_pairs, guest_pairs)
+            text = _show_xi_text(draft, host_pairs, guest_pairs,
+                                 host_bench=host_bench, guest_bench=guest_bench)
         session.commit()
     except Exception:
         logger.exception("letsplay: failed to build auto XIs")
@@ -648,6 +721,189 @@ async def _prompt_show_xi(context, draft):
         parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     if sent and getattr(sent, "message_id", None):
         draft["showxi_msg_id"] = sent.message_id
+
+
+# ════════════════════════════════════════════════════════════════════
+# /change — swap a bench player into the XI before the toss (Lets Play)
+#
+# Mirrors the CIPL/Challenge-League /change: `out` is a Playing XI slot (1-11),
+# `in` is a bench number (12+). The bench player takes the XI place and the
+# dropped player goes to the bench. Only usable while the "Playing XI" card is
+# showing (status == "showxi") and before the toss. Because /letsplay always
+# auto-orders the batting line-up by batting rating, in-XI reordering is a no-op
+# and is rejected; only bench→XI swaps are accepted.
+# ════════════════════════════════════════════════════════════════════
+
+def _letsplay_draft_in_chat(context, chat_id, statuses=None):
+    """Return the pending Lets Play draft dict for ``chat_id`` (optionally
+    filtered by status), or None."""
+    for k, v in list(context.bot_data.items()):
+        if (isinstance(k, str) and k.startswith("lp_")
+                and isinstance(v, dict) and v.get("chat_id") == chat_id):
+            if statuses is None or v.get("status") in statuses:
+                return v
+    return None
+
+
+async def _rerender_show_xi(context, draft):
+    """Rebuild and edit the 'Playing XI' card in place from the current snapshots."""
+    session = get_session()
+    text = None
+    try:
+        host_xi, host_bench, _h = _xi_bench_for_side(
+            session, draft["host"]["user_id"], draft.get("host_xi_roster_ids"))
+        guest_xi, guest_bench, _g = _xi_bench_for_side(
+            session, draft["guest"]["user_id"], draft.get("guest_xi_roster_ids"))
+        if host_xi is not None and guest_xi is not None:
+            text = _show_xi_text(draft, host_xi, guest_xi,
+                                 host_bench=host_bench, guest_bench=guest_bench)
+        session.commit()
+    except Exception:
+        logger.exception("letsplay: re-render show XI failed")
+        return
+    finally:
+        session.close()
+    if not text:
+        return
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+        "🪙 Start Toss", callback_data=f"lp_starttoss_{draft['invite_id']}")]])
+    mid = draft.get("showxi_msg_id")
+    if mid:
+        try:
+            await context.bot.edit_message_text(
+                text, chat_id=draft["chat_id"], message_id=mid,
+                parse_mode="HTML", reply_markup=kb,
+                disable_web_page_preview=True)
+            return
+        except Exception:
+            logger.debug("letsplay /change in-place edit failed", exc_info=True)
+    sent = await context.bot.send_message(
+        draft["chat_id"], text, parse_mode="HTML", reply_markup=kb,
+        disable_web_page_preview=True)
+    if sent and getattr(sent, "message_id", None):
+        draft["showxi_msg_id"] = sent.message_id
+
+
+async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """`/change <out> <in>` for a pending Lets Play. Returns True when the command
+    targeted a Lets Play draft (so the caller should not fall through to the
+    Challenge-League /change), False otherwise."""
+    msg = update.effective_message
+    chat = update.effective_chat
+    tg = update.effective_user
+    if msg is None or chat is None or tg is None:
+        return False
+    draft = _letsplay_draft_in_chat(context, chat.id,
+                                    statuses=("pitch", "showxi", "toss"))
+    if not draft:
+        return False
+
+    side = None
+    if draft["host"]["tg_id"] == tg.id:
+        side = "host"
+    elif draft["guest"]["tg_id"] == tg.id:
+        side = "guest"
+    if side is None:
+        await msg.reply_text("❌ Only the two players in this Lets Play can use /change.")
+        return True
+    if draft.get("status") != "showxi":
+        await msg.reply_text(
+            "❌ You can only change your XI once both Playing XIs are shown and "
+            "before the toss starts.")
+        return True
+
+    xi_key = "host_xi_roster_ids" if side == "host" else "guest_xi_roster_ids"
+    args = (context.args if getattr(context, "args", None) is not None
+            else (msg.text or "").split()[1:])
+    nums = [a for a in args if str(a).lstrip("-").isdigit()]
+
+    usage = ("Usage: <code>/change &lt;out&gt; &lt;in&gt;</code> — drop an XI slot "
+             "(1–11) for a bench player (12+). e.g. <code>/change 2 13</code>")
+
+    session = get_session()
+    try:
+        xi, bench, errs = _xi_bench_for_side(
+            session, draft[side]["user_id"], draft.get(xi_key))
+        if xi is None:
+            await msg.reply_text(
+                "❌ Your roster no longer forms a legal Playing XI:\n"
+                + "\n".join(f"• {e}" for e in errs)
+                + "\n\nFix it with /autobuild or /swap, then try /letsplay again.",
+                parse_mode="HTML")
+            return True
+
+        by_id = {int(e.id): (e, p) for e, p in xi}
+        by_id.update({int(e.id): (e, p) for e, p in bench})
+        xi_ids_order = [int(e.id) for e, _ in xi]
+        # Keep the snapshot in sync with what we just rendered/validated.
+        draft[xi_key] = list(xi_ids_order)
+        bench_number = {12 + i: int(e.id) for i, (e, _p) in enumerate(bench)}
+
+        if len(nums) != 2:
+            await msg.reply_text("❌ Give two numbers.\n" + usage, parse_mode="HTML")
+            return True
+        out_no, in_no = int(nums[0]), int(nums[1])
+        if not (1 <= out_no <= 11):
+            await msg.reply_text(
+                f"❌ The first number must be an XI slot (1–11), not {out_no}.\n"
+                + usage, parse_mode="HTML")
+            return True
+        if in_no not in bench_number:
+            if not bench:
+                await msg.reply_text(
+                    "❌ You have no bench players — your roster is exactly 11.")
+            elif 1 <= in_no <= 11:
+                await msg.reply_text(
+                    "❌ Batting order is auto-set by rating, so swapping two XI "
+                    "slots has no effect. Bring a bench player in instead — "
+                    f"pick 12–{11 + len(bench)}.\n" + usage, parse_mode="HTML")
+            else:
+                await msg.reply_text(
+                    f"❌ The second number must be a bench player "
+                    f"(12–{11 + len(bench)}), not {in_no}.\n" + usage,
+                    parse_mode="HTML")
+            return True
+
+        new_ids = list(xi_ids_order)
+        new_ids[out_no - 1] = bench_number[in_no]
+        new_pairs = [by_id[i] for i in new_ids if i in by_id]
+        ok, verr = validate_xi(new_pairs)
+        if not ok:
+            await msg.reply_text(
+                "❌ That change makes an illegal Playing XI:\n"
+                + "\n".join(f"• {e}" for e in verr) + "\nNo change made.",
+                parse_mode="HTML")
+            return True
+
+        # Store the new XI in batting order.
+        new_xi = _sort_batting_order(new_pairs)
+        draft[xi_key] = [int(e.id) for e, _ in new_xi]
+        session.commit()
+    except Exception:
+        logger.exception("letsplay /change failed")
+        await msg.reply_text("⚠️ Couldn't change your XI. Try again.")
+        return True
+    finally:
+        session.close()
+
+    _rearm_setup_timeout(context, draft["invite_id"])
+    await _rerender_show_xi(context, draft)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+    return True
+
+
+async def change_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dispatch /change to the Lets Play handler first, then fall back to the
+    Challenge-League handler. A chat can't host both a Lets Play draft and a
+    Challenge draft at once, so at most one of them acts."""
+    handled = await letsplay_change_handler(update, context)
+    if handled:
+        return
+    from handlers.challenge import challenge_change_handler
+    await challenge_change_handler(update, context)
 
 
 async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

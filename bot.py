@@ -239,7 +239,6 @@ from handlers.botmatch import (
 from handlers.lucky7 import lucky7_handler, lucky7_callback
 from handlers.powerplay import powerplay_handler
 from handlers.score21 import score21_handler, score21_callback
-from handlers.statduel import statduel_handler, statduel_end_handler, statduel_callback
 from handlers.wordchase import (
     wordchase_handler, wordchase_end_handler,
     wordchase_end_callback, wordchase_message_handler,
@@ -359,7 +358,6 @@ BOT_MENU_COMMANDS = (
     ("lucky7", "Bet on two dice summing below/above/exactly 7"),
     ("powerplay", "Crash game — bet on a multiplier before it crashes"),
     ("score21", "Play Blackjack against the dealer"),
-    ("statduel", "Compare cricket player stats with dynamic multiplier betting"),
     ("wordchase", "Host a word-guessing game (group)"),
     ("bluff", "Challenge someone to a cricket trivia bluff duel"),
     ("mole", "Start a Mole Hunt social deduction game (group)"),
@@ -545,7 +543,7 @@ async def start_handler(update, context):
         "/vsbot [overs] - Play a bot opponent in chat\n"
         "/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)\n"
         "/endmatch /em - End match (fine applies)\n"
-        "/clearmatches - Admin: clear all stuck matches in this chat (no winner)\n"
+        "/clearmatches - Players in the match (or a bot admin) clear stuck matches here (no winner)\n"
         "/removematch @user - Admin: remove a player stuck in a match\n"
         "/resume /r - If buttons disappear mid-match\n"
         "/rcl - Resume a stuck Challenge League (/cipl) match\n"
@@ -974,9 +972,11 @@ def main():
         app.add_handler(CommandHandler("catch", catch_handler))
         app.add_handler(CommandHandler("bal", bal_handler))
         app.add_handler(CommandHandler("cm", challenge_handler))
-        # /change <out> <in> — swap a CIPL Playing XI player. Runs in group 0
-        # (before the group-1 league command regex, which safely ignores it).
-        app.add_handler(CommandHandler("change", challenge_change_handler))
+        # /change <out> <in> — swap a Playing XI player. Runs in group 0 (before
+        # the group-1 league command regex, which safely ignores it). The router
+        # serves both the Challenge League (/cm, /cipl) and /letsplay drafts.
+        from handlers.letsplay import change_router as _change_router
+        app.add_handler(CommandHandler("change", _change_router))
         app.add_handler(MessageHandler(
             _filters.Regex(r"^/[A-Za-z0-9_]+(?:@\w+)?(?:\s|$)"),
             challenge_league_handler,
@@ -1282,10 +1282,6 @@ def main():
 
         app.add_handler(CommandHandler(["score21", "s21"], score21_handler))
         app.add_handler(CallbackQueryHandler(score21_callback, pattern=r"^s21_"))
-
-        app.add_handler(CommandHandler(["statduel", "sd"], statduel_handler))
-        app.add_handler(CommandHandler("endstatduel", statduel_end_handler))
-        app.add_handler(CallbackQueryHandler(statduel_callback, pattern=r"^sd_"))
 
         app.add_handler(CommandHandler(["wordchase", "wc"], wordchase_handler))
         app.add_handler(CommandHandler(["endchase", "ewc"], wordchase_end_handler))
