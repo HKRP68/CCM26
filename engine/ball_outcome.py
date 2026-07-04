@@ -722,6 +722,49 @@ _SKILL_RATIO_CLAMP = (0.30, 3.33)
 _HARD_BAT_RATIO_BOOST = 1.04
 _HARD_WICKET_SKILL_MULT = 0.92
 
+# Absolute-class layer. The skill RATIO above is 1.0 at parity regardless of
+# level, which made a 60-vs-60 match statistically identical to a 90-vs-90
+# one. These exponents key selected outcomes to the batter's (or bowler's)
+# absolute rating, anchored at 75: elite line-ups hit more boundaries and
+# leave fewer balls dead; weak line-ups scratch around for singles.
+_LEVEL_ANCHOR = 75.0
+# Upper bound leaves headroom for confidence/position multipliers on 90+
+# batters (otherwise a set 90 and a set 99 clamp to the same level).
+_LEVEL_RATIO_CLAMP = (0.45, 1.50)
+_LEVEL_RUN_EXP = {
+    "Six":    0.50,
+    "Four":   0.32,
+    "Double": 0.15,
+    "Dot":   -0.22,
+}
+# Wicket: quality bowling strikes more, but a classy batter resists — the two
+# nearly cancel at parity so the wicket rate stays calibrated across levels.
+_LEVEL_WICKET_BOWL_EXP = 0.25
+_LEVEL_WICKET_BAT_EXP = 0.15
+
+# T20 wicket realism lift (non-ListA path only) — see the recalibration note
+# where it is applied in calculate_outcome. Raised from 1.30 when the duel
+# layer landed: state-mixing + momentum feedback pushed parity scores up
+# ~30 runs and wickets down; this pulls the anchor back to ~210 @ ~4.5.
+T20_WICKET_REALISM_MULT = 1.42
+# Companion re-anchor applied alongside the wicket lift (duel state-mixing
+# inflates boundary conversion at parity; trim it back to the calibration).
+T20_DUEL_RECAL = {"Four": 0.90, "Six": 0.88, "Dot": 1.10}
+
+# Hardcore rating-vs-rating gap steepener (engine.rating_duel.gap_factor).
+# Multiplies the ratio-based skill model by exp(K * tanh(gap/17)) so single
+# rating points register and big gaps become decisive (EXTREME dominance).
+# K per outcome; Wicket uses the bowler-signed gap.
+_GAP_STEEP_EXP = {
+    "Six":    0.55,
+    "Four":   0.45,
+    "Three":  0.30,
+    "Double": 0.25,
+    "Single": 0.05,
+    "Dot":   -0.40,
+}
+_GAP_STEEP_WICKET_EXP = 0.40
+
 
 def _skill_multiplier(outcome_type: str, effective_batting: float,
                       bowling: float, pitch: str, bowling_type: str,
@@ -729,12 +772,26 @@ def _skill_multiplier(outcome_type: str, effective_batting: float,
     """Return ``pitch_factor × skill_ratio**exponent`` for the multiplicative
     model. ``skill_ratio`` is batting/bowling for run outcomes (bowling/batting
     for wickets), so the factor is 1.0 at rating parity and scales smoothly."""
+    from engine.rating_duel import (
+        gap_factor, batting_tier_mults, bowling_tier_mults)
+    import math as _math
     lo, hi = _SKILL_RATIO_CLAMP
+    lvl_lo, lvl_hi = _LEVEL_RATIO_CLAMP
+    bat_level = max(lvl_lo, min(lvl_hi, effective_batting / _LEVEL_ANCHOR))
+    bowl_level = max(lvl_lo, min(lvl_hi, bowling / _LEVEL_ANCHOR))
+    gapf = gap_factor(effective_batting, bowling)   # (-1,1), + = batter on top
+    bt = batting_tier_mults(effective_batting)
+    wt = bowling_tier_mults(bowling)
     if outcome_type == "Wicket":
         ratio = max(lo, min(hi, bowling / max(1.0, effective_batting)))
         skill_mult = ratio ** (_SKILL_WICKET_EXP * SKILL_MODEL_STRENGTH)
         if pitch == "Hard":
             skill_mult *= _HARD_WICKET_SKILL_MULT
+        skill_mult *= (bowl_level ** _LEVEL_WICKET_BOWL_EXP
+                       / bat_level ** _LEVEL_WICKET_BAT_EXP)
+        # Hardcore gap steepener + class tiers (both disciplines).
+        skill_mult *= _math.exp(_GAP_STEEP_WICKET_EXP * -gapf)
+        skill_mult *= bt["wicket"] * wt["wicket"]
         pitch_factor = get_pitch_wicket_multiplier(pitch, bowling_type, config=config)
     else:
         ratio = effective_batting / max(1.0, bowling)
@@ -743,6 +800,15 @@ def _skill_multiplier(outcome_type: str, effective_batting: float,
         ratio = max(lo, min(hi, ratio))
         exp = _SKILL_RUN_EXP.get(outcome_type, 0.0) * SKILL_MODEL_STRENGTH
         skill_mult = ratio ** exp
+        skill_mult *= bat_level ** _LEVEL_RUN_EXP.get(outcome_type, 0.0)
+        # Hardcore gap steepener + class tiers.
+        skill_mult *= _math.exp(_GAP_STEEP_EXP.get(outcome_type, 0.0) * gapf)
+        if outcome_type == "Four":
+            skill_mult *= bt["four"] * wt["four"]
+        elif outcome_type == "Six":
+            skill_mult *= bt["six"] * wt["six"]
+        elif outcome_type == "Dot":
+            skill_mult *= wt["dot"]
         pitch_factor = get_pitch_run_multiplier(pitch, config=config)
     return pitch_factor * skill_mult
 
@@ -1141,6 +1207,14 @@ def calculate_outcome(
         if pitch_wear > 0.0:
             raw_weights = _apply_pitch_wear(raw_weights, pitch, pitch_wear)
             logger.debug("[PitchWear=%.3f] Applied T20 pitch deterioration.", pitch_wear)
+        # Realism recalibration: measured wicket rate at rating parity was
+        # ~3 per 20 overs (real T20 sits near 6). Lift the wicket weight so
+        # innings feel like a contest instead of a 220/3 batting parade; the
+        # drop-catch mechanic gives some of these lives straight back.
+        raw_weights["Wicket"] = raw_weights.get("Wicket", 0.0) * T20_WICKET_REALISM_MULT
+        for _k, _m in T20_DUEL_RECAL.items():
+            if _k in raw_weights:
+                raw_weights[_k] *= _m
 
     # 3.4) Rating-based performance gating — ListA only.
     # The T20 / legacy path uses the multiplicative skill model in
@@ -1153,6 +1227,26 @@ def calculate_outcome(
             batter["batting_rating"],
             bowler["bowling_rating"],
         )
+
+    # 3.45) Execution duel — this ball's explicit rating contest (T20 path).
+    # The bowler tries to execute, the batter tries to read; the winner of
+    # the exchange reshapes this delivery's weights (engine.rating_duel).
+    # State odds are pure functions of the two ratings — a big rating edge
+    # wins far more exchanges, which is where extreme dominance comes from.
+    duel_state = None
+    if not _is_lista:
+        try:
+            from engine.rating_duel import resolve_duel, approach_risk_class
+            duel_state, _dm = resolve_duel(
+                batting, bowling, approach_risk_class(batting_approach))
+            _duel_keymap = {"Dot": "dot", "Single": "one", "Double": "two",
+                            "Three": "three", "Four": "four", "Six": "six",
+                            "Wicket": "wicket", "Extras": "extras"}
+            for _wk, _mk in _duel_keymap.items():
+                if _wk in raw_weights:
+                    raw_weights[_wk] *= _dm[_mk]
+        except Exception:
+            logger.exception("rating duel failed; ignoring this ball")
 
     # 3.5) Apply Game State Momentum Engine (GSME) adjustments.
     # This layer accounts for ball history (last 18 deliveries), run-rate
@@ -1256,6 +1350,23 @@ def calculate_outcome(
         except Exception:
             logger.exception("ball_outcome weight_hook failed; ignoring this ball")
 
+    # 4d) Wicket safety valve (T20 path). The multiplicative layers (duel x
+    # GSME collapse x pressure x realism lift) can stack the wicket weight
+    # into instant-cascade territory in long auto-sims that lack /cipl's
+    # anti-cluster hook. Real T20 per-ball dismissal probability never
+    # sustains past ~12-13%; cap the NORMALIZED wicket share at 12% so
+    # collapses stay possible but a side can no longer fold inside five overs
+    # at rating parity. Capping the share (not the raw weight) means solving
+    # w/(w+other) = share for the max wicket weight, i.e. share/(1-share)*other.
+    if not _is_lista and not free_hit:
+        _share = 0.12
+        _w = raw_weights.get("Wicket", 0.0)
+        _other = max(0.0, total_weight - _w)
+        _wcap = (_share / (1.0 - _share)) * _other
+        if _other > 0.0 and _w > _wcap:
+            raw_weights["Wicket"] = _wcap
+            total_weight = sum(raw_weights.values())
+
     # 5) Normalize weights into probabilities
     # print(f"\n[calculate_outcome] Total raw weight sum: {total_weight:.6f}")
     if total_weight <= 0:
@@ -1280,6 +1391,8 @@ def calculate_outcome(
         "is_extra": False,
         "batter_out": False
     }
+    if duel_state:
+        result["duel"] = duel_state
 
     if chosen == "Wicket":
         result["type"] = "wicket"

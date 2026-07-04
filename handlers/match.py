@@ -4127,6 +4127,32 @@ def _traits_for(s, roster_id):
     return cache[key]
 
 
+def _fielding_quality_for(s):
+    """Fielding quality (35-95) of the current bowling side, cached per innings.
+
+    Players carry no dedicated fielding rating, so overall ``rating`` is the
+    proxy (falling back to the bat/bowl mean). Returns None when the state has
+    no bowling XI (defensive: engine treats None as "no fielding mechanics").
+    """
+    innings = s.get("innings", 1)
+    cache = s.setdefault("_fielding_q_cache", {})
+    key = str(innings)
+    if key in cache:
+        return cache[key]
+    xi = s.get("bowl_xi") or []
+    vals = []
+    for p in xi:
+        v = (p.get("fielding_rating") or p.get("rating")
+             or (float(p.get("bat_rating") or 50) + float(p.get("bowl_rating") or 40)) / 2)
+        try:
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    quality = max(35.0, min(95.0, sum(vals) / len(vals))) if vals else None
+    cache[key] = quality
+    return quality
+
+
 def _form_mod_for(s, roster_id):
     """Per-match cached form rating modifier for a real roster entry.
 
@@ -4167,6 +4193,37 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
     try:
         otype = oc.get("type")
         runs = oc.get("runs", 0)
+
+        # Fielding drama has its own lines — a drop is a wicket that got away,
+        # a misfield is a freebie; neither fits the per-run templates. These
+        # take precedence over the duel lines: a dropped catch can co-occur
+        # with duel="punished" on a 4/6, and the drop is the bigger story.
+        if oc.get("dropped_catch"):
+            name = striker.get("name", "The batter")
+            return (f"🫳 DROPPED! {name} gets a life — the chance goes down "
+                    f"and they steal {runs}!" if runs else
+                    f"🫳 DROPPED! {name} gets a life — a costly miss in the field!")
+        if oc.get("misfield"):
+            name = striker.get("name", "The batter")
+            return f"Misfield! {name} pinches an extra run — sloppy in the field."
+
+        # Execution-duel drama: only voice the duel when the outcome matches
+        # it (a "beaten" flag on a ball that still went for four reads wrong).
+        duel = oc.get("duel")
+        if duel == "beaten" and otype == "runs" and runs == 0:
+            name = striker.get("name", "The batter")
+            return random.choice([
+                f"Beaten all ends up! {name} has no clue about that one.",
+                f"Beauty from {bowler.get('name', 'the bowler')} — {name} plays and misses!",
+                f"Squared up completely — {name} beaten by sheer class.",
+            ])
+        if duel == "punished" and otype == "runs" and runs in (4, 6):
+            name = striker.get("name", "The batter")
+            return random.choice([
+                f"PUNISHED! A rare loose ball and {name} puts it away in style.",
+                f"That's too easy — {name} was waiting for it and dispatched it!",
+                f"No mercy! The moment the length was off, {name} pounced.",
+            ])
 
         # Map outcome to event_key
         if oc.get("free_hit") and otype == "runs" and runs in (4, 6):
@@ -4422,6 +4479,11 @@ def _calc(s, striker, bowler, shot, delivery):
         else:
             break
 
+    # Fielding side quality — activates dropped catches / misfields in the
+    # engine. Derived from the bowling XI's overall ratings (players carry no
+    # dedicated fielding rating) and cached per innings on the state.
+    fielding_quality = _fielding_quality_for(s)
+
     # Chase pressure (required rate + death overs). Honest for human deliveries
     # too — it only reflects the match situation, not who is batting.
     try:
@@ -4449,6 +4511,9 @@ def _calc(s, striker, bowler, shot, delivery):
         consec_wickets=consec_wickets,
         delivery_repeat=delivery_repeat,
         pressure=pressure,
+        balls_faced=bat_balls_faced,
+        batter_runs=bs.get("runs", 0),
+        fielding_quality=fielding_quality,
     )
 
 
