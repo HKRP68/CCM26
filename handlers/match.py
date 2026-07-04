@@ -2738,6 +2738,21 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
 # ═══════════════════════════ /playmatch ══════════════════════════════
 
 async def playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # /playmatch (and its /pm, /match aliases) has been retired in favour of the
+    # richer Mini-App match flow. Point players there instead of starting the
+    # legacy in-chat handshake.
+    await update.message.reply_text(
+        "🏏 <b>/playmatch has moved!</b>\n\n"
+        "We've upgraded to the new Mini-App match experience. "
+        "Play your matches with <b>/wpm</b> from now on — same head-to-head "
+        "cricket, smoother interface, more control.\n\n"
+        "👉 Try <code>/wpm</code> for an open lobby, or "
+        "<code>/wpm &lt;overs&gt; @user</code> to challenge someone directly.",
+        parse_mode="HTML", disable_web_page_preview=True)
+    return
+
+
+async def _legacy_playmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user; cid = update.effective_chat.id
     session = get_session()
     try:
