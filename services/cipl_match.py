@@ -1186,7 +1186,9 @@ def simulate_over(state):
                               if runs else
                               f"DROPPED! {striker_name} gets a life — "
                               f"a costly miss in the field.")
-                over_events.append({"sym": str(runs), "text": f"Dropped catch! {striker_name} survives"})
+                # Replace the generic runs event appended above — don't add a
+                # second event for the same delivery.
+                over_events[-1] = {"sym": str(runs), "text": f"Dropped catch! {striker_name} survives"}
                 _push_commentary(state, _run_event(runs), striker_name,
                                  fh_prefix + _drop_text,
                                  runs=runs, event_key=_run_key)

@@ -65,12 +65,18 @@ def gap_factor(bat_rating: float, bowl_rating: float) -> float:
 def tier_steps(rating: float) -> int:
     """Ladder position relative to the neutral 65-79 band (+4 .. -2)."""
     r = float(rating)
-    if r >= 95: return 4
-    if r >= 90: return 3
-    if r >= 85: return 2
-    if r >= 80: return 1
-    if r >= 65: return 0
-    if r >= 50: return -1
+    if r >= 95:
+        return 4
+    if r >= 90:
+        return 3
+    if r >= 85:
+        return 2
+    if r >= 80:
+        return 1
+    if r >= 65:
+        return 0
+    if r >= 50:
+        return -1
     return -2
 
 

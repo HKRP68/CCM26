@@ -337,10 +337,11 @@ def _apply_rating_diff(probs: dict, bat_rating: int, bowl_rating: int):
     discrete class tiers, and an absolute-quality layer.
 
     Gap curve (EXTREME dominance, tanh S-curve — every rating point counts,
-    smooth saturation instead of a hard clamp):
-      diff = +10  → batsman clearly on top (factor ~1.05)
-      diff = +17  → batsman dominates (factor ~1.5)
-      diff = +30+ → total mismatch (factor → ~2.0)
+    smooth saturation instead of a hard clamp). factor = 1.4 * tanh(diff/17),
+    so the magnitude approaches a ~1.4 ceiling rather than growing unbounded:
+      diff = +10  → batsman clearly on top (factor ~0.74)
+      diff = +17  → batsman dominates      (factor ~1.07)
+      diff = +30+ → near-saturated mismatch (factor → ~1.4 ceiling)
       (negative diffs mirror for the bowler)
 
     Class tiers (engine.rating_duel): crossing 80/85/90/95 (or falling

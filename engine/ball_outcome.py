@@ -1350,15 +1350,20 @@ def calculate_outcome(
         except Exception:
             logger.exception("ball_outcome weight_hook failed; ignoring this ball")
 
-    # 4d) Wicket safety valve (T20 path). The multiplicative layers (duel ×
-    # GSME collapse × pressure × realism lift) can stack the wicket weight
+    # 4d) Wicket safety valve (T20 path). The multiplicative layers (duel x
+    # GSME collapse x pressure x realism lift) can stack the wicket weight
     # into instant-cascade territory in long auto-sims that lack /cipl's
     # anti-cluster hook. Real T20 per-ball dismissal probability never
-    # sustains past ~12-13%; cap the share at 15% so collapses stay possible
-    # but a side can no longer fold inside five overs at rating parity.
+    # sustains past ~12-13%; cap the NORMALIZED wicket share at 12% so
+    # collapses stay possible but a side can no longer fold inside five overs
+    # at rating parity. Capping the share (not the raw weight) means solving
+    # w/(w+other) = share for the max wicket weight, i.e. share/(1-share)*other.
     if not _is_lista and not free_hit:
-        _wcap = 0.12 * total_weight
-        if raw_weights.get("Wicket", 0.0) > _wcap:
+        _share = 0.12
+        _w = raw_weights.get("Wicket", 0.0)
+        _other = max(0.0, total_weight - _w)
+        _wcap = (_share / (1.0 - _share)) * _other
+        if _other > 0.0 and _w > _wcap:
             raw_weights["Wicket"] = _wcap
             total_weight = sum(raw_weights.values())
 

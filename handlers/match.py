@@ -4194,6 +4194,19 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
         otype = oc.get("type")
         runs = oc.get("runs", 0)
 
+        # Fielding drama has its own lines — a drop is a wicket that got away,
+        # a misfield is a freebie; neither fits the per-run templates. These
+        # take precedence over the duel lines: a dropped catch can co-occur
+        # with duel="punished" on a 4/6, and the drop is the bigger story.
+        if oc.get("dropped_catch"):
+            name = striker.get("name", "The batter")
+            return (f"🫳 DROPPED! {name} gets a life — the chance goes down "
+                    f"and they steal {runs}!" if runs else
+                    f"🫳 DROPPED! {name} gets a life — a costly miss in the field!")
+        if oc.get("misfield"):
+            name = striker.get("name", "The batter")
+            return f"Misfield! {name} pinches an extra run — sloppy in the field."
+
         # Execution-duel drama: only voice the duel when the outcome matches
         # it (a "beaten" flag on a ball that still went for four reads wrong).
         duel = oc.get("duel")
@@ -4211,17 +4224,6 @@ def _maybe_pick_commentary(oc, striker, bowler, runs_for_commentary=0):
                 f"That's too easy — {name} was waiting for it and dispatched it!",
                 f"No mercy! The moment the length was off, {name} pounced.",
             ])
-
-        # Fielding drama has its own lines — a drop is a wicket that got away,
-        # a misfield is a freebie; neither fits the per-run templates.
-        if oc.get("dropped_catch"):
-            name = striker.get("name", "The batter")
-            return (f"🫳 DROPPED! {name} gets a life — the chance goes down "
-                    f"and they steal {runs}!" if runs else
-                    f"🫳 DROPPED! {name} gets a life — a costly miss in the field!")
-        if oc.get("misfield"):
-            name = striker.get("name", "The batter")
-            return f"Misfield! {name} pinches an extra run — sloppy in the field."
 
         # Map outcome to event_key
         if oc.get("free_hit") and otype == "runs" and runs in (4, 6):
