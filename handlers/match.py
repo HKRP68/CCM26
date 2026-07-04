@@ -1983,20 +1983,55 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     cid = chat.id
 
-    if not await _is_chat_admin(context, chat, tg.id):
-        await update.message.reply_text(
-            "🚫 <b>Admins only.</b> Only a group admin can use /clearmatches.",
-            parse_mode="HTML")
-        return
-
     session = get_session()
     cleared = []
+    wipe_chat_memory = True
     try:
         rows = (session.query(Match)
                 .filter(Match.chat_id == cid,
                         Match.status.in_(ACTIVE_MATCH_STATUSES))
                 .all())
-        for m in rows:
+
+        # Only the users who were actually playing a match in this chat (either
+        # side) — plus a configured global bot admin ("me") — may clear it. Group
+        # admins no longer qualify just for being admins; they must have been in
+        # the match. When there is nothing to clear anyone may run the command
+        # (it's harmless and just reports the chat is already clear).
+        #
+        # A non-admin may clear ONLY the matches they were in: if two matches
+        # somehow co-exist in one chat, a player from one must not be able to end
+        # a different pair's game. So they clear their own rows and any co-existing
+        # match is left untouched.
+        rows_to_clear = rows
+        if rows:
+            is_admin = False
+            try:
+                from handlers.forward_broadcast import is_forward_admin
+                is_admin = bool(is_forward_admin(tg.id))
+            except Exception:
+                logger.debug("clearmatches: is_forward_admin check failed",
+                             exc_info=True)
+            if not is_admin:
+                me = (session.query(User)
+                      .filter(User.telegram_id == tg.id).first())
+                my_uid = me.id if me is not None else None
+                rows_to_clear = [
+                    m for m in rows
+                    if my_uid is not None
+                    and (m.user1_id == my_uid or m.user2_id == my_uid)]
+                if not rows_to_clear:
+                    await update.message.reply_text(
+                        "🚫 <b>Only the players in the match can clear it.</b>\n"
+                        "Ask one of the two players who were playing "
+                        "(or a bot admin) to run /clearmatches.",
+                        parse_mode="HTML")
+                    return
+                # Chat-wide in-memory teardown (lobbies/drafts) is safe only when
+                # every active match is being cleared; otherwise scope it to the
+                # cleared match ids so the co-existing match stays intact.
+                wipe_chat_memory = (len(rows_to_clear) == len(rows))
+
+        for m in rows_to_clear:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
             # No team won — leave the result blank.
@@ -2039,7 +2074,9 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         session.close()
 
     # In-memory teardown: cleared DB matches + any leftover state for this chat.
-    mem_mids = _clear_chat_memory(context, cid)
+    # Skip the chat-wide wipe when a non-admin cleared only a subset (a
+    # co-existing match must keep its in-memory state).
+    mem_mids = _clear_chat_memory(context, cid) if wipe_chat_memory else set()
     for mid in set(cleared) | mem_mids:
         try:
             cleanup_state(context, mid)
