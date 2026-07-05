@@ -514,6 +514,7 @@ _PITCH_DESC = {
     "Flat": "batting paradise, run-fest",
     "Green": "seamers dominate, low scoring",
     "Bouncy": "extra carry, pace & bounce",
+    "Even": "neutral, balanced T20 track",
 }
 
 

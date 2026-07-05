@@ -688,10 +688,10 @@ def _make_last_over_drama_hook(is_last_over, is_live_chase):
     except the innings' final over, so earlier overs are unchanged."""
     if not is_last_over:
         return None
-    six = 1.18 if is_live_chase else 1.12
-    four = 1.12 if is_live_chase else 1.08
-    wkt = 1.15 if is_live_chase else 1.10
-    dot = 0.90
+    six = 1.32 if is_live_chase else 1.24
+    four = 1.20 if is_live_chase else 1.14
+    wkt = 1.24 if is_live_chase else 1.16
+    dot = 0.84
 
     def _hook(raw_weights):
         rw = dict(raw_weights)

@@ -145,6 +145,7 @@ PITCH_MODS = {
     "Dry":    {"dot": +0.5, "W": +0.3, "6": -0.5},                    # neutral-bowler
     "Dusty":  {"W": +0.5, "dot": +1, "1": +0.5, "6": -0.5},           # spin grip
     "Hard":   {"4": +0.5, "6": +0.5, "1": +0.3, "W": -0.3, "dot": -0.5},  # bouncy
+    "Even":   {},                                                        # neutral, balanced
     "Flat":   {"4": +0.5, "6": +0.5, "1": +0.5, "dot": -0.5, "W": -0.3},  # batting-friendly
     "Dead":   {"4": +1.0, "6": +1.0, "1": +0.5, "dot": -1.0, "W": -0.8},  # lifeless, run-fest
 }

@@ -67,12 +67,13 @@ commentary_templates = {
 # 2) Pitch-influence definitions (60% weight)
 # -----------------------------------------------------------------------------
 PITCH_RUN_FACTOR = {
-    "Green":  0.98,   # seam-friendly but competitive → par ~150-160
-    "Dry":    1.00,   # spin-friendly → ~178 average
-    "Dusty":  1.04,   # worn turner → ~183 average
-    "Bouncy": 1.12,   # hard/bouncy carry → ~187 average
-    "Hard":   1.10,   # balanced (batting edge) → ~193
-    "Flat":   1.20 * 0.90,   # batting paradise → ~219
+    "Green":  0.98,   # seaming/swing → par ~123 (bowler's dream)
+    "Dusty":  1.04,   # sharp turn → par ~144
+    "Dry":    1.00,   # slow turn → par ~155
+    "Bouncy": 1.12,   # pace-friendly carry → par ~159
+    "Even":   1.06,   # neutral, balanced → par ~172
+    "Hard":   1.10,   # true bounce (batting edge) → par ~183
+    "Flat":   1.20 * 0.90,   # batting paradise → par ~209
     "Dead":   1.30    # batting festival → ~260
 }
 
@@ -115,7 +116,16 @@ PITCH_WICKET_FACTOR = {
     },
     "Flat": {
         # Almost no one “takes” wickets easily on Flat—batsmen dominate.
-        "default":      0.85
+        "default":      0.88
+    },
+    "Even": {
+        # Neutral surface — pace and spin share the wickets evenly.
+        "Fast":         1.03,
+        "Fast-medium":  1.01,
+        "Medium-fast":  1.00,
+        "Leg spin":     1.02,
+        "Off spin":     1.01,
+        "default":      0.95
     },
     "Dead": {
         # Very tough for bowlers on Dead track—wickets are rare
@@ -160,67 +170,79 @@ def get_pitch_wicket_multiplier(pitch: str, bowling_type: str, config=None) -> f
 # 3) Pitch-specific outcome probabilities (realistic scoring patterns)
 # -----------------------------------------------------------------------------
 PITCH_SCORING_MATRIX = {
+    # Calibrated to per-pitch first-innings means (par): Green~123 Dusty~144
+    # Dry~155 Bouncy~159 Even~172 Hard~183 Flat~209. Kept in sync with the
+    # authoritative ground_conditions.yaml pitch_profiles (this dict is the
+    # fallback used only when the YAML config is unavailable).
     "Green": {
-        "Dot":     0.250,  # Seam help, but strike rotation keeps the board moving
-        "Single":  0.375,  # More 1s — reward working the gaps on a green top
-        "Double":  0.117,  # More 2s
-        "Three":   0.005,  # ~0.6 threes per innings (very rare)
-        "Four":    0.090,
-        "Six":     0.040,
-        "Wicket":  0.050,  # Reduced — fewer collapses (par ~150-160)
-        "Extras":  0.073
-    },
-    "Dry": {
-        "Dot":     0.23,   # Spin-friendly; scoring needs application
-        "Single":  0.365,
-        "Double":  0.12,
-        "Three":   0.007,  # ~1 three per innings
-        "Four":    0.115,
-        "Six":     0.05,
-        "Wicket":  0.05,   # Favors spinners
-        "Extras":  0.063
+        "Dot":     0.394,  # Seaming/swing — pace dominates, hard to score
+        "Single":  0.330,
+        "Double":  0.081,
+        "Three":   0.005,
+        "Four":    0.056,
+        "Six":     0.026,
+        "Wicket":  0.048,
+        "Extras":  0.060
     },
     "Dusty": {
-        "Dot":     0.245,  # Worn turner; spinners influential, par scoring
-        "Single":  0.35,
-        "Double":  0.12,
-        "Three":   0.007,
-        "Four":    0.115,
-        "Six":     0.055,
-        "Wicket":  0.053,
-        "Extras":  0.055
+        "Dot":     0.348,  # Sharp turn — spin-attack, low-scoring dogfight
+        "Single":  0.340,
+        "Double":  0.092,
+        "Three":   0.006,
+        "Four":    0.078,
+        "Six":     0.042,
+        "Wicket":  0.044,
+        "Extras":  0.050
+    },
+    "Dry": {
+        "Dot":     0.324,  # Slow turn — spin bites in the middle overs
+        "Single":  0.350,
+        "Double":  0.101,
+        "Three":   0.006,
+        "Four":    0.085,
+        "Six":     0.044,
+        "Wicket":  0.040,
+        "Extras":  0.050
     },
     "Bouncy": {
-        "Dot":     0.245,  # Hard, bouncy carry; pace threat but batters score
-        "Single":  0.34,
-        "Double":  0.12,
-        "Three":   0.007,
-        "Four":    0.12,
-        "Six":     0.06,
-        "Wicket":  0.058,
-        "Extras":  0.05
+        "Dot":     0.336,  # Extra bounce — pace-friendly, tricky strokeplay
+        "Single":  0.350,
+        "Double":  0.099,
+        "Three":   0.006,
+        "Four":    0.079,
+        "Six":     0.045,
+        "Wicket":  0.040,
+        "Extras":  0.045
+    },
+    "Even": {
+        "Dot":     0.323,  # Neutral, balanced — the standard T20 track
+        "Single":  0.350,
+        "Double":  0.106,
+        "Three":   0.006,
+        "Four":    0.086,
+        "Six":     0.053,
+        "Wicket":  0.036,
+        "Extras":  0.040
     },
     "Hard": {
-        # 65/35 Batting/Bowling split — batters favored but bowlers compete
-        "Dot":     0.30,
-        "Single":  0.342,
-        "Double":  0.11,
-        "Three":   0.008,  # ~1 three per innings
-        "Four":    0.09,
-        "Six":     0.05,
-        "Wicket":  0.06,
-        "Extras":  0.04
+        "Dot":     0.335,  # True bounce, good carry — slight batting edge
+        "Single":  0.350,
+        "Double":  0.099,
+        "Three":   0.006,
+        "Four":    0.088,
+        "Six":     0.053,
+        "Wicket":  0.034,
+        "Extras":  0.035
     },
     "Flat": {
-        # Pure batting paradise
-        "Dot":     0.20,   # Very low dot %
-        "Single":  0.302,
-        "Double":  0.14,
-        "Three":   0.008,  # ~1 three per innings
-        "Four":    0.18,   # High boundaries
-        "Six":     0.12,   # High sixes
-        "Wicket":  0.03,   # Very low wickets
-        "Extras":  0.02
+        "Dot":     0.351,  # Batting paradise — 200+ thrillers
+        "Single":  0.340,
+        "Double":  0.097,
+        "Three":   0.006,
+        "Four":    0.091,
+        "Six":     0.060,
+        "Wicket":  0.030,
+        "Extras":  0.025
     },
     "Dead": {
         # Batting paradise (200+ average, ~4-5 wickets)
@@ -312,6 +334,7 @@ LISTA_DEATH_MATRIX = {
 LISTA_RUN_FACTORS = {
     "Green": 0.68,   # Strong bowler-friendly suppression
     "Dry":   0.72,   # Spin-friendly
+    "Even":  0.92,   # Neutral, balanced
     "Hard":  0.98,   # Baseline 280-320 target band
     "Flat":  1.21,   # High-scoring 320-360 target band
     "Dead":  1.18,   # Batting festival — aligns with par factor 1.18 (~340 runs)
@@ -746,7 +769,7 @@ _LEVEL_WICKET_BAT_EXP = 0.15
 # where it is applied in calculate_outcome. Raised from 1.30 when the duel
 # layer landed: state-mixing + momentum feedback pushed parity scores up
 # ~30 runs and wickets down; this pulls the anchor back to ~210 @ ~4.5.
-T20_WICKET_REALISM_MULT = 1.42
+T20_WICKET_REALISM_MULT = 1.15
 # Companion re-anchor applied alongside the wicket lift (duel state-mixing
 # inflates boundary conversion at parity; trim it back to the calibration).
 T20_DUEL_RECAL = {"Four": 0.90, "Six": 0.88, "Dot": 1.10}

@@ -25,6 +25,8 @@ _FALLBACK = {
               "run_factor": 0.85, "ideal_toss": "bat", "favours": "Spin"},
     "Hard":  {"description": "True bounce with carry — balanced, slight batting edge",
               "run_factor": 1.10, "ideal_toss": "bat", "favours": "Balanced"},
+    "Even":  {"description": "Neutral, balanced surface — bat and ball share honours",
+              "run_factor": 1.06, "ideal_toss": "bat", "favours": "Balanced"},
     "Flat":  {"description": "Even bounce — batting paradise, bowlers need skill",
               "run_factor": 1.08, "ideal_toss": "bowl", "favours": "Batting"},
     "Dead":  {"description": "Lifeless track — batting festival guaranteed",
@@ -34,7 +36,7 @@ _FALLBACK = {
 # Pitch-correct toss choice (from SimCricketX format_config.correct_toss_choice).
 # "bat" = bat first; "bowl" = bowl first.
 _IDEAL_TOSS = {"Green": "bowl", "Dry": "bat", "Hard": "bat",
-               "Flat": "bowl", "Dead": "bowl"}
+               "Even": "bat", "Flat": "bowl", "Dead": "bowl"}
 
 _cache = None
 

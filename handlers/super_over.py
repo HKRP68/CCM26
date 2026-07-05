@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 _PITCH_MAP = {
     "Hard": "Hard", "Flat": "Flat", "Green": "Green", "Dry": "Dry",
     "Dusty": "Dry", "Dust": "Dry", "Bouncy": "Hard", "Dead": "Dead",
+    "Even": "Hard",
 }
 
 # Short delay (seconds) between showing a ball's result and the next prompt so
