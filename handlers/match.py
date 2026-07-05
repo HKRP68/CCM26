@@ -4566,6 +4566,7 @@ def _calc(s, striker, bowler, shot, delivery):
         balls_faced=bat_balls_faced,
         batter_runs=bs.get("runs", 0),
         fielding_quality=fielding_quality,
+        bat_hand=striker.get("bat_hand"),
     )
 
 

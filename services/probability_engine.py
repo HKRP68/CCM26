@@ -328,6 +328,47 @@ def _get_shot_mods(shot):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# HANDEDNESS MATCHUP — left/right-hand batter vs bowling type & arm
+# ═══════════════════════════════════════════════════════════════════════
+# Mirrors engine/ball_outcome.py (the /cipl engine) so both engines field
+# the left/right-hander contest alike. Spin turning AWAY from the bat (the
+# edge threat) and the left-arm-pace angle across a right-hander lift the
+# wicket chance and mildly suppress boundaries.
+#
+# This generalises ball_outcome.py's rule (which assumes a right arm) by
+# using the bowling arm, so it is also correct for left-arm spinners:
+#   • Finger spin (off-spin bucket) turns away from the OPPOSITE-hand batter
+#       right-arm off-spin → away from LHB;  left-arm orthodox → away from RHB
+#   • Wrist spin (leg-spin bucket) turns away from the SAME-hand batter
+#       right-arm leg-spin → away from RHB;  left-arm wrist → away from LHB
+#
+# No-op unless BOTH hands are known, so every legacy caller is unaffected.
+
+_HAND_SPIN_BOOST = 1.15   # spin turning away from the bat
+_HAND_LEFTPACE_BOOST = 1.10   # left-arm pace angling across a right-hander
+_HAND_LEFTPACE_GREEN = 1.08   # extra seam movement on a Green pitch
+
+
+def _handedness_boost(bowler_key, bowl_hand, bat_hand, pitch) -> float:
+    """Return a wicket multiplier (>=1.0) for the hand matchup. 1.0 = neutral."""
+    if not bat_hand or not bowl_hand:
+        return 1.0
+    boost = 1.0
+    if bowler_key == "Off Spinner":       # finger spin
+        if bat_hand != bowl_hand:
+            boost *= _HAND_SPIN_BOOST
+    elif bowler_key == "Leg Spinner":     # wrist spin
+        if bat_hand == bowl_hand:
+            boost *= _HAND_SPIN_BOOST
+    elif bowler_key in ("Fast Pacer", "Medium Pacer"):
+        if bowl_hand == "Left" and bat_hand == "Right":
+            boost *= _HAND_LEFTPACE_BOOST
+            if pitch == "Green":
+                boost *= _HAND_LEFTPACE_GREEN
+    return boost
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # RATING DIFFERENTIAL
 # ═══════════════════════════════════════════════════════════════════════
 # Higher-rated player dominates. Magnitude scales with diff.
@@ -599,7 +640,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
                       pressure=0.0, balls_faced=None, batter_runs=None,
-                      fielding_quality=None):
+                      fielding_quality=None, bat_hand=None):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -619,6 +660,11 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
       Catch/stumping dismissals can be DROPPED (converted to runs, flagged
       "dropped_catch"), and dots/singles can leak a misfield extra run
       (flagged "misfield").
+
+    bat_hand (None → no-op): the striker's batting hand ("Left"/"Right").
+      Combined with bowl_hand it drives the handedness matchup (Layer 7b):
+      spin turning away from the bat and the left-arm pace angle across a
+      right-hander lift the wicket chance and mildly suppress boundaries.
 
     Returns dict: {"type": "runs"|"wicket"|"wide"|"noball"|"legbye",
                    "runs": int, "how": str, "traits_activated": [..],
@@ -659,6 +705,16 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     # Layer 7: Shot
     # Layer 7: Shot — use DB-backed mods if available, fallback to SHOT_MODS
     _apply_mods(probs, _get_shot_mods(shot))
+
+    # Layer 7b: Handedness matchup — spin turning away from the bat and the
+    # left-arm pace angle across a right-hander. No-op unless bat_hand AND
+    # bowl_hand are both known, so legacy callers are unaffected.
+    _mb = _handedness_boost(bowler_key, bowl_hand, bat_hand, pitch)
+    if _mb > 1.0:
+        probs["W"] *= _mb
+        _supp = 1.0 / (_mb ** 0.5)   # mild inverse boundary suppression
+        probs["4"] *= _supp
+        probs["6"] *= _supp
 
     # Layer 8: Rating differential + absolute quality — the dominance modifier
     _apply_rating_diff(probs, bat_rating, bowl_rating)

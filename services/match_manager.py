@@ -396,6 +396,7 @@ class MatchManager:
             striker.get("bat_rating", 70),
             bowler.get("bowl_rating", 70),
             pitch_wear=pitch_wear,
+            bat_hand=striker.get("bat_hand"),
         )
 
     # ── Innings / match end ─────────────────────────────────────────────────
