@@ -761,7 +761,6 @@ class CricketSimulationEngine:
             bowler.balls_this_spell += 1
             striker.balls_faced += 1
             match_state.partnership_balls += 1
-            this_free_hit = pending_free_hit
             pending_free_hit = False  # consumed by this legal ball
 
             if result["is_wicket"]:
@@ -801,6 +800,10 @@ class CricketSimulationEngine:
             striker, non_striker = non_striker, striker
             match_state.current_over += 1
             match_state.current_ball = 0
+        else:
+            # Incomplete over (all-out / target chased): report the number of
+            # legal balls actually bowled, not the last zero-based index.
+            match_state.current_ball = legal
 
         return {
             "balls": balls,
