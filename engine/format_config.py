@@ -330,6 +330,7 @@ _LISTA = FormatConfig(
     target_scores={
         "Green": 220,
         "Dry":   230,
+        "Even":  275,   # Neutral surface (par factor 0.95)
         "Hard":  285,
         "Flat":  320,
         "Dead":  340,
@@ -338,6 +339,7 @@ _LISTA = FormatConfig(
         # ListA day-match toss logic (pitch wear only, no dew)
         "Green": "bowl",   # New-ball seam threat; pitch stays decent all day
         "Dry":   "bat",    # Pitch deteriorates; spin brutal in 2nd innings
+        "Even":  "bat",    # Neutral surface; slight first-innings edge
         "Hard":  "bowl",   # Balanced; slight chase advantage
         "Flat":  "bowl",   # High totals still chaseable
         "Dead":  "bat",    # Set a huge total; spinners can do nothing anyway
@@ -350,6 +352,7 @@ _LISTA = FormatConfig(
         #   - Outfield faster from moisture (Four chance ↑)
         "Green": "bowl",   # Already bowl; dew makes chase even easier
         "Dry":   "bowl",   # Overrides day "bat" — dew kills spin in overs 25-50
+        "Even":  "bowl",   # Dew tilts the neutral surface to the chaser
         "Hard":  "bowl",   # Already bowl; unchanged
         "Flat":  "bowl",   # Already bowl; unchanged
         "Dead":  "bowl",   # Overrides day "bat" — batting paradise + dew = huge chase
@@ -361,6 +364,7 @@ _LISTA = FormatConfig(
         # A required rate above these baselines represents escalating pressure.
         "Green": 4.8,   # Seam-friendly: low-scoring; 5+ RPO is already urgent
         "Dry":   5.0,   # Spin-friendly: modest target, 5+ RPO is challenging
+        "Even":  5.5,   # Neutral baseline between Dry and Hard
         "Hard":  6.0,   # Balanced baseline for ODI cricket
         "Flat":  7.0,   # High-scoring; 7+ RPO still challenging even on flat deck
         "Dead":  7.5,   # Batting paradise; 8+ RPO is genuinely hard to sustain
