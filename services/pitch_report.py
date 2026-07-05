@@ -26,7 +26,7 @@ import random
 from html import escape
 
 # Surfaces offered in Challenge Leagues.
-PITCH_TYPES = ["Dry", "Dusty", "Hard", "Flat", "Green", "Bouncy"]
+PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
 
 # Weather set (matches the conditions spec).
 WEATHERS = [
@@ -43,6 +43,7 @@ _PITCH_BLURB = {
     "Flat": "Batting paradise, run-fest",
     "Green": "Seam movement, pace dominates",
     "Bouncy": "Extra carry, pace & bounce",
+    "Even": "Neutral, balanced contest",
 }
 
 # Base effectiveness (0-5) before conditions are layered on.
@@ -54,12 +55,13 @@ _PITCH_BASE = {
     "Flat":   (2, 2, 5),
     "Green":  (5, 1, 2),
     "Bouncy": (4, 2, 3),
+    "Even":   (3, 3, 3),
 }
 
 # Default surface a toss should be won to do — overridden by conditions below.
 _PITCH_TOSS = {
     "Dry": "bat", "Dusty": "bat", "Hard": "bat",
-    "Flat": "bat", "Green": "bowl", "Bouncy": "bowl",
+    "Flat": "bat", "Green": "bowl", "Bouncy": "bowl", "Even": "bat",
 }
 
 # Typical grass cover per surface (a weighted pick is taken around this).
@@ -70,6 +72,7 @@ _PITCH_GRASS = {
     "Flat": ["Little", "Little", "No Grass"],
     "Dry": ["Little", "No Grass", "Little"],
     "Dusty": ["No Grass", "No Grass", "Little"],
+    "Even": ["Little", "Medium", "Little"],
 }
 
 _EFF_LABEL = {0: "Minimal", 1: "Low", 2: "Moderate", 3: "Good",

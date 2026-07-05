@@ -155,16 +155,18 @@ _T20_PAR_SCORES: Dict[int, float] = {
     20: 190.0,
 }
 
-# Per-pitch multipliers on the neutral curve, aligned to calibrated full-pipeline
-# means: Green~181 Dry~180 Dusty~183 Bouncy~187 Hard~193 Flat~219 Dead~261.
+# Per-pitch multipliers on the neutral curve (top ~190), aligned to the
+# calibrated full-pipeline means: Green~123 Dusty~144 Dry~155 Bouncy~159
+# Even~172 Hard~183 Flat~209 Dead~260. Factor ≈ target_mean / 190.
 _T20_PITCH_PAR_FACTORS: Dict[str, float] = {
-    "Green":  0.94,
-    "Dry":    0.93,
-    "Dusty":  0.95,
-    "Bouncy": 0.97,
-    "Hard":   1.00,
-    "Flat":   1.13,
-    "Dead":   1.35,
+    "Green":  0.65,
+    "Dusty":  0.76,
+    "Dry":    0.82,
+    "Bouncy": 0.84,
+    "Even":   0.91,
+    "Hard":   0.96,
+    "Flat":   1.10,
+    "Dead":   1.37,
 }
 
 _T20 = FormatConfig(
@@ -186,12 +188,13 @@ _T20 = FormatConfig(
     },
     extras_per_innings=5,
     target_scores={
-        "Green":  180,
-        "Dry":    180,
-        "Dusty":  184,
-        "Bouncy": 188,
-        "Hard":   195,
-        "Flat":   219,
+        "Green":  123,
+        "Dusty":  144,
+        "Dry":    155,
+        "Bouncy": 159,
+        "Even":   172,
+        "Hard":   183,
+        "Flat":   209,
         "Dead":   260,
     },
     correct_toss_choice={
@@ -199,6 +202,7 @@ _T20 = FormatConfig(
         "Dry":    "bat",   # Spin worsens with wear → bat first
         "Dusty":  "bat",   # Turner deteriorates → bat first
         "Bouncy": "bowl",  # Pace/bounce best with new ball → bowl first
+        "Even":   "bat",   # Neutral track; slight first-innings edge → bat first
         "Hard":   "bat",   # Good batting surface → bat first
         "Flat":   "bowl",  # Run-fest; dew helps chaser → bowl first
         "Dead":   "bowl",  # Extreme batting; chaser advantaged → bowl first
@@ -210,6 +214,7 @@ _T20 = FormatConfig(
         "Dry":    "bowl",   # Dew neutralises spin in 2nd innings → bowl first
         "Dusty":  "bowl",   # Dew kills turn → bowl first
         "Bouncy": "bowl",   # Already bowl; unchanged
+        "Even":   "bowl",   # Dew tilts the neutral track to the chaser → bowl first
         "Hard":   "bowl",   # Chase with dew advantage → bowl first
         "Flat":   "bowl",   # Already bowl; unchanged
         "Dead":   "bowl",   # Already bowl; unchanged
@@ -217,12 +222,13 @@ _T20 = FormatConfig(
     rrr_baseline={
         # "Neutral" RPO for each pitch in T20 context.
         # GSME divides actual RRR by this to get a normalised aggression index.
-        "Green":  8.0,
-        "Dry":    8.0,
-        "Dusty":  8.5,
-        "Bouncy": 9.0,
-        "Hard":   9.5,
-        "Flat":  11.0,
+        "Green":  6.2,
+        "Dusty":  7.2,
+        "Dry":    7.8,
+        "Bouncy": 8.0,
+        "Even":   8.6,
+        "Hard":   9.2,
+        "Flat":  10.5,
         "Dead":  12.5,
     },
 )
@@ -294,6 +300,7 @@ _LISTA_PAR_SCORES: Dict[int, float] = {
 _LISTA_PITCH_PAR_FACTORS: Dict[str, float] = {
     "Green": 0.76,   # ~220 expected
     "Dry":   0.80,   # ~232 expected
+    "Even":  0.95,   # ~275 expected (neutral)
     "Hard":  1.00,   # ~290 expected (baseline)
     "Flat":  1.10,   # ~319 expected
     "Dead":  1.18,   # ~342 expected
@@ -323,6 +330,7 @@ _LISTA = FormatConfig(
     target_scores={
         "Green": 220,
         "Dry":   230,
+        "Even":  275,   # Neutral surface (par factor 0.95)
         "Hard":  285,
         "Flat":  320,
         "Dead":  340,
@@ -331,6 +339,7 @@ _LISTA = FormatConfig(
         # ListA day-match toss logic (pitch wear only, no dew)
         "Green": "bowl",   # New-ball seam threat; pitch stays decent all day
         "Dry":   "bat",    # Pitch deteriorates; spin brutal in 2nd innings
+        "Even":  "bat",    # Neutral surface; slight first-innings edge
         "Hard":  "bowl",   # Balanced; slight chase advantage
         "Flat":  "bowl",   # High totals still chaseable
         "Dead":  "bat",    # Set a huge total; spinners can do nothing anyway
@@ -343,6 +352,7 @@ _LISTA = FormatConfig(
         #   - Outfield faster from moisture (Four chance ↑)
         "Green": "bowl",   # Already bowl; dew makes chase even easier
         "Dry":   "bowl",   # Overrides day "bat" — dew kills spin in overs 25-50
+        "Even":  "bowl",   # Dew tilts the neutral surface to the chaser
         "Hard":  "bowl",   # Already bowl; unchanged
         "Flat":  "bowl",   # Already bowl; unchanged
         "Dead":  "bowl",   # Overrides day "bat" — batting paradise + dew = huge chase
@@ -354,6 +364,7 @@ _LISTA = FormatConfig(
         # A required rate above these baselines represents escalating pressure.
         "Green": 4.8,   # Seam-friendly: low-scoring; 5+ RPO is already urgent
         "Dry":   5.0,   # Spin-friendly: modest target, 5+ RPO is challenging
+        "Even":  5.5,   # Neutral baseline between Dry and Hard
         "Hard":  6.0,   # Balanced baseline for ODI cricket
         "Flat":  7.0,   # High-scoring; 7+ RPO still challenging even on flat deck
         "Dead":  7.5,   # Batting paradise; 8+ RPO is genuinely hard to sustain

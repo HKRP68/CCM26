@@ -21,7 +21,7 @@ UMPIRES = [
     "Jayaraman Madanagopal", "Sam Nogajski", "Langton Rusere", "Asif Yaqoob",
 ]
 
-PITCH_TYPES = ["Dry", "Dusty", "Hard", "Flat", "Green", "Bouncy"]
+PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
 WEATHER = ["Mostly Sunny", "Sunny", "Cloudy", "Partly Cloudy", "Overcast"]
 MATCH_EXPIRE = 30  # seconds
 

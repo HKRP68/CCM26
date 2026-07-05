@@ -67,6 +67,7 @@ def _pitch_hint_vsbot(pitch_type):
     return {
         "Flat":  "Batters' paradise — high scores expected.",
         "Hard":  "Bouncy, true bounce — rewards aggressive shots.",
+        "Even":  "Neutral, balanced track — bat and ball share honours.",
         "Green": "Seam movement up front — bowlers will love early overs.",
         "Dry":   "Slow and low — tough to time the ball cleanly.",
         "Dusty": "Spinners will turn it square as it wears.",

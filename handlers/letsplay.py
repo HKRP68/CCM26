@@ -49,7 +49,7 @@ LETSPLAY_OVERS = 20    # /letsplay is always a 20-over contest
 
 _PITCH_EMOJI = {
     "Dry": "🟫", "Dusty": "🟤", "Hard": "🟩",
-    "Flat": "⬜", "Green": "🌿", "Bouncy": "🔵",
+    "Flat": "⬜", "Green": "🌿", "Bouncy": "🔵", "Even": "🟨",
 }
 
 
