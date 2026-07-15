@@ -19,6 +19,7 @@ import random
 
 from engine.ball_outcome import calculate_outcome
 from engine import chase_chance
+from engine import ground_config
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
     make_ball_event,
@@ -91,14 +92,80 @@ def is_hundred(state):
 # 18th over"). STRENGTH scales how hard the matrix nudge pulls (0 = off).
 #
 # Two layers, applied during the 2nd innings only:
-#   1. A mild always-on chasing assist (the real "knows the target / dew" edge)
-#      that balances batting-first vs chasing toward ~50-50 overall.
+#   1. The spec total-band chase baseline (see _chase_baseline_effects, applied
+#      in simulate_over) that tilts the whole chase toward the pitch's Chase Win%.
 #   2. The matrix steer on top, in the back overs, for situational realism
 #      (e.g. 30 needed with ≤5 down stays a genuine ~56% chase).
 CHASE_STEER_BALLS = 30
 CHASE_STEER_STRENGTH = 0.30
-CHASE_BASELINE_ASSIST = {"boundary_modifier": 1.065, "wicket_modifier": 0.905,
-                         "dot_bonus": -0.015}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PITCH RULE ENGINE — spec-driven realism layers
+# ══════════════════════════════════════════════════════════════════════
+# Three global rules from the Pitch Rule Engine spec, each implemented as a
+# BOUNDED weight nudge layered on top of the existing rating/trait weights
+# (never an override — ratings and traits still decide the raw distribution):
+#
+#   Sub-100 Rule   — a side bowled out under ~100 is very rare; lower-order
+#                    hitting pushes the score to 110+ (see _make_floor_hook).
+#   Variance Rule  — the Ceiling is a cap, not a baseline; totals fluctuate
+#                    between Floor and Ceiling, most near Par (_make_variance_hook).
+#   Fighting Match — chases stay close and deep; a low-win-probability side loses
+#                    by ~10-15 rather than capitulating (_make_no_collapse_hook +
+#                    the total-band chase baseline set at the innings break).
+
+# (Sub-100) The tail digs in once 5+ down and short of the pitch's floor.
+FLOOR_MIN_WICKETS = 5
+FLOOR_GLOBAL = 100               # fallback floor when a pitch has no spec dynamics
+FLOOR_WICKET_SCALE_MIN = 0.22    # hardest Wicket damping when far below floor
+FLOOR_BOUNDARY_MAX = 1.70        # cap on lower-order boundary uplift
+
+# (Variance) One multiplier per innings — the innings' scoring "mood".
+VARIANCE_SIGMA = 0.11
+VARIANCE_LO, VARIANCE_HI = 0.76, 1.20
+
+# (Fighting Match) Anti-capitulation corridor for the 2nd-innings chase. It
+# PURELY preserves wickets (no scoring help) so a losing chase bats deep and
+# loses close instead of folding — it must not drag the chase back into a win.
+CORRIDOR_BALLS_FROM = 30         # engage from ~over 5 once a chase can fall behind
+CORRIDOR_WICKET_DAMP_MIN = 0.52  # ease the fold without preserving a slog-to-win bank
+CORRIDOR_BOUNDARY_MAX = 1.0      # no catch-up scoring — anti-fold only
+CORRIDOR_GAP_RUNS = 30.0         # deficit vs par-chase line that saturates the hook
+
+# Chase baseline (who wins): steer a tough chase toward the spec Chase Win% by
+# suppressing SCORING (they fall short), NOT by taking wickets (which would make
+# them fold cheaply and break the Fighting Match rule). Wicket coupling is kept
+# deliberately weak so the losing side bats deep and loses close.
+BASELINE_BOUNDARY_K = 0.32       # ±32% boundaries — kept mild so a losing chase
+BASELINE_DOT_K = 0.05            # stays in touch and loses CLOSE, not blown away
+BASELINE_WICKET_K = 0.12         # only ∓12% wickets (weak on purpose)
+# The engine gives the side batting second an intrinsic edge (it knows the
+# target, dew, etc.). Shift the effective win% down so a spec-50% total is
+# actually defended ~50% of the time rather than routinely chased down.
+CHASE_INTRINSIC_BIAS = 14
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _draw_variance():
+    """Draw this innings' scoring-mood multiplier (Variance Rule)."""
+    return max(VARIANCE_LO, min(VARIANCE_HI, random.gauss(1.0, VARIANCE_SIGMA)))
+
+
+def _chase_baseline_effects(chasing_pct):
+    """Map the chasing side's spec win% to a ``pressure_effects`` bias that tilts
+    the whole chase toward that result — but mostly via scoring, not wickets, so a
+    low-probability chase falls SHORT rather than capitulating (Fighting Match
+    Rule). ``tilt`` is +1 for a nailed-on chase, -1 for a hopeless one."""
+    tilt = _clamp((chasing_pct - CHASE_INTRINSIC_BIAS - 50) / 50.0, -1.0, 1.0)
+    return {
+        "boundary_modifier": 1.0 + BASELINE_BOUNDARY_K * tilt,
+        "dot_bonus": -BASELINE_DOT_K * tilt,
+        "wicket_modifier": 1.0 - BASELINE_WICKET_K * tilt,
+    }
 
 
 def _merge_pressure(pressure_effects, bias):
@@ -409,6 +476,10 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "wicket_limit": WICKET_LIMIT,
         # Dramatic-finish steering (armed at the innings break for 20-over chases).
         "scenario": None,
+        # Per-innings scoring "mood" for the Variance Rule (redrawn at the break).
+        "innings_variance": _draw_variance(),
+        # Chasing side's spec win% for the 2nd-innings target (set at the break).
+        "chase_target_pct": 50,
         # innings-1 archive (filled at the break)
         "inn1_runs": 0, "inn1_wickets": 0, "inn1_overs": "0.0",
     }
@@ -708,6 +779,113 @@ def _make_last_over_drama_hook(is_last_over, is_live_chase):
     return _hook
 
 
+def _make_variance_hook(v):
+    """Variance Rule: shift the WHOLE innings up or down by one per-innings
+    multiplier ``v`` — boost boundaries and trim dots symmetrically (Wicket
+    untouched, so ratings and collapses still decide the result). Successive
+    matches on the same pitch therefore fluctuate between the Floor and the
+    Ceiling, most landing near Par. No-op when ``v`` is neutral."""
+    if v is None or abs(v - 1.0) < 1e-6:
+        return None
+    dot_scale = max(0.1, 2.0 - v)   # v>1 → fewer dots; v<1 → more dots
+    dbl_scale = 1.0 + (v - 1.0) * 0.5
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        if "Four" in rw:
+            rw["Four"] *= v
+        if "Six" in rw:
+            rw["Six"] *= v
+        if "Double" in rw:
+            rw["Double"] *= dbl_scale
+        if "Dot" in rw:
+            rw["Dot"] *= dot_scale
+        return rw
+
+    return _hook
+
+
+def _make_floor_hook(state, pitch):
+    """Sub-100 Rule: once the batting side is several wickets down and short of
+    the pitch's expected Floor, the tail digs in and swings — damp Wicket and
+    lift Four/Six, scaled by how far below the Floor the score is and how many
+    are down. Bounded (Wicket never below ``FLOOR_WICKET_SCALE_MIN``) so genuine
+    collapses still happen, but a full all-out under ~100 becomes rare. No-op
+    above threshold."""
+    wkts = state.get("total_wickets", 0)
+    if wkts < FLOOR_MIN_WICKETS:
+        return None
+    dyn = ground_config.get_scoring_dynamics(pitch) or {}
+    # Key to the pitch's own expected Floor — scores rarely dip below it, so a
+    # side collapsing under it gets tail resistance until it climbs back toward it.
+    floor = int(dyn.get("floor", FLOOR_GLOBAL))
+    runs = state.get("total_runs", 0)
+    if runs >= floor:
+        return None
+    # 0 at the floor → 1 when half the floor short.
+    deficit = min(1.0, (floor - runs) / max(1.0, floor * 0.5))
+    wkt_urgency = (wkts - FLOOR_MIN_WICKETS + 1) / (WICKET_LIMIT - FLOOR_MIN_WICKETS + 1)
+    strength = min(1.0, deficit * (0.78 + 0.22 * wkt_urgency))
+    wkt_scale = 1.0 - (1.0 - FLOOR_WICKET_SCALE_MIN) * strength
+    bdry_scale = 1.0 + (FLOOR_BOUNDARY_MAX - 1.0) * strength
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        if "Wicket" in rw:
+            rw["Wicket"] *= wkt_scale
+        if "Four" in rw:
+            rw["Four"] *= bdry_scale
+        if "Six" in rw:
+            rw["Six"] *= bdry_scale
+        if "Dot" in rw:
+            rw["Dot"] *= (1.0 - 0.15 * strength)
+        return rw
+
+    return _hook
+
+
+def _make_no_collapse_hook(state):
+    """Fighting Match Rule (2nd innings): keep a chase alive and deep. When the
+    chasing side has slipped behind the even par-chase line, damp Wicket so they
+    keep wickets in hand rather than folding — scaled by how far behind par they
+    are. This tightens the losing margin and carries the game into the closing
+    overs WITHOUT manufacturing a win: it adds no scoring (``CORRIDOR_BOUNDARY_MAX``
+    is 1.0 by default — pure anti-fold), disengages the moment the score reaches
+    par, and the result is still arbitrated by the total-band chase baseline + the
+    back-overs matrix steer. No-op in innings 1, the opening overs, or when ahead."""
+    if state.get("innings") != 2 or not state.get("target"):
+        return None
+    innings_balls = total_balls(state)
+    bowled = balls_bowled(state)
+    if bowled < CORRIDOR_BALLS_FROM or bowled >= innings_balls:
+        return None
+    target = int(state["target"])
+    par_line = target * (bowled / innings_balls)   # runs an even chase would have
+    behind = par_line - state.get("total_runs", 0)
+    if behind <= 0:
+        return None
+    strength = min(1.0, behind / CORRIDOR_GAP_RUNS)
+    wkt_scale = 1.0 - (1.0 - CORRIDOR_WICKET_DAMP_MIN) * strength
+    bdry_scale = 1.0 + (CORRIDOR_BOUNDARY_MAX - 1.0) * strength
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        if "Wicket" in rw:
+            rw["Wicket"] *= wkt_scale
+        # Boundary lift is gated by CORRIDOR_BOUNDARY_MAX (1.0 by default = none).
+        # No Dot reduction: the corridor must not add scoring — it only stops the
+        # fold (see docstring), so a losing chase loses close, never gets dragged
+        # back into a win.
+        if bdry_scale != 1.0:
+            if "Four" in rw:
+                rw["Four"] *= bdry_scale
+            if "Six" in rw:
+                rw["Six"] *= bdry_scale
+        return rw
+
+    return _hook
+
+
 def _compose_hooks(*hooks):
     """Combine weight hooks into one, applied left to right. Drops Nones and
     returns the single hook (or None) when zero/one remain."""
@@ -969,8 +1147,12 @@ def simulate_over(state):
             # two systems never fight.
             if (scenario_eng is None or scenario_phase == "inactive") \
                     and innings == 2 and target:
-                # Layer 1: mild always-on chasing assist → ~50-50 baseline.
-                _merge_pressure(pressure_effects, CHASE_BASELINE_ASSIST)
+                # Layer 1: spec total-band baseline — tilt the whole chase toward
+                # the pitch's Chase Win% for this target (the "who wins" lever),
+                # biasing scoring rather than wickets so a losing chase falls short
+                # instead of folding cheaply.
+                _merge_pressure(pressure_effects,
+                                _chase_baseline_effects(state.get("chase_target_pct", 50)))
                 # Layer 2: matrix steer in the back overs (situational realism).
                 _balls_left_now = innings_balls - balls_bowled(state)
                 if 0 < _balls_left_now <= CHASE_STEER_BALLS:
@@ -1007,8 +1189,15 @@ def simulate_over(state):
             drama_hook = _make_last_over_drama_hook(
                 state["current_over"] >= overs_total,
                 bool(target) and not chased)
+            # Pitch Rule Engine layers: Sub-100 floor guard, the anti-capitulation
+            # fighting-match corridor (2nd innings), and the per-innings variance
+            # mood. All bounded nudges on top of the rating/trait weights.
+            floor_hook = _make_floor_hook(state, pitch)
+            corridor_hook = _make_no_collapse_hook(state)
+            variance_hook = _make_variance_hook(state.get("innings_variance"))
             weight_hook = _compose_hooks(trait_hook, env_hook,
-                                         wicket_hook, drama_hook)
+                                         wicket_hook, drama_hook,
+                                         floor_hook, corridor_hook, variance_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
@@ -1615,6 +1804,13 @@ def end_first_innings(state):
     # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.
     state["last_over_timeline"] = []
     state["last_over_commentary"] = []
+
+    # Fresh scoring mood for the chase (Variance Rule).
+    state["innings_variance"] = _draw_variance()
+    # Total-band Chase Win% for defending this target on this pitch — the
+    # baseline that biases who wins the chase (Pitch Rule Engine spec).
+    state["chase_target_pct"] = ground_config.get_chase_win_pct(
+        state.get("pitch_type", "Hard"), state["target"] - 1)
 
     # Optionally arm a dramatic-finish scenario for the chase now that the
     # target is known (20-over matches only; self-disables if unrealistic).
