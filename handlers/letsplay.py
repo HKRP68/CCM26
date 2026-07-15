@@ -602,27 +602,34 @@ def _ordered_xi_for_side(session, user_id):
 def _xi_bench_for_side(session, user_id, xi_ids=None):
     """Return ``(xi_pairs, bench_pairs, errors)`` for a side's roster.
 
-    ``xi_pairs`` is 11 (entry, player) in batting order (auto by batting rating,
-    high → low). When ``xi_ids`` is given (e.g. a set edited via /change) the XI
-    is pinned to exactly those roster entries; if any pinned player has since
-    disappeared the XI falls back to the auto top-11. ``bench_pairs`` is every
+    ``xi_pairs`` is 11 (entry, player). When ``xi_ids`` is given (e.g. a set
+    edited via /change) the XI is pinned to exactly those roster entries, in the
+    given order, so a batting order the user arranged with /change is preserved;
+    if any pinned player has since disappeared the XI falls back to the auto
+    top-11 ordered by batting rating (high → low). ``bench_pairs`` is every
     other roster entry, kept in roster order. On any problem ``xi_pairs`` is
     None and ``errors`` explains why (mirrors ``_ordered_xi_for_side``)."""
     full = _get_ordered_roster(session, user_id)
     if len(full) < 11:
         return None, [], [f"Need 11 players, have {len(full)}"]
     xi = None
+    pinned = False
     if xi_ids:
         by_id = {int(e.id): (e, p) for e, p in full}
         picked = [by_id[int(i)] for i in xi_ids if int(i) in by_id]
         if len(picked) == 11:
             xi = picked
+            pinned = True
     if xi is None:
         xi = full[:11]
     ok, errors = validate_xi(xi)
     if not ok:
         return None, [], errors
-    xi = _sort_batting_order(xi)
+    # A pinned XI keeps the exact order it was snapshotted in — that order is the
+    # user's chosen batting line-up (set via /change). Only an auto-built XI is
+    # (re)sorted by batting rating.
+    if not pinned:
+        xi = _sort_batting_order(xi)
     xi_set = {int(e.id) for e, _ in xi}
     bench = [(e, p) for e, p in full if int(e.id) not in xi_set]
     return xi, bench, []
@@ -640,7 +647,7 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
         "🧾 <b>LETS PLAY — Playing XI</b>",
         "━━━━━━━━━━━━━━━━━━━",
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • 20 overs",
-        "<i>Batting order auto-set by batting rating (high → low).</i>",
+        "<i>Batting order starts by rating (high → low) — reorder it below.</i>",
         "",
         _format_batting_order(
             host_pairs, f"👤 <b>{html.escape(draft['host']['name'])}</b> (Host)",
@@ -651,8 +658,9 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
             bench_pairs=guest_bench),
         "",
         "━━━━━━━━━━━━━━━━━━━",
-        "✏️ Swap a bench player into your XI with "
-        "<code>/change &lt;out&gt; &lt;in&gt;</code> — e.g. <code>/change 2 13</code>.",
+        "✏️ Reorder your batting with <code>/change &lt;a&gt; &lt;b&gt;</code> "
+        "(both 1–11, e.g. <code>/change 3 1</code>), or swap in a bench player "
+        "(e.g. <code>/change 2 13</code>).",
         f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> to flip the coin!",
     ]
     return "\n".join(parts)
@@ -726,12 +734,15 @@ async def _prompt_show_xi(context, draft):
 # ════════════════════════════════════════════════════════════════════
 # /change — swap a bench player into the XI before the toss (Lets Play)
 #
-# Mirrors the CIPL/Challenge-League /change: `out` is a Playing XI slot (1-11),
-# `in` is a bench number (12+). The bench player takes the XI place and the
-# dropped player goes to the bench. Only usable while the "Playing XI" card is
-# showing (status == "showxi") and before the toss. Because /letsplay always
-# auto-orders the batting line-up by batting rating, in-XI reordering is a no-op
-# and is rejected; only bench→XI swaps are accepted.
+# Two modes, chosen by the second number:
+#   • Reorder batting  — both numbers are XI slots (1-11): the two batting
+#     positions are swapped, letting a user set their own batting order.
+#   • Bring in a sub    — `out` is an XI slot (1-11), `in` is a bench number
+#     (12+): the bench player takes the dropped slot's place in the order.
+# Only usable while the "Playing XI" card is showing (status == "showxi") and
+# before the toss. The XI starts auto-ordered by batting rating, but once a user
+# reorders it the chosen order is preserved (snapshotted onto the draft) and used
+# when the match launches.
 # ════════════════════════════════════════════════════════════════════
 
 def _letsplay_draft_in_chat(context, chat_id, statuses=None):
@@ -842,8 +853,11 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
             else (msg.text or "").split()[1:])
     nums = [a for a in args if str(a).lstrip("-").isdigit()]
 
-    usage = ("Usage: <code>/change &lt;out&gt; &lt;in&gt;</code> — drop an XI slot "
-             "(1–11) for a bench player (12+). e.g. <code>/change 2 13</code>")
+    usage = ("Usage: <code>/change &lt;a&gt; &lt;b&gt;</code>\n"
+             "• Reorder batting: both 1–11 — swaps those two slots. "
+             "e.g. <code>/change 3 1</code>\n"
+             "• Bring in a sub: XI slot (1–11) for a bench player (12+). "
+             "e.g. <code>/change 2 13</code>")
 
     session = get_session()
     try:
@@ -873,24 +887,34 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
                 f"❌ The first number must be an XI slot (1–11), not {out_no}.\n"
                 + usage, parse_mode="HTML")
             return True
-        if in_no not in bench_number:
-            if not bench:
-                await msg.reply_text(
-                    "❌ You have no bench players — your roster is exactly 11.")
-            elif 1 <= in_no <= 11:
-                await msg.reply_text(
-                    "❌ Batting order is auto-set by rating, so swapping two XI "
-                    "slots has no effect. Bring a bench player in instead — "
-                    f"pick 12–{11 + len(bench)}.\n" + usage, parse_mode="HTML")
-            else:
-                await msg.reply_text(
-                    f"❌ The second number must be a bench player "
-                    f"(12–{11 + len(bench)}), not {in_no}.\n" + usage,
-                    parse_mode="HTML")
-            return True
 
         new_ids = list(xi_ids_order)
-        new_ids[out_no - 1] = bench_number[in_no]
+        if 1 <= in_no <= 11:
+            # Reorder the batting line-up: swap the two XI slots.
+            if in_no == out_no:
+                await msg.reply_text(
+                    "❌ Those are the same slot — pick two different XI slots to "
+                    "reorder, or a bench player (12+) to swap in.\n" + usage,
+                    parse_mode="HTML")
+                return True
+            new_ids[out_no - 1], new_ids[in_no - 1] = (
+                new_ids[in_no - 1], new_ids[out_no - 1])
+        elif in_no in bench_number:
+            # Bring a bench player into the dropped slot's batting position.
+            new_ids[out_no - 1] = bench_number[in_no]
+        else:
+            if not bench:
+                await msg.reply_text(
+                    "❌ The second number must be another XI slot (1–11) to "
+                    "reorder your batting. You have no bench players to swap in "
+                    "— your roster is exactly 11.\n" + usage, parse_mode="HTML")
+            else:
+                await msg.reply_text(
+                    f"❌ The second number must be an XI slot (1–11) to reorder, "
+                    f"or a bench player (12–{11 + len(bench)}) to swap in — not "
+                    f"{in_no}.\n" + usage, parse_mode="HTML")
+            return True
+
         new_pairs = [by_id[i] for i in new_ids if i in by_id]
         ok, verr = validate_xi(new_pairs)
         if not ok:
@@ -900,9 +924,9 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode="HTML")
             return True
 
-        # Store the new XI in batting order.
-        new_xi = _sort_batting_order(new_pairs)
-        draft[xi_key] = [int(e.id) for e, _ in new_xi]
+        # Store the XI in the exact order the user arranged — this is now their
+        # batting line-up and is preserved through re-renders and at launch.
+        draft[xi_key] = new_ids
         session.commit()
     except Exception:
         logger.exception("letsplay /change failed")
