@@ -26,15 +26,30 @@ pass in CI or a pre-commit hook.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import random
 import statistics
 import sys
 
-logging.disable(logging.CRITICAL)
-
 from engine import ground_config
 from services import cipl_match as cm
+
+
+@contextlib.contextmanager
+def _muted_logging():
+    """Silence engine logging for the duration of a calibration run only.
+
+    Importing this module must NOT disable logging process-wide (the test suite
+    imports it), so suppression is scoped here and the previous disable level is
+    restored afterwards — even if the run raises.
+    """
+    prev = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(prev)
 
 # Spec pitches (in the spec's order); Dead is engine-extra, calibrated loosely.
 SPEC_PITCHES = ["Flat", "Hard", "Even", "Bouncy", "Dry", "Green", "Dusty"]
@@ -80,18 +95,19 @@ def _run_innings(state, guard=40):
 
 def simulate_one(pitch, overs=20):
     """Play one full headless CIPL match on *pitch*; return a metrics dict."""
-    a, b = make_xi("A", 1), make_xi("B", 101)
-    state = cm.build_cipl_state(1, overs, 10, 20, 111, 222, a, b,
-                                "A", "B", -1, pitch, False, ball_format="T20")
-    _run_innings(state)
-    inn1_runs, inn1_wkts = state["total_runs"], state["total_wickets"]
-    inn1_balls = cm.balls_bowled(state)
-    cm.end_first_innings(state)
-    _run_innings(state)
-    inn2_runs, inn2_wkts = state["total_runs"], state["total_wickets"]
-    inn2_balls = cm.balls_bowled(state)
-    innings_balls = cm.total_balls(state)
-    result = cm.compute_result(state)
+    with _muted_logging():
+        a, b = make_xi("A", 1), make_xi("B", 101)
+        state = cm.build_cipl_state(1, overs, 10, 20, 111, 222, a, b,
+                                    "A", "B", -1, pitch, False, ball_format="T20")
+        _run_innings(state)
+        inn1_runs, inn1_wkts = state["total_runs"], state["total_wickets"]
+        inn1_balls = cm.balls_bowled(state)
+        cm.end_first_innings(state)
+        _run_innings(state)
+        inn2_runs, inn2_wkts = state["total_runs"], state["total_wickets"]
+        inn2_balls = cm.balls_bowled(state)
+        innings_balls = cm.total_balls(state)
+        result = cm.compute_result(state)
     return {
         "inn1_runs": inn1_runs, "inn1_wkts": inn1_wkts, "inn1_balls": inn1_balls,
         "inn2_runs": inn2_runs, "inn2_wkts": inn2_wkts, "inn2_balls": inn2_balls,
@@ -168,7 +184,14 @@ def collect(pitch, n):
 # Par (median) is the primary, tight target. Floor/Ceiling are the spec's soft
 # "scores fluctuate anywhere between" guides, so their tolerances are wider.
 TOL = {"floor_lo": 35, "floor_hi": 35, "par_pad": 10, "ceiling_lo": 35,
-       "ceiling_hi": 40, "sub100_max": 3.0, "chase_band": 20, "capitulation_max": 30}
+       "ceiling_hi": 40, "sub100_max": 3.0, "chase_band": 20, "capitulation_max": 30,
+       "anomaly_pad": 35, "deep_min": 45.0, "margin_max": 55.0}
+# Chase bands with fewer than this many samples are too noisy to judge — they are
+# reported as an explicit "n<min (not judged)" check rather than silently skipped.
+MIN_BAND_N = 12
+# Capitulation = a blown-away loss (mirrors collect(): margin > this, or an early
+# fold). Kept in sync with the counting there so the report label is accurate.
+CAPITULATION_MARGIN = 55
 
 
 def evaluate(pitch, m):
@@ -187,16 +210,29 @@ def evaluate(pitch, m):
         f"P10 {m['floor']:.0f} vs floor {floor}")
     chk("ceiling", ceiling - TOL["ceiling_lo"] <= m["ceiling"] <= ceiling + TOL["ceiling_hi"],
         f"P90 {m['ceiling']:.0f} vs ceiling {ceiling}")
+    chk("anomaly", m["anomaly"] <= anomaly + TOL["anomaly_pad"],
+        f"max {m['anomaly']:.0f} vs anomaly {anomaly} (+{TOL['anomaly_pad']})")
     chk("sub100", m["sub100_rate"] <= TOL["sub100_max"],
         f"{m['sub100_rate']:.1f}% all-out<100 (max {TOL['sub100_max']}%)")
+    # Fighting Match Rule: matches run deep, losses stay close.
+    chk("deep", m["deep_rate"] >= TOL["deep_min"],
+        f"{m['deep_rate']:.0f}% reach ov18 (min {TOL['deep_min']}%)")
+    chk("margin", m["def_margin_median"] <= TOL["margin_max"],
+        f"median defended margin {m['def_margin_median']:.0f} (max {TOL['margin_max']})")
     chk("capitulation", m["capitulation_rate"] <= TOL["capitulation_max"],
-        f"{m['capitulation_rate']:.0f}% defended >40 (max {TOL['capitulation_max']}%)")
+        f"{m['capitulation_rate']:.0f}% blown out "
+        f"(>{CAPITULATION_MARGIN} runs or early fold; max {TOL['capitulation_max']}%)")
 
     for mx, st in m["band_stats"].items():
-        if st["n"] >= 12:  # only judge bands with enough samples
+        if st["n"] >= MIN_BAND_N:
             obs = st["won"] / st["n"] * 100
             chk(f"chase<={mx}", abs(obs - st["pct_spec"]) <= TOL["chase_band"],
                 f"chase {obs:.0f}% vs spec {st['pct_spec']}% (n={st['n']})")
+        else:
+            # Not enough samples to judge — surface it explicitly rather than
+            # silently passing, so a thin band can't hide a miscalibration.
+            chk(f"chase<={mx}", True,
+                f"n={st['n']} < {MIN_BAND_N} (not judged)")
     return checks
 
 
@@ -229,6 +265,8 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--verbose", action="store_true", help="show per-check pass/fail")
     args = ap.parse_args(argv)
+    if args.n <= 0:
+        ap.error("--n must be greater than zero")
 
     random.seed(args.seed)
     pitches = [args.pitch] if args.pitch else SPEC_PITCHES

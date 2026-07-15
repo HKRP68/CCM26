@@ -872,12 +872,15 @@ def _make_no_collapse_hook(state):
         rw = dict(raw_weights)
         if "Wicket" in rw:
             rw["Wicket"] *= wkt_scale
-        if "Four" in rw:
-            rw["Four"] *= bdry_scale
-        if "Six" in rw:
-            rw["Six"] *= bdry_scale
-        if "Dot" in rw:
-            rw["Dot"] *= (1.0 - 0.12 * strength)
+        # Boundary lift is gated by CORRIDOR_BOUNDARY_MAX (1.0 by default = none).
+        # No Dot reduction: the corridor must not add scoring — it only stops the
+        # fold (see docstring), so a losing chase loses close, never gets dragged
+        # back into a win.
+        if bdry_scale != 1.0:
+            if "Four" in rw:
+                rw["Four"] *= bdry_scale
+            if "Six" in rw:
+                rw["Six"] *= bdry_scale
         return rw
 
     return _hook

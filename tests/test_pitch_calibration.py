@@ -56,8 +56,14 @@ _PITCHES = ("Flat", "Even", "Green", "Hard", "Dusty")
 
 @pytest.fixture(scope="module")
 def sims():
-    random.seed(20260715)
-    return {p: pc.collect(p, _N) for p in _PITCHES}
+    # Restore the process-global RNG afterwards so seeding here can't make other
+    # tests order-dependent.
+    prev = random.getstate()
+    try:
+        random.seed(20260715)
+        return {p: pc.collect(p, _N) for p in _PITCHES}
+    finally:
+        random.setstate(prev)
 
 
 @pytest.mark.parametrize("pitch", _PITCHES)
