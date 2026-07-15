@@ -175,6 +175,42 @@ def get_wicket_factors(pitch_type, config=None):
     return None
 
 
+def get_scoring_dynamics(pitch_type, config=None):
+    """Return the spec scoring-dynamics dict for a pitch, or None if unavailable.
+
+    Shape: {floor, par_low, par_high, ceiling, anomaly} — the target
+    first-innings distribution for this pitch (from the Pitch Rule Engine spec).
+    """
+    profile = get_pitch_profile(pitch_type, config=config)
+    if profile:
+        return profile.get("scoring_dynamics")
+    return None
+
+
+def get_chase_win_pct(pitch_type, first_innings_total, config=None, default=50):
+    """Chasing side's win probability (%) for defending *first_innings_total* on
+    *pitch_type*, from the pitch's ``chase_win_pct`` bands.
+
+    Each band is ``{max, pct}``; the first band whose ``max >= total`` wins. Bands
+    are expected in ascending ``max`` order (as authored in the YAML) but are
+    sorted defensively so authoring order can't change the result. Returns
+    *default* when the pitch or its bands are unavailable.
+    """
+    profile = get_pitch_profile(pitch_type, config=config)
+    bands = (profile or {}).get("chase_win_pct")
+    if not bands:
+        return default
+    try:
+        total = int(first_innings_total)
+    except (TypeError, ValueError):
+        return default
+    for band in sorted(bands, key=lambda b: b.get("max", float("inf"))):
+        if total <= band.get("max", float("inf")):
+            return int(band.get("pct", default))
+    # Total exceeds every band's max — fall back to the highest-max band's pct.
+    return int(sorted(bands, key=lambda b: b.get("max", float("inf")))[-1].get("pct", default))
+
+
 def get_phase_boosts(config=None):
     """Return the phase boosts config dict. None if unavailable."""
     cfg = config or get_config()

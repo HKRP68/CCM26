@@ -20,12 +20,19 @@ pitch_profiles:
       Six: 0.026
       Wicket: 0.048
       Extras: 0.060
-    run_factor: 0.98
+    run_factor: 1.590
     wicket_factors:
       Fast: 1.12
       Fast-medium: 1.06
       Medium-fast: 1.02
       default: 0.60
+    scoring_dynamics: {floor: 120, par_low: 150, par_high: 165, ceiling: 190, anomaly: 210}
+    chase_win_pct:
+      - {max: 140, pct: 85}
+      - {max: 160, pct: 60}
+      - {max: 180, pct: 40}
+      - {max: 200, pct: 20}
+      - {max: 99999, pct: 5}
 
   Dry:
     description: "Slow turn with low bounce — spin comes into play in the middle overs (par ~155)"
@@ -38,13 +45,20 @@ pitch_profiles:
       Six: 0.044
       Wicket: 0.040
       Extras: 0.050
-    run_factor: 1.00
+    run_factor: 1.030
     wicket_factors:
       Leg spin: 1.10
       Wrist spin: 1.08
       Off spin: 1.07
       Finger spin: 1.05
       default: 0.75
+    scoring_dynamics: {floor: 130, par_low: 160, par_high: 170, ceiling: 190, anomaly: 220}
+    chase_win_pct:
+      - {max: 140, pct: 80}
+      - {max: 160, pct: 60}
+      - {max: 180, pct: 35}
+      - {max: 200, pct: 15}
+      - {max: 99999, pct: 5}
 
   Hard:
     description: "True bounce, good carry — competitive 180-par contest with a slight batting edge (par ~183)"
@@ -57,12 +71,19 @@ pitch_profiles:
       Six: 0.053
       Wicket: 0.034
       Extras: 0.035
-    run_factor: 1.10
+    run_factor: 1.430
     wicket_factors:
       Fast: 1.06
       Fast-medium: 1.03
       Medium-fast: 1.00
       default: 0.92
+    scoring_dynamics: {floor: 160, par_low: 190, par_high: 210, ceiling: 240, anomaly: 260}
+    chase_win_pct:
+      - {max: 180, pct: 85}
+      - {max: 200, pct: 70}
+      - {max: 220, pct: 50}
+      - {max: 240, pct: 30}
+      - {max: 99999, pct: 15}
 
   Flat:
     description: "True surface with even bounce — batting paradise, 200+ thrillers (par ~209)"
@@ -75,9 +96,16 @@ pitch_profiles:
       Six: 0.060
       Wicket: 0.030
       Extras: 0.025
-    run_factor: 1.08
+    run_factor: 1.085
     wicket_factors:
       default: 0.88
+    scoring_dynamics: {floor: 170, par_low: 200, par_high: 220, ceiling: 270, anomaly: 287}
+    chase_win_pct:
+      - {max: 200, pct: 90}
+      - {max: 219, pct: 86}
+      - {max: 240, pct: 70}
+      - {max: 260, pct: 50}
+      - {max: 99999, pct: 30}
 
   Dead:
     description: "Lifeless track with nothing for bowlers — batting festival guaranteed"
@@ -100,6 +128,13 @@ pitch_profiles:
       Finger spin: 0.60
       Wrist spin: 0.60
       default: 0.60
+    scoring_dynamics: {floor: 190, par_low: 220, par_high: 240, ceiling: 285, anomaly: 305}
+    chase_win_pct:
+      - {max: 220, pct: 90}
+      - {max: 240, pct: 82}
+      - {max: 260, pct: 65}
+      - {max: 285, pct: 45}
+      - {max: 99999, pct: 28}
 
   Dusty:
     description: "Sharp turn with variable bounce — spin-attack pitch, low-scoring dogfights (par ~144)"
@@ -112,13 +147,20 @@ pitch_profiles:
       Six: 0.042
       Wicket: 0.044
       Extras: 0.050
-    run_factor: 1.04
+    run_factor: 0.860
     wicket_factors:
-      Leg spin: 1.12
-      Wrist spin: 1.10
-      Off spin: 1.08
-      Finger spin: 1.06
-      default: 0.85
+      Leg spin: 1.08
+      Wrist spin: 1.06
+      Off spin: 1.05
+      Finger spin: 1.04
+      default: 0.88
+    scoring_dynamics: {floor: 110, par_low: 140, par_high: 150, ceiling: 180, anomaly: 210}
+    chase_win_pct:
+      - {max: 130, pct: 75}
+      - {max: 150, pct: 50}
+      - {max: 170, pct: 25}
+      - {max: 190, pct: 10}
+      - {max: 99999, pct: 5}
 
   Bouncy:
     description: "Extra bounce, pace-friendly — tricky for strokeplay but rewards timing (par ~159)"
@@ -131,12 +173,19 @@ pitch_profiles:
       Six: 0.045
       Wicket: 0.040
       Extras: 0.045
-    run_factor: 1.12
+    run_factor: 1.310
     wicket_factors:
       Fast: 1.18
       Fast-medium: 1.08
       Medium-fast: 1.04
       default: 0.85
+    scoring_dynamics: {floor: 140, par_low: 165, par_high: 180, ceiling: 200, anomaly: 220}
+    chase_win_pct:
+      - {max: 150, pct: 80}
+      - {max: 170, pct: 60}
+      - {max: 190, pct: 35}
+      - {max: 210, pct: 20}
+      - {max: 99999, pct: 5}
 
   Even:
     description: "Neutral, balanced surface — the standard T20 track where bat and ball share honours (par ~172)"
@@ -149,7 +198,7 @@ pitch_profiles:
       Six: 0.053
       Wicket: 0.036
       Extras: 0.040
-    run_factor: 1.06
+    run_factor: 1.230
     wicket_factors:
       Fast: 1.03
       Fast-medium: 1.01
@@ -157,6 +206,13 @@ pitch_profiles:
       Leg spin: 1.02
       Off spin: 1.01
       default: 0.95
+    scoring_dynamics: {floor: 150, par_low: 175, par_high: 190, ceiling: 220, anomaly: 240}
+    chase_win_pct:
+      - {max: 160, pct: 85}
+      - {max: 180, pct: 65}
+      - {max: 200, pct: 45}
+      - {max: 220, pct: 25}
+      - {max: 99999, pct: 10}
 
 # ─── PHASE BOOSTS ───
 phase_boosts:
