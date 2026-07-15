@@ -3691,6 +3691,20 @@ def _webapp_auth(allow_not_debuted=False):
         return None, tg_id, ({"ok": False, "error": "not_debuted",
                               "message": "Complete your debut to unlock the Mini App."}, 403)
 
+    # Heal any drift in the denormalized roster_count cache so every Mini App
+    # surface (Home, Squad, Roster, packs) reports the same size as the live
+    # UserRoster rows — the same number chat's /myroster shows. Best-effort:
+    # a reconcile failure must never block an API request.
+    if user is not None:
+        try:
+            from services.roster_service import reconcile_roster_count
+            before = user.roster_count
+            if reconcile_roster_count(db, user) != (before or 0):
+                db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("roster_count reconcile failed (non-fatal)")
+
     # Remember the group the Mini App was launched from so later activity echoes
     # back there even if a subsequent launch (e.g. the persistent menu button)
     # carries no param.

@@ -62,6 +62,38 @@ def get_roster_stats(session: Session, user_id: int) -> dict:
     }
 
 
+def get_roster_count(session: Session, user_id: int) -> int:
+    """Single source of truth for roster size = live number of UserRoster rows.
+
+    Every surface (chat /myroster, Mini App Home, Squad) must derive the roster
+    size from this so they can never disagree. The denormalized
+    ``User.roster_count`` column is only a cache and can drift; use
+    :func:`reconcile_roster_count` to heal it.
+    """
+    return (
+        session.query(UserRoster)
+        .filter(UserRoster.user_id == user_id)
+        .count()
+    )
+
+
+def reconcile_roster_count(session: Session, user: User) -> int:
+    """Heal the cached ``User.roster_count`` to match the live row count.
+
+    Returns the correct (live) count. Only writes when the cache has drifted,
+    so it's a cheap no-op in the common case. The caller is responsible for
+    committing the session.
+    """
+    actual = get_roster_count(session, user.id)
+    if (user.roster_count or 0) != actual:
+        logger.info(
+            "roster_count drift for user %s: cached=%s actual=%s -> corrected",
+            getattr(user, "telegram_id", user.id), user.roster_count, actual,
+        )
+        user.roster_count = actual
+    return actual
+
+
 def get_duplicate_entries(session: Session, user_id: int):
     """Return list of (player, quantity) for players owned more than once."""
     subq = (
