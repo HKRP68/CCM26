@@ -77,6 +77,15 @@ async def myroster_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         entries, total, total_pages = get_user_roster(session, user.id, page, ROSTER_PAGE_SIZE)
 
+        # /myroster shows the live roster size; heal the cached roster_count so
+        # other chat surfaces (/team, /buypack, ...) and the Mini App Home agree.
+        if (user.roster_count or 0) != total:
+            user.roster_count = total
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+
         if total == 0:
             await update.message.reply_text(
                 f"📊 <b>YOUR ROSTER</b>\n"
