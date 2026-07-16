@@ -50,6 +50,7 @@ function formatInningsProgress(overs, balls) {
 let selectedDelivery = null;
 let selectedSpeed = 'normal';
 let autoplayActive = false;
+let autoplayPremium = true; // set from server state; false locks the pill for free users
 let autoplayMatchId = null; // match id Autoplay was last applied to (reset per match)
 let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
@@ -494,6 +495,13 @@ function applyMatchState(nextState, { force = false } = {}) {
   matchState = nextState;
   preloadEventGifs(matchState.eventGifs || {});
   pollFailureCount = 0;
+
+  // Autoplay is a premium (Silver/Platinum) feature. The server reports whether
+  // this user may use it; keep the pill locked (🔒) for free users.
+  if (matchState.autoplay && matchState.autoplay.premium !== undefined) {
+    autoplayPremium = !!matchState.autoplay.premium;
+  }
+  applyAutoplayLock();
 
   // Autoplay must default OFF for every new match. The flag is a module global,
   // so in a reused webview it would otherwise leak from a previous match and
@@ -2554,6 +2562,14 @@ async function postAutoplayStatus(active) {
 }
 
 function handleAutoplayToggle(active) {
+  // Premium gate: free users see a 🔒 pill and get an upgrade prompt instead of
+  // toggling. The server also rejects /api/match/autoplay for them (403).
+  if (active && !autoplayPremium) {
+    const msg = 'Autoplay is a premium feature 🔒\n\nUpgrade to 🥈 Silver or '
+      + '🏆 Platinum to hand your side to the AI.';
+    if (tg && tg.showAlert) { tg.showAlert(msg); } else { alert(msg); }
+    return;
+  }
   if (!active && autoplayInFlight) {
     autoplayOffPending = true;
     setAutoplayActive(false);
@@ -2572,6 +2588,22 @@ function setAutoplayActive(active) {
   btn.classList.toggle('active', autoplayActive);
   const label = btn.querySelector('.pill-label');
   if (label) label.innerText = autoplayActive ? 'ON' : 'OFF';
+}
+
+// Reflect premium state on the Autoplay pill: locked pills show a 🔒 and a
+// "PRO" label, and never render as active.
+function applyAutoplayLock() {
+  const btn = document.getElementById('autoplay-toggle-btn');
+  if (!btn) return;
+  const locked = !autoplayPremium;
+  btn.classList.toggle('locked', locked);
+  const label = btn.querySelector('.pill-label');
+  if (locked) {
+    if (label) label.innerText = '🔒 PRO';
+    btn.classList.remove('active');
+  } else if (label && (label.innerText === '🔒 PRO')) {
+    label.innerText = autoplayActive ? 'ON' : 'OFF';
+  }
 }
 
 let autoplayInFlight = false;

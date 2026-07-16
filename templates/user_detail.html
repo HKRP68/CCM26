@@ -150,6 +150,49 @@
 </details>
 {% endif %}
 
+{% set tier = active_tier(user) %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;">
+    <div>
+      <strong style="font-size:.95rem;">⭐ Subscription:</strong>
+      {% if tier == 'platinum' %}
+        <span style="color:#b9f2ff;font-weight:600;">🏆 Platinum</span>
+      {% elif tier == 'silver' %}
+        <span style="color:#cbd5e1;font-weight:600;">🥈 Silver</span>
+      {% else %}
+        <span style="color:var(--muted);">Free (no subscription)</span>
+      {% endif %}
+      {% if user.subscription_expires_at %}
+        <br><span style="font-size:.75rem;color:var(--muted);">
+          {% if tier == 'none' %}Expired{% else %}Renews / expires{% endif %}
+          {{ user.subscription_expires_at | ist('%d %b %Y %H:%M') }}</span>
+      {% endif %}
+    </div>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="silver">
+        <button type="submit" class="btn btn-blue btn-sm"
+                onclick="return confirm('Activate 🥈 Silver for {{ user.username or user.first_name }}? Instant rewards are granted on a new activation.')">🥈 Silver</button>
+      </form>
+      <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="platinum">
+        <button type="submit" class="btn btn-blue btn-sm"
+                onclick="return confirm('Activate 🏆 Platinum for {{ user.username or user.first_name }}? Instant rewards are granted on a new activation.')">🏆 Platinum</button>
+      </form>
+      {% if tier != 'none' %}
+      <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="deactivate">
+        <button type="submit" class="btn btn-red btn-sm"
+                onclick="return confirm('Deactivate subscription for {{ user.username or user.first_name }}?')">Deactivate</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
 <details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
   <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">⚙️ Edit Quest Points (QP)</summary>
   <form method="POST" action="{{ url_for('admin_edit_qp', user_id=user.id) }}" style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
