@@ -41,33 +41,40 @@ def get_tier(user) -> str:
 
 
 def tier_config(tier: str) -> dict | None:
+    """Return the config dict for a tier name, or None for 'none'/unknown."""
     return SUBSCRIPTION_TIERS.get((tier or "").lower())
 
 
 def is_subscribed(user) -> bool:
+    """True if the user has any active paid tier."""
     return get_tier(user) != "none"
 
 
 def is_platinum(user) -> bool:
+    """True if the user's active tier is Platinum."""
     return get_tier(user) == "platinum"
 
 
 def has_premium_commands(user) -> bool:
+    """True if the active tier unlocks /autobuild and /wpmbot."""
     cfg = tier_config(get_tier(user))
     return bool(cfg and cfg.get("premium_commands"))
 
 
 def has_autoplay(user) -> bool:
+    """True if the active tier unlocks the Mini App Autoplay toggle."""
     cfg = tier_config(get_tier(user))
     return bool(cfg and cfg.get("autoplay"))
 
 
 def has_weekly_card(user) -> bool:
+    """True if the active tier grants the /cmuweekly card."""
     cfg = tier_config(get_tier(user))
     return bool(cfg and cfg.get("weekly_card"))
 
 
 def coin_chest_config(user) -> dict | None:
+    """Return the active tier's coin-chest config (/cmuchest), or None."""
     cfg = tier_config(get_tier(user))
     return cfg.get("coin_chests") if cfg else None
 
@@ -99,6 +106,7 @@ def cooldown_seconds(user, base_seconds: int) -> int:
 
 
 def market_discount_pct(user) -> int:
+    """Percent discount the active tier applies to player purchases (0 if none)."""
     cfg = tier_config(get_tier(user))
     return int(cfg.get("market_discount_pct", 0)) if cfg else 0
 
@@ -108,7 +116,7 @@ def discounted_price(user, price: int) -> int:
     pct = market_discount_pct(user)
     if pct <= 0:
         return price
-    return int(price * (100 - pct) / 100)
+    return price * (100 - pct) // 100
 
 
 # ── Messaging ───────────────────────────────────────────────────────
@@ -141,7 +149,14 @@ def activate(session, user, tier: str, *, grant_instant: bool = True) -> dict:
     now = datetime.utcnow()
     user.subscription_tier = tier
     user.subscription_activated_at = now
-    user.subscription_expires_at = now + timedelta(days=int(cfg.get("duration_days", 30)))
+    # Renewing the SAME active tier stacks onto the remaining paid time instead
+    # of erasing it; a new/expired/different tier starts a fresh window from now.
+    duration = timedelta(days=int(cfg.get("duration_days", 30)))
+    if (already_active_same_tier and user.subscription_expires_at
+            and user.subscription_expires_at > now):
+        user.subscription_expires_at += duration
+    else:
+        user.subscription_expires_at = now + duration
 
     granted = None
     if grant_instant and not already_active_same_tier:

@@ -1,6 +1,7 @@
 """Platinum recurring drops: /cmuweekly (weekly guaranteed card) and
 /cmuchest (coin chests every 10 days)."""
 
+import html
 import logging
 import random
 from datetime import datetime
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_stats(session, user_id: int) -> UserStats:
+    """Return the user's UserStats row, creating it if missing."""
     stats = session.query(UserStats).filter(UserStats.user_id == user_id).first()
     if stats is None:
         stats = UserStats(user_id=user_id)
@@ -34,10 +36,14 @@ def _ensure_stats(session, user_id: int) -> UserStats:
 # ── /cmuweekly ──────────────────────────────────────────────────────
 
 async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Grant a Platinum subscriber their weekly guaranteed 85+ card (7-day cd)."""
     uid = update.effective_user.id
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == uid).first()
+        # Row-lock the user so concurrent claims serialize on the cooldown check
+        # (real lock on Postgres, no-op on SQLite).
+        user = (session.query(User).filter(User.telegram_id == uid)
+                .with_for_update().first())
         if not user:
             await update.message.reply_text("❌ Use /debut first.")
             return
@@ -81,10 +87,14 @@ async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── /cmuchest ───────────────────────────────────────────────────────
 
 async def cmuchest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Grant a Platinum subscriber their recurring coin chests (10-day cd)."""
     uid = update.effective_user.id
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == uid).first()
+        # Row-lock the user so concurrent claims serialize on the cooldown check
+        # (real lock on Postgres, no-op on SQLite).
+        user = (session.query(User).filter(User.telegram_id == uid)
+                .with_for_update().first())
         if not user:
             await update.message.reply_text("❌ Use /debut first.")
             return
@@ -137,14 +147,15 @@ def _grant_player(session, user, player):
     Returns (display_line, extra_coins_credited)."""
     if player is None:
         return ("🃏 Player: <i>none available</i>", 0)
+    name = html.escape(player.name)  # names are rendered with parse_mode=HTML
     if (user.roster_count or 0) < MAX_ROSTER:
         entry = UserRoster(user_id=user.id, player_id=player.id,
                            order_position=(user.roster_count or 0) + 1,
                            acquired_date=datetime.utcnow())
         session.add(entry)
         user.roster_count = (user.roster_count or 0) + 1
-        return (f"🃏 <b>{player.name}</b> — {player.rating} OVR added to squad", 0)
+        return (f"🃏 <b>{name}</b> — {player.rating} OVR added to squad", 0)
     sell_val = get_sell_value(player.rating)
     user.total_coins = (user.total_coins or 0) + sell_val
-    return (f"🃏 <b>{player.name}</b> — {player.rating} OVR (squad full → "
+    return (f"🃏 <b>{name}</b> — {player.rating} OVR (squad full → "
             f"+{sell_val:,} coins)", sell_val)

@@ -501,7 +501,6 @@ function applyMatchState(nextState, { force = false } = {}) {
   if (matchState.autoplay && matchState.autoplay.premium !== undefined) {
     autoplayPremium = !!matchState.autoplay.premium;
   }
-  applyAutoplayLock();
 
   // Autoplay must default OFF for every new match. The flag is a module global,
   // so in a reused webview it would otherwise leak from a previous match and
@@ -513,6 +512,10 @@ function applyMatchState(nextState, { force = false } = {}) {
   } else if (!autoplayOffPending && matchState.autoplay?.isOnForMe !== undefined) {
     setAutoplayActive(!!matchState.autoplay.isOnForMe);
   }
+
+  // Apply the premium lock LAST so the 🔒 PRO label wins over the ON/OFF label
+  // that setAutoplayActive() just wrote for free users.
+  applyAutoplayLock();
 
   if (identitySelectionRequired) {
     showIdentitySelection(matchState);

@@ -6,6 +6,7 @@ quest points and one random OVR-banded player), reveals them in place, and locks
 all nine buttons so the box cannot be re-opened until the cooldown resets.
 """
 
+import html
 import logging
 import random
 from datetime import datetime
@@ -54,6 +55,7 @@ def _weighted_from_bands(bands) -> int:
 
 
 def get_weighted_currency(kind: str) -> int:
+    """Roll a weighted coin amount, or a gems/questPoints amount otherwise."""
     if kind == "coins":
         return _weighted_from_bands(MYSTERYBOX_COIN_BANDS)
     return _weighted_from_bands(MYSTERYBOX_CURRENCY_BANDS)  # gems / questPoints
@@ -72,6 +74,7 @@ def get_weighted_player_band() -> tuple[int, int, str]:
 # ── Keyboards ───────────────────────────────────────────────────────
 
 def _fresh_grid() -> InlineKeyboardMarkup:
+    """Build the initial 3x3 grid of openable 🎁 buttons."""
     rows = []
     for r in range(3):
         row = [InlineKeyboardButton("🎁", callback_data=f"cmb_open_{r * 3 + c}")
@@ -97,6 +100,7 @@ def _locked_grid(opened_index: int) -> InlineKeyboardMarkup:
 # ── Command ─────────────────────────────────────────────────────────
 
 async def cmumysterybox_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send the Mystery Box grid to a subscriber whose cooldown is ready."""
     uid = update.effective_user.id
     session = get_session()
     try:
@@ -128,6 +132,7 @@ async def cmumysterybox_handler(update: Update, context: ContextTypes.DEFAULT_TY
 # ── Callback ────────────────────────────────────────────────────────
 
 async def mysterybox_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route a box tap: 'already opened' alert for locked cells, else reveal."""
     query = update.callback_query
     data = query.data or ""
 
@@ -155,10 +160,17 @@ async def mysterybox_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _reveal(query, opened_index: int):
+    """Grant weighted rewards for the tapped box, edit the reveal in place, and
+    lock the grid. No-op (with an alert) if the box was already opened."""
     uid = query.from_user.id
     session = get_session()
     try:
-        user = session.query(User).filter(User.telegram_id == uid).first()
+        # Lock the user row so two concurrent reveals (e.g. horizontally scaled
+        # workers) serialize: the second waits, then sees last_mysterybox already
+        # stamped below and is refused before it can credit rewards twice.
+        # (with_for_update is a no-op on SQLite and a real row lock on Postgres.)
+        user = (session.query(User).filter(User.telegram_id == uid)
+                .with_for_update().first())
         if not user:
             await query.answer("❌ Use /debut first.", show_alert=True)
             return
@@ -229,22 +241,23 @@ def _grant_player(session, user, player):
     Returns (display_line, extra_coins_credited)."""
     if player is None:
         return ("🃏 Player: <i>none available</i>", 0)
+    name = html.escape(player.name)  # names are rendered with parse_mode=HTML
     if (user.roster_count or 0) < MAX_ROSTER:
         entry = UserRoster(user_id=user.id, player_id=player.id,
                            order_position=(user.roster_count or 0) + 1,
                            acquired_date=datetime.utcnow())
         session.add(entry)
         user.roster_count = (user.roster_count or 0) + 1
-        return (f"🃏 <b>{player.name}</b> — {player.rating} OVR added to squad",
-                0)
+        return (f"🃏 <b>{name}</b> — {player.rating} OVR added to squad", 0)
     # Squad full → convert to sell value.
     sell_val = get_sell_value(player.rating)
     user.total_coins = (user.total_coins or 0) + sell_val
-    return (f"🃏 <b>{player.name}</b> — {player.rating} OVR (squad full → "
+    return (f"🃏 <b>{name}</b> — {player.rating} OVR (squad full → "
             f"+{sell_val:,} coins)", sell_val)
 
 
 def _ensure_stats(session, user_id: int) -> UserStats:
+    """Return the user's UserStats row, creating it if missing."""
     stats = session.query(UserStats).filter(UserStats.user_id == user_id).first()
     if stats is None:
         stats = UserStats(user_id=user_id)
