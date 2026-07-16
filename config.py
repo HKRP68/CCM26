@@ -91,13 +91,22 @@ MYSTERYBOX_CURRENCY_BANDS = [
     (40.0, 261, 275),   # 25%
     (100.0, 250, 260),  # 60%
 ]
-# (cumulative_roll_ceiling, ovr_low, ovr_high, label).
+# (cumulative_roll_ceiling, ovr_low, ovr_high, label). Also reused by
+# /cmuweekly so its guaranteed 85+ card favours 85-87 and tapers upward.
 MYSTERYBOX_PLAYER_BANDS = [
     (0.3,  97, 99, "97+ OVR ⭐ JACKPOT"),   # 0.3%
     (1.5,  94, 96, "94-96 OVR — Epic"),      # 1.2%
     (10.0, 91, 93, "91-93 OVR — Rare"),      # 8.5%
     (35.0, 88, 90, "88-90 OVR — Uncommon"),  # 25%
     (100.0, 85, 87, "85-87 OVR — Common"),   # 65%
+]
+# Each Mystery Box open grants exactly ONE reward type, rolled from these
+# weights (cumulative_roll_ceiling, type). Coins-heavy, player rare.
+MYSTERYBOX_REWARD_TYPE_BANDS = [
+    (50.0,  "coins"),        # 50%
+    (70.0,  "gems"),         # 20%
+    (90.0,  "questPoints"),  # 20%
+    (100.0, "player"),       # 10%
 ]
 
 # ── Debut rewards ───────────────────────────────────────────────────

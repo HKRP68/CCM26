@@ -12,8 +12,8 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, UserStats, UserRoster
 from config import (
-    MAX_ROSTER, get_sell_value,
-    WEEKLY_CARD_MIN_OVR, WEEKLY_CARD_MAX_OVR, WEEKLY_CARD_COOLDOWN_DAYS,
+    MAX_ROSTER, get_sell_value, MYSTERYBOX_PLAYER_BANDS,
+    WEEKLY_CARD_COOLDOWN_DAYS,
 )
 from services import subscription_service
 from services.activity_service import log_activity
@@ -31,6 +31,17 @@ def _ensure_stats(session, user_id: int) -> UserStats:
         session.add(stats)
         session.flush()
     return stats
+
+
+def _weighted_weekly_band() -> tuple[int, int]:
+    """Roll an 85+ OVR band weighted so 85-87 is most likely (reuses the
+    Mystery Box player-band weights); returns (ovr_low, ovr_high)."""
+    roll = random.random() * 100.0
+    for ceiling, low, high, _label in MYSTERYBOX_PLAYER_BANDS:
+        if roll <= ceiling:
+            return low, high
+    _, low, high, _ = MYSTERYBOX_PLAYER_BANDS[-1]
+    return low, high
 
 
 # ── /cmuweekly ──────────────────────────────────────────────────────
@@ -64,8 +75,8 @@ async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML")
             return
 
-        player = get_random_player_by_rating_range(
-            session, WEEKLY_CARD_MIN_OVR, WEEKLY_CARD_MAX_OVR)
+        low, high = _weighted_weekly_band()
+        player = get_random_player_by_rating_range(session, low, high)
         line, extra = _grant_player(session, user, player)
         stats.last_weekly = datetime.utcnow()
         log_activity(session, user.id, "cmuweekly",
@@ -107,35 +118,44 @@ async def cmuchest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         stats = _ensure_stats(session, user.id)
-        cooldown = int(chest_cfg.get("cooldown_days", 10)) * 86400
-        ready, remaining = check_cooldown(stats, "last_coinchest", cooldown)
-        if not ready:
-            await update.message.reply_text(
-                f"⏳ Your next Coin Chests unlock in "
-                f"<b>{format_remaining(remaining)}</b>.",
-                parse_mode="HTML")
-            return
-
         count = int(chest_cfg.get("count", 3))
         lo = int(chest_cfg.get("min", 60000))
         hi = int(chest_cfg.get("max", 99000))
-        amounts = [random.randint(lo, hi) for _ in range(count)]
-        total = sum(amounts)
-        user.total_coins = (user.total_coins or 0) + total
-        stats.last_coinchest = datetime.utcnow()
+        cooldown = int(chest_cfg.get("cooldown_days", 10)) * 86400
+
+        # Quota cycle: up to `count` chests per `cooldown` window, ONE per open.
+        # last_coinchest marks the current cycle's start; coinchest_used counts
+        # opens within it. A new cycle begins on the first open after the window.
+        now = datetime.utcnow()
+        cycle_start = stats.last_coinchest
+        used = stats.coinchest_used or 0
+        if cycle_start is None or (now - cycle_start).total_seconds() >= cooldown:
+            stats.last_coinchest = now
+            stats.coinchest_used = 1
+        elif used < count:
+            stats.coinchest_used = used + 1
+        else:
+            reset_in = int(cooldown - (now - cycle_start).total_seconds())
+            await update.message.reply_text(
+                f"📦 You've opened all <b>{count}</b> coin chests this cycle.\n"
+                f"⏳ Your next chests unlock in <b>{format_remaining(reset_in)}</b>.",
+                parse_mode="HTML")
+            return
+
+        remaining_this_cycle = count - stats.coinchest_used
+        amount = random.randint(lo, hi)
+        user.total_coins = (user.total_coins or 0) + amount
         log_activity(session, user.id, "cmuchest",
-                     f"Coin chests: {amounts} = +{total}", coins_change=total)
+                     f"Coin chest {stats.coinchest_used}/{count}: +{amount}",
+                     coins_change=amount)
         session.commit()
 
-        chest_lines = "\n".join(
-            f"📦 Chest {i + 1}: <b>+{amt:,}</b> coins"
-            for i, amt in enumerate(amounts))
         await update.message.reply_text(
-            "🪙 <b>Coin Chests Opened!</b>\n"
+            "🪙 <b>Coin Chest Opened!</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            f"{chest_lines}\n"
+            f"📦 <b>+{amount:,}</b> coins\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Total: <b>+{total:,}</b> coins\n"
+            f"🎁 Chests left this cycle: <b>{remaining_this_cycle}</b>\n"
             f"💵 Balance: <b>{user.total_coins:,}</b>",
             parse_mode="HTML")
     finally:

@@ -5687,10 +5687,19 @@ def webapp_market():
                  db.query(UserRoster.player_id)
                    .filter(UserRoster.user_id == user.id).all()}
 
+        # The market discount is a Platinum perk: non-Platinum users see and pay
+        # the full base_price (no discount), Platinum sees the discounted price.
+        from services import subscription_service
+        is_plat = subscription_service.is_platinum(user)
+
         results = []
         for s in slots:
             p = players.get(s.player_id)
             if not p: continue
+            eff_price = s.final_price if is_plat else s.base_price
+            disc = (int((1 - s.final_price / s.base_price) * 100)
+                    if is_plat and s.base_price > 0 and s.final_price < s.base_price
+                    else 0)
             results.append({
                 "slot_id": s.id,
                 "slot_index": s.slot_index,
@@ -5702,9 +5711,8 @@ def webapp_market():
                 "country": p.country,
                 "version": p.version or "Base",
                 "base_price": s.base_price,
-                "final_price": s.final_price,
-                "discount_pct": (int((1 - s.final_price / s.base_price) * 100)
-                                 if s.base_price > 0 and s.final_price < s.base_price else 0),
+                "final_price": eff_price,
+                "discount_pct": disc,
                 "quantity": s.quantity,
                 "purchased_count": s.purchased_count,
                 "sold_out": s.purchased_count >= s.quantity,
@@ -5762,13 +5770,18 @@ def webapp_market_buy(slot_id):
             return {"ok": False, "error": "roster_full",
                     "message": "Your roster is full (25/25)."}, 400
 
+        # The market discount is a Platinum perk: Platinum pays final_price
+        # (5% off), everyone else pays the full base_price.
+        from services import subscription_service
+        price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+
         # Balance
-        if (user.total_coins or 0) < slot.final_price:
+        if (user.total_coins or 0) < price:
             return {"ok": False, "error": "insufficient_coins",
-                    "message": f"Need {slot.final_price:,} 🪙 — you have {user.total_coins:,}."}, 400
+                    "message": f"Need {price:,} 🪙 — you have {user.total_coins:,}."}, 400
 
         # Apply
-        user.total_coins -= slot.final_price
+        user.total_coins -= price
         # Append at next free position (use roster_count+1 for predictability)
         max_pos = (db.query(UserRoster.order_position)
                    .filter(UserRoster.user_id == user.id)
@@ -5791,25 +5804,25 @@ def webapp_market_buy(slot_id):
             from services.activity_service import log_activity
             log_activity(db, user.id, "market_buy",
                          f"[MiniApp] Market: {player.name} ({player.rating})",
-                         coins_change=-slot.final_price,
+                         coins_change=-price,
                          player_name=player.name, player_rating=player.rating)
         except Exception:
             pass
         try:
             from services.undo_service import record_buy
-            record_buy(db, user.id, player.id, slot.final_price)
+            record_buy(db, user.id, player.id, price)
         except Exception:
             pass
 
         db.commit()
         post_miniapp_activity(user, "buy_player",
                               player_name=player.name, rating=player.rating,
-                              price=slot.final_price)
+                              price=price)
         return {
             "ok": True,
             "player_name": player.name,
             "rating": player.rating,
-            "spent": slot.final_price,
+            "spent": price,
             "balance": {
                 "coins": user.total_coins or 0,
                 "roster_count": user.roster_count or 0,

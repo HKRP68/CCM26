@@ -162,7 +162,10 @@ class UserStats(Base):
     # /cmuweekly (Platinum weekly card), /cmuchest (Platinum coin chests).
     last_mysterybox = Column(DateTime, nullable=True)
     last_weekly = Column(DateTime, nullable=True)
+    # /cmuchest quota cycle: last_coinchest is the current cycle's start; up to
+    # coin_chests.count chests may be opened (one per /cmuchest) per cycle.
     last_coinchest = Column(DateTime, nullable=True)
+    coinchest_used = Column(Integer, default=0, nullable=False)
     # Cooldown-ready notification flags. Set True once we've notified the user
     # their cooldown is up, so the background job doesn't spam them every tick.
     # Reset to False when the user performs the action (consuming the cooldown).
