@@ -546,6 +546,13 @@ async def autobuild_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        from services import subscription_service
+        if not subscription_service.has_premium_commands(user):
+            await update.message.reply_text(
+                subscription_service.premium_required_message("/autobuild"),
+                parse_mode="HTML")
+            return
+
         roster = _get_ordered_roster(session, user.id)
         if len(roster) < 11:
             await update.message.reply_text(

@@ -705,6 +705,20 @@ body {
   background-color: var(--primary-accent);
   box-shadow: 0 0 6px var(--primary-accent);
 }
+
+/* Premium-locked pill: free users can see the toggle but not use it. */
+.autoplay-pill-btn.locked {
+  opacity: 0.6;
+  border-color: var(--card-border);
+  color: var(--text-muted);
+  background: rgba(var(--contrast-rgb), 0.04);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+.autoplay-pill-btn.locked .pill-dot {
+  background-color: var(--text-muted);
+  box-shadow: none;
+}
 .autoplay-status-message {
   margin: 0 0 12px;
   padding: 10px 12px;

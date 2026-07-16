@@ -256,6 +256,7 @@
         <th>Telegram ID</th>
         <th class="sortable">{{ sortcol('Coins', 'coins') }}</th>
         <th class="sortable">{{ sortcol('Gems', 'gems') }}</th>
+        <th>Tier</th>
         <th class="sortable">{{ sortcol('Roster', 'roster') }}</th>
         <th class="sortable">{{ sortcol('Wins', 'wins') }}</th>
         <th>Win%</th>
@@ -275,6 +276,12 @@
       <td style="font-size:.8rem;">{{ u.telegram_id }}</td>
       <td style="color:var(--accent);">{{ "{:,}".format(u.total_coins) }}</td>
       <td style="color:var(--accent2);">{{ u.total_gems }}</td>
+      <td style="font-size:.8rem;">
+        {% set t = active_tier(u) %}
+        {% if t == 'platinum' %}<span style="color:#b9f2ff;font-weight:600;">🏆 Platinum</span>
+        {% elif t == 'silver' %}<span style="color:#cbd5e1;font-weight:600;">🥈 Silver</span>
+        {% else %}<span style="color:var(--muted);">Free</span>{% endif %}
+      </td>
       <td>{{ u.roster_count }}/25</td>
       <td>{{ u.matches_won or 0 }} <span style="color:var(--muted);font-size:.75rem;">/ {{ u.matches_played or 0 }}</span></td>
       <td style="font-size:.85rem;">{{ u._winpct }}%</td>
@@ -289,7 +296,7 @@
     </tr>
     {% endfor %}
     {% if not users %}
-    <tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--muted);">
+    <tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--muted);">
       No users match the current filters.
       {% if active_filters %}
         <a href="{{ url_for('users_list') }}" style="color:var(--accent);">Clear filters</a>?

@@ -181,6 +181,9 @@ def _migrate_add_columns():
         "banned_at": "TIMESTAMP",
         "last_miniapp_chat_id": "BIGINT",
         "notifications_enabled": "BOOLEAN DEFAULT TRUE",
+        "subscription_tier": "VARCHAR(20) DEFAULT 'none'",
+        "subscription_expires_at": "TIMESTAMP",
+        "subscription_activated_at": "TIMESTAMP",
     }
     new_match_cols = {
         "winner_id": "INTEGER",
@@ -213,6 +216,11 @@ def _migrate_add_columns():
         _try_add("users", col, coltype)
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
+
+    # Subscription recurring-drop cooldown timestamps on user_stats.
+    _try_add("user_stats", "last_mysterybox", "TIMESTAMP")
+    _try_add("user_stats", "last_weekly", "TIMESTAMP")
+    _try_add("user_stats", "last_coinchest", "TIMESTAMP")
 
     # Challenge League Tournaments: per-league tournament command + match tagging.
     # (The tournament_* tables themselves are created by create_all above.)

@@ -24,6 +24,82 @@ DAILY_COOLDOWN = 86400
 GSPIN_COOLDOWN = 28800
 XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
 
+# ── Paid subscription tiers ─────────────────────────────────────────
+# Manually granted by an admin from the website (no self-serve payment).
+# A tier stays active for `duration_days` from activation.
+#   instant                 — one-time rewards credited on activation.
+#   mysterybox_cooldown_days — /cmumysterybox recurrence.
+#   cooldown_reduction_min_per_hour — shaves this many minutes off every hour
+#                             of a normal command cooldown (Silver 10, Plat 20).
+#   market_discount_pct     — % off player purchases (Platinum only).
+#   weekly_card             — enables /cmuweekly (guaranteed 85+ card, 7-day cd).
+#   coin_chests             — enables /cmuchest (Platinum recurring coin chests).
+#   premium_commands        — unlocks /autobuild and /wpmbot.
+#   autoplay                — unlocks the Mini App Autoplay button.
+SUBSCRIPTION_TIERS = {
+    "silver": {
+        "label": "🥈 Silver",
+        "price_inr": 59,
+        "duration_days": 30,
+        "instant": {"coins": 49000, "gems": 499, "quest_points": 499,
+                    "packs": ["Star Pack"]},
+        "mysterybox_cooldown_days": 10,
+        "cooldown_reduction_min_per_hour": 10,
+        "market_discount_pct": 0,
+        "weekly_card": False,
+        "coin_chests": None,
+        "premium_commands": True,
+        "autoplay": True,
+    },
+    "platinum": {
+        "label": "🏆 Platinum",
+        "price_inr": 99,
+        "duration_days": 30,
+        "instant": {"coins": 1000000, "gems": 1000, "quest_points": 1000,
+                    "packs": ["Legend Pack"]},
+        "mysterybox_cooldown_days": 5,
+        "cooldown_reduction_min_per_hour": 20,
+        "market_discount_pct": 5,
+        "weekly_card": True,
+        "coin_chests": {"count": 3, "min": 60000, "max": 99000,
+                        "cooldown_days": 10},
+        "premium_commands": True,
+        "autoplay": True,
+    },
+}
+
+# /cmuweekly guaranteed player band (any 85+ OVR).
+WEEKLY_CARD_MIN_OVR = 85
+WEEKLY_CARD_MAX_OVR = 99
+WEEKLY_CARD_COOLDOWN_DAYS = 7
+
+# ── Mystery box (/cmumysterybox) weighted reward tables ─────────────
+# (cumulative_roll_ceiling, low, high). A roll of Math.random()*100 in
+# (prev_ceiling, ceiling] selects the band; getRandomInt(low, high) is inclusive.
+MYSTERYBOX_COIN_BANDS = [
+    (1.0,  58001, 60000),   # 1%
+    (5.0,  52001, 58000),   # 4%
+    (15.0, 45001, 52000),   # 10%
+    (40.0, 36001, 45000),   # 25%
+    (100.0, 30000, 36000),  # 60%
+]
+# gems and questPoints share the same distribution.
+MYSTERYBOX_CURRENCY_BANDS = [
+    (1.0,  296, 300),   # 1%
+    (5.0,  286, 295),   # 4%
+    (15.0, 276, 285),   # 10%
+    (40.0, 261, 275),   # 25%
+    (100.0, 250, 260),  # 60%
+]
+# (cumulative_roll_ceiling, ovr_low, ovr_high, label).
+MYSTERYBOX_PLAYER_BANDS = [
+    (0.3,  97, 99, "97+ OVR ⭐ JACKPOT"),   # 0.3%
+    (1.5,  94, 96, "94-96 OVR — Epic"),      # 1.2%
+    (10.0, 91, 93, "91-93 OVR — Rare"),      # 8.5%
+    (35.0, 88, 90, "88-90 OVR — Uncommon"),  # 25%
+    (100.0, 85, 87, "85-87 OVR — Common"),   # 65%
+]
+
 # ── Debut rewards ───────────────────────────────────────────────────
 DEBUT_COINS = 1500
 DEBUT_GEMS = 30

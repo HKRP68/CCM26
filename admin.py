@@ -125,6 +125,13 @@ except ImportError:
     csrf = None
 
 
+@app.context_processor
+def _inject_subscription_helpers():
+    """Expose the ACTIVE subscription tier to templates (expired → 'none')."""
+    from services import subscription_service
+    return {"active_tier": subscription_service.get_tier}
+
+
 def csrf_exempt(view):
     """Mark a Flask view as exempt from CSRF protection.
 
@@ -2956,6 +2963,55 @@ def user_ban(user_id):
     finally:
         db.close()
     return redirect(url_for("user_detail", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/subscription", methods=["POST"])
+@login_required
+def user_subscription(user_id):
+    """Activate (silver/platinum) or deactivate a user's paid subscription.
+
+    Activating grants the tier's one-time instant rewards on a NEW activation
+    (repeated clicks / same-tier renewals don't re-grant — see
+    subscription_service.activate)."""
+    from services import subscription_service
+    db = get_session()
+    try:
+        user = db.query(User).get(user_id)
+        if not user:
+            flash("User not found", "error")
+            return redirect(url_for("users_list"))
+        action = (request.form.get("action", "") or "").strip().lower()
+        name = user.username or user.first_name or f"#{user.id}"
+        if action in ("silver", "platinum"):
+            result = subscription_service.activate(db, user, action)
+            log_admin(db, "user_subscription", target_type="user",
+                      target_id=user.id, target_name=name,
+                      detail=f"Activated {action}; instant={result.get('instant_granted')}")
+            db.commit()
+            granted = result.get("instant_granted")
+            extra = ""
+            if granted:
+                extra = (f" (+{granted['coins']:,} coins, +{granted['gems']} gems, "
+                         f"+{granted['quest_points']} QP"
+                         + (f", packs: {', '.join(granted['packs'])}" if granted.get('packs') else "")
+                         + ")")
+            flash(f"⭐ Activated {action.title()} for {name}{extra}", "success")
+        elif action == "deactivate":
+            subscription_service.deactivate(db, user)
+            log_admin(db, "user_subscription", target_type="user",
+                      target_id=user.id, target_name=name,
+                      detail="Deactivated subscription")
+            db.commit()
+            flash(f"Subscription deactivated for {name}", "info")
+        else:
+            flash("Unknown subscription action", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("Subscription action failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(request.referrer or url_for("user_detail", user_id=user_id))
 
 
 @app.route("/users/bulk-action", methods=["POST"])
@@ -5821,6 +5877,11 @@ def webapp_xi_autobuild():
         return err
     db, user, tg_id = auth
     try:
+        from services import subscription_service
+        if not subscription_service.has_premium_commands(user):
+            return {"ok": False, "error": "premium_required",
+                    "message": "Autobuild is a premium feature. Upgrade to "
+                               "Silver or Platinum to unlock it."}, 403
         from handlers.lineup import _build_best_xi
         rows = (db.query(UserRoster, Player)
                 .join(Player, UserRoster.player_id == Player.id)
@@ -6958,7 +7019,22 @@ def _match_rest_full_state(db, match_id, user_id):
         "roles": participant_roles,
         "snapshot": build_snapshot(db, match_id, user_id),
         "state": _copy.deepcopy(state),
+        # Autoplay is a premium (Silver/Platinum) feature. The client renders the
+        # toggle locked when `premium` is false.
+        "autoplay": {"premium": _user_has_autoplay(db, user_id)},
     }
+
+
+def _user_has_autoplay(db, user_id) -> bool:
+    """True if the given internal user id has an active tier that unlocks
+    the Mini App Autoplay toggle."""
+    try:
+        from services import subscription_service
+        user = db.query(User).get(user_id)
+        return subscription_service.has_autoplay(user)
+    except Exception:
+        logger.exception("_user_has_autoplay failed")
+        return False
 
 
 @app.route("/api/match/state", methods=["GET"])
@@ -7334,6 +7410,12 @@ def match_rest_autoplay():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
+        # Autoplay is a premium (Silver/Platinum) feature.
+        from services import subscription_service
+        if not subscription_service.has_autoplay(user):
+            return {"ok": False, "error": "premium_required",
+                    "message": "Autoplay is a premium feature. Upgrade to "
+                               "Silver or Platinum to unlock it."}, 403
         from services.match_webapp_service import (
             auto_play_user_turns, auto_play_bot_turns, get_state_is_vsbot)
         from services.match_webapp_access import get_state, get_next_action

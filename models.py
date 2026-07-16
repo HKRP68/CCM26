@@ -65,6 +65,14 @@ class User(Base):
     # cooldown-ready DM nudges, scheduled FOMO push messages, and echoing
     # this user's Mini App actions into groups. Toggled via /notifications.
     notifications_enabled = Column(Boolean, default=True, nullable=False)
+    # ── Paid subscription (manually granted by an admin from the website) ──
+    # 'none' = free user. 'silver'/'platinum' = active paid tiers. Access is
+    # time-boxed: a tier is only "active" while subscription_expires_at is in the
+    # future — see services/subscription_service.get_tier(), which treats an
+    # expired tier as 'none' everywhere without needing a background job.
+    subscription_tier = Column(String(20), default="none", nullable=False)
+    subscription_expires_at = Column(DateTime, nullable=True)
+    subscription_activated_at = Column(DateTime, nullable=True)
     # Ban / disable — banned users are refused by the bot's middleware
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)
@@ -149,6 +157,12 @@ class UserStats(Base):
     last_ximage = Column(DateTime, nullable=True)
     # Free Pack (Mini App, ad-gated, 1h cooldown)
     last_free_pack = Column(DateTime, nullable=True)
+    # ── Subscription recurring-drop cooldowns ──
+    # /cmumysterybox (tiered: Silver every 10 days, Platinum every 5),
+    # /cmuweekly (Platinum weekly card), /cmuchest (Platinum coin chests).
+    last_mysterybox = Column(DateTime, nullable=True)
+    last_weekly = Column(DateTime, nullable=True)
+    last_coinchest = Column(DateTime, nullable=True)
     # Cooldown-ready notification flags. Set True once we've notified the user
     # their cooldown is up, so the background job doesn't spam them every tick.
     # Reset to False when the user performs the action (consuming the cooldown).

@@ -70,6 +70,13 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        from services import subscription_service
+        if not subscription_service.has_premium_commands(user):
+            await update.message.reply_text(
+                subscription_service.premium_required_message("/wpmbot"),
+                parse_mode="HTML")
+            return
+
         from handlers.match import (
             _active_match_in_chat, _active_match_for_user,
             _chat_busy_message, _user_busy_message,

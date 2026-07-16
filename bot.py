@@ -235,6 +235,9 @@ from handlers.botmatch import (
     botmatch_cancel_callback,
 )
 
+# Subscription mystery box + recurring drops
+from handlers.cmumysterybox import cmumysterybox_handler, mysterybox_callback
+from handlers.premium_drops import cmuweekly_handler, cmuchest_handler
 # New social & gambling games
 from handlers.lucky7 import lucky7_handler, lucky7_callback
 from handlers.powerplay import powerplay_handler
@@ -288,6 +291,9 @@ BOT_MENU_COMMANDS = (
     ("claim", "Claim your hourly player and coin reward"),
     ("gspin", "Spin the reward wheel"),
     ("daily", "Claim your daily reward"),
+    ("cmumysterybox", "Open your subscriber Mystery Box 🎁"),
+    ("cmuweekly", "Claim your Platinum weekly card 🏆"),
+    ("cmuchest", "Open your Platinum coin chests 🪙"),
     ("myroster", "View your player roster"),
     ("playerinfo", "View details for a player"),
     ("releasepl", "Release one player from your roster"),
@@ -1275,6 +1281,12 @@ def main():
         app.add_handler(CallbackQueryHandler(trade_back_callback, pattern=r"^tback_"))
 
         # ── Social & Gambling Games ──────────────────────────────────
+        # Subscription mystery box + recurring drops
+        app.add_handler(CommandHandler("cmumysterybox", cmumysterybox_handler))
+        app.add_handler(CallbackQueryHandler(mysterybox_callback, pattern=r"^cmb_"))
+        app.add_handler(CommandHandler("cmuweekly", cmuweekly_handler))
+        app.add_handler(CommandHandler("cmuchest", cmuchest_handler))
+
         app.add_handler(CommandHandler("lucky7", lucky7_handler))
         app.add_handler(CallbackQueryHandler(lucky7_callback, pattern=r"^l7_"))
 
