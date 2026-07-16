@@ -337,8 +337,13 @@ def buy_player(session, user, slot_index):
     if user.roster_count >= MAX_ROSTER:
         return False, f"Roster full ({MAX_ROSTER}). Release players first."
 
-    if user.total_coins < slot.final_price:
-        return False, f"Not enough coins. Need {slot.final_price:,}, have {user.total_coins:,}."
+    # The market discount is a Platinum perk: Platinum pays final_price (5% off),
+    # everyone else pays the full base_price.
+    from services import subscription_service
+    price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+
+    if user.total_coins < price:
+        return False, f"Not enough coins. Need {price:,}, have {user.total_coins:,}."
 
     # Atomic decrement using UPDATE...WHERE — prevents race condition
     result = session.execute(
@@ -353,7 +358,7 @@ def buy_player(session, user, slot_index):
         return False, "Sold out — someone else just got it."
 
     # Charge user, add to roster
-    user.total_coins -= slot.final_price
+    user.total_coins -= price
     user.roster_count += 1
     next_pos = user.roster_count
     entry = UserRoster(
@@ -366,7 +371,7 @@ def buy_player(session, user, slot_index):
     session.add(MarketPurchase(
         user_id=user.id, market_type="player",
         slot_index=slot.slot_index, item_id=player.id, item_name=player.name,
-        price_paid=slot.final_price,
+        price_paid=price,
     ))
 
     return True, player.name

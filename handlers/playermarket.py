@@ -128,6 +128,14 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             subtitle=subtitle,
         )
 
+        # The market discount is a Platinum perk: non-Platinum users see/pay the
+        # full base_price; Platinum sees the discounted final_price.
+        from services import subscription_service
+        is_plat = subscription_service.is_platinum(user)
+
+        def _slot_price(slot):
+            return slot.final_price if is_plat else slot.base_price
+
         # Build buttons: one per player (their name) + Cancel
         btns = []
         for slot in slots:
@@ -135,17 +143,20 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             if not player:
                 continue
             sold = (slot.purchased_count >= slot.quantity)
-            label = f"{'❌ ' if sold else ''}{player.name} • {slot.final_price:,} 🪙"
+            label = f"{'❌ ' if sold else ''}{player.name} • {_slot_price(slot):,} 🪙"
             cb = (f"pmsel_{tg_user.id}_{slot.slot_index}"
                   if not sold else f"pmnoop_{tg_user.id}")
             btns.append([InlineKeyboardButton(label, callback_data=cb)])
         btns.append([InlineKeyboardButton(
             "❌ Cancel", callback_data=f"pmcancel_{tg_user.id}")])
 
+        discount_line = ("🏷️ All cards <b>5% off</b> · Refreshes every 24h"
+                         if is_plat else
+                         "🏷️ <b>Platinum</b> perk: 5% off all cards · Refreshes every 24h")
         caption = (
             f"💰 <b>{user.total_coins:,}</b> 🪙 · "
             f"📊 {user.roster_count}/25 roster\n"
-            f"🏷️ All cards <b>5% off</b> · Refreshes every 24h"
+            f"{discount_line}"
         )
 
         if img_bytes:
@@ -167,7 +178,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 if p:
                     text_lines.append(
                         f"#{slot.slot_index+1}. <b>{p.name}</b> "
-                        f"({p.rating} OVR) — {slot.final_price:,} 🪙")
+                        f"({p.rating} OVR) — {_slot_price(slot):,} 🪙")
             sent = await update.message.reply_text(
                 "\n".join(text_lines),
                 parse_mode="HTML",
@@ -227,6 +238,11 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
 
         sold = (slot.purchased_count >= slot.quantity)
 
+        # The market discount is a Platinum perk: non-Platinum pays base_price.
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        from services import subscription_service
+        price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+
         # Build the player's full card
         try:
             card_bytes = generate_card(player)
@@ -237,10 +253,10 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
             f"<b>{player.name}</b>",
             f"⭐ {player.rating} OVR · {player.category} · {player.country or '—'}",
             "",
-            f"💸 Price: <b>{slot.final_price:,}</b> 🪙",
+            f"💸 Price: <b>{price:,}</b> 🪙",
         ]
-        if slot.base_price > slot.final_price:
-            disc = int((1 - slot.final_price / slot.base_price) * 100)
+        if price < slot.base_price:
+            disc = int((1 - price / slot.base_price) * 100)
             cap_lines.insert(3, f"<s>{slot.base_price:,}</s> 🪙  <i>(-{disc}%)</i>")
         if sold:
             cap_lines.append("\n❌ <i>Sold out</i>")
@@ -254,7 +270,7 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         else:
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
-                    f"✅ Buy ({slot.final_price:,} 🪙)",
+                    f"✅ Buy ({price:,} 🪙)",
                     callback_data=f"pmbuy_{tg.id}_{slot_index}",
                 ),
                 InlineKeyboardButton("❌ Cancel",

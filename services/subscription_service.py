@@ -119,6 +119,13 @@ def discounted_price(user, price: int) -> int:
     return price * (100 - pct) // 100
 
 
+def market_price(user, base_price: int, final_price: int) -> int:
+    """Player Market price for this user. The market's discount is a Platinum
+    perk: Platinum pays the discounted ``final_price``; everyone else pays the
+    full ``base_price``."""
+    return final_price if is_platinum(user) else base_price
+
+
 # ── Messaging ───────────────────────────────────────────────────────
 
 def premium_required_message(feature: str = "This feature") -> str:

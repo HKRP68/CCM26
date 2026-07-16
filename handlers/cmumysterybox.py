@@ -18,7 +18,7 @@ from database import get_session
 from models import User, UserStats, UserRoster
 from config import (
     MYSTERYBOX_COIN_BANDS, MYSTERYBOX_CURRENCY_BANDS, MYSTERYBOX_PLAYER_BANDS,
-    MAX_ROSTER, get_sell_value,
+    MYSTERYBOX_REWARD_TYPE_BANDS, MAX_ROSTER, get_sell_value,
 )
 from services import subscription_service
 from services.activity_service import log_activity
@@ -69,6 +69,15 @@ def get_weighted_player_band() -> tuple[int, int, str]:
             return low, high, label
     _, low, high, label = MYSTERYBOX_PLAYER_BANDS[-1]
     return low, high, label
+
+
+def get_weighted_reward_type() -> str:
+    """Roll which SINGLE reward type this box grants: coins/gems/questPoints/player."""
+    roll = random.random() * 100.0
+    for ceiling, rtype in MYSTERYBOX_REWARD_TYPE_BANDS:
+        if roll <= ceiling:
+            return rtype
+    return MYSTERYBOX_REWARD_TYPE_BANDS[-1][1]
 
 
 # ── Keyboards ───────────────────────────────────────────────────────
@@ -191,25 +200,39 @@ async def _reveal(query, opened_index: int):
                 pass
             return
 
-        # Generate rewards.
-        coins = get_weighted_currency("coins")
-        gems = get_weighted_currency("gems")
-        qp = get_weighted_currency("questPoints")
-        low, high, band_label = get_weighted_player_band()
-        player = get_random_player_by_rating_range(session, low, high)
+        # Each box grants exactly ONE reward type.
+        reward_type = get_weighted_reward_type()
+        coins = gems = qp = 0
+        reward_line = ""
+        log_detail = ""
 
-        user.total_coins = (user.total_coins or 0) + coins
-        user.total_gems = (user.total_gems or 0) + gems
-        user.quest_points = (user.quest_points or 0) + qp
-
-        player_line, extra_coins = _grant_player(session, user, player)
-        coins += extra_coins  # for the activity log total only
+        if reward_type == "coins":
+            coins = get_weighted_currency("coins")
+            user.total_coins = (user.total_coins or 0) + coins
+            reward_line = f"💰 You won <b>{coins:,}</b> Coins!"
+            log_detail = f"+{coins} coins"
+        elif reward_type == "gems":
+            gems = get_weighted_currency("gems")
+            user.total_gems = (user.total_gems or 0) + gems
+            reward_line = f"💎 You won <b>{gems}</b> Gems!"
+            log_detail = f"+{gems} gems"
+        elif reward_type == "questPoints":
+            qp = get_weighted_currency("questPoints")
+            user.quest_points = (user.quest_points or 0) + qp
+            reward_line = f"🎯 You won <b>{qp}</b> Quest Points!"
+            log_detail = f"+{qp} QP"
+        else:  # player
+            low, high, band_label = get_weighted_player_band()
+            player = get_random_player_by_rating_range(session, low, high)
+            reward_line, extra_coins = _grant_player(session, user, player)
+            coins += extra_coins  # squad-full fallback credits coins
+            log_detail = (f"player {player.name if player else 'none'} "
+                          f"({band_label})")
 
         stats.last_mysterybox = datetime.utcnow()
 
         log_activity(session, user.id, "cmumysterybox",
-                     f"Mystery Box: +{coins} coins, +{gems} gems, +{qp} QP; "
-                     f"player: {player.name if player else 'none'} ({band_label})",
+                     f"Mystery Box: {log_detail}",
                      coins_change=coins, gems_change=gems)
         try:
             from services.quest_service import safe_track
@@ -221,10 +244,7 @@ async def _reveal(query, opened_index: int):
         text = (
             "🎉 <b>Mystery Box Opened!</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 <b>{coins:,}</b> Coins\n"
-            f"💎 <b>{gems}</b> Gems\n"
-            f"🎯 <b>{qp}</b> Quest Points\n"
-            f"{player_line}\n"
+            f"{reward_line}\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             f"💵 Balance: <b>{user.total_coins:,}</b> coins"
         )

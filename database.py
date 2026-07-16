@@ -221,6 +221,7 @@ def _migrate_add_columns():
     _try_add("user_stats", "last_mysterybox", "TIMESTAMP")
     _try_add("user_stats", "last_weekly", "TIMESTAMP")
     _try_add("user_stats", "last_coinchest", "TIMESTAMP")
+    _try_add("user_stats", "coinchest_used", "INTEGER DEFAULT 0")
 
     # Challenge League Tournaments: per-league tournament command + match tagging.
     # (The tournament_* tables themselves are created by create_all above.)
