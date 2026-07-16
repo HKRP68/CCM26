@@ -3875,15 +3875,15 @@ def webapp_init():
         from services import adsgram_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
-        from services.command_config_service import get_cooldown
+        from services.command_config_service import get_user_cooldown
         gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db)
         daily_quota = _quota_service.get_quota_status(stats, "daily", session=db)
         gspin_ready = not gspin_quota["all_used"]
         gspin_remaining = gspin_quota["cycle_reset_in"] if gspin_quota["all_used"] else 0
         daily_ready = not daily_quota["all_used"]
         daily_remaining = daily_quota["cycle_reset_in"] if daily_quota["all_used"] else 0
-        effective_gspin_cd = get_cooldown(db, "gspin", GSPIN_COOLDOWN)
-        effective_daily_cd = get_cooldown(db, "daily", DAILY_COOLDOWN)
+        effective_gspin_cd = get_user_cooldown(db, user, "gspin", GSPIN_COOLDOWN)
+        effective_daily_cd = get_user_cooldown(db, user, "daily", DAILY_COOLDOWN)
         played = user.matches_played or 0
         won = user.matches_won or 0
         win_rate = round(won / played * 100, 1) if played else 0

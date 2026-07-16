@@ -173,7 +173,7 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Check enabled flag
         from services.command_config_service import (
-            is_command_enabled, get_disabled_message, get_cooldown,
+            is_command_enabled, get_disabled_message, get_user_cooldown,
             get_coin_amount,
         )
         if not is_command_enabled(session, "claim"):
@@ -188,7 +188,7 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        effective_cooldown = get_cooldown(session, "claim", CLAIM_COOLDOWN)
+        effective_cooldown = get_user_cooldown(session, user, "claim", CLAIM_COOLDOWN)
         ready, remaining = check_cooldown(stats, "last_claim", effective_cooldown)
         if not ready:
             from services.message_service import get_msg

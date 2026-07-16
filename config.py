@@ -19,9 +19,13 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 MEDIA_STORAGE_CHAT_ID = os.getenv("MEDIA_STORAGE_CHAT_ID", "").strip()
 
 # ── Cooldowns (seconds) ─────────────────────────────────────────────
-CLAIM_COOLDOWN = 3600
-DAILY_COOLDOWN = 86400
-GSPIN_COOLDOWN = 28800
+# These are the base (free-user) cooldowns. Paid tiers get a proportional
+# reduction applied via services.subscription_service.cooldown_seconds
+# (Silver −10 min/hr → ×0.833, Platinum −20 min/hr → ×0.667). For example
+# /daily at 12h → Silver 10h, Platinum 8h.
+CLAIM_COOLDOWN = 3600    # 1 hour
+DAILY_COOLDOWN = 43200   # 12 hours
+GSPIN_COOLDOWN = 28800   # 8 hours
 XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
 
 # ── Paid subscription tiers ─────────────────────────────────────────

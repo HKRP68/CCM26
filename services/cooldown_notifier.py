@@ -81,7 +81,7 @@ def _get_cooldowns(session):
         },
         {
             "field": "last_claim", "flag": "notified_claim_ready",
-            "cooldown": claim_cd,
+            "cooldown": claim_cd, "tiered": True,
             "message": "⏰ Your hourly Claim is ready! Use /claim for a free player + coins.",
         },
         {
@@ -152,7 +152,14 @@ async def run_cooldown_notifications(application):
                         ready = False
                 elif last is not None:
                     elapsed = (now - last).total_seconds()
-                    ready = elapsed >= cd["cooldown"]
+                    cd_seconds = cd["cooldown"]
+                    if cd.get("tiered"):
+                        try:
+                            from services.subscription_service import cooldown_seconds as _tier_cd
+                            cd_seconds = _tier_cd(user, cd_seconds)
+                        except Exception:
+                            pass
+                    ready = elapsed >= cd_seconds
 
                 if last is None and not quota_kind:
                     # Never used this legacy feature — keep flag clear.
