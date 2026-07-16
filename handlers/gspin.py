@@ -109,8 +109,8 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup([[btn]]))
                 return
 
-        from services.command_config_service import get_cooldown
-        effective_cooldown = get_cooldown(session, "gspin", GSPIN_COOLDOWN)
+        from services.command_config_service import get_user_cooldown
+        effective_cooldown = get_user_cooldown(session, user, "gspin", GSPIN_COOLDOWN)
         ready, remaining = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
             from services.message_service import get_msg
@@ -158,8 +158,8 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        from services.command_config_service import get_cooldown
-        effective_cooldown = get_cooldown(session, "gspin", GSPIN_COOLDOWN)
+        from services.command_config_service import get_user_cooldown
+        effective_cooldown = get_user_cooldown(session, user, "gspin", GSPIN_COOLDOWN)
         ready, _ = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
             release(key)

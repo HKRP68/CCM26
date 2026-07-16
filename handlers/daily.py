@@ -26,7 +26,7 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session()
     try:
         from services.command_config_service import (
-            is_command_enabled, get_disabled_message, get_cooldown,
+            is_command_enabled, get_disabled_message, get_user_cooldown,
             get_coin_amount, get_player_count,
         )
         if not is_command_enabled(session, "daily"):
@@ -83,7 +83,7 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup([[btn]]))
                 return
 
-        effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
+        effective_cooldown = get_user_cooldown(session, user, "daily", DAILY_COOLDOWN)
         ready, remaining = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
             from services.message_service import get_msg
@@ -132,8 +132,8 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-        from services.command_config_service import get_cooldown
-        effective_cooldown = get_cooldown(session, "daily", DAILY_COOLDOWN)
+        from services.command_config_service import get_user_cooldown
+        effective_cooldown = get_user_cooldown(session, user, "daily", DAILY_COOLDOWN)
         ready, _ = check_cooldown(stats, "last_daily", effective_cooldown)
         if not ready:
             release(key)

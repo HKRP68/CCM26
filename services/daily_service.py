@@ -23,10 +23,10 @@ def check_daily_ready(session, user):
     """
     from models import UserStats
     from config import DAILY_COOLDOWN
-    from services.command_config_service import get_cooldown
+    from services.command_config_service import get_user_cooldown
 
     stats = session.query(UserStats).filter(UserStats.user_id == user.id).first()
-    effective_cd = get_cooldown(session, "daily", DAILY_COOLDOWN)
+    effective_cd = get_user_cooldown(session, user, "daily", DAILY_COOLDOWN)
     if not stats or not stats.last_daily:
         return True, 0
     elapsed = (datetime.utcnow() - stats.last_daily).total_seconds()
@@ -55,7 +55,7 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False,
     from models import UserStats, UserRoster
     from config import DAILY_COOLDOWN, DAILY_COINS, STREAK_MILESTONE, MAX_ROSTER
     from services.command_config_service import (
-        get_cooldown, get_coin_amount, get_player_count, get_reward,
+        get_user_cooldown, get_coin_amount, get_player_count, get_reward,
     )
     from services.config_service import get_config
     from services.streak_service import update_streak
@@ -71,7 +71,7 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False,
     # Cooldown gate (defense in depth — caller should have checked).
     # Skip when caller manages its own quota (Mini App).
     if not skip_cooldown:
-        effective_cd = get_cooldown(session, "daily", DAILY_COOLDOWN)
+        effective_cd = get_user_cooldown(session, user, "daily", DAILY_COOLDOWN)
         if stats.last_daily:
             elapsed = (datetime.utcnow() - stats.last_daily).total_seconds()
             if elapsed < effective_cd:

@@ -39,6 +39,24 @@ def get_cooldown(session, command_key, default_seconds):
     return row.cooldown_seconds
 
 
+def get_user_cooldown(session, user, command_key, default_seconds):
+    """Effective cooldown for a specific ``user``: the admin/base cooldown for
+    the command with the user's subscription-tier reduction applied on top.
+
+    Free users (or ``user`` is None) get the base value unchanged; Silver and
+    Platinum tiers get their proportional reduction. Use this at every point
+    that gates or displays a per-user cooldown so paid tiers are honoured
+    consistently across the bot and Mini App.
+    """
+    base = get_cooldown(session, command_key, default_seconds)
+    try:
+        from services.subscription_service import cooldown_seconds
+        return cooldown_seconds(user, base)
+    except Exception:
+        logger.exception("get_user_cooldown tier reduction failed")
+        return base
+
+
 def get_reward(session, command_key):
     """Returns CommandReward row or None."""
     try:
