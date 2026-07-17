@@ -146,7 +146,7 @@ async def run_cooldown_notifications(application):
                 ready = False
                 if quota_kind:
                     try:
-                        quota = get_quota_status(stats, quota_kind, session=session)
+                        quota = get_quota_status(stats, quota_kind, session=session, user=user)
                         ready = not quota["all_used"]
                     except Exception:
                         ready = False

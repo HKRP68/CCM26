@@ -52,7 +52,7 @@ async def daily_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      if update.effective_chat else "private")
         is_private = (chat_type == "private")
         if has_miniapp_url():
-            quota = get_quota_status(stats, "daily", session=session)
+            quota = get_quota_status(stats, "daily", session=session, user=user)
             if quota["all_used"]:
                 await update.message.reply_text(
                     "⏳ All daily claims are used. New claims in "

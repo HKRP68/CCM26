@@ -3876,8 +3876,8 @@ def webapp_init():
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
         from services.command_config_service import get_user_cooldown
-        gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db)
-        daily_quota = _quota_service.get_quota_status(stats, "daily", session=db)
+        gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db, user=user)
+        daily_quota = _quota_service.get_quota_status(stats, "daily", session=db, user=user)
         gspin_ready = not gspin_quota["all_used"]
         gspin_remaining = gspin_quota["cycle_reset_in"] if gspin_quota["all_used"] else 0
         daily_ready = not daily_quota["all_used"]
@@ -4618,9 +4618,9 @@ def webapp_spin():
                 pass
 
         # ── Check quota ──
-        allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db)
+        allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db, user=user)
         if not allowed:
-            status = quota_service.get_quota_status(stats, "spin")
+            status = quota_service.get_quota_status(stats, "spin", session=db, user=user)
             if reason == "ad_required":
                 return {"ok": False, "error": "ad_required",
                         "message": "Free spin already used — watch an ad for next spin.",
@@ -4648,7 +4648,7 @@ def webapp_spin():
         result = apply_reward(db, user, reward, hold_overflow=True)
         # Update legacy last_gspin (bot still references it) + consume quota slot
         stats.last_gspin = _dt.utcnow()
-        quota_service.consume_slot(stats, "spin", slot_type)
+        quota_service.consume_slot(stats, "spin", slot_type, session=db, user=user)
 
         try:
             from services.activity_service import log_activity
@@ -4670,7 +4670,7 @@ def webapp_spin():
             "reward": result,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "spin", session=db),
+            "quota": quota_service.get_quota_status(stats, "spin", session=db, user=user),
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -4780,9 +4780,9 @@ def webapp_daily():
                 pass
 
         # ── Check quota ──
-        allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db)
+        allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db, user=user)
         if not allowed:
-            status = quota_service.get_quota_status(stats, "daily")
+            status = quota_service.get_quota_status(stats, "daily", session=db, user=user)
             if reason == "ad_required":
                 return {"ok": False, "error": "ad_required",
                         "message": "Free daily already used — watch an ad for next claim.",
@@ -4796,7 +4796,7 @@ def webapp_daily():
                         "quota": status,
                         "cooldown_remaining": status["cycle_reset_in"]}, 429
 
-        # ── Claim ── (skip the legacy 24h cooldown, quota_service handles limits)
+        # ── Claim ── (skip the legacy last_daily cooldown; quota_service handles limits)
         # hold_overflow=True → parks squad-full players as pending claims so the
         # Mini App can offer a Replace flow instead of discarding them.
         result = claim_daily(db, user, source_label=f"MiniApp/{slot_type}/{verified_via or 'free'}",
@@ -4805,7 +4805,7 @@ def webapp_daily():
             return {"ok": False, "error": result.get("error", "internal"),
                     "message": "Daily claim failed unexpectedly."}, 500
 
-        quota_service.consume_slot(stats, "daily", slot_type)
+        quota_service.consume_slot(stats, "daily", slot_type, session=db, user=user)
         db.commit()
         post_miniapp_activity(user, "daily",
                               coins=result.get("coins"), gems=result.get("gems"),
@@ -4817,7 +4817,7 @@ def webapp_daily():
             "ok": True,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "daily", session=db),
+            "quota": quota_service.get_quota_status(stats, "daily", session=db, user=user),
             "reward": {
                 "coins": result["coins"],
                 "gems": result["gems"],
