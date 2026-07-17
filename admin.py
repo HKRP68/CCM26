@@ -8553,87 +8553,18 @@ def _broadcast_wpm_current_bowler_card(match_id):
         logger.exception("failed to broadcast /wpm bowler card")
 
 def _broadcast_match_scorecard(match_id):
-    """Update the pinned live scorecard message in the match chat.
+    """Live scorecard chat broadcast — intentionally disabled.
 
-    The worker edits the same Telegram message whenever possible, sends it once
-    if missing, and pins that live scorecard so the chat always has the latest
-    score without spam. All Telegram/network work stays off the request path.
+    Previously this posted (and pinned) an over-by-over "LIVE SCORECARD" message
+    in the match chat. That is now suppressed for every Mini-App match —
+    /wpm (2-player), /cm (Challenge Mode) and /wpmbot (vs-bot) — so the group is
+    never spammed with live-score updates. Players follow the score live in the
+    Mini App; the only chat output is the final Match Summary + image.
+
+    Kept as a no-op so the existing call sites don't need to change and the
+    behaviour can be re-enabled in one place if ever needed.
     """
-    import threading
-
-    def _work():
-        try:
-            from services.match_webapp_access import get_state, get_next_action, save_state
-            from services.match_broadcast import build_live_scorecard_text, _launch_url
-            from services.match_state_store import (A_PICK_DELIVERY, A_PICK_LENGTH,
-                                                     A_PICK_NEW_BOWLER)
-
-            state = get_state(match_id)
-            if not state:
-                return
-            # /wpmbot (vs-bot) matches don't get a live scorecard in the group
-            # chat — the only chat output is the final Match Summary + image.
-            if state.get("is_vsbot"):
-                return
-            chat_id = state.get("chat_id")
-            if not chat_id:
-                return
-
-            na = get_next_action(match_id)
-            waiting = None
-            if na in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
-                uname = state.get("bowl_username")
-                waiting = f"@{uname}" if uname else state.get("bowl_team_name", "the bowler")
-
-            text = build_live_scorecard_text(state, waiting_for_mention=waiting)
-
-            reply_markup = None
-            url = _launch_url(match_id, chat_id)
-            if url:
-                reply_markup = {"inline_keyboard": [[
-                    {"text": "▶️ Play Match", "url": url}]]}
-
-            message_id = state.get("live_score_msg_id")
-            edited = False
-            if message_id:
-                payload = {"chat_id": chat_id, "message_id": message_id,
-                           "text": text, "parse_mode": "HTML",
-                           "disable_web_page_preview": True}
-                if reply_markup:
-                    payload["reply_markup"] = reply_markup
-                res = _tg_api_post("editMessageText", payload)
-                edited = bool(res and (res.get("ok") or "not modified" in (res.get("description", "").lower())))
-
-            if not edited:
-                payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                           "disable_web_page_preview": True}
-                if reply_markup:
-                    payload["reply_markup"] = reply_markup
-                res = _tg_api_post("sendMessage", payload)
-                if res and res.get("ok"):
-                    msg = (res.get("result") or {})
-                    new_mid = msg.get("message_id")
-                    if new_mid:
-                        state["live_score_msg_id"] = new_mid
-                        message_id = new_mid
-                        save_state(match_id, state)
-
-            if message_id and not state.get("live_score_pinned"):
-                pin_res = _tg_api_post("pinChatMessage", {
-                    "chat_id": chat_id,
-                    "message_id": message_id,
-                    "disable_notification": True,
-                })
-                if pin_res and pin_res.get("ok"):
-                    state["live_score_pinned"] = True
-                    save_state(match_id, state)
-        except Exception:
-            logger.exception("scorecard broadcast worker failed")
-
-    try:
-        threading.Thread(target=_work, daemon=True).start()
-    except Exception:
-        logger.exception("could not spawn scorecard broadcast thread")
+    return
 
 
 def _top_performers_for_summary(arena_state):
