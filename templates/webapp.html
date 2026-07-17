@@ -2261,7 +2261,7 @@
 
 <!-- ════ Spin screen ════ -->
 <div class="screen" id="screen-spin">
-  <div class="ad-banner">🎁 <strong>1 FREE spin</strong> + 📺 <strong>5 ad spins</strong> every 24 hours.</div>
+  <div class="ad-banner" id="spin-ad-banner">🎁 <strong>1 FREE spin</strong> + 📺 <strong>5 ad spins</strong> per cycle.</div>
   <div class="spin-container">
     <div class="wheel-stage" id="wheel-stage">
       <div class="wheel-pointer" aria-hidden="true"></div>
@@ -2287,7 +2287,7 @@
 
 <!-- ════ Daily screen ════ -->
 <div class="screen" id="screen-daily">
-  <div class="ad-banner">🎁 <strong>1 FREE claim</strong> + 📺 <strong>5 ad claims</strong> every 24 hours.</div>
+  <div class="ad-banner" id="daily-ad-banner">🎁 <strong>1 FREE claim</strong> + 📺 <strong>5 ad claims</strong> per cycle.</div>
   <div style="padding: 1rem 0; text-align: center;">
     <div style="font-size: 4rem; margin-bottom: 0.5rem;">📅</div>
     <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Daily Reward</h2>
@@ -3086,7 +3086,7 @@ async function refreshDashboard() {
   const sq = data.gspin?.quota;
   if (sq) {
     if (sq.free_available) {
-      spinSub.textContent = '🎁 1 free + 5 ads';
+      spinSub.textContent = `🎁 1 free + ${sq.ad_total} ads`;
     } else if (sq.ad_used < sq.ad_total) {
       spinSub.textContent = `📺 ${sq.ad_total - sq.ad_used} ad spins left`;
     } else {
@@ -3095,6 +3095,7 @@ async function refreshDashboard() {
   } else {
     spinSub.textContent = 'Tap to play';
   }
+  setAdBanner('spin-ad-banner', 'spin', sq?.ad_total, data.gspin?.cooldown_total);
   updateSpinButton(data.gspin);
 
   // Daily tile
@@ -3102,7 +3103,7 @@ async function refreshDashboard() {
   const dq = data.daily?.quota;
   if (dq) {
     if (dq.free_available) {
-      dailySub.textContent = '🎁 1 free + 5 ads';
+      dailySub.textContent = `🎁 1 free + ${dq.ad_total} ads`;
     } else if (dq.ad_used < dq.ad_total) {
       dailySub.textContent = `📺 ${dq.ad_total - dq.ad_used} ad claims left`;
     } else {
@@ -3111,6 +3112,7 @@ async function refreshDashboard() {
   } else {
     dailySub.textContent = 'Tap to claim';
   }
+  setAdBanner('daily-ad-banner', 'claim', dq?.ad_total, data.daily?.cooldown_total);
   updateDailyButton();
 
   // Streak line on Daily screen
@@ -3325,6 +3327,25 @@ function fmtRemaining(secs) {
   if (h === 0 && m === 0) return 'a moment';
   if (h === 0) return `${m}m`;
   return `${h}h ${m}m`;
+}
+
+// Human phrase for a whole cycle length, e.g. "8 hours", "6h 40m", "40 minutes".
+function fmtCycle(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h === 0) return `${m} minutes`;
+  if (m === 0) return h === 1 ? '1 hour' : `${h} hours`;
+  return `${h}h ${m}m`;
+}
+
+// Rewrite an ad-banner to reflect the real ad quota + cycle length (both depend
+// on admin config and the user's subscription tier, so they can't be hardcoded).
+function setAdBanner(id, noun, adTotal, cycleSecs) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const ads = (adTotal != null ? adTotal : 5);
+  const every = cycleSecs ? ` every ${fmtCycle(cycleSecs)}` : '';
+  el.innerHTML = `🎁 <strong>1 FREE ${noun}</strong> + 📺 <strong>${ads} ad ${noun}s</strong>${every}.`;
 }
 
 let lastInitData = null;
