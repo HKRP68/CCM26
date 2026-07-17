@@ -4564,9 +4564,9 @@ def webapp_roster_overflow_release():
 def webapp_spin():
     """Spin endpoint with quota system.
 
-    Each user gets:
-      - 1 FREE spin per 24h cycle (no ad needed)
-      - 5 additional ad-gated spins per cycle
+    Each user gets, per cycle (cycle length = the effective /gspin cooldown):
+      - 1 FREE spin (no ad needed)
+      - N additional ad-gated spins (N = spin_ad_quota, admin-configurable)
 
     Request body:
       {ad_token: <optional, only needed when using ad-gated slot>}
