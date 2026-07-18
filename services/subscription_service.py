@@ -45,6 +45,22 @@ def tier_config(tier: str) -> dict | None:
     return SUBSCRIPTION_TIERS.get((tier or "").lower())
 
 
+def tier_rank(tier: str) -> int:
+    """Ordinal rank of a tier for comparisons; higher = better, ``none`` = 0.
+
+    Ranks follow the declaration order of ``SUBSCRIPTION_TIERS`` (silver=1,
+    platinum=2), so callers never hard-code which tier outranks which.
+    """
+    order = list(SUBSCRIPTION_TIERS.keys())
+    tier = (tier or "").lower()
+    return order.index(tier) + 1 if tier in order else 0
+
+
+def can_upgrade(user, target_tier: str) -> bool:
+    """True if ``target_tier`` is strictly higher than the user's active tier."""
+    return tier_rank(target_tier) > tier_rank(get_tier(user))
+
+
 def is_subscribed(user) -> bool:
     """True if the user has any active paid tier."""
     return get_tier(user) != "none"
@@ -173,6 +189,50 @@ def activate(session, user, tier: str, *, grant_instant: bool = True) -> dict:
             "instant_granted": granted}
 
 
+def upgrade(session, user, target_tier: str, *, grant_delta: bool = True) -> dict:
+    """Upgrade an active lower tier to a higher one (e.g. Silver → Platinum).
+
+    Unlike :func:`activate`, an upgrade credits a small top-up bundle (the
+    target tier's ``upgrade_from`` config) rather than the full Platinum
+    instant bundle, and keeps whatever paid time is left on the clock — so a
+    Silver member stepping up gets a modest boost plus the new signature pack,
+    not a second subscription. Caller commits.
+
+    Falls back to a plain :func:`activate` when the user has no active tier
+    (there is nothing already granted to subtract). Raises ``ValueError`` if
+    ``target_tier`` is unknown or not strictly higher than the current tier.
+    """
+    target = (target_tier or "").lower()
+    cfg = SUBSCRIPTION_TIERS.get(target)
+    if cfg is None:
+        raise ValueError(f"Unknown subscription tier: {target_tier!r}")
+
+    current = get_tier(user)
+    if current == "none":
+        # No active tier to subtract from — this is a fresh activation.
+        return activate(session, user, target)
+
+    if tier_rank(target) <= tier_rank(current):
+        raise ValueError(
+            f"Cannot upgrade {current!r} to {target!r}: not a higher tier.")
+
+    now = datetime.utcnow()
+    user.subscription_tier = target
+    user.subscription_activated_at = now
+    # Keep the remaining paid time; only open a fresh window if none is left.
+    if not (user.subscription_expires_at and user.subscription_expires_at > now):
+        user.subscription_expires_at = now + timedelta(
+            days=int(cfg.get("duration_days", 30)))
+
+    granted = None
+    if grant_delta:
+        granted = grant_upgrade_rewards(session, user, current, target)
+
+    return {"tier": target, "from_tier": current,
+            "expires_at": user.subscription_expires_at,
+            "instant_granted": granted}
+
+
 def deactivate(session, user) -> None:
     """Clear a user's subscription immediately. Caller commits."""
     user.subscription_tier = "none"
@@ -204,6 +264,72 @@ def grant_instant_rewards(session, user, tier: str) -> dict:
                      coins_change=coins, gems_change=gems)
     except Exception:
         logger.exception("log_activity failed during subscription grant")
+
+    return {"coins": coins, "gems": gems, "quest_points": qp,
+            "packs": granted_packs}
+
+
+def instant_delta(from_tier: str, to_tier: str) -> dict:
+    """Raw instant DIFFERENCE between two tiers: the higher tier's instant
+    bundle minus what the lower tier already granted.
+
+    Currencies clamp at zero (an upgrade never claws back). Packs already
+    granted by the lower tier are dropped, so only the NEW packs remain. Used
+    only as the fallback for :func:`upgrade_rewards` when a tier has no explicit
+    ``upgrade_from`` bundle configured.
+    """
+    a = (SUBSCRIPTION_TIERS.get((from_tier or "").lower()) or {}).get("instant") or {}
+    b = (SUBSCRIPTION_TIERS.get((to_tier or "").lower()) or {}).get("instant") or {}
+    delta = {key: max(0, int(b.get(key, 0)) - int(a.get(key, 0)))
+             for key in ("coins", "gems", "quest_points")}
+    already = {str(p).strip().lower() for p in (a.get("packs") or [])}
+    delta["packs"] = [p for p in (b.get("packs") or [])
+                      if str(p).strip().lower() not in already]
+    return delta
+
+
+def upgrade_rewards(from_tier: str, to_tier: str) -> dict:
+    """Rewards granted for a ``from_tier`` → ``to_tier`` upgrade.
+
+    Prefers the target tier's explicit, admin-tuned ``upgrade_from[from_tier]``
+    top-up bundle (deliberately smaller than a full activation). Falls back to
+    the raw instant difference (see :func:`instant_delta`) only when no explicit
+    bundle is configured.
+    """
+    to_cfg = SUBSCRIPTION_TIERS.get((to_tier or "").lower()) or {}
+    explicit = (to_cfg.get("upgrade_from") or {}).get((from_tier or "").lower())
+    if explicit is None:
+        return instant_delta(from_tier, to_tier)
+    return {"coins": int(explicit.get("coins", 0)),
+            "gems": int(explicit.get("gems", 0)),
+            "quest_points": int(explicit.get("quest_points", 0)),
+            "packs": list(explicit.get("packs") or [])}
+
+
+def grant_upgrade_rewards(session, user, from_tier: str, to_tier: str) -> dict:
+    """Credit the top-up rewards for a ``from_tier`` → ``to_tier`` upgrade
+    (see :func:`upgrade_rewards`). Caller commits."""
+    delta = upgrade_rewards(from_tier, to_tier)
+    coins, gems, qp = delta["coins"], delta["gems"], delta["quest_points"]
+
+    if coins:
+        user.total_coins = (user.total_coins or 0) + coins
+    if gems:
+        user.total_gems = (user.total_gems or 0) + gems
+    if qp:
+        user.quest_points = (user.quest_points or 0) + qp
+
+    granted_packs = _grant_named_packs(session, user, delta["packs"])
+
+    try:
+        from services.activity_service import log_activity
+        log_activity(session, user.id, "subscription",
+                     f"Upgraded {from_tier} → {to_tier}: +{coins} coins, "
+                     f"+{gems} gems, +{qp} QP, packs: "
+                     f"{', '.join(granted_packs) or 'none'}",
+                     coins_change=coins, gems_change=gems)
+    except Exception:
+        logger.exception("log_activity failed during subscription upgrade")
 
     return {"coins": coins, "gems": gems, "quest_points": qp,
             "packs": granted_packs}

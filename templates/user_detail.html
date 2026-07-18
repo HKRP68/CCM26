@@ -181,6 +181,15 @@
         <button type="submit" class="btn btn-blue btn-sm"
                 onclick="return confirm('Activate 🏆 Platinum for this user? Instant rewards are granted on a new activation.')">🏆 Platinum</button>
       </form>
+      {% if tier == 'silver' %}
+      <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="upgrade">
+        <input type="hidden" name="target" value="platinum">
+        <button type="submit" class="btn btn-green btn-sm"
+                onclick="return confirm('Upgrade this user from 🥈 Silver to 🏆 Platinum?\n\nThey KEEP their remaining time and get a top-up (451k coins, 251 gems, 251 QP) plus the 🏆 Legend Pack — NOT a full second subscription.')">⬆️ Upgrade → Platinum</button>
+      </form>
+      {% endif %}
       {% if tier != 'none' %}
       <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

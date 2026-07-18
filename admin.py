@@ -2996,6 +2996,27 @@ def user_subscription(user_id):
                          + (f", packs: {', '.join(granted['packs'])}" if granted.get('packs') else "")
                          + ")")
             flash(f"⭐ Activated {action.title()} for {name}{extra}", "success")
+        elif action == "upgrade":
+            target = (request.form.get("target", "") or "").strip().lower()
+            from_tier = subscription_service.get_tier(user)
+            try:
+                result = subscription_service.upgrade(db, user, target)
+            except ValueError as ve:
+                db.rollback()
+                flash(str(ve), "error")
+                return redirect(request.referrer or url_for("user_detail", user_id=user_id))
+            log_admin(db, "user_subscription", target_type="user",
+                      target_id=user.id, target_name=name,
+                      detail=f"Upgraded {from_tier}→{target}; instant={result.get('instant_granted')}")
+            db.commit()
+            granted = result.get("instant_granted")
+            extra = ""
+            if granted:
+                extra = (f" (+{granted['coins']:,} coins, +{granted['gems']} gems, "
+                         f"+{granted['quest_points']} QP"
+                         + (f", packs: {', '.join(granted['packs'])}" if granted.get('packs') else "")
+                         + ")")
+            flash(f"⬆️ Upgraded {name} {from_tier.title()} → {target.title()}{extra}", "success")
         elif action == "deactivate":
             subscription_service.deactivate(db, user)
             log_admin(db, "user_subscription", target_type="user",
