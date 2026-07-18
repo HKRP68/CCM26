@@ -69,7 +69,7 @@ SUBSCRIPTION_TIERS = {
         # is granted — the Star Pack the user got from Silver is already theirs.
         # Set "packs": [] here if you don't want any pack on upgrade.
         "upgrade_from": {
-            "silver": {"coins": 150000, "gems": 200, "quest_points": 200,
+            "silver": {"coins": 451000, "gems": 251, "quest_points": 251,
                        "packs": ["Legend Pack"]},
         },
         "mysterybox_cooldown_days": 5,

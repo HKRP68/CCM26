@@ -59,9 +59,9 @@ class UpgradeTests(unittest.TestCase):
         # The configured upgrade_from top-up wins over both the full instant
         # bundle AND the raw delta.
         r = self.svc.upgrade_rewards("silver", "platinum")
-        self.assertEqual(r["coins"], 150000)
-        self.assertEqual(r["gems"], 200)
-        self.assertEqual(r["quest_points"], 200)
+        self.assertEqual(r["coins"], 451000)
+        self.assertEqual(r["gems"], 251)
+        self.assertEqual(r["quest_points"], 251)
         self.assertEqual([p.lower() for p in r["packs"]], ["legend pack"])
 
     def test_upgrade_credits_the_topup(self):
@@ -70,10 +70,10 @@ class UpgradeTests(unittest.TestCase):
         res = self.svc.upgrade(None, u, "platinum")
         self.assertEqual(u.subscription_tier, "platinum")
         self.assertEqual(res["from_tier"], "silver")
-        # Small top-up, not the full 1,000,000 Platinum bundle nor the 951k delta.
-        self.assertEqual(u.total_coins, before_coins + 150000)
-        self.assertEqual(u.total_gems, 10 + 200)
-        self.assertEqual(u.quest_points, 5 + 200)
+        # Top-up, not the full 1,000,000 Platinum bundle nor the 951k delta.
+        self.assertEqual(u.total_coins, before_coins + 451000)
+        self.assertEqual(u.total_gems, 10 + 251)
+        self.assertEqual(u.quest_points, 5 + 251)
 
     def test_upgrade_preserves_remaining_time(self):
         u = self._silver_user(days_left=20)
