@@ -161,6 +161,14 @@ def activate(session, user, tier: str, *, grant_instant: bool = True) -> dict:
     Sets tier + a fresh 30-day expiry. Instant signup rewards are granted only
     when this is a NEW activation of that tier (so repeated admin clicks, or a
     renewal of the same active tier, do not re-grant). Caller commits.
+
+    Subscriptions never auto-renew: an expired tier simply lapses (see
+    :func:`get_tier`, which treats it as ``none`` on read). A member who
+    subscribes again after lapsing is therefore treated exactly like a
+    first-time member — a fresh paid window, the instant signup rewards
+    re-granted, and their subscriber recurring-drop cooldowns reset (see
+    :func:`_reset_subscriber_cooldowns`) so the first Mystery Box / weekly card /
+    coin chest is available immediately rather than inheriting a stale timer.
     """
     tier = (tier or "").lower()
     cfg = SUBSCRIPTION_TIERS.get(tier)
@@ -182,8 +190,12 @@ def activate(session, user, tier: str, *, grant_instant: bool = True) -> dict:
         user.subscription_expires_at = now + duration
 
     granted = None
-    if grant_instant and not already_active_same_tier:
-        granted = grant_instant_rewards(session, user, tier)
+    if not already_active_same_tier:
+        # Fresh subscription (first-time OR re-subscribing after a lapse): wipe
+        # any leftover subscriber cooldowns so they start clean like a new member.
+        _reset_subscriber_cooldowns(session, user)
+        if grant_instant:
+            granted = grant_instant_rewards(session, user, tier)
 
     return {"tier": tier, "expires_at": user.subscription_expires_at,
             "instant_granted": granted}
@@ -234,9 +246,40 @@ def upgrade(session, user, target_tier: str, *, grant_delta: bool = True) -> dic
 
 
 def deactivate(session, user) -> None:
-    """Clear a user's subscription immediately. Caller commits."""
+    """End a user's subscription immediately — no auto-renewal. Caller commits.
+
+    Clears the tier and expiry and wipes the subscriber recurring-drop cooldowns
+    so that if they ever subscribe again they are treated as a first-time member
+    (see :func:`activate`)."""
     user.subscription_tier = "none"
     user.subscription_expires_at = None
+    _reset_subscriber_cooldowns(session, user)
+
+
+def _reset_subscriber_cooldowns(session, user) -> None:
+    """Wipe the subscriber-only recurring-drop cooldowns so a NEW subscription
+    starts clean: the first Mystery Box (/cmumysterybox), weekly card
+    (/cmuweekly) and coin chests (/cmuchest) are all immediately available,
+    exactly as for a first-time member.
+
+    Only called on a fresh (re)activation or a deactivation — never on a
+    same-tier renewal or an upgrade, where paid service was continuous and the
+    running cooldowns should be preserved. Safe to call with ``session`` None
+    (used by unit tests that don't touch a DB)."""
+    if session is None or user is None:
+        return
+    try:
+        from models import UserStats
+        stats = (session.query(UserStats)
+                 .filter(UserStats.user_id == user.id).first())
+        if stats is None:
+            return
+        stats.last_mysterybox = None
+        stats.last_weekly = None
+        stats.last_coinchest = None
+        stats.coinchest_used = 0
+    except Exception:
+        logger.exception("Failed resetting subscriber cooldowns")
 
 
 def grant_instant_rewards(session, user, tier: str) -> dict:

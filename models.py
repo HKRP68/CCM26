@@ -158,7 +158,7 @@ class UserStats(Base):
     # Free Pack (Mini App, ad-gated, 1h cooldown)
     last_free_pack = Column(DateTime, nullable=True)
     # ── Subscription recurring-drop cooldowns ──
-    # /cmumysterybox (tiered: Silver every 10 days, Platinum every 5),
+    # /cmumysterybox (tiered: Silver every 8 days, Platinum every 4),
     # /cmuweekly (Platinum weekly card), /cmuchest (Platinum coin chests).
     last_mysterybox = Column(DateTime, nullable=True)
     last_weekly = Column(DateTime, nullable=True)
