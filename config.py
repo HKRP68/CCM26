@@ -61,6 +61,17 @@ SUBSCRIPTION_TIERS = {
         "duration_days": 30,
         "instant": {"coins": 1000000, "gems": 1000, "quest_points": 1000,
                     "packs": ["Legend Pack"]},
+        # Rewards for UPGRADING into Platinum from a lower tier (keyed by the
+        # source tier). Deliberately a small top-up, NOT the full `instant`
+        # bundle: the member keeps their remaining paid time and already
+        # received the lower tier's rewards, so an upgrade tops them up rather
+        # than handing out a second subscription. Only the new signature pack
+        # is granted — the Star Pack the user got from Silver is already theirs.
+        # Set "packs": [] here if you don't want any pack on upgrade.
+        "upgrade_from": {
+            "silver": {"coins": 150000, "gems": 200, "quest_points": 200,
+                       "packs": ["Legend Pack"]},
+        },
         "mysterybox_cooldown_days": 5,
         "cooldown_reduction_min_per_hour": 20,
         "market_discount_pct": 5,

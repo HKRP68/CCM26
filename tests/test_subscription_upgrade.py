@@ -45,7 +45,8 @@ class UpgradeTests(unittest.TestCase):
             subscription_activated_at=datetime.utcnow() - timedelta(days=10),
         )
 
-    def test_delta_is_platinum_minus_silver(self):
+    def test_raw_delta_is_platinum_minus_silver(self):
+        # instant_delta is the fallback math (no explicit upgrade_from bundle).
         d = self.svc.instant_delta("silver", "platinum")
         # 1,000,000 − 49,000 ; 1000 − 499 ; 1000 − 499
         self.assertEqual(d["coins"], 951000)
@@ -54,16 +55,25 @@ class UpgradeTests(unittest.TestCase):
         # Star Pack already granted by Silver is dropped; Legend Pack is new.
         self.assertEqual([p.lower() for p in d["packs"]], ["legend pack"])
 
-    def test_upgrade_credits_only_the_difference(self):
+    def test_upgrade_uses_small_topup_not_full_bundle(self):
+        # The configured upgrade_from top-up wins over both the full instant
+        # bundle AND the raw delta.
+        r = self.svc.upgrade_rewards("silver", "platinum")
+        self.assertEqual(r["coins"], 150000)
+        self.assertEqual(r["gems"], 200)
+        self.assertEqual(r["quest_points"], 200)
+        self.assertEqual([p.lower() for p in r["packs"]], ["legend pack"])
+
+    def test_upgrade_credits_the_topup(self):
         u = self._silver_user()
         before_coins = u.total_coins
         res = self.svc.upgrade(None, u, "platinum")
         self.assertEqual(u.subscription_tier, "platinum")
         self.assertEqual(res["from_tier"], "silver")
-        # Only the delta is added, not the full 1,000,000 Platinum bundle.
-        self.assertEqual(u.total_coins, before_coins + 951000)
-        self.assertEqual(u.total_gems, 10 + 501)
-        self.assertEqual(u.quest_points, 5 + 501)
+        # Small top-up, not the full 1,000,000 Platinum bundle nor the 951k delta.
+        self.assertEqual(u.total_coins, before_coins + 150000)
+        self.assertEqual(u.total_gems, 10 + 200)
+        self.assertEqual(u.quest_points, 5 + 200)
 
     def test_upgrade_preserves_remaining_time(self):
         u = self._silver_user(days_left=20)

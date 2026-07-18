@@ -192,11 +192,11 @@ def activate(session, user, tier: str, *, grant_instant: bool = True) -> dict:
 def upgrade(session, user, target_tier: str, *, grant_delta: bool = True) -> dict:
     """Upgrade an active lower tier to a higher one (e.g. Silver → Platinum).
 
-    Unlike :func:`activate`, an upgrade credits only "the rest" — the higher
-    tier's instant bundle MINUS whatever the current tier already granted — so
-    a Silver member stepping up to Platinum gets the difference (not the full
-    Platinum bundle a second time) and keeps whatever paid time is left on the
-    clock. Caller commits.
+    Unlike :func:`activate`, an upgrade credits a small top-up bundle (the
+    target tier's ``upgrade_from`` config) rather than the full Platinum
+    instant bundle, and keeps whatever paid time is left on the clock — so a
+    Silver member stepping up gets a modest boost plus the new signature pack,
+    not a second subscription. Caller commits.
 
     Falls back to a plain :func:`activate` when the user has no active tier
     (there is nothing already granted to subtract). Raises ``ValueError`` if
@@ -226,7 +226,7 @@ def upgrade(session, user, target_tier: str, *, grant_delta: bool = True) -> dic
 
     granted = None
     if grant_delta:
-        granted = grant_upgrade_delta(session, user, current, target)
+        granted = grant_upgrade_rewards(session, user, current, target)
 
     return {"tier": target, "from_tier": current,
             "expires_at": user.subscription_expires_at,
@@ -270,11 +270,13 @@ def grant_instant_rewards(session, user, tier: str) -> dict:
 
 
 def instant_delta(from_tier: str, to_tier: str) -> dict:
-    """Rewards still owed when moving ``from_tier`` → ``to_tier``: the higher
-    tier's instant bundle minus what the lower tier already granted.
+    """Raw instant DIFFERENCE between two tiers: the higher tier's instant
+    bundle minus what the lower tier already granted.
 
     Currencies clamp at zero (an upgrade never claws back). Packs already
-    granted by the lower tier are dropped, so only the NEW packs remain.
+    granted by the lower tier are dropped, so only the NEW packs remain. Used
+    only as the fallback for :func:`upgrade_rewards` when a tier has no explicit
+    ``upgrade_from`` bundle configured.
     """
     a = (SUBSCRIPTION_TIERS.get((from_tier or "").lower()) or {}).get("instant") or {}
     b = (SUBSCRIPTION_TIERS.get((to_tier or "").lower()) or {}).get("instant") or {}
@@ -286,10 +288,28 @@ def instant_delta(from_tier: str, to_tier: str) -> dict:
     return delta
 
 
-def grant_upgrade_delta(session, user, from_tier: str, to_tier: str) -> dict:
-    """Credit only "the rest" of the perks for a ``from_tier`` → ``to_tier``
-    upgrade (see :func:`instant_delta`). Caller commits."""
-    delta = instant_delta(from_tier, to_tier)
+def upgrade_rewards(from_tier: str, to_tier: str) -> dict:
+    """Rewards granted for a ``from_tier`` → ``to_tier`` upgrade.
+
+    Prefers the target tier's explicit, admin-tuned ``upgrade_from[from_tier]``
+    top-up bundle (deliberately smaller than a full activation). Falls back to
+    the raw instant difference (see :func:`instant_delta`) only when no explicit
+    bundle is configured.
+    """
+    to_cfg = SUBSCRIPTION_TIERS.get((to_tier or "").lower()) or {}
+    explicit = (to_cfg.get("upgrade_from") or {}).get((from_tier or "").lower())
+    if explicit is None:
+        return instant_delta(from_tier, to_tier)
+    return {"coins": int(explicit.get("coins", 0)),
+            "gems": int(explicit.get("gems", 0)),
+            "quest_points": int(explicit.get("quest_points", 0)),
+            "packs": list(explicit.get("packs") or [])}
+
+
+def grant_upgrade_rewards(session, user, from_tier: str, to_tier: str) -> dict:
+    """Credit the top-up rewards for a ``from_tier`` → ``to_tier`` upgrade
+    (see :func:`upgrade_rewards`). Caller commits."""
+    delta = upgrade_rewards(from_tier, to_tier)
     coins, gems, qp = delta["coins"], delta["gems"], delta["quest_points"]
 
     if coins:
