@@ -308,6 +308,19 @@ nav.topbar .brand {
   border-radius: var(--radius-md);
   min-height: 44px;
 }
+.nav-drawer a .nav-badge {
+  margin-left: auto;
+  background: var(--accent, #e03131);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: .18rem .42rem;
+  border-radius: var(--radius-full, 999px);
+  min-width: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px rgba(224,49,49,.25);
+}
 .nav-drawer a:hover { background: var(--brand-light); color: var(--brand); transform: translateX(2px); }
 .nav-drawer a.active { background: var(--gradient); color: #fff; border-color: rgba(255,255,255,.24); font-weight: 800; box-shadow: var(--shadow-md); }
 [data-theme="dark"] .nav-drawer a.active { color: #161b21; }
@@ -460,6 +473,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_quests_list') }}" class="{{ 'active' if request.endpoint in ('admin_quests_list','admin_quest_new','admin_quest_edit') }}">🎯 Quests</a>
     <a href="{{ url_for('admin_traits_list') }}" class="{{ 'active' if request.endpoint in ('admin_traits_list','admin_trait_edit') }}">💎 Traits</a>
     <a href="{{ url_for('admin_packs_list') }}" class="{{ 'active' if request.endpoint in ('admin_packs_list','admin_pack_new','admin_pack_edit') }}">📦 Packs</a>
+    <a href="{{ url_for('admin_cmushop') }}" class="{{ 'active' if request.endpoint in ('admin_cmushop','admin_cmushop_image') }}">🛍️ CMU Shop</a>
     <a href="{{ url_for('admin_tours_list') }}" class="{{ 'active' if request.endpoint in ('admin_tours_list','admin_tour_detail') }}">🏆 Tours</a>
     <a href="{{ url_for('admin_commentary_list') }}" class="{{ 'active' if request.endpoint in ('admin_commentary_list','admin_commentary_new','admin_commentary_edit','admin_commentary_import') }}">💬 Commentary</a>
 
@@ -481,7 +495,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_notifications_list') }}" class="{{ 'active' if request.endpoint in ('admin_notifications_list','admin_notification_new','admin_notification_edit') }}">📢 Notifications</a>
     <a href="{{ url_for('admin_messages_list') }}" class="{{ 'active' if request.endpoint in ('admin_messages_list','admin_message_edit') }}">💌 Messages</a>
     <a href="{{ url_for('admin_broadcast') }}" class="{{ 'active' if request.endpoint == 'admin_broadcast' }}">📣 Broadcast</a>
-    <a href="{{ url_for('admin_reports') }}" class="{{ 'active' if request.endpoint == 'admin_reports' }}">📨 User Reports</a>
+    <a href="{{ url_for('admin_reports') }}" class="{{ 'active' if request.endpoint == 'admin_reports' }}">📨 User Reports{% if unread_reports and unread_reports > 0 %}<span class="nav-badge">{{ unread_reports }}</span>{% endif %}</a>
     <a href="{{ url_for('admin_shot_probs') }}" class="{{ 'active' if request.endpoint == 'admin_shot_probs' }}">🎯 Shot Probs</a>
 
     <div class="section-label">System</div>

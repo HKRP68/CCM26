@@ -26,6 +26,13 @@ ADMIN_ID_ENV_VARS = (
     "ADMIN_CHAT_ID",
 )
 
+# Owner IDs are a strict subset of admins used to gate the most sensitive
+# commands (e.g. /grant subscriptions). Read only from owner-specific env vars.
+OWNER_ID_ENV_VARS = (
+    "OWNER_IDS",
+    "BOT_OWNER_IDS",
+)
+
 
 def parse_id_list(raw_values: Iterable[str | None]) -> set[int]:
     """Parse comma/space/semicolon/newline separated positive Telegram IDs."""
@@ -65,3 +72,22 @@ def is_admin(user_id: int | None, admin_ids: set[int] | None = None) -> bool:
         return False
     allowed = admin_ids if admin_ids is not None else configured_admin_ids()
     return int(user_id) in allowed
+
+
+def configured_owner_ids() -> set[int]:
+    """Return owner-only Telegram user IDs from the owner env vars."""
+    return parse_id_list(os.getenv(name) for name in OWNER_ID_ENV_VARS)
+
+
+def is_owner(user_id: int | None) -> bool:
+    """Check whether a Telegram user is a configured bot OWNER.
+
+    Falls back to the general admin allowlist when no owner IDs are configured,
+    so the owner-only commands aren't dead on deployments that only set admin
+    IDs (rather than silently locking everyone out)."""
+    if user_id is None:
+        return False
+    owners = configured_owner_ids()
+    if not owners:
+        return is_admin(user_id)
+    return int(user_id) in owners

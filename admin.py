@@ -132,6 +132,25 @@ def _inject_subscription_helpers():
     return {"active_tier": subscription_service.get_tier}
 
 
+@app.context_processor
+def _inject_nav_badges():
+    """Feed unread-report count to the nav so a red badge shows on open.
+
+    Best-effort — any error yields 0 so page rendering never breaks."""
+    unread = 0
+    try:
+        from models import UserReport
+        db = get_session()
+        try:
+            unread = db.query(UserReport).filter(
+                UserReport.is_read == False).count()  # noqa: E712
+        finally:
+            db.close()
+    except Exception:
+        unread = 0
+    return {"unread_reports": unread}
+
+
 def csrf_exempt(view):
     """Mark a Flask view as exempt from CSRF protection.
 
@@ -1639,6 +1658,192 @@ def admin_player_image_preview(player_id):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# CMU SHOP — website-managed image gallery for the /CMUshop bot command
+# ═══════════════════════════════════════════════════════════════════════
+
+CMUSHOP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "data", "cmushop_images")
+_CMUSHOP_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _cmushop_read_bytes(img):
+    """Return image bytes for a CMUShopImage row: disk first, then Telegram."""
+    try:
+        if img.image_path and os.path.exists(img.image_path):
+            with open(img.image_path, "rb") as f:
+                return f.read()
+    except Exception:
+        logger.exception("cmushop disk read failed")
+    if img.tg_file_id:
+        try:
+            from services.tg_storage_service import download_file_bytes_sync
+            return download_file_bytes_sync(img.tg_file_id)
+        except Exception:
+            logger.exception("cmushop tg download failed")
+    return None
+
+
+@app.route("/cmushop", methods=["GET", "POST"])
+@login_required
+def admin_cmushop():
+    from models import CMUShopImage
+    from services import config_service
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = (request.form.get("action") or "").strip()
+            try:
+                if action == "upload":
+                    file = request.files.get("image_file")
+                    if not file or not file.filename:
+                        flash("No file selected.", "error")
+                        return redirect(url_for("admin_cmushop"))
+                    ext = os.path.splitext(file.filename)[1].lower()
+                    if ext not in _CMUSHOP_EXTS:
+                        flash("Only PNG/JPG/WEBP images are allowed.", "error")
+                        return redirect(url_for("admin_cmushop"))
+                    file_bytes = file.read()
+                    if not file_bytes:
+                        flash("Uploaded file was empty.", "error")
+                        return redirect(url_for("admin_cmushop"))
+                    if len(file_bytes) > 5 * 1024 * 1024:
+                        flash("Image too large (max 5 MB).", "error")
+                        return redirect(url_for("admin_cmushop"))
+                    # Validate it decodes as an image.
+                    try:
+                        from io import BytesIO
+                        from PIL import Image
+                        Image.open(BytesIO(file_bytes)).verify()
+                    except Exception:
+                        flash("That file is not a valid image.", "error")
+                        return redirect(url_for("admin_cmushop"))
+
+                    max_order = (db.query(CMUShopImage)
+                                 .order_by(CMUShopImage.sort_order.desc())
+                                 .first())
+                    next_order = (max_order.sort_order + 1) if max_order else 0
+                    row = CMUShopImage(
+                        image_path=None, tg_file_id=None,
+                        sort_order=next_order, is_active=True,
+                        uploaded_by=session.get("admin", "admin"))
+                    db.add(row)
+                    db.flush()  # assign id
+
+                    os.makedirs(CMUSHOP_DIR, exist_ok=True)
+                    disk_path = os.path.join(CMUSHOP_DIR, f"{row.id}{ext}")
+                    try:
+                        with open(disk_path, "wb") as f:
+                            f.write(file_bytes)
+                        row.image_path = disk_path
+                    except Exception:
+                        logger.exception("cmushop disk save failed")
+
+                    # Durable Telegram-backed copy (survives redeploys).
+                    try:
+                        from services.event_media_service import (
+                            upload_photo_to_storage_channel)
+                        up = upload_photo_to_storage_channel(
+                            file_bytes, f"cmushop_{row.id}{ext}")
+                        if up.get("success"):
+                            row.tg_file_id = up["file_id"]
+                        else:
+                            flash("Saved, but Telegram storage upload failed: "
+                                  f"{up.get('error')}. Image may not survive a "
+                                  "redeploy or show in the bot until re-uploaded.",
+                                  "error")
+                    except Exception:
+                        logger.exception("cmushop storage upload failed")
+
+                    db.commit()
+                    log_admin(db, "cmushop_upload", target_type="cmushop",
+                              target_id=row.id, target_name=f"#{row.id}",
+                              detail=f"Uploaded image ({len(file_bytes)//1024} KB)")
+                    db.commit()
+                    flash("✅ Image added to CMU Shop.", "success")
+
+                elif action == "delete":
+                    rid = int(request.form.get("image_id"))
+                    row = db.query(CMUShopImage).get(rid)
+                    if row:
+                        try:
+                            if row.image_path and os.path.exists(row.image_path):
+                                os.remove(row.image_path)
+                        except Exception:
+                            logger.exception("cmushop file delete failed")
+                        db.delete(row)
+                        db.commit()
+                        log_admin(db, "cmushop_delete", target_type="cmushop",
+                                  target_id=rid, target_name=f"#{rid}",
+                                  detail="Deleted image")
+                        db.commit()
+                        flash("Image removed.", "info")
+
+                elif action == "toggle":
+                    rid = int(request.form.get("image_id"))
+                    row = db.query(CMUShopImage).get(rid)
+                    if row:
+                        row.is_active = not row.is_active
+                        db.commit()
+                        flash(f"Image #{rid} is now "
+                              f"{'active' if row.is_active else 'hidden'}.", "info")
+
+                elif action in ("move_up", "move_down"):
+                    rid = int(request.form.get("image_id"))
+                    rows = (db.query(CMUShopImage)
+                            .order_by(CMUShopImage.sort_order, CMUShopImage.id)
+                            .all())
+                    idx = next((i for i, r in enumerate(rows) if r.id == rid), None)
+                    if idx is not None:
+                        swap = idx - 1 if action == "move_up" else idx + 1
+                        if 0 <= swap < len(rows):
+                            a, b = rows[idx], rows[swap]
+                            a.sort_order, b.sort_order = b.sort_order, a.sort_order
+                            db.commit()
+
+                elif action == "save_caption":
+                    caption = (request.form.get("caption") or "").strip()[:1024]
+                    config_service.save_config(
+                        db, {"cmushop_caption": caption},
+                        updated_by=session.get("admin", "admin"))
+                    db.commit()
+                    flash("✅ Caption saved.", "success")
+            except Exception as e:
+                db.rollback()
+                logger.exception("cmushop action failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_cmushop"))
+
+        images = (db.query(CMUShopImage)
+                  .order_by(CMUShopImage.sort_order, CMUShopImage.id).all())
+        caption = config_service.get_config(db).get("cmushop_caption") or ""
+        return render_template("admin_cmushop.html",
+                               images=images, caption=caption)
+    finally:
+        db.close()
+
+
+@app.route("/cmushop/image/<int:image_id>")
+@login_required
+def admin_cmushop_image(image_id):
+    """Serve a CMU Shop image's bytes for inline admin preview."""
+    from models import CMUShopImage
+    db = get_session()
+    try:
+        row = db.query(CMUShopImage).get(image_id)
+        if not row:
+            from flask import abort
+            abort(404)
+        data = _cmushop_read_bytes(row)
+        if not data:
+            from flask import abort
+            abort(404)
+        from flask import Response
+        return Response(data, mimetype="image/png")
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # PLAYER VERSIONS — alternate cosmetic editions of a base player
 # Backend: each version is a Player row with parent_player_id set + a
 # PlayerImage row attached. Stats are inherited from the base player.
@@ -2965,6 +3170,27 @@ def user_ban(user_id):
     return redirect(url_for("user_detail", user_id=user_id))
 
 
+def _notify_subscription(telegram_id, tier, granted, *, expires_at=None,
+                         upgraded_from=None):
+    """DM a user through the bot that their subscription was activated/upgraded.
+
+    Best-effort — flashes an error on failure but never aborts the grant (the
+    DB change already committed). Mirrors the report-reply bridge import."""
+    if not telegram_id:
+        return
+    try:
+        from services import subscription_service
+        from bot import _send_bot_dm_blocking
+        text = subscription_service.activation_dm_text(
+            tier, granted, expires_at=expires_at, upgraded_from=upgraded_from)
+        if not _send_bot_dm_blocking(telegram_id, text):
+            flash("Subscription granted, but the bot DM could not be sent.",
+                  "error")
+    except Exception:
+        logger.exception("Subscription activation DM failed")
+        flash("Subscription granted, but the bot DM could not be sent.", "error")
+
+
 @app.route("/users/<int:user_id>/subscription", methods=["POST"])
 @login_required
 def user_subscription(user_id):
@@ -2996,6 +3222,8 @@ def user_subscription(user_id):
                          + (f", packs: {', '.join(granted['packs'])}" if granted.get('packs') else "")
                          + ")")
             flash(f"⭐ Activated {action.title()} for {name}{extra}", "success")
+            _notify_subscription(user.telegram_id, action, granted,
+                                 expires_at=result.get("expires_at"))
         elif action == "upgrade":
             target = (request.form.get("target", "") or "").strip().lower()
             from_tier = subscription_service.get_tier(user)
@@ -3017,6 +3245,9 @@ def user_subscription(user_id):
                          + (f", packs: {', '.join(granted['packs'])}" if granted.get('packs') else "")
                          + ")")
             flash(f"⬆️ Upgraded {name} {from_tier.title()} → {target.title()}{extra}", "success")
+            _notify_subscription(user.telegram_id, target, granted,
+                                 expires_at=result.get("expires_at"),
+                                 upgraded_from=from_tier)
         elif action == "deactivate":
             subscription_service.deactivate(db, user)
             log_admin(db, "user_subscription", target_type="user",
