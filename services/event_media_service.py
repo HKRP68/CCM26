@@ -320,3 +320,54 @@ def upload_to_storage_channel(file_bytes, filename, original_label=None):
         return {"success": False, "error": result["error"]}
     return {"success": True, "file_id": result["file_id"],
             "message_id": result["message_id"], "kind": result["kind"]}
+
+
+def upload_photo_to_storage_channel(file_bytes, filename, caption=None):
+    """Upload an image to the storage channel via send_photo and return its
+    file_id. Unlike :func:`upload_to_storage_channel` (which uses
+    send_animation/send_document), this uses send_photo so the file_id can be
+    re-sent as a proper Telegram photo (for the /CMUshop carousel).
+
+    Synchronous — spins up a fresh loop + Bot, safe to call from Flask.
+    Returns {'success': True, 'file_id': '...', 'message_id': int} or
+    {'success': False, 'error': '...'}.
+    """
+    import asyncio
+    from config import BOT_TOKEN, MEDIA_STORAGE_CHAT_ID
+
+    if not BOT_TOKEN:
+        return {"success": False, "error": "BOT_TOKEN env var not set"}
+    if not MEDIA_STORAGE_CHAT_ID:
+        return {"success": False, "error": "MEDIA_STORAGE_CHAT_ID env var not set"}
+
+    async def _do_upload():
+        from telegram import Bot
+        from io import BytesIO
+
+        bot = Bot(token=BOT_TOKEN)
+        async with bot:
+            buf = BytesIO(file_bytes)
+            buf.name = filename
+            cap = (f"🛍️ CMU Shop: {filename}" if not caption else caption)[:1024]
+            try:
+                msg = await bot.send_photo(
+                    chat_id=MEDIA_STORAGE_CHAT_ID, photo=buf, caption=cap)
+                if msg.photo:
+                    # Largest rendition is last.
+                    return {"file_id": msg.photo[-1].file_id,
+                            "message_id": msg.message_id}
+                return {"error": "send_photo returned no file_id"}
+            except Exception as e:
+                return {"error": f"{type(e).__name__}: {e}"}
+
+    try:
+        result = asyncio.run(_do_upload())
+    except RuntimeError as e:
+        return {"success": False, "error": f"asyncio.run failed: {e}"}
+    except Exception as e:
+        return {"success": False, "error": f"upload failed: {e}"}
+
+    if result.get("error"):
+        return {"success": False, "error": result["error"]}
+    return {"success": True, "file_id": result["file_id"],
+            "message_id": result["message_id"]}

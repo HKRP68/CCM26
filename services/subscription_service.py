@@ -144,6 +144,50 @@ def market_price(user, base_price: int, final_price: int) -> int:
 
 # ── Messaging ───────────────────────────────────────────────────────
 
+def activation_dm_text(tier: str, granted: dict | None, *,
+                       expires_at=None, upgraded_from: str | None = None) -> str:
+    """Build the bot DM a user receives when an admin activates/upgrades their
+    subscription. ``granted`` is the instant/top-up bundle returned by
+    :func:`activate`/:func:`upgrade` (or None on a same-tier renewal). Pure
+    string builder — safe to unit-test without a DB or bot.
+    """
+    cfg = tier_config(tier) or {}
+    label = cfg.get("label", (tier or "").title() or "Subscription")
+
+    if upgraded_from:
+        from_label = (tier_config(upgraded_from) or {}).get(
+            "label", (upgraded_from or "").title())
+        header = f"⬆️ <b>Upgraded to {label}!</b>\n<i>from {from_label}</i>"
+    else:
+        header = f"🎉 <b>{label} activated!</b>"
+
+    lines = [header, ""]
+
+    if granted:
+        reward_bits = []
+        if granted.get("coins"):
+            reward_bits.append(f"💰 <b>{int(granted['coins']):,}</b> coins")
+        if granted.get("gems"):
+            reward_bits.append(f"💎 <b>{int(granted['gems']):,}</b> gems")
+        if granted.get("quest_points"):
+            reward_bits.append(f"🎯 <b>{int(granted['quest_points']):,}</b> QP")
+        if reward_bits:
+            lines.append("You received " + ", ".join(reward_bits) + ".")
+        packs = granted.get("packs") or []
+        if packs:
+            lines.append("📦 Packs: <b>" + ", ".join(packs) + "</b>")
+        lines.append("")
+
+    if expires_at is not None:
+        try:
+            lines.append(f"⏳ Active until <b>{expires_at:%d %b %Y}</b>.")
+        except Exception:
+            pass
+
+    lines.append("Enjoy your perks — thanks for supporting CMU! 🏏")
+    return "\n".join(lines).strip()
+
+
 def premium_required_message(feature: str = "This feature") -> str:
     return (
         f"🔒 <b>{feature} is a premium feature.</b>\n\n"

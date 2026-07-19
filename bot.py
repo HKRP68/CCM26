@@ -88,6 +88,9 @@ from handlers.challenge import (
 )
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
+from handlers.coins2gems import coins2gems_handler, coins2gems_callback
+from handlers.grant import grant_handler
+from handlers.cmushop import cmushop_handler, cmushop_callback
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
 from handlers.ipl16 import ipl160_handler
@@ -309,6 +312,8 @@ BOT_MENU_COMMANDS = (
     ("buypl", "Buy a player"),
     ("teamname", "Set your team name"),
     ("purse", "Check your balance"),
+    ("coins2gems", "Convert coins into gems (1000 coins = 1 gem)"),
+    ("cmushop", "Browse the CMU shop 🛍️"),
     ("stats", "View player game statistics"),
     ("statscl", "View any Challenge League player's stats"),
     ("statstour", "View a player's active-tournament stats"),
@@ -596,8 +601,11 @@ def start_admin_panel():
         logger.exception("Admin panel crashed")
 
 
-def _send_admin_reply_blocking(chat_id, text):
-    """Synchronous send-message helper for use from Flask admin panel."""
+def _send_bot_dm_blocking(chat_id, text):
+    """Synchronous DM helper for use from the Flask admin panel (and other
+    sync callers). Sends ``text`` as HTML to ``chat_id`` on a throwaway Bot
+    instance + event loop. Returns True on success, False on any failure.
+    """
     try:
         import asyncio
         from telegram import Bot
@@ -606,8 +614,9 @@ def _send_admin_reply_blocking(chat_id, text):
         async def _send():
             await bot_instance.send_message(
                 chat_id=chat_id,
-                text=("📬 <b>Admin reply to your /report:</b>\n\n" + text),
+                text=text,
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
         try:
             loop = asyncio.new_event_loop()
@@ -618,8 +627,14 @@ def _send_admin_reply_blocking(chat_id, text):
             logger.exception("Async send failed")
             return False
     except Exception:
-        logger.exception("Reply send failed")
+        logger.exception("Bot DM send failed")
         return False
+
+
+def _send_admin_reply_blocking(chat_id, text):
+    """Send an admin reply to a user's /report through the bot (sync)."""
+    return _send_bot_dm_blocking(
+        chat_id, "📬 <b>Admin reply to your /report:</b>\n\n" + text)
 
 
 def main():
@@ -911,6 +926,19 @@ def main():
 
         # ── User feedback ────────────────────────────────────────────
         app.add_handler(CommandHandler("report", report_handler))
+
+        # ── Coins → Gems conversion ──────────────────────────────────
+        app.add_handler(CommandHandler(["coins2gems", "c2g"], coins2gems_handler))
+        app.add_handler(CallbackQueryHandler(coins2gems_callback, pattern=r"^c2g:"))
+
+        # ── Owner-only subscription grant (hidden from menu) ─────────
+        app.add_handler(CommandHandler("grant", grant_handler))
+
+        # ── CMU Shop image gallery ───────────────────────────────────
+        # PTB requires lowercase command names and lowercases incoming ones
+        # before matching, so "cmushop" also handles a user typing /CMUshop.
+        app.add_handler(CommandHandler("cmushop", cmushop_handler))
+        app.add_handler(CallbackQueryHandler(cmushop_callback, pattern=r"^cmushop:"))
 
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))

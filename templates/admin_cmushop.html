@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}CMU Shop{% endblock %}
+{% block content %}
+
+<style>
+  .cmushop-caption-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1.25rem;
+  }
+  .cmushop-caption-box textarea {
+    width: 100%;
+    min-height: 90px;
+    background: rgba(0,0,0,.25);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: .6rem .8rem;
+    font-size: .9rem;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .cmushop-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1rem;
+  }
+  .cmushop-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .cmushop-item.hidden { opacity: .5; }
+  .cmushop-item img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    background: rgba(0,0,0,.3);
+    display: block;
+  }
+  .cmushop-item .meta {
+    padding: .5rem .6rem;
+    font-size: .75rem;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .cmushop-item .row {
+    display: flex; gap: .3rem; flex-wrap: wrap;
+    padding: .35rem .6rem .6rem;
+  }
+  .cmushop-item .row form { margin: 0; }
+  .hint { color: var(--muted); font-size: .8rem; margin: .35rem 0 0; }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🛍️ CMU Shop <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ images|length }} image{{ '' if images|length == 1 else 's' }})</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<p class="hint">
+  Images and one shared caption power the <code>/CMUshop</code> bot command.
+  With a single active image the bot sends just the photo; with several it adds
+  ◀️ Prev / Next ▶️ buttons. The caption below is shown under every image.
+</p>
+
+<!-- Shared caption -->
+<div class="cmushop-caption-box">
+  <form method="POST" action="{{ url_for('admin_cmushop') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_caption">
+    <label style="font-weight:600;display:block;margin-bottom:.4rem;">Shared caption (HTML allowed)</label>
+    <textarea name="caption" placeholder="e.g. 🔥 This week's deals — DM @admin to buy!">{{ caption }}</textarea>
+    <button type="submit" class="btn btn-blue btn-sm" style="margin-top:.5rem;">💾 Save caption</button>
+  </form>
+</div>
+
+<!-- Upload -->
+<div class="cmushop-caption-box">
+  <form method="POST" action="{{ url_for('admin_cmushop') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="upload">
+    <label style="font-weight:600;display:block;margin-bottom:.4rem;">Add image (PNG / JPG / WEBP, max 5 MB)</label>
+    <input type="file" name="image_file" accept="image/png,image/jpeg,image/webp" required>
+    <button type="submit" class="btn btn-green btn-sm" style="margin-top:.5rem;">⬆️ Upload</button>
+  </form>
+</div>
+
+{% if not images %}
+<div style="text-align:center;padding:2rem;color:var(--muted);background:var(--card);border-radius:10px;">
+  No images yet — upload one above to start the shop.
+</div>
+{% else %}
+<div class="cmushop-grid">
+  {% for img in images %}
+  <div class="cmushop-item {{ 'hidden' if not img.is_active }}">
+    <img src="{{ url_for('admin_cmushop_image', image_id=img.id) }}" alt="Shop image #{{ img.id }}" loading="lazy">
+    <div class="meta">
+      <span>#{{ img.id }} · pos {{ loop.index }}</span>
+      <span>{{ '✅ active' if img.is_active else '🚫 hidden' }}{{ ' · 📤 TG' if img.tg_file_id }}</span>
+    </div>
+    <div class="row">
+      <form method="POST" action="{{ url_for('admin_cmushop') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="move_up">
+        <input type="hidden" name="image_id" value="{{ img.id }}">
+        <button type="submit" class="btn btn-ghost btn-sm" {{ 'disabled' if loop.first }}>◀️</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_cmushop') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="move_down">
+        <input type="hidden" name="image_id" value="{{ img.id }}">
+        <button type="submit" class="btn btn-ghost btn-sm" {{ 'disabled' if loop.last }}>▶️</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_cmushop') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="toggle">
+        <input type="hidden" name="image_id" value="{{ img.id }}">
+        <button type="submit" class="btn btn-ghost btn-sm">{{ '🚫 Hide' if img.is_active else '✅ Show' }}</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_cmushop') }}" onsubmit="return confirm('Delete this image?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="image_id" value="{{ img.id }}">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--accent);">🗑️</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}

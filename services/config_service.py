@@ -67,6 +67,8 @@ DEFAULTS = {
     "card_template_show_portrait": True,
     "card_template_font_path": None,
     "card_template_settings": None,
+    # Shared caption under every /CMUshop image
+    "cmushop_caption": "",
 }
 
 

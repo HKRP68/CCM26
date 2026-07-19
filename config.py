@@ -129,6 +129,11 @@ DEBUT_COINS = 1500
 DEBUT_GEMS = 30
 MAX_ROSTER = 25
 
+# ── Coins → Gems conversion (/coins2gems) ───────────────────────────
+# How many coins buy one gem. The conversion is one-way and irreversible;
+# coins spent are always rounded DOWN to a whole multiple of this value.
+COINS_PER_GEM = 1000
+
 # ── Claim reward ────────────────────────────────────────────────────
 # No coins from /claim — players still pull a free card.
 CLAIM_COINS = 0

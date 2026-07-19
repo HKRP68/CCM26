@@ -704,6 +704,32 @@ class PlayerImage(Base):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# CMU SHOP — website-managed image gallery shown by the /CMUshop command
+# ══════════════════════════════════════════════════════════════════════
+
+class CMUShopImage(Base):
+    """One image in the /CMUshop gallery. Images + a single shared caption
+    (GameConfig.cmushop_caption) are managed from the website. The bot sends
+    a single photo when only one active image exists, or a Next/Prev carousel
+    when several do. Durable across redeploys via the Telegram storage-channel
+    file_id, exactly like PlayerImage.
+    """
+    __tablename__ = "cmu_shop_images"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Path on disk relative to project root (e.g. data/cmushop_images/3.png).
+    image_path = Column(String(300), nullable=True)
+    # Telegram file_id — set after upload to the storage channel; lets the bot
+    # re-send without a disk read and survives ephemeral-host redeploys.
+    tg_file_id = Column(String(200), nullable=True, index=True)
+    # Display order in the carousel (ascending).
+    sort_order = Column(Integer, default=0, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by = Column(String(100), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS — scheduled FOMO-style push messages from the bot
 # ══════════════════════════════════════════════════════════════════════
 
@@ -888,6 +914,8 @@ class GameConfig(Base):
     # standalone cricket_card_generator_website_v4-3.html editor.
     card_template_font_path = Column(String(300), nullable=True)
     card_template_settings = Column(Text, nullable=True)
+    # Shared caption shown under every /CMUshop image (same for all images).
+    cmushop_caption = Column(Text, nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
