@@ -5,8 +5,19 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>CricMaster Ultra</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script>
+  // Track third-party SDK load state so a DNS/network failure on these
+  // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
+  // ad or CDN domain) degrades gracefully instead of breaking the app.
+  window.__adsgramReady = false;
+  window.__adsgramFailed = false;
+  window.__sortableFailed = false;
+</script>
+<script src="https://sad.adsgram.ai/js/sad.min.js" async
+        onload="window.__adsgramReady = true; window.dispatchEvent(new Event('adsgram-ready'));"
+        onerror="window.__adsgramFailed = true; console.warn('Adsgram SDK failed to load — ad spins unavailable this session');"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" async
+        onerror="window.__sortableFailed = true; console.warn('SortableJS failed to load — using ▲▼ reorder buttons only');"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -2890,7 +2901,12 @@ let lastOnboardingData = null;
 let suggestionSending = false;
 
 // ════════════════ API ════════════════
-async function api(path, body) {
+async function api(path, body, timeoutMs = 25000) {
+  // Abort a stalled request so callers never hang forever. Without this a
+  // dropped connection in the Telegram WebView would leave the spin wheel
+  // animating with no reward ever arriving.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const resp = await fetch(path, {
       method: 'POST',
@@ -2900,11 +2916,22 @@ async function api(path, body) {
         ...(START_PARAM ? { 'X-Tg-Start-Param': START_PARAM } : {}),
       },
       body: JSON.stringify(body || {}),
+      signal: ctrl.signal,
     });
     const data = await resp.json();
     return { ok: resp.ok && data.ok, status: resp.status, data };
   } catch (e) {
-    return { ok: false, status: 0, data: { error: 'network', message: e.message } };
+    const aborted = e?.name === 'AbortError';
+    return {
+      ok: false,
+      status: 0,
+      data: {
+        error: aborted ? 'timeout' : 'network',
+        message: aborted ? 'Request timed out — check your connection and try again' : e.message,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -4253,61 +4280,110 @@ async function onSpinClick() {
   document.getElementById('wheel')?.classList.add('spinning');
   startWheelAnticipation();
 
-  let adToken = '';
-  if (!useFree) {
-    // Need to watch ad first
-    adToken = await showAd();
-    if (!adToken) {
-      stopWheelAnticipation();
-      document.getElementById('wheel')?.classList.remove('spinning');
-      toast('Ad was skipped or failed', 'error');
-      isSpinning = false;
-      refreshDashboard();
-      return;
-    }
-  }
-  // else: free spin → no ad_token needed, backend allows it via quota system
-
-  const { ok, data } = await api('/api/webapp/spin', { ad_token: adToken });
-  if (!ok) {
+  // Watchdog: no matter what goes wrong below, never leave the wheel
+  // spinning forever with no reward. If we're still spinning after a
+  // generous window, force-stop and let the user retry.
+  let settled = false;
+  const stopSpin = () => {
     stopWheelAnticipation();
     document.getElementById('wheel')?.classList.remove('spinning');
     isSpinning = false;
-    toast(data.message || 'Spin failed', 'error');
+  };
+  const watchdog = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    stopSpin();
+    toast('Spin timed out — please try again', 'error');
     hapticNotif('error');
     refreshDashboard();
-    return;
-  }
+  }, 90000);  // generous cap: covers a long ad + network, but always terminates
+  const finish = () => { settled = true; clearTimeout(watchdog); };
 
-  await decelerateWheelToReward(data.reward);
-  isSpinning = false;
-  document.getElementById('wheel')?.classList.remove('spinning');
-  hapticNotif('success');
-  showReward(data.reward);
-  // Refresh quota + balances
-  refreshDashboard();
+  try {
+    let adToken = '';
+    if (!useFree) {
+      // Need to watch ad first
+      adToken = await showAd();
+      if (!adToken) {
+        finish();
+        stopSpin();
+        refreshDashboard();
+        return;
+      }
+    }
+    // else: free spin → no ad_token needed, backend allows it via quota system
+
+    const { ok, data } = await api('/api/webapp/spin', { ad_token: adToken });
+    if (settled) return;  // watchdog already fired
+    if (!ok || !data?.reward) {
+      finish();
+      stopSpin();
+      toast(data?.message || 'Spin failed', 'error');
+      hapticNotif('error');
+      refreshDashboard();
+      return;
+    }
+
+    finish();
+    await decelerateWheelToReward(data.reward);
+    document.getElementById('wheel')?.classList.remove('spinning');
+    isSpinning = false;
+    hapticNotif('success');
+    showReward(data.reward);
+    // Refresh quota + balances
+    refreshDashboard();
+  } catch (e) {
+    if (settled) return;
+    finish();
+    stopSpin();
+    console.error('Spin failed:', e);
+    toast('Spin failed — please try again', 'error');
+    hapticNotif('error');
+    refreshDashboard();
+  }
 }
 
 // Adsgram AdController, initialised lazily once we know the block ID
 let _adController = null;
 let _adsConfigured = false;
 let _adsBlockId = null;
+let _adsWaitingForSdk = false;
 
 function initAdsgram(config) {
   _adsConfigured = !!config?.configured;
   _adsBlockId = config?.block_id || null;
-  if (_adsConfigured && _adsBlockId && window.Adsgram?.init) {
-    try {
-      _adController = window.Adsgram.init({ blockId: _adsBlockId });
-    } catch (e) {
-      console.error('Adsgram init failed:', e);
-      _adController = null;
-    }
+  if (!_adsConfigured || !_adsBlockId) return;
+  // The Adsgram SDK loads async, so it may not be present yet when init
+  // data arrives. Try now, and if the SDK isn't ready, wait for its load
+  // event (or bail if it already failed to load — e.g. DNS blocked).
+  if (_tryInitAdController()) return;
+  if (window.__adsgramFailed) return;  // load errored; nothing to wait for
+  if (_adsWaitingForSdk) return;       // already waiting (init runs each refresh)
+  _adsWaitingForSdk = true;
+  window.addEventListener('adsgram-ready', () => {
+    _adsWaitingForSdk = false;
+    _tryInitAdController();
+  }, { once: true });
+}
+
+function _tryInitAdController() {
+  if (_adController) return true;
+  if (!_adsConfigured || !_adsBlockId || !window.Adsgram?.init) return false;
+  try {
+    _adController = window.Adsgram.init({ blockId: _adsBlockId });
+    return true;
+  } catch (e) {
+    console.error('Adsgram init failed:', e);
+    _adController = null;
+    return false;
   }
 }
 
 async function showAd() {
-  // Real Adsgram SDK if configured + initialised
+  // Real Adsgram SDK if configured + initialised. The SDK loads async, so
+  // if the controller isn't up yet, try once more before giving up.
+  if (!_adController) _tryInitAdController();
+
   if (_adController) {
     try {
       toast('📺 Loading ad…', 'info');
@@ -4323,11 +4399,25 @@ async function showAd() {
       return null;
     } catch (err) {
       // SDK rejects on skip/error/no-banner — show friendly message
-      const desc = err?.description || err?.message || 'Ad unavailable';
-      if (err?.error) toast(`Ad error: ${desc}`, 'error');
-      else toast('Ad skipped — no spin granted', 'info');
+      const desc = err?.description || err?.message || '';
+      const state = (err?.state || err?.error || '').toString().toLowerCase();
+      if (state.includes('no') || /no.?banner|not.?loaded|unavailable|empty/i.test(desc)) {
+        toast('No ads available right now — try again shortly', 'info');
+      } else if (err?.error) {
+        toast(`Ad error: ${desc || 'unavailable'}`, 'error');
+      } else {
+        toast('Ad skipped — no spin granted', 'info');
+      }
       return null;
     }
+  }
+
+  // Real ads are configured but the SDK never became available (blocked
+  // domain / DNS failure / init error). Don't hand back a MOCK token — the
+  // backend would reject it and the user would be stuck. Tell them plainly.
+  if (_adsConfigured) {
+    toast('Ads are temporarily unavailable — please try again later', 'error');
+    return null;
   }
 
   // Fallback: dev/mock mode (only works if backend has WEBAPP_DEV_MODE=1
@@ -4935,14 +5025,21 @@ function renderXiList() {
     `;
   }).join('');
 
-  // Init Sortable on the list — drag to reorder
-  if (xiSortable) { try { xiSortable.destroy(); } catch (e) {} }
-  xiSortable = Sortable.create(list, {
-    animation: 150,
-    handle: '.xi-handle',
-    ghostClass: 'xi-ghost',
-    onEnd: persistXiOrder,
-  });
+  // Init Sortable on the list — drag to reorder. The library loads from a
+  // CDN that can be blocked/unreachable (net::ERR_NAME_NOT_RESOLVED); if so,
+  // skip drag-reorder gracefully — the ▲▼ buttons still reorder the XI.
+  if (xiSortable) { try { xiSortable.destroy(); } catch (e) {} xiSortable = null; }
+  if (typeof Sortable === 'undefined' || window.__sortableFailed) return;
+  try {
+    xiSortable = Sortable.create(list, {
+      animation: 150,
+      handle: '.xi-handle',
+      ghostClass: 'xi-ghost',
+      onEnd: persistXiOrder,
+    });
+  } catch (e) {
+    console.warn('Sortable init failed — drag reorder disabled:', e);
+  }
 }
 
 function renderBenchGrouped() {
