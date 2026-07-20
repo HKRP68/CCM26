@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 # India Standard Time
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# Anti-spam floor: a single schedule may never re-fire more often than this,
+# no matter its type or (mis)configuration. This caps re-engagement nudges
+# like the "We miss you" absence reminder at one message every 6 hours so
+# users don't get spammed every few minutes.
+MIN_REFIRE_INTERVAL = timedelta(hours=6)
+
 
 # ════════════════════════════════════════════════════════════════════
 # Built-in FOMO template starter pack
@@ -112,6 +118,14 @@ def should_fire(schedule):
     """Check whether this schedule should fire right now."""
     if not schedule.is_active:
         return False
+
+    # Global anti-spam cooldown — never re-fire within MIN_REFIRE_INTERVAL of
+    # the last fire, regardless of schedule_type. Guards against a schedule
+    # that's misconfigured (e.g. a short interval) or ticked repeatedly from
+    # firing every few minutes. last_fired_at is stored as naive UTC.
+    if schedule.last_fired_at is not None:
+        if (datetime.utcnow() - schedule.last_fired_at) < MIN_REFIRE_INTERVAL:
+            return False
 
     # Window gate — but only if window is meaningful.
     # If start == end, treat it as "no window restriction" (always allowed).
