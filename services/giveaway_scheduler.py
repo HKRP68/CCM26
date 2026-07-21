@@ -96,7 +96,8 @@ async def _announce_start(context, session, giveaway):
     sent = 0
     for cid in chat_ids:
         try:
-            await _send_announcement(context, cid, giveaway, text, markup)
+            msg = await _send_announcement(context, cid, giveaway, text, markup)
+            await _pin_announcement(context, cid, msg)
             sent += 1
         except Forbidden:
             await _mark_chat_inactive(cid)
@@ -107,7 +108,8 @@ async def _announce_start(context, session, giveaway):
             # so its audience still sees the announcement.
             await asyncio.sleep(getattr(exc, "retry_after", 1) or 1)
             try:
-                await _send_announcement(context, cid, giveaway, text, markup)
+                msg = await _send_announcement(context, cid, giveaway, text, markup)
+                await _pin_announcement(context, cid, msg)
                 sent += 1
             except TelegramError as exc2:
                 logger.warning("Giveaway announce retry to %s failed: %s", cid, exc2)
@@ -123,13 +125,25 @@ async def _announce_start(context, session, giveaway):
 
 async def _send_announcement(context, chat_id, giveaway, text, markup):
     if giveaway.image_file_id:
-        await context.bot.send_photo(
+        return await context.bot.send_photo(
             chat_id=chat_id, photo=giveaway.image_file_id,
             caption=text, parse_mode="HTML", reply_markup=markup)
-    else:
-        await context.bot.send_message(
-            chat_id=chat_id, text=text, parse_mode="HTML",
-            reply_markup=markup, disable_web_page_preview=True)
+    return await context.bot.send_message(
+        chat_id=chat_id, text=text, parse_mode="HTML",
+        reply_markup=markup, disable_web_page_preview=True)
+
+
+async def _pin_announcement(context, chat_id, message):
+    """Pin the giveaway announcement so it stays visible. Best-effort: a missing
+    pin permission (bot isn't admin) must never fail the broadcast itself."""
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=chat_id, message_id=message_id, disable_notification=True)
+    except TelegramError as exc:
+        logger.info("Could not pin giveaway announcement in %s: %s", chat_id, exc)
 
 
 # ── End (draw + results) ─────────────────────────────────────────────

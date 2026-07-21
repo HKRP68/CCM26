@@ -73,6 +73,18 @@ class ButtonAccessTests(unittest.TestCase):
         self.assertTrue(button_access.check_callback_owner(cancel_update))
         self.assertTrue(button_access.check_callback_owner(decision_update))
 
+    def test_giveaway_participate_button_is_shared_for_everyone(self):
+        # The giveaway "Participate" button is broadcast to whole groups; anyone
+        # may tap it (the callback validates GC membership + one-entry itself),
+        # so it must never be owner-locked — the reported "not for you" bug.
+        button_access.register_button_owner(100, 200, 111)
+        update = DummyUpdate(DummyQuery(222, "gwjoin_42"))
+
+        self.assertTrue(button_access.check_callback_owner(update))
+        # A shared-prefix keyboard must also not be *registered* as owner-locked.
+        self.assertFalse(button_access.is_shared_callback_data("roster_page_1"))
+        self.assertTrue(button_access.is_shared_callback_data("gwjoin_42"))
+
     def test_pbo_invite_buttons_are_shared_for_invitee_validation(self):
         button_access.register_button_owner(100, 200, 111)
 
