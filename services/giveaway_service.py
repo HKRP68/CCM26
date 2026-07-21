@@ -18,6 +18,7 @@ Design notes:
 
 import logging
 import random
+import re
 from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +27,40 @@ logger = logging.getLogger(__name__)
 
 # Currency prize types → the User column each credits.
 _CURRENCY_TYPES = ("coins", "gems", "quest_points")
+
+
+# ── Official-group presentation helpers ──────────────────────────────
+
+def group_handle(cfg) -> str | None:
+    """Return the Official Group public @handle for display (e.g. '@cmugames'),
+    or None when only a private invite link / numeric id is configured.
+
+    Prefers the admin-set ``branding_group_username``; otherwise parses a public
+    ``t.me/<username>`` out of ``official_group_link`` (private ``t.me/+…`` invite
+    links have no public handle, so they yield None)."""
+    if not cfg:
+        return None
+    uname = (getattr(cfg, "branding_group_username", None) or "").strip().lstrip("@")
+    if uname:
+        return "@" + uname
+    link = (getattr(cfg, "official_group_link", None) or "").strip()
+    m = re.search(r"t\.me/([A-Za-z0-9_]{3,})$", link)
+    if m:
+        return "@" + m.group(1)
+    return None
+
+
+def group_join_url(cfg) -> str | None:
+    """Return a clickable URL to join the Official Group, or None."""
+    if not cfg:
+        return None
+    link = (getattr(cfg, "official_group_link", None) or "").strip()
+    if link:
+        return link
+    uname = (getattr(cfg, "branding_group_username", None) or "").strip().lstrip("@")
+    if uname:
+        return "https://t.me/" + uname
+    return None
 
 
 # ── Entry ────────────────────────────────────────────────────────────

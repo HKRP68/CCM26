@@ -72,8 +72,9 @@ async def _start_due(context):
 
 
 async def _announce_start(context, session, giveaway):
-    from models import BotChat
-    from services.giveaway_service import announcement_text
+    from models import BotChat, GameConfig
+    from services.giveaway_service import (
+        announcement_text, group_join_url, group_handle)
 
     q = session.query(BotChat).filter(BotChat.is_active == True)  # noqa: E712
     if (giveaway.announce_target or "groups") == "groups":
@@ -81,10 +82,18 @@ async def _announce_start(context, session, giveaway):
     chat_ids = [c.chat_id for c in q.all()]
 
     text = announcement_text(giveaway)
-    markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎉 Participate",
-                             callback_data=f"gwjoin_{giveaway.id}")
-    ]])
+    rows = [[InlineKeyboardButton("🎉 Participate",
+                                  callback_data=f"gwjoin_{giveaway.id}")]]
+    # A one-tap join button so non-members can join the Official Group right from
+    # the announcement (they still tap Participate afterwards to enter).
+    cfg = session.query(GameConfig).first()
+    join_url = group_join_url(cfg)
+    if join_url:
+        handle = group_handle(cfg)
+        rows.append([InlineKeyboardButton(
+            f"🔗 Join {handle}" if handle else "🔗 Join Official Group",
+            url=join_url)])
+    markup = InlineKeyboardMarkup(rows)
 
     # Flip to running and commit BEFORE the (potentially slow) fan-out so users
     # in the first chats who tap immediately aren't rejected as "not open", and

@@ -328,6 +328,41 @@ class GrantPlayerFallbackTest(unittest.TestCase):
         self.assertIn("coins", label)
 
 
+class OfficialGroupHelperTest(unittest.TestCase):
+    def setUp(self):
+        self.svc, self.models, _ = _load_service(self)
+
+    def _cfg(self, username=None, link=None):
+        return SimpleNamespace(branding_group_username=username,
+                               official_group_link=link)
+
+    def test_handle_from_username(self):
+        self.assertEqual(self.svc.group_handle(self._cfg(username="cmugames")),
+                         "@cmugames")
+        self.assertEqual(self.svc.group_handle(self._cfg(username="@cmugames")),
+                         "@cmugames")
+
+    def test_handle_parsed_from_public_link(self):
+        self.assertEqual(
+            self.svc.group_handle(self._cfg(link="https://t.me/cmugames")),
+            "@cmugames")
+
+    def test_handle_none_for_private_invite_or_missing(self):
+        # Private invite links (t.me/+…) have no public handle.
+        self.assertIsNone(self.svc.group_handle(self._cfg(link="https://t.me/+AbC123")))
+        self.assertIsNone(self.svc.group_handle(self._cfg()))
+        self.assertIsNone(self.svc.group_handle(None))
+
+    def test_join_url_prefers_link_then_builds_from_username(self):
+        self.assertEqual(
+            self.svc.group_join_url(self._cfg(link="https://t.me/+AbC123")),
+            "https://t.me/+AbC123")
+        self.assertEqual(
+            self.svc.group_join_url(self._cfg(username="cmugames")),
+            "https://t.me/cmugames")
+        self.assertIsNone(self.svc.group_join_url(self._cfg()))
+
+
 class TextBuilderTest(unittest.TestCase):
     def setUp(self):
         self.svc, self.models, _ = _load_service(self)
