@@ -15,7 +15,29 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 
-def _load_service():
+# Modules this file stubs in sys.modules. We snapshot and restore them around
+# each test so stubbing the (uninstalled-here but real-in-CI) sqlalchemy package
+# can't poison later tests that import the real database layer.
+_STUBBED_MODULES = (
+    "sqlalchemy", "sqlalchemy.exc", "models",
+    "services.activity_service", "services.overflow_service",
+    "config", "services.giveaway_service",
+)
+
+
+def _restore_modules(saved):
+    for name, mod in saved.items():
+        if mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mod
+
+
+def _load_service(test):
+    # Snapshot originals and schedule their restoration after the test.
+    saved = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
+    test.addCleanup(_restore_modules, saved)
+
     # Stub sqlalchemy.exc.IntegrityError (imported at module top).
     sa = types.ModuleType("sqlalchemy")
     exc = types.ModuleType("sqlalchemy.exc")
@@ -54,6 +76,11 @@ def _load_service():
         def __init__(self, **kw):
             self.__dict__.update(kw)
 
+    class Giveaway:
+        id = None
+        winners_drawn_at = None
+
+    models.Giveaway = Giveaway
     models.GiveawayEntry = GiveawayEntry
     models.User = User
     models.Player = Player
@@ -81,6 +108,9 @@ class _FakeQuery:
     def filter(self, *a, **k):
         return self
 
+    def with_for_update(self, *a, **k):
+        return self
+
     def all(self):
         return self._all
 
@@ -92,17 +122,24 @@ class _FakeQuery:
 
 
 class _FakeSession:
-    """Minimal session: query(GiveawayEntry) → entries; query(User) → the user
-    for the current entry (calls happen once per entry, in order)."""
+    """Minimal session: query(Giveaway) → the giveaway under test (row-lock
+    claim); query(GiveawayEntry) → entries; query(User) → the user for the
+    current entry (calls happen once per entry, in order)."""
 
-    def __init__(self, entries, users_by_id):
+    def __init__(self, entries, users_by_id, giveaway=None, player=None):
         self.entries = entries
         self.users_by_id = users_by_id
+        self.giveaway = giveaway
+        self.player = player
         self.committed = False
         self._user_idx = 0
 
     def query(self, model):
-        from models import GiveawayEntry as GE, User as U
+        from models import Giveaway as GA, GiveawayEntry as GE, User as U, Player as P
+        if model is GA:
+            return _FakeQuery(first_result=self.giveaway)
+        if model is P:
+            return _FakeQuery(first_result=self.player)
         if model is GE:
             return _FakeQuery(all_result=list(self.entries))
         if model is U:
@@ -142,7 +179,7 @@ def _giveaway(prize_type="coins", amount=5000, winners=2):
 
 class DrawWinnersTest(unittest.TestCase):
     def setUp(self):
-        self.svc, self.models, self.IntegrityError = _load_service()
+        self.svc, self.models, self.IntegrityError = _load_service(self)
         random.seed(42)
 
     def _entries(self, uids):
@@ -152,8 +189,8 @@ class DrawWinnersTest(unittest.TestCase):
     def test_grants_currency_and_marks_winners(self):
         users = {u: _user(u) for u in (1, 2, 3)}
         entries = self._entries([1, 2, 3])
-        session = _FakeSession(entries, users)
         g = _giveaway("coins", amount=5000, winners=2)
+        session = _FakeSession(entries, users, g)
 
         winners = self.svc.draw_winners(session, g)
 
@@ -170,8 +207,8 @@ class DrawWinnersTest(unittest.TestCase):
     def test_no_duplicate_winners(self):
         users = {u: _user(u) for u in range(1, 6)}
         entries = self._entries(list(range(1, 6)))
-        session = _FakeSession(entries, users)
         g = _giveaway(winners=3)
+        session = _FakeSession(entries, users, g)
         winners = self.svc.draw_winners(session, g)
         ids = [w["user_id"] for w in winners]
         self.assertEqual(len(ids), len(set(ids)))  # all distinct
@@ -179,16 +216,16 @@ class DrawWinnersTest(unittest.TestCase):
     def test_clamps_to_participant_count(self):
         users = {u: _user(u) for u in (1, 2)}
         entries = self._entries([1, 2])
-        session = _FakeSession(entries, users)
         g = _giveaway(winners=5)  # more winners than entrants
+        session = _FakeSession(entries, users, g)
         winners = self.svc.draw_winners(session, g)
         self.assertEqual(len(winners), 2)  # everyone wins, no more
 
     def test_banned_users_excluded(self):
         users = {1: _user(1), 2: _user(2, banned=True), 3: _user(3)}
         entries = self._entries([1, 2, 3])
-        session = _FakeSession(entries, users)
         g = _giveaway(winners=3)
+        session = _FakeSession(entries, users, g)
         winners = self.svc.draw_winners(session, g)
         ids = {w["user_id"] for w in winners}
         self.assertNotIn(2, ids)
@@ -198,8 +235,8 @@ class DrawWinnersTest(unittest.TestCase):
         # eligible_user_ids simulates the live Official-GC re-check: user 3 left.
         users = {u: _user(u) for u in (1, 2, 3)}
         entries = self._entries([1, 2, 3])
-        session = _FakeSession(entries, users)
         g = _giveaway(winners=3)
+        session = _FakeSession(entries, users, g)
         winners = self.svc.draw_winners(session, g, eligible_user_ids={1, 2})
         ids = {w["user_id"] for w in winners}
         self.assertEqual(ids, {1, 2})
@@ -207,8 +244,8 @@ class DrawWinnersTest(unittest.TestCase):
     def test_no_eligible_entries_ends_void(self):
         users = {1: _user(1, banned=True)}
         entries = self._entries([1])
-        session = _FakeSession(entries, users)
         g = _giveaway(winners=1)
+        session = _FakeSession(entries, users, g)
         winners = self.svc.draw_winners(session, g)
         self.assertEqual(winners, [])
         self.assertEqual(g.status, "ended")
@@ -217,9 +254,9 @@ class DrawWinnersTest(unittest.TestCase):
     def test_idempotent_no_double_payout(self):
         users = {1: _user(1)}
         entries = self._entries([1])
-        session = _FakeSession(entries, users)
         g = _giveaway(winners=1)
         g.winners_drawn_at = datetime.utcnow()  # already drawn
+        session = _FakeSession(entries, users, g)
         winners = self.svc.draw_winners(session, g)
         self.assertEqual(winners, [])
         self.assertEqual(users[1].total_coins, 0)  # not credited again
@@ -229,15 +266,15 @@ class DrawWinnersTest(unittest.TestCase):
                             ("quest_points", "quest_points")):
             users = {1: _user(1)}
             entries = self._entries([1])
-            session = _FakeSession(entries, users)
             g = _giveaway(ptype, amount=300, winners=1)
+            session = _FakeSession(entries, users, g)
             self.svc.draw_winners(session, g)
             self.assertEqual(getattr(users[1], attr), 300)
 
 
 class RecordEntryTest(unittest.TestCase):
     def setUp(self):
-        self.svc, self.models, self.IntegrityError = _load_service()
+        self.svc, self.models, self.IntegrityError = _load_service(self)
 
     def test_first_entry_joins(self):
         session = _FakeSession([], {})
@@ -263,9 +300,37 @@ class RecordEntryTest(unittest.TestCase):
         self.assertEqual(status, "already")
 
 
+class GrantPlayerFallbackTest(unittest.TestCase):
+    def setUp(self):
+        self.svc, self.models, _ = _load_service(self)
+
+    def test_overflow_failure_falls_back_to_coins(self):
+        # Roster full + overflow parking blows up → the winner must still get the
+        # card's sell value in coins, never a "you won" with nothing granted.
+        ov = types.ModuleType("services.overflow_service")
+
+        def _boom(*a, **k):
+            raise RuntimeError("db down")
+
+        ov.record_overflow = _boom
+        sys.modules["services.overflow_service"] = ov
+        sys.modules["config"].get_sell_value = lambda rating: 1234
+
+        player = SimpleNamespace(id=5, name="Star Player", rating=80)
+        session = _FakeSession([], {}, player=player)
+        user = _user(1)
+        user.roster_count = 25  # full
+        g = _giveaway("player")
+        g.prize_player_id = 5
+
+        label = self.svc._grant_player(session, g, user)
+        self.assertEqual(user.total_coins, 1234)
+        self.assertIn("coins", label)
+
+
 class TextBuilderTest(unittest.TestCase):
     def setUp(self):
-        self.svc, self.models, _ = _load_service()
+        self.svc, self.models, _ = _load_service(self)
 
     def test_prize_labels(self):
         self.assertIn("coins", self.svc.prize_label(_giveaway("coins", 5000)))

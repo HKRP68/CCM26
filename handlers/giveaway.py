@@ -73,15 +73,20 @@ async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_T
                 show_alert=True)
             return
 
-        # Official GC membership gate.
+        # Official GC membership gate. Fail closed: if no Official GC is
+        # configured we can't verify membership, so refuse rather than silently
+        # turning a GC-gated giveaway into an open one.
         cfg = session.query(GameConfig).first()
         official_group_id = cfg.official_group_id if cfg else None
         official_link = cfg.official_group_link if cfg else None
-        if official_group_id:
-            is_member = await _is_group_member(context, official_group_id, tg_user.id)
-            if not is_member:
-                await _answer_join_gc(query, official_link)
-                return
+        if not official_group_id:
+            await query.answer("This giveaway isn't available right now.",
+                               show_alert=True)
+            return
+        is_member = await _is_group_member(context, official_group_id, tg_user.id)
+        if not is_member:
+            await _answer_join_gc(query, official_link)
+            return
 
         # Record the entry (one-per-user enforced by the DB unique index).
         status = giveaway_service.record_entry(session, giveaway, user, tg_user.id)

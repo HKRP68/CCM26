@@ -125,13 +125,27 @@ def _grant_player(session, giveaway, user) -> str:
         user.roster_count = (user.roster_count or 0) + 1
     else:
         # Roster full — park it as a pending overflow claim so the card is never
-        # lost (same path GSpin/daily use).
+        # lost (same path GSpin/daily use). If parking fails, fall back to
+        # crediting the card's sell value in coins so the winner is never told
+        # they won a prize that wasn't actually granted.
         try:
             from services.overflow_service import record_overflow
             record_overflow(session, user, player, source="giveaway")
             label += " — roster full, held as pending claim"
         except Exception:
             logger.exception("giveaway overflow park failed for user %s", user.id)
+            try:
+                from config import get_sell_value
+                coins = int(get_sell_value(player.rating) or 0)
+            except Exception:
+                coins = 0
+            user.total_coins = (user.total_coins or 0) + coins
+            label = f"{coins:,} coins (roster full — {player.name} converted)"
+            from services.activity_service import log_activity
+            log_activity(session, user.id, "giveaway_player_coins",
+                         detail=f"Giveaway #{giveaway.id} '{giveaway.title}' — {label}",
+                         coins_change=coins)
+            return label
 
     from services.activity_service import log_activity
     log_activity(session, user.id, "giveaway_player",
@@ -157,10 +171,23 @@ def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
     ``random.sample`` over the surviving DISTINCT entries guarantees no user
     wins two slots. If there are fewer eligible entries than ``num_winners``,
     every eligible entrant wins. Returns a list of winner dicts. Caller commits.
-    """
-    from models import GiveawayEntry, User
 
-    if giveaway.winners_drawn_at is not None:
+    Concurrency: the giveaway row is re-fetched ``with_for_update()`` and the
+    ``winners_drawn_at`` guard is checked while holding that row lock, so two
+    processes finalizing the same giveaway (e.g. during a rolling deploy) can't
+    both pay out — the second blocks until the first commits, then sees the flag
+    set and returns []. (On SQLite the lock is a no-op, but there only one
+    process runs.)
+    """
+    from models import Giveaway, GiveawayEntry, User
+
+    # Claim the giveaway under a row lock. Operate on the locked instance so the
+    # flag set below is protected by the same lock the caller's commit releases.
+    giveaway = (session.query(Giveaway)
+                .filter(Giveaway.id == giveaway.id)
+                .with_for_update()
+                .first())
+    if giveaway is None or giveaway.winners_drawn_at is not None:
         return []
 
     entries = (session.query(GiveawayEntry)
@@ -212,7 +239,9 @@ def prize_label(giveaway) -> str:
     if ptype == "quest_points":
         return f"🎯 {int(giveaway.prize_amount or 0):,} quest points"
     if ptype == "player":
-        name = giveaway.prize_player.name if giveaway.prize_player else "a player card"
+        # prize_label is embedded into Telegram HTML messages, so escape the
+        # (admin/imported) player name — a stray & or < would 400 the send.
+        name = _esc(giveaway.prize_player.name) if giveaway.prize_player else "a player card"
         rating = f" ({giveaway.prize_player.rating})" if giveaway.prize_player else ""
         return f"🃏 {name}{rating}"
     return "a prize"

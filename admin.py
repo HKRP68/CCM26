@@ -15491,6 +15491,17 @@ def admin_giveaways():
                     flash("Pick a valid prize type.", "error")
                     return redirect(url_for("admin_giveaways"))
 
+                # Fail closed: a giveaway is GC-gated by definition, so refuse to
+                # create one until the Official GC id is configured — otherwise
+                # membership can't be verified and anyone could enter.
+                from models import GameConfig as _GC
+                _cfg = db.query(_GC).first()
+                if not (_cfg and _cfg.official_group_id):
+                    flash("⚠️ Set the Official GC (numeric group id) under Branding "
+                          "before creating a giveaway — participation is gated on it.",
+                          "error")
+                    return redirect(url_for("admin_giveaways"))
+
                 num_winners = int(request.form.get("num_winners") or 1)
                 if num_winners < 1:
                     flash("Number of winners must be at least 1.", "error")

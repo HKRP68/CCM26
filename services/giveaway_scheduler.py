@@ -12,17 +12,20 @@ every tick:
     Official GC + DMed to winners, then flipped to ``ended``.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import Forbidden, BadRequest, TelegramError
+from telegram.error import Forbidden, BadRequest, RetryAfter, TelegramError
 
 logger = logging.getLogger(__name__)
 
 SWEEP_JOB_NAME = "giveaway_sweep"
 SWEEP_INTERVAL = 30  # seconds
 GROUP_CHAT_TYPES = ("group", "supergroup")
+# Small gap between broadcast sends to stay under Telegram's flood limits.
+SEND_DELAY_SECONDS = 0.05
 
 # Telegram member statuses that count as "in the group".
 _MEMBER_STATUSES = {"creator", "administrator", "member", "restricted"}
@@ -58,7 +61,12 @@ async def _start_due(context):
             # let _end_due void it.
             if g.end_time <= now:
                 continue
-            await _announce_start(context, session, g)
+            # Isolate failures so one broken giveaway can't block the others.
+            try:
+                await _announce_start(context, session, g)
+            except Exception:
+                session.rollback()
+                logger.exception("Giveaway #%s announce failed", g.id)
     finally:
         session.close()
 
@@ -78,30 +86,50 @@ async def _announce_start(context, session, giveaway):
                              callback_data=f"gwjoin_{giveaway.id}")
     ]])
 
+    # Flip to running and commit BEFORE the (potentially slow) fan-out so users
+    # in the first chats who tap immediately aren't rejected as "not open", and
+    # a concurrent tick won't re-announce.
+    giveaway.announced_at = datetime.utcnow()
+    giveaway.status = "running"
+    session.commit()
+
     sent = 0
     for cid in chat_ids:
         try:
-            if giveaway.image_file_id:
-                await context.bot.send_photo(
-                    chat_id=cid, photo=giveaway.image_file_id,
-                    caption=text, parse_mode="HTML", reply_markup=markup)
-            else:
-                await context.bot.send_message(
-                    chat_id=cid, text=text, parse_mode="HTML",
-                    reply_markup=markup, disable_web_page_preview=True)
+            await _send_announcement(context, cid, giveaway, text, markup)
             sent += 1
         except Forbidden:
             await _mark_chat_inactive(cid)
         except BadRequest as exc:
             logger.info("Giveaway announce to %s rejected: %s", cid, exc)
+        except RetryAfter as exc:
+            # Flood control — wait the requested interval and retry this chat once
+            # so its audience still sees the announcement.
+            await asyncio.sleep(getattr(exc, "retry_after", 1) or 1)
+            try:
+                await _send_announcement(context, cid, giveaway, text, markup)
+                sent += 1
+            except TelegramError as exc2:
+                logger.warning("Giveaway announce retry to %s failed: %s", cid, exc2)
         except TelegramError as exc:
             logger.warning("Giveaway announce to %s failed: %s", cid, exc)
 
-    giveaway.announced_at = datetime.utcnow()
-    giveaway.status = "running"
-    session.commit()
+        if SEND_DELAY_SECONDS:
+            await asyncio.sleep(SEND_DELAY_SECONDS)
+
     logger.info("Giveaway #%s announced to %s/%s chats",
                 giveaway.id, sent, len(chat_ids))
+
+
+async def _send_announcement(context, chat_id, giveaway, text, markup):
+    if giveaway.image_file_id:
+        await context.bot.send_photo(
+            chat_id=chat_id, photo=giveaway.image_file_id,
+            caption=text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id, text=text, parse_mode="HTML",
+            reply_markup=markup, disable_web_page_preview=True)
 
 
 # ── End (draw + results) ─────────────────────────────────────────────
@@ -123,11 +151,21 @@ async def _end_due(context):
                          Giveaway.end_time <= now)
                  .all())
         for g in due:
-            await _finalize(context, session, g)
+            # Isolate failures so one broken giveaway can't block the rest — or
+            # the stale void-loop below.
+            try:
+                await _finalize(context, session, g)
+            except Exception:
+                session.rollback()
+                logger.exception("Giveaway #%s finalize failed", g.id)
         for g in stale:
-            g.status = "ended"
-            g.winners_drawn_at = datetime.utcnow()
-            session.commit()
+            try:
+                g.status = "ended"
+                g.winners_drawn_at = datetime.utcnow()
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("Giveaway #%s void failed", g.id)
     finally:
         session.close()
 
@@ -139,16 +177,19 @@ async def _finalize(context, session, giveaway):
     official_group_id = _official_group_id(session)
 
     # Re-verify live Official GC membership for each entrant (anti-cheat: dropping
-    # anyone who left the GC after entering). If no official group is configured,
-    # skip the membership filter entirely.
-    eligible_user_ids = None
+    # anyone who left the GC after entering). Fail closed: if the Official GC is
+    # unconfigured we can't verify anyone, so no one is eligible (empty set →
+    # giveaway ends void) rather than paying out an unverifiable audience.
+    eligible_user_ids = set()
     if official_group_id:
-        eligible_user_ids = set()
         entries = (session.query(GiveawayEntry)
                    .filter(GiveawayEntry.giveaway_id == giveaway.id).all())
         for e in entries:
             if await _is_group_member(context, official_group_id, e.telegram_id):
                 eligible_user_ids.add(e.user_id)
+    else:
+        logger.warning("Giveaway #%s finalized with no Official GC configured — "
+                       "voiding (no verifiable participants)", giveaway.id)
 
     winners = draw_winners(session, giveaway, eligible_user_ids=eligible_user_ids)
     session.commit()
