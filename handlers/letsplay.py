@@ -1212,6 +1212,10 @@ async def _launch_match(context, draft, decision, winner_side):
         str(bowl_info["tg_id"]): bowl_team_name,
     }
     state["is_letsplay"] = True
+    # Rating/trait-aware death-overs resolution (see cipl_match._make_clutch_hook):
+    # the last over of a live LetsPlay chase is decided by ratings + clutch traits,
+    # not a pre-scripted scenario value.
+    state["clutch_finale"] = True
     save_state(context, match_id, state, next_action=A_PICK_CIPL_BOWLER)
 
     await _announce(context, state, pitch_type)

@@ -99,6 +99,11 @@ def is_hundred(state):
 CHASE_STEER_BALLS = 30
 CHASE_STEER_STRENGTH = 0.30
 
+# LetsPlay "clutch finale": how many legal balls before the innings end the
+# rating/trait-aware death resolution kicks in (in addition to any scenario-engine
+# finale phase). One over by default.
+CLUTCH_WINDOW_BALLS = 6
+
 
 # ══════════════════════════════════════════════════════════════════════
 # PITCH RULE ENGINE — spec-driven realism layers
@@ -189,26 +194,27 @@ SCENARIO_TYPES = ("last_ball_six", "win_by_1_run", "super_over_thriller",
 
 def _select_finish_profile(overs):
     """Pick a finish profile for an armed chase, returning ``(scenario_type,
-    finish_ball)``. The weighting spreads finishes out to reduce last-ball drama:
+    finish_ball)``. Thriller-forward weighting — finishes cluster at the wire so
+    the mode lives up to "more drama":
 
-        30%  win with 1 ball to spare (19.5)
-        20%  last-ball win            (19.6)
-        10%  tie → Super Over
+        32%  last-ball win            (19.6)
+        22%  win with 1 ball to spare (19.5)
+        16%  tie → Super Over
         20%  finish in the 19th over  (18.1–18.6)
-        20%  comfortable win          (17.1–17.6, 2+ overs to spare)
+        10%  comfortable win          (17.1–17.6, 2+ overs to spare)
 
     ``finish_ball`` is an absolute legal-ball index (1..overs*6); ``None`` for the
     tie profile, which is handled by the super_over_thriller script.
     """
     balls = overs * 6
     r = random.random()
-    if r < 0.30:
-        return "controlled_finish", balls - 1
-    if r < 0.50:
+    if r < 0.32:
         return "controlled_finish", balls
-    if r < 0.60:
+    if r < 0.54:
+        return "controlled_finish", balls - 1
+    if r < 0.70:
         return "super_over_thriller", None
-    if r < 0.80:
+    if r < 0.90:
         return "controlled_finish", random.randint(balls - 11, balls - 6)
     return "controlled_finish", random.randint(balls - 17, balls - 12)
 
@@ -330,11 +336,12 @@ class _ScenarioMatchShim:
 
 def _scenario_probability():
     """Chance (0–1) that an eligible chase is armed with a dramatic finish.
-    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.30)."""
+    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.55 —
+    thriller-forward, so most chases go down to the wire)."""
     try:
-        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.30"))))
+        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.55"))))
     except (TypeError, ValueError):
-        return 0.30
+        return 0.55
 
 
 def _maybe_enable_scenario(state):
@@ -779,6 +786,64 @@ def _make_last_over_drama_hook(is_last_over, is_live_chase):
     return _hook
 
 
+def _make_clutch_hook(runs_needed, balls_left, wickets_left, is_final_ball):
+    """Death-overs "clutch" amplifier for a live LetsPlay chase.
+
+    Unlike the scenario engine (which scripts a fixed run value and bypasses
+    ratings/traits), this is a BOUNDED weight nudge layered on top of the normal
+    rating/trait weights — so the batsman's rating, the bowler's rating and the
+    active clutch traits (Finisher / Clutch / Death / Yorker) still decide the
+    ball. It only tilts intent by how much the chase needs:
+
+      • required-per-ball ``rpb`` high  → go big: Six/Four up, Dot down, a modest
+        Wicket bump (risk of going for it).
+      • ``rpb`` low                     → play safe: Dot up, Six/Wicket down.
+      • ``is_final_ball``               → maximum six-or-bust spread.
+
+    Returns None when there's nothing to chase (defensive), leaving weights raw.
+    """
+    if balls_left <= 0:
+        return None
+    rpb = max(0.0, runs_needed) / balls_left
+
+    # Intent factor 0..1: ~0 at rpb<=1 (cruising), ~1 at rpb>=2.5 (all-out).
+    intent = max(0.0, min(1.0, (rpb - 1.0) / 1.5))
+
+    six = 1.0 + 0.75 * intent          # up to 1.75
+    four = 1.0 + 0.45 * intent         # up to 1.45
+    wkt = 1.0 + 0.35 * intent          # up to 1.35 (going for it → risk)
+    dot = 1.0 - 0.40 * intent          # down to 0.60
+    single = 1.0 - 0.15 * intent
+
+    if rpb < 0.7:
+        # Cruising home — protect wickets, milk singles, no need to slog.
+        six, four, wkt, dot, single = 0.80, 0.90, 0.80, 1.25, 1.20
+
+    if is_final_ball:
+        # The very last ball of a live chase: crank the spread to the max within
+        # bounds. Ratings/traits still pick who wins the moment.
+        six = max(six, 1.85)
+        four = max(four, 1.45)
+        wkt = max(wkt, 1.45)
+        dot = min(dot, 0.55)
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        if "Six" in rw:
+            rw["Six"] *= six
+        if "Four" in rw:
+            rw["Four"] *= four
+        if "Wicket" in rw:
+            rw["Wicket"] *= wkt
+        if "Dot" in rw:
+            rw["Dot"] *= dot
+        if "Single" in rw:
+            rw["Single"] *= single
+        return rw
+
+    return _hook
+
+
 def _make_variance_hook(v):
     """Variance Rule: shift the WHOLE innings up or down by one per-innings
     multiplier ``v`` — boost boundaries and trim dots symmetrically (Wicket
@@ -1130,15 +1195,30 @@ def simulate_over(state):
 
         streak = streaks.get(srid, {"boundaries": 0})
 
+        # ── LetsPlay clutch finale ──
+        # In a live LetsPlay chase, the death overs (scenario finale phase, or the
+        # last CLUTCH_WINDOW_BALLS legal balls) are resolved through the NORMAL
+        # engine path with a clutch intent amplifier — so ratings + traits decide
+        # the six/wicket, instead of the scenario engine's fixed scripted value.
+        # CIPL never sets ``clutch_finale`` so its scripted finale is untouched.
+        runs_needed = (target - state["total_runs"]) if target is not None else 0
+        letsplay_finale = (
+            bool(state.get("clutch_finale"))
+            and innings == 2 and target is not None
+            and runs_needed > 0 and balls_left > 0
+            and (scenario_phase == "finale" or balls_left <= CLUTCH_WINDOW_BALLS)
+        )
+
         # ── Scenario engine hook ──
         # Finale phase scripts the delivery outright; free-play/convergence
         # phases instead nudge the pressure effects toward the target corridor.
+        # Skipped entirely for a LetsPlay clutch finale (no scripted override).
         scenario_override = (scenario_eng.get_override_outcome(striker, bowler)
-                             if scenario_eng else None)
+                             if (scenario_eng and not letsplay_finale) else None)
         if scenario_override:
             oc = _normalize_outcome(scenario_override)
         else:
-            if scenario_eng:
+            if scenario_eng and not letsplay_finale:
                 _merge_pressure(pressure_effects, scenario_eng.get_scenario_bias({}))
 
             # Chase-chance steering — a controlled nudge toward the matrix-estimated
@@ -1195,9 +1275,19 @@ def simulate_over(state):
             floor_hook = _make_floor_hook(state, pitch)
             corridor_hook = _make_no_collapse_hook(state)
             variance_hook = _make_variance_hook(state.get("innings_variance"))
+            # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
+            # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
+            # the six-or-bust spread. None for /cipl and non-finale balls.
+            clutch_hook = (
+                _make_clutch_hook(
+                    runs_needed, balls_left,
+                    state.get("wicket_limit", WICKET_LIMIT) - state["total_wickets"],
+                    balls_left == 1)
+                if letsplay_finale else None)
             weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook,
-                                         floor_hook, corridor_hook, variance_hook)
+                                         floor_hook, corridor_hook, variance_hook,
+                                         clutch_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],

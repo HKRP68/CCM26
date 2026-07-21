@@ -1363,6 +1363,13 @@ def _render_over_summary(state, summary):
     if c and c["runs_required"] > 0:
         lines.append(f"🎯 Need {c['runs_required']} off {c['balls_remaining']} "
                      f"(RRR {c['rrr']:.2f})")
+        # Final-over thriller cue: at the end of the penultimate over of a live
+        # chase that's still winnable, flag the drama coming down to the wire.
+        if c["balls_remaining"] == 6 and 0 < c["runs_required"] <= 36:
+            if c["runs_required"] / 6.0 >= 2.0:
+                lines.append("🔥 DOWN TO THE WIRE — final over, needs a blitz!")
+            else:
+                lines.append("🔥 Final over — game in the balance!")
     # Reveal any player traits that fired this over (/letsplay only — Challenge
     # League players carry no traits, so these lists are always empty there).
     ta = summary.get("traits_activated") or {}
