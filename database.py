@@ -67,6 +67,7 @@ def init_db():
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
         FantasyRoleRule, EventMedia,
+        Giveaway, GiveawayEntry,
     )
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()

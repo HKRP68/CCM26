@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Giveaway · {{ g.title }}{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🎁 {{ g.title }}</h2>
+  <a href="{{ url_for('admin_giveaways') }}" class="btn btn-ghost btn-sm">← All giveaways</a>
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.8rem;">
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Status</div>
+      <div style="font-weight:700;">
+        {% if g.status == 'running' %}<span style="color:var(--green);">● RUNNING</span>
+        {% elif g.status == 'scheduled' %}<span style="color:var(--accent);">Scheduled</span>
+        {% elif g.status == 'ended' %}Ended
+        {% else %}Cancelled{% endif %}
+      </div>
+    </div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Prize</div>
+      <div style="font-weight:700;">
+        {% if g.prize_type == 'coins' %}🪙 {{ "{:,}".format(g.prize_amount) }} coins
+        {% elif g.prize_type == 'gems' %}💎 {{ "{:,}".format(g.prize_amount) }} gems
+        {% elif g.prize_type == 'quest_points' %}🎯 {{ "{:,}".format(g.prize_amount) }} QP
+        {% elif g.prize_type == 'player' %}🃏 {{ g.prize_player.name if g.prize_player else '—' }}{% if g.prize_player %} ({{ g.prize_player.rating }}){% endif %}
+        {% endif %}
+      </div>
+    </div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Winners</div>
+      <div style="font-weight:700;">{{ g.num_winners }}</div></div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Entries</div>
+      <div style="font-weight:700;">{{ entry_count }}</div></div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Start (IST)</div>
+      <div>{{ g.start_time | ist('%Y-%m-%d %H:%M') }}</div></div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">End (IST)</div>
+      <div>{{ g.end_time | ist('%Y-%m-%d %H:%M') }}</div></div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Announce to</div>
+      <div>{{ 'All chats' if g.announce_target == 'all' else 'Groups' }}</div></div>
+    <div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;">Banner</div>
+      <div>{{ '🖼️ attached' if g.image_file_id else '—' }}</div></div>
+  </div>
+  {% if g.notes %}<div style="margin-top:.8rem;font-size:.82rem;color:var(--muted);">📝 {{ g.notes }}</div>{% endif %}
+
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem;">
+    {% if g.status == 'scheduled' %}
+    <form method="POST" action="{{ url_for('admin_giveaway_announce_now', gid=g.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-primary btn-sm">📢 Announce now</button>
+    </form>
+    {% endif %}
+    {% if g.status == 'running' %}
+    <form method="POST" action="{{ url_for('admin_giveaway_draw_now', gid=g.id) }}"
+          onsubmit="return confirm('Draw winners now? This ends the giveaway.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-primary btn-sm">🎲 Draw winners now</button>
+    </form>
+    {% endif %}
+    {% if g.status in ('scheduled', 'running') %}
+    <form method="POST" action="{{ url_for('admin_giveaway_cancel', gid=g.id) }}"
+          onsubmit="return confirm('Cancel this giveaway?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-ghost btn-sm">🚫 Cancel</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<h3>Participants ({{ entry_count }})</h3>
+{% if entries %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>User</th>
+    <th>Telegram ID</th>
+    <th>Joined (IST)</th>
+    <th>Result</th>
+  </tr></thead>
+  <tbody>
+  {% for e, u in entries %}
+  <tr>
+    <td>{{ ('@' + u.username) if u.username else (u.first_name or '—') }}</td>
+    <td style="font-size:.82rem;color:var(--muted);">{{ e.telegram_id }}</td>
+    <td style="font-size:.82rem;">{{ e.joined_at | ist('%Y-%m-%d %H:%M') }}</td>
+    <td>
+      {% if e.is_winner %}<span style="color:var(--green);font-weight:700;">🏆 {{ e.prize_detail }}</span>
+      {% else %}<span style="color:var(--muted);">—</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No participants yet.
+</p>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Giveaways{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🎁 Giveaways</h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;" {% if not giveaways %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:700;">➕ Create new giveaway</summary>
+
+  <form method="POST" action="{{ url_for('admin_giveaways') }}" enctype="multipart/form-data" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div style="margin-bottom:1rem;">
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Title</label>
+      <input type="text" name="title" required placeholder="e.g. Weekend Coin Blast"
+             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Prize type</label>
+        <select name="prize_type" id="gw-prize-type" onchange="gwTogglePrize()"
+                style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <option value="coins">🪙 Coins</option>
+          <option value="gems">💎 Gems</option>
+          <option value="quest_points">🎯 Quest Points</option>
+          <option value="player">🃏 Player (specific card)</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Number of winners</label>
+        <input type="number" name="num_winners" min="1" value="1" required
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <div id="gw-amount-row" style="margin-top:1rem;">
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Prize amount (per winner)</label>
+      <input type="number" name="prize_amount" min="1" value="10000"
+             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+
+    <div id="gw-player-row" style="margin-top:1rem;display:none;">
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Player name (exact)</label>
+      <input type="text" name="player_name" placeholder="e.g. Virat Kohli"
+             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem;">Every winner receives this same card. Use the full name if several players share a first name.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Start time (IST)</label>
+        <input type="datetime-local" name="start_date" required
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">End time (IST)</label>
+        <input type="datetime-local" name="end_date" required
+               style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Announce to</label>
+        <select name="announce_target"
+                style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <option value="groups">Groups &amp; supergroups (recommended)</option>
+          <option value="all">All chats (incl. private DMs)</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Banner image (optional)</label>
+        <input type="file" name="image_file" accept="image/*"
+               style="width:100%;padding:.45rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <label style="display:flex;align-items:center;gap:.5rem;margin-top:1rem;font-size:.85rem;color:var(--muted);">
+      <input type="checkbox" name="require_min_activity" value="1">
+      Require prior activity (played ≥ 1 match) to enter — extra anti-alt gate
+    </label>
+
+    <div style="background:rgba(212,168,42,.06);border:1px solid var(--accent);border-radius:8px;padding:.6rem .8rem;margin-top:1rem;font-size:.78rem;color:var(--muted);">
+      ℹ️ Only members of the <strong>Official GC</strong> can participate (set it under Branding). Winners are drawn automatically at the end time and posted in the Official GC + DMed.
+    </div>
+
+    <div style="margin-top:1rem;">
+      <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.2rem;">Notes (optional, internal)</label>
+      <textarea name="notes" rows="2"
+                style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;"></textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Create giveaway</button>
+  </form>
+</details>
+
+<h3>All giveaways</h3>
+{% if giveaways %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Title</th>
+    <th>Prize</th>
+    <th>Winners</th>
+    <th>Status</th>
+    <th>Start (IST)</th>
+    <th>End (IST)</th>
+    <th>Entries</th>
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for g in giveaways %}
+  <tr>
+    <td><strong>{{ g.title }}</strong></td>
+    <td style="font-size:.82rem;">
+      {% if g.prize_type == 'coins' %}🪙 {{ "{:,}".format(g.prize_amount) }}
+      {% elif g.prize_type == 'gems' %}💎 {{ "{:,}".format(g.prize_amount) }}
+      {% elif g.prize_type == 'quest_points' %}🎯 {{ "{:,}".format(g.prize_amount) }}
+      {% elif g.prize_type == 'player' %}🃏 {{ g.prize_player.name if g.prize_player else '—' }}
+      {% endif %}
+    </td>
+    <td>{{ g.num_winners }}</td>
+    <td>
+      {% if g.status == 'running' %}<span style="color:var(--green);font-weight:700;">● RUNNING</span>
+      {% elif g.status == 'scheduled' %}<span style="color:var(--accent);">Scheduled</span>
+      {% elif g.status == 'ended' %}<span style="color:var(--muted);">Ended</span>
+      {% else %}<span style="color:var(--muted);">Cancelled</span>{% endif %}
+    </td>
+    <td style="font-size:.82rem;">{{ g.start_time | ist('%Y-%m-%d %H:%M') }}</td>
+    <td style="font-size:.82rem;">{{ g.end_time | ist('%Y-%m-%d %H:%M') }}</td>
+    <td>{{ counts.get(g.id, 0) }}</td>
+    <td><a href="{{ url_for('admin_giveaway_detail', gid=g.id) }}" class="btn btn-ghost btn-sm">View</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No giveaways yet. Create one above.
+</p>
+{% endif %}
+
+<script>
+function gwTogglePrize() {
+  var t = document.getElementById('gw-prize-type').value;
+  document.getElementById('gw-amount-row').style.display = (t === 'player') ? 'none' : 'block';
+  document.getElementById('gw-player-row').style.display = (t === 'player') ? 'block' : 'none';
+}
+document.addEventListener('DOMContentLoaded', gwTogglePrize);
+</script>
+
+{% endblock %}

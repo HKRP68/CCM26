@@ -90,6 +90,7 @@ from handlers.unscramble import unscramble_handler, join_handler as unscramble_j
 from handlers.report import report_handler
 from handlers.coins2gems import coins2gems_handler, coins2gems_callback
 from handlers.grant import grant_handler
+from handlers.giveaway import giveaway_join_callback
 from handlers.cmushop import cmushop_handler, cmushop_callback
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
@@ -901,6 +902,7 @@ def main():
         app.add_handler(CallbackQueryHandler(searchovr_page_callback, pattern=r"^sovr_"))
         app.add_handler(CallbackQueryHandler(search_cancel_callback, pattern=r"^searchcancel_"))
         app.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
+        app.add_handler(CallbackQueryHandler(giveaway_join_callback, pattern=r"^gwjoin_"))
         app.add_handler(CommandHandler(["buypl", "buy", "b"], buypl_handler))
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
@@ -1395,6 +1397,13 @@ def main():
             start_heartbeat(app)
         except Exception:
             logger.exception("Failed to start match heartbeat")
+
+        # Start the giveaway scheduler (announces + draws giveaways on time)
+        try:
+            from services.giveaway_scheduler import start_giveaway_scheduler
+            start_giveaway_scheduler(app)
+        except Exception:
+            logger.exception("Failed to start giveaway scheduler")
 
         # Schedule periodic tour expiry (every hour)
         try:
