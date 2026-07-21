@@ -14,7 +14,7 @@ user can't forge another identity or an arbitrary giveaway id):
 import logging
 from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
@@ -78,14 +78,13 @@ async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_T
         # turning a GC-gated giveaway into an open one.
         cfg = session.query(GameConfig).first()
         official_group_id = cfg.official_group_id if cfg else None
-        official_link = cfg.official_group_link if cfg else None
         if not official_group_id:
             await query.answer("This giveaway isn't available right now.",
                                show_alert=True)
             return
         is_member = await _is_group_member(context, official_group_id, tg_user.id)
         if not is_member:
-            await _answer_join_gc(query, official_link)
+            await _answer_join_gc(query, cfg)
             return
 
         # Record the entry (one-per-user enforced by the DB unique index).
@@ -132,22 +131,13 @@ async def _is_group_member(context, group_id, user_id) -> bool:
     return True
 
 
-async def _answer_join_gc(query, official_link):
-    """Tell the user they must join the Official GC first."""
-    if official_link:
-        # Alerts can't carry buttons, so send a follow-up with a join button.
-        await query.answer(
-            "❌ Join the Official GC first, then tap Participate again.",
-            show_alert=True)
-        try:
-            await query.message.reply_text(
-                "🔗 You must be a member of the Official GC to enter this giveaway.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔗 Join the Official GC", url=official_link)
-                ]]))
-        except TelegramError:
-            pass
+async def _answer_join_gc(query, cfg):
+    """Tell the non-member (privately, via an alert popup — no group spam) to
+    join the Official Group first, naming its @handle when there is one."""
+    handle = giveaway_service.group_handle(cfg)
+    if handle:
+        msg = (f"🔒 Join our Official Group {handle} to participate "
+               "in this giveaway! 🎁")
     else:
-        await query.answer(
-            "❌ You must be a member of the Official GC to participate.",
-            show_alert=True)
+        msg = ("🔒 Join our Official Group to participate in this giveaway! 🎁")
+    await query.answer(msg, show_alert=True)

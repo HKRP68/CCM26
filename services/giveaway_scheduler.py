@@ -72,8 +72,9 @@ async def _start_due(context):
 
 
 async def _announce_start(context, session, giveaway):
-    from models import BotChat
-    from services.giveaway_service import announcement_text
+    from models import BotChat, GameConfig
+    from services.giveaway_service import (
+        announcement_text, group_join_url, group_handle)
 
     q = session.query(BotChat).filter(BotChat.is_active == True)  # noqa: E712
     if (giveaway.announce_target or "groups") == "groups":
@@ -81,10 +82,18 @@ async def _announce_start(context, session, giveaway):
     chat_ids = [c.chat_id for c in q.all()]
 
     text = announcement_text(giveaway)
-    markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎉 Participate",
-                             callback_data=f"gwjoin_{giveaway.id}")
-    ]])
+    rows = [[InlineKeyboardButton("🎉 Participate",
+                                  callback_data=f"gwjoin_{giveaway.id}")]]
+    # A one-tap join button so non-members can join the Official Group right from
+    # the announcement (they still tap Participate afterwards to enter).
+    cfg = session.query(GameConfig).first()
+    join_url = group_join_url(cfg)
+    if join_url:
+        handle = group_handle(cfg)
+        rows.append([InlineKeyboardButton(
+            f"🔗 Join {handle}" if handle else "🔗 Join Official Group",
+            url=join_url)])
+    markup = InlineKeyboardMarkup(rows)
 
     # Flip to running and commit BEFORE the (potentially slow) fan-out so users
     # in the first chats who tap immediately aren't rejected as "not open", and
@@ -96,7 +105,8 @@ async def _announce_start(context, session, giveaway):
     sent = 0
     for cid in chat_ids:
         try:
-            await _send_announcement(context, cid, giveaway, text, markup)
+            msg = await _send_announcement(context, cid, giveaway, text, markup)
+            await _pin_announcement(context, cid, msg)
             sent += 1
         except Forbidden:
             await _mark_chat_inactive(cid)
@@ -107,7 +117,8 @@ async def _announce_start(context, session, giveaway):
             # so its audience still sees the announcement.
             await asyncio.sleep(getattr(exc, "retry_after", 1) or 1)
             try:
-                await _send_announcement(context, cid, giveaway, text, markup)
+                msg = await _send_announcement(context, cid, giveaway, text, markup)
+                await _pin_announcement(context, cid, msg)
                 sent += 1
             except TelegramError as exc2:
                 logger.warning("Giveaway announce retry to %s failed: %s", cid, exc2)
@@ -123,13 +134,25 @@ async def _announce_start(context, session, giveaway):
 
 async def _send_announcement(context, chat_id, giveaway, text, markup):
     if giveaway.image_file_id:
-        await context.bot.send_photo(
+        return await context.bot.send_photo(
             chat_id=chat_id, photo=giveaway.image_file_id,
             caption=text, parse_mode="HTML", reply_markup=markup)
-    else:
-        await context.bot.send_message(
-            chat_id=chat_id, text=text, parse_mode="HTML",
-            reply_markup=markup, disable_web_page_preview=True)
+    return await context.bot.send_message(
+        chat_id=chat_id, text=text, parse_mode="HTML",
+        reply_markup=markup, disable_web_page_preview=True)
+
+
+async def _pin_announcement(context, chat_id, message):
+    """Pin the giveaway announcement so it stays visible. Best-effort: a missing
+    pin permission (bot isn't admin) must never fail the broadcast itself."""
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=chat_id, message_id=message_id, disable_notification=True)
+    except TelegramError as exc:
+        logger.info("Could not pin giveaway announcement in %s: %s", chat_id, exc)
 
 
 # ── End (draw + results) ─────────────────────────────────────────────

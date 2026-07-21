@@ -153,6 +153,11 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "bm_decline_",
     "bm_answer_",
     "bm_steal_",
+    # Giveaway "Participate" button: a public join button broadcast to every
+    # chat the bot is in. Anyone in the chat may tap it (the callback validates
+    # Official GC membership + one-entry itself), so it must never be owner-locked
+    # to whoever the sender happened to be.
+    "gwjoin_",
 )
 
 _SEND_METHODS = (
