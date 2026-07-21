@@ -1637,6 +1637,79 @@ class CompetitionTemplate(Base):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# GIVEAWAYS
+# ══════════════════════════════════════════════════════════════════════
+
+class Giveaway(Base):
+    """An admin-created prize giveaway.
+
+    Created from the admin website with an optional image banner. The giveaway
+    is announced to every chat the bot is in when its ``start_time`` passes;
+    users join by tapping a "Participate" button (only if they are members of
+    the Official GC). When ``end_time`` passes, ``num_winners`` random winners
+    are drawn, the prize is granted, and results are posted in the Official GC.
+
+    All times are stored in **UTC**. The admin enters them in IST on the website
+    (converted with the −5:30 offset, matching the rest of the codebase).
+
+    prize_type values:
+      'coins' / 'gems' / 'quest_points' → each winner gets ``prize_amount``.
+      'player'                          → each winner gets ``prize_player_id``.
+
+    status: scheduled → running → ended (or cancelled).
+    """
+    __tablename__ = "giveaways"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(120), nullable=False)
+    prize_type = Column(String(20), nullable=False)   # coins|gems|quest_points|player
+    prize_amount = Column(Integer, default=0)          # for currency prizes
+    prize_player_id = Column(Integer, ForeignKey("players.id"), nullable=True)
+    num_winners = Column(Integer, default=1, nullable=False)
+    start_time = Column(DateTime, nullable=False, index=True)  # UTC
+    end_time = Column(DateTime, nullable=False, index=True)    # UTC
+    status = Column(String(16), default="scheduled", nullable=False, index=True)
+    image_file_id = Column(String(300), nullable=True)  # durable Telegram file_id of banner
+    announce_target = Column(String(16), default="groups")  # groups|all
+    # Optional alt-account gate — when True, only users with prior game activity
+    # (matches_played >= 1) may join. Default off to keep entry frictionless.
+    require_min_activity = Column(Boolean, default=False, nullable=False)
+    announced_at = Column(DateTime, nullable=True)
+    winners_drawn_at = Column(DateTime, nullable=True)  # double-draw guard
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    notes = Column(Text, nullable=True)
+
+    prize_player = relationship("Player")
+
+
+class GiveawayEntry(Base):
+    """One user's entry into a giveaway.
+
+    The unique ``(giveaway_id, user_id)`` index is the single source of truth
+    that a user can participate at most once — inserts race safely against it,
+    so concurrent taps / replays collapse to one row.
+    """
+    __tablename__ = "giveaway_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    giveaway_id = Column(Integer, ForeignKey("giveaways.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    # Denormalized so we can DM the winner even if the User row changes later.
+    telegram_id = Column(BigInteger, nullable=False)
+    joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_winner = Column(Boolean, default=False, nullable=False)
+    won_at = Column(DateTime, nullable=True)
+    prize_detail = Column(String(200), nullable=True)  # e.g. "50,000 coins" / "Virat Kohli (91)"
+
+    __table_args__ = (
+        Index("ix_giveaway_entry_uniq", "giveaway_id", "user_id", unique=True),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
 # MONTHLY SEASON + EVENTS
 # ══════════════════════════════════════════════════════════════════════
 

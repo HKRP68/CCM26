@@ -15439,6 +15439,247 @@ def admin_competition_template_delete(tpl_id):
         db.close()
 
 
+# ─── Giveaways ───────────────────────────────────────────────────────
+
+def _ist_input_to_utc(raw):
+    """Parse an admin datetime-local input (interpreted as IST) into UTC."""
+    from datetime import datetime as _dt
+    d = _dt.fromisoformat(raw)  # naive, treated as IST wall-clock
+    return d - _IST_OFFSET
+
+
+def _store_giveaway_image(file_storage):
+    """Persist an uploaded image to the Telegram storage channel; return a
+    durable file_id (or None). The announcement is sent later at start time, so
+    a disk path wouldn't survive a redeploy — a Telegram file_id does."""
+    if not file_storage or not file_storage.filename:
+        return None
+    if not (file_storage.mimetype or "").startswith("image/"):
+        raise ValueError("Banner must be an image file.")
+    data = file_storage.read()
+    if not data:
+        return None
+    if len(data) > 10 * 1024 * 1024:
+        raise ValueError("Image too large (max 10MB).")
+    import tempfile
+    from services import tg_storage_service
+    if not tg_storage_service.is_configured():
+        raise ValueError("Image storage isn't configured (set STORAGE_CHAT_ID). "
+                         "Create the giveaway without an image, or configure storage.")
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        return tg_storage_service.upload_photo_sync(tmp.name)
+
+
+@app.route("/giveaways", methods=["GET", "POST"])
+@login_required
+def admin_giveaways():
+    """List giveaways + create form."""
+    db = get_session()
+    try:
+        from models import Giveaway, GiveawayEntry
+
+        if request.method == "POST":
+            try:
+                title = (request.form.get("title") or "").strip()
+                prize_type = (request.form.get("prize_type") or "").strip()
+                if not title:
+                    flash("Title is required.", "error")
+                    return redirect(url_for("admin_giveaways"))
+                if prize_type not in ("coins", "gems", "quest_points", "player"):
+                    flash("Pick a valid prize type.", "error")
+                    return redirect(url_for("admin_giveaways"))
+
+                num_winners = int(request.form.get("num_winners") or 1)
+                if num_winners < 1:
+                    flash("Number of winners must be at least 1.", "error")
+                    return redirect(url_for("admin_giveaways"))
+
+                prize_amount = 0
+                prize_player_id = None
+                if prize_type == "player":
+                    pname = (request.form.get("player_name") or "").strip()
+                    if not pname:
+                        flash("Enter the player's name for a player prize.", "error")
+                        return redirect(url_for("admin_giveaways"))
+                    from services.version_paginator import find_players_for_search
+                    matches = find_players_for_search(db, pname)
+                    if not matches:
+                        flash(f"No player found matching '{pname}'.", "error")
+                        return redirect(url_for("admin_giveaways"))
+                    if len(matches) > 1:
+                        names = ", ".join(p.name for p in matches[:8])
+                        flash(f"'{pname}' matches several players ({names}). "
+                              "Use the full name.", "error")
+                        return redirect(url_for("admin_giveaways"))
+                    prize_player_id = matches[0].id
+                else:
+                    prize_amount = int(request.form.get("prize_amount") or 0)
+                    if prize_amount <= 0:
+                        flash("Prize amount must be greater than 0.", "error")
+                        return redirect(url_for("admin_giveaways"))
+
+                try:
+                    start_utc = _ist_input_to_utc(request.form.get("start_date") or "")
+                    end_utc = _ist_input_to_utc(request.form.get("end_date") or "")
+                except ValueError:
+                    flash("Invalid date. Use the date/time pickers.", "error")
+                    return redirect(url_for("admin_giveaways"))
+                if end_utc <= start_utc:
+                    flash("End time must be after start time.", "error")
+                    return redirect(url_for("admin_giveaways"))
+
+                try:
+                    image_file_id = _store_giveaway_image(request.files.get("image_file"))
+                except ValueError as ve:
+                    flash(f"⚠️ {ve}", "error")
+                    return redirect(url_for("admin_giveaways"))
+
+                g = Giveaway(
+                    title=title[:120],
+                    prize_type=prize_type,
+                    prize_amount=prize_amount,
+                    prize_player_id=prize_player_id,
+                    num_winners=num_winners,
+                    start_time=start_utc,
+                    end_time=end_utc,
+                    status="scheduled",
+                    image_file_id=image_file_id,
+                    announce_target=(request.form.get("announce_target") or "groups"),
+                    require_min_activity=bool(request.form.get("require_min_activity")),
+                    notes=(request.form.get("notes") or "").strip()[:500] or None,
+                    created_by=session.get("admin_user", "admin"),
+                )
+                db.add(g); db.commit()
+                flash(f"🎁 Created giveaway '{title}' (#{g.id}).", "success")
+                try:
+                    log_admin(db, "create_giveaway", "giveaway", g.id, "system",
+                              f"{prize_type} x{num_winners}")
+                    db.commit()
+                except Exception:
+                    pass
+                return redirect(url_for("admin_giveaway_detail", gid=g.id))
+            except Exception as e:
+                db.rollback()
+                logger.exception("Giveaway create failed")
+                flash(f"❌ Error: {e}", "error")
+                return redirect(url_for("admin_giveaways"))
+
+        giveaways = (db.query(Giveaway)
+                     .order_by(Giveaway.created_at.desc()).limit(50).all())
+        counts = {
+            g.id: db.query(GiveawayEntry)
+                    .filter(GiveawayEntry.giveaway_id == g.id).count()
+            for g in giveaways
+        }
+        return render_template("admin_giveaways.html",
+                               giveaways=giveaways, counts=counts)
+    finally:
+        db.close()
+
+
+@app.route("/giveaways/<int:gid>")
+@login_required
+def admin_giveaway_detail(gid):
+    db = get_session()
+    try:
+        from models import Giveaway, GiveawayEntry, User
+        g = db.query(Giveaway).get(gid)
+        if not g:
+            flash("Giveaway not found.", "error")
+            return redirect(url_for("admin_giveaways"))
+        entries = (db.query(GiveawayEntry, User)
+                   .join(User, User.id == GiveawayEntry.user_id)
+                   .filter(GiveawayEntry.giveaway_id == gid)
+                   .order_by(GiveawayEntry.is_winner.desc(),
+                             GiveawayEntry.joined_at.asc())
+                   .all())
+        return render_template("admin_giveaway_detail.html",
+                               g=g, entries=entries,
+                               entry_count=len(entries))
+    finally:
+        db.close()
+
+
+@app.route("/giveaways/<int:gid>/cancel", methods=["POST"])
+@login_required
+def admin_giveaway_cancel(gid):
+    db = get_session()
+    try:
+        from models import Giveaway
+        g = db.query(Giveaway).get(gid)
+        if not g:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_giveaways"))
+        if g.status in ("ended", "cancelled"):
+            flash("Giveaway already finished.", "info")
+        else:
+            g.status = "cancelled"
+            db.commit()
+            flash("🚫 Giveaway cancelled.", "info")
+            try:
+                log_admin(db, "cancel_giveaway", "giveaway", gid, "system")
+                db.commit()
+            except Exception:
+                pass
+        return redirect(url_for("admin_giveaway_detail", gid=gid))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_giveaway_detail", gid=gid))
+    finally:
+        db.close()
+
+
+@app.route("/giveaways/<int:gid>/announce_now", methods=["POST"])
+@login_required
+def admin_giveaway_announce_now(gid):
+    """Nudge a scheduled giveaway to start now — the bot sweeper announces it
+    within ~30s. (We don't send from Flask so there's one source of truth.)"""
+    db = get_session()
+    try:
+        from datetime import datetime as _dt
+        from models import Giveaway
+        g = db.query(Giveaway).get(gid)
+        if not g:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_giveaways"))
+        if g.status != "scheduled":
+            flash("Only a scheduled giveaway can be announced now.", "error")
+        else:
+            g.start_time = _dt.utcnow()
+            db.commit()
+            flash("📢 Announcing shortly (within ~30s).", "success")
+        return redirect(url_for("admin_giveaway_detail", gid=gid))
+    finally:
+        db.close()
+
+
+@app.route("/giveaways/<int:gid>/draw_now", methods=["POST"])
+@login_required
+def admin_giveaway_draw_now(gid):
+    """Nudge a running giveaway to end now — the bot sweeper draws winners
+    (with the live GC re-check) within ~30s."""
+    db = get_session()
+    try:
+        from datetime import datetime as _dt
+        from models import Giveaway
+        g = db.query(Giveaway).get(gid)
+        if not g:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_giveaways"))
+        if g.status != "running":
+            flash("Only a running giveaway can be drawn.", "error")
+        else:
+            g.end_time = _dt.utcnow()
+            db.commit()
+            flash("🎲 Drawing winners shortly (within ~30s).", "success")
+        return redirect(url_for("admin_giveaway_detail", gid=gid))
+    finally:
+        db.close()
+
+
 # ─── Branding (channel + group links) ────────────────────────────────
 
 @app.route("/branding")

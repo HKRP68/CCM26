@@ -483,6 +483,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <div class="section-label">Economy & Rewards</div>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">💰 Economy</a>
     <a href="{{ url_for('admin_gspin_rewards') }}" class="{{ 'active' if request.endpoint == 'admin_gspin_rewards' }}">🎡 GSpin Rewards</a>
+    <a href="{{ url_for('admin_giveaways') }}" class="{{ 'active' if request.endpoint in ('admin_giveaways','admin_giveaway_detail') }}">🎁 Giveaways</a>
     <a href="{{ url_for('admin_rarity_list') }}" class="{{ 'active' if request.endpoint in ('admin_rarity_list','admin_rarity_simulate') }}">🌟 Rarity</a>
     <a href="{{ url_for('admin_markets_overview') }}" class="{{ 'active' if request.endpoint in ('admin_markets_overview','admin_market_player_edit','admin_market_trait_edit') }}">🛒 Markets</a>
 
