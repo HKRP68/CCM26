@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from sqlalchemy import func
+
 from database import get_session
 from models import (
     User, Player, UserRoster, Match, BotTeam, BotTeamPlayer, UserStats,
@@ -25,6 +27,23 @@ from services.bot_ai import BOT_TG_ID
 from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
+
+# ── Adaptive bot tuning (/wpmbot) ────────────────────────────────────
+# Balanced challenge: the auto-built opponent is one rating point stronger
+# than the user's own XI and every bot player carries a single role-matched
+# Level 5 trait. Tough but winnable. Adjust these to retune difficulty.
+ADAPTIVE_RATING_DELTA = 1        # bot avg rating = user avg + this
+ADAPTIVE_TRAIT_LEVEL = 5         # trait level on every bot player
+ADAPTIVE_AI_DIFFICULTY = "Hard"  # in-match bot AI aggression
+
+# One role-appropriate trait per bot player, by Player.category. Bowlers
+# rotate through a few keys so the attack isn't monotonous.
+_ADAPTIVE_TRAIT_BY_CATEGORY = {
+    "Batsman": ["bat_anchor"],
+    "Wicket Keeper": ["bat_anchor"],
+    "All-rounder": ["bat_finisher"],
+    "Bowler": ["bowl_wicket_hunter", "bowl_dot_specialist", "bowl_death"],
+}
 
 
 def _queue_bot_action(context, mid, action_name, action):
@@ -617,6 +636,117 @@ def _build_bot_team_xi(session, bot_team_id):
             "bowl_hand": p.bowl_hand,
             "bat_hand": p.bat_hand,
             "is_bot_player": True,
+        })
+    return out
+
+
+def _adaptive_trait_dict(effect_key):
+    """Build the inline trait dict (read by handlers.match._calc) for one
+    Level-5 trait, resolving display name/emoji/category from the catalog."""
+    from services.trait_service import TRAIT_DEFINITIONS
+    meta = next((t for t in TRAIT_DEFINITIONS
+                 if t["effect_key"] == effect_key), None)
+    if not meta:
+        return None
+    return {
+        "effect_key": effect_key,
+        "level": ADAPTIVE_TRAIT_LEVEL,
+        "display_name": meta["name"],
+        "emoji": meta["emoji"],
+        "category": meta["category"],
+    }
+
+
+def build_adaptive_bot_xi(session, user_id):
+    """Auto-assemble a balanced 11 that is ADAPTIVE_RATING_DELTA points
+    stronger than the user's XI, with one Level-5 trait per player.
+
+    Reuses the /sim pool-pick pattern (category-balanced, band-widening
+    fallbacks) and emits the same dict shape as ``_build_bot_team_xi`` plus an
+    inline ``traits`` list so the bot fields Level-5 traits in-match despite
+    having no PlayerTrait rows.
+    """
+    from services.quick_match_service import get_user_team_rating
+    from services.sim_team import append_distinct_base_players, base_player_id
+
+    # Tune against the XI the user actually fields (ordered top 11 that goes into
+    # the match), not their strongest cards overall — otherwise benched studs
+    # would inflate the target and the "+1" bot could tower over the real XI.
+    try:
+        from handlers.lineup import _get_ordered_roster
+        fielded = _get_ordered_roster(session, user_id)[:11]
+        ratings = [pl.rating for _, pl in fielded if pl and pl.rating]
+        user_rating = sum(ratings) / len(ratings) if ratings else get_user_team_rating(session, user_id)
+    except Exception:
+        user_rating = get_user_team_rating(session, user_id)
+    target = int(round(max(50, min(99, user_rating + ADAPTIVE_RATING_DELTA))))
+    lo, hi = max(40, target - 8), min(100, target + 8)
+
+    # Category-balanced selection. We track chosen base players in `seen` and add
+    # per category until the target count is met, de-duplicating variants as we
+    # go — so collapsing two versions of the same cricketer can never silently
+    # drop a batsman/bowler slot (which would leave the bot short of eligible
+    # bowlers). Each category widens its rating band if the near-target pool is
+    # thin, then a final generic top-up guarantees a full 11.
+    rows = []
+    seen = set()
+
+    def fill_category(category, n):
+        need = n
+        # Prefer players near the target band, then widen if short.
+        for band in (True, False):
+            if need <= 0:
+                break
+            q = session.query(Player).filter(
+                Player.category == category, Player.is_active == True)
+            if band:
+                q = q.filter(Player.rating.between(lo, hi))
+            for p in q.order_by(func.random()).limit(need * 4).all():
+                if need <= 0:
+                    break
+                bid = base_player_id(p)
+                if bid in seen:
+                    continue
+                seen.add(bid)
+                rows.append(p)
+                need -= 1
+
+    for category, n in (("Batsman", 4), ("Wicket Keeper", 1),
+                        ("All-rounder", 2), ("Bowler", 4)):
+        fill_category(category, n)
+
+    if len(rows) < 11:
+        near_pool = (session.query(Player)
+                     .filter(Player.is_active == True, Player.rating.between(lo, hi))
+                     .order_by(func.random()).limit(64).all())
+        append_distinct_base_players(rows, near_pool)
+    if len(rows) < 11:
+        full_pool = (session.query(Player)
+                     .filter(Player.is_active == True)
+                     .order_by(func.random()).limit(128).all())
+        append_distinct_base_players(rows, full_pool)
+
+    out = []
+    bowler_rotation = 0
+    for p in rows[:11]:
+        keys = _ADAPTIVE_TRAIT_BY_CATEGORY.get(p.category, ["bat_anchor"])
+        effect_key = keys[bowler_rotation % len(keys)]
+        if len(keys) > 1:
+            bowler_rotation += 1
+        traits = [t for t in (_adaptive_trait_dict(effect_key),) if t]
+        out.append({
+            "roster_id": -(100000 + p.id),  # negative, distinct from BotTeamPlayer ids
+            "player_id": p.id,
+            "name": p.name,
+            "rating": p.rating,
+            "category": p.category,
+            "bat_rating": p.bat_rating or 40,
+            "bowl_rating": p.bowl_rating or 40,
+            "bowl_style": p.bowl_style,
+            "bowl_hand": p.bowl_hand,
+            "bat_hand": p.bat_hand,
+            "is_bot_player": True,
+            "traits": traits,
         })
     return out
 

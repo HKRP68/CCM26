@@ -15510,21 +15510,19 @@ def admin_giveaways():
                 prize_amount = 0
                 prize_player_id = None
                 if prize_type == "player":
-                    pname = (request.form.get("player_name") or "").strip()
-                    if not pname:
-                        flash("Enter the player's name for a player prize.", "error")
+                    try:
+                        prize_player_id = int(request.form.get("player_id") or 0)
+                    except (TypeError, ValueError):
+                        prize_player_id = 0
+                    if not prize_player_id:
+                        flash("Pick a player card for a player prize.", "error")
                         return redirect(url_for("admin_giveaways"))
-                    from services.version_paginator import find_players_for_search
-                    matches = find_players_for_search(db, pname)
-                    if not matches:
-                        flash(f"No player found matching '{pname}'.", "error")
+                    chosen = (db.query(Player)
+                              .filter(Player.id == prize_player_id,
+                                      Player.is_active == True).first())
+                    if not chosen:
+                        flash("That player card is not available. Pick another.", "error")
                         return redirect(url_for("admin_giveaways"))
-                    if len(matches) > 1:
-                        names = ", ".join(p.name for p in matches[:8])
-                        flash(f"'{pname}' matches several players ({names}). "
-                              "Use the full name.", "error")
-                        return redirect(url_for("admin_giveaways"))
-                    prize_player_id = matches[0].id
                 else:
                     prize_amount = int(request.form.get("prize_amount") or 0)
                     if prize_amount <= 0:
@@ -15584,8 +15582,32 @@ def admin_giveaways():
                     .filter(GiveawayEntry.giveaway_id == g.id).count()
             for g in giveaways
         }
+        # Version-aware player picker for the "player card" prize type. Each
+        # option's value is the exact Player.id, so a specific version (with its
+        # own rating) can be chosen — not just a collapsed base card.
+        all_players = (db.query(Player)
+                       .filter(Player.is_active == True)
+                       .order_by(Player.rating.desc(), Player.name).all())
+        dropdown_options = []
+        for p in all_players:
+            label_parts = [p.name]
+            v = (p.version or "").strip()
+            if v and v.lower() not in ("", "base card", "base"):
+                label_parts.append(f"[{v}]")
+            else:
+                label_parts.append("[Base]")
+            label_parts.append(f"({p.rating} OVR)")
+            if p.country:
+                label_parts.append(f"· {p.country}")
+            dropdown_options.append({
+                "id": p.id,
+                "label": " ".join(label_parts),
+                "rating": p.rating,
+                "is_variant": bool(p.parent_player_id),
+            })
         return render_template("admin_giveaways.html",
-                               giveaways=giveaways, counts=counts)
+                               giveaways=giveaways, counts=counts,
+                               dropdown_options=dropdown_options)
     finally:
         db.close()
 
