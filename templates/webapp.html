@@ -1867,7 +1867,7 @@
     border: 1px solid var(--border);
     border-radius: 10px;
     margin-bottom: 0.4rem;
-    touch-action: none;  /* needed for Sortable on touch */
+    touch-action: pan-y;  /* allow vertical scroll over cards; drag starts from .xi-handle */
   }
   .xi-row.xi-ghost { opacity: 0.4; background: var(--card-2); }
   .xi-handle {

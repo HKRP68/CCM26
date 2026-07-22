@@ -44,10 +44,15 @@
     </div>
 
     <div id="gw-player-row" style="margin-top:1rem;display:none;">
-      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Player name (exact)</label>
-      <input type="text" name="player_name" placeholder="e.g. Virat Kohli"
-             style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
-      <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem;">Every winner receives this same card. Use the full name if several players share a first name.</div>
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Player card (versions listed too)</label>
+      <select name="player_id"
+              style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;">
+        <option value="">— pick a player —</option>
+        {% for opt in dropdown_options %}
+        <option value="{{ opt.id }}">{{ opt.label }}{% if opt.is_variant %} 🎴{% endif %}</option>
+        {% endfor %}
+      </select>
+      <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem;">Every winner receives this exact card (name · version · rating). 🎴 marks a special version.</div>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">

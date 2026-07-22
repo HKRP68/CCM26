@@ -4491,8 +4491,11 @@ def _calc(s, striker, bowler, shot, delivery):
 
     # Fetch traits for striker and bowler (per-match cached — traits don't
     # change mid-match, so this is a DB hit only on the first ball each faces).
-    striker_traits = _traits_for(s, striker.get("roster_id"))
-    bowler_traits = _traits_for(s, bowler.get("roster_id"))
+    # Bot/synthetic players carry their traits inline on the player dict (they
+    # have negative synthetic roster_ids with no PlayerTrait rows). Real players
+    # have no "traits" key and fall through to the per-match DB lookup.
+    striker_traits = striker.get("traits") or _traits_for(s, striker.get("roster_id"))
+    bowler_traits = bowler.get("traits") or _traits_for(s, bowler.get("roster_id"))
 
     # Build trait context for activation conditions
     bs = s.get("bat_stats", {}).get(striker.get("roster_id"), {})

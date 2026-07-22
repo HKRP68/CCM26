@@ -336,12 +336,15 @@ class _ScenarioMatchShim:
 
 def _scenario_probability():
     """Chance (0–1) that an eligible chase is armed with a dramatic finish.
-    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.55 —
-    thriller-forward, so most chases go down to the wire)."""
+    Tunable via the CIPL_SCENARIO_PROBABILITY env var (default 0.70 —
+    thriller-forward, so most chases go down to the wire). Raised from 0.55 to
+    make Challenge League matches less one-sided and more likely to finish
+    close; the engine still self-disables a scripted finish per over when it
+    would look unrealistic, so a genuinely dominant chase stays dominant."""
     try:
-        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.55"))))
+        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.70"))))
     except (TypeError, ValueError):
-        return 0.55
+        return 0.70
 
 
 def _maybe_enable_scenario(state):

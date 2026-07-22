@@ -27,13 +27,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import User, Player, UserRoster, Match, BotTeam, BotTeamPlayer
+from models import User, UserRoster, Match
 from services.bot_ai import BOT_TG_ID
 from services.button_timeout import schedule_button_timeout
 from services.match_broadcast import coin_call_keyboard, run_coin_toss
 from handlers.vsbot import (
-    _get_or_create_bot_user, _build_bot_team_xi, _pitch_hint_vsbot,
+    _get_or_create_bot_user, build_adaptive_bot_xi, _pitch_hint_vsbot,
+    ADAPTIVE_AI_DIFFICULTY,
 )
+
+# Name shown for the auto-built adaptive opponent.
+ADAPTIVE_BOT_TEAM_NAME = "Challenger XI"
 
 logger = logging.getLogger(__name__)
 
@@ -111,95 +115,11 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "\n\nUse /pxi to fix lineup.", parse_mode="HTML")
             return
 
-        # Active + valid bot teams
-        active_teams = (session.query(BotTeam)
-                        .filter(BotTeam.is_active == True)
-                        .order_by(BotTeam.difficulty, BotTeam.name).all())
-        from services.bot_team_service import validate_team_xi
-        valid_teams = [t for t in active_teams if validate_team_xi(session, t.id)[0]]
-        if not valid_teams:
-            await update.message.reply_text(
-                "❌ No valid bot teams available right now.\n"
-                "Admin needs to create some first via the website.")
-            return
-
-        btns = []
-        for t in valid_teams:
-            ratings = (session.query(Player.rating)
-                       .join(BotTeamPlayer, BotTeamPlayer.player_id == Player.id)
-                       .filter(BotTeamPlayer.bot_team_id == t.id).all())
-            avg = round(sum(r[0] for r in ratings) / len(ratings), 1) if ratings else 0
-            label = f"{t.name} ({t.difficulty}) — Avg {avg}"
-            btns.append([InlineKeyboardButton(
-                label, callback_data=f"wpmb_pick_{tg.id}_{t.id}_{overs}")])
-        btns.append([InlineKeyboardButton(
-            "❌ Cancel", callback_data=f"wpmb_cancel_{tg.id}")])
-
-        sent = await update.message.reply_text(
-            f"🤖📱 <b>WPM vs BOT — {overs} OVER MATCH</b>\n\n"
-            f"Play a bot team inside the Mini App.\n"
-            f"Choose your opponent:\n",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
-        try:
-            schedule_button_timeout(context, sent.chat_id, sent.message_id,
-                                    delay_seconds=WPMBOT_INVITE_TIMEOUT)
-        except Exception:
-            pass
-    except Exception:
-        session.rollback()
-        logger.exception("wpmbot_handler error")
-        await update.message.reply_text("⚠️ Error starting wpmbot match.")
-    finally:
-        session.close()
-
-
-# ════════════════════════════════════════════════════════════════════
-# Callback: pick bot team → toss
-# ════════════════════════════════════════════════════════════════════
-
-async def wpmbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """wpmb_pick_<owner_tg>_<bot_team_id>_<overs>"""
-    q = update.callback_query
-    tg = q.from_user
-    try:
-        parts = q.data.split("_")
-        owner_tg = int(parts[2]); team_id = int(parts[3]); overs = int(parts[4])
-    except (IndexError, ValueError):
-        await q.answer("Invalid")
-        return
-    if tg.id != owner_tg:
-        await q.answer("Not your match!", show_alert=True)
-        return
-    await q.answer()
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg.id).first()
-        if not user:
-            await q.edit_message_text("❌ Do /debut first!")
-            return
-
-        bot_team = session.query(BotTeam).get(team_id)
-        if not bot_team or not bot_team.is_active:
-            await q.edit_message_text("❌ Bot team unavailable.")
-            return
-
-        # Re-check the chat/player aren't busy now (race with another lobby/match).
-        from handlers.match import (
-            _active_match_in_chat, _active_match_for_user, _chat_busy_message,
-        )
-        existing = _active_match_in_chat(session, q.message.chat_id)
-        if existing:
-            await q.edit_message_text(_chat_busy_message(existing), parse_mode="HTML")
-            return
-        if _active_match_for_user(session, user.id):
-            await q.edit_message_text(
-                "⚠️ You already have an active match (any game mode). "
-                "Finish it first, then start a new one.")
-            return
-
+        # Redesigned flow: no team picker. The opponent is auto-built to be
+        # ADAPTIVE_RATING_DELTA points stronger than the user's XI, with Level 5
+        # traits (see handlers.vsbot.build_adaptive_bot_xi). Go straight to toss.
         bot_user = _get_or_create_bot_user(session)
-        bot_user.team_name = bot_team.name
+        bot_user.team_name = ADAPTIVE_BOT_TEAM_NAME
         session.commit()
 
         from services.match_constants import random_match_settings
@@ -211,13 +131,12 @@ async def wpmbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pitch_type=st["pitch_type"], weather=st["weather"],
             temperature=st["temperature"],
             umpire1=st["umpire1"], umpire2=st["umpire2"],
-            chat_id=q.message.chat_id, created_at=now,
+            chat_id=cid, created_at=now,
             expires_at=now + timedelta(minutes=30), overs=overs,
         )
         session.add(m)
         session.commit()
 
-        context.bot_data[f"wpmb_team_{m.id}"] = bot_team.id
         context.bot_data[f"wpmb_overs_{m.id}"] = overs
         context.bot_data[f"wpmb_pitch_{m.id}"] = st
 
@@ -225,30 +144,26 @@ async def wpmbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         kb = coin_call_keyboard(
             f"wpmb_coin_heads_{m.id}_{user.id}",
             f"wpmb_coin_tails_{m.id}_{user.id}")
+        sent = await update.message.reply_text(
+            f"🤖📱 <b>WPM vs BOT — {overs} OVER MATCH</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"An <b>adaptive Challenger XI</b> — tuned just above your team, "
+            f"with Level 5 traits — is warming up.\n"
+            f"📍 Pitch: <b>{st['pitch_type']}</b> · 🌤️ {st['weather']}\n"
+            f"🏟️ {st['stadium']}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Call it in the air, captain!</i>\n"
+            f"<b>Heads</b> or <b>Tails?</b>",
+            parse_mode="HTML", reply_markup=kb)
         try:
-            await q.edit_message_text(
-                f"🪙 <b>TOSS</b> — vs <b>{bot_team.name}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"📍 Pitch: <b>{st['pitch_type']}</b> · 🌤️ {st['weather']}\n"
-                f"🏟️ {st['stadium']}\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Call it in the air, captain!</i>\n"
-                f"<b>Heads</b> or <b>Tails?</b>",
-                parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            pass
-        try:
-            schedule_button_timeout(context, q.message.chat_id, q.message.message_id,
-                                    delay_seconds=120)
+            schedule_button_timeout(context, sent.chat_id, sent.message_id,
+                                    delay_seconds=WPMBOT_INVITE_TIMEOUT)
         except Exception:
             pass
     except Exception:
         session.rollback()
-        logger.exception("wpmbot_pick_callback error")
-        try:
-            await q.edit_message_text("⚠️ Error setting up match.")
-        except Exception:
-            pass
+        logger.exception("wpmbot_handler error")
+        await update.message.reply_text("⚠️ Error starting wpmbot match.")
     finally:
         session.close()
 
@@ -305,9 +220,7 @@ async def wpmbot_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.answer("This toss is no longer active.", show_alert=True)
             return
         bot_user = session.query(User).filter(User.telegram_id == BOT_TG_ID).first()
-        bot_team_id = context.bot_data.get(f"wpmb_team_{mid}")
-        bot_team = session.query(BotTeam).get(bot_team_id) if bot_team_id else None
-        bot_name = bot_team.name if bot_team else "Bot XI"
+        bot_name = (bot_user.team_name if bot_user else None) or ADAPTIVE_BOT_TEAM_NAME
         await q.answer()
 
         coin, won = await run_coin_toss(
@@ -430,13 +343,14 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
         bat_uid = m.batting_first_id
         bowl_uid = m.bowling_first_id
 
-        bot_team_id = context.bot_data.get(f"wpmb_team_{mid}")
-        bot_team = session.query(BotTeam).get(bot_team_id) if bot_team_id else None
-        bot_xi = _build_bot_team_xi(session, bot_team_id) if bot_team_id else []
-        if not bot_xi:
+        # Auto-build the adaptive opponent (+1 stronger, Level 5 traits).
+        bot_xi = build_adaptive_bot_xi(session, user.id)
+        if not bot_xi or len(bot_xi) < 11:
             if q:
                 try:
-                    await q.edit_message_text("❌ Bot team unavailable.")
+                    await q.edit_message_text(
+                        "❌ Couldn't assemble an opponent (not enough players "
+                        "in the pool). Try again later.")
                 except Exception:
                     pass
             return
@@ -472,7 +386,7 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
             from services.match_webapp_service import init_match_for_webapp
             ok, message = init_match_for_webapp(
                 session, mid, xi_overrides={bot_user.id: bot_xi},
-                difficulty=(bot_team.difficulty if bot_team else None))
+                difficulty=ADAPTIVE_AI_DIFFICULTY)
             if not ok:
                 logger.error("wpmbot init_match_for_webapp failed: %s", message)
                 await context.bot.send_message(

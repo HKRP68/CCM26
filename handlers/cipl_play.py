@@ -55,6 +55,45 @@ CIPL_FORFEIT_COINS = int(os.getenv("CIPL_FORFEIT_COINS", "3000"))
 CIPL_FORFEIT_GEMS = int(os.getenv("CIPL_FORFEIT_GEMS", "5"))
 CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 overs
 
+# Anti-blowout: drafts can produce lopsided squads, and the shared rating
+# engine amplifies gaps into one-sided results. Before a match starts we pull
+# each side's effective ratings a fraction of the way toward the two-team
+# midpoint — shrinking the strength gap by this factor while preserving each
+# squad's internal shape. 0.0 = off (raw gap), 1.0 = both teams equalised.
+CIPL_GAP_COMPRESSION = float(os.getenv("CIPL_GAP_COMPRESSION", "0.4"))
+
+
+def _compress_team_gap(team_a, team_b, factor=CIPL_GAP_COMPRESSION):
+    """Nudge two XIs' effective ratings toward each other by ``factor``.
+
+    Mutates the player dicts in place (``rating``/``bat_rating``/``bowl_rating``)
+    by a single per-team shift, so the weaker side is lifted and the stronger
+    side eased down while every player keeps their relative standing within the
+    squad. Deterministic and idempotent across both innings because the team
+    means are computed from the same players each time.
+    """
+    if factor <= 0 or not team_a or not team_b:
+        return
+
+    def _mean(team):
+        vals = [float(p.get("rating") or 0) for p in team]
+        return sum(vals) / len(vals) if vals else 0.0
+
+    mean_a, mean_b = _mean(team_a), _mean(team_b)
+    midpoint = (mean_a + mean_b) / 2.0
+
+    def _shift(team, team_mean):
+        delta = factor * (midpoint - team_mean)
+        if abs(delta) < 1e-9:
+            return
+        for p in team:
+            for key in ("rating", "bat_rating", "bowl_rating"):
+                if p.get(key) is not None:
+                    p[key] = int(round(max(1, min(100, float(p[key]) + delta))))
+
+    _shift(team_a, mean_a)
+    _shift(team_b, mean_b)
+
 
 class SimpleUser:
     """Detached snapshot of a User so engine code never touches a closed session."""
@@ -723,6 +762,10 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(bat_xi) < 2 or len(bowl_xi) < 2:
             await q.answer("Playing XI missing — restart the challenge.", show_alert=True)
             return
+        # Balance the tie: compress the two squads' rating gap so a lopsided
+        # draft doesn't turn into a blowout (applied once; carried into both
+        # innings via the stored XIs).
+        _compress_team_gap(bat_xi, bowl_xi)
 
         # Capture all primitives BEFORE the session closes (avoid detached ORM).
         bat_info = SimpleUser(bat_user.id, bat_user.telegram_id,
