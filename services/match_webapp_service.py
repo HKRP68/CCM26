@@ -327,6 +327,25 @@ def _active_players(players):
     return [p for p in (players or []) if _is_active_player(p)]
 
 
+# Categories permitted to bowl in bot matches (/wpmbot, /vsbot). Batsmen and
+# wicket-keepers never bowl there — only all-rounders and specialist bowlers.
+_BOWLING_CATEGORIES = {"bowler", "all-rounder", "allrounder", "all rounder"}
+
+
+def _can_bowl(player):
+    return (player.get("category") or "").strip().lower() in _BOWLING_CATEGORIES
+
+
+def _bowling_eligible(players):
+    """Filter players to those allowed to bowl (all-rounders + bowlers).
+
+    Falls back to the full list if none qualify (defensive — XI validation
+    already guarantees >=3 bowlers + >=1 all-rounder, so this never fires in
+    practice, but it keeps the picker from dead-ending on malformed data)."""
+    elig = [p for p in (players or []) if _can_bowl(p)]
+    return elig or list(players or [])
+
+
 def _replace_player_in_list(players, out_rid, incoming):
     for i, p in enumerate(players or []):
         if p.get("roster_id") == out_rid:
@@ -636,7 +655,9 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
                 s["striker_idx"] = 0; s["non_striker_idx"] = 1; s["next_batsman_idx"] = 2
                 s["openers_done"] = True
             if bwu.id == bot_user.id:
-                s["current_bowler"] = bwxi[0]
+                # Bot opens with an eligible bowler (all-rounder/bowler), not
+                # whoever happens to sit at the top of the batting order.
+                s["current_bowler"] = _bowling_eligible(bwxi)[0]
                 s["bowler_done"] = True
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
@@ -951,11 +972,14 @@ def build_snapshot(session, match_id, user_id, state_override=None):
             for p in _active_players(state.get("bat_xi", []))
         ]
     if role == "bowler" and in_setup and not bowler_done:
+        _bowl_opts = _active_players(state.get("bowl_xi", []))
+        if state.get("is_vsbot"):
+            _bowl_opts = _bowling_eligible(_bowl_opts)
         snap["bowler_options"] = [
             {"roster_id": p["roster_id"], "name": p["name"],
              "bowl_rating": p.get("bowl_rating"), "rating": p.get("rating"),
              "bowl_style": p.get("bowl_style"), "category": p.get("category")}
-            for p in _active_players(state.get("bowl_xi", []))
+            for p in _bowl_opts
         ]
 
     snap["setup_progress"] = {
@@ -1224,6 +1248,9 @@ def select_bowler(match_id, user_id, bowler_rid):
         by_rid = {p["roster_id"]: p for p in bowl_xi}
         if bowler_rid not in by_rid:
             raise CasAbort((False, False, "Pick a bowler from your XI."))
+        if state.get("is_vsbot") and not _can_bowl(by_rid[bowler_rid]):
+            raise CasAbort((False, False,
+                            "Only all-rounders and bowlers can bowl."))
 
         state["current_bowler"] = by_rid[bowler_rid]
         state["bowler_done"] = True
@@ -2152,6 +2179,8 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     by_rid = {p["roster_id"]: p for p in _active_players(state.get("bowl_xi", []))}
     if bowler_rid not in by_rid:
         return False, "Pick a bowler from your XI."
+    if state.get("is_vsbot") and not _can_bowl(by_rid[bowler_rid]):
+        return False, "Only all-rounders and bowlers can bowl."
     prev = state.get("prev_bowler_rid")
     if bowler_rid == prev:
         return False, "Same bowler can't bowl consecutive overs."
@@ -2181,6 +2210,9 @@ def get_new_bowler_options(match_id, user_id):
     prev = state.get("prev_bowler_rid")
     quota = _bowling_quota(state.get("overs"))
     players = _active_players(state.get("bowl_xi", []))
+    if state.get("is_vsbot"):
+        # Bot matches: only all-rounders and bowlers may be offered.
+        players = _bowling_eligible(players)
     # Only enforce the quota if at least one quota-safe bowler is available;
     # otherwise relax it (still excluding the previous bowler) to avoid dead-ends.
     enforce_quota = any(
@@ -3345,7 +3377,8 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
 
         if na == A_PICK_NEW_BOWLER:
             new_bowler = bot_ai.pick_bot_next_bowler(
-                _active_players(state["bowl_xi"]), state.get("prev_bowler_rid"),
+                _bowling_eligible(_active_players(state["bowl_xi"])),
+                state.get("prev_bowler_rid"),
                 state["bowl_stats"], state["overs"])
             state["current_bowler"] = new_bowler
             _emit_new_bowler(state, new_bowler)
