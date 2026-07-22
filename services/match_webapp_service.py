@@ -462,6 +462,19 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
     if outgoing.get("disabled"):
         return False, outgoing.get("disabled_reason") or "That player cannot be replaced right now.", None
 
+    # Bot matches keep the "only all-rounders & bowlers bowl" rule intact even
+    # for Impact subs: if bringing this player in would hand them the ball
+    # (they replace the current bowler, or they come on at the new-bowler
+    # break), reject an ineligible substitute before any state mutation.
+    if state.get("is_vsbot") and user_id == state.get("bowl_team_id") and not _can_bowl(incoming):
+        would_bowl = (
+            (state.get("current_bowler") or {}).get("roster_id") == out_roster_id
+            or na == A_PICK_NEW_BOWLER
+        )
+        if would_bowl:
+            return False, ("Only all-rounders and bowlers can bowl — bring on an "
+                           "eligible bowler for the next over."), None
+
     xi_key = _team_active_xi_key(state, user_id)
     idx = _apply_impact_to_identity_list(state.get(xi_key, []), out_roster_id, incoming)
     if idx is None:
@@ -2186,10 +2199,16 @@ def select_new_bowler(match_id, user_id, bowler_rid):
         return False, "Same bowler can't bowl consecutive overs."
     # Per-bowler over limit (ceil(overs / 5)). Keep the cap in force while any
     # quota-safe bowler remains; relax it only if nobody is left so the picker
-    # can never dead-end.
+    # can never dead-end. In bot matches the quota universe must be the eligible
+    # bowlers only — otherwise idle batsmen/keeper (0 overs, ineligible) keep
+    # `under_quota` non-empty and every eligible over-quota pick is wrongly
+    # rejected once the real bowlers are all capped, dead-ending the innings.
     quota = _bowling_quota(state.get("overs"))
+    quota_pool = by_rid
+    if state.get("is_vsbot"):
+        quota_pool = {rid: p for rid, p in by_rid.items() if _can_bowl(p)}
     under_quota = [
-        rid for rid, p in by_rid.items()
+        rid for rid, p in quota_pool.items()
         if rid != prev
         and _stat_row(state.get("bowl_stats"), rid).get("overs_done", 0) < quota
     ]

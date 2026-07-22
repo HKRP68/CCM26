@@ -667,7 +667,7 @@ def build_adaptive_bot_xi(session, user_id):
     having no PlayerTrait rows.
     """
     from services.quick_match_service import get_user_team_rating
-    from services.sim_team import distinct_base_players, append_distinct_base_players
+    from services.sim_team import append_distinct_base_players, base_player_id
 
     # Tune against the XI the user actually fields (ordered top 11 that goes into
     # the match), not their strongest cards overall — otherwise benched studs
@@ -682,21 +682,39 @@ def build_adaptive_bot_xi(session, user_id):
     target = int(round(max(50, min(99, user_rating + ADAPTIVE_RATING_DELTA))))
     lo, hi = max(40, target - 8), min(100, target + 8)
 
-    def pick(category, n):
-        q = (session.query(Player)
-             .filter(Player.category == category, Player.is_active == True,
-                     Player.rating.between(lo, hi))
-             .order_by(func.random()).limit(n).all())
-        if len(q) < n:  # widen the band if the pool is thin
-            q = (session.query(Player)
-                 .filter(Player.category == category, Player.is_active == True)
-                 .order_by(func.random()).limit(n).all())
-        return q
+    # Category-balanced selection. We track chosen base players in `seen` and add
+    # per category until the target count is met, de-duplicating variants as we
+    # go — so collapsing two versions of the same cricketer can never silently
+    # drop a batsman/bowler slot (which would leave the bot short of eligible
+    # bowlers). Each category widens its rating band if the near-target pool is
+    # thin, then a final generic top-up guarantees a full 11.
+    rows = []
+    seen = set()
 
-    rows = distinct_base_players(
-        pick("Batsman", 4) + pick("Wicket Keeper", 1)
-        + pick("All-rounder", 2) + pick("Bowler", 4)
-    )
+    def fill_category(category, n):
+        need = n
+        # Prefer players near the target band, then widen if short.
+        for band in (True, False):
+            if need <= 0:
+                break
+            q = session.query(Player).filter(
+                Player.category == category, Player.is_active == True)
+            if band:
+                q = q.filter(Player.rating.between(lo, hi))
+            for p in q.order_by(func.random()).limit(need * 4).all():
+                if need <= 0:
+                    break
+                bid = base_player_id(p)
+                if bid in seen:
+                    continue
+                seen.add(bid)
+                rows.append(p)
+                need -= 1
+
+    for category, n in (("Batsman", 4), ("Wicket Keeper", 1),
+                        ("All-rounder", 2), ("Bowler", 4)):
+        fill_category(category, n)
+
     if len(rows) < 11:
         near_pool = (session.query(Player)
                      .filter(Player.is_active == True, Player.rating.between(lo, hi))

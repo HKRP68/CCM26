@@ -164,15 +164,20 @@ LIVE_MATCH_STATUSES = ("playing", "active", "in_progress")
 
 
 def _expire_stale_pending_matches(session):
-    """Expire invitations whose timer elapsed while no expiry job was running.
+    """Expire pre-play rows whose timer elapsed while no expiry job was running.
 
     Scheduled expiry jobs are best-effort: they can be missed when the bot is
     restarted or temporarily unavailable.  Lazily cleaning stale invitations
     before active-match lookups prevents those old rows from blocking new
     matches indefinitely.
+
+    Covers ``pending`` invitations and abandoned ``toss`` rows (e.g. a /wpmbot
+    prompt closed before the coin is called): both are pre-play states bounded
+    by their own ``expires_at``, so sweeping them once that timestamp passes is
+    always safe — a live match has moved on to a playing status by then.
     """
     expired = (session.query(Match)
-               .filter(Match.status == "pending",
+               .filter(Match.status.in_(("pending", "toss")),
                        Match.expires_at.isnot(None),
                        Match.expires_at < datetime.utcnow())
                .update({Match.status: "expired"}, synchronize_session=False))

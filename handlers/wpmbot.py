@@ -134,7 +134,10 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             temperature=st["temperature"],
             umpire1=st["umpire1"], umpire2=st["umpire2"],
             chat_id=cid, created_at=now,
-            expires_at=now + timedelta(minutes=30), overs=overs,
+            # Short pre-play expiry: if the user closes the prompt or the toss
+            # buttons time out, the stale toss row is swept quickly (see
+            # _expire_stale_pending_matches) instead of blocking them for long.
+            expires_at=now + timedelta(minutes=10), overs=overs,
         )
         session.add(m)
         session.commit()
