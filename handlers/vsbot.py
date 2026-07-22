@@ -669,7 +669,16 @@ def build_adaptive_bot_xi(session, user_id):
     from services.quick_match_service import get_user_team_rating
     from services.sim_team import distinct_base_players, append_distinct_base_players
 
-    user_rating = get_user_team_rating(session, user_id)
+    # Tune against the XI the user actually fields (ordered top 11 that goes into
+    # the match), not their strongest cards overall — otherwise benched studs
+    # would inflate the target and the "+1" bot could tower over the real XI.
+    try:
+        from handlers.lineup import _get_ordered_roster
+        fielded = _get_ordered_roster(session, user_id)[:11]
+        ratings = [pl.rating for _, pl in fielded if pl and pl.rating]
+        user_rating = sum(ratings) / len(ratings) if ratings else get_user_team_rating(session, user_id)
+    except Exception:
+        user_rating = get_user_team_rating(session, user_id)
     target = int(round(max(50, min(99, user_rating + ADAPTIVE_RATING_DELTA))))
     lo, hi = max(40, target - 8), min(100, target + 8)
 
@@ -713,7 +722,7 @@ def build_adaptive_bot_xi(session, user_id):
             "name": p.name,
             "rating": p.rating,
             "category": p.category,
-            "bat_rating": p.bat_rating or p.rating,
+            "bat_rating": p.bat_rating or 40,
             "bowl_rating": p.bowl_rating or 40,
             "bowl_style": p.bowl_style,
             "bowl_hand": p.bowl_hand,

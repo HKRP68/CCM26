@@ -93,6 +93,7 @@ from handlers.vsbot import (
 from handlers.wpmbot import (
     wpmbot_handler,
     wpmbot_cancel_callback,
+    wpmbot_coin_callback,
     wpmbot_toss_callback,
 )
 
@@ -318,6 +319,7 @@ def main():
         # ── wpmbot (vs bot, played in the Mini App) ──────────────────
         app.add_handler(CommandHandler(["wpmbot", "wpmb"], wpmbot_handler))
         app.add_handler(CallbackQueryHandler(wpmbot_cancel_callback, pattern=r"^wpmb_cancel_"))
+        app.add_handler(CallbackQueryHandler(wpmbot_coin_callback, pattern=r"^wpmb_coin_"))
         app.add_handler(CallbackQueryHandler(wpmbot_toss_callback, pattern=r"^wpmb_toss_"))
 
         # ── Quests ──────────────────────────────────────────────────

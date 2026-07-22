@@ -341,10 +341,14 @@ def _scenario_probability():
     make Challenge League matches less one-sided and more likely to finish
     close; the engine still self-disables a scripted finish per over when it
     would look unrealistic, so a genuinely dominant chase stays dominant."""
+    import math
     try:
-        return max(0.0, min(1.0, float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.70"))))
+        v = float(os.environ.get("CIPL_SCENARIO_PROBABILITY", "0.70"))
     except (TypeError, ValueError):
         return 0.70
+    if not math.isfinite(v):  # nan/inf → safe default
+        return 0.70
+    return max(0.0, min(1.0, v))
 
 
 def _maybe_enable_scenario(state):

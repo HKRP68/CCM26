@@ -118,9 +118,11 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Redesigned flow: no team picker. The opponent is auto-built to be
         # ADAPTIVE_RATING_DELTA points stronger than the user's XI, with Level 5
         # traits (see handlers.vsbot.build_adaptive_bot_xi). Go straight to toss.
+        # NB: the bot User row is a shared singleton (also used by /vsbot,
+        # /wspbot), so we do NOT stamp the opponent name onto it — that would
+        # race across concurrent matches. The label is a constant here and every
+        # display site uses ADAPTIVE_BOT_TEAM_NAME directly.
         bot_user = _get_or_create_bot_user(session)
-        bot_user.team_name = ADAPTIVE_BOT_TEAM_NAME
-        session.commit()
 
         from services.match_constants import random_match_settings
         st = random_match_settings()
@@ -220,7 +222,7 @@ async def wpmbot_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.answer("This toss is no longer active.", show_alert=True)
             return
         bot_user = session.query(User).filter(User.telegram_id == BOT_TG_ID).first()
-        bot_name = (bot_user.team_name if bot_user else None) or ADAPTIVE_BOT_TEAM_NAME
+        bot_name = ADAPTIVE_BOT_TEAM_NAME
         await q.answer()
 
         coin, won = await run_coin_toss(
@@ -357,7 +359,7 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
 
         # Team-name labels (independent of which side bats first).
         user_team_name = user.team_name or f"@{user.username}'s XI"
-        bot_team_name = bot_user.team_name
+        bot_team_name = ADAPTIVE_BOT_TEAM_NAME
         if bat_uid == user.id:
             bat_team_name, bowl_team_name = user_team_name, bot_team_name
         else:
@@ -404,7 +406,7 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
             bat_mention = "🤖 AI" if bat_uid == bot_user.id else _mm(user)
             bowl_mention = "🤖 AI" if bowl_uid == bot_user.id else _mm(user)
             winner = session.query(User).get(decider_uid)
-            winner_label = ("🤖 " + (bot_user.team_name or "Bot XI")
+            winner_label = ("🤖 " + ADAPTIVE_BOT_TEAM_NAME
                             if decider_uid == bot_user.id
                             else f"@{winner.username or winner.first_name}")
             toss_note = f"{winner_label} won & chose to {'bat' if decision == 'bat' else 'bowl'}"

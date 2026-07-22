@@ -60,7 +60,21 @@ CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 over
 # each side's effective ratings a fraction of the way toward the two-team
 # midpoint — shrinking the strength gap by this factor while preserving each
 # squad's internal shape. 0.0 = off (raw gap), 1.0 = both teams equalised.
-CIPL_GAP_COMPRESSION = float(os.getenv("CIPL_GAP_COMPRESSION", "0.4"))
+def _env_float(name, default, lo, hi):
+    """Parse a float env var, falling back to ``default`` on anything malformed
+    or non-finite, then clamp into ``[lo, hi]``. Keeps a bad env value from
+    crashing import or forcing extreme gameplay."""
+    import math
+    try:
+        v = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        v = default
+    if not math.isfinite(v):
+        v = default
+    return max(lo, min(hi, v))
+
+
+CIPL_GAP_COMPRESSION = _env_float("CIPL_GAP_COMPRESSION", 0.4, 0.0, 1.0)
 
 
 def _compress_team_gap(team_a, team_b, factor=CIPL_GAP_COMPRESSION):
