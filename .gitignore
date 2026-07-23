@@ -19,3 +19,6 @@ data/card_templates/state.json
 
 # Backup written by migrate_clear_card_file_ids.py
 card_file_id_backup_*.json
+
+# Source-archive backups are not used at runtime and bloat the Railway snapshot
+*.zip

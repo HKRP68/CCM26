@@ -1,0 +1,14 @@
+# Railway builds this project with Railpack, which uses mise to install the
+# Python runtime declared in .python-version (3.11.9). Recent mise versions
+# verify GitHub artifact attestations for python, and that verification fails
+# in the Railway build environment:
+#
+#   mise ERROR Failed to install core:python@3.11.9:
+#   No GitHub artifact attestations found for python@3.11.9
+#
+# Disable attestation verification so the runtime installs cleanly.
+[tools]
+python = "3.11.9"
+
+[settings]
+python.github_attestations = false
