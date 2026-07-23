@@ -4080,26 +4080,11 @@ def webapp_player_card(player_id):
     Uses the same card generation path as the bot, so active admin-uploaded
     custom cards automatically override template/procedural cards.
     """
-    # Fetch the player and release the DB connection BEFORE generating the card.
-    # generate_card() does its own (nested) DB work and image I/O; holding this
-    # request's connection open across that means each concurrent card load ties
-    # up two pooled connections at once, which drains the pool under the burst of
-    # card requests the Mini App fires on load. The Player row exposes only scalar
-    # columns to the generator, so a detached instance is safe here.
     db = get_session()
     try:
         player = db.query(Player).get(player_id)
-        active = bool(player and player.is_active)
-    except Exception:
-        logger.exception("webapp_player_card lookup failed")
-        return "Could not load card", 500
-    finally:
-        db.close()
-
-    if not active:
-        return "Player not found", 404
-
-    try:
+        if not player or not player.is_active:
+            return "Player not found", 404
         from services.card_generator import generate_card
         image_bytes = generate_card(player)
         if not image_bytes:
@@ -4112,6 +4097,8 @@ def webapp_player_card(player_id):
     except Exception:
         logger.exception("webapp_player_card failed")
         return "Could not load card", 500
+    finally:
+        db.close()
 
 
 @app.route("/api/webapp/init", methods=["POST"])
