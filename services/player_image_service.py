@@ -64,6 +64,10 @@ def get_custom_image_bytes(player_id):
     if player_id in _IMG_CACHE:
         return _IMG_CACHE[player_id]
     try:
+        # Read the row and release the DB connection BEFORE any disk read or
+        # Telegram download. Holding a pooled connection across slow file/network
+        # I/O is what drains the pool under a burst of card requests. We only
+        # need three scalar fields from the row, so pull them out and close.
         from database import get_session
         session = get_session()
         try:
@@ -74,48 +78,50 @@ def get_custom_image_bytes(player_id):
                 _IMG_CACHE[player_id] = None
                 return None
             path = row.image_path
-            if path and os.path.isfile(path):
-                with open(path, "rb") as f:
-                    data = f.read()
-            elif row.tg_file_id:
-                # Deploy hosts such as Render discard local files. Restore the
-                # bytes from the durable Telegram storage-channel file_id and
-                # repopulate the local cache for subsequent renders.
-                from services import tg_storage_service
-                data = tg_storage_service.download_file_bytes_sync(row.tg_file_id)
-                if not data:
-                    logger.warning(
-                        f"Could not restore player {player_id} image from Telegram")
-                    # Do not cache this failure: a transient Telegram outage
-                    # should be retried on the next request.
-                    return None
-                ext = _ext_from_filename(path) or "jpg"
-                path = _path_for(player_id, ext)
-                try:
-                    tmp_path = f"{path}.tmp"
-                    with open(tmp_path, "wb") as f:
-                        f.write(data)
-                    os.replace(tmp_path, path)
-                    logger.info(
-                        f"Restored player {player_id} image from Telegram storage")
-                except Exception:
-                    # The bytes are still usable for this response even if the
-                    # ephemeral disk cannot be repopulated.
-                    logger.exception(
-                        f"Failed to cache restored image for player {player_id}")
-            else:
-                logger.warning(
-                    f"PlayerImage row exists for player {player_id} but local file "
-                    f"is missing and no Telegram file_id is stored: {path}")
-                _IMG_CACHE[player_id] = None
-                return None
-            # Cap cache size to avoid runaway memory
-            if len(_IMG_CACHE) > 200:
-                _IMG_CACHE.clear()
-            _IMG_CACHE[player_id] = data
-            return data
+            tg_file_id = row.tg_file_id
         finally:
             session.close()
+
+        if path and os.path.isfile(path):
+            with open(path, "rb") as f:
+                data = f.read()
+        elif tg_file_id:
+            # Deploy hosts such as Render discard local files. Restore the
+            # bytes from the durable Telegram storage-channel file_id and
+            # repopulate the local cache for subsequent renders.
+            from services import tg_storage_service
+            data = tg_storage_service.download_file_bytes_sync(tg_file_id)
+            if not data:
+                logger.warning(
+                    f"Could not restore player {player_id} image from Telegram")
+                # Do not cache this failure: a transient Telegram outage
+                # should be retried on the next request.
+                return None
+            ext = _ext_from_filename(path) or "jpg"
+            path = _path_for(player_id, ext)
+            try:
+                tmp_path = f"{path}.tmp"
+                with open(tmp_path, "wb") as f:
+                    f.write(data)
+                os.replace(tmp_path, path)
+                logger.info(
+                    f"Restored player {player_id} image from Telegram storage")
+            except Exception:
+                # The bytes are still usable for this response even if the
+                # ephemeral disk cannot be repopulated.
+                logger.exception(
+                    f"Failed to cache restored image for player {player_id}")
+        else:
+            logger.warning(
+                f"PlayerImage row exists for player {player_id} but local file "
+                f"is missing and no Telegram file_id is stored: {path}")
+            _IMG_CACHE[player_id] = None
+            return None
+        # Cap cache size to avoid runaway memory
+        if len(_IMG_CACHE) > 200:
+            _IMG_CACHE.clear()
+        _IMG_CACHE[player_id] = data
+        return data
     except Exception:
         logger.exception(f"get_custom_image_bytes failed for player {player_id}")
         return None
