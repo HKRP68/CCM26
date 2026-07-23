@@ -544,7 +544,6 @@
   .upgrade-opt-info { flex: 1; }
   .upgrade-opt-version { font-weight: 800; font-size: 0.9rem; }
   .upgrade-opt-cost { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
-  .upgrade-opt-fee { font-size: 0.68rem; color: var(--muted); opacity: 0.75; margin-top: 0.05rem; }
   .upgrade-do-btn {
     background: #a78bfa; color: #0a0f1a; border: none;
     padding: 0.5rem 0.9rem; border-radius: 8px; font-weight: 800;
@@ -6199,7 +6198,6 @@ function renderUpgradeOptions(data) {
       <div class="upgrade-opt-info">
         <div class="upgrade-opt-version">${o.rating} · ${escapeHtml(o.version)}</div>
         <div class="upgrade-opt-cost">${formatNum(o.cost)} 🪙 ${o.affordable ? '' : '<span style="color:var(--red);">(not enough)</span>'}</div>
-        <div class="upgrade-opt-fee">+ ${o.fee_percent}% fee</div>
       </div>
       <button class="upgrade-do-btn" ${o.affordable ? '' : 'disabled'} onclick="doUpgrade(${o.player_id}, ${o.cost})">Upgrade</button>
     </div>
