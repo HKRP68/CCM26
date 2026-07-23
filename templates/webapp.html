@@ -6198,7 +6198,6 @@ function renderUpgradeOptions(data) {
       <div class="upgrade-opt-info">
         <div class="upgrade-opt-version">${o.rating} · ${escapeHtml(o.version)}</div>
         <div class="upgrade-opt-cost">${formatNum(o.cost)} 🪙 ${o.affordable ? '' : '<span style="color:var(--red);">(not enough)</span>'}</div>
-        ${o.upgrade_value != null ? `<div class="upgrade-opt-cost" style="opacity:0.75;">${formatNum(o.upgrade_value)} + ${o.fee_percent != null ? o.fee_percent : 1}% fee (${formatNum(o.fee)} 🪙)</div>` : ''}
       </div>
       <button class="upgrade-do-btn" ${o.affordable ? '' : 'disabled'} onclick="doUpgrade(${o.player_id}, ${o.cost})">Upgrade</button>
     </div>
