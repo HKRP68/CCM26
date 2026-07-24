@@ -1538,7 +1538,10 @@ class AdsgramReward(Base):
     """
     __tablename__ = "adsgram_rewards"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    telegram_id = Column(Integer, nullable=False, index=True)
+    # BigInteger, not Integer: Telegram ids have already passed 2^31, and an
+    # INTEGER column rejects them with "integer out of range", failing the
+    # postback and silently costing the user their ad reward.
+    telegram_id = Column(BigInteger, nullable=False, index=True)
     received_at = Column(DateTime, default=datetime.utcnow,
                          nullable=False, index=True)
     consumed_at = Column(DateTime, nullable=True)

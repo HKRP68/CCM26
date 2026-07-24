@@ -12,6 +12,7 @@ FOMO templates: built-in starter pack admins can quick-add.
 """
 
 import logging
+import os
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 # India Standard Time
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# Send pacing. Telegram's global ceiling for messages to different chats is
+# ~30/s; going over it earns 429s (and PTB then retries, making a blast take
+# even longer while it holds the bot hostage). Stay comfortably under, and keep
+# it tunable from the environment.
+SENDS_PER_SECOND = float(os.getenv("NOTIFY_SENDS_PER_SECOND", "20"))
+
+# Delivery rows are written in chunks on a worker thread rather than one giant
+# transaction at the end of the blast.
+LOG_CHUNK_SIZE = int(os.getenv("NOTIFY_LOG_CHUNK_SIZE", "200"))
 
 # Anti-spam floor: a single schedule may never re-fire more often than this,
 # no matter its type or (mis)configuration. This caps re-engagement nudges
@@ -245,29 +256,123 @@ async def send_to_user(bot, user, message_text, schedule_id=None, session=None):
         return False, err
 
 
-async def fire_schedule(bot, session, schedule):
-    """Fire one schedule — select users, send, log, update last_fired_at.
-    Returns (sent_count, failed_count).
+class _UserSnapshot:
+    """Plain copy of the user fields a notification needs.
+
+    A blast can run for minutes. Keeping live ORM objects (and the session that
+    owns them) alive for that long pins a DB connection out of the pool the
+    whole time, so we copy what render_message + send need and let the session
+    go.
     """
-    users = select_target_users(session, schedule.target_filter or "all")
-    if not users:
-        # Still mark as fired so it doesn't keep retrying within the same window
-        schedule.last_fired_at = datetime.utcnow()
-        session.flush()
-        return 0, 0
+
+    __slots__ = ("id", "telegram_id", "first_name", "username", "total_coins",
+                 "total_gems", "win_streak", "best_streak", "matches_won",
+                 "quest_points")
+
+    def __init__(self, u):
+        for f in self.__slots__:
+            setattr(self, f, getattr(u, f, None))
+
+
+def _snapshot_targets(target_filter):
+    """Select target users and detach them from the DB. Runs in a worker thread."""
+    from database import get_session
+    session = get_session()
+    try:
+        return [_UserSnapshot(u) for u in select_target_users(session, target_filter)]
+    finally:
+        session.close()
+
+
+def _write_delivery_logs(rows):
+    """Persist a chunk of NotificationLog rows. Runs in a worker thread."""
+    from database import get_session
+    session = get_session()
+    try:
+        session.bulk_save_objects([NotificationLog(**r) for r in rows])
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Notification delivery-log write failed")
+    finally:
+        session.close()
+
+
+async def _blast(bot, users, message_template, schedule_id=None):
+    """Send one message to many users without starving the rest of the bot.
+
+    Two things matter here. Sends are paced to stay under Telegram's global
+    rate limit (bursting past it just earns 429s and retries, which is what
+    made a blast take the bot down with it), and delivery logging is batched
+    onto worker threads so the event loop never blocks on the database while
+    users are waiting on their own commands.
+    """
+    import asyncio
 
     sent_ok = 0
     sent_fail = 0
+    pending = []
+    interval = 1.0 / max(SENDS_PER_SECOND, 1)
+    next_send = asyncio.get_running_loop().time()
+
     for u in users:
-        msg = render_message(schedule.message, u)
-        ok, _ = await send_to_user(bot, u, msg, schedule.id, session)
-        if ok:
+        # Pace against a monotonic schedule so a slow send doesn't compound.
+        now = asyncio.get_running_loop().time()
+        if next_send > now:
+            await asyncio.sleep(next_send - now)
+        next_send = max(next_send + interval, now)
+
+        text = render_message(message_template, u)
+        try:
+            await bot.send_message(
+                chat_id=u.telegram_id, text=text, parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
             sent_ok += 1
-        else:
+            pending.append(dict(schedule_id=schedule_id, user_id=u.id,
+                                sent_at=datetime.utcnow(), delivered=True))
+        except Exception as e:
+            err = str(e)[:300]
             sent_fail += 1
+            pending.append(dict(schedule_id=schedule_id, user_id=u.id,
+                                sent_at=datetime.utcnow(), delivered=False,
+                                error_text=err))
+
+        if len(pending) >= LOG_CHUNK_SIZE:
+            await asyncio.to_thread(_write_delivery_logs, pending)
+            pending = []
+
+    if pending:
+        await asyncio.to_thread(_write_delivery_logs, pending)
+    return sent_ok, sent_fail
+
+
+async def fire_schedule(bot, session, schedule):
+    """Fire one schedule — select users, send, log, update last_fired_at.
+    Returns (sent_count, failed_count).
+
+    ``last_fired_at`` is committed BEFORE any message goes out: a big blast
+    outlives many heartbeat ticks, and an uncommitted timestamp let the next
+    tick pick the same schedule up and fire it all over again.
+    """
+    import asyncio
+
+    schedule_id = schedule.id
+    target = schedule.target_filter or "all"
+    message = schedule.message
     schedule.last_fired_at = datetime.utcnow()
-    schedule.sent_count = (schedule.sent_count or 0) + sent_ok
-    session.flush()
+    session.commit()
+
+    users = await asyncio.to_thread(_snapshot_targets, target)
+    if not users:
+        return 0, 0
+
+    sent_ok, sent_fail = await _blast(bot, users, message, schedule_id)
+
+    fresh = session.get(NotificationSchedule, schedule_id)
+    if fresh is not None:
+        fresh.sent_count = (fresh.sent_count or 0) + sent_ok
+        session.commit()
     return sent_ok, sent_fail
 
 
@@ -276,23 +381,24 @@ async def fire_one_off(bot, session, schedule_id, message_override=None,
     """Send a one-time blast — used by the admin "Send Now" button.
     Doesn't update schedule.last_fired_at unless the schedule type is one_off.
     """
-    schedule = session.query(NotificationSchedule).get(schedule_id)
+    import asyncio
+
+    schedule = session.get(NotificationSchedule, schedule_id)
     if not schedule:
         return 0, 0
     msg = message_override or schedule.message
     target = target_override or schedule.target_filter or "all"
-    users = select_target_users(session, target)
-    sent_ok = 0
-    sent_fail = 0
-    for u in users:
-        rendered = render_message(msg, u)
-        ok, _ = await send_to_user(bot, u, rendered, schedule_id, session)
-        if ok: sent_ok += 1
-        else: sent_fail += 1
-    if schedule.schedule_type == "one_off":
-        schedule.last_fired_at = datetime.utcnow()
-    schedule.sent_count = (schedule.sent_count or 0) + sent_ok
-    session.flush()
+    is_one_off = schedule.schedule_type == "one_off"
+
+    users = await asyncio.to_thread(_snapshot_targets, target)
+    sent_ok, sent_fail = await _blast(bot, users, msg, schedule_id)
+
+    fresh = session.get(NotificationSchedule, schedule_id)
+    if fresh is not None:
+        if is_one_off:
+            fresh.last_fired_at = datetime.utcnow()
+        fresh.sent_count = (fresh.sent_count or 0) + sent_ok
+        session.commit()
     return sent_ok, sent_fail
 
 
@@ -303,16 +409,53 @@ async def fire_one_off(bot, session, schedule_id, message_override=None,
 # Track last tick time so we only run notification logic once per minute
 _LAST_TICK_MINUTE = None
 
+# A blast to a large audience runs for minutes, spanning many heartbeat ticks.
+# This flag keeps those later ticks from starting a second, overlapping blast.
+_BLAST_IN_PROGRESS = False
+
+# Hold a reference to the detached blast task; a bare create_task result can be
+# garbage-collected mid-flight.
+_BLAST_TASK = None
+
+
+async def _run_blast_job(application, schedule_id, name):
+    """Own the whole lifetime of one blast, on its own session."""
+    global _BLAST_IN_PROGRESS
+    from database import get_session
+
+    session = get_session()
+    try:
+        sched = session.get(NotificationSchedule, schedule_id)
+        if sched is None:
+            return
+        sent, failed = await fire_schedule(application.bot, session, sched)
+        logger.info(f"Notification '{name}' fired: {sent} sent, {failed} failed")
+    except Exception:
+        logger.exception(f"Notification '{name}' blast failed")
+    finally:
+        session.close()
+        _BLAST_IN_PROGRESS = False
+
 
 async def maybe_tick(application):
     """Check all active schedules; fire any that are due. Called from heartbeat.
     De-dupes to once per minute since heartbeat runs every 30s.
+
+    The blast itself is detached rather than awaited. The heartbeat job it is
+    called from runs every 30s with max_instances=1, so awaiting a multi-minute
+    blast here would make the scheduler skip every heartbeat in the meantime —
+    silently pausing stuck-match recovery for the length of the broadcast.
     """
-    global _LAST_TICK_MINUTE
+    global _LAST_TICK_MINUTE, _BLAST_IN_PROGRESS, _BLAST_TASK
+    import asyncio
+
     now_min = datetime.utcnow().replace(second=0, microsecond=0)
     if _LAST_TICK_MINUTE == now_min:
         return
     _LAST_TICK_MINUTE = now_min
+
+    if _BLAST_IN_PROGRESS:
+        return
 
     try:
         from database import get_session
@@ -320,11 +463,12 @@ async def maybe_tick(application):
         try:
             schedules = (session.query(NotificationSchedule)
                          .filter(NotificationSchedule.is_active == True).all())
-            for sched in schedules:
-                if should_fire(sched):
-                    sent, failed = await fire_schedule(application.bot, session, sched)
-                    session.commit()
-                    logger.info(f"Notification '{sched.name}' fired: {sent} sent, {failed} failed")
+            # One blast at a time; a second due schedule fires on a later tick.
+            due = next((s for s in schedules if should_fire(s)), None)
+            if due is not None:
+                _BLAST_IN_PROGRESS = True
+                _BLAST_TASK = asyncio.create_task(
+                    _run_blast_job(application, due.id, due.name))
         finally:
             session.close()
     except Exception:

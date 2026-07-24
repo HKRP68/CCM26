@@ -2704,7 +2704,18 @@ def finalize_webapp_match(session, match_id):
     # SECOND scorecard (with a divergent POTM). Never finalize them here.
     if state and state.get("mode") == "cipl_approach":
         return None
-    m = session.query(Match).get(match_id)
+    # Lock the match row before the status check. Finalization sets
+    # status="completed" but only commits ~100 lines later, after stats, POTM,
+    # quests and the tour hook. Without the lock, every concurrent caller in
+    # that window (Mini App poll self-heal, the heartbeat, a second tab) reads
+    # the pre-commit status, decides the match is unfinished, and finalizes it
+    # again — the storm of "duplicate key ... ix_match_scorecards_match_id"
+    # errors. Waiters now block here and see {"already": True} instead.
+    m = (session.query(Match)
+         .filter(Match.id == match_id)
+         .populate_existing()
+         .with_for_update()
+         .first())
     if not m:
         return None
     if m.status == "completed":

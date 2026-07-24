@@ -1889,8 +1889,9 @@ def admin_notification_send_now(sid):
         flash("Bot not running — cannot send.", "error")
         return redirect(url_for("admin_notifications_list"))
 
-    # Run the async send on the bot's event loop, blocking until done
+    # Run the async send on the bot's event loop.
     import asyncio as _asyncio
+    import concurrent.futures as _cf
     db = get_session()
     try:
         ns = db.query(NotificationSchedule).get(sid)
@@ -1911,11 +1912,21 @@ def admin_notification_send_now(sid):
 
         future = _asyncio.run_coroutine_threadsafe(_do(), loop)
         try:
-            sent, failed = future.result(timeout=120)
+            # Sends are paced to stay under Telegram's rate limit, so a large
+            # audience takes minutes. Wait only long enough to surface an
+            # immediate failure, then let the blast finish in the background
+            # rather than holding the request (and the admin) hostage.
+            sent, failed = future.result(timeout=10)
             log_admin(db, "notif_send_now", "notification", sid, ns.name,
                       f"Manual send: {sent} delivered, {failed} failed")
             db.commit()
             flash(f"✅ Sent to {sent} users ({failed} failed).", "info")
+        except _cf.TimeoutError:
+            log_admin(db, "notif_send_now", "notification", sid, ns.name,
+                      "Manual send: started (delivering in background)")
+            db.commit()
+            flash("📤 Sending in the background — the final count lands in the logs.",
+                  "info")
         except Exception as e:
             flash(f"Send error: {e}", "error")
     finally:

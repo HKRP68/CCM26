@@ -107,11 +107,14 @@ DEFAULT_PACKS = [
 
 def seed_default_packs(session):
     """Insert default packs if they don't exist. Idempotent."""
+    # One query for every slot rather than one per pack — this runs on every
+    # boot, and each round trip is bot downtime on a restart.
+    slots = [p["slot_number"] for p in DEFAULT_PACKS]
+    taken = {s for (s,) in session.query(Pack.slot_number)
+             .filter(Pack.slot_number.in_(slots))}
     inserted = 0
     for pdata in DEFAULT_PACKS:
-        existing = (session.query(Pack)
-                    .filter(Pack.slot_number == pdata["slot_number"]).first())
-        if existing:
+        if pdata["slot_number"] in taken:
             continue
         p = Pack(**pdata)
         session.add(p)
