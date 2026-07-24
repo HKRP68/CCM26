@@ -8024,23 +8024,29 @@ def event_sound_asset(sound_key):
                 return send_file(path, conditional=True, max_age=86400)
             logger.warning(f"Event sound file missing: {path}; serving default")
         if row is not None and row.source_type == "telegram" and row.source:
-            import requests as _requests
-            token = os.getenv("BOT_TOKEN", "").strip()
-            if token:
-                meta = _requests.get(
-                    f"https://api.telegram.org/bot{token}/getFile",
-                    params={"file_id": row.source}, timeout=8).json()
-                file_path = ((meta.get("result") or {}).get("file_path"))
-                if file_path:
-                    upstream = _requests.get(
-                        f"https://api.telegram.org/file/bot{token}/{file_path}",
-                        timeout=20)
-                    upstream.raise_for_status()
-                    return Response(
-                        upstream.content,
-                        content_type=sound_content_type(file_path),
-                        headers={"Cache-Control": "public, max-age=86400"})
-            logger.warning(f"Event sound telegram fetch failed for {sound_key}; serving default")
+            # Any Telegram hiccup (timeout, bad JSON, HTTP error) must fall
+            # through to the committed default sound, not 503 the request.
+            try:
+                import requests as _requests
+                token = os.getenv("BOT_TOKEN", "").strip()
+                if token:
+                    meta = _requests.get(
+                        f"https://api.telegram.org/bot{token}/getFile",
+                        params={"file_id": row.source}, timeout=8).json()
+                    file_path = ((meta.get("result") or {}).get("file_path"))
+                    if file_path:
+                        upstream = _requests.get(
+                            f"https://api.telegram.org/file/bot{token}/{file_path}",
+                            timeout=20)
+                        upstream.raise_for_status()
+                        return Response(
+                            upstream.content,
+                            content_type=sound_content_type(file_path),
+                            headers={"Cache-Control": "public, max-age=86400"})
+            except Exception:
+                logger.exception(f"Event sound telegram fetch failed for {sound_key}; serving default")
+            else:
+                logger.warning(f"Event sound telegram fetch failed for {sound_key}; serving default")
         default_path = DEFAULT_SOUND_FILES.get(sound_key)
         if default_path and os.path.isfile(default_path):
             return send_file(default_path, conditional=True, max_age=86400,
@@ -12328,9 +12334,11 @@ def admin_sounds():
 
                 elif action == "set_url":
                     url_input = (request.form.get("url") or "").strip()
-                    if not (url_input.startswith("http://")
-                            or url_input.startswith("https://")):
-                        flash("URL must start with http:// or https://", "error")
+                    # https only: the Mini App is served over HTTPS, so an
+                    # http:// audio src is blocked as mixed content and the
+                    # sound silently never plays.
+                    if not url_input.startswith("https://"):
+                        flash("URL must start with https://", "error")
                         return redirect(url_for("admin_sounds"))
                     row = _get_or_create(sound_key)
                     row.source_type = "url"

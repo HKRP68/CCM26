@@ -117,18 +117,22 @@ function preloadEventSounds(config) {
 // unlocked — this is a cheap no-op almost always).
 function unlockAudio() {
   audioUnlocked = true;
+  const settling = [];
   Object.values(soundEls).forEach(entry => {
     if (entry.unlocked) return;
+    // Already audibly playing (e.g. the ambience chain started it) — audio is
+    // proven unlocked for this element; a muted re-play would only interrupt it.
+    if (!entry.el.paused) { entry.unlocked = true; return; }
     try {
       entry.el.muted = true;
       const p = entry.el.play();
       if (p && p.then) {
-        p.then(() => {
+        settling.push(p.then(() => {
           entry.el.pause();
           entry.el.currentTime = 0;
           entry.el.muted = false;
           entry.unlocked = true;
-        }).catch(() => { entry.el.muted = false; });
+        }).catch(() => { entry.el.muted = false; }));
       } else {
         entry.el.pause();
         entry.el.muted = false;
@@ -138,7 +142,10 @@ function unlockAudio() {
       try { entry.el.muted = false; } catch (e2) {}
     }
   });
-  updateAmbience();
+  // Ambience must not start until the unlock plays have settled — their
+  // pause()/reset in .then() would otherwise stop the clip it just started.
+  if (settling.length) Promise.allSettled(settling).then(updateAmbience);
+  else updateAmbience();
 }
 
 // Which one-shot to play for a revealed ball. Dot balls and wides are
@@ -334,8 +341,14 @@ async function init() {
   const sfxToggleBtn = document.getElementById('sfx-toggle-btn');
   const ambienceToggleBtn = document.getElementById('ambience-toggle-btn');
   const syncSoundToggleUI = () => {
-    if (sfxToggleBtn) sfxToggleBtn.classList.toggle('muted', !soundPrefs.sfx);
-    if (ambienceToggleBtn) ambienceToggleBtn.classList.toggle('muted', !soundPrefs.ambience);
+    if (sfxToggleBtn) {
+      sfxToggleBtn.classList.toggle('muted', !soundPrefs.sfx);
+      sfxToggleBtn.setAttribute('aria-pressed', String(soundPrefs.sfx));
+    }
+    if (ambienceToggleBtn) {
+      ambienceToggleBtn.classList.toggle('muted', !soundPrefs.ambience);
+      ambienceToggleBtn.setAttribute('aria-pressed', String(soundPrefs.ambience));
+    }
   };
   syncSoundToggleUI();
   if (sfxToggleBtn) {
