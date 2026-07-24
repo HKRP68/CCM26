@@ -629,41 +629,48 @@ def dashboard():
         # per day is the truest daily-active-users signal. We build a 14-day
         # trend plus a day-over-day retention rate (yesterday's actives who
         # came back today).
-        def distinct_active(start, end):
+        #
+        # Day boundaries follow the IST calendar (to match how the site shows
+        # every timestamp), while `created_at` is stored in UTC — so an IST
+        # midnight maps to the UTC instant (IST-midnight − IST offset).
+        now_ist = now + _IST_OFFSET
+        ist_today_0 = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def distinct_active_ist(ist_start, ist_end):
+            # Convert IST wall-clock bounds back to the UTC instants we filter on.
             return (db.query(func.count(func.distinct(ActivityLog.user_id)))
-                    .filter(ActivityLog.created_at >= start,
-                            ActivityLog.created_at < end)
+                    .filter(ActivityLog.created_at >= ist_start - _IST_OFFSET,
+                            ActivityLog.created_at < ist_end - _IST_OFFSET)
                     .scalar() or 0)
 
-        yesterday_0 = today_0 - timedelta(days=1)
-        active_today = distinct_active(today_0, today_0 + timedelta(days=1))
-        active_yesterday = distinct_active(yesterday_0, today_0)
+        def active_ids_ist(ist_start, ist_end):
+            return {r[0] for r in db.query(func.distinct(ActivityLog.user_id))
+                    .filter(ActivityLog.created_at >= ist_start - _IST_OFFSET,
+                            ActivityLog.created_at < ist_end - _IST_OFFSET).all()}
+
+        ist_yesterday_0 = ist_today_0 - timedelta(days=1)
+        active_today = distinct_active_ist(ist_today_0, ist_today_0 + timedelta(days=1))
+        active_yesterday = distinct_active_ist(ist_yesterday_0, ist_today_0)
 
         retention_daily = []
         for i in range(13, -1, -1):
-            day_start = today_0 - timedelta(days=i)
+            day_start = ist_today_0 - timedelta(days=i)
             day_end = day_start + timedelta(days=1)
             retention_daily.append({
                 "label": day_start.strftime("%d %b"),
-                "count": distinct_active(day_start, day_end),
+                "count": distinct_active_ist(day_start, day_end),
             })
         max_active = max((d["count"] for d in retention_daily), default=1) or 1
         for d in retention_daily:
             d["pct"] = round(d["count"] / max_active * 100)
 
-        # Day-over-day retention: of users active yesterday, how many returned
-        # today. Computed with a self-intersect on distinct user ids.
+        # Day-over-day retention: of users active yesterday (IST), how many
+        # returned today. Computed with a self-intersect on distinct user ids.
         returning_today = 0
         if active_yesterday:
-            yesterday_ids = {r[0] for r in db.query(
-                func.distinct(ActivityLog.user_id)).filter(
-                    ActivityLog.created_at >= yesterday_0,
-                    ActivityLog.created_at < today_0).all()}
+            yesterday_ids = active_ids_ist(ist_yesterday_0, ist_today_0)
             if yesterday_ids:
-                today_ids = {r[0] for r in db.query(
-                    func.distinct(ActivityLog.user_id)).filter(
-                        ActivityLog.created_at >= today_0,
-                        ActivityLog.created_at < today_0 + timedelta(days=1)).all()}
+                today_ids = active_ids_ist(ist_today_0, ist_today_0 + timedelta(days=1))
                 returning_today = len(yesterday_ids & today_ids)
         retention_rate = round(returning_today / active_yesterday * 100) if active_yesterday else 0
 

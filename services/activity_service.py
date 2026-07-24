@@ -1,11 +1,15 @@
 """Log all user actions to ActivityLog table."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from models import ActivityLog
 
 logger = logging.getLogger(__name__)
+
+# The website reports retention on the IST calendar, so throttle "start" rows
+# per IST day to match (timestamps themselves are still stored in UTC).
+_IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
 def log_activity(session, user_id: int, action: str, detail: str = "",
@@ -40,14 +44,14 @@ def record_start(telegram_id: int):
     New users who haven't run /debut yet have no ``User`` row (and the
     ``ActivityLog.user_id`` foreign key would reject them), so those are
     skipped — they get counted the moment they take a real action. Throttled
-    to at most one row per user per UTC day. Best-effort: any failure is
+    to at most one row per user per IST day. Best-effort: any failure is
     swallowed so telemetry never blocks the welcome message.
     """
     if not telegram_id:
         return
     try:
         now = datetime.utcnow()
-        today = now.date()
+        today = (now + _IST_OFFSET).date()
 
         from database import get_session
         from models import User
