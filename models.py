@@ -1290,6 +1290,32 @@ class EventMedia(Base):
     uploaded_by = Column(String(80), nullable=True)
 
 
+class EventSound(Base):
+    """Audio played in the Crickidex Arena Mini App for gameplay events.
+
+    One row per sound_key at most; a missing row (or source_type 'default')
+    means the committed default file under static/cricket/sounds/ is served.
+    Admin uploads replace a key's audio without touching the repo files.
+
+    sound_key values: see services.event_sound_service.SOUND_KEYS
+    source_type:
+      'default'  → serve the committed default file (source unused)
+      'telegram' → source is a Telegram file_id (storage-channel upload)
+      'url'      → source is a public URL (client is redirected to it)
+      'file'     → source is a filename under data/event_media/sounds/
+    """
+    __tablename__ = "event_sounds"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sound_key = Column(String(30), nullable=False, unique=True, index=True)
+    source_type = Column(String(10), default="default")
+    source = Column(Text, nullable=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    volume = Column(Integer, default=100)  # percent, 0-100
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String(80), nullable=True)
+
+
 class GSpinReward(Base):
     """Admin-configurable rewards for the /gspin wheel.
 

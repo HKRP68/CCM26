@@ -146,6 +146,15 @@ body {
 }
 .header-icon-btn:active { color: var(--primary-accent); }
 
+/* Right-side header controls: sound toggles + theme. Tightened so three
+   icons still fit next to the team names on narrow phones. */
+.header-btn-group { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.header-btn-group .header-icon-btn { padding: 4px; }
+#sfx-toggle-btn, #ambience-toggle-btn { width: 32px; height: 32px; justify-content: center; }
+.mute-slash { display: none; }
+.header-icon-btn.muted { opacity: 0.45; }
+.header-icon-btn.muted .mute-slash { display: block; }
+
 #theme-toggle-btn { position: relative; width: 36px; height: 36px; justify-content: center; }
 #theme-toggle-btn .theme-icon {
   position: absolute;

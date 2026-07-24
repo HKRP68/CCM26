@@ -28,7 +28,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20260608-1">
+  <link rel="stylesheet" href="style.css?v=20260724-1">
 </head>
 <body>
   <div id="app-container">
@@ -46,6 +46,24 @@
         </div>
         <div class="header-match-id" id="header-match-uuid">MATCH ID: E2265B</div>
       </div>
+      <div class="header-btn-group">
+      <button class="header-icon-btn" id="sfx-toggle-btn" aria-label="Toggle in-game sounds">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"></polygon>
+          <path d="M15.5 8.5a5 5 0 0 1 0 7"></path>
+          <path d="M18.5 5.5a9.2 9.2 0 0 1 0 13"></path>
+          <line class="mute-slash" x1="3" y1="3" x2="21" y2="21"></line>
+        </svg>
+      </button>
+      <button class="header-icon-btn" id="ambience-toggle-btn" aria-label="Toggle crowd sound">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 11l14-6v14L3 13v-2z" fill="currentColor" stroke="none"></path>
+          <path d="M3 11v2"></path>
+          <path d="M17 8.5l4-1.5v10l-4-1.5"></path>
+          <path d="M6.5 13.5V18a1.8 1.8 0 0 0 1.8 1.8h.4A1.8 1.8 0 0 0 10.5 18v-3"></path>
+          <line class="mute-slash" x1="3" y1="3" x2="21" y2="21"></line>
+        </svg>
+      </button>
       <button class="header-icon-btn" id="theme-toggle-btn" aria-label="Toggle light/dark theme">
         <svg class="theme-icon theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="4.5"></circle>
@@ -62,6 +80,7 @@
           <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path>
         </svg>
       </button>
+      </div>
     </header>
 
     <!-- LOADING SCREEN -->
@@ -587,6 +606,6 @@
 
   </div>
   
-  <script src="app.js?v=20260608-1"></script>
+  <script src="app.js?v=20260724-1"></script>
 </body>
 </html>
