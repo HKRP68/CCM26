@@ -385,6 +385,14 @@ BOT_MENU_COMMANDS = (
 
 async def register_bot_menu(application):
     """Publish every canonical bot command to Telegram's slash-command menu."""
+    # Start the event-loop lag sampler here: post_init runs on the same loop
+    # that will serve every update, which is exactly what we want to measure.
+    try:
+        from services import loop_monitor
+        loop_monitor.start()
+    except Exception:
+        logger.exception("Could not start the event-loop lag monitor")
+
     await application.bot.set_my_commands([
         BotCommand(command, description)
         for command, description in BOT_MENU_COMMANDS

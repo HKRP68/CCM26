@@ -1,8 +1,10 @@
 """Database engine, session factory, and initialisation."""
 
 import os
+import time
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import DisconnectionError
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from config import DATABASE_URL
 
@@ -12,12 +14,25 @@ if "sqlite" in DATABASE_URL:
 
 # Neon (and most managed Postgres) closes idle TCP connections after ~5 min.
 # Settings tuned for low-traffic Telegram bot on Neon's free tier:
-#   - pool_pre_ping: tests connection with SELECT 1 before use. Cheap, reliable.
 #   - pool_recycle: proactively close connections older than 240s so we don't
 #     hit the server's idle-kill (saves one "broken pipe" round-trip per kill).
 #   - pool_size + max_overflow are environment-tunable so the bot can handle
 #     concurrent Telegram updates without creating unbounded connections.
+#
+# Liveness checking is deliberately NOT pool_pre_ping. That option sends a
+# SELECT 1 before *every* checkout, which doubles the round trips of a
+# one-query operation. The database is a long way from the app (measured at
+# ~100ms per round trip), and most of this codebase opens sessions
+# synchronously from async handlers, so each of those extra pings is ~100ms
+# with the bot's event loop frozen — i.e. it lands directly on user-visible
+# latency. Instead we ping only connections that have actually been sitting
+# idle long enough to plausibly be dead (see the checkout hook below), which
+# keeps the safety net while making the hot path free.
 _is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_URL.lower())
+
+# Only ping a pooled connection if it has been idle at least this long. Under
+# load connections are reused constantly, so this is almost always a no-op.
+IDLE_PING_AFTER_SECONDS = float(os.getenv("DB_IDLE_PING_AFTER", "30"))
 
 if _is_postgres:
     # The Telegram application handles multiple updates concurrently, so keep
@@ -30,7 +45,6 @@ if _is_postgres:
     engine = create_engine(
         DATABASE_URL,
         echo=False,
-        pool_pre_ping=True,
         pool_recycle=240,          # < Neon's idle disconnect (~5min)
         pool_size=pool_size,
         max_overflow=max_overflow,
@@ -39,8 +53,36 @@ if _is_postgres:
     )
 else:
     # SQLite (local dev) — keep simple
-    engine = create_engine(DATABASE_URL, echo=False,
-                           pool_pre_ping=True, connect_args=connect_args)
+    engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+
+
+@event.listens_for(engine, "checkin")
+def _record_idle_start(dbapi_connection, connection_record):
+    """Stamp when a connection went back into the pool."""
+    connection_record.info["returned_at"] = time.monotonic()
+
+
+@event.listens_for(engine, "checkout")
+def _ping_if_idle(dbapi_connection, connection_record, connection_proxy):
+    """Validate a connection only if it has been idle long enough to go stale.
+
+    Raising DisconnectionError here is the same contract pool_pre_ping uses:
+    SQLAlchemy discards the connection and transparently retries the checkout
+    with a fresh one, so callers never see the failure.
+    """
+    returned_at = connection_record.info.get("returned_at")
+    if returned_at is None:
+        return  # brand-new connection, already known good
+    if (time.monotonic() - returned_at) < IDLE_PING_AFTER_SECONDS:
+        return  # hot connection — skip the round trip
+    try:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("SELECT 1")
+        finally:
+            cursor.close()
+    except Exception as exc:
+        raise DisconnectionError() from exc
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
