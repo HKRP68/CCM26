@@ -346,6 +346,36 @@ def _bowling_eligible(players):
     return elig or list(players or [])
 
 
+def _bot_bowler_pool(state, players, prev_rid):
+    """Players a bot-match team may pick from for the next over.
+
+    Bot matches (``/wpmbot``, ``/vsbot``) normally restrict bowling to the
+    front-line attack — all-rounders and specialist bowlers. But a team can run
+    out of front-line overs: once every all-rounder/bowler is either the bowler
+    who just bowled (no consecutive overs) or has used their full quota, there
+    is nobody left to legally bowl. Rather than hand a specialist an illegal
+    extra over, part-time batsmen come on to bowl — mirroring real cricket,
+    where recognised batsmen fill in when the frontline quota is exhausted.
+
+    Returns the front-line attack while at least one front-liner can still
+    legally bowl; otherwise returns the full list so batsmen become selectable.
+    The caller's usual quota / no-consecutive rules then apply to whichever
+    tier is active (batsmen start fresh at 0 overs, so they pass the quota
+    check that the exhausted specialists now fail).
+    """
+    players = list(players or [])
+    front_line = [p for p in players if _can_bowl(p)]
+    quota = _bowling_quota(state.get("overs"))
+    front_available = any(
+        p.get("roster_id") != prev_rid
+        and _stat_row(state.get("bowl_stats"), p.get("roster_id")).get("overs_done", 0) < quota
+        for p in front_line
+    )
+    if front_line and front_available:
+        return front_line
+    return players
+
+
 def _replace_player_in_list(players, out_rid, incoming):
     for i, p in enumerate(players or []):
         if p.get("roster_id") == out_rid:
@@ -2192,21 +2222,30 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     by_rid = {p["roster_id"]: p for p in _active_players(state.get("bowl_xi", []))}
     if bowler_rid not in by_rid:
         return False, "Pick a bowler from your XI."
-    if state.get("is_vsbot") and not _can_bowl(by_rid[bowler_rid]):
-        return False, "Only all-rounders and bowlers can bowl."
     prev = state.get("prev_bowler_rid")
+    # In bot matches only the front-line attack (all-rounders + bowlers) may
+    # bowl — until it is exhausted, at which point batsmen become eligible so
+    # the innings can be completed (see _bot_bowler_pool). A batsman picked
+    # while a front-liner still has legal overs left is rejected.
+    if state.get("is_vsbot"):
+        pool = _bot_bowler_pool(state, list(by_rid.values()), prev)
+        pool_ids = {p["roster_id"] for p in pool}
+        if bowler_rid not in pool_ids:
+            return False, ("Only all-rounders and bowlers can bowl while your "
+                           "front-line attack still has overs left.")
     if bowler_rid == prev:
         return False, "Same bowler can't bowl consecutive overs."
     # Per-bowler over limit (ceil(overs / 5)). Keep the cap in force while any
     # quota-safe bowler remains; relax it only if nobody is left so the picker
-    # can never dead-end. In bot matches the quota universe must be the eligible
-    # bowlers only — otherwise idle batsmen/keeper (0 overs, ineligible) keep
-    # `under_quota` non-empty and every eligible over-quota pick is wrongly
-    # rejected once the real bowlers are all capped, dead-ending the innings.
+    # can never dead-end. In bot matches the quota universe is the current pool
+    # (front-line only, or the full XI once batsmen have been unlocked) —
+    # otherwise idle, still-ineligible players (0 overs) keep `under_quota`
+    # non-empty and every legal over-quota pick is wrongly rejected once the
+    # real bowlers are all capped, dead-ending the innings.
     quota = _bowling_quota(state.get("overs"))
     quota_pool = by_rid
     if state.get("is_vsbot"):
-        quota_pool = {rid: p for rid, p in by_rid.items() if _can_bowl(p)}
+        quota_pool = {rid: p for rid, p in by_rid.items() if rid in pool_ids}
     under_quota = [
         rid for rid, p in quota_pool.items()
         if rid != prev
@@ -2230,8 +2269,10 @@ def get_new_bowler_options(match_id, user_id):
     quota = _bowling_quota(state.get("overs"))
     players = _active_players(state.get("bowl_xi", []))
     if state.get("is_vsbot"):
-        # Bot matches: only all-rounders and bowlers may be offered.
-        players = _bowling_eligible(players)
+        # Bot matches: front-line attack (all-rounders + bowlers) only, but
+        # once every front-liner is spent (quota used / just bowled), batsmen
+        # join the pool so a part-timer can fill the remaining overs.
+        players = _bot_bowler_pool(state, players, prev)
     # Only enforce the quota if at least one quota-safe bowler is available;
     # otherwise relax it (still excluding the previous bowler) to avoid dead-ends.
     enforce_quota = any(
@@ -3396,7 +3437,8 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
 
         if na == A_PICK_NEW_BOWLER:
             new_bowler = bot_ai.pick_bot_next_bowler(
-                _bowling_eligible(_active_players(state["bowl_xi"])),
+                _bot_bowler_pool(state, _active_players(state["bowl_xi"]),
+                                 state.get("prev_bowler_rid")),
                 state.get("prev_bowler_rid"),
                 state["bowl_stats"], state["overs"])
             state["current_bowler"] = new_bowler
