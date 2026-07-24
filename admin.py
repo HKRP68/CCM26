@@ -622,6 +622,72 @@ def dashboard():
             "highest_today": max(reward_history, key=lambda x: x["player"]["rating"], default=None),
         }
 
+        # ── User Retention (daily active users) ──────────────────────────
+        # "How many users start or do any activity to use the bot in a day."
+        # ActivityLog is the shared audit trail for every meaningful action
+        # (start, claim, daily, matches, buys, spins, …), so distinct users
+        # per day is the truest daily-active-users signal. We build a 14-day
+        # trend plus a day-over-day retention rate (yesterday's actives who
+        # came back today).
+        #
+        # Day boundaries follow the IST calendar (to match how the site shows
+        # every timestamp), while `created_at` is stored in UTC — so an IST
+        # midnight maps to the UTC instant (IST-midnight − IST offset).
+        now_ist = now + _IST_OFFSET
+        ist_today_0 = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def distinct_active_ist(ist_start, ist_end):
+            # Convert IST wall-clock bounds back to the UTC instants we filter on.
+            return (db.query(func.count(func.distinct(ActivityLog.user_id)))
+                    .filter(ActivityLog.created_at >= ist_start - _IST_OFFSET,
+                            ActivityLog.created_at < ist_end - _IST_OFFSET)
+                    .scalar() or 0)
+
+        def active_ids_ist(ist_start, ist_end):
+            return {r[0] for r in db.query(func.distinct(ActivityLog.user_id))
+                    .filter(ActivityLog.created_at >= ist_start - _IST_OFFSET,
+                            ActivityLog.created_at < ist_end - _IST_OFFSET).all()}
+
+        ist_yesterday_0 = ist_today_0 - timedelta(days=1)
+        active_today = distinct_active_ist(ist_today_0, ist_today_0 + timedelta(days=1))
+        active_yesterday = distinct_active_ist(ist_yesterday_0, ist_today_0)
+
+        retention_daily = []
+        for i in range(13, -1, -1):
+            day_start = ist_today_0 - timedelta(days=i)
+            day_end = day_start + timedelta(days=1)
+            retention_daily.append({
+                "label": day_start.strftime("%d %b"),
+                "count": distinct_active_ist(day_start, day_end),
+            })
+        max_active = max((d["count"] for d in retention_daily), default=1) or 1
+        for d in retention_daily:
+            d["pct"] = round(d["count"] / max_active * 100)
+
+        # Day-over-day retention: of users active yesterday (IST), how many
+        # returned today. Computed with a self-intersect on distinct user ids.
+        returning_today = 0
+        if active_yesterday:
+            yesterday_ids = active_ids_ist(ist_yesterday_0, ist_today_0)
+            if yesterday_ids:
+                today_ids = active_ids_ist(ist_today_0, ist_today_0 + timedelta(days=1))
+                returning_today = len(yesterday_ids & today_ids)
+        retention_rate = round(returning_today / active_yesterday * 100) if active_yesterday else 0
+
+        # Peak day over the window, and 7-day average, for quick context.
+        peak_active = max((d["count"] for d in retention_daily), default=0)
+        avg_active_7d = round(sum(d["count"] for d in retention_daily[-7:]) / 7) if retention_daily else 0
+
+        retention = {
+            "active_today": active_today,
+            "active_yesterday": active_yesterday,
+            "returning_today": returning_today,
+            "retention_rate": retention_rate,
+            "daily": retention_daily,
+            "peak_active": peak_active,
+            "avg_active_7d": avg_active_7d,
+        }
+
         # Player snapshot (kept compact)
         total_players = db.query(func.count(Player.id)).scalar() or 0
         active_players = db.query(func.count(Player.id)).filter(
@@ -681,7 +747,7 @@ def dashboard():
                                countries=countries, growth=growth,
                                match_activity=match_activity,
                                recent_logs=recent_logs, top_users=top_users,
-                               reward_stats=reward_stats,
+                               reward_stats=reward_stats, retention=retention,
                                maint_active=maint_active, maint_until=maint_until)
     finally:
         db.close()

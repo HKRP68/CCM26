@@ -398,6 +398,18 @@ async def start_handler(update, context):
     args = (context.args or []) if hasattr(context, 'args') else []
     payload = (args[0].lower() if args else "")
 
+    # Record a daily "start" activity for User Retention stats. Best-effort and
+    # throttled to once per user per day; skipped for users who haven't done
+    # /debut yet (no User row). Runs off the event loop so it never delays the
+    # welcome reply.
+    try:
+        tg_user = update.effective_user
+        if tg_user:
+            from services.activity_service import record_start
+            await asyncio.to_thread(record_start, tg_user.id)
+    except Exception:
+        pass
+
     # ── Referral payload ──
     if payload.startswith("ref"):
         try:

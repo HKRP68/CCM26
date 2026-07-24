@@ -70,6 +70,44 @@
   .chart-bar.match-bar {
     background: linear-gradient(to top, #C41E3A, #8b0000);
   }
+  .chart-bar.retention-bar {
+    background: linear-gradient(to top, #a78bfa, #7c3aed);
+  }
+
+  .retention-panel .retention-head { margin-bottom: .5rem; }
+  .retention-sub {
+    color: var(--muted, #888);
+    font-size: .78rem;
+    font-weight: 400;
+  }
+  .retention-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: .75rem;
+    margin: .5rem 0 1rem;
+  }
+  .ret-kpi {
+    background: var(--bg, #10141c);
+    border: 1px solid var(--border, #2a3142);
+    border-radius: 8px;
+    padding: .7rem .85rem;
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+  }
+  .ret-kpi .lbl {
+    color: var(--muted, #888);
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    font-weight: 600;
+  }
+  .ret-kpi .num { font-size: 1.6rem; font-weight: 700; color: var(--text); line-height: 1; }
+  .ret-kpi .sub { color: var(--muted, #888); font-size: .72rem; }
+  .ret-kpi.accent-teal { border-left: 3px solid #00C9A7; }
+  .ret-kpi.accent-gold { border-left: 3px solid #FBBF24; }
+  .ret-kpi.accent-grey { border-left: 3px solid #6b7280; }
+  .ret-kpi.accent-purple { border-left: 3px solid #a78bfa; }
   .chart-bar:hover::after {
     content: attr(data-tip);
     position: absolute;
@@ -296,6 +334,45 @@
     <span class="lbl">Total Users</span>
     <span class="num">{{ stats.total_users }}</span>
     <span class="sub">{{ stats.banned }} banned</span>
+  </div>
+</div>
+
+<!-- User Retention (daily active users) -->
+<div class="panel retention-panel">
+  <div class="retention-head">
+    <h3 style="border:0;margin:0;padding:0;">🔁 User Retention <span class="retention-sub">— users who start or do any activity per day (IST)</span></h3>
+  </div>
+  <div class="retention-kpis">
+    <div class="ret-kpi accent-teal">
+      <span class="lbl">Active Today</span>
+      <span class="num">{{ retention.active_today }}</span>
+      <span class="sub">{{ retention.active_yesterday }} yesterday</span>
+    </div>
+    <div class="ret-kpi accent-gold">
+      <span class="lbl">Retention Rate</span>
+      <span class="num">{{ retention.retention_rate }}%</span>
+      <span class="sub">{{ retention.returning_today }} of yesterday's users returned</span>
+    </div>
+    <div class="ret-kpi accent-purple">
+      <span class="lbl">7-Day Avg</span>
+      <span class="num">{{ retention.avg_active_7d }}</span>
+      <span class="sub">avg daily active users</span>
+    </div>
+    <div class="ret-kpi accent-grey">
+      <span class="lbl">Peak (14d)</span>
+      <span class="num">{{ retention.peak_active }}</span>
+      <span class="sub">busiest day in range</span>
+    </div>
+  </div>
+  <div class="chart-bars">
+    {% for d in retention.daily %}
+      <div class="chart-bar retention-bar" style="height: {{ [d.pct, 4]|max }}%;" data-tip="{{ d.label }}: {{ d.count }} active"></div>
+    {% endfor %}
+  </div>
+  <div class="chart-labels">
+    {% for d in retention.daily %}
+      <div>{% if loop.index0 % 2 == 0 %}{{ d.label[:3] }}{% endif %}</div>
+    {% endfor %}
   </div>
 </div>
 
