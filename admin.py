@@ -7991,6 +7991,74 @@ def event_media_asset(media_id):
         db.close()
 
 
+@app.route("/api/event-sound/<sound_key>")
+@csrf_exempt
+def event_sound_asset(sound_key):
+    """Serve/proxy a gameplay sound through a stable MiniApp URL.
+
+    Defaults are committed files under static/cricket/sounds/; admin overrides
+    are Telegram file_ids / URLs / disk files in the EventSound table.
+    """
+    from services.event_sound_service import (
+        VALID_SOUND_KEYS, DEFAULT_SOUND_FILES, SOUND_UPLOAD_DIR,
+        sound_content_type)
+    if sound_key not in VALID_SOUND_KEYS:
+        return {"error": "not_found"}, 404
+    db = get_session()
+    try:
+        from models import EventSound
+        row = None
+        try:
+            row = (db.query(EventSound)
+                   .filter(EventSound.sound_key == sound_key).first())
+        except Exception:
+            logger.exception("event sound lookup failed; serving default")
+        if row is not None and not row.enabled and not session.get("admin_user"):
+            return {"error": "not_found"}, 404
+        if row is not None and row.source_type == "url" and row.source:
+            return redirect(row.source, code=302)
+        if row is not None and row.source_type == "file" and row.source:
+            path = (row.source if os.path.isabs(row.source)
+                    else os.path.join(SOUND_UPLOAD_DIR, os.path.basename(row.source)))
+            if os.path.isfile(path):
+                return send_file(path, conditional=True, max_age=86400)
+            logger.warning(f"Event sound file missing: {path}; serving default")
+        if row is not None and row.source_type == "telegram" and row.source:
+            # Any Telegram hiccup (timeout, bad JSON, HTTP error) must fall
+            # through to the committed default sound, not 503 the request.
+            try:
+                import requests as _requests
+                token = os.getenv("BOT_TOKEN", "").strip()
+                if token:
+                    meta = _requests.get(
+                        f"https://api.telegram.org/bot{token}/getFile",
+                        params={"file_id": row.source}, timeout=8).json()
+                    file_path = ((meta.get("result") or {}).get("file_path"))
+                    if file_path:
+                        upstream = _requests.get(
+                            f"https://api.telegram.org/file/bot{token}/{file_path}",
+                            timeout=20)
+                        upstream.raise_for_status()
+                        return Response(
+                            upstream.content,
+                            content_type=sound_content_type(file_path),
+                            headers={"Cache-Control": "public, max-age=86400"})
+            except Exception:
+                logger.exception(f"Event sound telegram fetch failed for {sound_key}; serving default")
+            else:
+                logger.warning(f"Event sound telegram fetch failed for {sound_key}; serving default")
+        default_path = DEFAULT_SOUND_FILES.get(sound_key)
+        if default_path and os.path.isfile(default_path):
+            return send_file(default_path, conditional=True, max_age=86400,
+                             mimetype=sound_content_type(default_path))
+        return {"error": "not_found"}, 404
+    except Exception:
+        logger.exception("event sound asset failed")
+        return {"error": "storage_unavailable"}, 503
+    finally:
+        db.close()
+
+
 @app.route("/api/match/autoplay-status", methods=["POST"])
 @csrf_exempt
 def match_rest_autoplay_status():
@@ -8066,6 +8134,8 @@ def match_rest_poll():
             return {"error": "No active match found."}, 404
         from services.event_media_service import get_miniapp_event_gifs
         payload["eventGifs"] = get_miniapp_event_gifs(db)
+        from services.event_sound_service import get_miniapp_event_sounds
+        payload["eventSounds"] = get_miniapp_event_sounds(db)
         return payload
     except Exception as e:
         logger.exception("match_rest_poll failed")
@@ -12157,6 +12227,183 @@ def admin_media_detail(event_key):
         return render_template("admin_media_detail.html",
                                event_key=event_key, event_meta=event_meta,
                                rows=rows)
+    finally:
+        db.close()
+
+
+@app.route("/sounds", methods=["GET", "POST"])
+@login_required
+def admin_sounds():
+    """Manage the Mini App gameplay sounds — one sound per key.
+
+    Defaults are committed files; uploads become Telegram-file_id overrides
+    (durable) or disk files when no storage channel is configured.
+    """
+    db = get_session()
+    try:
+        from datetime import datetime as _dt
+        from models import EventSound
+        from services.event_sound_service import (
+            SOUND_KEYS, VALID_SOUND_KEYS, SOUND_UPLOAD_DIR,
+            ALLOWED_SOUND_EXTENSIONS, MAX_SOUND_UPLOAD_BYTES,
+            clamp_volume, invalidate_miniapp_event_sounds)
+        import os as _os
+        import uuid as _uuid
+        from werkzeug.utils import secure_filename
+
+        def _get_or_create(key):
+            row = (db.query(EventSound)
+                   .filter(EventSound.sound_key == key).first())
+            if row is None:
+                # Set column defaults explicitly — they only apply at INSERT
+                # flush, and actions like toggle read the fields before that.
+                row = EventSound(sound_key=key, source_type="default",
+                                 enabled=True, volume=100)
+                db.add(row)
+            return row
+
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            sound_key = (request.form.get("sound_key") or "").strip()
+            if sound_key not in VALID_SOUND_KEYS:
+                flash(f"Unknown sound key: {sound_key}", "error")
+                return redirect(url_for("admin_sounds"))
+            try:
+                if action == "upload":
+                    uploaded = request.files.get("upload")
+                    if not (uploaded and uploaded.filename):
+                        flash("Choose an audio file to upload.", "error")
+                        return redirect(url_for("admin_sounds"))
+                    ext = _os.path.splitext(uploaded.filename)[1].lower()
+                    if ext not in ALLOWED_SOUND_EXTENSIONS:
+                        flash(f"File must be one of: {', '.join(ALLOWED_SOUND_EXTENSIONS)}", "error")
+                        return redirect(url_for("admin_sounds"))
+                    file_bytes = uploaded.read()
+                    if not file_bytes:
+                        flash("Uploaded file is empty.", "error")
+                        return redirect(url_for("admin_sounds"))
+                    if len(file_bytes) > MAX_SOUND_UPLOAD_BYTES:
+                        flash(f"File too large ({len(file_bytes)/1024/1024:.1f}MB). "
+                              f"Limit is {MAX_SOUND_UPLOAD_BYTES // (1024*1024)}MB.", "error")
+                        return redirect(url_for("admin_sounds"))
+
+                    from config import MEDIA_STORAGE_CHAT_ID
+                    stored = False
+                    row = _get_or_create(sound_key)
+                    old_disk_source = (row.source if row.source_type == "file" else None)
+                    if MEDIA_STORAGE_CHAT_ID:
+                        from services.event_media_service import upload_to_storage_channel
+                        up = upload_to_storage_channel(
+                            file_bytes, uploaded.filename,
+                            original_label=f"sound:{sound_key}")
+                        if up["success"]:
+                            row.source_type = "telegram"
+                            row.source = up["file_id"]
+                            stored = True
+                            flash("✅ Uploaded to Telegram channel "
+                                  "(persistent, never resets).", "info")
+                        else:
+                            flash(f"⚠️ Telegram channel upload failed: "
+                                  f"{up['error']}. Saved to disk instead "
+                                  f"(may not persist on deploy).", "error")
+                    if not stored:
+                        safe_stem = secure_filename(_os.path.splitext(uploaded.filename)[0]) or "sound"
+                        unique = f"{sound_key}_{safe_stem}_{_uuid.uuid4().hex[:8]}{ext}"
+                        _os.makedirs(SOUND_UPLOAD_DIR, exist_ok=True)
+                        with open(_os.path.join(SOUND_UPLOAD_DIR, unique), "wb") as f:
+                            f.write(file_bytes)
+                        row.source_type = "file"
+                        row.source = unique
+                        if not MEDIA_STORAGE_CHAT_ID:
+                            flash("✅ Uploaded. <i>For persistence across deploys, "
+                                  "set MEDIA_STORAGE_CHAT_ID env var to a "
+                                  "private channel id.</i>", "info")
+                    if old_disk_source:
+                        old_path = _os.path.join(SOUND_UPLOAD_DIR,
+                                                 _os.path.basename(old_disk_source))
+                        if _os.path.exists(old_path):
+                            try: _os.remove(old_path)
+                            except OSError: pass
+                    row.enabled = True
+                    row.updated_at = _dt.utcnow()
+                    row.updated_by = session.get("admin_user", "admin")
+                    db.commit()
+                    log_admin(db, "sound_upload", "event_sound", row.id,
+                              sound_key, f"source_type={row.source_type}")
+                    db.commit()
+
+                elif action == "set_url":
+                    url_input = (request.form.get("url") or "").strip()
+                    # https only: the Mini App is served over HTTPS, so an
+                    # http:// audio src is blocked as mixed content and the
+                    # sound silently never plays.
+                    if not url_input.startswith("https://"):
+                        flash("URL must start with https://", "error")
+                        return redirect(url_for("admin_sounds"))
+                    row = _get_or_create(sound_key)
+                    row.source_type = "url"
+                    row.source = url_input
+                    row.enabled = True
+                    row.updated_at = _dt.utcnow()
+                    row.updated_by = session.get("admin_user", "admin")
+                    db.commit()
+                    log_admin(db, "sound_set_url", "event_sound", row.id,
+                              sound_key, f"url={url_input[:60]}")
+                    db.commit()
+                    flash("✅ URL saved.", "info")
+
+                elif action == "set_volume":
+                    row = _get_or_create(sound_key)
+                    row.volume = clamp_volume(request.form.get("volume"))
+                    row.updated_at = _dt.utcnow()
+                    db.commit()
+                    flash(f"Volume set to {row.volume}%.", "info")
+
+                elif action == "toggle":
+                    row = _get_or_create(sound_key)
+                    row.enabled = not bool(row.enabled)
+                    row.updated_at = _dt.utcnow()
+                    db.commit()
+                    log_admin(db, "sound_toggle", "event_sound", row.id,
+                              sound_key, "enabled" if row.enabled else "disabled")
+                    db.commit()
+                    flash(f"{'Enabled' if row.enabled else 'Disabled'} {sound_key}.", "info")
+
+                elif action == "reset":
+                    row = (db.query(EventSound)
+                           .filter(EventSound.sound_key == sound_key).first())
+                    if row is not None:
+                        if row.source_type == "file" and row.source:
+                            old_path = _os.path.join(SOUND_UPLOAD_DIR,
+                                                     _os.path.basename(row.source))
+                            if _os.path.exists(old_path):
+                                try: _os.remove(old_path)
+                                except OSError: pass
+                        db.delete(row)
+                        db.commit()
+                        log_admin(db, "sound_reset", "event_sound", 0,
+                                  sound_key, "reset to default")
+                        db.commit()
+                    flash(f"↩️ {sound_key} reset to the default sound.", "info")
+            except Exception as e:
+                db.rollback()
+                logger.exception("sound admin error")
+                flash(f"Error: {e}", "error")
+            try:
+                invalidate_miniapp_event_sounds()
+            except Exception:
+                pass
+            return redirect(url_for("admin_sounds"))
+
+        try:
+            rows = {r.sound_key: r for r in db.query(EventSound).all()}
+        except Exception:
+            logger.exception("event_sounds table unavailable")
+            rows = {}
+        import time as _time
+        return render_template("admin_sounds.html",
+                               sound_keys=SOUND_KEYS, rows=rows,
+                               cache_bust=int(_time.time()))
     finally:
         db.close()
 

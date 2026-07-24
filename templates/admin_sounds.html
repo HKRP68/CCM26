@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Gameplay Sounds{% endblock %}
+{% block content %}
+
+<h1>🔊 Gameplay Sound Management</h1>
+<p style="color:var(--muted); margin-bottom:1.5rem; max-width:760px;">
+  Sounds played inside the Crickidex Arena Mini App (/wpm and /wpmbot matches).
+  Each key has one active sound: the built-in default that ships with the app,
+  or your uploaded replacement. In-Game sounds fire on ball outcomes; Match
+  Ambience alternates as crowd background while an innings is live. Players can
+  mute either group from the game header.
+</p>
+
+<div style="background:rgba(34, 197, 94, 0.1); border:1px solid rgba(34, 197, 94, 0.4); border-radius:8px; padding:.75rem 1rem; margin-bottom:1.5rem; font-size:.85rem; color:var(--muted);">
+  💡 <strong>Telegram-channel storage (recommended for uploads):</strong>
+  with <code>MEDIA_STORAGE_CHAT_ID</code> configured (same channel as Event
+  Media), uploaded audio is stored on Telegram forever and survives every
+  redeploy. Without it, uploads go to local disk and may reset on deploy.
+  Defaults always survive — they are part of the app itself.
+</div>
+
+{% for group_key, group_title, group_desc in [
+    ("ingame", "🔊 In-Game Sounds", "One-shot effects on ball outcomes. Dot balls are intentionally silent."),
+    ("match", "📣 Match Ambience", "Crowd background — the two clips alternate in a continuous loop during play.")] %}
+<h2 style="margin:1.25rem 0 .25rem;">{{ group_title }}</h2>
+<p style="color:var(--muted); font-size:.85rem; margin-bottom:.75rem;">{{ group_desc }}</p>
+
+<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:1rem; margin-bottom:1rem;">
+  {% for key, label, desc, category in sound_keys if category == group_key %}
+    {% set row = rows.get(key) %}
+    {% set enabled = (row.enabled if row else True) %}
+    <div style="padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:10px; {% if not enabled %}opacity:.6;{% endif %}">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.25rem;">
+        <div style="font-size:1.15rem; font-weight:700;">{{ label }}</div>
+        {% if not row or row.source_type == "default" %}
+          <span style="font-size:.72rem; padding:.15rem .5rem; border-radius:99px; background:rgba(148,163,184,.18); color:var(--muted);">Default</span>
+        {% elif row.source_type == "telegram" %}
+          <span style="font-size:.72rem; padding:.15rem .5rem; border-radius:99px; background:rgba(34,197,94,.15); color:#22c55e;">Telegram ✓</span>
+        {% elif row.source_type == "url" %}
+          <span style="font-size:.72rem; padding:.15rem .5rem; border-radius:99px; background:rgba(59,130,246,.15); color:#3b82f6;">URL</span>
+        {% else %}
+          <span style="font-size:.72rem; padding:.15rem .5rem; border-radius:99px; background:rgba(245,158,11,.15); color:#f59e0b;">Disk ⚠️</span>
+        {% endif %}
+      </div>
+      <div style="color:var(--muted); font-size:.82rem; margin-bottom:.6rem;">{{ desc }}</div>
+
+      <audio controls preload="none" style="width:100%; height:34px; margin-bottom:.6rem;"
+             src="{{ url_for('event_sound_asset', sound_key=key) }}?v={{ cache_bust }}"></audio>
+
+      <form method="post" enctype="multipart/form-data" style="display:flex; gap:.4rem; margin-bottom:.5rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="upload">
+        <input type="hidden" name="sound_key" value="{{ key }}">
+        <input type="file" name="upload" accept=".mp3,.wav,.ogg,.m4a" required
+               style="flex:1; min-width:0; font-size:.8rem;">
+        <button type="submit" class="btn" style="font-size:.8rem;">Replace</button>
+      </form>
+
+      <form method="post" style="display:flex; gap:.4rem; margin-bottom:.5rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="set_url">
+        <input type="hidden" name="sound_key" value="{{ key }}">
+        <input type="url" name="url" placeholder="https://… direct audio URL"
+               style="flex:1; min-width:0; font-size:.8rem; padding:.3rem .5rem; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+        <button type="submit" class="btn" style="font-size:.8rem;">Set URL</button>
+      </form>
+
+      <div style="display:flex; gap:.4rem; align-items:center; flex-wrap:wrap;">
+        <form method="post" style="display:flex; gap:.3rem; align-items:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="set_volume">
+          <input type="hidden" name="sound_key" value="{{ key }}">
+          <label style="font-size:.78rem; color:var(--muted);">Vol %</label>
+          <input type="number" name="volume" min="0" max="100"
+                 value="{{ row.volume if row and row.volume is not none else 100 }}"
+                 style="width:60px; font-size:.8rem; padding:.25rem .4rem; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+          <button type="submit" class="btn" style="font-size:.75rem;">Save</button>
+        </form>
+        <form method="post" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="toggle">
+          <input type="hidden" name="sound_key" value="{{ key }}">
+          <button type="submit" class="btn" style="font-size:.75rem;">
+            {{ "🔇 Disable" if enabled else "🔊 Enable" }}
+          </button>
+        </form>
+        {% if row %}
+        <form method="post" style="display:inline;"
+              onsubmit="return confirm('Reset {{ key }} to the built-in default sound?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="reset">
+          <input type="hidden" name="sound_key" value="{{ key }}">
+          <button type="submit" class="btn" style="font-size:.75rem;">↩️ Reset</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% endblock %}

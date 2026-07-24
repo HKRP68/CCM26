@@ -69,6 +69,203 @@ function isActiveXIPlayer(player) {
   return player?.active !== false;
 }
 
+// ═══════════════ Gameplay audio (in-game SFX + crowd ambience) ═══════════════
+// Sound config arrives in the /api/match payload as eventSounds (admin-editable
+// via the /sounds panel). Two independent player toggles, both default ON:
+//   sfx      → one-shot effects on ball outcomes (wicket/four/six/no-ball/runs)
+//   ambience → crowd background that alternates crowd_1 / crowd_2 while live
+const SFX_PREF_KEY = 'crickidex_sfx_enabled';
+const AMBIENCE_PREF_KEY = 'crickidex_ambience_enabled';
+// Absent key = enabled, so sounds are ON for every player by default.
+function readSoundPref(key) {
+  try { return localStorage.getItem(key) !== '0'; } catch (e) { return true; }
+}
+const soundPrefs = { sfx: readSoundPref(SFX_PREF_KEY), ambience: readSoundPref(AMBIENCE_PREF_KEY) };
+const soundEls = {}; // key -> { el, url, volume, category, unlocked }
+const CROWD_KEYS = ['crowd_1', 'crowd_2'];
+// Ambience sits well under the event effects so outcomes always cut through.
+const CROWD_BASE_VOLUME = 0.35;
+const CROWD_DUCK_FACTOR = 0.4;
+let audioUnlocked = false;
+let ambienceActive = false;
+let crowdChainIdx = 0;
+let crowdDuckTimer = null;
+let crowdFadeTimer = null;
+
+function preloadEventSounds(config) {
+  Object.entries(config || {}).forEach(([key, cfg]) => {
+    if (!cfg || !cfg.url) return;
+    const volume = typeof cfg.volume === 'number' ? Math.max(0, Math.min(1, cfg.volume)) : 1;
+    const existing = soundEls[key];
+    if (existing && existing.url === cfg.url) {
+      existing.volume = volume;
+      return;
+    }
+    // URL changed (admin replaced the sound mid-session) or first sighting.
+    const wasPlayingCrowd = !!(existing && CROWD_KEYS.includes(key) && !existing.el.paused);
+    if (existing) { try { existing.el.pause(); } catch (e) {} }
+    const el = new Audio(cfg.url);
+    el.preload = 'auto';
+    soundEls[key] = { el, url: cfg.url, volume, category: cfg.category || 'ingame', unlocked: false };
+    if (wasPlayingCrowd && ambienceActive) playCrowdStep();
+  });
+}
+
+// Telegram WebViews block programmatic audio until the element has played
+// inside a user gesture. Gameplay is tap-heavy, so every tap silently unlocks
+// any elements that appeared since the last one (entries are skipped once
+// unlocked — this is a cheap no-op almost always).
+function unlockAudio() {
+  audioUnlocked = true;
+  const settling = [];
+  Object.values(soundEls).forEach(entry => {
+    if (entry.unlocked) return;
+    // Already audibly playing (e.g. the ambience chain started it) — audio is
+    // proven unlocked for this element; a muted re-play would only interrupt it.
+    if (!entry.el.paused) { entry.unlocked = true; return; }
+    try {
+      entry.el.muted = true;
+      const p = entry.el.play();
+      if (p && p.then) {
+        settling.push(p.then(() => {
+          entry.el.pause();
+          entry.el.currentTime = 0;
+          entry.el.muted = false;
+          entry.unlocked = true;
+        }).catch(() => { entry.el.muted = false; }));
+      } else {
+        entry.el.pause();
+        entry.el.muted = false;
+        entry.unlocked = true;
+      }
+    } catch (e) {
+      try { entry.el.muted = false; } catch (e2) {}
+    }
+  });
+  // Ambience must not start until the unlock plays have settled — their
+  // pause()/reset in .then() would otherwise stop the clip it just started.
+  if (settling.length) Promise.allSettled(settling).then(updateAmbience);
+  else updateAmbience();
+}
+
+// Which one-shot to play for a revealed ball. Dot balls and wides are
+// intentionally silent; the no-ball whistle outranks the runs scored off it.
+function soundKeyForCommentary(comm) {
+  if (!comm) return null;
+  if (comm.isWicket) return 'wicket';
+  if (comm.runs === 6) return 'six';
+  if (comm.runs === 4) return 'four';
+  const text = String(comm.text || '').toLowerCase();
+  if (comm.eventKey === 'no_ball' || text.includes('no ball')) return 'no_ball';
+  if (text.includes('wide')) return null;
+  if (comm.runs >= 1 && comm.runs <= 3) return 'runs';
+  return null;
+}
+
+function fireEventSound(comm) {
+  if (!soundPrefs.sfx || !audioUnlocked) return;
+  const key = soundKeyForCommentary(comm);
+  const entry = key ? soundEls[key] : null;
+  if (!entry) return;
+  try {
+    entry.el.currentTime = 0;
+    entry.el.volume = entry.volume;
+    const p = entry.el.play();
+    if (p && p.catch) p.catch(() => {});
+    duckCrowdUnder(entry.el);
+  } catch (e) {
+    console.warn('Event sound failed:', e);
+  }
+}
+
+function activeCrowdEntry() {
+  for (const key of CROWD_KEYS) {
+    const entry = soundEls[key];
+    if (entry && !entry.el.paused) return entry;
+  }
+  return null;
+}
+
+// Drop the crowd under an event sound so the moment lands, restore after.
+function duckCrowdUnder(eventEl) {
+  const crowd = activeCrowdEntry();
+  if (!crowd) return;
+  try { crowd.el.volume = CROWD_BASE_VOLUME * crowd.volume * CROWD_DUCK_FACTOR; } catch (e) {}
+  const restore = () => {
+    const c = activeCrowdEntry();
+    if (c) { try { c.el.volume = CROWD_BASE_VOLUME * c.volume; } catch (e) {} }
+  };
+  eventEl.addEventListener('ended', restore, { once: true });
+  clearTimeout(crowdDuckTimer);
+  crowdDuckTimer = setTimeout(restore, 5000); // safety net if 'ended' never fires
+}
+
+// The two crowd clips chain into each other for a non-repetitive endless loop.
+function playCrowdStep() {
+  if (!ambienceActive) return;
+  for (let i = 0; i < CROWD_KEYS.length; i++) {
+    const entry = soundEls[CROWD_KEYS[crowdChainIdx % CROWD_KEYS.length]];
+    if (entry) {
+      try {
+        entry.el.onended = () => { crowdChainIdx++; playCrowdStep(); };
+        entry.el.currentTime = 0;
+        entry.el.volume = CROWD_BASE_VOLUME * entry.volume;
+        const p = entry.el.play();
+        if (p && p.catch) p.catch(() => {});
+        return;
+      } catch (e) {}
+    }
+    crowdChainIdx++; // this clip is unavailable (admin-disabled) — try the other
+  }
+  ambienceActive = false; // no crowd audio available; updateAmbience will retry
+}
+
+function stopAmbience() {
+  ambienceActive = false;
+  CROWD_KEYS.forEach(key => {
+    const entry = soundEls[key];
+    if (!entry) return;
+    entry.el.onended = null;
+    fadeOutAndPause(entry.el);
+  });
+}
+
+function fadeOutAndPause(el) {
+  if (el.paused) return;
+  const startVol = el.volume;
+  let step = 0;
+  clearInterval(crowdFadeTimer);
+  crowdFadeTimer = setInterval(() => {
+    step++;
+    try { el.volume = Math.max(0, startVol * (1 - step / 6)); } catch (e) {}
+    if (step >= 6) {
+      clearInterval(crowdFadeTimer);
+      try { el.pause(); } catch (e) {}
+    }
+  }, 50);
+}
+
+// Reconcile ambience with match status + player toggle. Safe to call often.
+function updateAmbience() {
+  const status = matchState?.status;
+  const live = status === 'innings1' || status === 'innings2' || status === 'innings_break';
+  if (live && soundPrefs.ambience && audioUnlocked) {
+    if (!ambienceActive) {
+      ambienceActive = true;
+      playCrowdStep();
+    }
+  } else if (ambienceActive) {
+    stopAmbience();
+  }
+}
+
+function stopAllGameAudio() {
+  stopAmbience();
+  Object.values(soundEls).forEach(entry => {
+    try { entry.el.pause(); } catch (e) {}
+  });
+}
+
 // Initial Setup
 async function init() {
   const cleanParam = (val) => {
@@ -117,6 +314,7 @@ async function init() {
 
   // Bind exit handlers
   const handleExit = () => {
+    stopAllGameAudio();
     if (tg) {
       tg.close();
     } else {
@@ -138,6 +336,53 @@ async function init() {
       if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     });
   }
+
+  // Sound toggles (in-game SFX / crowd ambience) — both default ON.
+  const sfxToggleBtn = document.getElementById('sfx-toggle-btn');
+  const ambienceToggleBtn = document.getElementById('ambience-toggle-btn');
+  const syncSoundToggleUI = () => {
+    if (sfxToggleBtn) {
+      sfxToggleBtn.classList.toggle('muted', !soundPrefs.sfx);
+      sfxToggleBtn.setAttribute('aria-pressed', String(soundPrefs.sfx));
+    }
+    if (ambienceToggleBtn) {
+      ambienceToggleBtn.classList.toggle('muted', !soundPrefs.ambience);
+      ambienceToggleBtn.setAttribute('aria-pressed', String(soundPrefs.ambience));
+    }
+  };
+  syncSoundToggleUI();
+  if (sfxToggleBtn) {
+    sfxToggleBtn.addEventListener('click', () => {
+      soundPrefs.sfx = !soundPrefs.sfx;
+      try { localStorage.setItem(SFX_PREF_KEY, soundPrefs.sfx ? '1' : '0'); } catch (e) {}
+      if (!soundPrefs.sfx) {
+        Object.values(soundEls).forEach(entry => {
+          if (entry.category !== 'match') {
+            try { entry.el.pause(); entry.el.currentTime = 0; } catch (e) {}
+          }
+        });
+      }
+      syncSoundToggleUI();
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    });
+  }
+  if (ambienceToggleBtn) {
+    ambienceToggleBtn.addEventListener('click', () => {
+      soundPrefs.ambience = !soundPrefs.ambience;
+      try { localStorage.setItem(AMBIENCE_PREF_KEY, soundPrefs.ambience ? '1' : '0'); } catch (e) {}
+      updateAmbience();
+      syncSoundToggleUI();
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    });
+  }
+
+  // Every tap unlocks any audio elements created since the last one (WebView
+  // autoplay policy) — see unlockAudio(); unlocked entries make this a no-op.
+  document.addEventListener('pointerdown', unlockAudio);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopAmbience();
+    else updateAmbience();
+  });
 
   startPolling();
   setupEventListeners();
@@ -494,6 +739,7 @@ function applyMatchState(nextState, { force = false } = {}) {
 
   matchState = nextState;
   preloadEventGifs(matchState.eventGifs || {});
+  preloadEventSounds(matchState.eventSounds || {});
   pollFailureCount = 0;
 
   // Autoplay is a premium (Silver/Platinum) feature. The server reports whether
@@ -556,6 +802,8 @@ function applyMatchState(nextState, { force = false } = {}) {
     renderResultScreen();
     stopPolling();
   }
+
+  updateAmbience();
 
   setTimeout(runAutoplayAction, AUTOPLAY_ACTION_DELAY_MS);
 }
@@ -2974,6 +3222,9 @@ function showEventBoxText(comm) {
 }
 
 function triggerMatchEvent(comm) {
+  // Sound fires here — the single per-ball entry point — rather than inside
+  // showEventBoxText/the GIF branch, so fallback paths can't double-play it.
+  fireEventSound(comm);
   const key = eventKeyForCommentary(comm);
   const choices = key ? (matchState?.eventGifs?.[key] || []) : [];
   if (!choices.length) {
