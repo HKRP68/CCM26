@@ -890,3 +890,28 @@ def reset_db():
 
 def get_session():
     return SessionLocal()
+
+
+def measure_round_trip(samples=3):
+    """Return the median app→database round trip in milliseconds (or None).
+
+    This is the unit cost of a single query, and it is the number that
+    dominates this bot's response time: most handlers run several queries
+    synchronously, so a slow link multiplies straight into user-visible
+    latency. Worth knowing at a glance — a co-located database answers in
+    single-digit milliseconds, a cross-region one in ~100ms.
+    """
+    timings = []
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))          # warm/validate first
+            for _ in range(max(1, samples)):
+                started = time.perf_counter()
+                conn.execute(text("SELECT 1"))
+                timings.append((time.perf_counter() - started) * 1000.0)
+    except Exception:
+        return None
+    if not timings:
+        return None
+    timings.sort()
+    return timings[len(timings) // 2]

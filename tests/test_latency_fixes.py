@@ -430,3 +430,40 @@ class PlayerCardCachingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Database round-trip probe
+# ════════════════════════════════════════════════════════════════════
+
+class RoundTripProbeTests(unittest.TestCase):
+    """The probe exists so the dominant latency term is visible, not guessed."""
+
+    def test_probe_returns_a_positive_measurement(self):
+        import database
+        rtt = database.measure_round_trip()
+        self.assertIsNotNone(rtt)
+        self.assertGreaterEqual(rtt, 0.0)
+        self.assertLess(rtt, 1000.0)
+
+    def test_probe_reports_none_when_the_database_is_unreachable(self):
+        import database
+
+        class _Boom:
+            def connect(self):
+                raise RuntimeError("no database")
+
+        with patch.object(database, "engine", _Boom()):
+            self.assertIsNone(database.measure_round_trip())
+
+    def test_probe_does_not_swallow_interrupts(self):
+        """Connection errors are absorbed; Ctrl-C / shutdown must still pass."""
+        import database
+
+        class _Boom:
+            def connect(self):
+                raise KeyboardInterrupt
+
+        with patch.object(database, "engine", _Boom()):
+            with self.assertRaises(KeyboardInterrupt):
+                database.measure_round_trip()
