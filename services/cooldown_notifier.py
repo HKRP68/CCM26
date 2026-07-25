@@ -17,6 +17,7 @@ don't wake people up.
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from services.miniapp_buttons import miniapp_button
@@ -29,8 +30,21 @@ QUIET_START_HOUR = 23
 QUIET_END_HOUR = 7
 IST_OFFSET_HOURS = 5.5
 
-# How many users to process per tick (avoid long-running jobs on free tier)
+# How many DMs to send per tick (avoid long-running jobs on free tier)
 BATCH_SIZE = 50
+
+# How many user rows to examine per tick. The scan used to pull the entire
+# users table into memory on every run — at peak that is the process's biggest
+# allocation and the job overran its own 5-minute interval. Now it walks the
+# table in id order, a slice per tick, resuming where it left off.
+SCAN_LIMIT = int(os.getenv("COOLDOWN_SCAN_LIMIT", "500"))
+
+# Pace the DMs so a batch can't monopolise the bot's Telegram connection.
+SENDS_PER_SECOND = float(os.getenv("COOLDOWN_SENDS_PER_SECOND", "10"))
+
+# Rolling cursor into the users table, so consecutive ticks advance instead of
+# rescanning the same prefix forever.
+_SCAN_AFTER_ID = 0
 
 # Cooldown definitions include both legacy last_* cooldowns and Mini App
 # quota-backed actions. Quota-backed actions are considered ready whenever at
@@ -107,35 +121,43 @@ async def _send_dm(application, telegram_id, text, reply_markup=None):
         return False
 
 
-async def run_cooldown_notifications(application):
-    """One tick: scan a batch of users and notify on newly-ready cooldowns.
+def _scan_slice(after_id, quiet):
+    """Examine one slice of users; clear stale flags; return the DMs to send.
 
-    Designed to be called by job_queue.run_repeating.
+    Pure database work — runs in a worker thread so it never blocks the bot's
+    event loop. Returns (pending, next_after_id, wrapped) where ``pending`` is
+    the list of nudges still to be delivered and ``wrapped`` means the scan
+    reached the end of the table, so the next tick should start from the top.
     """
     from database import get_session
     from models import User, UserStats
 
-    # Quiet hours — skip sending (but we still reset flags below so users get
-    # notified once quiet hours end, not repeatedly)
-    quiet = _in_quiet_hours()
-
     session = get_session()
-    sent_count = 0
+    pending = []
+    last_id = after_id
     try:
         cooldowns = _get_cooldowns(session)
         now = datetime.utcnow()
 
-        # Iterate users who have a stats row + are not banned.
-        # We process in batches keyed by user id to spread load.
-        # Pull users with at least one cooldown field set (i.e. they've played).
-        # Skip users who opted out via /notifications (NULL = still enabled).
+        # Users who have a stats row + are not banned, walked in id order so
+        # consecutive ticks make progress. Skip users who opted out via
+        # /notifications (NULL = still enabled).
         rows = (session.query(User, UserStats)
                 .join(UserStats, UserStats.user_id == User.id)
                 .filter(User.is_banned == False)
                 .filter(User.notifications_enabled.isnot(False))
+                .filter(User.id > after_id)
+                .order_by(User.id)
+                .limit(SCAN_LIMIT)
                 .all())
 
         for user, stats in rows:
+            if len(pending) >= BATCH_SIZE:
+                # Batch is full. Stop here and leave the cursor on the last
+                # user we finished, so the next tick resumes at this point
+                # instead of skipping everyone we didn't get to.
+                break
+            last_id = user.id
             if not user.telegram_id:
                 continue
             for cd in cooldowns:
@@ -168,41 +190,100 @@ async def run_cooldown_notifications(application):
                     continue
 
                 if ready and not flag_set:
-                    # Newly ready → notify (unless quiet hours)
+                    # Newly ready → queue a nudge (unless quiet hours).
+                    # If quiet, leave the flag False so we notify once quiet ends.
                     if not quiet:
-                        kb_rows = []
-                        if cd.get("miniapp_tab"):
-                            btn = miniapp_button(
-                                cd["button_label"], cd["miniapp_tab"],
-                                is_private=True)
-                            if btn is not None:
-                                kb_rows.append([btn])
-                        # Always offer a one-tap opt-out so users can silence
-                        # these reminders straight from the message.
-                        kb_rows.append([InlineKeyboardButton(
-                            "🔕 Turn off notifications",
-                            callback_data="notif_toggle:off")])
-                        reply_markup = InlineKeyboardMarkup(kb_rows)
-                        ok = await _send_dm(application, user.telegram_id,
-                                            cd["message"], reply_markup)
-                        if ok:
-                            setattr(stats, cd["flag"], True)
-                            sent_count += 1
-                            if sent_count >= BATCH_SIZE:
-                                # Cap per tick; remaining users get caught next tick
-                                session.commit()
-                                logger.info(f"Cooldown notifications: sent {sent_count} (batch cap)")
-                                return
-                    # If quiet, leave flag False so we notify once quiet ends
+                        pending.append({
+                            "telegram_id": user.telegram_id,
+                            "user_id": user.id,
+                            "cd": cd,
+                        })
                 elif not ready and flag_set:
                     # User acted (cooldown/quota reset) → clear flag so next ready notifies
                     setattr(stats, cd["flag"], False)
 
+        # Fewer rows than we asked for means we reached the end of the table.
+        wrapped = len(rows) < SCAN_LIMIT and len(pending) < BATCH_SIZE
         session.commit()
-        if sent_count:
-            logger.info(f"Cooldown notifications: sent {sent_count}")
     except Exception:
         session.rollback()
-        logger.exception("run_cooldown_notifications failed")
+        logger.exception("cooldown notification scan failed")
+        return [], after_id, False
     finally:
         session.close()
+    return pending, last_id, wrapped
+
+
+def _mark_notified(marks):
+    """Set the notified_* flags for DMs that actually went out (worker thread)."""
+    from database import get_session
+    from models import UserStats
+
+    if not marks:
+        return
+    session = get_session()
+    try:
+        by_user = {}
+        for user_id, flag in marks:
+            by_user.setdefault(user_id, []).append(flag)
+        rows = (session.query(UserStats)
+                .filter(UserStats.user_id.in_(list(by_user)))
+                .all())
+        for row in rows:
+            for flag in by_user.get(row.user_id, ()):
+                setattr(row, flag, True)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("cooldown notification flag update failed")
+    finally:
+        session.close()
+
+
+async def run_cooldown_notifications(application):
+    """One tick: scan a slice of users and notify on newly-ready cooldowns.
+
+    Designed to be called by job_queue.run_repeating. The database work happens
+    on worker threads; only the Telegram sends run on the event loop, paced so
+    a batch of nudges can't stall the commands users are typing.
+    """
+    import asyncio
+    global _SCAN_AFTER_ID
+
+    # Quiet hours — skip sending (but we still reset flags below so users get
+    # notified once quiet hours end, not repeatedly)
+    quiet = _in_quiet_hours()
+
+    pending, last_id, wrapped = await asyncio.to_thread(
+        _scan_slice, _SCAN_AFTER_ID, quiet)
+
+    # Walked off the end of the table → start over from the top next tick.
+    _SCAN_AFTER_ID = 0 if wrapped else last_id
+
+    if not pending:
+        return
+
+    marks = []
+    interval = 1.0 / max(SENDS_PER_SECOND, 1)
+    for item in pending:
+        cd = item["cd"]
+        kb_rows = []
+        if cd.get("miniapp_tab"):
+            btn = miniapp_button(cd["button_label"], cd["miniapp_tab"],
+                                 is_private=True)
+            if btn is not None:
+                kb_rows.append([btn])
+        # Always offer a one-tap opt-out so users can silence these reminders
+        # straight from the message.
+        kb_rows.append([InlineKeyboardButton(
+            "🔕 Turn off notifications", callback_data="notif_toggle:off")])
+
+        ok = await _send_dm(application, item["telegram_id"], cd["message"],
+                            InlineKeyboardMarkup(kb_rows))
+        if ok:
+            marks.append((item["user_id"], cd["flag"]))
+        await asyncio.sleep(interval)
+
+    await asyncio.to_thread(_mark_notified, marks)
+    if marks:
+        logger.info(f"Cooldown notifications: sent {len(marks)}")

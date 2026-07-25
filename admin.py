@@ -4118,6 +4118,11 @@ def _player_card_url(player_id):
         return f"/webapp/player-card/{int(player_id)}"
 
 
+# How long a browser may reuse a player-card image without revalidating.
+# Admin uploads become visible after at most this long.
+CARD_CACHE_SECONDS = int(os.getenv("CARD_CACHE_SECONDS", "300"))
+
+
 def _image_mimetype(data):
     """Best-effort MIME sniffing for generated or admin-uploaded card bytes."""
     if not data:
@@ -4155,9 +4160,21 @@ def webapp_player_card(player_id):
         image_bytes = generate_card(player)
         if not image_bytes:
             return "Could not generate card", 500
-        resp = Response(image_bytes, mimetype=_image_mimetype(image_bytes))
-        # Custom cards can be toggled/uploaded from admin; keep Mini App fresh.
-        resp.headers["Cache-Control"] = "no-cache, max-age=0"
+
+        # Card art is immutable until an admin changes it, but this endpoint
+        # used to send "no-cache", so opening a squad re-downloaded (and
+        # re-encoded) every card every time. Each of those requests runs in the
+        # bot's own process and competes with the event loop for CPU, so the
+        # waste lands on the bot's response latency, not just bandwidth.
+        # An ETag lets repeat views cost a bodyless 304, and a short max-age
+        # skips the request entirely while still picking up admin edits quickly.
+        etag = '"%s"' % _hashlib.sha1(image_bytes).hexdigest()
+        if request.headers.get("If-None-Match") == etag:
+            resp = Response(status=304)
+        else:
+            resp = Response(image_bytes, mimetype=_image_mimetype(image_bytes))
+        resp.headers["ETag"] = etag
+        resp.headers["Cache-Control"] = f"private, max-age={CARD_CACHE_SECONDS}"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         return resp
     except Exception:
@@ -11382,8 +11399,9 @@ def admin_notification_send_now(sid):
         flash("Bot not running — cannot send.", "error")
         return redirect(url_for("admin_notifications_list"))
 
-    # Run the async send on the bot's event loop, blocking until done
+    # Run the async send on the bot's event loop.
     import asyncio as _asyncio
+    import concurrent.futures as _cf
     db = get_session()
     try:
         ns = db.query(NotificationSchedule).get(sid)
@@ -11404,11 +11422,21 @@ def admin_notification_send_now(sid):
 
         future = _asyncio.run_coroutine_threadsafe(_do(), loop)
         try:
-            sent, failed = future.result(timeout=120)
+            # Sends are paced to stay under Telegram's rate limit, so a large
+            # audience takes minutes. Wait only long enough to surface an
+            # immediate failure, then let the blast finish in the background
+            # rather than holding the request (and the admin) hostage.
+            sent, failed = future.result(timeout=10)
             log_admin(db, "notif_send_now", "notification", sid, ns.name,
                       f"Manual send: {sent} delivered, {failed} failed")
             db.commit()
             flash(f"✅ Sent to {sent} users ({failed} failed).", "info")
+        except _cf.TimeoutError:
+            log_admin(db, "notif_send_now", "notification", sid, ns.name,
+                      "Manual send: started (delivering in background)")
+            db.commit()
+            flash("📤 Sending in the background — the final count lands in the logs.",
+                  "info")
         except Exception as e:
             flash(f"Send error: {e}", "error")
     finally:

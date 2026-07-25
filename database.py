@@ -1,8 +1,10 @@
 """Database engine, session factory, and initialisation."""
 
 import os
+import time
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import DisconnectionError
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from config import DATABASE_URL
 
@@ -12,12 +14,25 @@ if "sqlite" in DATABASE_URL:
 
 # Neon (and most managed Postgres) closes idle TCP connections after ~5 min.
 # Settings tuned for low-traffic Telegram bot on Neon's free tier:
-#   - pool_pre_ping: tests connection with SELECT 1 before use. Cheap, reliable.
 #   - pool_recycle: proactively close connections older than 240s so we don't
 #     hit the server's idle-kill (saves one "broken pipe" round-trip per kill).
 #   - pool_size + max_overflow are environment-tunable so the bot can handle
 #     concurrent Telegram updates without creating unbounded connections.
+#
+# Liveness checking is deliberately NOT pool_pre_ping. That option sends a
+# SELECT 1 before *every* checkout, which doubles the round trips of a
+# one-query operation. The database is a long way from the app (measured at
+# ~100ms per round trip), and most of this codebase opens sessions
+# synchronously from async handlers, so each of those extra pings is ~100ms
+# with the bot's event loop frozen — i.e. it lands directly on user-visible
+# latency. Instead we ping only connections that have actually been sitting
+# idle long enough to plausibly be dead (see the checkout hook below), which
+# keeps the safety net while making the hot path free.
 _is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_URL.lower())
+
+# Only ping a pooled connection if it has been idle at least this long. Under
+# load connections are reused constantly, so this is almost always a no-op.
+IDLE_PING_AFTER_SECONDS = float(os.getenv("DB_IDLE_PING_AFTER", "30"))
 
 if _is_postgres:
     # The Telegram application handles multiple updates concurrently, so keep
@@ -30,7 +45,6 @@ if _is_postgres:
     engine = create_engine(
         DATABASE_URL,
         echo=False,
-        pool_pre_ping=True,
         pool_recycle=240,          # < Neon's idle disconnect (~5min)
         pool_size=pool_size,
         max_overflow=max_overflow,
@@ -39,8 +53,36 @@ if _is_postgres:
     )
 else:
     # SQLite (local dev) — keep simple
-    engine = create_engine(DATABASE_URL, echo=False,
-                           pool_pre_ping=True, connect_args=connect_args)
+    engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+
+
+@event.listens_for(engine, "checkin")
+def _record_idle_start(dbapi_connection, connection_record):
+    """Stamp when a connection went back into the pool."""
+    connection_record.info["returned_at"] = time.monotonic()
+
+
+@event.listens_for(engine, "checkout")
+def _ping_if_idle(dbapi_connection, connection_record, connection_proxy):
+    """Validate a connection only if it has been idle long enough to go stale.
+
+    Raising DisconnectionError here is the same contract pool_pre_ping uses:
+    SQLAlchemy discards the connection and transparently retries the checkout
+    with a fresh one, so callers never see the failure.
+    """
+    returned_at = connection_record.info.get("returned_at")
+    if returned_at is None:
+        return  # brand-new connection, already known good
+    if (time.monotonic() - returned_at) < IDLE_PING_AFTER_SECONDS:
+        return  # hot connection — skip the round trip
+    try:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("SELECT 1")
+        finally:
+            cursor.close()
+    except Exception as exc:
+        raise DisconnectionError() from exc
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -69,10 +111,24 @@ def init_db():
         FantasyRoleRule, EventMedia,
         Giveaway, GiveawayEntry,
     )
+    import logging
+    import time as _time
+    log = logging.getLogger(__name__)
+
+    t0 = _time.perf_counter()
     Base.metadata.create_all(bind=engine)
+    t1 = _time.perf_counter()
     _migrate_add_columns()
+    t2 = _time.perf_counter()
     _seed_traits()
     _seed_competition_templates()
+    t3 = _time.perf_counter()
+    # Boot time is the bot's whole downtime on every restart/redeploy, so keep
+    # it visible in the logs — a regression here is a regression in uptime.
+    log.info(
+        "init_db timings: create_all %.1fs | migrate %.1fs | seed %.1fs | total %.1fs",
+        t1 - t0, t2 - t1, t3 - t2, t3 - t0,
+    )
 
 
 def _seed_competition_templates():
@@ -160,14 +216,130 @@ def _seed_traits():
         session.close()
 
 
+def _load_existing_columns():
+    """Return {table_name: {column_name, ...}} for the live schema.
+
+    Read in ONE round trip on Postgres. This is what makes a warm start fast:
+    ``_try_add`` consults this map and issues no SQL at all for the ~110
+    columns that already exist, instead of paying a connect + BEGIN + ALTER +
+    COMMIT round trip each. Returns ``None`` if the schema can't be read, in
+    which case ``_try_add`` falls back to attempting every ALTER as before.
+    """
+    import logging
+    try:
+        if _is_postgres:
+            out = {}
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT table_name, column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema()"
+                ))
+                for table, col in rows:
+                    out.setdefault(table, set()).add(col)
+            return out
+        # SQLite (local dev): reflect per table. Cheap — it's a local file.
+        from sqlalchemy import inspect as _sa_inspect
+        insp = _sa_inspect(engine)
+        return {
+            t: {c["name"] for c in insp.get_columns(t)}
+            for t in insp.get_table_names()
+        }
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Could not read existing schema; falling back to blind ALTERs",
+            exc_info=True)
+        return None
+
+
+_MIGRATION_STATE_TABLE = "schema_migration_state"
+
+
+def _migration_signature_matches(key, statements):
+    """True if this exact statement list already ran successfully before.
+
+    The stored signature is a hash of the statements themselves, so editing or
+    adding a statement automatically invalidates the marker and the batch runs
+    again on the next boot. Nothing here is required for correctness — every
+    statement is idempotent — it only lets a warm start skip the round trips.
+    """
+    import hashlib
+    sig = hashlib.sha256("\n".join(statements).encode()).hexdigest()
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                f"CREATE TABLE IF NOT EXISTS {_MIGRATION_STATE_TABLE} ("
+                "key VARCHAR(64) PRIMARY KEY, signature VARCHAR(64) NOT NULL)"
+            ))
+            conn.commit()
+            row = conn.execute(
+                text(f"SELECT signature FROM {_MIGRATION_STATE_TABLE} WHERE key = :k"),
+                {"k": key},
+            ).first()
+        return (row is not None and row[0] == sig), sig
+    except Exception:
+        # Can't read the marker — fall back to just running the statements.
+        return False, sig
+
+
+def _record_migration_signature(key, sig):
+    try:
+        with engine.connect() as conn:
+            updated = conn.execute(
+                text(f"UPDATE {_MIGRATION_STATE_TABLE} SET signature = :s WHERE key = :k"),
+                {"s": sig, "k": key},
+            ).rowcount
+            if not updated:
+                conn.execute(
+                    text(f"INSERT INTO {_MIGRATION_STATE_TABLE} (key, signature) "
+                         "VALUES (:k, :s)"),
+                    {"k": key, "s": sig},
+                )
+            conn.commit()
+    except Exception:
+        # Worst case the batch simply re-runs next boot. Never fail the start.
+        pass
+
+
+def _run_isolated(statements):
+    """Run each statement on ONE connection, each inside its own SAVEPOINT.
+
+    Same failure isolation as a transaction-per-statement (a failing statement
+    rolls back only to its savepoint, so later ones still run), without paying
+    a new connection + round trip per statement. Returns a list of
+    (sql, exception) for the failures so callers can decide what to log.
+    """
+    import logging
+    failures = []
+    try:
+        with engine.connect() as conn:
+            for sql in statements:
+                try:
+                    with conn.begin_nested():
+                        conn.execute(text(sql))
+                except Exception as e:  # noqa: PERF203 — isolation is the point
+                    failures.append((sql, e))
+            conn.commit()
+    except Exception:
+        # Connection-level failure (dropped socket, etc). These statements are
+        # all idempotent and re-run on the next boot, so never fail the start.
+        logging.getLogger(__name__).warning(
+            "Batched migration statements aborted", exc_info=True)
+    return failures
+
+
 def _migrate_add_columns():
     """Add any missing columns in-place. Safe to run every start.
 
-    IMPORTANT: each ALTER runs in its own transaction so a failure on one
-    column (e.g. it already exists) does NOT abort the whole migration.
-    Without this, Postgres rolls back the whole transaction on first error
-    and subsequent columns silently never get added.
+    Columns that already exist are skipped without any SQL (see
+    ``_load_existing_columns``), so a warm start costs one schema read rather
+    than ~110 network round trips.
+
+    IMPORTANT: each ALTER that *does* run gets its own transaction so a failure
+    on one column does NOT abort the whole migration. Without this, Postgres
+    rolls back the whole transaction on first error and subsequent columns
+    silently never get added.
     """
+    existing = _load_existing_columns()
     new_user_cols = {
         "matches_played": "INTEGER DEFAULT 0",
         "matches_won": "INTEGER DEFAULT 0",
@@ -201,6 +373,9 @@ def _migrate_add_columns():
     }
 
     def _try_add(table, col, coltype):
+        # Already there? Nothing to do, and — crucially — no round trip.
+        if existing is not None and col in existing.get(table, ()):
+            return
         # Each attempt is independent — failure on this column doesn't poison others
         for sql in (
             f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype}",
@@ -209,6 +384,8 @@ def _migrate_add_columns():
             try:
                 with engine.begin() as conn:
                     conn.execute(text(sql))
+                if existing is not None:
+                    existing.setdefault(table, set()).add(col)
                 return  # success
             except Exception:
                 continue  # try next form, or just give up
@@ -269,13 +446,6 @@ def _migrate_add_columns():
     _try_add("event_media", "original_height", "INTEGER")
     _try_add("event_media", "max_mobile_width", "INTEGER DEFAULT 440")
     _try_add("event_media", "media_type", "VARCHAR(10) DEFAULT 'image'")
-
-    # Normalize the legacy milestone key so it remains editable in the dashboard.
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("UPDATE event_media SET event_key = 'century' WHERE event_key = 'hundred'"))
-    except Exception:
-        pass
 
     # GameConfig: new simulation-tuning columns
     new_gameconfig_cols = {
@@ -409,8 +579,12 @@ def _migrate_add_columns():
     _try_add("challenge_teams", "is_active", "BOOLEAN DEFAULT TRUE")
     _try_add("challenge_players", "source_player_id", "INTEGER")
 
-    # Backfill/normalize for Postgres + SQLite: ensure non-null and true by default
-    for sql in (
+    # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
+    # default. All of these share one connection (savepoint per statement) so
+    # they stay independently fault-tolerant without a round trip each.
+    backfill_sql = [
+        # Normalize the legacy milestone key so it remains editable in the dashboard.
+        "UPDATE event_media SET event_key = 'century' WHERE event_key = 'hundred'",
         "UPDATE user_quest_progress SET assigned = TRUE WHERE assigned IS NULL",
         "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET DEFAULT TRUE",
         "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET NOT NULL",
@@ -419,13 +593,16 @@ def _migrate_add_columns():
         "UPDATE challenge_leagues SET match_format = 'T20' WHERE match_format IS NULL",
         "ALTER TABLE challenge_leagues ALTER COLUMN match_format SET DEFAULT 'T20'",
         "ALTER TABLE challenge_leagues ALTER COLUMN match_format SET NOT NULL",
-    ):
-        try:
-            with engine.begin() as conn:
-                conn.execute(text(sql))
-        except Exception:
-            # SQLite and older schemas may not support ALTER COLUMN forms; safe to ignore.
-            pass
+        # Telegram ids outgrew INTEGER — widen the legacy column so adsgram
+        # postbacks stop failing with "integer out of range".
+        "ALTER TABLE adsgram_rewards ALTER COLUMN telegram_id TYPE BIGINT",
+    ]
+    done, sig = _migration_signature_matches("backfill", backfill_sql)
+    if not done:
+        # SQLite and older schemas may not support ALTER COLUMN forms; safe to
+        # ignore those failures (and to keep retrying them on later boots).
+        if not _run_isolated(backfill_sql):
+            _record_migration_signature("backfill", sig)
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions
@@ -455,11 +632,12 @@ def _migrate_add_columns():
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code "
         "ON users (referral_code)",
     ]
-    for sql in migration_sql:
-        try:
-            with engine.begin() as conn:
-                conn.execute(text(sql))
-        except Exception as e:
+    done, sig = _migration_signature_matches("player_name_indexes", migration_sql)
+    if not done:
+        failures = _run_isolated(migration_sql)
+        if not failures:
+            _record_migration_signature("player_name_indexes", sig)
+        for sql, e in failures:
             # SQLite doesn't support ALTER TABLE DROP CONSTRAINT — that's expected,
             # don't spam the log. Only log unexpected errors.
             err = str(e).lower()
@@ -522,25 +700,10 @@ def _migrate_add_columns():
         import logging
         logging.getLogger(__name__).warning("Ad quest seed skipped (non-fatal)")
 
-    # Create fantasy league tables (idempotent via CREATE TABLE IF NOT EXISTS)
-    try:
-        from models import (
-            FantasyLeague, FantasyMatch, FantasyPlayerScore, FantasyEntry, FantasyPick,
-            FantasyLeaguePlayer, FantasyCountryRule, FantasyRoleRule,
-        )  # noqa: F401
-        Base.metadata.create_all(bind=engine, tables=[
-            FantasyLeague.__table__,
-            FantasyMatch.__table__,
-            FantasyPlayerScore.__table__,
-            FantasyEntry.__table__,
-            FantasyPick.__table__,
-            FantasyLeaguePlayer.__table__,
-            FantasyCountryRule.__table__,
-            FantasyRoleRule.__table__,
-        ])
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("Fantasy table creation skipped (non-fatal)")
+    # (The fantasy_* tables are registered on Base.metadata via the model
+    # imports in init_db, so the create_all up there already builds them. The
+    # separate create_all that used to live here was a no-op that still cost a
+    # schema reflection round trip on every boot.)
 
     # Seed default GSpin rewards (idempotent — only if table is empty)
     try:
@@ -619,15 +782,22 @@ def _migrate_add_columns():
                  "and ball-by-ball commentary JSON.",
                  "matches", 0, 95, dict()),
             ]
+            # Two queries for the whole catalog rather than two per command —
+            # every round trip here is downtime on a cold start.
+            keys = [d[0] for d in defaults]
+            have_cmd = {k for (k,) in sess.query(BotCommand.command_key)
+                        .filter(BotCommand.command_key.in_(keys))}
+            have_rwd = {k for (k,) in sess.query(CommandReward.command_key)
+                        .filter(CommandReward.command_key.in_(keys))}
             n_cmd = 0; n_rwd = 0
             for key, name, aliases, desc, cat, cd, srt, rwd in defaults:
-                if not sess.query(BotCommand).filter(BotCommand.command_key == key).first():
+                if key not in have_cmd:
                     sess.add(BotCommand(
                         command_key=key, display_name=name, aliases=aliases,
                         description=desc, category=cat, cooldown_seconds=cd,
                         sort_order=srt, enabled=True))
                     n_cmd += 1
-                if not sess.query(CommandReward).filter(CommandReward.command_key == key).first():
+                if key not in have_rwd:
                     sess.add(CommandReward(command_key=key, **rwd))
                     n_rwd += 1
             if n_cmd or n_rwd:
@@ -662,10 +832,12 @@ def _migrate_add_columns():
                 "Defend": "Block — burn balls, very safe",
                 "Leave": "Let it pass — no runs, very low risk",
             }
+            # One query for all shot names instead of one per shot.
+            have = {s for (s,) in sess.query(ShotProbability.shot_name)
+                    .filter(ShotProbability.shot_name.in_(list(_SM)))}
             n = 0
             for shot, mods in _SM.items():
-                if sess.query(ShotProbability).filter(
-                        ShotProbability.shot_name == shot).first():
+                if shot in have:
                     continue
                 row = ShotProbability(
                     shot_name=shot,
@@ -718,3 +890,28 @@ def reset_db():
 
 def get_session():
     return SessionLocal()
+
+
+def measure_round_trip(samples=3):
+    """Return the median app→database round trip in milliseconds (or None).
+
+    This is the unit cost of a single query, and it is the number that
+    dominates this bot's response time: most handlers run several queries
+    synchronously, so a slow link multiplies straight into user-visible
+    latency. Worth knowing at a glance — a co-located database answers in
+    single-digit milliseconds, a cross-region one in ~100ms.
+    """
+    timings = []
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))          # warm/validate first
+            for _ in range(max(1, samples)):
+                started = time.perf_counter()
+                conn.execute(text("SELECT 1"))
+                timings.append((time.perf_counter() - started) * 1000.0)
+    except Exception:
+        return None
+    if not timings:
+        return None
+    timings.sort()
+    return timings[len(timings) // 2]

@@ -385,6 +385,14 @@ BOT_MENU_COMMANDS = (
 
 async def register_bot_menu(application):
     """Publish every canonical bot command to Telegram's slash-command menu."""
+    # Start the event-loop lag sampler here: post_init runs on the same loop
+    # that will serve every update, which is exactly what we want to measure.
+    try:
+        from services import loop_monitor
+        loop_monitor.start()
+    except Exception:
+        logger.exception("Could not start the event-loop lag monitor")
+
     await application.bot.set_my_commands([
         BotCommand(command, description)
         for command, description in BOT_MENU_COMMANDS
@@ -695,6 +703,26 @@ def main():
     # Check data file exists
     data_path = os.path.join(os.path.dirname(__file__), "data", "players.json")
     logger.info("  data/players.json: %s", "found" if os.path.exists(data_path) else "NOT FOUND")
+
+    # Report the database round trip. Most handlers run several queries
+    # synchronously per command, so this number is multiplied into every reply
+    # the bot sends — it is usually the single largest term in "why is the bot
+    # slow", and it is fixed by hosting, not by code.
+    try:
+        from database import measure_round_trip
+        db_rtt = measure_round_trip()
+        if db_rtt is None:
+            logger.warning("  DB round-trip: could not measure")
+        elif db_rtt >= 25:
+            logger.warning(
+                "  DB round-trip: %.0f ms — SLOW. The app and the database look "
+                "like they are in different regions; every query a command runs "
+                "pays this twice-over in user-visible latency. Co-locating them "
+                "is the single biggest available speed-up.", db_rtt)
+        else:
+            logger.info("  DB round-trip: %.1f ms", db_rtt)
+    except Exception:
+        logger.exception("DB round-trip probe failed (non-fatal)")
 
     # ── Start admin panel FIRST (Render health check needs this) ─────
     admin_thread = threading.Thread(target=start_admin_panel, daemon=True)
