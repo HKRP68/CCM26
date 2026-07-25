@@ -106,6 +106,48 @@ def test_tie_keeps_streaks_but_counts_the_day():
     assert a.active_days == 1 and b.active_days == 1
 
 
+def test_forfeiting_a_vsbot_match_still_costs_the_human_their_streak():
+    """A completed vsbot loss breaks your streak, so a forfeited one must too.
+
+    Otherwise a player on a long streak who is losing to the bot can simply go
+    idle and keep it — the forfeit path used to skip stats for every vsbot
+    match. Asserted against the source of the timeout handler because the real
+    thing needs a live Telegram context and DB session; what matters is that
+    the credit is no longer gated on is_vsbot.
+    """
+    import inspect
+    import handlers.match as match_mod
+
+    src = inspect.getsource(match_mod._action_timeout)
+    stats_block = src.split("# Update user stats")[1].split("# Tour hook")[0]
+    assert "is_vsbot" not in stats_block, (
+        "the forfeit stats update is gated on is_vsbot again — forfeiting to "
+        "the bot would protect a win streak")
+    # The bot itself must still never collect career stats.
+    assert "BOT_TG_ID_" in stats_block
+    assert "apply_win_streak(idle_user, False)" in stats_block
+
+
+def test_countback_result_phrases_read_as_sentences():
+    """A countback win has no run/wicket margin, so every surface that prints a
+    result has to use the phrase rather than "won by 0 sixes"."""
+    from handlers.super_over import _COUNTBACK_TEXT
+    for how, phrase in _COUNTBACK_TEXT.items():
+        assert phrase.startswith("won on"), (how, phrase)
+        assert "0" not in phrase
+        # Reads correctly straight after a team name.
+        assert f"Team X {phrase}".startswith("Team X won on")
+
+
+def test_summary_card_honours_an_explicit_margin_text():
+    """_build_cipl_summary_image must prefer a caller-supplied phrase, so the
+    Super Over countback card never renders "won by 0 sixes"."""
+    import handlers.cipl_play as cipl_play
+    import inspect
+    src = inspect.getsource(cipl_play._build_cipl_summary_image)
+    assert 'result.get("margin_text")' in src
+
+
 def test_reward_core_moves_the_streak_counters():
     """award_match_rewards_core is what /cipl, /letsplay, the Super Over and the
     Mini App all call — the streak must move there, not only in chat matches."""

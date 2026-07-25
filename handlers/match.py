@@ -736,20 +736,23 @@ async def _action_timeout(context):
                 m.inn1_runs = s.get("inn1_runs"); m.inn1_wickets = s.get("inn1_wickets")
             m.inn2_runs = s.get("total_runs"); m.inn2_wickets = s.get("total_wickets")
 
-            # Update user stats (skip for vsbot — no real-economy effect on bot losses)
-            if not s.get("is_vsbot") and not winner_is_bot:
-                from services.match_rewards import (
-                    apply_win_streak, record_active_day)
-                if winner_user:
-                    winner_user.matches_played = (winner_user.matches_played or 0) + 1
-                    winner_user.matches_won = (winner_user.matches_won or 0) + 1
-                    apply_win_streak(winner_user, True)
-                    record_active_day(winner_user)
-                if idle_user:
-                    idle_user.matches_played = (idle_user.matches_played or 0) + 1
-                    idle_user.matches_lost = (idle_user.matches_lost or 0) + 1
-                    apply_win_streak(idle_user, False)
-                    record_active_day(idle_user)
+            # Update user stats. The BOT never gets career stats, but the human
+            # on the other side always does — including in a vsbot match. This
+            # used to skip vsbot entirely, which meant forfeiting to the bot was
+            # a free way to protect a win streak that a completed vsbot loss
+            # would have broken.
+            from services.match_rewards import (
+                apply_win_streak, record_active_day)
+            if winner_user and not winner_is_bot:
+                winner_user.matches_played = (winner_user.matches_played or 0) + 1
+                winner_user.matches_won = (winner_user.matches_won or 0) + 1
+                apply_win_streak(winner_user, True)
+                record_active_day(winner_user)
+            if idle_user and idle_tg != BOT_TG_ID_:
+                idle_user.matches_played = (idle_user.matches_played or 0) + 1
+                idle_user.matches_lost = (idle_user.matches_lost or 0) + 1
+                apply_win_streak(idle_user, False)
+                record_active_day(idle_user)
 
             # Tour hook — if this match is part of a tour, update it
             if not s.get("is_vsbot") and winner_user:

@@ -1413,8 +1413,7 @@ async def _super_over_tied(context, mid):
         "🔥 <b>SUPER OVER TIED!</b>\n\n"
         f"{html.escape(a['name'])}: {sa[0]}/{sa[1]}\n"
         f"{html.escape(b['name'])}: {sb[0]}/{sb[1]}\n\n"
-        "Level on runs, sixes, fours <i>and</i> wickets — nothing can "
-        "separate you.\n\n"
+        "Level on runs, sixes <i>and</i> fours — nothing can separate you.\n\n"
         f"Starting <b>Super Over {n + 1}</b>…\n"
         f"<b>{html.escape(nf['name'])}</b> will bat first (they batted second "
         "in the previous Super Over).",
@@ -1427,9 +1426,11 @@ async def _super_over_tied(context, mid):
 # Finalisation
 # ════════════════════════════════════════════════════════════════════
 
+# Phrased to read correctly straight after a team name, in the chat message,
+# the image caption and on the summary card itself.
 _COUNTBACK_TEXT = {
-    "sixes": "level on runs — won on sixes hit",
-    "fours": "level on runs and sixes — won on fours hit",
+    "sixes": "won on sixes hit (scores level)",
+    "fours": "won on fours hit (scores and sixes level)",
 }
 
 
@@ -1459,7 +1460,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         margin_type, margin = "wickets", max(1, 2 - w_wkts)
         margin_text = f"won by {margin} {margin_type}"
     # How the match result reads wherever a full sentence is needed.
-    result_phrase = (f"won the match {margin_text}"
+    result_phrase = (f"{margin_text} — and the match"
                      if decided_by in _COUNTBACK_TEXT
                      else f"won the match by {margin} {margin_type}")
     so["_winner_uid"] = winner_uid
@@ -1584,7 +1585,10 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     sent_main = await _send_main_scorecard(
         context, so,
         {"tie": False, "winner": win["name"], "margin": margin,
-         "margin_type": margin_type},
+         "margin_type": margin_type,
+         # A countback win has no run/wicket margin, so hand the card the
+         # finished phrase rather than letting it print "won by 0 sixes".
+         "margin_text": margin_text if decided_by in _COUNTBACK_TEXT else None},
         caption=f"🏆 <b>{html.escape(win['name'])} {html.escape(result_phrase)}</b>")
     if not sent_main:
         # Image unavailable — fall back to the text combined scorecard (scores

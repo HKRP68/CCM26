@@ -2144,7 +2144,11 @@ def _build_cipl_summary_image(state, result):
         winner_name, margin_text = "Match Tied", "Match Tied"
     else:
         winner_name = result["winner"]
-        margin_text = f"won by {result['margin']} {result['margin_type']}"
+        # A caller with no run/wicket margin to quote (e.g. a Super Over decided
+        # on boundary countback) passes the finished phrase itself, so the card
+        # never has to render something like "won by 0 sixes".
+        margin_text = (result.get("margin_text")
+                       or f"won by {result['margin']} {result['margin_type']}")
 
     inn1_team = state.get("inn1_bat_team", state.get("bowl_team_name", "Team 1"))
     inn2_team = state.get("bat_team_name", "Team 2")
