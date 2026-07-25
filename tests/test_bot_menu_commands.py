@@ -76,3 +76,19 @@ def test_menu_entries_all_have_a_handler():
 
 def test_batting_order_command_is_published():
     assert "setbo" in _menu_commands()
+
+
+def test_wsp_modes_stay_turned_off():
+    """/wsp and /wspbot are deliberately disabled.
+
+    The handler modules are kept on disk so past watch-mode matches stay
+    viewable, which makes it easy to switch the commands back on by accident —
+    this fails if anything re-registers or re-advertises them.
+    """
+    menu = _menu_commands()
+    _primary, every = _registered_commands()
+    for cmd in ("wsp", "wspbot", "wspb"):
+        assert cmd not in every, f"/{cmd} was re-registered as a command"
+        assert cmd not in menu, f"/{cmd} was re-added to the slash menu"
+    assert "CallbackQueryHandler(wsp" not in SRC, \
+        "a /wsp or /wspbot callback handler was re-registered"

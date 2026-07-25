@@ -167,18 +167,13 @@ from handlers.wpmbot import (
     wpmbot_coin_callback,
     wpmbot_toss_callback,
 )
-from handlers.wsp import (
-    wsp_handler,
-    wsp_join_callback,
-    wsp_cancel_callback,
-    wsp_decision_callback,
-)
-from handlers.wspbot import (
-    wspbot_handler,
-    wspbot_pick_callback,
-    wspbot_cancel_callback,
-    wspbot_toss_callback,
-)
+# /wsp and /wspbot (auto-simulated "watch mode" matches) are TURNED OFF: their
+# handlers are not imported or registered, so the commands and their buttons do
+# nothing. handlers/wsp.py, handlers/wspbot.py and services/wsp_autoplay.py are
+# left in place — matches already played this way keep their scorecards and
+# stay viewable in the admin panel (they are stamped played_via='wsp'), and
+# turning the modes back on is just restoring this import block plus the
+# registrations and menu entries marked "wsp/wspbot disabled" below.
 
 # Quest handlers
 from handlers.quests import (
@@ -337,8 +332,6 @@ BOT_MENU_COMMANDS = (
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
     ("wpm", "Match lobby up to 20 overs — tag/reply to invite a player (Mini App)"),
-    ("wsp", "Auto-simulated match vs a player — watch mode (max 5 overs)"),
-    ("wspbot", "Auto-simulated match vs a bot team — watch mode"),
     ("sim", "Simulate a full match instantly"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
@@ -1251,17 +1244,11 @@ def main():
         app.add_handler(CallbackQueryHandler(wpmbot_coin_callback, pattern=r"^wpmb_coin_"))
         app.add_handler(CallbackQueryHandler(wpmbot_toss_callback, pattern=r"^wpmb_toss_"))
 
-        # ── wsp (PvP auto-simulated watch mode) ──────────────────────
-        app.add_handler(CommandHandler(["wsp"], wsp_handler))
-        app.add_handler(CallbackQueryHandler(wsp_join_callback,     pattern=r"^wsp_join$"))
-        app.add_handler(CallbackQueryHandler(wsp_cancel_callback,   pattern=r"^wsp_cancel$"))
-        app.add_handler(CallbackQueryHandler(wsp_decision_callback, pattern=r"^wsp_decision:"))
-
-        # ── wspbot (vs bot auto-simulated watch mode) ─────────────────
-        app.add_handler(CommandHandler(["wspbot", "wspb"], wspbot_handler))
-        app.add_handler(CallbackQueryHandler(wspbot_pick_callback,   pattern=r"^wspb_pick_"))
-        app.add_handler(CallbackQueryHandler(wspbot_cancel_callback, pattern=r"^wspb_cancel_"))
-        app.add_handler(CallbackQueryHandler(wspbot_toss_callback,   pattern=r"^wspb_toss_"))
+        # ── wsp / wspbot disabled ────────────────────────────────────
+        # The auto-simulated watch-mode matches are turned off: no command and
+        # no callback handlers are registered, so /wsp, /wspbot and /wspb are
+        # inert and their old buttons do nothing. See the note by the removed
+        # imports at the top of this file for how to switch them back on.
 
         # ── Quests ──────────────────────────────────────────────────
         app.add_handler(CommandHandler(["myquest", "mq", "quests"], myquest_handler))
