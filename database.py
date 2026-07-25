@@ -578,6 +578,9 @@ def _migrate_add_columns():
     _try_add("challenge_teams", "secondary_color", "VARCHAR(9)")
     _try_add("challenge_teams", "is_active", "BOOLEAN DEFAULT TRUE")
     _try_add("challenge_players", "source_player_id", "INTEGER")
+    # Custom batting order (/setbo, /sbo, Mini App XI reorder). NULL = the user
+    # has never arranged one, so auto-built line-ups sort by batting rating.
+    _try_add("users", "batting_order_set_at", "TIMESTAMP")
 
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so

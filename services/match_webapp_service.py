@@ -2786,6 +2786,9 @@ def finalize_webapp_match(session, match_id):
                 usr = session.query(_U).get(uid)
                 if usr:
                     usr.matches_played = (usr.matches_played or 0) + 1
+            # A tie breaks nobody's streak, but it was still a day spent playing.
+            from services.match_rewards import record_match_result_stats
+            record_match_result_stats(session, None, None, tie_user_ids=(u1, u2))
         elif winner_uid:
             wc, wg, lc, lg = award_match_rewards_core(
                 session, winner_uid, loser_uid, m.overs or 1, is_vsbot=is_vsbot)
@@ -3065,6 +3068,10 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
         margin_type = "forfeit"
         win_id, lose_id = opponent_id, quitter_id
         result_text = f"Won by forfeit ({reason})"
+        # A forfeit is still a decided match: it extends the winner's streak,
+        # breaks the quitter's, and counts as an active day for both.
+        from services.match_rewards import record_match_result_stats
+        record_match_result_stats(session, win_id, lose_id)
     else:
         # No progress → clean cancel, no rewards, no records.
         margin_type = "cancelled"

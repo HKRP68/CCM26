@@ -43,6 +43,12 @@ class User(Base):
     best_streak = Column(Integer, default=0)
     active_days = Column(Integer, default=0)  # days with at least 1 match
     last_match_date = Column(DateTime, nullable=True)
+    # Set the first time the user arranges their own batting order (/setbo,
+    # /sbo or the Mini App XI reorder). While NULL, modes that auto-build a
+    # line-up (e.g. /letsplay) sort the XI by batting rating high → low; once
+    # set, the roster's own order_position 1-11 IS the batting order and is
+    # used verbatim. /setbo auto clears it back to NULL.
+    batting_order_set_at = Column(DateTime, nullable=True)
     # Quick Match counters — kept SEPARATE from matches_played/won/lost so
     # Quick Match (casual practice mode) doesn't pollute the global
     # leaderboard, player stats, or career win/loss records.

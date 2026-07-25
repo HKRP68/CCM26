@@ -80,9 +80,8 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "so_dv_",
     "so_ln_",
     "so_sh_",
-    "wsp_join",
-    "wsp_decision:",
-    "wsp_cancel",
+    # (/wsp's join/decision/cancel prefixes lived here; the mode is turned off
+    # in bot.py, so nothing handles those callbacks any more.)
     "cm_accept_",
     "cm_deny_",
     "cm_toss_",

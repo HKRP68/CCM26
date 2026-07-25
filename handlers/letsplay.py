@@ -189,6 +189,19 @@ def _sort_batting_order(pairs):
         reverse=True)
 
 
+def _has_custom_batting_order(session, user_id):
+    """True once this user has arranged their own batting order (/setbo, /sbo
+    or the Mini App XI reorder). Their saved roster order is then the line-up."""
+    try:
+        row = (session.query(User.batting_order_set_at)
+               .filter(User.id == user_id).first())
+        return bool(row and row[0])
+    except Exception:
+        logger.exception("letsplay: batting-order flag lookup failed (user %s)",
+                         user_id)
+        return False
+
+
 def _bench_pairs(full_pairs, xi_ids):
     """Roster (entry, player) pairs NOT in the XI, kept in roster order."""
     xi_set = {int(i) for i in xi_ids}
@@ -606,9 +619,14 @@ def _xi_bench_for_side(session, user_id, xi_ids=None):
     edited via /change) the XI is pinned to exactly those roster entries, in the
     given order, so a batting order the user arranged with /change is preserved;
     if any pinned player has since disappeared the XI falls back to the auto
-    top-11 ordered by batting rating (high → low). ``bench_pairs`` is every
-    other roster entry, kept in roster order. On any problem ``xi_pairs`` is
-    None and ``errors`` explains why (mirrors ``_ordered_xi_for_side``)."""
+    top-11. ``bench_pairs`` is every other roster entry, kept in roster order.
+    On any problem ``xi_pairs`` is None and ``errors`` explains why (mirrors
+    ``_ordered_xi_for_side``).
+
+    An un-pinned XI is only auto-sorted by batting rating when the user has
+    never arranged a batting order of their own. Once they have (via /setbo,
+    /sbo or the Mini App XI screen), their roster order 1-11 IS the line-up and
+    is used exactly as saved."""
     full = _get_ordered_roster(session, user_id)
     if len(full) < 11:
         return None, [], [f"Need 11 players, have {len(full)}"]
@@ -626,9 +644,9 @@ def _xi_bench_for_side(session, user_id, xi_ids=None):
     if not ok:
         return None, [], errors
     # A pinned XI keeps the exact order it was snapshotted in — that order is the
-    # user's chosen batting line-up (set via /change). Only an auto-built XI is
-    # (re)sorted by batting rating.
-    if not pinned:
+    # user's chosen batting line-up (set via /change). An auto-built XI is only
+    # (re)sorted by batting rating for users who never set their own order.
+    if not pinned and not _has_custom_batting_order(session, user_id):
         xi = _sort_batting_order(xi)
     xi_set = {int(e.id) for e, _ in xi}
     bench = [(e, p) for e, p in full if int(e.id) not in xi_set]
@@ -647,7 +665,8 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
         "🧾 <b>LETS PLAY — Playing XI</b>",
         "━━━━━━━━━━━━━━━━━━━",
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • 20 overs",
-        "<i>Batting order starts by rating (high → low) — reorder it below.</i>",
+        "<i>Batting order = the one you saved with /sbo (or by rating, high → "
+        "low, if you never set one). Tweak it for this match below.</i>",
         "",
         _format_batting_order(
             host_pairs, f"👤 <b>{html.escape(draft['host']['name'])}</b> (Host)",

@@ -94,15 +94,25 @@ def _format_stats(session, user):
     best = user.best_streak or 0
     active = user.active_days or 0
 
+    # A live streak reads better with the flame repeated; a broken one says so
+    # outright instead of showing a bare 0 that looks like a bug.
+    if streak:
+        streak_line = f"{streak} {'🔥' * min(streak, 5)}"
+    else:
+        streak_line = "0 <i>(no wins yet — win a match to start one)</i>"
+    last_played = (user.last_match_date.strftime("%b %d, %Y")
+                   if user.last_match_date else "Never")
+
     return (
         f"📊 <b>TEAM STATS</b>\n\n"
         f"🎮 <b>Matches Played:</b> {played}\n"
         f"🏆 <b>Won:</b> {won}\n"
         f"❌ <b>Lost:</b> {lost}\n"
         f"📈 <b>Win %:</b> {win_pct}%\n\n"
-        f"🔥 <b>Current Streak:</b> {streak}\n"
-        f"⭐ <b>Best Streak:</b> {best}\n"
-        f"⚡ <b>Active Days:</b> {active}"
+        f"🔥 <b>Current Streak:</b> {streak_line}\n"
+        f"⭐ <b>Best Streak:</b> {best} <i>(match winning)</i>\n"
+        f"⚡ <b>Active Days:</b> {active} <i>(days you played)</i>\n"
+        f"🗓 <b>Last Played:</b> {last_played}"
     )
 
 
@@ -124,6 +134,7 @@ def _format_news(session, user):
         "auto_release": "🗑", "buy": "🛒", "buy_market": "🛒",
         "daily": "📅", "gspin": "🎰", "trade": "🔄",
         "captain": "👑", "swap": "🔁", "debut": "🎉",
+        "batting_order": "🏏",
         "match_start": "🏏", "match_reward": "🎁", "match_won": "🏆",
         "match_lost": "💔", "endmatch": "🛑", "match_fine": "⚠️",
         "replace": "🔁", "teamname": "🏷",
