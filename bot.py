@@ -337,8 +337,8 @@ BOT_MENU_COMMANDS = (
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
     ("wpm", "Match lobby up to 20 overs — tag/reply to invite a player (Mini App)"),
-    ("wsp", "Wicket Survival Panic — survive as long as you can"),
-    ("wspbot", "Wicket Survival Panic against the bot"),
+    ("wsp", "Auto-simulated match vs a player — watch mode (max 5 overs)"),
+    ("wspbot", "Auto-simulated match vs a bot team — watch mode"),
     ("sim", "Simulate a full match instantly"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
@@ -365,7 +365,7 @@ BOT_MENU_COMMANDS = (
     ("challengeint", "Challenge another user to an international match"),
     ("unscramble", "Create an Unscramble Player lobby"),
     ("ju", "Join the Unscramble lobby"),
-    ("su", "Start the Unscramble game"),
+    ("su", "Start the Unscramble game (host only)"),
     ("traits", "View your traits and inventory"),
     ("traitshop", "Browse the daily trait shop"),
     ("traitapply", "Apply a trait to a player"),
@@ -392,7 +392,7 @@ BOT_MENU_COMMANDS = (
     ("powerplay", "Crash game — bet on a multiplier before it crashes"),
     ("score21", "Play Blackjack against the dealer"),
     ("wordchase", "Host a word-guessing game (group)"),
-    ("endchase", "End the running Word Chase game"),
+    ("endchase", "End the running Word Chase game (host only)"),
     ("bluff", "Challenge someone to a cricket trivia bluff duel"),
     ("mole", "Start a Mole Hunt social deduction game (group)"),
     ("cartel", "Start a Cricket Cartel multi-role deduction game (group)"),
@@ -1138,7 +1138,7 @@ def main():
         from handlers.super_over import (
             so_bat_callback, so_batok_callback, so_bowl_callback,
             so_bowlok_callback, so_deliv_callback, so_len_callback,
-            so_shot_callback, so_killer_callback, so_power_callback,
+            so_shot_callback,
         )
         app.add_handler(CallbackQueryHandler(so_batok_callback, pattern=r"^so_batok_"))
         app.add_handler(CallbackQueryHandler(so_bat_callback, pattern=r"^so_bat_"))
@@ -1147,9 +1147,6 @@ def main():
         app.add_handler(CallbackQueryHandler(so_deliv_callback, pattern=r"^so_dv_"))
         app.add_handler(CallbackQueryHandler(so_len_callback, pattern=r"^so_ln_"))
         app.add_handler(CallbackQueryHandler(so_shot_callback, pattern=r"^so_sh_"))
-        # One-per-innings captain gambles: 🎯 Killer Ball / 💥 Power Shot.
-        app.add_handler(CallbackQueryHandler(so_killer_callback, pattern=r"^so_kb_"))
-        app.add_handler(CallbackQueryHandler(so_power_callback, pattern=r"^so_ps_"))
         # /letsplay — friendly head-to-head played with each user's own roster.
         # Reuses the Challenge League over-by-over engine; traits are active.
         from handlers.letsplay import (

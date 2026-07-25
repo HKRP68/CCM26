@@ -26,6 +26,18 @@ GUEST_UID = 2
 
 so_mod._BALL_PAUSE = 0  # no broadcast delay in tests
 
+# The ball engine reads the admin sim-tuning config on every delivery. In
+# production that is one cached dict lookup; with no database behind the tests
+# every ball would open its own session and fall back, which is both slow and
+# leaves the outcome at the mercy of whatever config happens to be present.
+# Prime the cache with the defaults so the tests measure the engine itself.
+try:
+    import services.config_service as _config_service
+    if _config_service._CACHE.get("data") is None:
+        _config_service._CACHE["data"] = dict(_config_service.DEFAULTS)
+except Exception:  # pragma: no cover - defensive
+    pass
+
 
 # ── Fakes ────────────────────────────────────────────────────────────
 
@@ -347,10 +359,10 @@ def test_double_tap_shot_resolves_one_ball():
     random.seed(5)
     _patch_finalize(so_mod)
     # Force every ball to a dot so the innings can't end on the first delivery.
-    orig = so_mod.calculate_super_over_outcome
-    so_mod.calculate_super_over_outcome = lambda *a, **k: {
-        "type": "run", "runs": 0, "description": "dot",
-        "wicket_type": None, "is_extra": False, "batter_out": False}
+    orig = so_mod._super_over_ball
+    so_mod._super_over_ball = lambda *a, **k: {
+        "type": "run", "runs": 0, "wicket_type": None,
+        "is_extra": False, "batter_out": False, "traits_activated": []}
     try:
         ctx = FakeContext()
         state = _tied_state()
@@ -373,7 +385,7 @@ def test_double_tap_shot_resolves_one_ball():
         asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
         assert so["inn"]["deliveries"] == before + 1
     finally:
-        so_mod.calculate_super_over_outcome = orig
+        so_mod._super_over_ball = orig
 
 
 def test_resume_super_over_reposts_prompt():
@@ -412,136 +424,159 @@ def test_super_over_buttons_are_shared_for_both_captains():
     # that didn't trigger the send gets "This button is not for you".
     from services.button_access import is_shared_callback_data
     for data in (f"so_bat_{1}_{2}", "so_batok_1", "so_bowl_1_2", "so_bowlok_1",
-                 "so_dv_1_0", "so_ln_1_0", "so_sh_1_0", "so_kb_1", "so_ps_1"):
+                 "so_dv_1_0", "so_ln_1_0", "so_sh_1_0"):
         assert is_shared_callback_data(data), data
 
 
-# ── Captain gambles (💥 Power Shot / 🎯 Killer Ball) ───────────────────
+# ── What actually decides a Super Over: ratings, then traits ──────────
+#
+# The Super Over is a 1-over /playmatch, so it runs on the /playmatch per-ball
+# engine. These tests pin down the three properties that make it a fair decider
+# rather than a lottery: ratings dominate, traits apply (as they do in the
+# /letsplay match that produced the tie), and nobody gets a handicap.
 
-def _start_innings_for_gamble_test(ctx):
-    """Kick off a Super Over and stop at the DELIV stage of innings 1."""
-    state = _tied_state()
-    mid = state["match_id"]
-    asyncio.run(start_super_over(ctx, mid, state))
-    asyncio.run(_do_selection(ctx, mid))
-    return mid, _get(ctx, mid)
-
-
-def _dot_ball_engine():
-    """Force every delivery to a dot so an innings can't end early."""
-    return lambda *a, **k: {
-        "type": "run", "runs": 0, "description": "dot",
-        "wicket_type": None, "is_extra": False, "batter_out": False}
-
-
-def test_killer_ball_arms_and_is_spent_on_the_next_delivery():
-    from handlers.super_over import so_killer_callback
-    random.seed(21)
-    _patch_finalize(so_mod)
-    orig = so_mod.calculate_super_over_outcome
-    seen = {}
-
-    def spy(*a, **k):
-        seen.update(k)
-        return _dot_ball_engine()()
-
-    so_mod.calculate_super_over_outcome = spy
-    try:
-        ctx = FakeContext()
-        mid, so = _start_innings_for_gamble_test(ctx)
-        bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
-        bat_tg = so["teams"][so["bat_uid"]]["tg"]
-
-        assert so["inn"]["killer_ball_left"] == 1
-        asyncio.run(so_killer_callback(_upd(FakeQuery(f"so_kb_{mid}", bowl_tg)), ctx))
-        assert so["inn"]["killer_ball_armed"] is True
-
-        # Bowl the ball — the gamble reaches the engine and is then spent.
-        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
-        if so["inn"]["stage"] == "LEN":
-            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
-        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
-
-        assert seen["wicket_boost"] > 1.0
-        assert seen["dot_boost"] > 1.0
-        assert so["inn"]["killer_ball_left"] == 0
-        assert so["inn"]["killer_ball_armed"] is False
-    finally:
-        so_mod.calculate_super_over_outcome = orig
+def _bat_one_over(bat, bowl, n=4000, pitch="Hard"):
+    """Mean runs from n single deliveries — a cheap proxy for a Super Over."""
+    from handlers.super_over import _super_over_ball
+    from services.sim_match import _adapt_player
+    total = 0
+    for _ in range(n):
+        oc = _super_over_ball(
+            _adapt_player(bat), _adapt_player(bowl), pitch,
+            shot="Drive", variation="Stock Ball", length="Good Length")
+        if oc.get("type") == "wicket":
+            total -= 6          # a dismissal is the cost that matters most
+        else:
+            total += int(oc.get("runs", 0))
+    return total / n
 
 
-def test_power_shot_lifts_boundaries_and_risk_then_runs_out():
-    from handlers.super_over import so_power_callback
-    random.seed(22)
-    _patch_finalize(so_mod)
-    orig = so_mod.calculate_super_over_outcome
-    seen = {}
-
-    def spy(*a, **k):
-        seen.update(k)
-        return _dot_ball_engine()()
-
-    so_mod.calculate_super_over_outcome = spy
-    try:
-        ctx = FakeContext()
-        mid, so = _start_innings_for_gamble_test(ctx)
-        bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
-        bat_tg = so["teams"][so["bat_uid"]]["tg"]
-
-        # Power Shot can only be called once the delivery is on its way.
-        asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bat_tg)), ctx))
-        assert so["inn"]["power_shot_armed"] is False
-
-        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
-        if so["inn"]["stage"] == "LEN":
-            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
-        asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bat_tg)), ctx))
-        assert so["inn"]["power_shot_armed"] is True
-
-        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
-        assert seen["boundary_boost"] > so_mod.SO_BOUNDARY_BOOST
-        assert seen["wicket_boost"] > 1.0
-        assert so["inn"]["power_shot_left"] == 0
-
-        # Second attempt in the same innings is refused.
-        asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bat_tg)), ctx))
-        assert so["inn"]["power_shot_armed"] is False
-    finally:
-        so_mod.calculate_super_over_outcome = orig
+def _so_player(name, bat, bowl, traits=None):
+    return {"roster_id": 1, "player_id": 1, "name": name, "rating": max(bat, bowl),
+            "category": "All-rounder", "bat_rating": bat, "bowl_rating": bowl,
+            "bowl_style": "Fast", "bowl_hand": "Right", "bat_hand": "Right",
+            "traits": traits or []}
 
 
-def test_gambles_are_owner_gated():
-    from handlers.super_over import so_killer_callback, so_power_callback
-    random.seed(23)
-    _patch_finalize(so_mod)
-    ctx = FakeContext()
-    mid, so = _start_innings_for_gamble_test(ctx)
-    bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
-    bat_tg = so["teams"][so["bat_uid"]]["tg"]
-
-    # The batting captain must not be able to arm the bowling side's gamble.
-    asyncio.run(so_killer_callback(_upd(FakeQuery(f"so_kb_{mid}", bat_tg)), ctx))
-    assert so["inn"]["killer_ball_armed"] is False
-    # …and vice versa.
-    asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bowl_tg)), ctx))
-    assert so["inn"]["power_shot_armed"] is False
+def test_a_better_batter_scores_more_in_the_super_over():
+    # The old super-over matrix blended ratings so weakly that a 90-rated batter
+    # scored the same as a 60-rated one. Rating must visibly decide it.
+    bowler = _so_player("Bowl", 30, 75)
+    random.seed(3)
+    weak = _bat_one_over(_so_player("Weak", 55, 30), bowler)
+    random.seed(3)
+    strong = _bat_one_over(_so_player("Strong", 92, 30), bowler)
+    assert strong > weak + 0.5, f"weak={weak:.2f} strong={strong:.2f}"
 
 
-def test_each_innings_gets_a_fresh_pair_of_gambles():
-    random.seed(24)
-    _patch_finalize(so_mod)
-    ctx = FakeContext()
-    mid, so = _start_innings_for_gamble_test(ctx)
-    so["inn"]["power_shot_left"] = 0
-    so["inn"]["killer_ball_left"] = 0
+def test_a_better_bowler_concedes_less_in_the_super_over():
+    batter = _so_player("Bat", 78, 30)
+    random.seed(4)
+    weak = _bat_one_over(batter, _so_player("Weak", 30, 45))
+    random.seed(4)
+    strong = _bat_one_over(batter, _so_player("Strong", 30, 95))
+    assert strong < weak - 0.5, f"weak={weak:.2f} strong={strong:.2f}"
 
-    # Finish innings 1 and set up innings 2.
-    asyncio.run(so_mod._end_innings(ctx, mid))
-    asyncio.run(_do_selection(ctx, mid))
-    so = _get(ctx, mid)
-    assert so["innings_no"] == 2
-    assert so["inn"]["power_shot_left"] == 1
-    assert so["inn"]["killer_ball_left"] == 1
+
+def test_traits_apply_in_the_super_over():
+    # /letsplay XIs carry traits; they must work in the Super Over exactly as
+    # they do in the twenty overs that produced the tie.
+    power = [{"effect_key": "bat_power_hitter", "level": 5,
+              "display_name": "Power Hitter", "emoji": "💥"}]
+    bowler = _so_player("Bowl", 30, 70)
+    plain = _so_player("Plain", 75, 30)
+    random.seed(5)
+    without = _bat_one_over(plain, bowler)
+
+    from handlers.super_over import _super_over_ball
+    from services.sim_match import _adapt_player
+    random.seed(5)
+    total = 0
+    for _ in range(4000):
+        oc = _super_over_ball(
+            _adapt_player(plain), _adapt_player(bowler), "Hard",
+            bat_traits=power, shot="Drive", variation="Stock Ball",
+            length="Good Length")
+        total += -6 if oc.get("type") == "wicket" else int(oc.get("runs", 0))
+    with_trait = total / 4000
+    assert with_trait > without, f"without={without:.2f} with={with_trait:.2f}"
+
+
+def test_cipl_xis_without_traits_still_resolve():
+    # Challenge League players carry no traits — the same call must work and
+    # simply decide the ball on ratings.
+    from handlers.super_over import _super_over_ball
+    from services.sim_match import _adapt_player
+    random.seed(6)
+    oc = _super_over_ball(
+        _adapt_player(_so_player("A", 80, 30)),
+        _adapt_player(_so_player("B", 30, 80)), "Hard",
+        shot="Drive", variation="Stock Ball", length="Good Length")
+    assert oc["type"] in ("run", "wicket", "extra")
+    assert oc["traits_activated"] == []
+
+
+def test_neither_side_gets_a_batting_handicap():
+    # The Super Over used to hand the side batting first a 1.25x scoring edge.
+    # Identical players must now produce identical expectations.
+    a = _so_player("A", 75, 70)
+    b = _so_player("B", 75, 70)
+    random.seed(8)
+    first = _bat_one_over(a, b, n=6000)
+    random.seed(8)
+    second = _bat_one_over(b, a, n=6000)
+    assert abs(first - second) < 0.15, f"first={first:.3f} second={second:.3f}"
+
+
+# ── Deciding a level Super Over ───────────────────────────────────────
+
+def _so_for_decision(r1, w1, six1, four1, r2, w2, six2, four2):
+    return {
+        "score": {1: (r1, w1), 2: (r2, w2)},
+        "so_innings": [
+            {"team_uid": 1, "batters": [{"sixes": six1, "fours": four1}]},
+            {"team_uid": 2, "batters": [{"sixes": six2, "fours": four2}]},
+        ],
+    }
+
+
+def test_runs_decide_the_super_over():
+    from handlers.super_over import _decide_super_over
+    so = _so_for_decision(15, 1, 1, 2, 12, 0, 2, 3)
+    assert _decide_super_over(so, 1, 2) == (1, 2, "runs")
+    so = _so_for_decision(12, 1, 2, 3, 15, 0, 1, 2)
+    assert _decide_super_over(so, 1, 2) == (2, 1, "runs")
+
+
+def test_a_completed_chase_wins_regardless_of_countback():
+    from handlers.super_over import _decide_super_over
+    so = _so_for_decision(15, 1, 3, 0, 16, 1, 0, 1)
+    assert _decide_super_over(so, 1, 2, chase_won=True) == (2, 1, "runs")
+
+
+def test_level_scores_go_to_sixes_then_fours():
+    from handlers.super_over import _decide_super_over
+    # Same runs, more sixes for the side batting second.
+    so = _so_for_decision(14, 1, 1, 2, 14, 1, 2, 0)
+    assert _decide_super_over(so, 1, 2) == (2, 1, "sixes")
+    # Same runs and sixes → fours separate them.
+    so = _so_for_decision(14, 1, 1, 3, 14, 0, 1, 1)
+    assert _decide_super_over(so, 1, 2) == (1, 2, "fours")
+
+
+def test_wickets_are_not_a_countback_rung():
+    # Rewarding the side that lost fewer wickets would pay players to block out
+    # a Super Over, so a true mirror image is replayed instead.
+    from handlers.super_over import _decide_super_over
+    so = _so_for_decision(14, 0, 1, 2, 14, 2, 1, 2)
+    assert _decide_super_over(so, 1, 2) == (None, None, "tie")
+
+
+def test_only_a_perfect_mirror_forces_another_super_over():
+    from handlers.super_over import _decide_super_over
+    so = _so_for_decision(11, 1, 1, 1, 11, 1, 1, 1)
+    winner, loser, how = _decide_super_over(so, 1, 2)
+    assert winner is None and loser is None and how == "tie"
 
 
 # ── Presentation ──────────────────────────────────────────────────────
@@ -550,7 +585,11 @@ def test_score_card_shows_the_chase_equation_and_pressure():
     random.seed(25)
     _patch_finalize(so_mod)
     ctx = FakeContext()
-    mid, so = _start_innings_for_gamble_test(ctx)
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    asyncio.run(_do_selection(ctx, mid))
+    so = _get(ctx, mid)
     so["innings_no"] = 2
     so["target"] = 16
     so["inn"]["runs"] = 13
@@ -594,62 +633,6 @@ def test_super_over_mvp_can_be_a_bowler():
     name, line = _super_over_mvp(so, winner_uid=1)
     assert name == "H5"
     assert "2-4" in line
-
-
-def test_first_batting_team_gets_the_edge():
-    random.seed(0)
-    so_mod_outcome = so_mod.calculate_super_over_outcome
-    # Boundary boost lifts 4s/6s; the batting edge cuts the favoured side's
-    # wicket chance. Compare large samples with identical players.
-    b = {"name": "A", "batting_rating": 80, "batting_hand": "Right"}
-    bw = {"name": "B", "bowling_rating": 70, "fielding_rating": 65,
-          "bowling_type": "Fast", "bowling_hand": "Right"}
-
-    def sample(n=8000, **kw):
-        random.seed(1)
-        bdry = wkt = 0
-        for _ in range(n):
-            o = so_mod_outcome(b, bw, "Hard", {"boundaries": 0}, 0, 0, **kw)
-            if o["type"] == "run" and o["runs"] in (4, 6):
-                bdry += 1
-            elif o["type"] == "wicket":
-                wkt += 1
-        return bdry / n, wkt / n
-
-    base_b, base_w = sample()
-    boost_b, _ = sample(boundary_boost=1.6)
-    edge_b, edge_w = sample(boundary_boost=1.6, edge=1.25)
-    drama_b, _ = sample(boundary_boost=1.6, edge=1.25, last_ball=True)
-
-    assert boost_b > base_b              # more boundaries with the boost
-    assert edge_w < base_w               # edge → fewer wickets for the bat side
-    assert drama_b > edge_b              # last-ball drama → even more boundaries
-
-
-def test_killer_ball_multipliers_reach_the_engine():
-    # The 🎯 Killer Ball gamble is only interesting if it really bites: more
-    # wickets from wicket_boost, more dots from dot_boost.
-    outcome = so_mod.calculate_super_over_outcome
-    b = {"name": "A", "batting_rating": 80, "batting_hand": "Right"}
-    bw = {"name": "B", "bowling_rating": 70, "fielding_rating": 65,
-          "bowling_type": "Fast", "bowling_hand": "Right"}
-
-    def sample(n=8000, **kw):
-        random.seed(2)
-        wkt = dots = 0
-        for _ in range(n):
-            o = outcome(b, bw, "Hard", {"boundaries": 0}, 0, 0, **kw)
-            if o["type"] == "wicket":
-                wkt += 1
-            elif o["type"] == "run" and o["runs"] == 0:
-                dots += 1
-        return wkt / n, dots / n
-
-    base_w, base_d = sample()
-    kill_w, kill_d = sample(wicket_boost=so_mod.KILLER_BALL_WICKET,
-                            dot_boost=so_mod.KILLER_BALL_DOT)
-    assert kill_w > base_w
-    assert kill_d > base_d
 
 
 def test_scorecard_images_sent_tie_superover_and_winner():
@@ -756,6 +739,96 @@ def test_finalize_persists_super_over_innings():
         assert so["innings"][0]["label"] == "Super Over Innings 1"
     finally:
         mws.save_final_scorecard = orig
+
+
+def _simulate_super_over(bat, bowl, pitch, target=None):
+    """Headless Super Over innings using the real ball engine + the real rules
+    (6 legal balls, 2 wickets, chase ends on the target)."""
+    from handlers.super_over import _super_over_ball
+    from services.sim_match import _adapt_player
+    bowler = _adapt_player(bowl)
+    runs = wickets = legal = deliveries = 0
+    sixes = fours = 0
+    free_hit = False
+    bat_runs = bat_balls = 0
+    while legal < 6 and wickets < 2 and deliveries < 24:
+        oc = _super_over_ball(
+            _adapt_player(bat), bowler, pitch, batter_runs=bat_runs,
+            balls_faced=bat_balls, free_hit=free_hit, legal=legal,
+            target=target, runs=runs, shot="Drive",
+            variation="Stock Ball", length="Good Length")
+        r = int(oc.get("runs", 0))
+        otype, etype = oc.get("type"), oc.get("extra_type")
+        free_hit = False
+        is_legal = True
+        if otype == "extra" and etype in ("Wide", "No Ball"):
+            is_legal = False
+            runs += r
+            free_hit = (etype == "No Ball")
+        elif otype == "extra":
+            runs += r
+            bat_balls += 1
+        elif otype == "wicket":
+            wickets += 1
+            runs += r
+            bat_balls += 1
+        else:
+            runs += r
+            bat_runs += r
+            bat_balls += 1
+            if r == 6:
+                sixes += 1
+            elif r == 4:
+                fours += 1
+        if is_legal:
+            legal += 1
+        deliveries += 1
+        if target is not None and runs >= target:
+            break
+    return runs, wickets, sixes, fours
+
+
+def test_super_over_balance_scoring_fairness_and_replay_rate():
+    """The three balance properties, measured rather than asserted by eye.
+
+    Kept to 1,200 Super Overs so it stays a fast test; the thresholds are wide
+    enough to absorb that sample's noise while still catching a real regression
+    (an inflated matrix, a reinstated batting-first edge, or a countback that
+    stops working).
+    """
+    from handlers.super_over import _decide_super_over
+    n = 1200
+    a = _so_player("A", 75, 70)
+    b = _so_player("B", 75, 70)
+    first_runs = []
+    first_wins = second_wins = replays = 0
+    random.seed(42)
+    for _ in range(n):
+        pitch = random.choice(["Hard", "Flat", "Green", "Dry", "Dead"])
+        r1, w1, s1, f1 = _simulate_super_over(a, b, pitch)
+        r2, w2, s2, f2 = _simulate_super_over(b, a, pitch, target=r1 + 1)
+        first_runs.append(r1)
+        so = {"score": {1: (r1, w1), 2: (r2, w2)},
+              "so_innings": [
+                  {"team_uid": 1, "batters": [{"sixes": s1, "fours": f1}]},
+                  {"team_uid": 2, "batters": [{"sixes": s2, "fours": f2}]}]}
+        winner, _loser, _how = _decide_super_over(so, 1, 2)
+        if winner is None:
+            replays += 1
+        elif winner == 1:
+            first_wins += 1
+        else:
+            second_wins += 1
+
+    mean_runs = sum(first_runs) / n
+    # 1) Realistic scoring — a Super Over is ~8-14, not the 17+ the old
+    #    boundary-inflated matrix produced.
+    assert 7.0 <= mean_runs <= 15.0, f"mean Super Over score {mean_runs:.2f}"
+    # 2) Equal chance — identical sides must not favour batting first or second.
+    assert abs(first_wins - second_wins) / n < 0.10, (
+        f"bat-first {first_wins} vs bat-second {second_wins} of {n}")
+    # 3) Another Super Over stays rare (~2%); the countback does the rest.
+    assert replays / n < 0.06, f"replay rate {replays / n:.3%}"
 
 
 def test_many_seeds_always_terminate_with_a_winner():
