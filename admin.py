@@ -2143,7 +2143,7 @@ def _purge_player_references(db, player):
     player leaves Challenge League data. Returns the number of users refunded.
     """
     from models import (
-        UserRoster, Trade, PlayerTrait, TraitInventory,
+        UserRoster, Trade,
         PlayerGameStats, PlayerMarket, GlobalPlayerMarket, BotTeamPlayer,
         PlayerFormHistory, PlayerImage, PlayerMatchStats,
         FantasyPlayerScore, FantasyPick,
@@ -2161,9 +2161,8 @@ def _purge_player_references(db, player):
     refunded_users = 0
     if roster_ids:
         # Equipped traits go back to the owner's inventory rather than vanishing.
-        for pt in db.query(PlayerTrait).filter(PlayerTrait.roster_id.in_(roster_ids)).all():
-            db.add(TraitInventory(user_id=pt.user_id, trait_id=pt.trait_id, level=pt.level))
-            db.delete(pt)
+        from services.trait_service import return_traits_to_inventory
+        return_traits_to_inventory(db, roster_ids)
         # Null roster pointers held by trades (FK is NO ACTION → would block).
         for t in (db.query(Trade)
                     .filter((Trade.initiator_roster_id.in_(roster_ids)) |
@@ -3550,8 +3549,16 @@ def user_remove_player(user_id, roster_id):
         if entry:
             player = db.query(Player).get(entry.player_id)
             name = player.name if player else "Unknown"
-            db.delete(entry)
+            # Traits the owner equipped on this player go back to their
+            # inventory — an admin removal must not burn them (and PlayerTrait
+            # rows would otherwise block the delete on the FK).
+            from services.trait_service import return_traits_to_inventory
+            return_traits_to_inventory(db, entry.id)
             user = db.query(User).get(user_id)
+            if user and user.captain_roster_id == entry.id:
+                user.captain_roster_id = None
+                db.flush()
+            db.delete(entry)
             if user:
                 user.roster_count = max(0, user.roster_count - 1)
             from services.activity_service import log_activity
@@ -4607,6 +4614,12 @@ def webapp_release(roster_id):
         player_name = player.name
         player_rating = player.rating
 
+        # Selling a player never destroys the traits equipped on them — each one
+        # goes back to this user's inventory at its current level (same rule as
+        # the chat /release), so they can be re-applied via /traitapply.
+        from services.trait_service import return_traits_to_inventory
+        traits_returned = return_traits_to_inventory(db, row.id)
+
         # Remove from roster
         db.delete(row)
         user.total_coins = (user.total_coins or 0) + sell_value
@@ -4636,6 +4649,7 @@ def webapp_release(roster_id):
             "sell_value": sell_value,
             "player_name": player_name,
             "player_rating": player_rating,
+            "traits_returned": traits_returned,
             "balance": {
                 "coins": user.total_coins or 0,
                 "roster_count": user.roster_count or 0,
@@ -4692,6 +4706,11 @@ def webapp_release_multi():
         players = {p.id: p for p in
                    db.query(Player).filter(Player.id.in_(player_ids)).all()}
 
+        # Traits equipped on any of the sold players return to the user's
+        # inventory at their current level before the rows are deleted.
+        from services.trait_service import return_traits_to_inventory
+        traits_returned = return_traits_to_inventory(db, [r.id for r in rows])
+
         total_coins = 0
         released = []
         for r in rows:
@@ -4731,6 +4750,7 @@ def webapp_release_multi():
             "released_count": len(released),
             "total_coins": total_coins,
             "released": released,
+            "traits_returned": traits_returned,
             "balance": {
                 "coins": user.total_coins or 0,
                 "roster_count": user.roster_count or 0,
@@ -7044,17 +7064,15 @@ def webapp_trait_remove():
         return err
     db, user, tg_id = auth
     try:
-        from models import PlayerTrait, TraitInventory
+        # Same service the chat command /removetrait uses, so both surfaces
+        # return the trait to inventory at exactly the same level.
+        from services.trait_service import remove_trait_from_player
         data = request.get_json(silent=True) or {}
         ptid = int(data.get("player_trait_id") or 0)
-        pt = (db.query(PlayerTrait)
-              .filter(PlayerTrait.id == ptid,
-                      PlayerTrait.user_id == user.id).first())
-        if not pt:
-            return {"ok": False, "message": "Trait not found."}, 404
-        # Return to inventory at same level
-        db.add(TraitInventory(user_id=user.id, trait_id=pt.trait_id, level=pt.level))
-        db.delete(pt)
+        ok, msg = remove_trait_from_player(db, user, ptid)
+        if not ok:
+            db.rollback()
+            return {"ok": False, "message": msg}, 404
         db.commit()
         return {"ok": True, "message": "Trait removed and returned to inventory."}
     except Exception as e:

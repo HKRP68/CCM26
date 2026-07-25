@@ -119,11 +119,11 @@ from handlers.sim import sim_handler
 # Trait handlers
 from handlers.traits import (
     traits_handler, traitshop_handler, traitapply_handler,
-    traitupgrade_handler, traitreplace_handler,
+    traitupgrade_handler, traitreplace_handler, removetrait_handler,
     traitbuy_callback, traitreroll_callback, traitshop_cancel_callback,
     trapply_inv_callback, trapply_pl_callback,
     trup_pt_callback, trup_inv_callback,
-    trrep_pt_callback, trrep_inv_callback,
+    trrep_pt_callback, trrep_inv_callback, trrem_pt_callback,
     trait_cancel_callback,
 )
 
@@ -350,6 +350,7 @@ BOT_MENU_COMMANDS = (
     ("traitapply", "Apply a trait to a player"),
     ("traitupgrade", "Upgrade a player trait"),
     ("traitreplace", "Replace a player trait"),
+    ("removetrait", "Remove a trait from a player (back to inventory)"),
     ("playermarket", "Browse the player market"),
     ("buypack", "Browse and buy card packs"),
     ("openpack", "Open a pack from your inventory"),
@@ -585,6 +586,7 @@ async def start_handler(update, context):
         "/traitapply /tapply - Apply trait to player\n"
         "/traitupgrade /tup - Level up a trait\n"
         "/traitreplace /trep - Replace a trait\n"
+        "/removetrait /rtrait - Remove a trait (back to inventory)\n"
         "/leaderboard /lb /top - Leaderboard"
         + _get_start_branding(),
         parse_mode="HTML",
@@ -1135,6 +1137,7 @@ def main():
         app.add_handler(CommandHandler(["traitapply", "tapply"], traitapply_handler))
         app.add_handler(CommandHandler(["traitupgrade", "tup"], traitupgrade_handler))
         app.add_handler(CommandHandler(["traitreplace", "trep"], traitreplace_handler))
+        app.add_handler(CommandHandler(["removetrait", "rtrait"], removetrait_handler))
 
         app.add_handler(CallbackQueryHandler(traitbuy_callback, pattern=r"^trbuy_"))
         app.add_handler(CallbackQueryHandler(traitreroll_callback, pattern=r"^trreroll_"))
@@ -1145,6 +1148,7 @@ def main():
         app.add_handler(CallbackQueryHandler(trup_inv_callback, pattern=r"^trup_inv_"))
         app.add_handler(CallbackQueryHandler(trrep_pt_callback, pattern=r"^trrep_pt_"))
         app.add_handler(CallbackQueryHandler(trrep_inv_callback, pattern=r"^trrep_inv_"))
+        app.add_handler(CallbackQueryHandler(trrem_pt_callback, pattern=r"^trrem_pt_"))
         app.add_handler(CallbackQueryHandler(trait_cancel_callback, pattern=r"^trcancel$"))
 
         # ── Player Market ────────────────────────────────────────────

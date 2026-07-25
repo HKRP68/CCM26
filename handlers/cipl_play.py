@@ -1086,6 +1086,42 @@ def is_cipl_state(state):
     return bool(state) and state.get("mode") == "cipl_approach"
 
 
+def _innings_quota_used(state):
+    """True when the current innings has nothing left to bowl.
+
+    That is: the format's full quota of overs (20) or balls (100 = 20 sets) has
+    been bowled, the side is all out, or the chase is won. Once this is true no
+    further over/set may be played in this innings — the match must move to the
+    innings break or the result. Never raises on a malformed state.
+    """
+    try:
+        return bool(state) and cipl_match.is_innings_over(state)
+    except Exception:
+        logger.exception("innings-over check failed — treating innings as live")
+        return False
+
+
+def _match_row_status(mid):
+    """Read Match.status from the DB (blocking — call via asyncio.to_thread)."""
+    session = get_session()
+    try:
+        m = session.query(Match).get(mid)
+        return (m.status or "") if m else None
+    except Exception:
+        logger.exception("match status lookup failed for %s", mid)
+        return None
+    finally:
+        session.close()
+
+
+async def _finish_innings(context, mid, state):
+    """Route a finished innings to its terminal step — never another over."""
+    if state.get("innings", 1) == 1:
+        await _innings_break(context, mid, state)
+    else:
+        await _complete_match(context, mid, state)
+
+
 def _super_over_active(context, mid):
     """True while a Super Over is running for this match.
 
@@ -1122,7 +1158,18 @@ async def cipl_resume(context, mid, state=None):
             return False
         action = await _get_next_action(context, mid)
         if action == A_COMPLETED:
+            # Finished match whose cleanup didn't land — clear it so /rcl stops
+            # finding the corpse (and can never re-prompt an over on it).
+            cleanup_state(context, mid)
+            release_match_lock(mid)
             return False
+        # The innings has already used its full quota (20 overs / 100 balls, all
+        # out, or the chase won). /rcl must NEVER re-prompt a pick here: doing so
+        # played a 21st over whenever an end-of-innings handler had failed
+        # part-way (a dropped Telegram send left next_action on the consumed
+        # approach pick). Drive the terminal step instead.
+        if _innings_quota_used(state):
+            return await _resume_finished_innings(context, mid, state)
         try:
             # Re-render the outstanding pick. Keep action_msg_id so an approach
             # resume edits the existing prompt IN PLACE (no duplicate), and a
@@ -1141,6 +1188,44 @@ async def cipl_resume(context, mid, state=None):
         except Exception:
             logger.exception("cipl_resume failed for match %s", mid)
             return False
+
+
+async def _resume_finished_innings(context, mid, state):
+    """Resume a match whose innings is over but whose end handler didn't finish.
+
+    Innings 1 → run the innings break (which starts the chase from over 1).
+    Innings 2 → the match is decided. If the DB already recorded the result, the
+    stale live state is simply cleaned up (re-running the finalizer would pay the
+    rewards a second time); otherwise the result is posted properly.
+    Returns True — the resume was handled either way.
+    """
+    if state.get("innings", 1) == 1:
+        logger.info("cipl resume: innings 1 quota used for match %s — "
+                    "running the innings break instead of another over", mid)
+        await _innings_break(context, mid, state)
+        return True
+
+    status = await asyncio.to_thread(_match_row_status, mid)
+    if status in ("completed", "abandoned", "cancelled"):
+        logger.info("cipl resume: match %s already %s — clearing stale state",
+                    mid, status)
+        try:
+            await context.bot.send_message(
+                state["chat_id"],
+                "🏁 <b>This match is already over.</b>\n"
+                "The full quota of overs has been bowled — there's nothing left "
+                "to resume. Start a new one with /cipl or /letsplay.",
+                parse_mode="HTML")
+        except Exception:
+            logger.exception("cipl resume completion notice failed for %s", mid)
+        cleanup_state(context, mid)
+        release_match_lock(mid)
+        return True
+
+    logger.info("cipl resume: innings 2 quota used for match %s — posting the "
+                "result instead of another over", mid)
+    await _complete_match(context, mid, state)
+    return True
 
 
 async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1188,8 +1273,9 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok = await cipl_resume(context, found_mid, found_state)
     if not ok:
         await update.message.reply_text(
-            "⚠️ Couldn't resume — the match may have already finished.\n"
-            "If it stays stuck, ask an admin to /removematch you.")
+            "🏁 Nothing to resume — this match has already finished.\n"
+            "Start a new one with /cipl or /letsplay. If you're still stuck in "
+            "a match, ask an admin to /removematch you.")
 
 
 async def _find_cipl_match_in_chat(context, cid):
@@ -1263,6 +1349,10 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if q.from_user.id != state["bowl_user_tg"]:
             await q.answer("Only the bowling captain picks the bowler.", show_alert=True)
             return
+        if _innings_quota_used(state):
+            await q.answer("This innings is already over — the full quota of "
+                           "overs has been bowled.", show_alert=True)
+            return
         if await _get_next_action(context, mid) != A_PICK_CIPL_BOWLER:
             await q.answer("Bowler already chosen.", show_alert=True)
             return
@@ -1304,6 +1394,10 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if q.from_user.id != state["bowl_user_tg"]:
             await q.answer("Only the bowling captain picks this.", show_alert=True)
             return
+        if _innings_quota_used(state):
+            await q.answer("This innings is already over — the full quota of "
+                           "overs has been bowled.", show_alert=True)
+            return
         if await _get_next_action(context, mid) != A_PICK_BOWL_APPROACH:
             await q.answer("Already chosen.", show_alert=True)
             return
@@ -1337,6 +1431,10 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if q.from_user.id != state["bat_user_tg"]:
             await q.answer("Only the batting captain picks this.", show_alert=True)
             return
+        if _innings_quota_used(state):
+            await q.answer("This innings is already over — the full quota of "
+                           "overs has been bowled.", show_alert=True)
+            return
         if await _get_next_action(context, mid) != A_PICK_BAT_APPROACH:
             await q.answer("Already chosen.", show_alert=True)
             return
@@ -1355,6 +1453,20 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ════════════════════════════════════════════════════════════════════
 
 async def _run_over(context, mid, state):
+    # Hard stop on the format limit. Once the innings quota is used — 20 overs,
+    # or 100 balls (20 sets) in The Hundred — no further over may be simulated,
+    # no matter how we got here (a stale approach button, a /rcl on a match whose
+    # end-of-innings handler failed, an inactivity auto-pick). Finish the innings
+    # instead of bowling a 21st over.
+    if _innings_quota_used(state):
+        logger.warning(
+            "cipl: blocked an over past the innings limit for match %s "
+            "(innings %s, %s/%s balls, %s wickets)",
+            mid, state.get("innings"), cipl_match.balls_bowled(state),
+            cipl_match.total_balls(state), state.get("total_wickets"))
+        await _finish_innings(context, mid, state)
+        return
+
     _cancel_timer(context, mid)
     bowler_name = state["current_bowler"]["name"]
     await _edit_action_message(
@@ -1379,14 +1491,17 @@ async def _run_over(context, mid, state):
     else:
         await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
 
-    await _post_tracked(context, state, _render_over_summary(state, summary),
-                        keyboard=_miniapp_row(state))
+    # The summary post is cosmetic — a failed send must not stop the innings from
+    # ending below, or the match would sit on a consumed approach pick and the
+    # next /rcl would bowl another over.
+    try:
+        await _post_tracked(context, state, _render_over_summary(state, summary),
+                            keyboard=_miniapp_row(state))
+    except Exception:
+        logger.exception("cipl over summary post failed for match %s", mid)
 
     if innings_over:
-        if state["innings"] == 1:
-            await _innings_break(context, mid, state)
-        else:
-            await _complete_match(context, mid, state)
+        await _finish_innings(context, mid, state)
     else:
         await _prompt_bowler(context, mid, state)
 
@@ -1768,9 +1883,15 @@ async def _complete_match(context, mid, state):
             f"+{prize_info['l_gems']} 💎")
     text = f"🏁 <b>Match Over</b>\n<blockquote expandable>{body}</blockquote>"
     miniapp_row = _miniapp_row(state)
-    await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
-                                   reply_markup=InlineKeyboardMarkup(miniapp_row)
-                                   if miniapp_row else None)
+    # The result is already committed at this point — a failed send must not
+    # abort the function, or the live state would stay parked on the last
+    # (consumed) approach pick and /rcl would bowl an over past the limit.
+    try:
+        await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
+                                       reply_markup=InlineKeyboardMarkup(miniapp_row)
+                                       if miniapp_row else None)
+    except Exception:
+        logger.exception("cipl result message failed for match %s", mid)
     try:
         # Pillow rendering is CPU-bound and synchronous — run it off the event
         # loop so finishing one Challenge League match doesn't freeze every

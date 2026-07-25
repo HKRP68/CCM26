@@ -44,7 +44,8 @@ def _do_release(session, user, entries):
     Returns dict with success, released list, total_coins, new_balance, new_count.
     """
     from sqlalchemy import text
-    from models import Trade, PlayerTrait, TraitInventory
+    from models import Trade
+    from services.trait_service import return_traits_to_inventory
 
     total_coins = 0
     released = []
@@ -87,19 +88,8 @@ def _do_release(session, user, entries):
             t.receiver_roster_id = None
     session.flush()
 
-    # 2. Return any equipped traits to inventory
-    equipped = (session.query(PlayerTrait)
-                .filter(PlayerTrait.roster_id.in_(roster_ids)).all())
-    for pt in equipped:
-        inv = TraitInventory(
-            user_id=pt.user_id,
-            trait_id=pt.trait_id,
-            level=pt.level,
-        )
-        session.add(inv)
-        session.delete(pt)
-        traits_returned += 1
-    session.flush()
+    # 2. Return any equipped traits to inventory (same level they were on)
+    traits_returned = return_traits_to_inventory(session, roster_ids)
 
     # 3. Captain check: null user.captain_roster_id BEFORE deleting roster rows.
     # We check ALL the entries being deleted up front so the captain reference

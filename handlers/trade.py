@@ -395,6 +395,12 @@ async def trade_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"{_mention(initiator)} received: {_player_label(recv_player)}\n"
             f"{_mention(receiver)} received: {_player_label(init_player)}"
         )
+        if result.get("traits_returned"):
+            final_text += (
+                f"\n\n{result['traits_returned']} trait(s) were unequipped and "
+                f"returned to their owner's inventory — traits don't travel "
+                f"with a traded player. Use /traitapply to re-attach them."
+            )
         await context.bot.send_message(chat_id=state["chat_id"], text=final_text)
         _clear_trade(context, trade_id)
     except Exception:

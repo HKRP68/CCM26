@@ -127,6 +127,15 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         session.flush()
         return {"success": False, "message": error}
 
+    # Traits do NOT travel with a traded player. Each side's equipped traits go
+    # back to the inventory of the captain who owned them (at their current
+    # level) before the roster rows change hands — otherwise the trait would
+    # keep boosting a player its buyer never paid gems for, and PlayerTrait rows
+    # would be left pointing at another user's squad.
+    from services.trait_service import return_traits_to_inventory
+    traits_returned = return_traits_to_inventory(
+        session, [init_entry.id, recv_entry.id])
+
     init_entry.user_id = receiver.id
     recv_entry.user_id = initiator.id
     trade.status = "completed"
@@ -165,6 +174,7 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         "receiver": receiver,
         "init_player": init_player,
         "recv_player": recv_player,
+        "traits_returned": traits_returned,
         "message": "Trade completed",
     }
 

@@ -169,6 +169,12 @@ def resolve_replace(session, user, claim_id, old_roster_id):
     old_rating = old_player.rating if old_player else 0
     source = claim.source
 
+    # The dropped player's traits come off before the slot is re-used, so they
+    # return to the owner's inventory instead of silently moving onto the
+    # incoming player (the roster row itself survives the swap).
+    from services.trait_service import return_traits_to_inventory
+    traits_returned = return_traits_to_inventory(session, old_entry.id)
+
     # Re-use the dropped slot for the pending player.
     old_entry.player_id = new_player.id
     old_entry.acquired_date = datetime.utcnow()
@@ -187,6 +193,7 @@ def resolve_replace(session, user, claim_id, old_roster_id):
         "old_player": {"name": old_name, "rating": old_rating},
         "new_player": {"id": new_player.id, "name": new_player.name,
                        "rating": new_player.rating},
+        "traits_returned": traits_returned,
         "roster_count": user.roster_count or 0,
     }
 
