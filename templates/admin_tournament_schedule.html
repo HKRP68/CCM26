@@ -1,196 +1,211 @@
 {% extends "base.html" %}
 {% block title %}{{ t.name }} — Schedule{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
-<style>
-.tour-shell { display:flex; flex-direction:column; gap:1rem; }
-.breadcrumbs { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin-bottom:.35rem; }
-.breadcrumbs a { color:var(--accent); text-decoration:none; }
-.tour-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
-.fx-row { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.5rem .8rem; }
-.fx-row .vs { color:var(--muted); font-weight:700; }
-.fx-row select { min-width:130px; }
-.status-pill { border-radius:999px; padding:.2rem .5rem; font-size:.72rem; font-weight:700; border:1px solid var(--border); text-transform:capitalize; }
-.status-pill.scheduled { color:#93c5fd; border-color:rgba(147,197,253,.4); background:rgba(59,130,246,.12); }
-.status-pill.completed { color:#86efac; border-color:rgba(134,239,172,.4); background:rgba(34,197,94,.12); }
-.status-pill.live { color:#fde68a; border-color:rgba(253,230,138,.4); background:rgba(234,179,8,.12); }
-.danger { border-color:rgba(239,68,68,.4) !important; color:#fca5a5 !important; }
-.round-head { margin:.9rem 0 .4rem; color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; }
-.rr-form { width:100%; display:flex; flex-direction:column; gap:.55rem; margin-top:.5rem; padding:.6rem .7rem; background:var(--card); border:1px dashed var(--border); border-radius:12px; }
-.rr-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:end; }
-.rr-form label { display:block; color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.2rem; }
-.rr-form .rr-team { font-weight:700; color:var(--text, inherit); min-width:150px; align-self:center; }
-details.rr-toggle { flex-basis:100%; margin-top:.3rem; }
-details.rr-toggle > summary { cursor:pointer; color:var(--accent); font-size:.84rem; }
-</style>
+{% macro team_badge(tt, size) %}
+  {% set pal = ['#c01935','#307fc4','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'] %}
+  {% if tt and tt.logo_url %}
+    <div class="team-badge" style="width:{{ size }}px;height:{{ size }}px;background-image:url('{{ tt.logo_url }}');"></div>
+  {% else %}
+    {% set col = pal[(tt.id if tt else 0) % (pal|length)] %}
+    <div class="team-badge" style="width:{{ size }}px;height:{{ size }}px;--team-color:{{ col }};">{{ (tt.short_name or tt.name or '?')[:3]|upper if tt else '?' }}</div>
+  {% endif %}
+{% endmacro %}
 
-{# Manual result-entry form for a scheduled fixture whose two teams are known. #}
 {% macro result_form(fx) %}
 <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="rr-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="action" value="record_result">
   <input type="hidden" name="fixture_id" value="{{ fx.id }}">
   <div class="rr-row">
-    <span class="rr-team">{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else 'Team 1' }} <span class="empty" style="font-weight:400;">(bats 1st)</span></span>
-    <div><label>Runs</label><input type="number" name="inn1_runs" min="0" value="0" style="width:85px;"></div>
-    <div><label>Wickets</label><input type="number" name="inn1_wickets" min="0" max="10" value="0" style="width:80px;"></div>
-    <div><label>Overs</label><input type="text" name="inn1_overs" placeholder="e.g. 20 or 19.3" style="width:110px;"></div>
+    <span class="rr-team">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }} <small style="font-weight:400;color:var(--muted);">(1st)</small></span>
+    <div><label>Runs</label><input type="number" name="inn1_runs" min="0" value="0" style="width:80px;"></div>
+    <div><label>Wkts</label><input type="number" name="inn1_wickets" min="0" max="10" value="0" style="width:70px;"></div>
+    <div><label>Overs</label><input type="text" name="inn1_overs" placeholder="20 or 19.3" style="width:95px;"></div>
   </div>
   <div class="rr-row">
-    <span class="rr-team">{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else 'Team 2' }} <span class="empty" style="font-weight:400;">(bats 2nd)</span></span>
-    <div><label>Runs</label><input type="number" name="inn2_runs" min="0" value="0" style="width:85px;"></div>
-    <div><label>Wickets</label><input type="number" name="inn2_wickets" min="0" max="10" value="0" style="width:80px;"></div>
-    <div><label>Overs</label><input type="text" name="inn2_overs" placeholder="e.g. 20 or 19.3" style="width:110px;"></div>
+    <span class="rr-team">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }} <small style="font-weight:400;color:var(--muted);">(2nd)</small></span>
+    <div><label>Runs</label><input type="number" name="inn2_runs" min="0" value="0" style="width:80px;"></div>
+    <div><label>Wkts</label><input type="number" name="inn2_wickets" min="0" max="10" value="0" style="width:70px;"></div>
+    <div><label>Overs</label><input type="text" name="inn2_overs" placeholder="20 or 19.3" style="width:95px;"></div>
   </div>
   <div class="rr-row">
     <div><label>Winner</label>
       <select name="winner_slot">
         <option value="">Auto (higher score)</option>
-        <option value="1">{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else 'Team 1' }}</option>
-        <option value="2">{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else 'Team 2' }}</option>
+        <option value="1">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }}</option>
+        <option value="2">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }}</option>
         <option value="tie">Tie</option>
       </select>
     </div>
-    <button class="btn btn-primary" type="submit">✅ Save result &amp; update table</button>
+    <button class="action-btn accent-btn" type="submit" style="width:auto;">✅ Save result &amp; update table</button>
   </div>
-  <p class="empty" style="margin:0;">Overs use cricket notation (<code>19.3</code> = 19 overs 3 balls). This updates the points table &amp; net run-rate; per-player batting/bowling stats are only tracked for matches played through the bot.</p>
+  <p style="color:var(--muted);font-size:.76rem;margin:0;">Overs use cricket notation (<code>19.3</code>). Updates points table &amp; NRR; per-player stats come from bot-played matches.</p>
 </form>
 {% endmacro %}
 
-<div class="tour-shell">
-  <div>
-    <div class="breadcrumbs">
-      <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span>
-      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Schedule</span>
-    </div>
-    <h2 style="margin:0;">Schedule — {{ t.name }}</h2>
-    <p style="color:var(--muted); margin:.25rem 0 0;">
-      League stage: <strong>{{ t.league_format }}</strong>
-      {% if t.league_format == 'groups' %} • {{ t.group_points_mode }} points{% endif %}
-      • {{ league_played }}/{{ league_total }} played
-    </p>
+<div class="tour-page">
+  <div class="breadcrumbs">
+    <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span>
+    <a href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Schedule</span>
   </div>
 
-  <section class="tour-card">
-    <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
-      <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
-            onsubmit="return confirm('Generate (or regenerate) the schedule? Existing unplayed fixtures are replaced.');">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="action" value="generate_schedule">
-        <button class="btn btn-primary" type="submit">🗓️ Generate / regenerate</button>
-      </form>
+  <div class="tournament-hero">
+    <div class="hero-content">
+      <div class="hero-left">
+        <div class="trophy-badge"><i class="fas fa-calendar-week"></i></div>
+        <div class="hero-text">
+          <h1 class="hero-title" style="font-size:1.4rem;">Schedule</h1>
+          <div class="hero-meta">
+            <span class="format-badge-hero">{{ t.format }}</span>
+            <span class="meta-divider">•</span>
+            <span class="meta-detail">{{ t.league_format }}{% if t.league_format == 'groups' %} · {{ t.group_points_mode }}{% endif %}</span>
+            <span class="meta-divider">•</span>
+            <span class="meta-detail"><i class="fas fa-flag-checkered"></i> {{ league_played }}/{{ league_total }} played</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
+              onsubmit="return confirm('Generate (or regenerate) the schedule? Unplayed fixtures are replaced.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="generate_schedule">
+          <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-wand-magic-sparkles"></i> Generate / regenerate</button>
+        </form>
+      </div>
     </div>
-    {% if not fixtures %}
-    <p style="color:var(--muted); margin-top:.8rem;">No fixtures yet. Set the league format and groups on the
-      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">manage page</a>, then generate the schedule.</p>
-    {% endif %}
+    <div class="tour-tabs">
+      <a href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}"><i class="fas fa-chart-line"></i> Overview</a>
+      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"><i class="fas fa-sliders-h"></i> Manage</a>
+      <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}" class="active"><i class="fas fa-calendar-week"></i> Schedule</a>
+    </div>
+  </div>
+
+  {% if not fixtures %}
+  <section class="section-card">
+    <div class="empty-state"><i class="fas fa-calendar-plus"></i>
+      <p>No fixtures yet. Set the league format and groups on the
+        <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">Manage</a> page, then generate the schedule.</p></div>
   </section>
+  {% endif %}
 
-  {% if fixtures %}
-  <section class="tour-card">
-    <h3 style="margin-top:0;">Fixtures</h3>
-    {% for rno, fxs in rounds %}
-    <div class="round-head">Round {{ rno }}</div>
-    {% for fx in fxs %}
-    <div class="fx-row" style="margin-bottom:.4rem;">
-      <span class="status-pill {{ fx.status }}">{{ fx.status }}</span>
-      {% if fx.group_id and g_map.get(fx.group_id) %}<span style="color:var(--muted); font-size:.78rem;">{{ g_map.get(fx.group_id).name }}</span>{% endif %}
-
-      {% if fx.status != 'scheduled' %}
-        <span>{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else 'TBD' }}</span>
-        <span class="vs">vs</span>
-        <span>{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else 'TBD' }}</span>
-        {% if fx.result_text %}<span style="color:var(--muted); font-size:.8rem;">— {{ fx.result_text }}</span>{% endif %}
-      {% else %}
-        <form method="POST" style="display:inline;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="swap_team">
-          <input type="hidden" name="fixture_id" value="{{ fx.id }}">
-          <input type="hidden" name="slot" value="1">
-          <select name="new_team_id" onchange="this.form.submit()">
-            <option value="">TBD</option>
-            {% for tt in teams %}<option value="{{ tt.id }}" {{ 'selected' if fx.team1_id == tt.id else '' }}>{{ tt.name }}</option>{% endfor %}
-          </select>
-        </form>
-        <span class="vs">vs</span>
-        <form method="POST" style="display:inline;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="swap_team">
-          <input type="hidden" name="fixture_id" value="{{ fx.id }}">
-          <input type="hidden" name="slot" value="2">
-          <select name="new_team_id" onchange="this.form.submit()">
-            <option value="">TBD</option>
-            {% for tt in teams %}<option value="{{ tt.id }}" {{ 'selected' if fx.team2_id == tt.id else '' }}>{{ tt.name }}</option>{% endfor %}
-          </select>
-        </form>
-        <form method="POST" style="display:inline; margin-left:auto;" onsubmit="return confirm('Delete this fixture?');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="delete_fixture">
-          <input type="hidden" name="fixture_id" value="{{ fx.id }}">
-          <button class="btn danger" type="submit">Delete</button>
-        </form>
-        {% if fx.team1_id and fx.team2_id %}
-        <details class="rr-toggle">
-          <summary>✍️ Mark completed / record result manually</summary>
-          {{ result_form(fx) }}
-        </details>
+  {% if rounds %}
+  <section class="section-card">
+    <div class="section-header"><div><h2 class="section-title"><i class="fas fa-list-ol"></i> League Fixtures</h2></div></div>
+    <div class="fixtures-grid">
+      {% for rno, fxs in rounds %}
+      <div class="round-head">Round {{ rno }}</div>
+      {% for fx in fxs %}
+      {% set t1 = tt_map.get(fx.team1_id) %}
+      {% set t2 = tt_map.get(fx.team2_id) %}
+      <div class="fixture-card {{ fx.status }}">
+        <div class="fixture-header">
+          <span class="round-badge">{% if fx.group_id and g_map.get(fx.group_id) %}{{ g_map[fx.group_id].name }}{% else %}Match {{ fx.match_no }}{% endif %}</span>
+          <span class="status-badge {{ fx.status }}">{{ fx.status }}</span>
+        </div>
+        {% if fx.status != 'scheduled' %}
+          <div class="teams-versus">
+            <div class="team-block">{{ team_badge(t1, 42) }}<div class="team-name-display">{{ t1.name if t1 else 'TBD' }}</div>
+              <div class="score-display">{{ fx.inn1_runs }}/{{ fx.inn1_wickets }}</div></div>
+            <div class="vs-divider">VS</div>
+            <div class="team-block">{{ team_badge(t2, 42) }}<div class="team-name-display">{{ t2.name if t2 else 'TBD' }}</div>
+              <div class="score-display">{{ fx.inn2_runs }}/{{ fx.inn2_wickets }}</div></div>
+          </div>
+          {% if fx.result_text %}<div class="result-banner"><i class="fas fa-trophy"></i> {{ fx.result_text }}</div>{% endif %}
+        {% else %}
+          <div class="teams-versus" style="align-items:stretch;">
+            <form method="POST" style="flex:1;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="swap_team">
+              <input type="hidden" name="fixture_id" value="{{ fx.id }}"><input type="hidden" name="slot" value="1">
+              <select name="new_team_id" onchange="this.form.submit()" style="width:100%;">
+                <option value="">TBD</option>
+                {% for tt in teams %}<option value="{{ tt.id }}" {{ 'selected' if fx.team1_id == tt.id else '' }}>{{ tt.name }}</option>{% endfor %}
+              </select>
+            </form>
+            <div class="vs-divider">VS</div>
+            <form method="POST" style="flex:1;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="swap_team">
+              <input type="hidden" name="fixture_id" value="{{ fx.id }}"><input type="hidden" name="slot" value="2">
+              <select name="new_team_id" onchange="this.form.submit()" style="width:100%;">
+                <option value="">TBD</option>
+                {% for tt in teams %}<option value="{{ tt.id }}" {{ 'selected' if fx.team2_id == tt.id else '' }}>{{ tt.name }}</option>{% endfor %}
+              </select>
+            </form>
+          </div>
+          <div class="fixture-footer">
+            {% if fx.team1_id and fx.team2_id %}
+            <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
+            {% endif %}
+            <form method="POST" class="inline-form" onsubmit="return confirm('Delete this fixture?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_fixture">
+              <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+              <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Delete fixture</button>
+            </form>
+          </div>
         {% endif %}
-      {% endif %}
+      </div>
+      {% endfor %}
+      {% endfor %}
     </div>
-    {% endfor %}
-    {% endfor %}
   </section>
   {% endif %}
 
   {% if knockout %}
-  <section class="tour-card">
-    <h3 style="margin-top:0;">🏆 Knockout bracket</h3>
-    {% for fx in knockout %}
-    <div class="fx-row" style="margin-bottom:.4rem;">
-      <span class="status-pill {{ fx.status }}">{{ fx.status }}</span>
-      <span style="color:var(--muted); font-size:.78rem; text-transform:capitalize;">{{ fx.stage|replace('_',' ') }}</span>
-      <span>{{ tt_map.get(fx.team1_id).name if tt_map.get(fx.team1_id) else (fx.slot1_label or 'TBD') }}</span>
-      <span class="vs">vs</span>
-      <span>{{ tt_map.get(fx.team2_id).name if tt_map.get(fx.team2_id) else (fx.slot2_label or 'TBD') }}</span>
-      {% if fx.result_text %}<span style="color:var(--muted); font-size:.8rem;">— {{ fx.result_text }}</span>{% endif %}
-      {% if fx.status == 'scheduled' %}
-      <form method="POST" style="display:inline; margin-left:auto;" onsubmit="return confirm('Delete this knockout match?');">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="action" value="delete_fixture">
-        <input type="hidden" name="fixture_id" value="{{ fx.id }}">
-        <button class="btn danger" type="submit">Delete</button>
-      </form>
-      {% if fx.team1_id and fx.team2_id %}
-      <details class="rr-toggle">
-        <summary>✍️ Mark completed / record result manually</summary>
-        {{ result_form(fx) }}
-      </details>
-      {% endif %}
-      {% endif %}
+  <section class="section-card">
+    <div class="section-header"><div><h2 class="section-title"><i class="fas fa-sitemap"></i> Knockout Bracket</h2>
+      <div class="section-subtitle">Winners advance automatically</div></div></div>
+    <div class="fixtures-grid">
+      {% for fx in knockout %}
+      {% set t1 = tt_map.get(fx.team1_id) %}
+      {% set t2 = tt_map.get(fx.team2_id) %}
+      <div class="fixture-card {{ fx.status }}">
+        <div class="fixture-header">
+          <span class="round-badge" style="text-transform:capitalize;">{{ fx.stage|replace('_',' ') }}</span>
+          <span class="status-badge {{ fx.status }}">{{ fx.status }}</span>
+        </div>
+        <div class="teams-versus">
+          <div class="team-block">{{ team_badge(t1, 42) if t1 else '' }}{% if not t1 %}<div class="team-logo-circle" style="background:#555;">?</div>{% endif %}
+            <div class="team-name-display">{{ t1.name if t1 else (fx.slot1_label or 'TBD') }}</div>
+            {% if fx.status == 'completed' %}<div class="score-display">{{ fx.inn1_runs }}/{{ fx.inn1_wickets }}</div>{% endif %}</div>
+          <div class="vs-divider">VS</div>
+          <div class="team-block">{{ team_badge(t2, 42) if t2 else '' }}{% if not t2 %}<div class="team-logo-circle" style="background:#555;">?</div>{% endif %}
+            <div class="team-name-display">{{ t2.name if t2 else (fx.slot2_label or 'TBD') }}</div>
+            {% if fx.status == 'completed' %}<div class="score-display">{{ fx.inn2_runs }}/{{ fx.inn2_wickets }}</div>{% endif %}</div>
+        </div>
+        {% if fx.result_text %}<div class="result-banner"><i class="fas fa-trophy"></i> {{ fx.result_text }}</div>{% endif %}
+        {% if fx.status == 'scheduled' %}
+        <div class="fixture-footer">
+          {% if fx.team1_id and fx.team2_id %}
+          <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
+          {% endif %}
+          <form method="POST" class="inline-form" onsubmit="return confirm('Delete this knockout match?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_fixture">
+            <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+            <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Delete</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
     </div>
-    {% endfor %}
-    <p style="color:var(--muted); font-size:.8rem; margin:.5rem 0 0;">Winners advance automatically as each match is played.</p>
   </section>
   {% endif %}
 
   <!-- Add a manual fixture -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">Add a fixture</h3>
+  <section class="section-card">
+    <div class="section-header"><div><h2 class="section-title"><i class="fas fa-plus"></i> Add a fixture</h2></div></div>
     <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
-          style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
+          style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:end;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add_fixture">
-      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Team 1</label>
-      <select name="team1_id">{% for tt in teams %}<option value="{{ tt.id }}">{{ tt.name }}</option>{% endfor %}</select></div>
-      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Team 2</label>
-      <select name="team2_id">{% for tt in teams %}<option value="{{ tt.id }}">{{ tt.name }}</option>{% endfor %}</select></div>
+      <div><label class="field-label">Team 1</label><select name="team1_id">{% for tt in teams %}<option value="{{ tt.id }}">{{ tt.name }}</option>{% endfor %}</select></div>
+      <div><label class="field-label">Team 2</label><select name="team2_id">{% for tt in teams %}<option value="{{ tt.id }}">{{ tt.name }}</option>{% endfor %}</select></div>
       {% if groups %}
-      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Group</label>
-      <select name="group_id"><option value="">—</option>{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select></div>
+      <div><label class="field-label">Group</label><select name="group_id"><option value="">—</option>{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select></div>
       {% endif %}
-      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Round</label>
-      <input type="number" name="round_no" value="0" style="width:80px;"></div>
-      <button class="btn btn-primary" type="submit">+ Add fixture</button>
+      <div><label class="field-label">Round</label><input type="number" name="round_no" value="0" style="width:80px;"></div>
+      <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-plus"></i> Add fixture</button>
     </form>
   </section>
 </div>

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ t.name }} — Manage{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
 <style>
@@ -24,18 +25,35 @@
 </style>
 
 <div class="tour-shell">
-  <div>
-    <div class="breadcrumbs">
-      <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span><span>{{ t.name }}</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; align-items:center;">
-      <h2 style="margin:0;">{{ t.name }} <span class="status-pill {{ t.status }}">{{ t.status }}</span>{% if t.is_active %} <span class="status-pill active">● active</span>{% endif %}</h2>
-      <div style="display:flex; gap:.45rem; flex-wrap:wrap;">
-        <a class="btn" href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">📅 Schedule</a>
-        <a class="btn btn-primary" href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">📊 View Dashboard</a>
+  <div class="breadcrumbs">
+    <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span><span>{{ t.name }}</span>
+  </div>
+  <div class="tournament-hero">
+    <div class="hero-content">
+      <div class="hero-left">
+        <div class="trophy-badge"><i class="fas fa-sliders-h"></i></div>
+        <div class="hero-text">
+          <h1 class="hero-title" style="font-size:1.5rem;">{{ t.name }}</h1>
+          <div class="hero-meta">
+            <span class="status-pill {{ t.status }}"><span class="dot">●</span> {{ t.status }}</span>
+            {% if t.is_active %}<span class="status-pill active">live</span>{% endif %}
+            <span class="meta-divider">•</span>
+            <span class="format-badge-hero">{{ t.format }} · {{ t.overs }} ov</span>
+            <span class="meta-divider">•</span>
+            <span class="meta-detail">{{ t.league_name or '—' }}</span>
+            {% if t.command_snapshot %}<span class="meta-divider">•</span><span class="meta-detail"><code>{{ t.command_snapshot }}</code></span>{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <a href="{{ url_for('admin_tournaments_list') }}" class="back-btn"><i class="fas fa-arrow-left"></i> Back</a>
       </div>
     </div>
-    <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • {{ t.format }} • {{ t.overs }} overs{% if t.command_snapshot %} • <code>{{ t.command_snapshot }}</code>{% endif %}</p>
+    <div class="tour-tabs">
+      <a href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}"><i class="fas fa-chart-line"></i> Overview</a>
+      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="active"><i class="fas fa-sliders-h"></i> Manage</a>
+      <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}"><i class="fas fa-calendar-week"></i> Schedule</a>
+    </div>
   </div>
 
   <!-- Lifecycle -->
@@ -243,6 +261,7 @@
             <option value="ipl_playoffs" {{ 'selected' if t.knockout_type == 'ipl_playoffs' else '' }}>IPL Playoffs (Q1 / Eliminator / Q2 / Final)</option>
             <option value="groups_top2_sf" {{ 'selected' if t.knockout_type == 'groups_top2_sf' else '' }}>Groups: Top 2 each → Semifinals → Final</option>
             <option value="groups_top4_qf" {{ 'selected' if t.knockout_type == 'groups_top4_qf' else '' }}>Groups: Top 4 each → Quarters → Semis → Final</option>
+            <option value="pure_knockout" {{ 'selected' if t.knockout_type == 'pure_knockout' else '' }}>Pure Knockout (all teams, no league)</option>
             <option value="custom" {{ 'selected' if t.knockout_type == 'custom' else '' }}>Custom (JSON)</option>
           </select>
         </div>

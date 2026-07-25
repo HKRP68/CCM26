@@ -18,6 +18,7 @@ Supported types:
   * ``ipl_playoffs``   - Top 4: Q1 (1v2), Eliminator (3v4), Q2 (LQ1 v WElim), Final.
   * ``groups_top2_sf`` - Top 2 of each group: cross semis -> Final.
   * ``groups_top4_qf`` - Top 4 of each group: QFs -> SFs -> Final.
+  * ``pure_knockout``  - Standalone bracket seeded from all teams (no league).
   * ``custom``         - bracket described by ``knockout_config_json`` (see below).
 """
 
@@ -371,6 +372,16 @@ def generate_knockout(session, tournament_id):
         if ngroups < 2 or min_size < 4:
             raise ValueError("Need at least 2 groups, each with at least 4 teams.")
         created = _build_single_elim(session, tid, seeds)
+    elif ktype == "pure_knockout":
+        # Standalone single-elimination: seed directly from the participating
+        # teams (no league stage) in sort order, padding to a power of two with
+        # byes. Winners advance via the same feeds_winner_to_id wiring.
+        from models import TournamentTeam
+        teams = (session.query(TournamentTeam).filter_by(tournament_id=tid)
+                 .order_by(TournamentTeam.sort_order, TournamentTeam.name).all())
+        if len(teams) < 2:
+            raise ValueError("Pure knockout needs at least 2 teams.")
+        created = _build_single_elim(session, tid, [t.id for t in teams])
     elif ktype == "custom":
         created = _build_custom(session, tid, tour.knockout_config_json)
     else:

@@ -1,170 +1,285 @@
 {% extends "base.html" %}
-{% block title %}{{ t.name }} — Dashboard{% endblock %}
+{% block title %}{{ t.name }} — Overview{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
-<style>
-.tour-shell { display:flex; flex-direction:column; gap:1rem; }
-.breadcrumbs { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin-bottom:.35rem; }
-.breadcrumbs a { color:var(--accent); text-decoration:none; }
-.tour-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
-.tbl { width:100%; border-collapse:collapse; font-size:.9rem; }
-.tbl th, .tbl td { text-align:left; padding:.5rem .55rem; border-bottom:1px solid var(--border); }
-.tbl th { color:var(--muted); font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; }
-.tbl td.num, .tbl th.num { text-align:right; font-variant-numeric:tabular-nums; }
-.leader-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:1rem; }
-.leader-box h4 { margin:.1rem 0 .5rem; font-size:.95rem; }
-.leader-row { display:flex; justify-content:space-between; gap:.6rem; padding:.32rem 0; border-bottom:1px dashed var(--border); font-size:.88rem; }
-.leader-row span.v { color:var(--accent); font-weight:800; font-variant-numeric:tabular-nums; }
-.empty { color:var(--muted); font-size:.86rem; }
-.match-card { background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.7rem .85rem; margin-bottom:.6rem; }
-.match-head { display:flex; justify-content:space-between; gap:.6rem; flex-wrap:wrap; font-weight:700; }
-details.match-card summary { cursor:pointer; }
-</style>
+{% set palette = ['#c01935','#307fc4','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'] %}
 
-{% macro leaders_list(rows, attr, suffix='') %}
-  {% if rows %}
-    {% for r in rows %}
-      <div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r[attr] }}{{ suffix }}</span></div>
-    {% endfor %}
-  {% else %}<div class="empty">No data yet.</div>{% endif %}
+{% macro team_badge(tt, size) %}
+  {% set pal = ['#c01935','#307fc4','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'] %}
+  {% if tt and tt.logo_url %}
+    <div class="team-badge" style="width:{{ size }}px;height:{{ size }}px;background-image:url('{{ tt.logo_url }}');"></div>
+  {% else %}
+    {% set col = pal[(tt.id if tt else 0) % (pal|length)] %}
+    <div class="team-badge" style="width:{{ size }}px;height:{{ size }}px;--team-color:{{ col }};">{{ (tt.short_name or tt.name or '?')[:3]|upper if tt else '?' }}</div>
+  {% endif %}
 {% endmacro %}
 
-{% macro leaders_pairs(pairs, suffix='') %}
-  {% if pairs %}
-    {% for r, v in pairs %}
-      <div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ v }}{{ suffix }}</span></div>
-    {% endfor %}
-  {% else %}<div class="empty">No qualified players yet.</div>{% endif %}
+{% macro lb_list(rows, attr, suffix='') %}
+  {% if rows %}{% for r in rows %}
+    <div class="lb-row"><span class="lb-name">{{ r.name or 'Player' }}{% if r.team_name %} <small>· {{ r.team_name }}</small>{% endif %}</span><span class="lb-val">{{ r[attr] }}{{ suffix }}</span></div>
+  {% endfor %}{% else %}<div class="empty" style="color:var(--muted);font-size:.85rem;">No data yet.</div>{% endif %}
 {% endmacro %}
 
-<div class="tour-shell">
-  <div>
-    <div class="breadcrumbs">
-      <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span>
-      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Dashboard</span>
+{% macro lb_pairs(pairs, suffix='') %}
+  {% if pairs %}{% for r, v in pairs %}
+    <div class="lb-row"><span class="lb-name">{{ r.name or 'Player' }}{% if r.team_name %} <small>· {{ r.team_name }}</small>{% endif %}</span><span class="lb-val">{{ v }}{{ suffix }}</span></div>
+  {% endfor %}{% else %}<div class="empty" style="color:var(--muted);font-size:.85rem;">No qualified players yet.</div>{% endif %}
+{% endmacro %}
+
+{% macro points_rows(rows) %}
+  {% set pal = ['#c01935','#307fc4','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'] %}
+  <div class="standings-container">
+    {% for tt in rows %}
+    {% set col = pal[tt.id % (pal|length)] %}
+    <div class="standing-row {% if loop.index <= 4 %}qualified{% endif %}">
+      <div class="rank-badge">{{ loop.index }}</div>
+      <div class="team-section">
+        <div class="team-stripe" style="--team-color:{{ col }};"></div>
+        {{ team_badge(tt, 30) }}
+        <div class="team-details">
+          <div class="team-name-row">{{ tt.name }}</div>
+          <div class="team-stats-mini">{{ tt.played }}P • {{ tt.won }}W • {{ tt.lost }}L{% if tt.tied %} • {{ tt.tied }}T{% endif %}</div>
+        </div>
+      </div>
+      <div class="stats-section">
+        <div class="stat-group"><div class="stat-label-mini">NRR</div>
+          <div class="stat-value-mini {% if tt._nrr > 0 %}positive{% elif tt._nrr < 0 %}negative{% endif %}">{{ '%+.3f'|format(tt._nrr) }}</div></div>
+        <div class="stat-group"><div class="stat-label-mini">Pts</div><div class="stat-value-pts">{{ tt.points }}</div></div>
+      </div>
     </div>
-    <h2 style="margin:0;">📊 {{ t.name }} Dashboard</h2>
-    <p style="color:var(--muted); margin:.25rem 0 0;">{{ t.league_name or '—' }} • status: {{ t.status }}{% if t.is_active %} • ● active{% endif %}
-      {% if league_total %} • League stage: {{ league_played }}/{{ league_total }} played{% if league_played >= league_total %} ✅{% endif %}{% endif %}</p>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{% macro result_form(fx) %}
+<form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="rr-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="action" value="record_result">
+  <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+  <div class="rr-row">
+    <span class="rr-team">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }} <small style="font-weight:400;color:var(--muted);">(1st)</small></span>
+    <div><label>Runs</label><input type="number" name="inn1_runs" min="0" value="0" style="width:80px;"></div>
+    <div><label>Wkts</label><input type="number" name="inn1_wickets" min="0" max="10" value="0" style="width:70px;"></div>
+    <div><label>Overs</label><input type="text" name="inn1_overs" placeholder="20 or 19.3" style="width:95px;"></div>
+  </div>
+  <div class="rr-row">
+    <span class="rr-team">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }} <small style="font-weight:400;color:var(--muted);">(2nd)</small></span>
+    <div><label>Runs</label><input type="number" name="inn2_runs" min="0" value="0" style="width:80px;"></div>
+    <div><label>Wkts</label><input type="number" name="inn2_wickets" min="0" max="10" value="0" style="width:70px;"></div>
+    <div><label>Overs</label><input type="text" name="inn2_overs" placeholder="20 or 19.3" style="width:95px;"></div>
+  </div>
+  <div class="rr-row">
+    <div><label>Winner</label>
+      <select name="winner_slot">
+        <option value="">Auto (higher score)</option>
+        <option value="1">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }}</option>
+        <option value="2">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }}</option>
+        <option value="tie">Tie</option>
+      </select>
+    </div>
+    <button class="action-btn accent-btn" type="submit" style="width:auto;">✅ Save result</button>
+  </div>
+</form>
+{% endmacro %}
+
+{% macro fixture_card(fx) %}
+{% set t1 = tt_map.get(fx.team1_id) %}
+{% set t2 = tt_map.get(fx.team2_id) %}
+<div class="fixture-card {{ fx.status }}{% if fx.id == next_fixture_id %} next-up{% endif %}" id="fixture-{{ fx.id }}">
+  {% if fx.id == next_fixture_id %}<div class="next-up-badge"><i class="fas fa-bolt"></i> Next Up</div>{% endif %}
+  <div class="fixture-header">
+    <span class="round-badge">
+      {% if fx.stage and fx.stage not in ('league','group') %}{{ fx.stage|replace('_',' ')|title }}
+      {% else %}Match {{ fx.match_no or fx.id }}{% endif %}
+    </span>
+    <span class="status-badge {{ fx.status }}">
+      {% if fx.status == 'completed' %}<i class="fas fa-check-circle"></i> Done
+      {% elif fx.status == 'live' %}<i class="fas fa-circle"></i> Live
+      {% else %}<i class="fas fa-clock"></i> Scheduled{% endif %}
+    </span>
+  </div>
+  <div class="teams-versus">
+    <div class="team-block">
+      {{ team_badge(t1, 46) if t1 else '' }}
+      {% if not t1 %}<div class="team-logo-circle" style="background:#555;">?</div>{% endif %}
+      <div class="team-name-display">{{ t1.name if t1 else (fx.slot1_label or 'TBD') }}</div>
+      {% if fx.status == 'completed' %}<div class="score-display">{{ fx.inn1_runs }}/{{ fx.inn1_wickets }} <span class="overs">({{ fx.inn1_balls // 6 }}.{{ fx.inn1_balls % 6 }})</span></div>{% endif %}
+    </div>
+    <div class="vs-divider">VS</div>
+    <div class="team-block">
+      {{ team_badge(t2, 46) if t2 else '' }}
+      {% if not t2 %}<div class="team-logo-circle" style="background:#555;">?</div>{% endif %}
+      <div class="team-name-display">{{ t2.name if t2 else (fx.slot2_label or 'TBD') }}</div>
+      {% if fx.status == 'completed' %}<div class="score-display">{{ fx.inn2_runs }}/{{ fx.inn2_wickets }} <span class="overs">({{ fx.inn2_balls // 6 }}.{{ fx.inn2_balls % 6 }})</span></div>{% endif %}
+    </div>
+  </div>
+  {% if fx.status == 'completed' and fx.result_text %}
+  <div class="result-banner"><i class="fas fa-trophy"></i> {{ fx.result_text }}</div>
+  {% endif %}
+  <div class="fixture-footer">
+    {% if fx.status == 'scheduled' and fx.team1_id and fx.team2_id %}
+      <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
+    {% elif fx.status == 'scheduled' %}
+      <a class="action-btn outline-btn" href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}"><i class="fas fa-pen"></i> Set teams</a>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+<div class="tour-page">
+  <div class="breadcrumbs">
+    <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span><span>{{ t.name }}</span>
+  </div>
+
+  <!-- Hero -->
+  <div class="tournament-hero">
+    <div class="hero-content">
+      <div class="hero-left">
+        <div class="trophy-badge"><i class="fas fa-trophy"></i></div>
+        <div class="hero-text">
+          <h1 class="hero-title">{{ t.name }}</h1>
+          <div class="hero-meta">
+            <span class="status-pill {{ t.status }}"><span class="dot">●</span> {{ t.status }}</span>
+            <span class="meta-divider">•</span>
+            <span class="format-badge-hero"><i class="fas fa-bolt"></i> {{ t.format }} · {{ t.overs }} ov</span>
+            <span class="meta-divider">•</span>
+            <span class="meta-detail"><i class="fas fa-layer-group"></i> {{ t.league_name or '—' }}</span>
+            <span class="meta-divider">•</span>
+            <span class="meta-detail"><i class="fas fa-users"></i> {{ table|length }} teams</span>
+            {% if league_total %}<span class="meta-divider">•</span>
+            <span class="meta-detail"><i class="fas fa-flag-checkered"></i> {{ league_played }}/{{ league_total }} played</span>{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <a href="{{ url_for('admin_tournaments_list') }}" class="back-btn"><i class="fas fa-arrow-left"></i> Back</a>
+      </div>
+    </div>
+
+    <div class="tour-tabs">
+      <a href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}" class="active"><i class="fas fa-chart-line"></i> Overview</a>
+      <a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"><i class="fas fa-sliders-h"></i> Manage</a>
+      <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}"><i class="fas fa-calendar-week"></i> Schedule</a>
+    </div>
+
+    <div class="quick-stats">
+      <div class="stat-card"><div class="stat-icon played"><i class="fas fa-flag-checkered"></i></div>
+        <div><div class="stat-value">{{ match_cards|length }}</div><div class="stat-label">Matches Played</div></div></div>
+      <div class="stat-card"><div class="stat-icon remaining"><i class="fas fa-calendar-alt"></i></div>
+        <div><div class="stat-value">{{ (league_total - league_played) if league_total else '—' }}</div><div class="stat-label">League Remaining</div></div></div>
+      <div class="stat-card"><div class="stat-icon leader"><i class="fas fa-crown"></i></div>
+        <div><div class="stat-value">{{ table[0].points if table else 0 }}</div><div class="stat-label">Leader Points</div></div></div>
+    </div>
   </div>
 
   {% if champion %}
-  <section class="tour-card" style="border-color:rgba(249,209,96,.5); background:linear-gradient(180deg, rgba(249,209,96,.08), transparent);">
-    <h3 style="margin:0; display:flex; align-items:center; gap:.5rem;">🏆 Champions: <span style="color:var(--accent);">{{ champion.name }}</span></h3>
-  </section>
+  <div class="champion-banner">🏆 Champions: <span class="champ-name">{{ champion.name }}</span></div>
   {% endif %}
 
-  <!-- Points table(s) -->
-  {% macro points_tbl(rows) %}
-    <table class="tbl">
-      <thead><tr><th>#</th><th>Team</th><th class="num">P</th><th class="num">W</th><th class="num">L</th><th class="num">T</th><th class="num">Pts</th><th class="num">NRR</th></tr></thead>
-      <tbody>
-        {% for tt in rows %}
-        <tr><td>{{ loop.index }}</td><td>{{ tt.name }}</td><td class="num">{{ tt.played }}</td><td class="num">{{ tt.won }}</td><td class="num">{{ tt.lost }}</td><td class="num">{{ tt.tied }}</td><td class="num"><strong>{{ tt.points }}</strong></td><td class="num">{{ '%+.3f'|format(tt._nrr) }}</td></tr>
+  <!-- Points table + Schedule -->
+  <div class="dashboard-content">
+    <div class="section-card standings-section">
+      <div class="section-header"><div>
+        <h2 class="section-title"><i class="fas fa-ranking-star"></i> Points Table</h2>
+        <div class="section-subtitle">Top 4 highlighted</div></div>
+      </div>
+      {% if group_tables %}
+        {% for g, rows in group_tables %}
+          <div class="standings-group-title"><strong>{{ g.name }}</strong> <span style="opacity:.7;">({{ g.rr_mode }} RR)</span></div>
+          {% if rows %}{{ points_rows(rows) }}{% else %}<div class="empty-state"><i class="fas fa-chart-bar"></i><p>No teams in this group.</p></div>{% endif %}
         {% endfor %}
-      </tbody>
-    </table>
-  {% endmacro %}
-  <section class="tour-card">
-    <h3 style="margin-top:0;">🏅 Points Table</h3>
-    {% if group_tables %}
-      {% for g, rows in group_tables %}
-      <h4 style="margin:.6rem 0 .3rem;">{{ g.name }} <span class="empty">({{ g.rr_mode }} RR)</span></h4>
-      {% if rows %}{{ points_tbl(rows) }}{% else %}<div class="empty">No teams in this group.</div>{% endif %}
-      {% endfor %}
-    {% elif table %}
-      {{ points_tbl(table) }}
-    {% else %}<div class="empty">No teams / results yet.</div>{% endif %}
-  </section>
-
-  <!-- Stat leaders -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">🌟 Tournament Stats</h3>
-    <div class="leader-grid">
-      <div class="leader-box"><h4>🏏 Most Runs</h4>{{ leaders_list(leaders.most_runs, 'bat_runs') }}</div>
-      <div class="leader-box"><h4>🎯 Most Wickets</h4>{{ leaders_list(leaders.most_wickets, 'bowl_wickets') }}</div>
-      <div class="leader-box"><h4>6️⃣ Most Sixes</h4>{{ leaders_list(leaders.most_sixes, 'bat_sixes') }}</div>
-      <div class="leader-box"><h4>4️⃣ Most Fours</h4>{{ leaders_list(leaders.most_fours, 'bat_fours') }}</div>
-      <div class="leader-box"><h4>5️⃣0️⃣ Most 50s <span class="empty">(50–99)</span></h4>{{ leaders_list(leaders.most_fifties, 'fifties') }}</div>
-      <div class="leader-box"><h4>💯 Most 100s <span class="empty">(100+)</span></h4>{{ leaders_list(leaders.most_hundreds, 'hundreds') }}</div>
-      <div class="leader-box"><h4>⭐ Highest Score</h4>
-        {% if leaders.highest_score %}{% for r in leaders.highest_score %}<div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r.highest_score }}{{ '*' if r.not_out else '' }}</span></div>{% endfor %}{% else %}<div class="empty">No data yet.</div>{% endif %}
-      </div>
-      <div class="leader-box"><h4>💥 Best Figure</h4>
-        {% if leaders.best_figure %}{% for r in leaders.best_figure %}<div class="leader-row"><span>{{ r.name or 'Player' }}{% if r.team_name %} <span class="empty">· {{ r.team_name }}</span>{% endif %}</span><span class="v">{{ r.best_bowl_wickets }}/{{ r.best_bowl_runs }}</span></div>{% endfor %}{% else %}<div class="empty">No data yet.</div>{% endif %}
-      </div>
-      <div class="leader-box"><h4>📊 Top Batting Average</h4>{{ leaders_pairs(leaders.top_average) }}</div>
-      <div class="leader-box"><h4>⚡ Best Strike Rate</h4>{{ leaders_pairs(leaders.best_strike_rate) }}</div>
-      <div class="leader-box"><h4>🛡️ Best Economy</h4>{{ leaders_pairs(leaders.best_economy) }}</div>
+      {% elif table %}{{ points_rows(table) }}
+      {% else %}<div class="empty-state"><i class="fas fa-chart-bar"></i><p>No standings yet.</p></div>{% endif %}
     </div>
-  </section>
+
+    <div class="section-card fixtures-section">
+      <div class="section-header"><div>
+        <h2 class="section-title"><i class="fas fa-calendar-week"></i> Schedule</h2>
+        <div class="section-subtitle">Fixtures &amp; results</div></div>
+        <a class="action-btn outline-btn" style="width:auto;" href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}"><i class="fas fa-pen"></i> Edit</a>
+      </div>
+      {% if fixtures %}
+      <div class="fixtures-grid">
+        {% for fx in fixtures %}{{ fixture_card(fx) }}{% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state"><i class="fas fa-calendar-plus"></i>
+        <p>No fixtures yet. Generate a schedule on the <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">Schedule</a> page.</p></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Leaderboards -->
+  <div class="section-card">
+    <div class="section-header"><div><h2 class="section-title"><i class="fas fa-star"></i> Tournament Leaders</h2></div></div>
+    <div class="leaderboards-grid">
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-baseball-bat-ball" style="color:var(--accent);"></i><h4>Most Runs</h4></div>{{ lb_list(leaders.most_runs, 'bat_runs') }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-bullseye" style="color:var(--accent);"></i><h4>Most Wickets</h4></div>{{ lb_list(leaders.most_wickets, 'bowl_wickets') }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-6" style="color:var(--accent);"></i><h4>Most Sixes</h4></div>{{ lb_list(leaders.most_sixes, 'bat_sixes') }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-4" style="color:var(--accent);"></i><h4>Most Fours</h4></div>{{ lb_list(leaders.most_fours, 'bat_fours') }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-medal" style="color:var(--accent);"></i><h4>Most 50s</h4></div>{{ lb_list(leaders.most_fifties, 'fifties') }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-award" style="color:var(--accent);"></i><h4>Most 100s</h4></div>{{ lb_list(leaders.most_hundreds, 'hundreds') }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-star" style="color:var(--accent);"></i><h4>Highest Score</h4></div>
+        {% if leaders.highest_score %}{% for r in leaders.highest_score %}<div class="lb-row"><span class="lb-name">{{ r.name or 'Player' }}{% if r.team_name %} <small>· {{ r.team_name }}</small>{% endif %}</span><span class="lb-val">{{ r.highest_score }}{{ '*' if r.not_out else '' }}</span></div>{% endfor %}{% else %}<div class="empty" style="color:var(--muted);font-size:.85rem;">No data yet.</div>{% endif %}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-fire" style="color:var(--accent);"></i><h4>Best Figures</h4></div>
+        {% if leaders.best_figure %}{% for r in leaders.best_figure %}<div class="lb-row"><span class="lb-name">{{ r.name or 'Player' }}{% if r.team_name %} <small>· {{ r.team_name }}</small>{% endif %}</span><span class="lb-val">{{ r.best_bowl_wickets }}/{{ r.best_bowl_runs }}</span></div>{% endfor %}{% else %}<div class="empty" style="color:var(--muted);font-size:.85rem;">No data yet.</div>{% endif %}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-chart-simple" style="color:var(--accent);"></i><h4>Best Average</h4></div>{{ lb_pairs(leaders.top_average) }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-gauge-high" style="color:var(--accent);"></i><h4>Best Strike Rate</h4></div>{{ lb_pairs(leaders.best_strike_rate) }}</div>
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-shield-halved" style="color:var(--accent);"></i><h4>Best Economy</h4></div>{{ lb_pairs(leaders.best_economy) }}</div>
+    </div>
+  </div>
 
   <!-- Player statistics -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">👤 Player Statistics</h3>
-    {% if players %}
-    <div style="overflow:auto;">
-    <table class="tbl">
-      <thead><tr><th>Player</th><th>Team</th><th class="num">M</th><th class="num">Runs</th><th class="num">Balls</th><th class="num">4s</th><th class="num">6s</th><th class="num">HS</th><th class="num">Avg</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Runs</th><th class="num">Econ</th><th class="num">Best</th></tr></thead>
-      <tbody>
-        {% for p in players %}
-        <tr>
-          <td>{{ p.name or 'Player' }}</td><td>{{ p.team_name or '—' }}</td>
-          <td class="num">{{ p.matches }}</td>
-          <td class="num">{{ p.bat_runs }}</td><td class="num">{{ p.bat_balls }}</td>
-          <td class="num">{{ p.bat_fours }}</td><td class="num">{{ p.bat_sixes }}</td><td class="num">{{ p.highest_score }}</td>
-          <td class="num">{{ '%.2f'|format(p.bat_runs / p.bat_outs) if p.bat_outs else '—' }}</td>
-          <td class="num">{{ '%.1f'|format(p.bat_runs / p.bat_balls * 100) if p.bat_balls else '—' }}</td>
-          <td class="num">{{ p.bowl_wickets }}</td><td class="num">{{ p.bowl_runs }}</td>
-          <td class="num">{{ '%.2f'|format(p.bowl_runs / (p.bowl_balls/6)) if p.bowl_balls else '—' }}</td>
-          <td class="num">{% if p.best_bowl_runs >= 0 %}{{ p.best_bowl_wickets }}/{{ p.best_bowl_runs }}{% else %}—{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}<div class="empty">No player stats recorded yet.</div>{% endif %}
-  </section>
-
-  <!-- Match history -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">📜 Match History ({{ match_cards|length }})</h3>
-    {% if match_cards %}
-    {% for m, lines in match_cards %}
-    <details class="match-card">
-      <summary>
-        <span class="match-head" style="display:inline-flex; gap:.6rem;">
-          <strong>{{ tt_map.get(m.team1_id, 'Team 1') }} vs {{ tt_map.get(m.team2_id, 'Team 2') }}</strong>
-          <span class="empty">{{ m.result_text or '' }}</span>
-        </span>
-      </summary>
-      <div style="margin-top:.5rem; display:flex; justify-content:space-between; gap:.6rem; flex-wrap:wrap; align-items:center;">
-        <span style="color:var(--muted); font-size:.85rem;">
-          1st innings: {{ m.inn1_runs }}/{{ m.inn1_wickets }} &nbsp;•&nbsp; 2nd innings: {{ m.inn2_runs }}/{{ m.inn2_wickets }}
-        </span>
-        <form method="POST" action="{{ url_for('admin_tournament_match_delete', tournament_id=t.id, match_row_id=m.id) }}" onsubmit="return confirm('Remove this match? Its stats will be rebuilt without it.');" style="display:inline;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button class="btn" type="submit" style="border-color:rgba(239,68,68,.4); color:#fca5a5;">🗑️ Remove match</button>
-        </form>
-      </div>
-      {% if lines %}
-      <div style="overflow:auto; margin-top:.5rem;">
-      <table class="tbl">
-        <thead><tr><th>Player</th><th>Team</th><th class="num">R</th><th class="num">B</th><th class="num">4s</th><th class="num">6s</th><th class="num">Wkts</th><th class="num">RC</th></tr></thead>
+  <details class="section-card" style="padding:0;">
+    <summary style="padding:1.25rem 1.5rem;cursor:pointer;font-weight:700;color:var(--text);"><i class="fas fa-table-list" style="color:var(--accent);"></i> Player Statistics ({{ players|length }})</summary>
+    <div style="padding:0 1.5rem 1.5rem;overflow:auto;">
+      {% if players %}
+      <table style="width:100%;border-collapse:collapse;font-size:.86rem;">
+        <thead><tr style="color:var(--muted);text-align:left;">
+          <th style="padding:.4rem;">Player</th><th>Team</th><th style="text-align:right;">M</th><th style="text-align:right;">Runs</th><th style="text-align:right;">SR</th><th style="text-align:right;">HS</th><th style="text-align:right;">Wkts</th><th style="text-align:right;">Econ</th><th style="text-align:right;">Best</th>
+        </tr></thead>
         <tbody>
-          {% for ln in lines %}
-          <tr><td>{{ ln.name }}</td><td>{{ ln.team_name or '—' }}</td>
-            <td class="num">{{ ln.bat_runs }}{{ '' if ln.bat_out else '*' }}</td><td class="num">{{ ln.bat_balls }}</td>
-            <td class="num">{{ ln.bat_fours }}</td><td class="num">{{ ln.bat_sixes }}</td>
-            <td class="num">{{ ln.bowl_wickets }}</td><td class="num">{{ ln.bowl_runs }}</td></tr>
+          {% for p in players %}
+          <tr style="border-top:1px solid var(--border);">
+            <td style="padding:.4rem;">{{ p.name or 'Player' }}</td><td>{{ p.team_name or '—' }}</td>
+            <td style="text-align:right;">{{ p.matches }}</td><td style="text-align:right;">{{ p.bat_runs }}</td>
+            <td style="text-align:right;">{{ '%.1f'|format(p.bat_runs / p.bat_balls * 100) if p.bat_balls else '—' }}</td>
+            <td style="text-align:right;">{{ p.highest_score }}</td><td style="text-align:right;">{{ p.bowl_wickets }}</td>
+            <td style="text-align:right;">{{ '%.2f'|format(p.bowl_runs / (p.bowl_balls/6)) if p.bowl_balls else '—' }}</td>
+            <td style="text-align:right;">{% if p.best_bowl_runs >= 0 %}{{ p.best_bowl_wickets }}/{{ p.best_bowl_runs }}{% else %}—{% endif %}</td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
+      {% else %}<div class="empty" style="color:var(--muted);">No player stats yet — recorded from bot-played matches.</div>{% endif %}
+    </div>
+  </details>
+
+  <!-- Match history -->
+  {% if match_cards %}
+  <details class="section-card" style="padding:0;">
+    <summary style="padding:1.25rem 1.5rem;cursor:pointer;font-weight:700;color:var(--text);"><i class="fas fa-scroll" style="color:var(--accent);"></i> Match History ({{ match_cards|length }})</summary>
+    <div style="padding:0 1.5rem 1.5rem;">
+      {% for m, lines in match_cards %}
+      <div style="background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;padding:.7rem .85rem;margin-bottom:.5rem;display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap;align-items:center;">
+        <span><strong>{{ tt_map[m.team1_id].name if tt_map.get(m.team1_id) else 'Team 1' }}</strong> vs <strong>{{ tt_map[m.team2_id].name if tt_map.get(m.team2_id) else 'Team 2' }}</strong>
+          <span style="color:var(--muted);font-size:.82rem;"> — {{ m.result_text or '' }} ({{ m.inn1_runs }}/{{ m.inn1_wickets }} vs {{ m.inn2_runs }}/{{ m.inn2_wickets }})</span></span>
+        <form method="POST" action="{{ url_for('admin_tournament_match_delete', tournament_id=t.id, match_row_id=m.id) }}" onsubmit="return confirm('Remove this match? Stats rebuild without it.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="action-btn danger-btn" type="submit" style="width:auto;padding:.35rem .7rem;">🗑️ Remove</button>
+        </form>
       </div>
-      {% endif %}
-    </details>
-    {% endfor %}
-    {% else %}<div class="empty">No tournament matches played yet.</div>{% endif %}
-  </section>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
 </div>
+
+<script>
+(function () {
+  var nextUp = document.querySelector('.fixture-card.next-up');
+  if (nextUp) setTimeout(function () { nextUp.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 400);
+})();
+</script>
 {% endblock %}
