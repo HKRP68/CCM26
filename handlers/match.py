@@ -3388,7 +3388,16 @@ async def render_screen(ctx, mid):
             return False
 
     try:
-        # Always check innings-over first (regardless of next_action)
+        # A finished match never renders another screen — the result is already
+        # recorded, so there is nothing left to play. Clear the stale state.
+        if s.get("result_finalized"):
+            cleanup_state(ctx, mid)
+            release_match_lock(mid)
+            return False
+
+        # Always check innings-over first (regardless of next_action). Once the
+        # overs are used up (or the side is all out / the chase is won) the only
+        # legal next step is the innings end — never another ball or over.
         if is_innings_over(s):
             await _end_innings(ctx, mid)
             return True
@@ -3571,6 +3580,18 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not found_mid:
         await update.message.reply_text("❌ No active match in this chat to resume.")
+        return
+
+    # Nothing to resume once the match is decided — the innings quota is spent,
+    # so re-rendering would only offer a ball that can't legally be bowled.
+    found_state = _gs(context, found_mid)
+    if found_state and found_state.get("result_finalized"):
+        cleanup_state(context, found_mid)
+        release_match_lock(found_mid)
+        await update.message.reply_text(
+            "🏁 <b>That match is already over.</b>\n"
+            "All overs have been bowled and the result is in — start a new "
+            "match to play again.", parse_mode="HTML")
         return
 
     await update.message.reply_text("🔄 <b>Resuming match...</b>", parse_mode="HTML")
@@ -5248,6 +5269,14 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
 
 async def _end_innings(ctx, mid):
     s = _gs(ctx, mid); cid = s["chat_id"]; _cancel_action_timer(ctx, mid)
+    # Already finalized (rewards paid, Match row completed) — this is a stale
+    # state that survived a failed cleanup. Clear it instead of paying out and
+    # re-announcing the result a second time.
+    if s.get("result_finalized"):
+        logger.info("match %s already finalized — clearing stale state", mid)
+        cleanup_state(ctx, mid)
+        release_match_lock(mid)
+        return
     if s["innings"] == 1:
         s["inn1_runs"] = s["total_runs"]; s["inn1_wickets"] = s["total_wickets"]
         s["inn1_overs"] = format_overs(s); s["inn1_team"] = s["bat_team_name"]
@@ -5527,6 +5556,13 @@ async def _end_innings(ctx, mid):
             session.rollback()
             logger.exception("Match finalize err")
         finally: session.close()
+
+        # Mark the result as recorded BEFORE the (fallible) scorecards, summary
+        # card and result message below. If any of those fail, the state that
+        # survives is flagged finished — so /resume clears it instead of
+        # re-running the innings end and paying the rewards twice.
+        s["result_finalized"] = True
+        _ss(ctx, mid, s, next_action=A_COMPLETED)
 
         msg = (
             f"━━━━━━━━━━━━━━━━━━━\n🏆 <b>MATCH RESULT</b>\n\n"

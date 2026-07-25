@@ -1,5 +1,6 @@
 """Trait system — business logic for shop, inventory, application, upgrades."""
 
+import html
 import random
 import logging
 from datetime import datetime, timedelta
@@ -286,6 +287,75 @@ def replace_trait_on_player(session, user, player_trait_id, inventory_id):
     return True, (f"🔄 Replaced {old_trait.emoji} {old_trait.name} with "
                   f"{new_trait.emoji} {new_trait.name} Lv.{pt.level}. "
                   f"-{TRAIT_REPLACE_COST} 💎")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UNEQUIP — traits always come back to the owner's inventory
+# ═══════════════════════════════════════════════════════════════════════
+
+def return_traits_to_inventory(session, roster_ids):
+    """Send every trait equipped on ``roster_ids`` back to its owner's inventory.
+
+    This is the single helper for every path where a roster slot stops being the
+    player it was — a sell/release, an undone buy, a trade, a claim/overflow
+    replace, or the admin player purge. Each trait returns at the level it was
+    equipped at (a Lv.4 trait comes back Lv.4) and goes to the user who owned it
+    (``PlayerTrait.user_id``), which is the pre-trade owner on a swap.
+
+    Returns the number of traits returned. The caller commits.
+    """
+    if isinstance(roster_ids, int):
+        roster_ids = [roster_ids]
+    ids = [int(r) for r in (roster_ids or []) if r]
+    if not ids:
+        return 0
+
+    equipped = (session.query(PlayerTrait)
+                .filter(PlayerTrait.roster_id.in_(ids)).all())
+    for pt in equipped:
+        session.add(TraitInventory(
+            user_id=pt.user_id, trait_id=pt.trait_id, level=pt.level))
+        session.delete(pt)
+    if equipped:
+        session.flush()
+    return len(equipped)
+
+
+def _player_name_for_roster(session, roster_id):
+    row = (session.query(Player)
+           .join(UserRoster, UserRoster.player_id == Player.id)
+           .filter(UserRoster.id == roster_id).first())
+    return row.name if row else "your player"
+
+
+def remove_trait_from_player(session, user, player_trait_id):
+    """Unequip one trait (/removetrait) and return it to inventory.
+
+    Free — the trait keeps its level, so removing and re-applying never costs
+    the user progress. Returns ``(ok, message)``; the caller commits.
+    """
+    pt = session.query(PlayerTrait).filter(
+        PlayerTrait.id == player_trait_id,
+        PlayerTrait.user_id == user.id).first()
+    if not pt:
+        return False, "That trait isn't equipped on any of your players."
+
+    trait = session.query(Trait).get(pt.trait_id)
+    if not trait:
+        return False, "Trait definition missing."
+
+    player_name = _player_name_for_roster(session, pt.roster_id)
+    level = pt.level
+
+    session.add(TraitInventory(
+        user_id=user.id, trait_id=pt.trait_id, level=level))
+    session.delete(pt)
+    session.flush()
+
+    return True, (f"📦 Removed {trait.emoji} {trait.name} Lv.{level} from "
+                  f"<b>{html.escape(player_name)}</b> — it's back in your "
+                  f"inventory.\n"
+                  f"<i>Use /traitapply to attach it to another player.</i>")
 
 
 def upgrade_player_trait(session, user, player_trait_id):

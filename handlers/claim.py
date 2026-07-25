@@ -515,6 +515,17 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
         new_name = new_player.name if new_player else "Unknown"
         count = user.roster_count
 
+        # The roster slot is reused for the new player, so any traits equipped
+        # on the outgoing player must come off first — otherwise they'd silently
+        # transfer to a player the user never applied them to. They go back to
+        # the inventory at their current level.
+        traits_returned = 0
+        try:
+            from services.trait_service import return_traits_to_inventory
+            traits_returned = return_traits_to_inventory(session, old_entry.id)
+        except Exception:
+            logger.exception("Trait return on replace failed (non-fatal)")
+
         old_entry.player_id = new_player_id
         old_entry.acquired_date = datetime.utcnow()
 
@@ -522,11 +533,13 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
                      player_name=new_name, player_rating=new_player.rating if new_player else 0)
         session.commit()
 
+        traits_line = (f"\n💎 {traits_returned} trait(s) returned to inventory."
+                       if traits_returned else "")
         await context.bot.send_message(chat_id=chat_id,
             text=(f"🔁 <b>Player SUCCESSFULLY REPLACED!</b>\n\n"
                   f"⬅ Removed: {old_name}\n"
                   f"➡ Added: {new_name}\n\n"
-                  f"✅ Squad Updated: {count}/25"),
+                  f"✅ Squad Updated: {count}/25{traits_line}"),
             parse_mode="HTML")
 
     except Exception:

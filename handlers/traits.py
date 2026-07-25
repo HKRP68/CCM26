@@ -8,6 +8,7 @@ Commands:
   /traitapply         — apply an inventory trait to a player (callback picker)
   /traitupgrade       — upgrade a trait on a player (callback picker)
   /traitreplace       — replace a trait on a player (callback picker)
+  /removetrait        — unequip a trait, returning it to inventory (picker)
 """
 
 import logging
@@ -19,7 +20,7 @@ from models import User, Player, UserRoster, Trait, PlayerTrait, TraitInventory,
 from utils.idempotency import claim_once, release
 from services.trait_service import (
     TRAIT_DEFINITIONS, refresh_shop, reroll_shop, buy_trait_from_shop,
-    apply_trait_to_player, replace_trait_on_player,
+    apply_trait_to_player, replace_trait_on_player, remove_trait_from_player,
     upgrade_player_trait, upgrade_inventory_trait,
     get_player_traits, _today_key, _get_or_create_daily,
 )
@@ -100,6 +101,7 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("🎯 /traitapply — attach to player")
         lines.append("⬆️ /traitupgrade — level up")
         lines.append("🔄 /traitreplace — swap trait")
+        lines.append("📦 /removetrait — unequip, back to inventory")
 
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -647,6 +649,10 @@ async def traitreplace_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🔄 <b>REPLACE TRAIT</b>",
             f"💎 Gems: {user.total_gems:,}  |  Cost: <b>{TRAIT_REPLACE_COST} 💎</b>",
             "━━━━━━━━━━━━━━━━━━━",
+            "⚠️ <i>The trait you replace is discarded. To keep it, use "
+            "/removetrait (free — it goes back to your inventory) and then "
+            "/traitapply the new one.</i>",
+            "",
             "Pick the EQUIPPED trait to replace:",
         ]
         for pt, t, ur, p in equipped:
@@ -737,6 +743,103 @@ async def trrep_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception:
         session.rollback()
         logger.exception("trrep_inv_callback error")
+        await q.answer("⚠️ Error", show_alert=True)
+    finally:
+        session.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /removetrait — unequip a trait, sending it back to inventory
+# ═══════════════════════════════════════════════════════════════════════
+
+async def removetrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/removetrait — pick an equipped trait to send back to your inventory."""
+    tg = update.effective_user
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        equipped = (session.query(PlayerTrait, Trait, UserRoster, Player)
+                    .join(Trait, PlayerTrait.trait_id == Trait.id)
+                    .join(UserRoster, PlayerTrait.roster_id == UserRoster.id)
+                    .join(Player, UserRoster.player_id == Player.id)
+                    .filter(PlayerTrait.user_id == user.id)
+                    .order_by(UserRoster.order_position).all())
+
+        if not equipped:
+            await update.message.reply_text(
+                "❌ You have no equipped traits to remove.\n"
+                "Apply one first with /traitapply.")
+            return
+
+        lines = [
+            "📦 <b>REMOVE TRAIT</b>",
+            "━━━━━━━━━━━━━━━━━━━",
+            "Removing is free — the trait keeps its level and goes straight "
+            "back to your inventory.",
+            "",
+            "Pick the trait to remove:",
+        ]
+        btns = []
+        for pt, t, ur, p in equipped:
+            max_badge = " 🌟" if pt.level == 5 else ""
+            btns.append([InlineKeyboardButton(
+                f"{t.emoji} {t.name} Lv.{pt.level}{max_badge} — {p.name}",
+                callback_data=f"trrem_pt_{pt.id}"
+            )])
+        btns.append([InlineKeyboardButton("❌ Cancel", callback_data="trcancel")])
+
+        await update.message.reply_text(
+            "\n".join(lines), parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(btns))
+    except Exception:
+        logger.exception("removetrait_handler error")
+        await update.message.reply_text("⚠️ Error.")
+    finally:
+        session.close()
+
+
+async def trrem_pt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unequip the chosen trait. Callback: trrem_pt_<player_trait_id>"""
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        pt_id = int(q.data.split("_")[2])
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+
+    # Dedup rapid taps — a double tap must not mint two inventory copies.
+    key = f"trrem_{pt_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            release(key)
+            await q.answer("Not authorized")
+            return
+        ok, msg = remove_trait_from_player(session, user, pt_id)
+        if ok:
+            session.commit()
+            await q.answer("Removed!")
+            try: await q.edit_message_text(msg, parse_mode="HTML")
+            except Exception: pass
+        else:
+            session.rollback()
+            release(key)
+            await q.answer(msg, show_alert=True)
+    except Exception:
+        # Keep the claim (the commit may already have landed) so a stale tap
+        # can't return the same trait to inventory twice.
+        session.rollback()
+        logger.exception("trrem_pt_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:
         session.close()

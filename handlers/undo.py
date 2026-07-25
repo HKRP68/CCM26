@@ -98,7 +98,7 @@ async def _undo_buy(update, session, user, payload):
 
     # Clean up any references to this roster row before deleting it
     from sqlalchemy import text as _sa_text
-    from models import Trade, PlayerTrait
+    from models import Trade
     try:
         stale_trades = (session.query(Trade)
                         .filter(Trade.status == "pending")
@@ -126,14 +126,16 @@ async def _undo_buy(update, session, user, payload):
     except Exception:
         logger.exception("Trade cleanup failed (non-fatal)")
 
-    # Remove any equipped traits (PlayerTrait points at the doomed roster row)
+    # Unequip any traits on this roster row — they go BACK to the user's
+    # inventory (at the level they were on) rather than being destroyed, exactly
+    # like a release does. The player leaves; the traits the user paid gems for
+    # stay theirs.
+    traits_returned = 0
     try:
-        equipped = (session.query(PlayerTrait)
-                    .filter(PlayerTrait.roster_id == roster_id).all())
-        for pt in equipped:
-            session.delete(pt)
+        from services.trait_service import return_traits_to_inventory
+        traits_returned = return_traits_to_inventory(session, roster_id)
     except Exception:
-        logger.exception("Trait cleanup failed (non-fatal)")
+        logger.exception("Trait return failed (non-fatal)")
 
     # Null captain pointer if it was this entry
     if getattr(user, "captain_roster_id", None) == roster_id:
@@ -160,12 +162,14 @@ async def _undo_buy(update, session, user, payload):
     clear_pending(session, user.id)
     session.commit()
 
+    traits_line = (f"\n💎 {traits_returned} trait(s) returned to inventory."
+                   if traits_returned else "")
     await update.message.reply_text(
         f"↩️ <b>UNDO COMPLETE</b>\n\n"
         f"Removed: <b>{player_name}</b> ({rating} OVR)\n"
         f"💰 Refunded: <b>{price:,}</b> 🪙\n"
         f"💳 Balance: {user.total_coins:,} 🪙\n"
-        f"📊 Roster: {user.roster_count}/25",
+        f"📊 Roster: {user.roster_count}/25{traits_line}",
         parse_mode="HTML")
 
 
