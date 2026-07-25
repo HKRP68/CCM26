@@ -42,6 +42,8 @@ def calculate_super_over_outcome(
     last_ball: bool = False,
     edge: float = 1.0,
     free_hit: bool = False,
+    wicket_boost: float = 1.0,
+    dot_boost: float = 1.0,
 ) -> dict:
     """
     Simulates one delivery in a Super Over. Uses SUPER_OVER_SCORING_MATRIX
@@ -88,6 +90,11 @@ def calculate_super_over_outcome(
         edge (float): batting-side edge (default 1.0 = none). >1 lifts the
                            batter's scoring (singles/twos/fours/sixes) and makes
                            a dismissal correspondingly less likely.
+        wicket_boost (float): multiplier on the Wicket weight (default 1.0).
+                           Used by the bowling captain's one-per-innings
+                           "Killer Ball" gamble.
+        dot_boost (float): multiplier on the Dot weight (default 1.0). Lets a
+                           wicket-hunting delivery also squeeze the scoring.
 
     Returns:
         dict with keys:
@@ -124,6 +131,8 @@ def calculate_super_over_outcome(
             # is left alone so the edge can't make scoring rarer).
             if outcome != "Dot":
                 weight *= edge
+            else:
+                weight *= dot_boost
 
         elif outcome in ("Four", "Six"):
             # Boundary outcomes: same blending + 1.2× super-over excitement, then
@@ -144,7 +153,7 @@ def calculate_super_over_outcome(
             skill_frac = ((bowling / (batting + bowling)) * (fielding / 100.0)) if (batting + bowling) > 0 else 0.5
             pitch_frac = get_pitch_wicket_multiplier(pitch, bowling_type)
             blended_frac = 0.4 * skill_frac + 0.6 * pitch_frac
-            weight = base_prob * blended_frac * 1.3
+            weight = base_prob * blended_frac * 1.3 * wicket_boost
             # Batting edge makes the favoured side a little harder to dismiss.
             if edge:
                 weight /= edge

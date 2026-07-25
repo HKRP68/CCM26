@@ -6311,6 +6311,12 @@ def webapp_xi_reorder():
         for new_pos, rid in enumerate(ids, start=1):
             by_id[rid].order_position = new_pos
 
+        # Mark the order as user-chosen so the chat modes that would otherwise
+        # auto-build a line-up (/letsplay) use this one instead of re-sorting by
+        # batting rating. Same flag /setbo and /sbo set.
+        from datetime import datetime as _dt
+        user.batting_order_set_at = _dt.utcnow()
+
         db.commit()
         return {"ok": True, "reordered": len(ids)}
     except Exception as e:

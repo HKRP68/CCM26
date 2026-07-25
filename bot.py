@@ -54,6 +54,7 @@ from handlers.trade import (
 
 # Phase 3 handlers
 from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback, autobuild_handler
+from handlers.batting_order import setbo_handler
 from handlers.ximage import ximage_handler
 from handlers.search import (
     searchpl_handler, searchovr_handler,
@@ -288,6 +289,19 @@ logger = logging.getLogger(__name__)
 # Keep this list aligned with the canonical command names registered in main().
 # Aliases remain supported by CommandHandler, but publishing only canonical names
 # keeps Telegram's slash-command menu complete without filling it with duplicates.
+# Every player-facing command registered in main() must appear here, EXCEPT:
+#   • admin/owner-gated ones (/grant, /setcardid, /clearmatches, /removematch,
+#     /frwd_grp, /frwd_prvt, /tourallow, /tourblock, /tourallowlist) and the
+#     /testwpm diagnostic — these must not show up in everyone's slash menu;
+#   • /eu and /cu, which the Unscramble lobby message already spells out for the
+#     players in it.
+# All of those still work as commands — they are simply not advertised.
+#
+# HARD LIMIT: Telegram's setMyCommands accepts at most 100 commands. Going over
+# fails the whole call (leaving the menu stale), so MENU_LIMIT is enforced below
+# and this tuple must stay at or under it.
+MENU_LIMIT = 100   # Telegram's setMyCommands ceiling
+
 BOT_MENU_COMMANDS = (
     ("start", "Show the welcome message and command overview"),
     ("debut", "Create your account and receive a starting squad"),
@@ -306,6 +320,7 @@ BOT_MENU_COMMANDS = (
     ("ximage", "View your Playing XI as an image"),
     ("autobuild", "Build your best available playing XI"),
     ("swapplayers", "Swap two players in your lineup"),
+    ("setbo", "View or change your batting order (e.g. /sbo 2 11)"),
     ("setcaptain", "Set your team captain"),
     ("searchpl", "Search for a player by name"),
     ("searchovr", "Search players by overall rating"),
@@ -322,11 +337,14 @@ BOT_MENU_COMMANDS = (
     ("myprofile", "View your profile"),
     ("playmatch", "Challenge another user to a match"),
     ("wpm", "Match lobby up to 20 overs — tag/reply to invite a player (Mini App)"),
-    ("testwpm", "Test /wpm and /cm completion summary delivery"),
+    ("wsp", "Wicket Survival Panic — survive as long as you can"),
+    ("wspbot", "Wicket Survival Panic against the bot"),
+    ("sim", "Simulate a full match instantly"),
     ("endmatch", "Request to end your active match"),
     ("resume", "Resume your active match"),
     ("rcl", "Resume a stuck Challenge League (/cipl) match"),
     ("letsplay", "Challenge a user with your own roster (20 overs)"),
+    ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
     ("lastmatch", "View your last match"),
     ("recentmatches", "View your recent matches"),
@@ -340,11 +358,14 @@ BOT_MENU_COMMANDS = (
     ("dwm", "Disable welcome messages for this chat"),
     ("pbo", "Start a player bowl-out"),
     ("catch", "Catch coins using your purse"),
+    ("bal", "Check your catch-game balance"),
     ("cm", "Start a two-wicket challenge match"),
     ("challengeipl", "Challenge another user to an IPL match"),
     ("challengebbl", "Challenge another user to a BBL match"),
     ("challengeint", "Challenge another user to an international match"),
     ("unscramble", "Create an Unscramble Player lobby"),
+    ("ju", "Join the Unscramble lobby"),
+    ("su", "Start the Unscramble game"),
     ("traits", "View your traits and inventory"),
     ("traitshop", "Browse the daily trait shop"),
     ("traitapply", "Apply a trait to a player"),
@@ -371,6 +392,7 @@ BOT_MENU_COMMANDS = (
     ("powerplay", "Crash game — bet on a multiplier before it crashes"),
     ("score21", "Play Blackjack against the dealer"),
     ("wordchase", "Host a word-guessing game (group)"),
+    ("endchase", "End the running Word Chase game"),
     ("bluff", "Challenge someone to a cricket trivia bluff duel"),
     ("mole", "Start a Mole Hunt social deduction game (group)"),
     ("cartel", "Start a Cricket Cartel multi-role deduction game (group)"),
@@ -394,11 +416,22 @@ async def register_bot_menu(application):
     except Exception:
         logger.exception("Could not start the event-loop lag monitor")
 
+    published = BOT_MENU_COMMANDS
+    if len(published) > MENU_LIMIT:
+        # Telegram rejects the whole call over the limit, which would leave the
+        # menu frozen on an old build. Publish what fits and shout about the
+        # rest so the overflow gets pruned deliberately rather than silently.
+        dropped = [c for c, _d in published[MENU_LIMIT:]]
+        logger.error(
+            "BOT_MENU_COMMANDS has %s entries but Telegram allows %s — "
+            "not publishing: %s", len(published), MENU_LIMIT, ", ".join(dropped))
+        published = published[:MENU_LIMIT]
+
     await application.bot.set_my_commands([
         BotCommand(command, description)
-        for command, description in BOT_MENU_COMMANDS
+        for command, description in published
     ])
-    logger.info("Registered %s Telegram bot-menu commands", len(BOT_MENU_COMMANDS))
+    logger.info("Registered %s Telegram bot-menu commands", len(published))
 
 
 async def start_handler(update, context):
@@ -936,6 +969,10 @@ def main():
         app.add_handler(CommandHandler(["ximage", "xiimg", "xipic"], ximage_handler))
         app.add_handler(CommandHandler(["autobuild", "ab", "best11"], autobuild_handler))
         app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
+        # /setbo, /sbo — set your own batting order (roster slots 1-11). The
+        # order saved here is what /letsplay and the Mini App XI screen use.
+        app.add_handler(CommandHandler(
+            ["setbo", "sbo", "battingorder", "bo"], setbo_handler))
         app.add_handler(CommandHandler(["setcaptain", "captain", "cap"], setcaptain_handler))
         app.add_handler(CommandHandler(["searchpl", "search", "sp"], searchpl_handler))
         app.add_handler(CommandHandler(["searchovr", "so"], searchovr_handler))
@@ -1101,7 +1138,7 @@ def main():
         from handlers.super_over import (
             so_bat_callback, so_batok_callback, so_bowl_callback,
             so_bowlok_callback, so_deliv_callback, so_len_callback,
-            so_shot_callback,
+            so_shot_callback, so_killer_callback, so_power_callback,
         )
         app.add_handler(CallbackQueryHandler(so_batok_callback, pattern=r"^so_batok_"))
         app.add_handler(CallbackQueryHandler(so_bat_callback, pattern=r"^so_bat_"))
@@ -1110,6 +1147,9 @@ def main():
         app.add_handler(CallbackQueryHandler(so_deliv_callback, pattern=r"^so_dv_"))
         app.add_handler(CallbackQueryHandler(so_len_callback, pattern=r"^so_ln_"))
         app.add_handler(CallbackQueryHandler(so_shot_callback, pattern=r"^so_sh_"))
+        # One-per-innings captain gambles: 🎯 Killer Ball / 💥 Power Shot.
+        app.add_handler(CallbackQueryHandler(so_killer_callback, pattern=r"^so_kb_"))
+        app.add_handler(CallbackQueryHandler(so_power_callback, pattern=r"^so_ps_"))
         # /letsplay — friendly head-to-head played with each user's own roster.
         # Reuses the Challenge League over-by-over engine; traits are active.
         from handlers.letsplay import (

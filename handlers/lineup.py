@@ -571,6 +571,11 @@ async def autobuild_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             entry.order_position = i
         for i, (entry, _) in enumerate(bench, start=12):
             entry.order_position = i
+        # /autobuild picks the XI by rating in display order, which is not a
+        # batting order anybody chose — drop the "custom order" flag so match
+        # modes fall back to sorting by batting rating until the user sets one
+        # again with /setbo.
+        user.batting_order_set_at = None
         session.commit()
 
         # Build the response message
@@ -603,7 +608,8 @@ async def autobuild_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tag = " 🌀" if _is_spin(p.bowl_style) else " 🎯"
             lines.append(f"{i:>2}. {p.name} — <b>{p.rating}</b>{tag}")
 
-        lines.append("\n<i>Use /pxi to view, /swap to adjust manually.</i>")
+        lines.append("\n<i>Use /pxi to view, /swap to adjust manually, "
+                     "/sbo to set your batting order.</i>")
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
     except Exception:

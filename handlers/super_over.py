@@ -25,6 +25,16 @@ Special Super Over rules (per the workflow spec):
   • Winner is decided by runs only (no wickets / boundary countback).
   • Super Over score is kept separate from the main-match score.
 
+On top of the rules, each Super Over innings gives BOTH captains one high-stakes
+gamble they can spend on any single ball:
+  • 💥 Power Shot (batting)  — big boundary lift, but a much greater risk of
+    losing the wicket. One per innings.
+  • 🎯 Killer Ball (bowling) — a big lift in wicket chance and dot pressure,
+    but if the batter survives it, it is easier to put away. One per innings.
+Both are armed before the ball is bowled, are visible to the opponent as soon as
+they are armed (so it is a bluffing game, not a hidden roll), and are consumed by
+the next legal-or-not delivery.
+
 State lives in ``context.bot_data[f"so_{mid}"]`` (in-memory, like the /wpm and
 /cm lobbies). The main Match row stays ``active`` until a winner is found, so the
 one-match-per-player / one-game-per-chat guards keep holding during the Super
@@ -64,6 +74,16 @@ _BALL_PAUSE = 1.4
 # Super Over flavour tuning (passed into the SimCricketX outcome engine).
 SO_BOUNDARY_BOOST = 1.6   # more fours/sixes than a regular over
 SO_BATTING_EDGE = 1.25    # edge to the team batting first in the Super Over
+
+# ── One-per-innings captain gambles ───────────────────────────────────
+# 💥 Power Shot: swing for the fence — many more boundaries, far more risk.
+POWER_SHOT_BOUNDARY = 1.9
+POWER_SHOT_WICKET = 1.7
+# 🎯 Killer Ball: the wicket-hunting delivery — big wicket + dot lift, but a
+# batter who survives it finds it easier to hit.
+KILLER_BALL_WICKET = 2.2
+KILLER_BALL_DOT = 1.5
+KILLER_BALL_BOUNDARY = 1.25
 
 
 def _so_key(mid):
@@ -443,6 +463,11 @@ def _render_selection(so):
         f"{_mention(bat['tg'], bat['name'])}, select <b>3 batters</b> "
         "(2 openers + 1 backup).",
         f"{_mention(bowl['tg'], bowl['name'])}, select <b>1 bowler</b>.", "",
+        "🃏 <b>One gamble each, once per innings:</b>",
+        "💥 <b>Power Shot</b> — huge boundary chance, huge risk of getting out.",
+        "🎯 <b>Killer Ball</b> — hunts the wicket and chokes the runs, but a "
+        "batter who survives it can cash in.",
+        "",
         "<i>Only the team owner can pick for their own team.</i>",
     ]
 
@@ -658,6 +683,11 @@ async def _start_innings(context, mid):
         "stage": "DELIV",
         "pending": {"delivery": None, "length": None},
         "msg_id": None,
+        # One-per-innings captain gambles: unused → armed → spent.
+        "power_shot_left": 1, "power_shot_armed": False,
+        "killer_ball_left": 1, "killer_ball_armed": False,
+        # Crowd/situation colour for the last ball bowled (see _crowd_line).
+        "hype": "",
     }
     so["bowled_by"][bowl_uid] = bowler_rid
     await _prompt(context, mid)
@@ -666,6 +696,58 @@ async def _start_innings(context, mid):
 def _name(so, uid, rid):
     p = _player_by_rid(so, uid, rid)
     return p["name"] if p else "Player"
+
+
+_BALL_EMOJI = {"0": "⚪", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣",
+               "4": "4️⃣", "6": "6️⃣", "W": "🔴"}
+
+
+def _ball_symbol(sym):
+    """Pretty per-ball marker for the Recent strip."""
+    return _BALL_EMOJI.get(sym, f"<code>{sym}</code>")
+
+
+def _pressure_bar(so, inn):
+    """A 6-block gauge of how hard the chase (or the defence) has become.
+
+    Innings 2 reads the required run rate against a Super Over's realistic
+    ceiling; innings 1 reads the balls already gone. It is cosmetic, but it is
+    what makes a 3-off-2 finish *look* like 3 off 2.
+    """
+    left = max(0, 6 - inn["legal"])
+    if so["innings_no"] == 2 and so.get("target"):
+        need = max(0, so["target"] - inn["runs"])
+        if left <= 0 or need <= 0:
+            filled = 6 if need > 0 else 0
+        else:
+            # 2 runs a ball is comfortable, 4+ a ball is desperation.
+            filled = max(0, min(6, round((need / left) / 4 * 6)))
+    else:
+        filled = min(6, inn["legal"])
+    return "▓" * filled + "░" * (6 - filled)
+
+
+def _equation_line(so, inn):
+    """The one line everybody actually stares at during a Super Over."""
+    need = max(0, so["target"] - inn["runs"])
+    left = max(0, 6 - inn["legal"])
+    if need <= 0:
+        return "✅ <b>Target reached!</b>"
+    if left <= 0:
+        return "⌛ <b>No balls left.</b>"
+    if left == 1:
+        return f"🚨 <b>{need} needed off the LAST BALL!</b>"
+    return f"⚡ Need <b>{need}</b> off <b>{left}</b> balls"
+
+
+def _armed_line(inn):
+    """Show which gambles are armed for THIS ball — both captains can see it."""
+    bits = []
+    if inn.get("power_shot_armed"):
+        bits.append("💥 <b>POWER SHOT ARMED</b>")
+    if inn.get("killer_ball_armed"):
+        bits.append("🎯 <b>KILLER BALL ARMED</b>")
+    return "  •  ".join(bits)
 
 
 def _score_card(so, note=None):
@@ -685,13 +767,12 @@ def _score_card(so, note=None):
              f"Batting: <b>{html.escape(bat['name'])}</b>",
              f"Bowling: <b>{html.escape(bowl['name'])}</b>"]
     if so["innings_no"] == 2:
-        need = max(0, so["target"] - inn["runs"])
-        left = max(0, 6 - inn["legal"])
         lines.append(f"🎯 Target: <b>{so['target']}</b>")
-        lines.append(f"Need <b>{need}</b> from <b>{left}</b> ball(s)")
+        lines.append(_equation_line(so, inn))
     lines += [
         "",
         f"Score: <b>{inn['runs']}/{inn['wickets']}</b> ({over_disp}/1)",
+        f"🌡 Pressure: {_pressure_bar(so, inn)}",
         "",
         f"🏏 {html.escape(_name(so, so['bat_uid'], s_rid))} "
         f"<b>{sb['r']}</b>({sb['b']})  •  "
@@ -700,10 +781,33 @@ def _score_card(so, note=None):
         f"{inn['bowl_wkts']}-{inn['bowl_runs']}",
     ]
     if inn["recent"]:
-        lines.append("Recent: " + " ".join(inn["recent"]))
+        lines.append("Recent: " + " ".join(_ball_symbol(s) for s in inn["recent"]))
+    armed = _armed_line(inn)
+    if armed:
+        lines += ["", armed]
+    if inn.get("hype"):
+        lines += ["", inn["hype"]]
     if note:
         lines += ["", note]
     return "\n".join(lines)
+
+
+def _killer_ball_row(mid, inn):
+    """The bowling captain's one-per-innings gamble button (or nothing left)."""
+    if inn.get("killer_ball_left", 0) <= 0:
+        return []
+    label = ("🎯 KILLER BALL — ARMED (tap to cancel)"
+             if inn.get("killer_ball_armed") else "🎯 Use Killer Ball (1 left)")
+    return [[InlineKeyboardButton(label, callback_data=f"so_kb_{mid}")]]
+
+
+def _power_shot_row(mid, inn):
+    """The batting captain's one-per-innings gamble button."""
+    if inn.get("power_shot_left", 0) <= 0:
+        return []
+    label = ("💥 POWER SHOT — ARMED (tap to cancel)"
+             if inn.get("power_shot_armed") else "💥 Use Power Shot (1 left)")
+    return [[InlineKeyboardButton(label, callback_data=f"so_ps_{mid}")]]
 
 
 async def _prompt(context, mid):
@@ -723,6 +827,7 @@ async def _prompt(context, mid):
         note = f"🎳 {_mention(bowl['tg'], bowl['name'])} — choose your delivery:"
         for i, c in enumerate(choices):
             kb.append([InlineKeyboardButton(c, callback_data=f"so_dv_{mid}_{i}")])
+        kb.extend(_killer_ball_row(mid, inn))
     elif stage == "LEN":
         choices = opts["lengths"]
         inn["_choices"] = choices
@@ -730,6 +835,7 @@ async def _prompt(context, mid):
                 f"<b>{html.escape(inn['pending']['delivery'])}</b> — choose length:")
         for i, c in enumerate(choices):
             kb.append([InlineKeyboardButton(c, callback_data=f"so_ln_{mid}_{i}")])
+        kb.extend(_killer_ball_row(mid, inn))
     else:  # SHOT
         inn["_choices"] = AVAILABLE_SHOTS
         deliv = inn["pending"]["delivery"]
@@ -744,6 +850,7 @@ async def _prompt(context, mid):
                 kb.append(row); row = []
         if row:
             kb.append(row)
+        kb.extend(_power_shot_row(mid, inn))
 
     text = _score_card(so, note=note)
     markup = InlineKeyboardMarkup(kb)
@@ -817,6 +924,59 @@ async def so_len_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _prompt(context, mid)
 
 
+async def so_killer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """so_kb_{mid} — bowling owner arms/cancels the Killer Ball for this ball."""
+    q = update.callback_query
+    mid, _ = _parse(q, "so_kb_")
+    so = _get(context, mid) if mid is not None else None
+    if not so or "inn" not in so:
+        await q.answer("Not active.", show_alert=True)
+        return
+    inn = so["inn"]
+    bowl = so["teams"][so["bowl_uid"]]
+    if q.from_user.id != bowl["tg"]:
+        await q.answer("Only the bowling captain can use the Killer Ball.",
+                       show_alert=True)
+        return
+    if inn["stage"] not in ("DELIV", "LEN"):
+        await q.answer("Too late — the delivery is already on its way.",
+                       show_alert=True)
+        return
+    if inn.get("killer_ball_left", 0) <= 0:
+        await q.answer("You've already used it this Super Over.", show_alert=True)
+        return
+    inn["killer_ball_armed"] = not inn.get("killer_ball_armed")
+    await q.answer("🎯 Killer Ball armed — bowl it!" if inn["killer_ball_armed"]
+                   else "Killer Ball put away.")
+    await _prompt(context, mid)
+
+
+async def so_power_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """so_ps_{mid} — batting owner arms/cancels the Power Shot for this ball."""
+    q = update.callback_query
+    mid, _ = _parse(q, "so_ps_")
+    so = _get(context, mid) if mid is not None else None
+    if not so or "inn" not in so:
+        await q.answer("Not active.", show_alert=True)
+        return
+    inn = so["inn"]
+    bat = so["teams"][so["bat_uid"]]
+    if q.from_user.id != bat["tg"]:
+        await q.answer("Only the batting captain can call the Power Shot.",
+                       show_alert=True)
+        return
+    if inn["stage"] != "SHOT":
+        await q.answer("Wait for the delivery first.", show_alert=True)
+        return
+    if inn.get("power_shot_left", 0) <= 0:
+        await q.answer("You've already used it this Super Over.", show_alert=True)
+        return
+    inn["power_shot_armed"] = not inn.get("power_shot_armed")
+    await q.answer("💥 Power Shot armed — swing away!" if inn["power_shot_armed"]
+                   else "Power Shot put away.")
+    await _prompt(context, mid)
+
+
 async def so_shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """so_sh_{mid}_{idx} — batting owner picks a shot, then the ball resolves."""
     q = update.callback_query
@@ -847,6 +1007,39 @@ async def so_shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _resolve_ball(context, mid, shot)
 
 
+def _crowd_line(so, inn, otype, runs, out, power_shot, killer_ball):
+    """One line of crowd/situation colour to sit under the score.
+
+    The Super Over is six balls long; without this the chat reads like a table
+    of numbers. It keys off what just happened AND the state of the chase, so a
+    six with two needed off one lands differently from a six in a stroll.
+    """
+    if out:
+        if killer_ball:
+            return "🎯 <i>THE GAMBLE PAYS OFF! The bowling captain called it!</i>"
+        if power_shot:
+            return "💥 <i>Swung for glory — and picked out the fielder. Brutal.</i>"
+        return "🔴 <i>Stunned silence, then a roar. That is a huge wicket.</i>"
+    if otype == "run" and runs == 6:
+        return "🚀 <i>INTO THE STANDS! The whole ground is on its feet!</i>"
+    if otype == "run" and runs == 4:
+        return "💨 <i>Races away to the fence — the pressure just flipped.</i>"
+    if otype == "run" and runs == 0:
+        if killer_ball:
+            return "🎯 <i>Dot ball off the Killer Ball — the squeeze is on.</i>"
+        return "😤 <i>Dot ball. You can hear the tension from here.</i>"
+    if otype == "extra":
+        return "😬 <i>Nerves from the bowler — free runs in a Super Over!</i>"
+    if so["innings_no"] == 2 and so.get("target"):
+        need = max(0, so["target"] - inn["runs"])
+        left = max(0, 6 - inn["legal"])
+        if left == 1 and need <= 6:
+            return f"🚨 <i>It all comes down to the final ball — {need} to win.</i>"
+        if need <= 2 and left >= 2:
+            return "😅 <i>Almost home now.</i>"
+    return "🏟 <i>The crowd holds its breath…</i>"
+
+
 # ── Ball resolution (SimCricketX engine + Super Over tuning) ───────────
 
 async def _resolve_ball(context, mid, shot):
@@ -870,11 +1063,30 @@ async def _resolve_ball(context, mid, shot):
     # A no-ball earlier in the over grants a free hit on this delivery: only a
     # run out can dismiss the batter, and boundaries are a touch more likely.
     free_hit = bool(inn.get("free_hit", False))
+
+    # ── Captain gambles: each side may spend one per innings on this ball ──
+    boundary_boost = SO_BOUNDARY_BOOST
+    wicket_boost = dot_boost = 1.0
+    power_shot = bool(inn.get("power_shot_armed"))
+    killer_ball = bool(inn.get("killer_ball_armed"))
+    if power_shot:
+        boundary_boost *= POWER_SHOT_BOUNDARY
+        wicket_boost *= POWER_SHOT_WICKET
+        inn["power_shot_left"] = max(0, inn.get("power_shot_left", 1) - 1)
+        inn["power_shot_armed"] = False
+    if killer_ball:
+        wicket_boost *= KILLER_BALL_WICKET
+        dot_boost *= KILLER_BALL_DOT
+        # High risk for the bowler too: mistime the gamble and it disappears.
+        boundary_boost *= KILLER_BALL_BOUNDARY
+        inn["killer_ball_left"] = max(0, inn.get("killer_ball_left", 1) - 1)
+        inn["killer_ball_armed"] = False
+
     oc = calculate_super_over_outcome(
         batter, bowler, so["pitch"], streak,
         over_number=0, batter_runs=inn["bat"][s_rid]["r"],
-        boundary_boost=SO_BOUNDARY_BOOST, last_ball=last_ball, edge=edge,
-        free_hit=free_hit)
+        boundary_boost=boundary_boost, last_ball=last_ball, edge=edge,
+        free_hit=free_hit, wicket_boost=wicket_boost, dot_boost=dot_boost)
 
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:
@@ -935,9 +1147,17 @@ async def _resolve_ball(context, mid, shot):
     free_hit_tag = "🆓 <b>FREE HIT</b>\n" if free_hit else ""
     no_ball_tag = ("\n🆓 <i>Free hit coming up — only a run out can dismiss!</i>"
                    if (otype == "extra" and extra_type == "No Ball") else "")
-    note = (f"{free_hit_tag}⚡ <b>{html.escape(deliv)}</b> → "
+    gamble_tag = ""
+    if power_shot and killer_ball:
+        gamble_tag = "💥🎯 <b>POWER SHOT vs KILLER BALL — everything on this ball!</b>\n"
+    elif power_shot:
+        gamble_tag = "💥 <b>POWER SHOT!</b> No half measures here.\n"
+    elif killer_ball:
+        gamble_tag = "🎯 <b>KILLER BALL!</b> The captain wants this wicket.\n"
+    note = (f"{gamble_tag}{free_hit_tag}⚡ <b>{html.escape(deliv)}</b> → "
             f"<i>{html.escape(_name(so, so['bat_uid'], s_rid))} plays the {html.escape(shot)}</i>\n"
             f"{html.escape(commentary)}{no_ball_tag}")
+    inn["hype"] = _crowd_line(so, inn, otype, runs, out, power_shot, killer_ball)
 
     # Strike rotation on odd runs off a legal ball (not on extras-only events).
     if otype == "run" and runs % 2 == 1:
@@ -1034,6 +1254,41 @@ def _super_over_summary(so, winner_name, margin_text):
             "team": d["team"], "runs": d["runs"], "wickets": d["wickets"],
         })
     return {"winner": winner_name, "marginText": margin_text, "innings": innings}
+
+
+def _super_over_mvp(so, winner_uid=None):
+    """Best performer of the DECIDING Super Over (batting or bowling).
+
+    Six balls a side is too short for the main-match Player of the Match maths,
+    so this is a compact impact score: a batter earns their runs plus a bonus
+    per boundary, a bowler earns a lot per wicket minus what they leaked. Ties
+    go to the winning side. Returns ``(name, line)`` or ``(None, None)``.
+    """
+    best = None
+    for d in so.get("so_innings") or []:
+        team_uid = d.get("team_uid")
+        opp_uid = d.get("opp_uid")
+        winners_side = (winner_uid is not None and team_uid == winner_uid)
+        for b in d.get("batters") or []:
+            impact = (b.get("runs", 0) + b.get("fours", 0)
+                      + 2 * b.get("sixes", 0))
+            line = (f"{b.get('runs', 0)} ({b.get('balls', 0)}b) "
+                    f"for {d.get('team', '')}")
+            cand = (impact, 1 if winners_side else 0, b.get("name"), line)
+            if best is None or cand[:2] > best[:2]:
+                best = cand
+        # The bowler's side is the one that did NOT bat in this innings.
+        bowler_won = (winner_uid is not None and opp_uid == winner_uid)
+        for w in d.get("bowlers") or []:
+            impact = 15 * w.get("wickets", 0) + max(0, 15 - w.get("runs", 0))
+            line = (f"{w.get('wickets', 0)}-{w.get('runs', 0)} "
+                    f"in the Super Over")
+            cand = (impact, 1 if bowler_won else 0, w.get("name"), line)
+            if best is None or cand[:2] > best[:2]:
+                best = cand
+    if not best or not best[2]:
+        return None, None
+    return best[2], best[3]
 
 
 def _super_over_miniapp_innings(so):
@@ -1240,6 +1495,11 @@ async def _finalize(context, mid, winner_uid, loser_uid):
         session.close()
 
     # Winner announcement.
+    mvp_name, mvp_line = _super_over_mvp(so, winner_uid)
+    mvp_block = ""
+    if mvp_name:
+        mvp_block = (f"\n\n⭐ <b>Super Over Star:</b> {html.escape(str(mvp_name))}"
+                     f"\n   <i>{html.escape(str(mvp_line))}</i>")
     await context.bot.send_message(
         so["chat_id"],
         "🏆 <b>SUPER OVER RESULT</b>\n\n"
@@ -1247,7 +1507,8 @@ async def _finalize(context, mid, winner_uid, loser_uid):
         f"{_so_scoreline(so, loser_uid)}\n\n"
         f"🎉 {_mention(win['tg'], win['name'])} (<b>{html.escape(win['name'])}</b>) "
         "win the Super Over!\n\n"
-        f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>",
+        f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>"
+        f"{mvp_block}",
         parse_mode="HTML")
 
     # Super Over scorecard image (titled "SUPER OVER").

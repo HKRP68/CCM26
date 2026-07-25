@@ -80,6 +80,9 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "so_dv_",
     "so_ln_",
     "so_sh_",
+    # The one-per-innings captain gambles ride on the same shared ball prompt.
+    "so_kb_",
+    "so_ps_",
     "wsp_join",
     "wsp_decision:",
     "wsp_cancel",

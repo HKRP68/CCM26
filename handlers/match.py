@@ -738,16 +738,18 @@ async def _action_timeout(context):
 
             # Update user stats (skip for vsbot — no real-economy effect on bot losses)
             if not s.get("is_vsbot") and not winner_is_bot:
+                from services.match_rewards import (
+                    apply_win_streak, record_active_day)
                 if winner_user:
                     winner_user.matches_played = (winner_user.matches_played or 0) + 1
                     winner_user.matches_won = (winner_user.matches_won or 0) + 1
-                    winner_user.win_streak = (winner_user.win_streak or 0) + 1
-                    winner_user.best_streak = max(winner_user.best_streak or 0,
-                                                   winner_user.win_streak)
+                    apply_win_streak(winner_user, True)
+                    record_active_day(winner_user)
                 if idle_user:
                     idle_user.matches_played = (idle_user.matches_played or 0) + 1
                     idle_user.matches_lost = (idle_user.matches_lost or 0) + 1
-                    idle_user.win_streak = 0
+                    apply_win_streak(idle_user, False)
+                    record_active_day(idle_user)
 
             # Tour hook — if this match is part of a tour, update it
             if not s.get("is_vsbot") and winner_user:
@@ -5520,26 +5522,23 @@ async def _end_innings(ctx, mid):
                     logger.exception("Tour-result hook failed (non-fatal)")
 
             # Update user counters — skip entirely for spectator matches AND bot-vs-bot
-            today = datetime.utcnow().date()
             if s.get("is_spectator") or s.get("is_bot_vs_bot"):
                 pass  # No user stats update
             else:
+                from services.match_rewards import (
+                    apply_win_streak, record_active_day)
                 for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
                     u = session.query(User).get(uid)
                     if u:
                         u.matches_played = (u.matches_played or 0) + 1
                         if is_winner:
                             u.matches_won = (u.matches_won or 0) + 1
-                            u.win_streak = (u.win_streak or 0) + 1
-                            u.best_streak = max(u.best_streak or 0, u.win_streak)
                         else:
                             u.matches_lost = (u.matches_lost or 0) + 1
-                            u.win_streak = 0
-                        # Active days
-                        last = u.last_match_date
-                        if not last or last.date() != today:
-                            u.active_days = (u.active_days or 0) + 1
-                        u.last_match_date = datetime.utcnow()
+                        # Streak + "days with at least 1 match" — same shared
+                        # helpers the Mini App / Challenge League finalize uses.
+                        apply_win_streak(u, is_winner)
+                        record_active_day(u)
 
                     # Quest tracking — skip bot user (telegram_id = -1). Shared
                     # with the Mini App finalize so /wpm & /wpmbot fire the same

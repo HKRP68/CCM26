@@ -412,8 +412,188 @@ def test_super_over_buttons_are_shared_for_both_captains():
     # that didn't trigger the send gets "This button is not for you".
     from services.button_access import is_shared_callback_data
     for data in (f"so_bat_{1}_{2}", "so_batok_1", "so_bowl_1_2", "so_bowlok_1",
-                 "so_dv_1_0", "so_ln_1_0", "so_sh_1_0"):
+                 "so_dv_1_0", "so_ln_1_0", "so_sh_1_0", "so_kb_1", "so_ps_1"):
         assert is_shared_callback_data(data), data
+
+
+# ── Captain gambles (💥 Power Shot / 🎯 Killer Ball) ───────────────────
+
+def _start_innings_for_gamble_test(ctx):
+    """Kick off a Super Over and stop at the DELIV stage of innings 1."""
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    asyncio.run(_do_selection(ctx, mid))
+    return mid, _get(ctx, mid)
+
+
+def _dot_ball_engine():
+    """Force every delivery to a dot so an innings can't end early."""
+    return lambda *a, **k: {
+        "type": "run", "runs": 0, "description": "dot",
+        "wicket_type": None, "is_extra": False, "batter_out": False}
+
+
+def test_killer_ball_arms_and_is_spent_on_the_next_delivery():
+    from handlers.super_over import so_killer_callback
+    random.seed(21)
+    _patch_finalize(so_mod)
+    orig = so_mod.calculate_super_over_outcome
+    seen = {}
+
+    def spy(*a, **k):
+        seen.update(k)
+        return _dot_ball_engine()()
+
+    so_mod.calculate_super_over_outcome = spy
+    try:
+        ctx = FakeContext()
+        mid, so = _start_innings_for_gamble_test(ctx)
+        bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+        bat_tg = so["teams"][so["bat_uid"]]["tg"]
+
+        assert so["inn"]["killer_ball_left"] == 1
+        asyncio.run(so_killer_callback(_upd(FakeQuery(f"so_kb_{mid}", bowl_tg)), ctx))
+        assert so["inn"]["killer_ball_armed"] is True
+
+        # Bowl the ball — the gamble reaches the engine and is then spent.
+        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
+        if so["inn"]["stage"] == "LEN":
+            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
+        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
+
+        assert seen["wicket_boost"] > 1.0
+        assert seen["dot_boost"] > 1.0
+        assert so["inn"]["killer_ball_left"] == 0
+        assert so["inn"]["killer_ball_armed"] is False
+    finally:
+        so_mod.calculate_super_over_outcome = orig
+
+
+def test_power_shot_lifts_boundaries_and_risk_then_runs_out():
+    from handlers.super_over import so_power_callback
+    random.seed(22)
+    _patch_finalize(so_mod)
+    orig = so_mod.calculate_super_over_outcome
+    seen = {}
+
+    def spy(*a, **k):
+        seen.update(k)
+        return _dot_ball_engine()()
+
+    so_mod.calculate_super_over_outcome = spy
+    try:
+        ctx = FakeContext()
+        mid, so = _start_innings_for_gamble_test(ctx)
+        bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+        bat_tg = so["teams"][so["bat_uid"]]["tg"]
+
+        # Power Shot can only be called once the delivery is on its way.
+        asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bat_tg)), ctx))
+        assert so["inn"]["power_shot_armed"] is False
+
+        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
+        if so["inn"]["stage"] == "LEN":
+            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
+        asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bat_tg)), ctx))
+        assert so["inn"]["power_shot_armed"] is True
+
+        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
+        assert seen["boundary_boost"] > so_mod.SO_BOUNDARY_BOOST
+        assert seen["wicket_boost"] > 1.0
+        assert so["inn"]["power_shot_left"] == 0
+
+        # Second attempt in the same innings is refused.
+        asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bat_tg)), ctx))
+        assert so["inn"]["power_shot_armed"] is False
+    finally:
+        so_mod.calculate_super_over_outcome = orig
+
+
+def test_gambles_are_owner_gated():
+    from handlers.super_over import so_killer_callback, so_power_callback
+    random.seed(23)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    mid, so = _start_innings_for_gamble_test(ctx)
+    bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+    bat_tg = so["teams"][so["bat_uid"]]["tg"]
+
+    # The batting captain must not be able to arm the bowling side's gamble.
+    asyncio.run(so_killer_callback(_upd(FakeQuery(f"so_kb_{mid}", bat_tg)), ctx))
+    assert so["inn"]["killer_ball_armed"] is False
+    # …and vice versa.
+    asyncio.run(so_power_callback(_upd(FakeQuery(f"so_ps_{mid}", bowl_tg)), ctx))
+    assert so["inn"]["power_shot_armed"] is False
+
+
+def test_each_innings_gets_a_fresh_pair_of_gambles():
+    random.seed(24)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    mid, so = _start_innings_for_gamble_test(ctx)
+    so["inn"]["power_shot_left"] = 0
+    so["inn"]["killer_ball_left"] = 0
+
+    # Finish innings 1 and set up innings 2.
+    asyncio.run(so_mod._end_innings(ctx, mid))
+    asyncio.run(_do_selection(ctx, mid))
+    so = _get(ctx, mid)
+    assert so["innings_no"] == 2
+    assert so["inn"]["power_shot_left"] == 1
+    assert so["inn"]["killer_ball_left"] == 1
+
+
+# ── Presentation ──────────────────────────────────────────────────────
+
+def test_score_card_shows_the_chase_equation_and_pressure():
+    random.seed(25)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    mid, so = _start_innings_for_gamble_test(ctx)
+    so["innings_no"] = 2
+    so["target"] = 16
+    so["inn"]["runs"] = 13
+    so["inn"]["legal"] = 5
+
+    card = so_mod._score_card(so)
+    assert "3 needed off the LAST BALL" in card
+    assert "Pressure:" in card
+    assert "▓" in card
+
+
+def test_super_over_mvp_prefers_the_winning_side_on_a_tie():
+    from handlers.super_over import _super_over_mvp
+    so = {
+        "so_innings": [
+            {"team": "Guest XI", "team_uid": 2, "opp_uid": 1,
+             "batters": [{"name": "G1", "runs": 10, "balls": 4,
+                          "fours": 0, "sixes": 0}],
+             "bowlers": [{"name": "H5", "wickets": 0, "runs": 15}]},
+            {"team": "Host XI", "team_uid": 1, "opp_uid": 2,
+             "batters": [{"name": "H1", "runs": 10, "balls": 3,
+                          "fours": 0, "sixes": 0}],
+             "bowlers": [{"name": "G5", "wickets": 0, "runs": 15}]},
+        ],
+    }
+    name, line = _super_over_mvp(so, winner_uid=1)
+    assert name == "H1"
+    assert "10 (3b)" in line
+
+
+def test_super_over_mvp_can_be_a_bowler():
+    from handlers.super_over import _super_over_mvp
+    so = {
+        "so_innings": [
+            {"team": "Guest XI", "team_uid": 2, "opp_uid": 1,
+             "batters": [{"name": "G1", "runs": 4, "balls": 6,
+                          "fours": 1, "sixes": 0}],
+             "bowlers": [{"name": "H5", "wickets": 2, "runs": 4}]},
+        ],
+    }
+    name, line = _super_over_mvp(so, winner_uid=1)
+    assert name == "H5"
+    assert "2-4" in line
 
 
 def test_first_batting_team_gets_the_edge():
@@ -444,6 +624,32 @@ def test_first_batting_team_gets_the_edge():
     assert boost_b > base_b              # more boundaries with the boost
     assert edge_w < base_w               # edge → fewer wickets for the bat side
     assert drama_b > edge_b              # last-ball drama → even more boundaries
+
+
+def test_killer_ball_multipliers_reach_the_engine():
+    # The 🎯 Killer Ball gamble is only interesting if it really bites: more
+    # wickets from wicket_boost, more dots from dot_boost.
+    outcome = so_mod.calculate_super_over_outcome
+    b = {"name": "A", "batting_rating": 80, "batting_hand": "Right"}
+    bw = {"name": "B", "bowling_rating": 70, "fielding_rating": 65,
+          "bowling_type": "Fast", "bowling_hand": "Right"}
+
+    def sample(n=8000, **kw):
+        random.seed(2)
+        wkt = dots = 0
+        for _ in range(n):
+            o = outcome(b, bw, "Hard", {"boundaries": 0}, 0, 0, **kw)
+            if o["type"] == "wicket":
+                wkt += 1
+            elif o["type"] == "run" and o["runs"] == 0:
+                dots += 1
+        return wkt / n, dots / n
+
+    base_w, base_d = sample()
+    kill_w, kill_d = sample(wicket_boost=so_mod.KILLER_BALL_WICKET,
+                            dot_boost=so_mod.KILLER_BALL_DOT)
+    assert kill_w > base_w
+    assert kill_d > base_d
 
 
 def test_scorecard_images_sent_tie_superover_and_winner():

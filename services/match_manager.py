@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from database import SessionLocal
-from models import Match as MatchModel, MatchState, User
+from models import Match as MatchModel, MatchState
 from config import WINNER_REWARD_PER_OVER, LOSER_REWARD_PER_OVER, get_max_overs_per_bowler
 
 logger = logging.getLogger(__name__)
@@ -120,27 +120,6 @@ def _get_active_cricket_matches() -> List[Dict[str, Any]]:
     except Exception:
         logger.exception("_get_active_cricket_matches failed")
         return []
-    finally:
-        session.close()
-
-
-def _update_win_streak(user_id: int, won: bool) -> None:
-    """Update win_streak / best_streak for a user after a match.
-    award_match_rewards_core handles coins/gems/win-loss counts but not streaks.
-    """
-    session = SessionLocal()
-    try:
-        user = session.query(User).get(user_id)
-        if user:
-            if won:
-                user.win_streak = (user.win_streak or 0) + 1
-                user.best_streak = max(user.best_streak or 0, user.win_streak)
-            else:
-                user.win_streak = 0
-            session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("_update_win_streak failed for user_id=%s", user_id)
     finally:
         session.close()
 
@@ -465,11 +444,8 @@ class MatchManager:
         finally:
             session.close()
 
-        # Update win streaks (award_match_rewards_core doesn't track these)
-        if winner_uid:
-            _update_win_streak(winner_uid, won=True)
-        if loser_uid:
-            _update_win_streak(loser_uid, won=False)
+        # Win streaks / active days are handled inside award_match_rewards_core
+        # above, so every mode that pays match rewards moves them identically.
 
         # Persist final state and mark completed
         _save_cricket_match(self.match_id, json.dumps(s, default=str), status="COMPLETED")
