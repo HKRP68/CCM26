@@ -321,18 +321,169 @@ class NotificationBlastTests(unittest.TestCase):
     def test_tick_returns_without_waiting_for_the_blast(self):
         """Awaiting the blast here would stall the 30s heartbeat job."""
         import time
+        from services import notification_service as ns
+
+        blast_seconds = 0.3
 
         async def slow_fire(bot, session, sched):
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(blast_seconds)
             return 1, 0
 
-        started = time.monotonic()
-        self._tick_harness(slow_fire)
-        total = time.monotonic() - started
+        class _Schedule:
+            id = 1
+            name = "evening blast"
+            is_active = True
 
-        # The harness awaits the task at the end, so the whole run takes the
-        # blast's time — but the *ticks* themselves must not have blocked.
-        self.assertGreaterEqual(total, 0.3)
+        class _Session:
+            def query(self, *a, **k):
+                return self
+
+            def filter(self, *a, **k):
+                return self
+
+            def all(self):
+                return [_Schedule()]
+
+            def get(self, *a, **k):
+                return _Schedule()
+
+            def close(self):
+                pass
+
+        class _App:
+            bot = _FakeBot()
+
+        async def run():
+            with patch.object(ns, "fire_schedule", slow_fire), \
+                 patch.object(ns, "should_fire", lambda s: True), \
+                 patch("database.get_session", lambda: _Session()):
+                ns._LAST_TICK_MINUTE = None
+                ns._BLAST_IN_PROGRESS = False
+                # Time the tick itself, not the blast it spawns.
+                started = time.monotonic()
+                await ns.maybe_tick(_App())
+                tick_seconds = time.monotonic() - started
+                if ns._BLAST_TASK is not None:
+                    await ns._BLAST_TASK       # don't leak the task
+                return tick_seconds
+
+        tick_seconds = asyncio.run(run())
+        self.assertLess(
+            tick_seconds, blast_seconds,
+            f"maybe_tick took {tick_seconds:.2f}s for a {blast_seconds}s blast "
+            "— it awaited the blast instead of detaching it")
+
+    def test_manual_send_is_refused_while_a_blast_runs(self):
+        """Two concurrent blasts would each pace to the limit and double it."""
+        from services import notification_service as ns
+
+        class _Schedule:
+            id = 1
+            name = "manual"
+            message = "hi"
+            target_filter = "all"
+            schedule_type = "one_off"
+            last_fired_at = None
+            sent_count = 0
+
+        class _Session:
+            def get(self, *a, **k):
+                return _Schedule()
+
+            def commit(self):
+                pass
+
+            def close(self):
+                pass
+
+        async def run():
+            ns._BLAST_IN_PROGRESS = True     # a scheduled blast is mid-flight
+            try:
+                with self.assertRaises(ns.BlastAlreadyRunning):
+                    await ns.fire_one_off(_FakeBot(), _Session(), 1)
+            finally:
+                ns._BLAST_IN_PROGRESS = False
+
+        asyncio.run(run())
+
+    def test_manual_one_off_claims_the_schedule_before_sending(self):
+        """should_fire() treats a one_off as due while last_fired_at is NULL."""
+        from services import notification_service as ns
+
+        claimed_before_send = []
+
+        class _Schedule:
+            id = 1
+            name = "manual"
+            message = "hi"
+            target_filter = "all"
+            schedule_type = "one_off"
+            last_fired_at = None
+            sent_count = 0
+
+        sched = _Schedule()
+
+        class _Session:
+            def get(self, *a, **k):
+                return sched
+
+            def commit(self):
+                pass
+
+            def close(self):
+                pass
+
+        async def fake_blast(bot, users, template, schedule_id=None):
+            # By the time any message goes out the schedule must be claimed,
+            # otherwise a heartbeat tick fires the same blast underneath us.
+            claimed_before_send.append(sched.last_fired_at is not None)
+            return 1, 0
+
+        async def run():
+            ns._BLAST_IN_PROGRESS = False
+            with patch.object(ns, "_snapshot_targets", lambda t: [object()]), \
+                 patch.object(ns, "_blast", fake_blast):
+                await ns.fire_one_off(_FakeBot(), _Session(), 1)
+
+        asyncio.run(run())
+        self.assertEqual(claimed_before_send, [True])
+        self.assertFalse(ns._BLAST_IN_PROGRESS, "the overlap flag leaked")
+
+    def test_manual_send_clears_the_flag_on_failure(self):
+        from services import notification_service as ns
+
+        class _Schedule:
+            id = 1
+            name = "manual"
+            message = "hi"
+            target_filter = "all"
+            schedule_type = "daily"
+            last_fired_at = None
+            sent_count = 0
+
+        class _Session:
+            def get(self, *a, **k):
+                return _Schedule()
+
+            def commit(self):
+                pass
+
+            def close(self):
+                pass
+
+        async def boom(bot, users, template, schedule_id=None):
+            raise RuntimeError("telegram exploded")
+
+        async def run():
+            ns._BLAST_IN_PROGRESS = False
+            with patch.object(ns, "_snapshot_targets", lambda t: [object()]), \
+                 patch.object(ns, "_blast", boom):
+                with self.assertRaises(RuntimeError):
+                    await ns.fire_one_off(_FakeBot(), _Session(), 1)
+
+        asyncio.run(run())
+        self.assertFalse(ns._BLAST_IN_PROGRESS,
+                         "a failed manual send left notifications blocked")
 
     def test_blast_failure_clears_the_in_progress_flag(self):
         """A crashed blast must not wedge notifications off forever."""

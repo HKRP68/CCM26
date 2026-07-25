@@ -376,11 +376,20 @@ async def fire_schedule(bot, session, schedule):
     return sent_ok, sent_fail
 
 
+class BlastAlreadyRunning(RuntimeError):
+    """Raised when a manual send is asked for while a blast is already going."""
+
+
 async def fire_one_off(bot, session, schedule_id, message_override=None,
                        target_override=None):
     """Send a one-time blast — used by the admin "Send Now" button.
     Doesn't update schedule.last_fired_at unless the schedule type is one_off.
+
+    Shares the overlap guard with the scheduled path. Two blasts running at
+    once would each pace themselves to SENDS_PER_SECOND and together sail past
+    the Telegram ceiling the pacing exists to respect.
     """
+    global _BLAST_IN_PROGRESS
     import asyncio
 
     schedule = session.get(NotificationSchedule, schedule_id)
@@ -390,13 +399,29 @@ async def fire_one_off(bot, session, schedule_id, message_override=None,
     target = target_override or schedule.target_filter or "all"
     is_one_off = schedule.schedule_type == "one_off"
 
-    users = await asyncio.to_thread(_snapshot_targets, target)
-    sent_ok, sent_fail = await _blast(bot, users, msg, schedule_id)
+    # Checked and claimed with no await in between, so the heartbeat tick can't
+    # interleave. Raising (rather than returning 0) keeps the admin UI from
+    # reporting a refused send as a successful send to nobody.
+    if _BLAST_IN_PROGRESS:
+        raise BlastAlreadyRunning(
+            "A notification blast is already running — try again once it finishes.")
+    _BLAST_IN_PROGRESS = True
+    try:
+        # Claim the schedule before the first message goes out. should_fire()
+        # treats a one_off as due precisely while last_fired_at is NULL, so
+        # leaving it unset for the length of the send let a heartbeat tick
+        # start the same blast again and double-send to everyone.
+        if is_one_off:
+            schedule.last_fired_at = datetime.utcnow()
+            session.commit()
+
+        users = await asyncio.to_thread(_snapshot_targets, target)
+        sent_ok, sent_fail = await _blast(bot, users, msg, schedule_id)
+    finally:
+        _BLAST_IN_PROGRESS = False
 
     fresh = session.get(NotificationSchedule, schedule_id)
     if fresh is not None:
-        if is_one_off:
-            fresh.last_fired_at = datetime.utcnow()
         fresh.sent_count = (fresh.sent_count or 0) + sent_ok
         session.commit()
     return sent_ok, sent_fail
