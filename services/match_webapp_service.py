@@ -587,7 +587,7 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
     return True, f"Impact Player confirmed: {incoming.get('name')} replaces {outgoing.get('name')}.", rec
 
 def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False,
-                          difficulty=None):
+                          difficulty=None, enforce_fair_stats=False):
     """Create the initial live state for a Mini-App-played match, right after
     the toss. Openers/bowler are placeholders until the teams pick them.
     Returns (ok, msg). Safe to call once; no-op if state already exists.
@@ -603,6 +603,11 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     difficulty: when this is a vs-bot match (one side is the AI bot user), the
     bot team's difficulty ("Easy"/"Medium"/"Hard"/"Legendary"). Stored in state
     so the AI (auto_play_bot_turns / auto_play_user_turns) plays accordingly.
+
+    enforce_fair_stats: user-vs-user /wpm passes this so a wide Team Overall gap
+    between the two XIs voids career stats (anti stat-farming). Never set for
+    bot matches or tournaments. The two Team Overalls are always stored in state
+    (``bat_team_ovr`` / ``bowl_team_ovr``) so callers can surface a warning.
     """
     from services.match_engine import create_match_state
     from models import UserRoster, Player
@@ -704,6 +709,22 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
                 s["bowler_done"] = True
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
+
+    # Fair-match stat gate (user-vs-user /wpm). Record each side's Team Overall
+    # (average XI rating) so the launch card can show it, and disable career
+    # stats when the gap is too wide — this stops players farming stats against
+    # a deliberately weak opponent. Bot matches never qualify (enforce_fair_stats
+    # is only passed by the /wpm human-vs-human launch, and vsbot is excluded).
+    try:
+        from services.player_stats_service import (
+            team_overall, is_stat_farming_mismatch)
+        s["bat_team_ovr"] = team_overall(bxi)
+        s["bowl_team_ovr"] = team_overall(bwxi)
+        if (enforce_fair_stats and not s.get("is_vsbot")
+                and is_stat_farming_mismatch(bxi, bwxi)):
+            s["stats_disabled"] = True
+    except Exception:
+        logger.exception("fair-stats gate failed (non-fatal) for match %s", match_id)
 
     next_act = "SETUP"
     if s.get("openers_done") and s.get("bowler_done"):
@@ -2832,7 +2853,7 @@ def finalize_webapp_match(session, match_id):
     # the chat finalize in handlers.match). Find the POTM player's owning side
     # from the innings XI lists, then bump that owner's PlayerGameStats.potm.
     try:
-        if pom and pom.get("player_id") and state:
+        if pom and pom.get("player_id") and state and not state.get("stats_disabled"):
             from models import PlayerGameStats
             pom_rid = pom.get("roster_id")
             pom_pid = pom.get("player_id")

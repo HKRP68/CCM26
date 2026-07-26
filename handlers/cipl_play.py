@@ -1754,10 +1754,14 @@ async def _complete_match(context, mid, state):
             # (parity with the chat/webapp finalize) — otherwise /statscl always
             # reports POTM(s): 0 for Challenge League players.
             try:
-                winner_for_potm = None if result["tie"] else result.get("winner")
-                best = _cipl_potm_select(state, winner_for_potm)
-                if best and best.get("player_id"):
-                    _record_cipl_potm(session, state, best)
+                # A /letsplay mismatch flags the state ``stats_disabled`` (anti
+                # stat-farming) — skip the POTM career credit too, in step with
+                # persist_player_game_stats. Tournament matches never set it.
+                if not state.get("stats_disabled"):
+                    winner_for_potm = None if result["tie"] else result.get("winner")
+                    best = _cipl_potm_select(state, winner_for_potm)
+                    if best and best.get("player_id"):
+                        _record_cipl_potm(session, state, best)
             except Exception:
                 logger.exception("cipl POTM career credit failed for match %s", mid)
 
