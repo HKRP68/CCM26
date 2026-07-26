@@ -200,6 +200,34 @@ class BotTurnFlowTests(unittest.TestCase):
         state["bowling_approach"] = "variation"
         self.assertIsNone(cp._bot_plan_label(state))
 
+    def test_a_failed_bot_toss_launch_still_reaches_the_player(self):
+        """On the bot-elects route the callback query was already answered during
+        the coin flip, so `q.answer(...)` is rejected. Launch failures must fall
+        back to a chat message instead of leaving a dead toss on screen."""
+        session = MagicMock()
+        session.query.return_value.get.return_value = None   # "Players no longer exist"
+        q = MagicMock()
+        # Telegram rejects a second answer on an already-answered query.
+        q.answer = AsyncMock(side_effect=RuntimeError("query already answered"))
+        q.edit_message_text = AsyncMock()
+        draft = {"chat_id": 4242, "vs_bot": True,
+                 "host_user_id": 1, "target_user_id": 2}
+
+        real_get_session = cp.get_session
+        cp.get_session = lambda: session
+        try:
+            asyncio.run(cp._launch_after_toss(self.ctx, q, draft, 7, "bat", "host"))
+        finally:
+            cp.get_session = real_get_session
+
+        self.ctx.bot.send_message.assert_called_once()
+        chat_id, text = self.ctx.bot.send_message.call_args.args[:2]
+        self.assertEqual(chat_id, 4242)
+        self.assertIn("Players no longer exist", text)
+        # A failed launch must stay retryable.
+        self.assertFalse(draft.get("launch_in_progress"))
+        self.assertFalse(draft.get("match_launched"))
+
     def test_a_full_innings_never_breaks_a_bowling_rule(self):
         """End to end: the AI captain bowls out an innings legally."""
         state = self._state(bot_bowls=True)

@@ -859,6 +859,26 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
     if draft.get("launch_in_progress") or draft.get("match_launched"):
         return
 
+    async def _fail(msg):
+        """Tell the player why the launch didn't happen.
+
+        The human Bat/Bowl route reaches here with the callback query still
+        unanswered, so an alert is the right surface. The bot-elects route was
+        already answered back in ``cipl_coin_callback``, where a second answer is
+        rejected — without the fallback those failures would be silent and leave
+        a dead toss message on screen.
+        """
+        try:
+            await q.answer(msg, show_alert=True)
+            return
+        except Exception:
+            logger.debug("toss failure alert rejected (query already answered)",
+                         exc_info=True)
+        try:
+            await context.bot.send_message(draft["chat_id"], f"⚠️ {msg}")
+        except Exception:
+            logger.exception("toss failure notice failed for draft %s", draft_id)
+
     # Lock synchronously BEFORE the (slow) DB work that builds and commits the
     # match. Launching involves several queries + a commit, during which the
     # Bat/Bowl buttons still look tappable; without this lock an impatient winner
@@ -882,7 +902,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         host = session.query(User).get(draft["host_user_id"])
         target = session.query(User).get(draft["target_user_id"])
         if not host or not target:
-            await q.answer("Players no longer exist.", show_alert=True)
+            await _fail("Players no longer exist.")
             return
 
         # Final concurrency gate at the commit point: one game per chat and one
@@ -893,16 +913,15 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         )
         if _active_match_in_chat(session, draft["chat_id"]) \
                 or _active_cric_match_in_chat(session, draft["chat_id"]):
-            await q.answer("A match is already active in this chat.", show_alert=True)
+            await _fail("A match is already active in this chat.")
             return
         # The bot opponent is a single shared User row that is a participant in
         # every concurrent practice match, so checking it here would block the
         # second one. Only the humans are gated.
         human_ids = [host.id] if draft.get("vs_bot") else [host.id, target.id]
         if any(_active_match_for_user(session, uid) for uid in human_ids):
-            await q.answer(
-                "A player is already in another active match — finish it first.",
-                show_alert=True)
+            await _fail(
+                "A player is already in another active match — finish it first.")
             return
 
         winner = target if winner_side == "target" else host
@@ -945,9 +964,9 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             if _tour and (_tour.schedule_generated or _tour.knockout_generated):
                 _fx = _lss.reserve_fixture_by_names(session, tid, host_team, target_team)
                 if not _fx:
-                    await q.answer(
+                    await _fail(
                         "That fixture has already been taken or played. Restart and "
-                        "pick a scheduled opponent.", show_alert=True)
+                        "pick a scheduled opponent.")
                     return
                 draft["reserved_fixture_id"] = _fx.id
 
@@ -956,7 +975,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         bat_xi = build_xi_from_draft(session, draft, bat_side)
         bowl_xi = build_xi_from_draft(session, draft, bowl_side)
         if len(bat_xi) < 2 or len(bowl_xi) < 2:
-            await q.answer("Playing XI missing — restart the challenge.", show_alert=True)
+            await _fail("Playing XI missing — restart the challenge.")
             return
         # Balance the tie: compress the two squads' rating gap so a lopsided
         # draft doesn't turn into a blowout (applied once; carried into both
@@ -1016,7 +1035,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         if session is not None:
             session.rollback()
         logger.exception("/cipl toss/launch failed")
-        await q.answer("Failed to start match.", show_alert=True)
+        await _fail("Failed to start match.")
         return
     finally:
         if session is not None:

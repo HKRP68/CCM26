@@ -6,11 +6,22 @@ if it broke: the bot never bowls an illegal over, it saves something for the
 death, and its batting intent actually tracks the match situation.
 """
 
+import random
 import unittest
 
 from engine.approach_modifiers import BATTING_KEYS, BOWLING_KEYS
 from services import bot_captain as bc
 from services import cipl_match as cm
+
+
+class SeededTestCase(unittest.TestCase):
+    """Bowler choice and the toss are deliberately random, and several tests
+    below assert on the shape of a 200-sample distribution. Seeding keeps those
+    assertions reproducible instead of leaving a small chance of a red CI run on
+    an unlucky draw."""
+
+    def setUp(self):
+        random.seed(20260726)
 
 
 def _player(rid, name, category, bowl_rating, bat_rating=50, traits=()):
@@ -61,7 +72,7 @@ def _state(**over):
     return state
 
 
-class PhaseTests(unittest.TestCase):
+class PhaseTests(SeededTestCase):
     def test_t20_phases(self):
         self.assertEqual(bc.phase(_state(current_over=1)), "powerplay")
         self.assertEqual(bc.phase(_state(current_over=6)), "powerplay")
@@ -74,7 +85,7 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual(seen, {"powerplay", "middle", "death"})
 
 
-class BowlerSelectionTests(unittest.TestCase):
+class BowlerSelectionTests(SeededTestCase):
     def test_never_picks_the_previous_bowler(self):
         # Ace is the strongest bowler by a distance, so only the no-back-to-back
         # rule can keep them out of the next over.
@@ -118,7 +129,7 @@ class BowlerSelectionTests(unittest.TestCase):
         self.assertIsNone(bc.pick_bowler(state))
 
 
-class BowlingApproachTests(unittest.TestCase):
+class BowlingApproachTests(SeededTestCase):
     def test_always_a_valid_key(self):
         for over in range(1, 21):
             for _ in range(10):
@@ -145,7 +156,7 @@ class BowlingApproachTests(unittest.TestCase):
         self.assertEqual(bc.pick_bowling_approach(state), "defensive")
 
 
-class BattingApproachTests(unittest.TestCase):
+class BattingApproachTests(SeededTestCase):
     def test_always_a_valid_key(self):
         for over in range(1, 21):
             for _ in range(10):
@@ -186,7 +197,7 @@ class BattingApproachTests(unittest.TestCase):
                         BAT_INDEX[bc.pick_batting_approach(star)])
 
 
-class TossTests(unittest.TestCase):
+class TossTests(SeededTestCase):
     def test_bot_elects_bat_or_bowl_and_uses_both(self):
         picks = {bc.elect_toss_decision() for _ in range(200)}
         self.assertEqual(picks, {"bat", "bowl"})

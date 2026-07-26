@@ -1778,6 +1778,27 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
 # /ciplbot — the AI opponent's automatic team and Playing XI
 # ════════════════════════════════════════════════════════════════════
 
+def _league_squad_sizes(session, draft):
+    """``{team name: squad size}`` for every team in this draft's league.
+
+    One grouped COUNT rather than a query per team: picking the bot's opponent
+    needs the size of all ten-or-so squads, and doing that one at a time inside
+    an awaited callback stalls the event loop for the whole round trip.
+    """
+    from sqlalchemy import func
+
+    try:
+        league = _resolve_draft_league(session, draft)
+        query = (session.query(ChallengeTeam.name, func.count(ChallengePlayer.id))
+                 .outerjoin(ChallengePlayer, ChallengePlayer.team_id == ChallengeTeam.id))
+        if league is not None:
+            query = query.filter(ChallengeTeam.league_id == league.id)
+        return {name: count for name, count in query.group_by(ChallengeTeam.name).all()}
+    except Exception:
+        logger.exception("ciplbot: reading league squad sizes failed")
+        return {}
+
+
 def _pick_bot_league_team(draft, host_team):
     """Pick the bot's league team: any other team with a squad it can field.
 
@@ -1788,16 +1809,10 @@ def _pick_bot_league_team(draft, host_team):
 
     session = get_session()
     try:
-        def squad_size(team_name):
-            probe = dict(draft, target_team=team_name)
-            try:
-                return len(_query_team_players(session, probe, "target"))
-            except Exception:
-                logger.exception("ciplbot: reading squad for %s failed", team_name)
-                return 0
-
-        chosen = pick_bot_team(draft.get("teams") or [], (host_team,), squad_size)
-        if chosen and squad_size(chosen) < 11:
+        sizes = _league_squad_sizes(session, draft)
+        chosen = pick_bot_team(draft.get("teams") or [], (host_team,),
+                               lambda name: sizes.get(name, 0))
+        if chosen and sizes.get(chosen, 0) < 11:
             return None
         return chosen
     finally:
@@ -1824,10 +1839,10 @@ def _autoconfirm_bot_xi(draft):
                          draft.get("target_team"), len(players))
             return False
         selection = _challenge_xi_selection(draft, "target")
-        selection["player_ids"] = [int(getattr(p, "id")) for p in xi]
+        selection["player_ids"] = [int(p.id) for p in xi]
         selection["confirmed"] = True
         # Cache the names so the recap can show the XI without another query.
-        draft["bot_xi_names"] = [str(getattr(p, "name", "Player")) for p in xi]
+        draft["bot_xi_names"] = [str(p.name or "Player") for p in xi]
         return True
     except Exception:
         logger.exception("ciplbot: bot XI generation failed")

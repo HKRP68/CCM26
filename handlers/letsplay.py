@@ -1189,11 +1189,20 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
             try:
                 await _launch_match(context, draft, decision, winner_side)
             except Exception:
+                # The setup timer was already cancelled above, so nothing else
+                # will ever clean this draft up — retire it here or it lingers
+                # in bot_data forever. Drop it BEFORE the (fallible) notice: if
+                # that send raises, a draft left on status "toss" would block
+                # every future /lpbot in this chat.
                 logger.exception("lpbot launch failed for invite %s", invite_id)
-                await context.bot.send_message(
-                    draft["chat_id"],
-                    "⚠️ Failed to start the match. Please try /lpbot again.")
                 draft["status"] = "failed"
+                _drop_draft(context, invite_id)
+                try:
+                    await context.bot.send_message(
+                        draft["chat_id"],
+                        "⚠️ Failed to start the match. Please try /lpbot again.")
+                except Exception:
+                    logger.exception("lpbot launch-failure notice failed")
             return
     else:
         # The reveal is the critical edit: if it fails the toss is left frozen on

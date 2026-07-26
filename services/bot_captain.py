@@ -316,8 +316,8 @@ def pick_batting_approach(state):
 # Labels for the chat messages
 # ════════════════════════════════════════════════════════════════════
 
-_BAT_LABELS = {k: (e, l) for k, e, l in BATTING_APPROACHES}
-_BOWL_LABELS = {k: (e, l) for k, e, l in BOWLING_APPROACHES}
+_BAT_LABELS = {key: (emoji, label) for key, emoji, label in BATTING_APPROACHES}
+_BOWL_LABELS = {key: (emoji, label) for key, emoji, label in BOWLING_APPROACHES}
 
 
 def batting_label(key):

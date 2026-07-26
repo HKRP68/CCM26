@@ -19,6 +19,7 @@ Usage:
 """
 
 import logging
+from html import escape
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -107,7 +108,11 @@ async def ciplbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         league_key, league_name = _resolve_league(session, args, command_name)
         if not league_key:
-            known = ", ".join(sorted(_challenge_leagues(session))) or "none configured"
+            # League keys are admin-configured, and this goes out as HTML — an
+            # unescaped "<" would fail the send outright instead of showing the
+            # help text.
+            known = ", ".join(escape(k) for k in sorted(_challenge_leagues(session))) \
+                or "none configured"
             await message.reply_text(
                 f"❌ Unknown league. Try one of: {known}.\n"
                 f"Example: <code>/ciplbot ipl</code>", parse_mode="HTML")
