@@ -43,7 +43,7 @@ from services import cipl_match
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES,
 )
-from handlers.match import _mention
+from handlers.match import BOT_TG_ID_, _mention
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,10 @@ CIPL_REMIND = int(os.getenv("CIPL_REMIND_SECONDS", "90"))     # warn 30s before 
 CIPL_FORFEIT_COINS = int(os.getenv("CIPL_FORFEIT_COINS", "3000"))
 CIPL_FORFEIT_GEMS = int(os.getenv("CIPL_FORFEIT_GEMS", "5"))
 CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 overs
+
+# Pause before the AI captain (/lpbot, /ciplbot) reveals a decision, so its
+# moves read as moves rather than as the board teleporting.
+BOT_THINK_DELAY = float(os.getenv("BOT_THINK_DELAY_SECONDS", "1.6"))
 
 # Anti-blowout: drafts can produce lopsided squads, and the shared rating
 # engine amplifies gaps into one-sided results. Before a match starts we pull
@@ -262,6 +266,69 @@ def _draft_key(draft_id):
     return _challenge_team_draft_key(draft_id)
 
 
+# ════════════════════════════════════════════════════════════════════
+# Bot matches (/lpbot, /ciplbot) — unranked practice vs the AI captain
+# ════════════════════════════════════════════════════════════════════
+
+def mark_bot_match(state, bot_user_id):
+    """Tag a freshly built state as an unranked practice match vs the bot.
+
+    ``stats_disabled`` is the existing gate every reward/stat path already
+    respects — ``player_stats_service.persist_player_game_stats`` bails on it,
+    the POTM career credit is skipped, and ``award_match_rewards_core`` is called
+    with ``count_result=False`` (no coins, gems, Win/Loss, streak, season points
+    or active day). ``is_bot_match`` is what drives the AI's turns and the
+    no-penalty timeout; ``unranked`` is a plain label for the UI.
+    """
+    state["is_bot_match"] = True
+    state["bot_user_id"] = bot_user_id
+    state["stats_disabled"] = True
+    state["unranked"] = True
+    # A practice match must never touch a tournament table or a tour series.
+    state["tournament_id"] = None
+    state["tournament_team_by_user"] = {}
+    state["reserved_fixture_id"] = None
+    state["cl_tour_id"] = None
+    state["cl_tour_match_id"] = None
+    return state
+
+
+def _is_bot_match(state):
+    return bool(state) and bool(state.get("is_bot_match"))
+
+
+def _bot_bowls(state):
+    """True when the AI captain is the one who must pick this over's bowler."""
+    return (_is_bot_match(state)
+            and state.get("bot_user_id") is not None
+            and state.get("bowl_team_id") == state.get("bot_user_id"))
+
+
+def _bot_bats(state):
+    """True when the AI captain is the one who must pick the batting approach."""
+    return (_is_bot_match(state)
+            and state.get("bot_user_id") is not None
+            and state.get("bat_team_id") == state.get("bot_user_id"))
+
+
+UNRANKED_NOTE = ("🎯 <i>Practice match — unranked. No career stats, coins, gems, "
+                 "Win/Loss or streak.</i>")
+
+
+def _rematch_row(state):
+    """A one-tap Rematch button for a finished practice match.
+
+    The callback carries the mode and, for a league match, the league — so the
+    rematch reopens the same competition instead of silently dropping to IPL.
+    """
+    if state.get("is_letsplay"):
+        data = "botmatch_again_lp"
+    else:
+        league = str(state.get("league_key") or "")[:16]
+        data = f"botmatch_again_cipl_{league}" if league else "botmatch_again_cipl"
+    return [[InlineKeyboardButton("🔁 Rematch the Bot", callback_data=data)]]
+
+
 def build_xi_from_draft(session, draft, side):
     """Return the selected XI for ``side`` as engine player dicts, in the
     captain's selection order (which is the batting order)."""
@@ -439,13 +506,20 @@ async def _on_remind(context):
                 await context.bot.delete_message(state["chat_id"], prev)
             except Exception:
                 pass
+        # A practice match against the bot costs nothing to walk away from, so
+        # don't threaten a fine that will never be charged.
+        if _is_bot_match(state):
+            nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
+                   f"<b>{secs} seconds</b> to play your turn — or the practice "
+                   f"match closes. No fine, it's just practice.")
+        else:
+            nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
+                   f"<b>{secs} seconds</b> to play your turn — or you forfeit "
+                   f"the match (−{CIPL_FORFEIT_COINS:,} 🪙 "
+                   f"−{CIPL_FORFEIT_GEMS} 💎).")
         try:
             sent = await context.bot.send_message(
-                state["chat_id"],
-                f"⏳ {_mention(idle_tg, idle_name)}, you have <b>{secs} seconds</b> "
-                f"to play your turn — or you forfeit the match "
-                f"(−{CIPL_FORFEIT_COINS:,} 🪙 −{CIPL_FORFEIT_GEMS} 💎).",
-                parse_mode="HTML")
+                state["chat_id"], nag, parse_mode="HTML")
             state["action_remind_msg_id"] = sent.message_id
             await _ss(context, mid, state)
         except Exception:
@@ -463,9 +537,69 @@ async def _on_timeout(context):
         if not state:
             return
         try:
-            await _forfeit_live_match(context, mid, state, expected)
+            if _is_bot_match(state):
+                await _close_idle_bot_match(context, mid, state)
+            else:
+                await _forfeit_live_match(context, mid, state, expected)
         except Exception:
             logger.exception("cipl timeout forfeit failed for match %s", mid)
+
+
+async def _close_idle_bot_match(context, mid, state):
+    """Retire an abandoned practice match — no forfeit, no fine, no winner.
+
+    There is no opponent to compensate and nothing was ever at stake, so an idle
+    /lpbot or /ciplbot match is simply packed away and the chat freed.
+    """
+    _cancel_timer(context, mid)
+    chat_id = state.get("chat_id")
+
+    prev = state.pop("action_remind_msg_id", None)
+    if prev and chat_id is not None:
+        try:
+            await context.bot.delete_message(chat_id, prev)
+        except Exception:
+            pass
+    try:
+        await _delete_prev_over(context, state)
+    except Exception:
+        pass
+
+    session = get_session()
+    try:
+        match = session.query(Match).get(mid)
+        if match and match.status not in ("completed", "abandoned"):
+            match.status = "abandoned"
+            match.completed_at = datetime.utcnow()
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("closing idle bot match %s failed", mid)
+    finally:
+        session.close()
+
+    pinned = state.get("pinned_msg_id")
+    if pinned and chat_id is not None:
+        try:
+            await context.bot.unpin_chat_message(chat_id, pinned)
+        except Exception:
+            pass
+
+    if chat_id is not None:
+        try:
+            await context.bot.send_message(
+                chat_id,
+                "🤖 <b>Practice match closed</b>\n"
+                "Nobody played a turn in time, so the bot has packed up. "
+                "Nothing was lost — no fine, no stats.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(_rematch_row(state)))
+        except Exception:
+            logger.exception("bot practice-match close notice failed for %s", mid)
+
+    await _ss(context, mid, state, next_action=A_COMPLETED)
+    cleanup_state(context, mid)
+    release_match_lock(mid)
 
 
 async def _forfeit_live_match(context, mid, state, expected):
@@ -586,8 +720,14 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if draft.get("toss_winner_side") or draft.get("coin_flipping"):
         await q.answer("Toss already done.", show_alert=True)
         return
-    if q.from_user.id != draft.get("target_tg_id"):
-        await q.answer("Only the guest calls the toss!", show_alert=True)
+    # The guest calls the toss — except vs the bot, where the guest IS the bot,
+    # so the caller is the (only) human in the match.
+    vs_bot = bool(draft.get("vs_bot"))
+    caller_tg = draft.get("host_tg_id") if vs_bot else draft.get("target_tg_id")
+    if q.from_user.id != caller_tg:
+        await q.answer(
+            "Only you can call this toss!" if vs_bot
+            else "Only the guest calls the toss!", show_alert=True)
         return
     # Lock synchronously BEFORE the async coin animation. The flip plays over
     # several Telegram edits, during which the Heads/Tails buttons still look
@@ -606,22 +746,47 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.exception("/cipl coin flip failed for draft %s", draft_id)
         await q.answer("Toss failed — call it again.", show_alert=True)
         return
-    winner_side = "target" if won else "host"
-    winner_tg = draft.get("target_tg_id") if won else draft.get("host_tg_id")
-    winner_name = (draft.get("target") if won else draft.get("host") or {}).get("name", "Winner")
-    # The reveal is the critical edit: if it fails the toss is left frozen on a
-    # mid-flip frame. Retry it, and only mark the winner once it actually lands —
-    # otherwise release the lock so the guest can call the toss again.
-    revealed = await reveal_toss_result(lambda: q.edit_message_text(
-        f"🪙 The coin lands on <b>{coin.upper()}</b> — guest called "
-        f"<b>{call.upper()}</b>.\n\n"
-        f"🏆 {_mention(winner_tg, winner_name)} won the toss. Choose:",
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏏 Bat First",
-                                 callback_data=f"cipl_toss_bat_{draft_id}_{winner_side}"),
-            InlineKeyboardButton("🎳 Bowl First",
-                                 callback_data=f"cipl_toss_bowl_{draft_id}_{winner_side}"),
-        ]])))
+    # ``won`` is from the CALLER's point of view, and the caller is the guest in
+    # a normal match but the host vs the bot.
+    caller_side = "host" if vs_bot else "target"
+    other_side = "target" if vs_bot else "host"
+    winner_side = caller_side if won else other_side
+    winner_tg = draft.get(f"{winner_side}_tg_id")
+    winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
+    caller_label = "you" if vs_bot else "guest"
+
+    # Vs the bot, a bot toss win is decided right here — it elects bat or bowl
+    # at random and the match launches. No keyboard is posted, so there is
+    # nothing stale for the human to tap.
+    bot_won = vs_bot and winner_side == "target"
+    if bot_won:
+        from services import bot_captain
+        decision = bot_captain.elect_toss_decision()
+        revealed = await reveal_toss_result(lambda: q.edit_message_text(
+            f"🪙 The coin lands on <b>{coin.upper()}</b> — you called "
+            f"<b>{call.upper()}</b>.\n\n"
+            f"🤖 <b>Bot</b> won the toss and elected to "
+            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.",
+            parse_mode="HTML"))
+        if revealed:
+            draft["toss_winner_side"] = winner_side
+            await _launch_after_toss(context, q, draft, draft_id,
+                                     decision, winner_side)
+            return
+    else:
+        # The reveal is the critical edit: if it fails the toss is left frozen on
+        # a mid-flip frame. Retry it, and only mark the winner once it actually
+        # lands — otherwise release the lock so the caller can try again.
+        revealed = await reveal_toss_result(lambda: q.edit_message_text(
+            f"🪙 The coin lands on <b>{coin.upper()}</b> — {caller_label} called "
+            f"<b>{call.upper()}</b>.\n\n"
+            f"🏆 {_mention(winner_tg, winner_name)} won the toss. Choose:",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏏 Bat First",
+                                     callback_data=f"cipl_toss_bat_{draft_id}_{winner_side}"),
+                InlineKeyboardButton("🎳 Bowl First",
+                                     callback_data=f"cipl_toss_bowl_{draft_id}_{winner_side}"),
+            ]])))
     if not revealed:
         # The animation edits already stripped the Heads/Tails keyboard, so a
         # bare alert would leave the guest with no button to retry. Clear the
@@ -629,12 +794,12 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         draft["coin_flipping"] = False
         logger.warning("/cipl toss reveal failed for draft %s — reprompting", draft_id)
         await q.answer("Toss hiccup — call it again below.", show_alert=True)
-        target = draft.get("target") or {}
+        caller = draft.get(caller_side) or {}
         try:
             await context.bot.send_message(
                 q.message.chat_id,
                 f"🪙 <b>TOSS</b>\n"
-                f"{_mention(target.get('tg_id'), target.get('name') or 'Guest')}, "
+                f"{_mention(caller.get('tg_id'), caller.get('name') or 'Player')}, "
                 f"call the coin again:",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
@@ -679,6 +844,20 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if q.from_user.id != winner_tg:
         await q.answer("Toss winner only.", show_alert=True)
         return
+    await _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
+
+
+async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side):
+    """Create the Match row and hand off to the over-by-over flow.
+
+    Shared by the human "Bat First / Bowl First" tap and the bot's automatic
+    election vs /ciplbot, so both routes get the same concurrency gates, the same
+    double-tap guards and the same launch.
+    """
+    # Guard the bot path too: it reaches here without going through the button
+    # checks above, and a hiccup-retried toss must not launch twice.
+    if draft.get("launch_in_progress") or draft.get("match_launched"):
+        return
 
     # Lock synchronously BEFORE the (slow) DB work that builds and commits the
     # match. Launching involves several queries + a commit, during which the
@@ -716,8 +895,11 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 or _active_cric_match_in_chat(session, draft["chat_id"]):
             await q.answer("A match is already active in this chat.", show_alert=True)
             return
-        if _active_match_for_user(session, host.id) \
-                or _active_match_for_user(session, target.id):
+        # The bot opponent is a single shared User row that is a participant in
+        # every concurrent practice match, so checking it here would block the
+        # second one. Only the humans are gated.
+        human_ids = [host.id] if draft.get("vs_bot") else [host.id, target.id]
+        if any(_active_match_for_user(session, uid) for uid in human_ids):
             await q.answer(
                 "A player is already in another active match — finish it first.",
                 show_alert=True)
@@ -853,7 +1035,12 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         _release_draft_chat_lock(context.bot_data, draft)
     except Exception:
         logger.debug("challenge draft lock release failed", exc_info=True)
-    await q.answer()
+    try:
+        # The bot-elects path already answered this query during the coin flip,
+        # and a second answer on the same query is rejected.
+        await q.answer()
+    except Exception:
+        logger.debug("toss callback answer failed (already answered)", exc_info=True)
     winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
     fmt_label = "The Hundred (100 balls)" if ball_format == "The100" else f"{match_obj.overs} overs"
     unit_flow = "set by set" if ball_format == "The100" else "over by over"
@@ -909,6 +1096,14 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         # Carry CL Tour identity so the series score updates when the match ends.
         state["cl_tour_id"] = draft.get("cl_tour_id")
         state["cl_tour_match_id"] = draft.get("cl_tour_match_id")
+    # /ciplbot: unranked practice, and the AI captain owns one side's turns.
+    # This clears the tournament/tour identity set just above, so a practice
+    # match can never be recorded against a real competition.
+    if draft and draft.get("vs_bot"):
+        mark_bot_match(state, draft.get("target_user_id"))
+        state["user_names"][str(BOT_TG_ID_)] = "🤖 Bot"
+        # Remembered so the Rematch button reopens the same league.
+        state["league_key"] = draft.get("league_key")
     await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
@@ -1021,6 +1216,9 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         return
     if not first:
         await _delete_prev_over(context, state)
+    if _bot_bowls(state):
+        await _bot_take_the_ball(context, mid, state)
+        return
     elig = cipl_match.eligible_bowlers(state)
     # When the front-line attack is exhausted, eligible_bowlers falls back to
     # part-time batsmen — flag them in the picker so the captain knows.
@@ -1047,7 +1245,45 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     _arm_timer(context, mid, A_PICK_CIPL_BOWLER)
 
 
+async def _bot_take_the_ball(context, mid, state):
+    """The AI captain picks its bowler for the over, then its approach.
+
+    Mirrors the human path exactly — same eligibility list, same state writes —
+    it just answers the prompt itself instead of posting a keyboard. No
+    inactivity timer is armed: the bot is never idle, and the human's clock only
+    starts when the board comes back to them.
+    """
+    from services import bot_captain
+
+    bowler = bot_captain.pick_bowler(state)
+    if bowler is None:
+        # Nothing legal to bowl — the innings has nowhere left to go.
+        logger.warning("bot captain: no bowler available for match %s — "
+                       "ending the innings", mid)
+        await _finish_innings(context, mid, state)
+        return
+
+    state["current_bowler"] = bowler
+    await _ss(context, mid, state)
+    text = (f"{_approach_card(state)}\n\n"
+            f"🤖 <b>{html.escape(str(state.get('bowl_team_name', 'Bot')))}</b> "
+            f"hands the ball to <b>{html.escape(str(bowler['name']))}</b> "
+            f"({bowler.get('bowl_rating', 0)}) for "
+            f"{_unit_word(state)} {state['current_over']}…")
+    await _new_action_message(context, state, text, None)
+    await asyncio.sleep(BOT_THINK_DELAY)
+    await _prompt_bowl_approach(context, mid, state)
+
+
 async def _prompt_bowl_approach(context, mid, state, auto=False):
+    if _bot_bowls(state):
+        # The bot's plan is hidden from the batting captain, exactly as a human
+        # opponent's would be — it is revealed only once the over is bowled.
+        from services import bot_captain
+        state["bowling_approach"] = bot_captain.pick_bowling_approach(state)
+        await _ss(context, mid, state)
+        await _prompt_bat_approach(context, mid, state)
+        return
     bowler = state["current_bowler"]
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
                                   callback_data=f"cipl_bowlapp_{mid}_{idx}")]
@@ -1063,6 +1299,13 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
 
 
 async def _prompt_bat_approach(context, mid, state, auto=False):
+    if _bot_bats(state):
+        from services import bot_captain
+        state["batting_approach"] = bot_captain.pick_batting_approach(state)
+        await _ss(context, mid, state)
+        await asyncio.sleep(BOT_THINK_DELAY)
+        await _run_over(context, mid, state)
+        return
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
                                   callback_data=f"cipl_batapp_{mid}_{idx}")]
             for idx, (_, emoji, label) in enumerate(BATTING_APPROACHES)]
@@ -1474,6 +1717,11 @@ async def _run_over(context, mid, state):
         f"{_header(state)}\n\n⏳ Simulating {_unit_word(state)} {state['current_over']} — "
         f"{bowler_name} bowling…", None)
 
+    # Capture the AI captain's plan BEFORE the over is simulated: a completed
+    # over resets both approaches on the state, so reading them afterwards would
+    # always report the neutral default.
+    bot_plan = _bot_plan_label(state)
+
     # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
     # engines). Run it in a worker thread so it can't block the event loop — and
     # every other user's command/button — for the duration of the over.
@@ -1495,7 +1743,8 @@ async def _run_over(context, mid, state):
     # ending below, or the match would sit on a consumed approach pick and the
     # next /rcl would bowl another over.
     try:
-        await _post_tracked(context, state, _render_over_summary(state, summary),
+        await _post_tracked(context, state,
+                            _render_over_summary(state, summary, bot_plan=bot_plan),
                             keyboard=_miniapp_row(state))
     except Exception:
         logger.exception("cipl over summary post failed for match %s", mid)
@@ -1506,7 +1755,23 @@ async def _run_over(context, mid, state):
         await _prompt_bowler(context, mid, state)
 
 
-def _render_over_summary(state, summary):
+def _bot_plan_label(state):
+    """The AI captain's approach for the over about to be bowled, as a label.
+
+    Read while the approach is still on the state (a completed over clears it).
+    ``None`` for a human-vs-human match.
+    """
+    if not _is_bot_match(state):
+        return None
+    from services import bot_captain
+    if _bot_bowls(state):
+        return bot_captain.bowling_label(state.get("bowling_approach"))
+    if _bot_bats(state):
+        return bot_captain.batting_label(state.get("batting_approach"))
+    return None
+
+
+def _render_over_summary(state, summary, bot_plan=None):
     timeline = " ".join(cipl_match._SYM.get(_sym_key(s), s)
                         for s in summary["over_timeline"]) or "—"
     striker = state["batting_order"][state["striker_idx"]]
@@ -1531,6 +1796,10 @@ def _render_over_summary(state, summary):
         f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
         f"{arrow} Momentum: {state['bat_team_name']}",
     ]
+    # Against the bot there is no opponent left to keep the plan from, so the
+    # over is a chance to show what the AI captain actually chose.
+    if bot_plan:
+        lines.append(f"🤖 Bot's plan: {bot_plan}")
     c = cipl_match.chase(state)
     if c and c["runs_required"] > 0:
         lines.append(f"🎯 Need {c['runs_required']} off {c['balls_remaining']} "
@@ -1717,7 +1986,10 @@ async def _complete_match(context, mid, state):
     # A tied match triggers a Super Over (interactive, user-vs-user, ball by
     # ball) for /cipl, /c[league] and /letsplay — they all reach here. The
     # Match row stays 'active' until the Super Over decides a winner.
-    if result["tie"]:
+    # A practice match vs the bot stops at the tie: the Super Over is an
+    # interactive two-human flow (handlers/super_over.py) with no AI captain,
+    # so there is nobody to play the bot's half of it.
+    if result["tie"] and not _is_bot_match(state):
         try:
             # Mention the Super Over in the Mini App commentary feed so spectators
             # know the tie is being resolved (the chat already announces it).
@@ -1891,6 +2163,9 @@ async def _complete_match(context, mid, state):
             f"+{prize_info['l_gems']} 💎")
     text = f"🏁 <b>Match Over</b>\n<blockquote expandable>{body}</blockquote>"
     miniapp_row = _miniapp_row(state)
+    if _is_bot_match(state):
+        text += f"\n\n{UNRANKED_NOTE}"
+        miniapp_row = (miniapp_row or []) + _rematch_row(state)
     # The result is already committed at this point — a failed send must not
     # abort the function, or the live state would stay parked on the last
     # (consumed) approach pick and /rcl would bowl an over past the limit.

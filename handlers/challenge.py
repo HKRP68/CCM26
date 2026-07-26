@@ -1,17 +1,18 @@
 """Two-player challenge mode using the Mini App match flow."""
 
-import json
 import logging
 import random
 import os
 import re
 from datetime import datetime, timedelta
+from html import escape as _esc
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
 from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
+from services import xi_rules
 from services.match_constants import MATCH_EXPIRE, PITCH_TYPES, random_match_settings
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.xi_memory_service import load_last_xi, save_last_xi
@@ -567,6 +568,11 @@ async def _send_challenge_xi_prompt(context, draft, message_obj):
         created_message = _challenge_created_text(draft, session)
     finally:
         session.close()
+    if draft.get("vs_bot"):
+        # Show the bot's locked-in XI here — it has no "Select XI" button of its
+        # own, so this is the only place the user gets to see what they're up
+        # against before the toss.
+        created_message += "\n" + _bot_xi_recap(draft)
     if message_obj is None:
         return
     try:
@@ -647,11 +653,27 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
         except Exception:
             logger.exception("Failed to update pitch confirmation message")
 
+    # Vs the bot: lock in its Playing XI now so the only thing left is the
+    # human's own XI selection, which runs exactly as it does in /cipl.
+    if draft.get("vs_bot") and not _autoconfirm_bot_xi(draft):
+        await _disarm_selection_timer(context, draft)
+        _release_draft_chat_lock(context.bot_data, draft)
+        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+        try:
+            await query.message.reply_text(
+                f"❌ The bot's team ({draft.get('target_team')}) doesn't have a "
+                f"squad it can field an XI from. Try /ciplbot again.")
+        except Exception:
+            logger.exception("ciplbot: failed to report a missing bot squad")
+        return
+
     await _send_challenge_xi_prompt(context, draft, getattr(query, "message", None))
-    # Both players now pick their Playing XI — arm the clock on both sides.
-    await _arm_selection_timer(
-        context, draft,
-        [draft.get("host_tg_id"), draft.get("target_tg_id")], "xi")
+    # Both players now pick their Playing XI — arm the clock on both sides (only
+    # the human side exists in a bot match).
+    waiting = [draft.get("host_tg_id")]
+    if not draft.get("vs_bot"):
+        waiting.append(draft.get("target_tg_id"))
+    await _arm_selection_timer(context, draft, waiting, "xi")
 
 
 async def challenge_deny_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -708,6 +730,11 @@ async def challenge_deny_match_callback(update: Update, context: ContextTypes.DE
 
 def _challenge_xi_keyboard(draft_id, draft):
     host_label = _team_button_label("Select", draft.get("host_team"))
+    if draft.get("vs_bot"):
+        # The bot's XI is already locked in — only the human picks one.
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton(host_label, callback_data=f"cl_xi_{draft_id}_host"),
+        ]])
     target_label = _team_button_label("Select", draft.get("target_team"))
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(host_label, callback_data=f"cl_xi_{draft_id}_host"),
@@ -963,53 +990,12 @@ def _challenge_start_match_keyboard(draft_id):
     ]])
 
 
-def _challenge_player_details(player):
-    raw = getattr(player, "details_json", None) or ""
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _challenge_player_category(player):
-    data = _challenge_player_details(player)
-    value = (data.get("category") or data.get("Category") or data.get("role") or data.get("Role") or "")
-    value = str(value).strip()
-    low = value.lower().replace("-", " ")
-    if low in ("wk", "keeper", "wicketkeeper", "wicket keeper", "wicket keeper batter", "wicket keeper batsman"):
-        return "Wicket Keeper"
-    if low in ("all rounder", "allrounder", "all round", "alr", "all-rounder"):
-        return "All-rounder"
-    if low in ("bowler", "bowl"):
-        return "Bowler"
-    if low in ("batsman", "batter", "bat"):
-        return "Batsman"
-    return value or "Player"
-
-
-def _challenge_player_rating(player):
-    """Best-effort overall rating from details_json; None when unavailable.
-
-    Rating is not a column on ChallengePlayer — it lives inside details_json —
-    so this degrades gracefully (returns None) rather than raising when the blob
-    has no rating, keeping the numbered-roster render robust.
-    """
-    data = _challenge_player_details(player)
-    for key in ("rating", "Rating", "overall", "Overall", "OVR", "ovr"):
-        value = data.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            return round(float(value))
-        except (TypeError, ValueError):
-            # Non-numeric ratings are rendered into HTML messages, so escape any
-            # markup-like characters from this admin-supplied details_json value.
-            from html import escape
-            return escape(str(value))
-    return None
+# The Challenge League XI rulebook lives in services/xi_rules.py so the bot's XI
+# builder (and its tests) can apply the same rules without importing this whole
+# Telegram handler module. These aliases keep every existing call site unchanged.
+_challenge_player_details = xi_rules.challenge_player_details
+_challenge_player_category = xi_rules.challenge_player_category
+_challenge_player_rating = xi_rules.challenge_player_rating
 
 
 def _challenge_side_for_user(draft, tg_id):
@@ -1031,26 +1017,10 @@ def _store_xi_message_ref(selection, message):
         pass
 
 
-def _challenge_is_wicket_keeper(player):
-    category = _challenge_player_category(player).lower()
-    return "wicket" in category or category == "wk"
-
-
-def _challenge_is_bowling_option(player):
-    category = _challenge_player_category(player).lower().replace("-", " ")
-    return "bowler" in category or "all rounder" in category or "allrounder" in category
-
-
-def _challenge_is_overseas(player):
-    """True when the challenge player is flagged overseas.
-
-    Prefers the ``is_overseas`` column (set by the admin toggle) and falls back to
-    the ``is_overseas`` key inside ``details_json`` for rows that predate the column.
-    """
-    flag = getattr(player, "is_overseas", None)
-    if flag is not None:
-        return bool(flag)
-    return bool(_challenge_player_details(player).get("is_overseas"))
+_challenge_is_wicket_keeper = xi_rules.challenge_is_wicket_keeper
+_challenge_is_bowling_option = xi_rules.challenge_is_bowling_option
+_challenge_is_overseas = xi_rules.challenge_is_overseas
+_challenge_xi_validation = xi_rules.validate_challenge_xi
 
 
 def _challenge_overseas_limits(draft):
@@ -1064,22 +1034,6 @@ def _challenge_overseas_limits(draft):
     except (TypeError, ValueError):
         hi = 11
     return lo, hi
-
-
-def _challenge_xi_validation(players, min_overseas=0, max_overseas=11):
-    if len(players) != 11:
-        return False, "Select exactly 11 players."
-    if not any(_challenge_is_wicket_keeper(player) for player in players):
-        return False, "Wicket Keeper is Must"
-    bowling_options = sum(1 for player in players if _challenge_is_bowling_option(player))
-    if bowling_options < 5:
-        return False, "At least 5 Bowling Option Must (Bowlers + Allrounders)"
-    overseas = sum(1 for player in players if _challenge_is_overseas(player))
-    if overseas > max_overseas:
-        return False, f"Max {max_overseas} overseas ✈️ allowed in XI (you have {overseas})"
-    if overseas < min_overseas:
-        return False, f"Min {min_overseas} overseas ✈️ required in XI (you have {overseas})"
-    return True, ""
 
 
 def _challenge_rule_checkbox(passed):
@@ -1274,7 +1228,14 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, is_tournament=False):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, is_tournament=False, vs_bot=False):
+    # ``effective_message`` rather than ``update.message`` so this also works when
+    # the picker is opened from a button (the /ciplbot Rematch), where
+    # ``update.message`` is None.
+    reply = update.effective_message
+    if reply is None:
+        logger.warning("league team picker: no message to reply to")
+        return
     # One game per chat / one match per player (any game mode). Block early so a
     # Challenge League draft can't start on top of a live match in this chat or
     # while either player is already busy elsewhere.
@@ -1282,7 +1243,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     # One league setup per chat: block a second challenge while another player's
     # team/player selection is still under way in this group.
     if _active_draft_in_chat(context.bot_data, cid) or _waiting_cm_lobby_in_chat(context.bot_data, cid):
-        await update.message.reply_text(
+        await reply.reply_text(
             "⚠️ A Challenge League team selection is already in progress in this chat. "
             "Finish, cancel, or deny it before starting another.",
             parse_mode="HTML")
@@ -1290,16 +1251,18 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     if session is not None:
         chat_busy = _active_match_in_chat(session, cid) or _active_cric_match_in_chat(session, cid)
         if chat_busy:
-            await update.message.reply_text(_chat_busy_message(chat_busy), parse_mode="HTML")
+            await reply.reply_text(_chat_busy_message(chat_busy), parse_mode="HTML")
             return
         host_busy = _active_match_for_user(session, challenger.id)
         if host_busy:
-            await update.message.reply_text(_user_busy_message(host_busy), parse_mode="HTML",
+            await reply.reply_text(_user_busy_message(host_busy), parse_mode="HTML",
                                             disable_web_page_preview=True)
             return
-        guest_busy = _active_match_for_user(session, target.id)
+        # The bot opponent is one shared User row that sits in every concurrent
+        # practice match, so checking it would block the second /ciplbot.
+        guest_busy = None if vs_bot else _active_match_for_user(session, target.id)
         if guest_busy:
-            await update.message.reply_text(
+            await reply.reply_text(
                 f"⚠️ {_user_label(target)} is already in an active match "
                 f"(#{guest_busy.id}). They must finish it first.",
                 parse_mode="HTML", disable_web_page_preview=True)
@@ -1324,6 +1287,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         # whole draft → toss → play flow so the result is recorded against it.
         "is_tournament": bool(is_tournament),
         "tournament_id": tournament_id,
+        # /ciplbot: the "target" is the AI opponent. It picks its own team and
+        # Playing XI, calls nothing, and the match is unranked practice.
+        "vs_bot": bool(vs_bot),
         "teams": teams,
         "team_codes": team_codes,
         "turn": "host",
@@ -1335,7 +1301,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         "target": {
             "user_id": target.id,
             "tg_id": target.telegram_id,
-            "name": _user_label(target),
+            # The AI opponent shows as "🤖 Bot" everywhere, not as the internal
+            # username of the shared bot User row.
+            "name": "🤖 Bot" if vs_bot else _user_label(target),
         },
         "created_at": datetime.utcnow().isoformat(),
     }
@@ -1359,14 +1327,14 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
             try:
                 if local_path:
                     with open(local_path, "rb") as photo:
-                        sent = await update.message.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
+                        sent = await reply.reply_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=markup)
                 else:
-                    sent = await update.message.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+                    sent = await reply.reply_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
             except Exception:
                 logger.exception("Failed to send league image for %s; falling back to text", league_key)
                 sent = None
         if sent is None:
-            sent = await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+            sent = await reply.reply_text(caption, parse_mode="HTML", reply_markup=markup)
     except Exception:
         # The draft + chat lock were installed before this send; if we couldn't
         # post the picker at all, release them so the chat isn't locked with no
@@ -1745,6 +1713,19 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
     command_name = _challenge_command_name(update)
     session = get_session()
     try:
+        # A "<league command>bot" alias (e.g. /cbblbot) starts a bot match in
+        # that league. This is the only place dynamic league commands can be
+        # routed — the regex handler that reaches here owns its handler group,
+        # so a second one would never fire.
+        from handlers.ciplbot import ciplbot_handler, league_key_from_bot_command
+        bot_league_key, _bot_league_name = league_key_from_bot_command(
+            command_name, session)
+        if bot_league_key:
+            session.close()
+            session = None
+            await ciplbot_handler(update, context)
+            return
+
         # Official tournament command takes precedence over the casual league command.
         tournament_league = is_tournament_command(command_name, session)
         if tournament_league is not None:
@@ -1787,7 +1768,83 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
             league_record=league_record, teams=teams, session=session,
         )
     finally:
+        # The bot-alias branch above closes and clears the session before
+        # delegating, so it opens its own rather than sharing a closed one.
+        if session is not None:
+            session.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# /ciplbot — the AI opponent's automatic team and Playing XI
+# ════════════════════════════════════════════════════════════════════
+
+def _pick_bot_league_team(draft, host_team):
+    """Pick the bot's league team: any other team with a squad it can field.
+
+    Returns None when no other team in the league has eleven players, which is
+    a real configuration problem worth surfacing rather than papering over.
+    """
+    from services.bot_xi_builder import pick_bot_team
+
+    session = get_session()
+    try:
+        def squad_size(team_name):
+            probe = dict(draft, target_team=team_name)
+            try:
+                return len(_query_team_players(session, probe, "target"))
+            except Exception:
+                logger.exception("ciplbot: reading squad for %s failed", team_name)
+                return 0
+
+        chosen = pick_bot_team(draft.get("teams") or [], (host_team,), squad_size)
+        if chosen and squad_size(chosen) < 11:
+            return None
+        return chosen
+    finally:
         session.close()
+
+
+def _autoconfirm_bot_xi(draft):
+    """Build and lock in the bot's Playing XI for this draft.
+
+    Highest OVR first under the league's own rules (11 players, a keeper, five
+    bowling options, the overseas min/max), via
+    ``services.bot_xi_builder.build_challenge_bot_xi``. Returns True on success;
+    on failure the caller should abandon the draft rather than start a match
+    with a bot side that has no XI.
+    """
+    from services.bot_xi_builder import build_challenge_bot_xi
+
+    session = get_session()
+    try:
+        players = _query_team_players(session, draft, "target")
+        xi = build_challenge_bot_xi(players, *_challenge_overseas_limits(draft))
+        if len(xi) != 11:
+            logger.error("ciplbot: could not build an XI for %s (%s players)",
+                         draft.get("target_team"), len(players))
+            return False
+        selection = _challenge_xi_selection(draft, "target")
+        selection["player_ids"] = [int(getattr(p, "id")) for p in xi]
+        selection["confirmed"] = True
+        # Cache the names so the recap can show the XI without another query.
+        draft["bot_xi_names"] = [str(getattr(p, "name", "Player")) for p in xi]
+        return True
+    except Exception:
+        logger.exception("ciplbot: bot XI generation failed")
+        return False
+    finally:
+        session.close()
+
+
+def _bot_xi_recap(draft):
+    """The bot's locked-in XI, numbered, for the Playing-XI prompt."""
+    names = draft.get("bot_xi_names") or []
+    if not names:
+        return ""
+    lines = [f"\n🤖 <b>{_esc(draft.get('target_team') or 'Bot')}</b> "
+             f"(bot XI — auto-picked, best available):"]
+    lines.extend(f"{i:>2}. {_esc(n)}" for i, n in enumerate(names, 1))
+    return "\n".join(lines)
 
 
 async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1840,7 +1897,29 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
                 show_alert=True)
             return
 
-    if turn == "host":
+    if turn == "host" and draft.get("vs_bot"):
+        # Vs the bot there is no second human to wait on: the bot takes one of
+        # the remaining teams straight away and the draft moves to the pitch.
+        draft["host_team"] = selected_team
+        bot_team = _pick_bot_league_team(draft, selected_team)
+        if not bot_team:
+            await query.answer(
+                "No other team in this league has a full squad to play with.",
+                show_alert=True)
+            draft["host_team"] = None
+            return
+        draft["target_team"] = bot_team
+        draft["turn"] = "complete"
+        await query.answer(f"Selected {selected_team} — bot takes {bot_team}")
+        lines = [
+            f"🤖 <b>{_league_battle_title(draft.get('league_name'))} vs BOT</b>",
+            "═════════════════════════════",
+        ]
+        lines.extend(_team_selection_status(draft))
+        lines.append("")
+        lines.append("🎯 <i>Unranked practice — no stats, coins, gems or Win/Loss.</i>")
+        message = "\n".join(lines)
+    elif turn == "host":
         draft["host_team"] = selected_team
         draft["turn"] = "target"
         await query.answer(f"Selected {selected_team}")
@@ -1886,11 +1965,13 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         if message_obj is not None:
             _track_setup_msg(draft, message_obj)
             # New step: the host now picks the pitch before Playing XI selection.
+            # Vs the bot there is no guest who could deny the match.
             try:
                 sent = await message_obj.reply_text(
                     _pitch_prompt(draft),
                     parse_mode="HTML",
-                    reply_markup=_pitch_keyboard(draft_id),
+                    reply_markup=_pitch_keyboard(
+                        draft_id, allow_deny=not draft.get("vs_bot")),
                 )
                 _track_setup_msg(draft, sent)
             except Exception:
@@ -3014,11 +3095,14 @@ async def challenge_start_match_callback(update: Update, context: ContextTypes.D
     await query.answer("Match started!")
     # Toss happens exactly like the current system: the guest calls heads/tails,
     # the winner elects bat/bowl, then the over-by-over match begins in chat.
-    target = draft.get("target") or {}
+    # Vs the bot the guest IS the bot, so the host calls the coin — and if the
+    # bot wins the toss it elects bat/bowl at random (see cipl_coin_callback).
+    caller = (draft.get("host") if draft.get("vs_bot")
+              else draft.get("target")) or {}
     try:
         await query.edit_message_text(
             f"🪙 <b>TOSS</b>\n"
-            f"{_mention(target.get('tg_id'), target.get('name') or 'Guest')}, "
+            f"{_mention(caller.get('tg_id'), caller.get('name') or 'Guest')}, "
             f"call the coin:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[

@@ -337,6 +337,8 @@ BOT_MENU_COMMANDS = (
     ("resume", "Resume your active match"),
     ("rcl", "Resume a stuck Challenge League (/cipl) match"),
     ("letsplay", "Challenge a user with your own roster (20 overs)"),
+    ("lpbot", "Practice a 20-over Lets Play against the bot (unranked)"),
+    ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
     ("lastmatch", "View your last match"),
@@ -600,6 +602,8 @@ async def start_handler(update, context):
         "/wpm [overs] [@user] - Match lobby up to 20 overs; tag/reply to invite a player (Mini App)\n"
         "/vsbot [overs] - Play a bot opponent in chat\n"
         "/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)\n"
+        "/lpbot /lpb - Practice Lets Play vs the bot, your roster, 20 overs (unranked)\n"
+        "/ciplbot /ciplb [league] - Practice a league match vs the bot (unranked)\n"
         "/endmatch /em - End match (fine applies)\n"
         "/clearmatches - Players in the match (or a bot admin) clear stuck matches here (no winner)\n"
         "/removematch @user - Admin: remove a player stuck in a match\n"
@@ -1153,6 +1157,20 @@ def main():
         app.add_handler(CallbackQueryHandler(letsplay_starttoss_callback, pattern=r"^lp_starttoss_"))
         app.add_handler(CallbackQueryHandler(letsplay_coin_callback, pattern=r"^lp_coin_"))
         app.add_handler(CallbackQueryHandler(letsplay_toss_callback, pattern=r"^lp_toss_"))
+
+        # ── /lpbot + /ciplbot — unranked practice vs the AI captain ──
+        # Both replay the /letsplay and /cipl flows with the bot in the other
+        # dugout, so they reuse the callbacks registered above and in the
+        # cipl_play block. Registered in the default handler group so they run
+        # before the catch-all league-command regex handler (group 1).
+        from handlers.lpbot import lpbot_handler, botmatch_again_callback
+        from handlers.ciplbot import ciplbot_handler
+        app.add_handler(CommandHandler(["lpbot", "lpb", "letsplaybot"], lpbot_handler))
+        app.add_handler(CommandHandler(["ciplbot", "ciplb", "challengeiplbot"],
+                                       ciplbot_handler))
+        app.add_handler(CallbackQueryHandler(botmatch_again_callback,
+                                             pattern=r"^botmatch_again_"))
+
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))

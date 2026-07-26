@@ -9,6 +9,7 @@ from models import User, Player, UserRoster
 from services.activity_service import log_activity
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.flags import get_flag
+from services import xi_rules
 from services.bowling_service import is_spinner as _is_spin, get_bowler_profile_key
 from services.fancy_text import small_caps, bold_digits, bold_serif, circled
 from services.miniapp_buttons import miniapp_deep_link
@@ -171,91 +172,10 @@ def format_bench_text(roster_list):
 
 # ── XI Validation ────────────────────────────────────────────────────
 
-def validate_xi(roster_list):
-    """Validate Playing XI composition for match.
-    Returns (valid: bool, errors: list[str])
-
-    Rules:
-    - Must have 11 players
-    - Min 3, Max 5 Batsmen
-    - Min 3, Max 5 Bowlers
-    - Min 1, Max 2 Wicket Keepers
-    - Min 1, Max 3 All-rounders
-    - 3rd ALR must have lower BOWL rating than all pure Bowlers
-    """
-    if len(roster_list) < 11:
-        return False, [f"Need 11 players, have {len(roster_list)}"]
-
-    top_11 = roster_list[:11]
-    errors = []
-
-    cats = {"Batsman": [], "Wicket Keeper": [], "All-rounder": [], "Bowler": []}
-    for entry, player in top_11:
-        cat = player.category
-        if cat in cats:
-            cats[cat].append(player)
-        else:
-            cats["Batsman"].append(player)
-
-    batsmen = cats["Batsman"]
-    keepers = cats["Wicket Keeper"]
-    allrounders = cats["All-rounder"]
-    bowlers = cats["Bowler"]
-
-    # Min/Max checks
-    if len(batsmen) < 3:
-        errors.append(f"Need min 3 Batsmen (have {len(batsmen)})")
-    if len(batsmen) > 5:
-        errors.append(f"Max 5 Batsmen (have {len(batsmen)})")
-    if len(bowlers) < 3:
-        errors.append(f"Need min 3 Bowlers (have {len(bowlers)})")
-    if len(bowlers) > 5:
-        errors.append(f"Max 5 Bowlers (have {len(bowlers)})")
-    if len(keepers) < 1:
-        errors.append("Need at least 1 Wicket Keeper")
-    if len(keepers) > 2:
-        errors.append(f"Max 2 Wicket Keepers (have {len(keepers)})")
-    if len(allrounders) < 1:
-        errors.append("Need at least 1 All-rounder")
-    if len(allrounders) > 3:
-        errors.append(f"Max 3 All-rounders (have {len(allrounders)})")
-
-    # 3rd ALR rule: if you have 3 all-rounders, AT LEAST ONE of them
-    # must have a BOWL rating lower than all pure Bowlers' BOWL ratings
-    if len(allrounders) == 3 and bowlers:
-        min_bowler_bowl = min(b.bowl_rating for b in bowlers)
-        # Find the weakest (lowest bowl rating) all-rounder
-        weakest_alr = min(allrounders, key=lambda p: p.bowl_rating)
-        if weakest_alr.bowl_rating >= min_bowler_bowl:
-            errors.append(
-                f"At least one All-rounder must have BOWL rating lower than all Bowlers. "
-                f"Lowest Bowler BOWL: {min_bowler_bowl}. "
-                f"Your weakest All-rounder ({weakest_alr.name}, BOWL {weakest_alr.bowl_rating}) "
-                f"doesn't qualify."
-            )
-
-    # Duplicate-version rule: each player (regardless of which version) can
-    # only appear ONCE in the XI. So if user has the Base + IPL 2026 cards
-    # of the same player, only ONE of them can be in the playing XI.
-    seen_base_ids = {}  # base_id -> first variant we saw
-    duplicate_pairs = []
-    for entry, player in top_11:
-        base_id = player.parent_player_id or player.id
-        if base_id in seen_base_ids:
-            duplicate_pairs.append((seen_base_ids[base_id], player))
-        else:
-            seen_base_ids[base_id] = player
-    if duplicate_pairs:
-        for first, second in duplicate_pairs:
-            label_first = first.version or "Base"
-            label_second = second.version or "Base"
-            errors.append(
-                f"Duplicate of <b>{first.name}</b> in XI: "
-                f"<i>{label_first}</i> and <i>{label_second}</i>. "
-                f"Pick only one version. Use /swap to swap one out."
-            )
-
-    return len(errors) == 0, errors
+# The roster XI rulebook lives in services/xi_rules.py so the bot's XI builder
+# (and its tests) can apply the same rules without importing this Telegram
+# handler module. Re-exported here under its original name.
+validate_xi = xi_rules.validate_roster_xi
 
 
 # ── Handlers ─────────────────────────────────────────────────────────
