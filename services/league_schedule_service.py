@@ -78,6 +78,13 @@ def generate_schedule(session, tournament_id):
     if not tour:
         return 0
 
+    # A Pure Knockout has no league stage — the round-robin generator would delete
+    # its bracket and replace it with league fixtures, so refuse here.
+    if (tour.knockout_type or "") == "pure_knockout":
+        raise ValueError(
+            "This is a Pure Knockout tournament — use “Generate bracket” instead "
+            "of the league schedule generator.")
+
     completed = (session.query(TournamentMatch)
                  .filter_by(tournament_id=tid)
                  .filter(TournamentMatch.status == "completed").count())
@@ -153,15 +160,18 @@ def generate_series(session, tournament_id, matches):
             .filter(TournamentMatch.status == "completed").count()):
         raise ValueError(
             "Completed matches exist — reset the tournament before regenerating.")
-    (session.query(TournamentMatch).filter_by(tournament_id=tid)
-     .filter(TournamentMatch.status != "completed")
-     .delete(synchronize_session=False))
 
+    # Validate the team count BEFORE deleting anything, so a bad call can't wipe
+    # the existing schedule and then raise (the create handler swallows the error).
     teams = (session.query(TournamentTeam).filter_by(tournament_id=tid)
              .order_by(TournamentTeam.sort_order, TournamentTeam.id).all())
     if len(teams) != 2:
         raise ValueError("A custom series needs exactly 2 teams.")
     t1, t2 = teams[0].id, teams[1].id
+
+    (session.query(TournamentMatch).filter_by(tournament_id=tid)
+     .filter(TournamentMatch.status != "completed")
+     .delete(synchronize_session=False))
     for i in range(n):
         a, b = (t1, t2) if i % 2 == 0 else (t2, t1)
         add_fixture(session, tid, a, b, round_no=i + 1)
