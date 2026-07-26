@@ -147,15 +147,36 @@ def _xi_to_engine(session, pairs):
     return out
 
 
-def _cat_tag(player):
-    cat = player.category or ""
-    if cat == "Wicket Keeper":
+def _cat_tag(category):
+    if category == "Wicket Keeper":
         return " 🧤"
-    if cat == "All-rounder":
+    if category == "All-rounder":
         return " ⚡"
-    if cat == "Bowler":
+    if category == "Bowler":
         return " 🎯"
     return ""
+
+
+def _row_fields(row):
+    """Normalise one XI row to ``(name, rating, category, traits)``.
+
+    A row is either a ``(UserRoster, Player)`` pair (a human side, read from the
+    DB) or an engine player dict (the /lpbot opponent, built in memory by
+    ``services.bot_xi_builder``). Both render on the same card.
+    """
+    if isinstance(row, dict):
+        return (str(row.get("name") or "Player"), row.get("rating") or 0,
+                row.get("category") or "", row.get("traits") or [])
+    _entry, player = row
+    return (str(player.name), player.rating, player.category or "", [])
+
+
+def _trait_tag(traits):
+    """Compact trait badge for the XI card (the bot's traits are inline dicts)."""
+    emojis = [str(t.get("emoji") or "").strip()
+              for t in traits if isinstance(t, dict)]
+    emojis = [e for e in emojis if e]
+    return (" " + "".join(emojis)) if emojis else ""
 
 
 def _format_batting_order(pairs, header, bench_pairs=None):
@@ -165,15 +186,17 @@ def _format_batting_order(pairs, header, bench_pairs=None):
     can read a bench slot straight off the card and swap it in.
     """
     lines = [header]
-    for i, (_entry, player) in enumerate(pairs[:11], start=1):
-        nm = html.escape(str(player.name))
-        lines.append(f"{i:>2}. {nm} <i>({player.rating})</i>{_cat_tag(player)}")
+    for i, row in enumerate(pairs[:11], start=1):
+        name, rating, category, traits = _row_fields(row)
+        lines.append(f"{i:>2}. {html.escape(name)} <i>({rating})</i>"
+                     f"{_cat_tag(category)}{_trait_tag(traits)}")
     if bench_pairs is not None:
         if bench_pairs:
             lines.append("   🪑 <i>Bench:</i>")
-            for i, (_entry, player) in enumerate(bench_pairs, start=12):
-                nm = html.escape(str(player.name))
-                lines.append(f"{i:>2}. {nm} <i>({player.rating})</i>{_cat_tag(player)}")
+            for i, row in enumerate(bench_pairs, start=12):
+                name, rating, category, _t = _row_fields(row)
+                lines.append(f"{i:>2}. {html.escape(name)} <i>({rating})</i>"
+                             f"{_cat_tag(category)}")
         else:
             lines.append("   🪑 <i>Bench: none (exactly 11 players)</i>")
     return "\n".join(lines)
@@ -653,6 +676,31 @@ def _xi_bench_for_side(session, user_id, xi_ids=None):
     return xi, bench, []
 
 
+def _bot_or_user_xi(session, draft, side):
+    """``(xi, bench, errors)`` for a side, whichever kind of side it is.
+
+    For a human that is ``_xi_bench_for_side``. For the /lpbot opponent the XI is
+    built once by ``services.bot_xi_builder`` and then cached on the draft, so
+    the card, any re-render and the launch all show the same eleven — rebuilding
+    would silently field a different team than the one the user agreed to play.
+
+    The bot's bench is ``None`` rather than ``[]``: it picks exactly eleven out
+    of the whole player pool, so it has no bench and no "Bench: none" line
+    belongs on its half of the card.
+    """
+    if not (draft.get("vs_bot") and side == "guest"):
+        return _xi_bench_for_side(session, draft[side]["user_id"],
+                                  draft.get(f"{side}_xi_roster_ids"))
+    xi = draft.get("bot_xi")
+    if not xi:
+        from services.bot_xi_builder import build_letsplay_bot_xi
+        xi = build_letsplay_bot_xi(session, draft["host"]["user_id"])
+        if len(xi) < 11:
+            return None, None, ["The bot couldn't field an XI — no player pool"]
+        draft["bot_xi"] = xi
+    return list(xi), None, []
+
+
 def _show_xi_text(draft, host_pairs, guest_pairs,
                   host_bench=None, guest_bench=None):
     """The 'both XIs locked' card shown before the toss.
@@ -661,8 +709,18 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
     to swap a bench player into the XI with /change before the toss.
     """
     pitch = draft.get("pitch_type", "Hard")
+    vs_bot = bool(draft.get("vs_bot"))
+    title = "🤖 <b>LETS PLAY vs BOT — Playing XI</b>" if vs_bot \
+        else "🧾 <b>LETS PLAY — Playing XI</b>"
+    guest_header = (f"🤖 <b>{html.escape(draft['guest']['name'])}</b> "
+                    f"(Bot — auto-picked)" if vs_bot
+                    else f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)")
+    start_line = (f"🔒 When ready, {_m(draft['host'])} taps <b>Start Toss</b> "
+                  f"to flip the coin!" if vs_bot
+                  else f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> "
+                       f"to flip the coin!")
     parts = [
-        "🧾 <b>LETS PLAY — Playing XI</b>",
+        title,
         "━━━━━━━━━━━━━━━━━━━",
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • 20 overs",
         "<i>Batting order = the one you saved with /sbo (or by rating, high → "
@@ -672,27 +730,34 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
             host_pairs, f"👤 <b>{html.escape(draft['host']['name'])}</b> (Host)",
             bench_pairs=host_bench),
         "",
-        _format_batting_order(
-            guest_pairs, f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)",
-            bench_pairs=guest_bench),
+        _format_batting_order(guest_pairs, guest_header, bench_pairs=guest_bench),
         "",
         "━━━━━━━━━━━━━━━━━━━",
-        _stats_fairness_note(host_pairs, guest_pairs),
+        _stats_fairness_note(host_pairs, guest_pairs, vs_bot=vs_bot),
         "✏️ Reorder your batting with <code>/change &lt;a&gt; &lt;b&gt;</code> "
         "(both 1–11, e.g. <code>/change 3 1</code>), or swap in a bench player "
         "(e.g. <code>/change 2 13</code>).",
-        f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> to flip the coin!",
+        start_line,
     ]
     return "\n".join(p for p in parts if p)
 
 
-def _stats_fairness_note(host_pairs, guest_pairs):
+def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False):
     """A Team Overall line for the Playing-XI card, warning when the gap is wide
     enough that career stats won't be recorded (anti stat-farming)."""
     from services.player_stats_service import (
         STATS_FAIRNESS_OVR_GAP, team_overall)
-    host_ovr = team_overall([{"rating": p.rating} for _e, p in host_pairs[:11]])
-    guest_ovr = team_overall([{"rating": p.rating} for _e, p in guest_pairs[:11]])
+    host_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in host_pairs[:11]])
+    guest_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in guest_pairs[:11]])
+    if vs_bot:
+        # Nothing is at stake in a practice match, so the anti stat-farming gap
+        # warning is irrelevant — say plainly that this one doesn't count.
+        return (
+            f"📊 <b>Team Overall:</b> You <b>{host_ovr}</b> vs Bot "
+            f"<b>{guest_ovr}</b>\n"
+            "🎯 <b>Practice match — unranked.</b> No career stats, no coins or "
+            "gems, no Win/Loss and no streak. Just cricket.\n"
+            "━━━━━━━━━━━━━━━━━━━")
     gap = abs(host_ovr - guest_ovr)
     if gap >= STATS_FAIRNESS_OVR_GAP:
         return (
@@ -722,8 +787,8 @@ async def _prompt_show_xi(context, draft):
     try:
         host_pairs, host_bench, host_errs = _xi_bench_for_side(
             session, draft["host"]["user_id"])
-        guest_pairs, guest_bench, guest_errs = _xi_bench_for_side(
-            session, draft["guest"]["user_id"])
+        guest_pairs, guest_bench, guest_errs = _bot_or_user_xi(
+            session, draft, "guest")
         if host_pairs is None or guest_pairs is None:
             bad = draft["host"] if host_pairs is None else draft["guest"]
             errs = host_errs if host_pairs is None else guest_errs
@@ -733,7 +798,8 @@ async def _prompt_show_xi(context, draft):
             # reading player.rating/name afterwards would raise
             # DetachedInstanceError and leave the draft stuck until timeout.
             host_ids = [int(e.id) for e, _p in host_pairs]
-            guest_ids = [int(e.id) for e, _p in guest_pairs]
+            guest_ids = (None if draft.get("vs_bot")
+                         else [int(e.id) for e, _p in guest_pairs])
             text = _show_xi_text(draft, host_pairs, guest_pairs,
                                  host_bench=host_bench, guest_bench=guest_bench)
         session.commit()
@@ -824,8 +890,7 @@ async def _rerender_show_xi(context, draft):
     try:
         host_xi, host_bench, _h = _xi_bench_for_side(
             session, draft["host"]["user_id"], draft.get("host_xi_roster_ids"))
-        guest_xi, guest_bench, _g = _xi_bench_for_side(
-            session, draft["guest"]["user_id"], draft.get("guest_xi_roster_ids"))
+        guest_xi, guest_bench, _g = _bot_or_user_xi(session, draft, "guest")
         if host_xi is not None and guest_xi is not None:
             text = _show_xi_text(draft, host_xi, guest_xi,
                                  host_bench=host_bench, guest_bench=guest_bench)
@@ -1011,8 +1076,13 @@ async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFA
     if not draft or draft.get("status") != "showxi":
         await q.answer("This match is no longer waiting for the toss.", show_alert=True)
         return
-    if q.from_user.id != draft["guest"]["tg_id"]:
-        await q.answer("Only the guest starts the toss.", show_alert=True)
+    # The guest starts the toss — vs the bot the guest IS the bot, so the host
+    # (the only human here) starts it.
+    starter_side = "host" if draft.get("vs_bot") else "guest"
+    if q.from_user.id != draft[starter_side]["tg_id"]:
+        await q.answer(
+            "Only you can start this toss." if starter_side == "host"
+            else "Only the guest starts the toss.", show_alert=True)
         return
     # Flip out of "showxi" synchronously (no await before this) so a racing
     # double-tap can't start two tosses.
@@ -1031,8 +1101,9 @@ async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFA
 # ════════════════════════════════════════════════════════════════════
 
 async def _start_toss(context, draft):
+    caller = draft["host"] if draft.get("vs_bot") else draft["guest"]
     text = (f"🪙 <b>Toss Time!</b>\n\n"
-            f"{_m(draft['guest'])}, call the toss:")
+            f"{_m(caller)}, call the toss:")
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("⬆️ Heads", callback_data=f"lp_coin_heads_{draft['invite_id']}"),
         InlineKeyboardButton("⬇️ Tails", callback_data=f"lp_coin_tails_{draft['invite_id']}"),
@@ -1062,8 +1133,14 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
     if draft.get("toss_winner_side") or draft.get("coin_flipping"):
         await q.answer("Toss already in progress.", show_alert=True)
         return
-    if q.from_user.id != draft["guest"]["tg_id"]:
-        await q.answer("Only the guest calls the toss!", show_alert=True)
+    # The guest calls the toss — vs the bot the guest IS the bot, so the human
+    # host calls it instead.
+    vs_bot = bool(draft.get("vs_bot"))
+    caller_side = "host" if vs_bot else "guest"
+    if q.from_user.id != draft[caller_side]["tg_id"]:
+        await q.answer(
+            "Only you can call this toss!" if vs_bot
+            else "Only the guest calls the toss!", show_alert=True)
         return
     # Lock synchronously BEFORE the async coin animation so a racing double-tap
     # can't spawn a second election keyboard for the wrong side.
@@ -1086,21 +1163,61 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
         logger.exception("letsplay coin flip failed for invite %s", invite_id)
         await q.answer("Toss failed — call it again.", show_alert=True)
         return
-    winner_side = "guest" if won else "host"
+    # ``won`` is from the CALLER's point of view, and the caller is the guest in
+    # a normal match but the host vs the bot.
+    other_side = "guest" if caller_side == "host" else "host"
+    winner_side = caller_side if won else other_side
     winner = draft[winner_side]
-    # The reveal is the critical edit: if it fails the toss is left frozen on a
-    # mid-flip frame. Retry it, and only mark the winner once it actually lands —
-    # otherwise release the lock so the guest can call the toss again.
-    revealed = await reveal_toss_result(lambda: q.edit_message_text(
-        f"🪙 The coin lands on <b>{coin.upper()}</b> — guest called "
-        f"<b>{call.upper()}</b>.\n\n"
-        f"🏆 {_m(winner)} won the toss. Choose:",
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏏 Bat First",
-                                 callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
-            InlineKeyboardButton("🎳 Bowl First",
-                                 callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
-        ]])))
+    caller_label = "you" if vs_bot else "guest"
+
+    # Vs the bot, a bot toss win is settled right here: it elects bat or bowl at
+    # random and the match launches, so no stale keyboard is left in the chat.
+    if vs_bot and winner_side == "guest":
+        from services.bot_captain import elect_toss_decision
+        decision = elect_toss_decision()
+        revealed = await reveal_toss_result(lambda: q.edit_message_text(
+            f"🪙 The coin lands on <b>{coin.upper()}</b> — you called "
+            f"<b>{call.upper()}</b>.\n\n"
+            f"🤖 <b>Bot</b> won the toss and elected to "
+            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
+            f"The match begins below — play over by over!",
+            parse_mode="HTML"))
+        if revealed:
+            draft["toss_winner_side"] = winner_side
+            draft["match_launched"] = True
+            _cancel_setup_timeout(context, invite_id)
+            try:
+                await _launch_match(context, draft, decision, winner_side)
+            except Exception:
+                # The setup timer was already cancelled above, so nothing else
+                # will ever clean this draft up — retire it here or it lingers
+                # in bot_data forever. Drop it BEFORE the (fallible) notice: if
+                # that send raises, a draft left on status "toss" would block
+                # every future /lpbot in this chat.
+                logger.exception("lpbot launch failed for invite %s", invite_id)
+                draft["status"] = "failed"
+                _drop_draft(context, invite_id)
+                try:
+                    await context.bot.send_message(
+                        draft["chat_id"],
+                        "⚠️ Failed to start the match. Please try /lpbot again.")
+                except Exception:
+                    logger.exception("lpbot launch-failure notice failed")
+            return
+    else:
+        # The reveal is the critical edit: if it fails the toss is left frozen on
+        # a mid-flip frame. Retry it, and only mark the winner once it actually
+        # lands — otherwise release the lock so the caller can try again.
+        revealed = await reveal_toss_result(lambda: q.edit_message_text(
+            f"🪙 The coin lands on <b>{coin.upper()}</b> — {caller_label} called "
+            f"<b>{call.upper()}</b>.\n\n"
+            f"🏆 {_m(winner)} won the toss. Choose:",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏏 Bat First",
+                                     callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
+                InlineKeyboardButton("🎳 Bowl First",
+                                     callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
+            ]])))
     if not revealed:
         # The animation edits already stripped the Heads/Tails keyboard, so a
         # bare alert would leave the guest with no button to retry. Clear the
@@ -1188,15 +1305,22 @@ async def _launch_match(context, draft, decision, winner_side):
         # Launch the EXACT XI each side confirmed (snapshot of roster ids taken
         # at confirm time), not whatever the live roster order is now. Fall back
         # to the current order only if a snapshot is somehow missing.
+        vs_bot = bool(draft.get("vs_bot"))
         host_ids = draft.get("host_xi_roster_ids")
-        guest_ids = draft.get("guest_xi_roster_ids")
         host_pairs = (_pairs_from_roster_ids(session, host.id, host_ids)
                       if host_ids else _get_ordered_roster(session, host.id))
-        guest_pairs = (_pairs_from_roster_ids(session, guest.id, guest_ids)
-                       if guest_ids else _get_ordered_roster(session, guest.id))
         # Final validation — a snapshot player may have been sold mid-setup,
-        # leaving fewer than 11 or an illegal composition.
-        for pairs, info in ((host_pairs, host_info), (guest_pairs, guest_info)):
+        # leaving fewer than 11 or an illegal composition. The bot's XI is built
+        # in memory from the master player pool, so there is nothing to re-read
+        # and nothing that can have changed underneath it.
+        to_check = [(host_pairs, host_info)]
+        guest_pairs = None
+        if not vs_bot:
+            guest_ids = draft.get("guest_xi_roster_ids")
+            guest_pairs = (_pairs_from_roster_ids(session, guest.id, guest_ids)
+                           if guest_ids else _get_ordered_roster(session, guest.id))
+            to_check.append((guest_pairs, guest_info))
+        for pairs, info in to_check:
             ok, _err = validate_xi(pairs)
             if not ok:
                 await context.bot.send_message(
@@ -1205,7 +1329,15 @@ async def _launch_match(context, draft, decision, winner_side):
                 return
 
         host_xi = _xi_to_engine(session, host_pairs[:11])
-        guest_xi = _xi_to_engine(session, guest_pairs[:11])
+        if vs_bot:
+            guest_xi = list(draft.get("bot_xi") or [])
+            if len(guest_xi) < 11:
+                await context.bot.send_message(
+                    draft["chat_id"],
+                    "⚠️ The bot couldn't field an XI — match cancelled.")
+                return
+        else:
+            guest_xi = _xi_to_engine(session, guest_pairs[:11])
         session.commit()
 
         bat_is_host = (bat_info["user_id"] == host_info["user_id"])
@@ -1255,13 +1387,18 @@ async def _launch_match(context, draft, decision, winner_side):
         str(bowl_info["tg_id"]): bowl_team_name,
     }
     state["is_letsplay"] = True
-    # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
-    # flag the match so no career stats are recorded (anti stat-farming). The
-    # players were already warned on the Playing-XI card before the toss.
     from services.player_stats_service import team_overall, is_stat_farming_mismatch
     state["bat_team_ovr"] = team_overall(bat_xi)
     state["bowl_team_ovr"] = team_overall(bowl_xi)
-    if is_stat_farming_mismatch(bat_xi, bowl_xi):
+    if draft.get("vs_bot"):
+        # /lpbot: unranked practice, and the AI captain plays the bot's turns.
+        # Nothing is at stake, so the anti stat-farming gap check is moot.
+        from handlers.cipl_play import mark_bot_match
+        mark_bot_match(state, guest_info["user_id"])
+    elif is_stat_farming_mismatch(bat_xi, bowl_xi):
+        # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
+        # flag the match so no career stats are recorded (anti stat-farming). The
+        # players were already warned on the Playing-XI card before the toss.
         state["stats_disabled"] = True
     # Rating/trait-aware death-overs resolution (see cipl_match._make_clutch_hook):
     # the last over of a live LetsPlay chase is decided by ratings + clutch traits,
@@ -1287,14 +1424,18 @@ async def _announce(context, state, pitch_type):
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
     pitch = html.escape(str(pitch_type or "Hard"))
     rule = "━" * 15
+    title = "🤖 <b>LETS PLAY vs BOT</b> 🏏" if state.get("is_bot_match") \
+        else "🏏 <b>LETS PLAY</b> 🏏"
     text = (
-        f"🏏 <b>LETS PLAY</b> 🏏\n"
+        f"{title}\n"
         f"{rule}\n"
         f"⚔️ <b>{bat}</b>  🆚  <b>{bowl}</b>\n"
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
-        f"{rule}\n"
+        + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"
+           if state.get("is_bot_match") else "")
+        + f"{rule}\n"
         f"📺 Live scorecard, commentary &amp; XI inside\n"
         f"👇 Tap <b>View Match</b> to follow live")
     try:

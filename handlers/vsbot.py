@@ -643,18 +643,8 @@ def _build_bot_team_xi(session, bot_team_id):
 def _adaptive_trait_dict(effect_key):
     """Build the inline trait dict (read by handlers.match._calc) for one
     Level-5 trait, resolving display name/emoji/category from the catalog."""
-    from services.trait_service import TRAIT_DEFINITIONS
-    meta = next((t for t in TRAIT_DEFINITIONS
-                 if t["effect_key"] == effect_key), None)
-    if not meta:
-        return None
-    return {
-        "effect_key": effect_key,
-        "level": ADAPTIVE_TRAIT_LEVEL,
-        "display_name": meta["name"],
-        "emoji": meta["emoji"],
-        "category": meta["category"],
-    }
+    from services.bot_xi_builder import trait_dict
+    return trait_dict(effect_key, ADAPTIVE_TRAIT_LEVEL)
 
 
 def build_adaptive_bot_xi(session, user_id):
