@@ -176,3 +176,52 @@ def test_reward_core_moves_the_streak_counters():
     assert winner.best_streak == 2 and winner.active_days == 1
     assert loser.matches_lost == 1 and loser.win_streak == 0
     assert loser.best_streak == 6 and loser.active_days == 1
+
+
+# ── anti stat-farming: count_result=False (a /letsplay or /wpm mismatch) ──
+
+def test_record_match_result_is_a_noop_when_not_counted():
+    """A flagged mismatch counts for nothing — no streak change AND no active
+    day for either side."""
+    winner = _user(id=1, win_streak=2, best_streak=4)
+    loser = _user(id=2, win_streak=7, best_streak=7)
+    session = _FakeSession({1: winner, 2: loser})
+
+    record_match_result_stats(session, 1, 2, count_result=False)
+
+    assert winner.win_streak == 2 and winner.best_streak == 4   # untouched
+    assert loser.win_streak == 7 and loser.best_streak == 7      # NOT reset
+    assert winner.active_days == 0 and loser.active_days == 0     # nothing counts
+
+
+def test_reward_core_awards_nothing_when_not_counted():
+    """A flagged mismatch earns nothing: no coins/gems, no W/L, no streak, no
+    season points, no active day. Returns all zeros."""
+    import services.match_rewards as mr
+
+    winner = _user(id=1, total_coins=0, total_gems=0, matches_played=3,
+                   matches_won=2, matches_lost=1, win_streak=1, best_streak=1)
+    loser = _user(id=2, total_coins=0, total_gems=0, matches_played=3,
+                  matches_won=1, matches_lost=2, win_streak=6, best_streak=6)
+    session = _FakeSession({1: winner, 2: loser})
+
+    season_calls = []
+    import services.season_service as ss
+    orig_season = getattr(ss, "safe_add_season_points", None)
+    ss.safe_add_season_points = lambda *a, **k: season_calls.append((a, k))
+    try:
+        wc, wg, lc, lg = mr.award_match_rewards_core(
+            session, 1, 2, overs=20, is_vsbot=False, count_result=False)
+    finally:
+        if orig_season is not None:
+            ss.safe_add_season_points = orig_season
+
+    # Nothing awarded, nothing recorded.
+    assert (wc, wg, lc, lg) == (0, 0, 0, 0)
+    assert winner.total_coins == 0 and loser.total_coins == 0
+    assert winner.active_days == 0 and loser.active_days == 0
+    assert winner.matches_won == 2 and winner.matches_played == 3
+    assert winner.win_streak == 1 and winner.best_streak == 1
+    assert loser.matches_lost == 2 and loser.matches_played == 3
+    assert loser.win_streak == 6
+    assert season_calls == []

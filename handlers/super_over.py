@@ -1481,8 +1481,13 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         try:
             from services.match_rewards import award_match_rewards_core
             overs = so["main"].get("overs") or 20
+            # A /letsplay or /wpm mismatch flagged for anti stat-farming counts
+            # for nothing — no coins/gems and no W/L record or streak for the
+            # Super-Over-decided match (award returns zeros).
+            count_result = not bool((so.get("main_state") or {}).get("stats_disabled"))
             w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
-                session, winner_uid, loser_uid, overs, is_vsbot=False)
+                session, winner_uid, loser_uid, overs, is_vsbot=False,
+                count_result=count_result)
             prize = {"wc": w_coins, "wg": w_gems, "lc": l_coins, "lg": l_gems}
         except Exception:
             logger.exception("Super Over reward award failed (%s)", mid)

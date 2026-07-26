@@ -677,12 +677,36 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
             bench_pairs=guest_bench),
         "",
         "━━━━━━━━━━━━━━━━━━━",
+        _stats_fairness_note(host_pairs, guest_pairs),
         "✏️ Reorder your batting with <code>/change &lt;a&gt; &lt;b&gt;</code> "
         "(both 1–11, e.g. <code>/change 3 1</code>), or swap in a bench player "
         "(e.g. <code>/change 2 13</code>).",
         f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> to flip the coin!",
     ]
-    return "\n".join(parts)
+    return "\n".join(p for p in parts if p)
+
+
+def _stats_fairness_note(host_pairs, guest_pairs):
+    """A Team Overall line for the Playing-XI card, warning when the gap is wide
+    enough that career stats won't be recorded (anti stat-farming)."""
+    from services.player_stats_service import (
+        STATS_FAIRNESS_OVR_GAP, team_overall)
+    host_ovr = team_overall([{"rating": p.rating} for _e, p in host_pairs[:11]])
+    guest_ovr = team_overall([{"rating": p.rating} for _e, p in guest_pairs[:11]])
+    gap = abs(host_ovr - guest_ovr)
+    if gap >= STATS_FAIRNESS_OVR_GAP:
+        return (
+            f"⚠️ <b>This match WON'T count.</b>\n"
+            f"Team Overall gap is too wide — Host <b>{host_ovr}</b> vs "
+            f"Guest <b>{guest_ovr}</b> (<b>{gap}</b> apart, limit "
+            f"{STATS_FAIRNESS_OVR_GAP}). No career stats, no Win/Loss or streak, "
+            "and no coins or gems — it keeps things fair. Play on for fun, or "
+            "even up the XIs with <code>/change</code>.\n"
+            "━━━━━━━━━━━━━━━━━━━")
+    return (
+        f"📊 <b>Team Overall:</b> Host <b>{host_ovr}</b> vs Guest "
+        f"<b>{guest_ovr}</b> — stats will count. ✅\n"
+        "━━━━━━━━━━━━━━━━━━━")
 
 
 async def _prompt_show_xi(context, draft):
@@ -1231,6 +1255,14 @@ async def _launch_match(context, draft, decision, winner_side):
         str(bowl_info["tg_id"]): bowl_team_name,
     }
     state["is_letsplay"] = True
+    # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
+    # flag the match so no career stats are recorded (anti stat-farming). The
+    # players were already warned on the Playing-XI card before the toss.
+    from services.player_stats_service import team_overall, is_stat_farming_mismatch
+    state["bat_team_ovr"] = team_overall(bat_xi)
+    state["bowl_team_ovr"] = team_overall(bowl_xi)
+    if is_stat_farming_mismatch(bat_xi, bowl_xi):
+        state["stats_disabled"] = True
     # Rating/trait-aware death-overs resolution (see cipl_match._make_clutch_hook):
     # the last over of a live LetsPlay chase is decided by ratings + clutch traits,
     # not a pre-scripted scenario value.

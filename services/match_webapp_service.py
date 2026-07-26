@@ -587,7 +587,7 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
     return True, f"Impact Player confirmed: {incoming.get('name')} replaces {outgoing.get('name')}.", rec
 
 def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False,
-                          difficulty=None):
+                          difficulty=None, enforce_fair_stats=False):
     """Create the initial live state for a Mini-App-played match, right after
     the toss. Openers/bowler are placeholders until the teams pick them.
     Returns (ok, msg). Safe to call once; no-op if state already exists.
@@ -603,6 +603,11 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     difficulty: when this is a vs-bot match (one side is the AI bot user), the
     bot team's difficulty ("Easy"/"Medium"/"Hard"/"Legendary"). Stored in state
     so the AI (auto_play_bot_turns / auto_play_user_turns) plays accordingly.
+
+    enforce_fair_stats: user-vs-user /wpm passes this so a wide Team Overall gap
+    between the two XIs voids career stats (anti stat-farming). Never set for
+    bot matches or tournaments. The two Team Overalls are always stored in state
+    (``bat_team_ovr`` / ``bowl_team_ovr``) so callers can surface a warning.
     """
     from services.match_engine import create_match_state
     from models import UserRoster, Player
@@ -704,6 +709,22 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
                 s["bowler_done"] = True
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
+
+    # Fair-match stat gate (user-vs-user /wpm). Record each side's Team Overall
+    # (average XI rating) so the launch card can show it, and disable career
+    # stats when the gap is too wide — this stops players farming stats against
+    # a deliberately weak opponent. Bot matches never qualify (enforce_fair_stats
+    # is only passed by the /wpm human-vs-human launch, and vsbot is excluded).
+    try:
+        from services.player_stats_service import (
+            team_overall, is_stat_farming_mismatch)
+        s["bat_team_ovr"] = team_overall(bxi)
+        s["bowl_team_ovr"] = team_overall(bwxi)
+        if (enforce_fair_stats and not s.get("is_vsbot")
+                and is_stat_farming_mismatch(bxi, bwxi)):
+            s["stats_disabled"] = True
+    except Exception:
+        logger.exception("fair-stats gate failed (non-fatal) for match %s", match_id)
 
     next_act = "SETUP"
     if s.get("openers_done") and s.get("bowler_done"):
@@ -2777,21 +2798,28 @@ def finalize_webapp_match(session, match_id):
     try:
         from services.match_rewards import award_match_rewards_core
         is_vsbot = bool((state or {}).get("is_vsbot"))
+        # A /wpm mismatch flagged for anti stat-farming counts for nothing —
+        # no coins/gems, no W/L record, no streak, no matches-played, no active
+        # day. count_result=False makes every reward path below a no-op.
+        count_result = not bool((state or {}).get("stats_disabled"))
         # tie → no winner; both still get a "played" + loss-tier reward each
         if result.get("margin_type") == "tie":
             # credit both as participants (loss-tier each), no W/L winner
             u1 = m.user1_id; u2 = m.user2_id
             from models import User as _U
-            for uid in (u1, u2):
-                usr = session.query(_U).get(uid)
-                if usr:
-                    usr.matches_played = (usr.matches_played or 0) + 1
+            if count_result:
+                for uid in (u1, u2):
+                    usr = session.query(_U).get(uid)
+                    if usr:
+                        usr.matches_played = (usr.matches_played or 0) + 1
             # A tie breaks nobody's streak, but it was still a day spent playing.
             from services.match_rewards import record_match_result_stats
-            record_match_result_stats(session, None, None, tie_user_ids=(u1, u2))
+            record_match_result_stats(session, None, None, tie_user_ids=(u1, u2),
+                                      count_result=count_result)
         elif winner_uid:
             wc, wg, lc, lg = award_match_rewards_core(
-                session, winner_uid, loser_uid, m.overs or 1, is_vsbot=is_vsbot)
+                session, winner_uid, loser_uid, m.overs or 1, is_vsbot=is_vsbot,
+                count_result=count_result)
             rewards = {"winner_coins": wc, "winner_gems": wg,
                        "loser_coins": lc, "loser_gems": lg}
     except Exception:
@@ -2832,7 +2860,7 @@ def finalize_webapp_match(session, match_id):
     # the chat finalize in handlers.match). Find the POTM player's owning side
     # from the innings XI lists, then bump that owner's PlayerGameStats.potm.
     try:
-        if pom and pom.get("player_id") and state:
+        if pom and pom.get("player_id") and state and not state.get("stats_disabled"):
             from models import PlayerGameStats
             pom_rid = pom.get("roster_id")
             pom_pid = pom.get("player_id")
@@ -3046,7 +3074,10 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
 
     applied_penalty = 0
     compensation = 0
-    if q["has_progress"]:
+    # A /wpm mismatch flagged for anti stat-farming counts for nothing: no coin
+    # penalty/compensation and no W/L record or streak — quitting it is free.
+    count_result = not bool((state or {}).get("stats_disabled"))
+    if q["has_progress"] and count_result:
         # Quitter loses coins (never below zero).
         applied_penalty = min(penalty, quitter.total_coins or 0) if quitter else 0
         if quitter:
@@ -3072,6 +3103,12 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
         # breaks the quitter's, and counts as an active day for both.
         from services.match_rewards import record_match_result_stats
         record_match_result_stats(session, win_id, lose_id)
+    elif q["has_progress"] and not count_result:
+        # Mismatch: the game happened, but no coins/records change hands. Still
+        # mark it a forfeit result so the winner/loser show on the match card.
+        margin_type = "forfeit"
+        win_id, lose_id = opponent_id, quitter_id
+        result_text = f"Won by forfeit ({reason})"
     else:
         # No progress → clean cancel, no rewards, no records.
         margin_type = "cancelled"

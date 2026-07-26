@@ -47,7 +47,7 @@ def apply_win_streak(user, won: bool) -> None:
 
 
 def record_match_result_stats(session, winner_user_id, loser_user_id,
-                              tie_user_ids=None) -> None:
+                              tie_user_ids=None, count_result=True) -> None:
     """Update the career streak + active-day counters after a finished match.
 
     This is the single place those counters move for every reward-paying flow
@@ -57,8 +57,15 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
 
     A tie touches neither streak (nobody won, nobody lost) but still counts as
     an active day for both participants. Caller commits.
+
+    count_result: when False (a /letsplay or /wpm mismatch flagged for anti
+    stat-farming) the match counts for NOTHING — no streak change and no active
+    day — so this is a no-op.
     """
     from models import User
+
+    if not count_result:
+        return
 
     now = datetime.utcnow()
     if tie_user_ids:
@@ -80,7 +87,7 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
 
 
 def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
-                             is_vsbot=False):
+                             is_vsbot=False, count_result=True):
     """Apply match-end rewards. Returns (w_coins, w_gems, l_coins, l_gems).
 
     - Coins/gems scale with overs via GameConfig.
@@ -91,11 +98,19 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
       that pays match rewards keeps /myprofile's streaks honest. Flows that end
       a match WITHOUT paying rewards (a tie, a forfeit) call
       record_match_result_stats directly instead.
+    - count_result: when False (a /letsplay or /wpm mismatch flagged for anti
+      stat-farming), the match counts for NOTHING — no coins, no gems, no
+      Win/Loss record, no matches-played, no win streak, no season points and
+      no active day. Returns (0, 0, 0, 0). This is what stops players farming
+      rewards/stats against a deliberately weak opponent.
     Caller commits.
     """
     from models import User
     from services.config_service import get_config
     from services.activity_service import log_activity
+
+    if not count_result:
+        return 0, 0, 0, 0
 
     cfg = get_config(session)
     w = session.query(User).get(winner_user_id) if winner_user_id else None
@@ -141,7 +156,7 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
         except Exception:
             pass
 
-    # Season points — PvP only (matches existing policy)
+    # Season points — PvP only (matches existing policy).
     if not is_vsbot:
         try:
             from services.season_service import safe_add_season_points

@@ -2710,7 +2710,11 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
                 return
 
         from services.match_webapp_service import init_match_for_webapp
-        ok, message = init_match_for_webapp(session, match.id)
+        # Casual /wpm (not a tour fixture) enforces the fair-stat gate: a wide
+        # Team Overall gap between the two XIs voids career stats (anti-farming).
+        ok, message = init_match_for_webapp(
+            session, match.id,
+            enforce_fair_stats=not bool(lobby.get("tour_match_id")))
         if not ok:
             # Reset a linked TourMatch back to pending so it can be replayed
             # (the Match is about to be deleted).
@@ -2737,6 +2741,28 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         await send_match_ready_message(
             context, cid, match, bat_team, bowl_team,
             _mention(bat_user), _mention(bowl_user), toss_note=toss_note)
+        # Fair-match stat gate: if the two XIs are too far apart in Team Overall
+        # the match earns no career stats — warn both players up front so nobody
+        # farms stats against a weak opponent expecting them to count.
+        try:
+            from services.match_webapp_access import get_state
+            from services.player_stats_service import STATS_FAIRNESS_OVR_GAP
+            st = get_state(match.id) or {}
+            if st.get("stats_disabled"):
+                b_ovr = st.get("bat_team_ovr", 0)
+                bw_ovr = st.get("bowl_team_ovr", 0)
+                await context.bot.send_message(
+                    cid,
+                    "⚠️ <b>This match WON'T count.</b>\n"
+                    f"Team Overall gap is too wide — {bat_team} <b>{b_ovr}</b> "
+                    f"vs {bowl_team} <b>{bw_ovr}</b> "
+                    f"(<b>{abs(b_ovr - bw_ovr)}</b> apart, limit "
+                    f"{STATS_FAIRNESS_OVR_GAP}). No career stats, no Win/Loss or "
+                    "streak, and no coins or gems — it keeps the game fair and "
+                    "stops farming. The match still plays out as normal.",
+                    parse_mode="HTML")
+        except Exception:
+            logger.exception("wpm fair-stats warning failed (non-fatal)")
     except Exception:
         session.rollback()
         logger.exception("/wpm toss decision failed")

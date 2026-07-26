@@ -13,6 +13,41 @@ from typing import Any, Dict, Iterable, Tuple
 from models import PlayerGameStats
 
 
+# ── Fair-match stat gate ──────────────────────────────────────────────────
+# Career player stats (batting/bowling) are only credited when the two XIs are
+# reasonably matched. If one side's Team Overall (the average player rating of
+# its XI) is this many points or more above the other's, the match is treated
+# as a mismatch and NO career stats are recorded for EITHER side. This stops
+# players from farming stats by fielding a strong XI against a deliberately
+# weak (usually alt-account) opponent.
+#
+# Applies to the user-vs-user modes that opt in — /letsplay and /wpm — which
+# tag their live state with ``stats_disabled`` when the gap is too wide. Bot
+# matches and tournaments never set the flag, so they are unaffected.
+STATS_FAIRNESS_OVR_GAP = 10
+
+
+def team_overall(xi: Iterable[Dict[str, Any]]) -> int:
+    """Team Overall — the average player ``rating`` of an XI, rounded.
+
+    ``xi`` is an iterable of engine/webapp player dicts carrying a ``rating``.
+    Returns 0 for an empty XI.
+    """
+    ratings = [int(p.get("rating") or 0) for p in (xi or []) if isinstance(p, dict)]
+    return round(sum(ratings) / len(ratings)) if ratings else 0
+
+
+def overall_gap(xi_a: Iterable[Dict[str, Any]], xi_b: Iterable[Dict[str, Any]]) -> int:
+    """Absolute Team Overall difference between two XIs."""
+    return abs(team_overall(xi_a) - team_overall(xi_b))
+
+
+def is_stat_farming_mismatch(xi_a: Iterable[Dict[str, Any]],
+                             xi_b: Iterable[Dict[str, Any]]) -> bool:
+    """True when the two XIs are too mismatched to earn career stats."""
+    return overall_gap(xi_a, xi_b) >= STATS_FAIRNESS_OVR_GAP
+
+
 def _rid_key(roster_id: Any) -> Any:
     """Normalize roster-id keys that may be serialized as strings."""
     if isinstance(roster_id, str):
@@ -121,6 +156,13 @@ def persist_player_game_stats(session, state: Dict[str, Any]) -> Dict[str, int]:
     """
     if not state:
         return {"batting": 0, "bowling": 0}
+
+    # Fair-match gate: /letsplay and /wpm mark a match ``stats_disabled`` when
+    # the two XIs are too far apart in Team Overall (see STATS_FAIRNESS_OVR_GAP).
+    # Such a mismatch earns NO career stats for either side, which is how we
+    # stop players farming stats against deliberately weak opponents.
+    if state.get("stats_disabled"):
+        return {"batting": 0, "bowling": 0, "skipped": "stats_disabled"}
 
     # If a match is abandoned in innings 1, snapshot the active innings so the
     # same persistence path can handle it.
