@@ -44,10 +44,10 @@ def setUpModule():
 
 
 def tearDownModule():
-    try:
+    # Let a disposal failure surface rather than swallowing it — it would mean
+    # this module is leaking sqlite connections, which is worth failing over.
+    if _ENGINE is not None:
         _ENGINE.dispose()
-    except Exception:
-        pass
     if _PREV_DATABASE_URL is None:
         os.environ.pop("DATABASE_URL", None)
     else:
