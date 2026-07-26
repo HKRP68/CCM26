@@ -14,8 +14,17 @@ _STUBBED = ("telegram", "telegram.ext", "database", "models",
             "handlers.match", "handlers.challenge")
 
 
+_MISSING = object()      # tells "absent from sys.modules" from "present as None"
+
+
 def _load_challenge_with_stubs():
-    saved = {name: sys.modules.get(name) for name in _STUBBED}
+    saved = {name: sys.modules.get(name, _MISSING) for name in _STUBBED}
+    # ``from handlers import challenge`` also caches the module as an attribute on
+    # the already-imported ``handlers`` package, so restoring sys.modules alone
+    # would leave ``handlers.challenge`` pointing at the stub.
+    handlers_pkg = sys.modules.get("handlers")
+    saved_attr = (getattr(handlers_pkg, "challenge", _MISSING)
+                  if handlers_pkg is not None else _MISSING)
     telegram = types.ModuleType("telegram")
 
     class InlineKeyboardButton:
@@ -80,13 +89,19 @@ def _load_challenge_with_stubs():
         from handlers import challenge
     finally:
         # ``challenge`` holds direct references to the stub classes it imported,
-        # so the tests below still run against them — but sys.modules goes back
-        # to the real thing for everybody else.
+        # so the tests below still run against them — but sys.modules AND the
+        # handlers package attribute go back to the real thing for everybody else.
         for name, module in saved.items():
-            if module is None:
+            if module is _MISSING:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+        pkg = sys.modules.get("handlers", handlers_pkg)
+        if pkg is not None:
+            if saved_attr is _MISSING:
+                pkg.__dict__.pop("challenge", None)
+            else:
+                pkg.challenge = saved_attr
     return challenge
 
 

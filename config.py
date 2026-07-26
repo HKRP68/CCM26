@@ -356,6 +356,68 @@ TRAIT_UPGRADE_COSTS = {
 # ── Replace / swap ────────────────────────────────────────────────
 TRAIT_REPLACE_COST = 250  # gems
 
+# ── Trait resale (/selltrait) and trait-for-trait trading (/tradetrait) ──
+#
+# A trait's "buy value" is everything it has cost by the time it reaches a
+# level: the shop price for Lv.1, plus every upgrade paid on the way up. Derived
+# from the two tables above rather than typed out, so tuning the shop price or
+# an upgrade cost re-prices resale and trading with it instead of leaving three
+# numbers to drift apart.
+#
+#   Level      1      2      3      4      5
+#   buy      150    350    750  1,550  3,050   (invested gems)
+#   sell     105    245    525  1,085  2,135   (30% below buy, always)
+#   trade fee 30     50     90    170    320   (each side, in gems)
+
+
+def _trait_buy_values():
+    values, running = {}, TRAIT_MARKET_BUY_COST
+    values[1] = running
+    for level in sorted(TRAIT_UPGRADE_COSTS):
+        running += TRAIT_UPGRADE_COSTS[level]
+        values[level + 1] = running
+    return values
+
+
+TRAIT_BUY_VALUE = _trait_buy_values()
+TRAIT_MAX_LEVEL = max(TRAIT_BUY_VALUE)
+
+# Selling always returns 30% less than the trait cost to build — at every level.
+TRAIT_SELL_DISCOUNT_PCT = 30
+
+# Trading is priced off the same investment: a flat fee at Lv.1, plus a share of
+# the upgrade gems sunk into the trait above it. That keeps a Lv.1 swap cheap
+# (30 gems, as specified) while a Lv.5 swap costs real money — roughly doubling
+# per level — without charging a fresh trait's worth of gems for the privilege.
+TRAIT_TRADE_FEE_BASE = 30          # gems, Lv.1
+TRAIT_TRADE_FEE_UPGRADE_PCT = 10   # + this % of the upgrade gems above Lv.1
+
+
+def _clamp_trait_level(level) -> int:
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(TRAIT_MAX_LEVEL, level))
+
+
+def trait_buy_value(level) -> int:
+    """Gems invested in a trait by the time it reaches ``level``."""
+    return TRAIT_BUY_VALUE[_clamp_trait_level(level)]
+
+
+def trait_sell_value(level) -> int:
+    """Gems returned for selling a trait — always 30% below its buy value."""
+    value = trait_buy_value(level) * (100 - TRAIT_SELL_DISCOUNT_PCT) // 100
+    return max(1, value)
+
+
+def trait_trade_fee(level) -> int:
+    """Gems each side pays to swap a trait of ``level``."""
+    upgrades_above_l1 = trait_buy_value(level) - TRAIT_BUY_VALUE[1]
+    fee = TRAIT_TRADE_FEE_BASE + upgrades_above_l1 * TRAIT_TRADE_FEE_UPGRADE_PCT // 100
+    return max(1, fee)
+
 # ── Aliases so trait_service / trait_engine can use consistent names ──
 TRAIT_LEVEL_PCT = {k: int(v * 100) for k, v in TRAIT_LEVEL_EFFECT.items()}
 TRAIT_MAX_EFFECTIVE_PCT = int(TRAIT_BOOST_CAP * 100)

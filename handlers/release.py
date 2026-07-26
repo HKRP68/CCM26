@@ -12,6 +12,7 @@ out with the buttons.
 """
 
 import logging
+import threading
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -32,8 +33,12 @@ logger = logging.getLogger(__name__)
 RELEASE_PROMPT_TTL = 120
 
 # telegram_id -> {"kind", "chat_id", "expires_at"} for the prompt awaiting an
-# answer. Process-local, like utils.idempotency's claim table.
+# answer, behind a lock like utils.idempotency's claim table: the bot runs with
+# concurrent_updates, and the Flask Mini App reads this table from its own thread
+# (admin._release_prompt_open), so every lookup-then-mutate below has to be
+# atomic or a chat prompt and a Mini App release can cross past each other.
 _open_prompts = {}
+_PROMPTS_LOCK = threading.Lock()
 
 _KIND_LABEL = {"release": "release", "multi": "multi-release"}
 
@@ -44,28 +49,32 @@ def pending_release(tg_id):
     Expired entries are dropped on read, so a prompt whose buttons have already
     timed out never blocks anything.
     """
-    row = _open_prompts.get(tg_id)
-    if not row:
-        return None
-    if row["expires_at"] <= time.monotonic():
-        _open_prompts.pop(tg_id, None)
-        return None
-    return row
+    with _PROMPTS_LOCK:
+        row = _open_prompts.get(tg_id)
+        if not row:
+            return None
+        if row["expires_at"] <= time.monotonic():
+            _open_prompts.pop(tg_id, None)
+            return None
+        return row
 
 
 def _open_prompt(tg_id, kind, chat_id):
-    # Opportunistic sweep: an abandoned prompt is only ever read again if that
-    # same user comes back, so purge the dead ones when the table grows.
-    if len(_open_prompts) > 256:
-        now = time.monotonic()
-        for stale in [k for k, v in _open_prompts.items() if v["expires_at"] <= now]:
-            _open_prompts.pop(stale, None)
-    _open_prompts[tg_id] = {"kind": kind, "chat_id": chat_id,
-                            "expires_at": time.monotonic() + RELEASE_PROMPT_TTL}
+    now = time.monotonic()
+    with _PROMPTS_LOCK:
+        # Opportunistic sweep: an abandoned prompt is only ever read again if that
+        # same user comes back, so purge the dead ones when the table grows.
+        if len(_open_prompts) > 256:
+            for stale in [k for k, v in _open_prompts.items()
+                          if v["expires_at"] <= now]:
+                _open_prompts.pop(stale, None)
+        _open_prompts[tg_id] = {"kind": kind, "chat_id": chat_id,
+                                "expires_at": now + RELEASE_PROMPT_TTL}
 
 
 def _close_prompt(tg_id):
-    _open_prompts.pop(tg_id, None)
+    with _PROMPTS_LOCK:
+        _open_prompts.pop(tg_id, None)
 
 
 def _busy_text(row):

@@ -2476,8 +2476,11 @@ def _summary_caption(state, result_line):
     try:
         stadium = state.get("stadium")
         if stadium:
-            lines.append(f"🏟️ {html.escape(str(stadium))} • "
-                         f"{state.get('overs', CIPL_OVERS)} overs")
+            # Match the start card's wording: a 100-ball match is not "20 overs".
+            overs_label = ("The Hundred (100 balls)"
+                           if state.get("ball_format") == "The100"
+                           else f"{state.get('overs', CIPL_OVERS)} overs")
+            lines.append(f"🏟️ {html.escape(str(stadium))} • {overs_label}")
         if _is_bot_match(state):
             from services.bot_captain import persona_label
             lines.append(f"🤖 Bot captain: <b>{html.escape(persona_label(state))}</b> "

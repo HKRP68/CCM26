@@ -80,6 +80,74 @@ class RosterLockTests(unittest.TestCase):
             hm._active_match_for_user = real_lookup
 
 
+class TradeConfirmCancelsOnALateMatchTests(unittest.TestCase):
+    """A trade waits up to 60s for the second tap — long enough for either
+    captain to start a match, which must cancel it rather than swap the cards."""
+
+    def setUp(self):
+        import handlers.trade as ht
+        self.ht = ht
+        self._saved = {name: getattr(ht, name) for name in
+                       ("get_session", "_load_users", "match_lock_message",
+                        "complete_trade")}
+        self.u1 = MagicMock()
+        self.u1.id, self.u1.telegram_id, self.u1.username = 1, 11, "alpha"
+        self.u2 = MagicMock()
+        self.u2.id, self.u2.telegram_id, self.u2.username = 2, 22, "beta"
+
+        session = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = self.u1
+        ht.get_session = lambda: session
+        ht._load_users = lambda s, state: (self.u1, self.u2)
+        self.completed = []
+        ht.complete_trade = lambda s, tid: self.completed.append(tid) or {
+            "success": True, "initiator": self.u1, "receiver": self.u2,
+            "init_player": MagicMock(), "recv_player": MagicMock(), "fee": 0}
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            setattr(self.ht, name, value)
+
+    def _run(self, locked_user_id=None):
+        self.ht.match_lock_message = (
+            lambda session, user_id, action, **kw:
+            "🔒 locked" if user_id == locked_user_id else None)
+
+        query = MagicMock()
+        query.data = "tcfrm_abc_1"
+        query.from_user.id = 11
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+
+        context = MagicMock()
+        context.bot_data = {self.ht.TRADE_STORE_KEY: {"abc": {
+            "id": "abc", "user1_id": 1, "user2_id": 2,
+            "user1_tg_id": 11, "user2_tg_id": 22, "chat_id": 9,
+            "db_trade_id": 77, "expires_at": time.time() + 60,
+            # Both have already confirmed, so this tap completes the trade.
+            "confirmations": [1, 2], "status": "awaiting_confirmations",
+        }}, self.ht.USER_TRADE_KEY: {1: "abc", 2: "abc"}}
+        context.bot.send_message = AsyncMock()
+        asyncio.run(self.ht.trade_confirm_callback(update, context))
+        return query
+
+    def test_an_unlocked_trade_still_completes(self):
+        query = self._run(locked_user_id=None)
+        self.assertEqual(self.completed, [77])
+
+    def test_the_initiator_starting_a_match_cancels_the_trade(self):
+        query = self._run(locked_user_id=1)
+        self.assertEqual(self.completed, [])
+        self.assertIn("in a match now", query.edit_message_text.call_args.args[0])
+
+    def test_the_other_captain_starting_a_match_cancels_it_too(self):
+        query = self._run(locked_user_id=2)
+        self.assertEqual(self.completed, [])
+        self.assertIn("beta", query.edit_message_text.call_args.args[0])
+
+
 class _Msg:
     """Just enough of a telegram Message for the release handlers."""
 

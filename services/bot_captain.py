@@ -36,8 +36,8 @@ import math
 import random
 
 from engine.approach_modifiers import (
-    BATTING_APPROACHES, BOWLING_APPROACHES, DEFAULT_BATTING, DEFAULT_BOWLING,
-    normalize_batting, normalize_bowling,
+    BATTING_APPROACHES, BATTING_KEYS, BOWLING_APPROACHES, BOWLING_KEYS,
+    DEFAULT_BATTING, DEFAULT_BOWLING, normalize_batting, normalize_bowling,
 )
 from services import cipl_match
 
@@ -50,6 +50,16 @@ logger = logging.getLogger(__name__)
 # strings around.
 BAT_LADDER = ["defensive", "rotate", "balanced", "aggressive", "ultra"]
 BOWL_PLANS = ["defensive", "balanced", "mixed", "aggressive", "variation"]
+
+# These two lists ARE the sampling space: a key the engine has that is missing
+# here would silently never be picked, and a key here that the engine dropped
+# would make ``BAT_LADDER.index()`` raise mid-over. Fail at import instead.
+assert set(BAT_LADDER) == BATTING_KEYS, (
+    f"BAT_LADDER is out of step with engine.approach_modifiers: "
+    f"{set(BAT_LADDER) ^ BATTING_KEYS}")
+assert set(BOWL_PLANS) == BOWLING_KEYS, (
+    f"BOWL_PLANS is out of step with engine.approach_modifiers: "
+    f"{set(BOWL_PLANS) ^ BOWLING_KEYS}")
 
 # Overs that count as the death at the end of an innings.
 DEATH_UNITS = 4
@@ -256,17 +266,22 @@ _MEMORY_SHAPE = ("opp_bat", "opp_bowl", "own_bat", "own_bowl")
 _RECENT_KEEP = 6
 
 
-def _memory(state):
+def _memory(state, create=True):
     """The bot's per-match read of its opponent, created on first use.
 
     Plain nested dicts/lists of primitives so it survives the JSON round-trip
     every ``save_state`` does, and tolerant of a partial dict restored from a
     match that started before this existed.
+
+    ``create=False`` returns a throwaway empty memory instead of writing one onto
+    ``state`` — used by the read paths so a state that is not a bot match never
+    picks up a ``bot_memory`` blob it would then persist.
     """
     mem = state.get("bot_memory")
     if not isinstance(mem, dict):
         mem = {}
-        state["bot_memory"] = mem
+        if create:
+            state["bot_memory"] = mem
     for key in _MEMORY_SHAPE:
         if not isinstance(mem.get(key), dict):
             mem[key] = {}
@@ -354,8 +369,20 @@ def take_read_note(state):
 # ════════════════════════════════════════════════════════════════════
 
 def _tilt(weights, key, factor):
+    """Scale one weight, chosen at runtime (e.g. a counter looked up by name)."""
     if key in weights:
         weights[key] *= factor
+
+
+def _tilts(weights, **factors):
+    """Scale several named weights at once: ``_tilts(w, aggressive=1.9, ...)``.
+
+    The keyword form keeps each situation's adjustment readable as one table
+    instead of a column of near-identical single-key calls.
+    """
+    for key, factor in factors.items():
+        if key in weights:
+            weights[key] *= factor
 
 
 def _sample(weights, noise=0.0):
@@ -414,7 +441,8 @@ def _bowler_score(state, player, ph, hold_back):
     is thrown at a set batter, a wicket-taker greets a new one, and whoever is
     being carted this innings gets taken out of the attack.
     """
-    score = _rating(player, "bowl_rating", default=0.0)
+    bowl_rating = _rating(player, "bowl_rating", default=0.0)
+    score = bowl_rating
     traits = _traits_of(player)
 
     if ph == "powerplay" and traits & _POWERPLAY_TRAITS:
@@ -434,7 +462,7 @@ def _bowler_score(state, player, ph, hold_back):
     balls_faced, sr = _striker_form(state)
     if balls_faced >= 12 and sr >= 130:
         # A set batter needs the best bowler in the side, not a holding over.
-        score += (_rating(player, "bowl_rating", default=0.0) - 70) * 0.15
+        score += (bowl_rating - 70) * 0.15
     elif balls_faced < 4:
         # Fresh batter: back a wicket-taker to make the new-batter over count.
         if traits & _WICKET_TRAITS:
@@ -506,10 +534,9 @@ def pick_bowler(state):
     best = max(score for _p, score in scored)
     temperature = max(1.0, float(persona["temperature"]))
 
-    weights, keys = [], []
-    for idx, (player, score) in enumerate(scored):
-        keys.append(idx)
-        weights.append(math.exp(max(-40.0, (score - best) / temperature)))
+    keys = list(range(len(scored)))
+    weights = [math.exp(max(-40.0, (score - best) / temperature))
+               for _player, score in scored]
     chosen = random.choices(keys, weights=weights, k=1)[0]
     return scored[chosen][0]
 
@@ -530,29 +557,27 @@ def _bowling_weights(state):
 
     # ── Phase ──
     if ph == "powerplay":
-        _tilt(w, "aggressive", 1.9); _tilt(w, "balanced", 1.2)
-        _tilt(w, "variation", 0.9); _tilt(w, "defensive", 0.5)
+        _tilts(w, aggressive=1.9, balanced=1.2, variation=0.9, defensive=0.5)
     elif ph == "death":
-        _tilt(w, "mixed", 2.0); _tilt(w, "variation", 1.6)
-        _tilt(w, "defensive", 1.2); _tilt(w, "balanced", 0.7)
-        _tilt(w, "aggressive", 0.8)
+        _tilts(w, mixed=2.0, variation=1.6, defensive=1.2, balanced=0.7,
+               aggressive=0.8)
     else:
-        _tilt(w, "balanced", 1.3); _tilt(w, "variation", 1.3); _tilt(w, "mixed", 1.1)
+        _tilts(w, balanced=1.3, variation=1.3, mixed=1.1)
 
     # ── Who is on strike ──
     if balls_faced < 6:
         # A brand-new batter is at their most vulnerable — go after them.
-        _tilt(w, "aggressive", 2.2); _tilt(w, "mixed", 1.15); _tilt(w, "defensive", 0.6)
+        _tilts(w, aggressive=2.2, mixed=1.15, defensive=0.6)
     elif balls_faced >= 8 and sr >= 150:
         # Someone flying: change of pace beats more of the same.
-        _tilt(w, "variation", 2.1); _tilt(w, "mixed", 1.8); _tilt(w, "aggressive", 0.6)
+        _tilts(w, variation=2.1, mixed=1.8, aggressive=0.6)
     elif balls_faced >= 10 and sr < 95:
         # Bogged down — squeeze harder and the wicket usually follows.
-        _tilt(w, "aggressive", 1.5); _tilt(w, "defensive", 0.75)
+        _tilts(w, aggressive=1.5, defensive=0.75)
 
     # ── Wickets: into the tail, bowl them out ──
     if wickets_lost >= 7:
-        _tilt(w, "aggressive", 1.7); _tilt(w, "mixed", 1.2); _tilt(w, "defensive", 0.6)
+        _tilts(w, aggressive=1.7, mixed=1.2, defensive=0.6)
     elif wickets_lost >= 5:
         _tilt(w, "aggressive", 1.2)
 
@@ -561,31 +586,30 @@ def _bowling_weights(state):
         rrr = chase["rrr"]
         if rrr >= 13:
             # They have to swing at everything: deny the boundary, take the risk.
-            _tilt(w, "defensive", 2.6); _tilt(w, "mixed", 1.5); _tilt(w, "aggressive", 0.5)
+            _tilts(w, defensive=2.6, mixed=1.5, aggressive=0.5)
         elif rrr >= 10:
-            _tilt(w, "mixed", 1.5); _tilt(w, "variation", 1.4)
+            _tilts(w, mixed=1.5, variation=1.4)
         elif rrr <= 6:
             # Cruising — only wickets change this game.
-            _tilt(w, "aggressive", 1.8); _tilt(w, "variation", 1.3); _tilt(w, "defensive", 0.6)
+            _tilts(w, aggressive=1.8, variation=1.3, defensive=0.6)
         if chase["runs_required"] <= 12 and chase["balls_remaining"] <= 12:
             # A tight finish is won by dots, not by heroics.
-            _tilt(w, "defensive", 1.8); _tilt(w, "mixed", 1.5); _tilt(w, "aggressive", 0.7)
+            _tilts(w, defensive=1.8, mixed=1.5, aggressive=0.7)
     return w
 
 
 def _read_the_batter(state, w):
     """Counter the way this human has actually been batting."""
-    mem = _memory(state)
+    mem = _memory(state, create=False)
     attack_share, samples = _share(mem["opp_bat"], ("aggressive", "ultra"))
     block_share, _ = _share(mem["opp_bat"], ("defensive", "rotate"))
     if samples >= 3:
         if attack_share >= 0.5:
             # A swinger: take the boundary away and let the risk do the work.
-            _tilt(w, "variation", 1.5); _tilt(w, "mixed", 1.4)
-            _tilt(w, "aggressive", 1.15); _tilt(w, "defensive", 0.8)
+            _tilts(w, variation=1.5, mixed=1.4, aggressive=1.15, defensive=0.8)
         if block_share >= 0.5:
             # A blocker gives up nothing but their wicket — so go get it.
-            _tilt(w, "aggressive", 1.6); _tilt(w, "balanced", 1.1); _tilt(w, "defensive", 0.6)
+            _tilts(w, aggressive=1.6, balanced=1.1, defensive=0.6)
     repeated = _repeated_pick(mem["recent_opp_bat"])
     if repeated:
         _tilt(w, _BAT_COUNTER.get(repeated, "balanced"), 1.9)
@@ -615,9 +639,9 @@ def pick_bowling_approach(state):
     _read_the_batter(state, w)
 
     aggression = persona["aggression"]
-    _tilt(w, "aggressive", math.exp(aggression))
-    _tilt(w, "mixed", math.exp(aggression * 0.35))
-    _tilt(w, "defensive", math.exp(-aggression))
+    _tilts(w, aggressive=math.exp(aggression),
+           mixed=math.exp(aggression * 0.35),
+           defensive=math.exp(-aggression))
 
     return _sample(w, noise=persona["noise"]) or DEFAULT_BOWLING
 
@@ -699,21 +723,21 @@ def _bat_situation_index(state):
 
 def _read_the_bowler(state, w, desperate):
     """Counter the way this human has actually been bowling."""
-    mem = _memory(state)
+    mem = _memory(state, create=False)
     attack_share, samples = _share(mem["opp_bowl"], ("aggressive",))
     defend_share, _ = _share(mem["opp_bowl"], ("defensive", "mixed"))
     wickets_in_hand = _wickets_in_hand(state)
     if samples >= 3:
         if defend_share >= 0.5:
             # They are shutting the boundary down — take the singles on offer.
-            _tilt(w, "rotate", 1.6); _tilt(w, "balanced", 1.2); _tilt(w, "ultra", 0.75)
+            _tilts(w, rotate=1.6, balanced=1.2, ultra=0.75)
         if attack_share >= 0.5 and not desperate:
             if wickets_in_hand >= 7:
                 # Their wicket-hunting plan leaks boundaries — make it hurt.
-                _tilt(w, "aggressive", 1.4); _tilt(w, "ultra", 1.2)
+                _tilts(w, aggressive=1.4, ultra=1.2)
             else:
                 # Too thin to trade wickets with them.
-                _tilt(w, "rotate", 1.5); _tilt(w, "balanced", 1.2); _tilt(w, "ultra", 0.7)
+                _tilts(w, rotate=1.5, balanced=1.2, ultra=0.7)
     repeated = _repeated_pick(mem["recent_opp_bowl"])
     if repeated and not desperate:
         _tilt(w, _BOWL_COUNTER.get(repeated, "balanced"), 1.7)

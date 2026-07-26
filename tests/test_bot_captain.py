@@ -11,6 +11,7 @@ claims are asserted over a sample of runs ("this dominates", "this is more
 aggressive than that") rather than on a single call.
 """
 
+import copy
 import random
 import unittest
 
@@ -276,7 +277,7 @@ class OpponentReadTests(SeededTestCase):
         state = _state(current_over=10, is_bot_match=True, bot_user_id=99,
                        bat_team_id=7, bowl_team_id=99)
         state["bat_stats"]["100"] = {"runs": 8, "balls": 14}   # nobody new in
-        plain = _sample_counts(bc.pick_bowling_approach, dict(state))
+        plain = _sample_counts(bc.pick_bowling_approach, copy.deepcopy(state))
         self._remember(state, bat=("defensive", "rotate", "defensive", "rotate"), runs=3)
         against_a_blocker = _sample_counts(bc.pick_bowling_approach, state)
         self.assertGreater(against_a_blocker.get("aggressive", 0),
@@ -286,7 +287,7 @@ class OpponentReadTests(SeededTestCase):
         state = _state(current_over=10, is_bot_match=True, bot_user_id=99,
                        bat_team_id=7, bowl_team_id=99)
         state["bat_stats"]["100"] = {"runs": 8, "balls": 14}
-        before = _sample_counts(bc.pick_bowling_approach, dict(state))
+        before = _sample_counts(bc.pick_bowling_approach, copy.deepcopy(state))
         bc.observe_over(state, {"batting_approach": "balanced",
                                 "bowling_approach": "aggressive",
                                 "over_runs": 14, "over_wickets": 0})

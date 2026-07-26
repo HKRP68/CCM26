@@ -13,12 +13,14 @@ BOT_PY = Path(__file__).resolve().parent.parent / "bot.py"
 SRC = BOT_PY.read_text()
 
 # Registered but deliberately unpublished: admin/owner-gated commands, the
-# /testwpm diagnostic, and the two Unscramble lobby controls the lobby message
-# already spells out.
+# /testwpm diagnostic, the two Unscramble lobby controls the lobby message
+# already spells out, and /tradetrait — the menu is full at Telegram's 100-command
+# ceiling, so it is documented in /traits, /help and /howto instead. Publishing it
+# means demoting something else, which is a deliberate call, not a default.
 UNPUBLISHED = {
     "grant", "setcardid", "clearmatches", "removematch",
     "frwd_grp", "frwd_prvt", "tourallow", "tourblock", "tourallowlist",
-    "testwpm", "eu", "cu",
+    "testwpm", "eu", "cu", "tradetrait",
 }
 
 

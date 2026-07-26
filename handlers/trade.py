@@ -398,6 +398,18 @@ async def trade_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
+        # A trade sits here for up to TRADE_EXPIRES_SECONDS waiting on the second
+        # tap, and either captain can start a match in that window — so the lock
+        # is re-checked at the moment the cards would change hands, exactly as the
+        # buy/market/trait confirmations do.
+        for side in (user1, user2):
+            if match_lock_message(session, side.id, "trade players"):
+                await query.edit_message_text(
+                    f"🔒 {_mention(side)} is in a match now — trade cancelled.\n"
+                    f"Run /trade again once the game is over.")
+                _clear_trade(context, trade_id)
+                return
+
         await query.edit_message_text(f"{_mention(user)} confirmed the trade.\nProcessing trade...")
         result = complete_trade(session, state["db_trade_id"])
         session.commit()

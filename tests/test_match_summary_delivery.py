@@ -93,6 +93,20 @@ class SummaryCaptionTests(unittest.TestCase):
         caption = cp._summary_caption({"is_bot_match": True}, "result")
         self.assertIn("result", caption)
 
+    def test_the_hundred_is_not_described_as_overs(self):
+        """A 100-ball match says so, exactly as the match-start card does."""
+        state = _state()
+        state["ball_format"] = "The100"
+        caption = cp._summary_caption(state, "🏆 Bot XI won")
+        self.assertIn("The Hundred (100 balls)", caption)
+        self.assertNotIn("overs", caption)
+
+    def test_an_over_based_match_still_says_overs(self):
+        state = _state()
+        state["overs"] = 10
+        caption = cp._summary_caption(state, "🏆 Bot XI won")
+        self.assertIn("10 overs", caption)
+
 
 class EndOfMatchDeliveryTests(unittest.TestCase):
     """Drive the real end-of-match tail with fakes and assert the photo goes."""

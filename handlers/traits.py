@@ -9,6 +9,7 @@ Commands:
   /traitupgrade       — upgrade a trait on a player (callback picker)
   /traitreplace       — replace a trait on a player (callback picker)
   /removetrait        — unequip a trait, returning it to inventory (picker)
+  /selltrait          — sell an inventory trait for gems (30% below buy value)
 
 Anything that changes what a PLAYER is carrying is frozen while that user has a
 match on (see ``services.roster_lock``) — you can't re-kit the XI after the
@@ -31,9 +32,11 @@ from services.trait_service import (
 )
 from services.flags import get_flag
 from services.roster_lock import match_lock_alert, match_lock_message
+from services.trait_trading_service import list_inventory, sell_inventory_trait
 from config import (
     TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_REROLL_COST,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
+    TRAIT_BUY_VALUE, TRAIT_SELL_DISCOUNT_PCT, trait_buy_value, trait_sell_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,8 +80,12 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append("📦 <b>INVENTORY</b>")
             for inv, t in inv_rows:
                 max_badge = " 🌟" if inv.level == 5 else ""
-                lines.append(f"  <code>#{inv.id}</code> {t.emoji} {t.name} Lv.{inv.level}{max_badge}")
-            lines.append("<i>Use /traitapply to attach to a player</i>")
+                # Resale price rides along so the sell decision needs no maths.
+                lines.append(
+                    f"  <code>#{inv.id}</code> {t.emoji} {t.name} Lv.{inv.level}"
+                    f"{max_badge} · 💰 {trait_sell_value(inv.level):,}💎")
+            lines.append("<i>Use /traitapply to attach to a player, "
+                         "/selltrait to cash one in</i>")
             lines.append("")
         else:
             lines.append("📦 <i>Inventory empty — buy traits via /traitshop</i>")
@@ -108,6 +115,8 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("⬆️ /traitupgrade — level up")
         lines.append("🔄 /traitreplace — swap trait")
         lines.append("📦 /removetrait — unequip, back to inventory")
+        lines.append("💰 /selltrait — sell an inventory trait for gems")
+        lines.append("💠 /tradetrait @user — swap a trait, same level both ways")
 
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -509,7 +518,9 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         # frozen mid-match — but inventory upgrades touch nobody on the field
         # and stay available. Hide the equipped half rather than refusing the
         # whole command.
-        in_match = bool(match_lock_alert(session, user.id, "upgrade an equipped trait"))
+        locked_msg = match_lock_message(session, user.id,
+                                        "upgrade an equipped trait")
+        in_match = bool(locked_msg)
 
         # Get all equipped traits that are not at max level
         equipped = [] if in_match else (
@@ -530,10 +541,7 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if not equipped and not inv_rows:
             if in_match:
-                await update.message.reply_text(
-                    match_lock_message(session, user.id,
-                                       "upgrade a trait a player is wearing"),
-                    parse_mode="HTML")
+                await update.message.reply_text(locked_msg, parse_mode="HTML")
                 return
             await update.message.reply_text(
                 "❌ No upgradeable traits. "
@@ -896,6 +904,166 @@ async def trrem_pt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # can't return the same trait to inventory twice.
         session.rollback()
         logger.exception("trrem_pt_callback error")
+        await q.answer("⚠️ Error", show_alert=True)
+    finally:
+        session.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /selltrait — cash an inventory trait in for gems
+# ═══════════════════════════════════════════════════════════════════════
+
+def _sell_quote_lines(user):
+    """The price list shown above the picker, so nobody sells on a guess."""
+    lines = ["💰 <b>SELL TRAIT</b>", "━━━━━━━━━━━━━━━━━━━",
+             f"💎 Gems: {user.total_gems:,}", "",
+             f"Selling always returns <b>{TRAIT_SELL_DISCOUNT_PCT}% less</b> "
+             f"than the gems a trait cost to build:"]
+    for level in sorted(TRAIT_BUY_VALUE):
+        lines.append(f"  Lv.{level}: {trait_buy_value(level):,} 💎 invested → "
+                     f"<b>{trait_sell_value(level):,} 💎</b> back")
+    lines += ["",
+              "<i>Only unequipped traits can be sold. A trait on a player? "
+              "/removetrait first — that's free and keeps its level.</i>", "",
+              "Pick the trait to sell:"]
+    return lines
+
+
+async def selltrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/selltrait — sell an inventory trait for gems (30% below buy value)."""
+    tg = update.effective_user
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        rows = list_inventory(session, user.id)
+        if not rows:
+            await update.message.reply_text(
+                "📦 <b>Nothing to sell.</b>\n\n"
+                "Your trait inventory is empty. Traits equipped on a player "
+                "aren't sellable — use /removetrait to bring one back first "
+                "(free), or buy more from /traitshop.",
+                parse_mode="HTML")
+            return
+
+        btns = []
+        for inv, trait in rows:
+            level = int(inv.level or 1)
+            btns.append([InlineKeyboardButton(
+                f"{trait.emoji} {trait.name} Lv.{level} → "
+                f"{trait_sell_value(level):,} 💎",
+                callback_data=f"trsell_{inv.id}")])
+        btns.append([InlineKeyboardButton("❌ Cancel", callback_data="trcancel")])
+
+        await update.message.reply_text(
+            "\n".join(_sell_quote_lines(user)), parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(btns))
+    except Exception:
+        logger.exception("selltrait_handler error")
+        await update.message.reply_text("⚠️ Error.")
+    finally:
+        session.close()
+
+
+async def trsell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm screen for one trait. Callback: trsell_<inventory_id>"""
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        inv_id = int(q.data.split("_")[1])
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await q.answer("Not authorized")
+            return
+        inv = session.query(TraitInventory).filter(
+            TraitInventory.id == inv_id,
+            TraitInventory.user_id == user.id).first()
+        if not inv:
+            await q.answer("Trait not found")
+            try: await q.edit_message_text("❌ That trait is no longer in your inventory.")
+            except Exception: pass
+            return
+        trait = session.query(Trait).get(inv.trait_id)
+        level = int(inv.level or 1)
+        await q.answer()
+
+        gems = trait_sell_value(level)
+        buy = trait_buy_value(level)
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"✅ Sell for {gems:,} 💎",
+                                 callback_data=f"trsellok_{inv.id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="trcancel"),
+        ]])
+        await q.edit_message_text(
+            f"💰 <b>SELL THIS TRAIT?</b>\n\n"
+            f"{trait.emoji} <b>{trait.name}</b> Lv.{level}\n"
+            f"🏷 {trait.category}\n\n"
+            f"Invested: {buy:,} 💎\n"
+            f"You receive: <b>{gems:,} 💎</b> "
+            f"({TRAIT_SELL_DISCOUNT_PCT}% below buy value)\n\n"
+            f"<i>This cannot be undone — the trait is gone for good.</i>",
+            parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        logger.exception("trsell_callback error")
+        await q.answer("⚠️ Error", show_alert=True)
+    finally:
+        session.close()
+
+
+async def trsellok_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Do the sale. Callback: trsellok_<inventory_id>"""
+    q = update.callback_query
+    tg = q.from_user
+    try:
+        inv_id = int(q.data.split("_")[1])
+    except (IndexError, ValueError):
+        await q.answer("Invalid")
+        return
+
+    # Dedup rapid taps — a double tap must not pay gems twice.
+    key = f"trsell_{inv_id}"
+    if not claim_once(key):
+        await q.answer("Already processing…")
+        return
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            release(key)
+            await q.answer("Not authorized")
+            return
+        ok, msg, detail = sell_inventory_trait(session, user, inv_id)
+        if not ok:
+            session.rollback()
+            release(key)
+            await q.answer(msg, show_alert=True)
+            return
+        session.commit()
+        await q.answer(f"+{detail['gems']:,} 💎")
+        try:
+            await q.edit_message_text(
+                f"✅ <b>TRAIT SOLD</b>\n\n"
+                f"{detail['label']}\n\n"
+                f"💎 Received: <b>{detail['gems']:,}</b>\n"
+                f"💰 Balance: {detail['balance']:,} 💎",
+                parse_mode="HTML")
+        except Exception:
+            pass
+    except Exception:
+        # Keep the claim (the commit may already have landed) so a stale tap
+        # can't pay for the same trait twice.
+        session.rollback()
+        logger.exception("trsellok_callback error")
         await q.answer("⚠️ Error", show_alert=True)
     finally:
         session.close()

@@ -138,6 +138,23 @@ def _user_label(user) -> str:
         getattr(user, "first_name", None) or "A player")
 
 
+def _lock_wallets(session: Session, user_ids):
+    """SELECT … FOR UPDATE both captains' rows, refreshing the in-session copies.
+
+    Serialises concurrent trade completions against each other on Postgres. A
+    backend without row locking (sqlite in the tests) simply ignores the clause,
+    and any failure is non-fatal — the affordability check below still runs, it
+    just isn't protected from a simultaneous completion.
+    """
+    try:
+        (session.query(User)
+         .filter(User.id.in_(list(user_ids)))
+         .with_for_update()
+         .all())
+    except Exception:
+        logger.debug("trade: wallet row lock unavailable", exc_info=True)
+
+
 def _cannot_afford(initiator: User, receiver: User, fee: int):
     """Message naming whoever can't cover the trade fee, or ``None``."""
     if fee <= 0:
@@ -178,7 +195,11 @@ def complete_trade(session: Session, trade_id: int) -> dict:
 
     # Charge the fee before the cards change hands — re-priced and re-checked
     # here because a balance can be spent while the confirmation is on screen.
+    # The bot serves updates concurrently, so take a row lock on both wallets
+    # first: without it two completions can both read the pre-charge balance and
+    # each decide the fee is affordable.
     fee = trade_fee_for(init_player.rating)
+    _lock_wallets(session, (initiator.id, receiver.id))
     short = _cannot_afford(initiator, receiver, fee)
     if short:
         trade.status = "cancelled"
