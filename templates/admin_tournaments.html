@@ -182,8 +182,13 @@
         box.innerHTML = '';
         (LEAGUE_TEAMS[lid] || []).forEach(function (t) {
           const lab = document.createElement('label');
-          lab.innerHTML = '<input type="checkbox" name="team_ids" value="' + t.id + '"> ' + t.name;
-          lab.querySelector('input').addEventListener('change', updateFormats);
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.name = 'team_ids';
+          cb.value = t.id;
+          cb.addEventListener('change', updateFormats);
+          lab.appendChild(cb);
+          lab.appendChild(document.createTextNode(' ' + t.name));
           box.appendChild(lab);
         });
         if (!(LEAGUE_TEAMS[lid] || []).length)

@@ -3,47 +3,9 @@
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
-{% macro team_badge(tt, size) %}
-  {% set pal = ['#c01935','#307fc4','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'] %}
-  {% if tt and tt.logo_url %}
-    <div class="team-badge" style="width:{{ size }}px;height:{{ size }}px;background-image:url('{{ tt.logo_url }}');"></div>
-  {% else %}
-    {% set col = pal[(tt.id if tt else 0) % (pal|length)] %}
-    <div class="team-badge" style="width:{{ size }}px;height:{{ size }}px;--team-color:{{ col }};">{{ (tt.short_name or tt.name or '?')[:3]|upper if tt else '?' }}</div>
-  {% endif %}
-{% endmacro %}
-
-{% macro result_form(fx) %}
-<form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="rr-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <input type="hidden" name="action" value="record_result">
-  <input type="hidden" name="fixture_id" value="{{ fx.id }}">
-  <div class="rr-row">
-    <span class="rr-team">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }} <small style="font-weight:400;color:var(--muted);">(1st)</small></span>
-    <div><label>Runs</label><input type="number" name="inn1_runs" min="0" value="0" style="width:80px;"></div>
-    <div><label>Wkts</label><input type="number" name="inn1_wickets" min="0" max="10" value="0" style="width:70px;"></div>
-    <div><label>Overs</label><input type="text" name="inn1_overs" placeholder="20 or 19.3" style="width:95px;"></div>
-  </div>
-  <div class="rr-row">
-    <span class="rr-team">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }} <small style="font-weight:400;color:var(--muted);">(2nd)</small></span>
-    <div><label>Runs</label><input type="number" name="inn2_runs" min="0" value="0" style="width:80px;"></div>
-    <div><label>Wkts</label><input type="number" name="inn2_wickets" min="0" max="10" value="0" style="width:70px;"></div>
-    <div><label>Overs</label><input type="text" name="inn2_overs" placeholder="20 or 19.3" style="width:95px;"></div>
-  </div>
-  <div class="rr-row">
-    <div><label>Winner</label>
-      <select name="winner_slot">
-        <option value="">Auto (higher score)</option>
-        <option value="1">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }}</option>
-        <option value="2">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }}</option>
-        <option value="tie">Tie</option>
-      </select>
-    </div>
-    <button class="action-btn accent-btn" type="submit" style="width:auto;">✅ Save result &amp; update table</button>
-  </div>
-  <p style="color:var(--muted);font-size:.76rem;margin:0;">Overs use cricket notation (<code>19.3</code>). Updates points table &amp; NRR; per-player stats come from bot-played matches.</p>
-</form>
-{% endmacro %}
+{% from "_tournament_macros.html" import team_badge, result_form with context %}
+{% set is_ko_only = (t.knockout_type == 'pure_knockout') %}
+{% set is_series = (t.format == 'Custom Series') %}
 
 <div class="tour-page">
   <div class="breadcrumbs">
@@ -67,12 +29,30 @@
         </div>
       </div>
       <div class="hero-actions">
+        {% if is_ko_only %}
+        <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
+              onsubmit="return confirm('Regenerate the knockout bracket? Unplayed bracket matches are replaced.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="generate_knockout">
+          <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-sitemap"></i> Regenerate bracket</button>
+        </form>
+        {% elif is_series %}
+        <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
+              style="display:flex;gap:.4rem;align-items:center;"
+              onsubmit="return confirm('Regenerate the series? Unplayed matches are replaced.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="generate_series">
+          <input type="number" name="series_matches" value="{{ fixtures|length or 3 }}" min="1" max="15" style="width:64px;" title="Number of matches">
+          <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-list-ol"></i> Regenerate series</button>
+        </form>
+        {% else %}
         <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
               onsubmit="return confirm('Generate (or regenerate) the schedule? Unplayed fixtures are replaced.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="action" value="generate_schedule">
           <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-wand-magic-sparkles"></i> Generate / regenerate</button>
         </form>
+        {% endif %}
       </div>
     </div>
     <div class="tour-tabs">

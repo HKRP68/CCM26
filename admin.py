@@ -13518,6 +13518,9 @@ def admin_tournaments_list():
                             from services import league_schedule_service, knockout_service
                             if tf == "pure_knockout":
                                 n = knockout_service.generate_knockout(db, t.id)
+                                # Mark the bracket as the active fixture schedule so
+                                # the bot team-picker gate restricts to bracket pairings.
+                                t.schedule_generated = True
                                 setup_msg = f" — {n}-match knockout bracket ready."
                             elif tf == "custom_series":
                                 n = league_schedule_service.generate_series(
@@ -13718,6 +13721,18 @@ def admin_tournament_detail(tournament_id):
                     except ValueError as ve:
                         db.rollback()
                         flash(f"⚠️ {ve}", "error")
+                elif action == "generate_series":
+                    # Custom Series regenerate: rebuild the N-match head-to-head
+                    # instead of a round-robin (which generate_schedule would do).
+                    from services import league_schedule_service
+                    try:
+                        n = league_schedule_service.generate_series(
+                            db, t.id, _int_form("series_matches", 3))
+                        log_admin(db, "tournament_series_generate", "tournament", t.id, t.name)
+                        flash(f"✅ Generated a {n}-match series.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
                 elif action == "add_fixture":
                     from services import league_schedule_service
                     try:
@@ -13897,8 +13912,10 @@ def admin_tournament_dashboard(tournament_id):
                   db.query(TournamentTeam).filter_by(tournament_id=t.id).all()}
         # All fixtures (scheduled + completed) so the Overview shows the schedule,
         # league rounds first then knockout, with a "Next Up" highlight.
+        # Order by match_no first: it is continuous across stages, so league
+        # rounds sort ahead of knockout (whose round_no restarts at 1).
         fixtures = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
-                    .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
+                    .order_by(TournamentMatch.match_no, TournamentMatch.round_no,
                               TournamentMatch.id).all())
         next_fixture_id = next(
             (f.id for f in fixtures
