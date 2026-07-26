@@ -5,7 +5,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 
+# Modules this file swaps for stubs so ``handlers.challenge`` can be imported
+# without Telegram or a database. They are put back the moment that import is
+# done — leaving a stub ``models`` in sys.modules breaks every test module
+# collected after this one ("cannot import name X from 'models'").
+_STUBBED = ("telegram", "telegram.ext", "database", "models",
+            "services.match_constants", "services.telegram_user_service",
+            "handlers.match", "handlers.challenge")
+
+
 def _load_challenge_with_stubs():
+    saved = {name: sys.modules.get(name) for name in _STUBBED}
     telegram = types.ModuleType("telegram")
 
     class InlineKeyboardButton:
@@ -66,7 +76,17 @@ def _load_challenge_with_stubs():
     sys.modules["handlers.match"] = handlers_match
 
     sys.modules.pop("handlers.challenge", None)
-    from handlers import challenge
+    try:
+        from handlers import challenge
+    finally:
+        # ``challenge`` holds direct references to the stub classes it imported,
+        # so the tests below still run against them — but sys.modules goes back
+        # to the real thing for everybody else.
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
     return challenge
 
 

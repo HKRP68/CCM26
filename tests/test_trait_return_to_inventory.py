@@ -226,11 +226,14 @@ class TraitReturnTest(_TraitFixtures, unittest.TestCase):
         from database import get_session
         from models import PlayerTrait, TraitInventory, Trade
         from datetime import datetime, timedelta
-        from services.trading_service import complete_trade
+        from services.trading_service import complete_trade, trade_fee_for
         session = get_session()
         try:
-            a = self._user(session)
-            b = self._user(session)
+            # A completed trade charges both captains the trade fee, so both
+            # need enough coins for the swap to go through at all.
+            fee = trade_fee_for(85)
+            a = self._user(session, coins=fee * 2)
+            b = self._user(session, coins=fee * 2)
             pa = self._player(session, rating=85)
             pb = self._player(session, rating=85)
             ra = self._roster(session, a, pa)

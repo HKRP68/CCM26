@@ -15,6 +15,7 @@ from services.card_generator import generate_card
 from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
 from services.card_text import format_player_card
+from services.roster_lock import MARKET_REASON, match_lock_message
 from utils.idempotency import claim_once, release
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,12 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        locked = match_lock_message(session, user.id, "buy players",
+                                    reason=MARKET_REASON)
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
 
         if user.roster_count >= MAX_ROSTER:
@@ -432,6 +439,15 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
+
+        # The card may have been opened before the match started — re-check at
+        # the moment the coins would actually move.
+        locked = match_lock_message(session, user.id, "buy players",
+                                    reason=MARKET_REASON)
+        if locked:
+            release(key)
+            await query.message.reply_text(locked, parse_mode="HTML")
+            return
 
         # Official-GC restriction: block purchase if the callback fires from a
         # non-official group (e.g. a stale/forwarded button).

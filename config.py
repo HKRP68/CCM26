@@ -258,7 +258,9 @@ def get_tier_colour(rating: int) -> tuple:
 TRADE_EXPIRES_SECONDS = 60
 MAX_ACTIVE_TRADES = 1
 TRADE_MIN_RATING = 75
-TRADE_FEE_PERCENT = 5
+# Charged to BOTH captains on a completed trade, as a percentage of the traded
+# card's buy value (both cards are the same OVR, so both pay the same).
+TRADE_FEE_PERCENT = 1
 ROSTER_PAGE_SIZE = 10
 
 # ══════════════════════════════════════════════════════════════════════

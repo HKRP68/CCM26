@@ -8,10 +8,11 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config import TRADE_EXPIRES_SECONDS
+from config import TRADE_EXPIRES_SECONDS, TRADE_FEE_PERCENT
 from database import get_session
 from models import Player, User, UserRoster
 from services.rating_matcher_service import get_players_at_rating, get_tradable_players
+from services.roster_lock import MARKET_REASON, match_lock_message
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.trading_service import complete_trade, create_pending_trade, get_pending_trade_for_user, reject_trade
 
@@ -155,6 +156,17 @@ async def trade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user2.id == user1.id:
             await update.message.reply_text("❌ You cannot trade with yourself")
             return
+        # A trade moves cards out of a squad exactly like a sale does, so it is
+        # frozen for BOTH captains while either of them has a match on.
+        for side, label in ((user1, "You"), (user2, _mention(user2))):
+            locked = match_lock_message(session, side.id, "trade players",
+                                        reason=MARKET_REASON)
+            if locked:
+                await update.message.reply_text(
+                    (locked if side.id == user1.id
+                     else f"🔒 {label} is in a match right now — trade later."),
+                    parse_mode="HTML")
+                return
         if (
             _active_trade_for_user(context, user1.id)
             or _active_trade_for_user(context, user2.id)
@@ -317,11 +329,18 @@ async def trade_user2_player_callback(update: Update, context: ContextTypes.DEFA
         )
         init_player = result["init_player"]
         recv_player = result["recv_player"]
+        fee = int(result.get("fee") or 0)
+        state["trade_fee"] = fee
+        fee_line = ""
+        if fee:
+            fee_line = (f"\n\nTrade fee: {fee:,} coins EACH "
+                        f"({TRADE_FEE_PERCENT}% of the card's buy value).")
         text = (
             "Trade Confirmation\n\n"
             f"{_mention(user1)} gives:\n{_player_label(init_player)}\n\n"
             f"{_mention(user2)} gives:\n{_player_label(recv_player)}\n\n"
             "Both players have the same OVR rating."
+            f"{fee_line}"
         )
         buttons = InlineKeyboardMarkup([
             [
@@ -390,11 +409,19 @@ async def trade_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         receiver = result["receiver"]
         init_player = result["init_player"]
         recv_player = result["recv_player"]
+        fee = int(result.get("fee") or 0)
         final_text = (
             "Trade Completed Successfully\n\n"
             f"{_mention(initiator)} received: {_player_label(recv_player)}\n"
             f"{_mention(receiver)} received: {_player_label(init_player)}"
         )
+        if fee:
+            final_text += (
+                f"\n\nTrade fee: {fee:,} coins charged to each captain "
+                f"({TRADE_FEE_PERCENT}% of the card's buy value).\n"
+                f"{_mention(initiator)}: {initiator.total_coins:,} 🪙  |  "
+                f"{_mention(receiver)}: {receiver.total_coins:,} 🪙"
+            )
         if result.get("traits_returned"):
             final_text += (
                 f"\n\n{result['traits_returned']} trait(s) were unequipped and "

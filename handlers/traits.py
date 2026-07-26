@@ -9,6 +9,11 @@ Commands:
   /traitupgrade       — upgrade a trait on a player (callback picker)
   /traitreplace       — replace a trait on a player (callback picker)
   /removetrait        — unequip a trait, returning it to inventory (picker)
+
+Anything that changes what a PLAYER is carrying is frozen while that user has a
+match on (see ``services.roster_lock``) — you can't re-kit the XI after the
+toss. Buying, rerolling and upgrading traits that are sitting in the inventory
+stay open: none of those touch a player who is out on the field.
 """
 
 import logging
@@ -25,6 +30,7 @@ from services.trait_service import (
     get_player_traits, _today_key, _get_or_create_daily,
 )
 from services.flags import get_flag
+from services.roster_lock import match_lock_alert, match_lock_message
 from config import (
     TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_REROLL_COST,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
@@ -349,6 +355,11 @@ async def traitapply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
             return
+        locked = match_lock_message(session, user.id, "apply a trait to a player")
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
+            return
+
         inv_rows = (session.query(TraitInventory, Trait)
                     .join(Trait, TraitInventory.trait_id == Trait.id)
                     .filter(TraitInventory.user_id == user.id)
@@ -445,6 +456,12 @@ async def trapply_pl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not user:
             await q.answer("Not authorized")
             return
+        # The picker may have been opened before the match started — check again
+        # at the moment it would actually change the player.
+        locked = match_lock_alert(session, user.id, "apply a trait")
+        if locked:
+            await q.answer(locked, show_alert=True)
+            return
         ok, msg = apply_trait_to_player(session, user, inv_id, roster_id)
         if ok:
             session.commit()
@@ -488,14 +505,21 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        # Upgrading a trait a player is WEARING changes that player, so it is
+        # frozen mid-match — but inventory upgrades touch nobody on the field
+        # and stay available. Hide the equipped half rather than refusing the
+        # whole command.
+        in_match = bool(match_lock_alert(session, user.id, "upgrade an equipped trait"))
+
         # Get all equipped traits that are not at max level
-        equipped = (session.query(PlayerTrait, Trait, UserRoster, Player)
-                    .join(Trait, PlayerTrait.trait_id == Trait.id)
-                    .join(UserRoster, PlayerTrait.roster_id == UserRoster.id)
-                    .join(Player, UserRoster.player_id == Player.id)
-                    .filter(PlayerTrait.user_id == user.id,
-                            PlayerTrait.level < 5)
-                    .all())
+        equipped = [] if in_match else (
+            session.query(PlayerTrait, Trait, UserRoster, Player)
+            .join(Trait, PlayerTrait.trait_id == Trait.id)
+            .join(UserRoster, PlayerTrait.roster_id == UserRoster.id)
+            .join(Player, UserRoster.player_id == Player.id)
+            .filter(PlayerTrait.user_id == user.id,
+                    PlayerTrait.level < 5)
+            .all())
 
         # Also include inventory traits
         inv_rows = (session.query(TraitInventory, Trait)
@@ -505,6 +529,12 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     .all())
 
         if not equipped and not inv_rows:
+            if in_match:
+                await update.message.reply_text(
+                    match_lock_message(session, user.id,
+                                       "upgrade a trait a player is wearing"),
+                    parse_mode="HTML")
+                return
             await update.message.reply_text(
                 "❌ No upgradeable traits. "
                 "Either buy some via /traitshop or all your traits are at Max Level.")
@@ -512,6 +542,9 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
         btns = []
         lines = [f"⬆️ <b>UPGRADE TRAIT</b>  |  💎 {user.total_gems:,}", "━━━━━━━━━━━━━━━━━━━"]
+        if in_match:
+            lines.append("🔒 <i>Equipped traits are locked while your match is "
+                         "on — inventory upgrades only.</i>")
 
         if equipped:
             lines.append("<b>Equipped:</b>")
@@ -557,6 +590,10 @@ async def trup_pt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
             await q.answer("Not authorized")
+            return
+        locked = match_lock_alert(session, user.id, "upgrade an equipped trait")
+        if locked:
+            await q.answer(locked, show_alert=True)
             return
         ok, msg = upgrade_player_trait(session, user, pt_id)
         if ok:
@@ -624,6 +661,11 @@ async def traitreplace_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        locked = match_lock_message(session, user.id, "replace a player's trait")
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
 
         equipped = (session.query(PlayerTrait, Trait, UserRoster, Player)
@@ -731,6 +773,10 @@ async def trrep_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not user:
             await q.answer("Not authorized")
             return
+        locked = match_lock_alert(session, user.id, "replace a player's trait")
+        if locked:
+            await q.answer(locked, show_alert=True)
+            return
         ok, msg = replace_trait_on_player(session, user, pt_id, inv_id)
         if ok:
             session.commit()
@@ -760,6 +806,11 @@ async def removetrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        locked = match_lock_message(session, user.id, "remove a player's trait")
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
 
         equipped = (session.query(PlayerTrait, Trait, UserRoster, Player)
@@ -824,6 +875,11 @@ async def trrem_pt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user:
             release(key)
             await q.answer("Not authorized")
+            return
+        locked = match_lock_alert(session, user.id, "remove a player's trait")
+        if locked:
+            release(key)
+            await q.answer(locked, show_alert=True)
             return
         ok, msg = remove_trait_from_player(session, user, pt_id)
         if ok:

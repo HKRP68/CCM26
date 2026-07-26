@@ -1426,6 +1426,16 @@ async def _announce(context, state, pitch_type):
     rule = "━" * 15
     title = "🤖 <b>LETS PLAY vs BOT</b> 🏏" if state.get("is_bot_match") \
         else "🏏 <b>LETS PLAY</b> 🏏"
+    # The AI captain draws a style per match (see services/bot_captain.py) —
+    # naming it here shows the player that the bot won't play this one the way
+    # it played the last one.
+    bot_line = ""
+    if state.get("is_bot_match"):
+        try:
+            from services.bot_captain import persona_label
+            bot_line = f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}\n"
+        except Exception:
+            logger.exception("letsplay: bot persona line failed")
     text = (
         f"{title}\n"
         f"{rule}\n"
@@ -1433,6 +1443,7 @@ async def _announce(context, state, pitch_type):
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
+        + bot_line
         + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"
            if state.get("is_bot_match") else "")
         + f"{rule}\n"
