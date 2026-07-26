@@ -279,11 +279,21 @@ def mark_bot_match(state, bot_user_id):
     with ``count_result=False`` (no coins, gems, Win/Loss, streak, season points
     or active day). ``is_bot_match`` is what drives the AI's turns and the
     no-penalty timeout; ``unranked`` is a plain label for the UI.
+
+    The AI captain also draws its style for this match here (see
+    ``services.bot_captain.PERSONAS``) so it is fixed — and can be shown on the
+    match card — before the first ball instead of being decided mid-over.
     """
     state["is_bot_match"] = True
     state["bot_user_id"] = bot_user_id
     state["stats_disabled"] = True
     state["unranked"] = True
+    try:
+        from services.bot_captain import assign_persona
+        assign_persona(state)
+    except Exception:
+        logger.exception("bot captain: persona draw failed for match %s",
+                         state.get("match_id"))
     # A practice match must never touch a tournament table or a tour series.
     state["tournament_id"] = None
     state["tournament_team_by_user"] = {}
@@ -437,13 +447,17 @@ def _miniapp_row(state):
     """The "View Match" button opens the SAME cricket arena Mini App used by
     /wpm and /wpmbot (scorecard, over-by-over commentary, playing XI), targeting
     THIS match_id — not just the bare app — so spectators land on the right board.
+
+    Returns a plain ``list`` of rows, never the ``InlineKeyboardMarkup`` tuple:
+    callers append their own rows to it (the Rematch button on a finished
+    practice match), and ``tuple + list`` raises.
     """
     try:
         from services.match_broadcast import play_match_keyboard
         kb = play_match_keyboard(
             state["match_id"], chat_id=state.get("chat_id"),
             is_private=bool(state.get("is_private")), label="📊 View Match")
-        return kb.inline_keyboard if kb else None
+        return [list(row) for row in kb.inline_keyboard] if kb else None
     except Exception:
         logger.exception("cipl view-match button build failed")
         return None
@@ -1186,6 +1200,16 @@ def _match_start_announcement(state):
         if cond.get("dew"):
             bits.append(f"❄️ {html.escape(str(cond['dew']))} dew")
         cond_line = f"{'  ·  '.join(bits)}\n"
+    # Practice match: name the captaincy style the AI drew for this match, so
+    # it's clear up front that the bot doesn't play every match the same way.
+    bot_line = ""
+    if _is_bot_match(state):
+        try:
+            from services.bot_captain import persona_label
+            bot_line = (f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}"
+                        f" • <i>unranked</i>\n")
+        except Exception:
+            logger.exception("cipl: bot persona line failed")
     return (
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
         f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
@@ -1193,6 +1217,7 @@ def _match_start_announcement(state):
         f"🏟️ {stadium} • {overs_label}\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"{cond_line}"
+        f"{bot_line}"
         f"🏏 {bat} batting first\n"
         f"{rule}\n"
         f"{bat_emoji} <b>{bat}</b>   vs   {bowl_emoji} <b>{bowl}</b>\n"
@@ -1746,6 +1771,12 @@ async def _run_over(context, mid, state):
     # every other user's command/button — for the duration of the over.
     summary = await asyncio.to_thread(cipl_match.simulate_over, state)
 
+    # Feed the over back to the AI captain: what the human picked, and what it
+    # cost them. Later overs counter the habits this builds up. No-op (and never
+    # raises) outside a bot match.
+    from services.bot_captain import observe_over
+    observe_over(state, summary)
+
     innings_over = cipl_match.is_innings_over(state)
     # Advance the resume pointer the instant the over is simulated — BEFORE the
     # (fallible) summary send / next prompt. If a send here fails, next_action
@@ -1819,6 +1850,15 @@ def _render_over_summary(state, summary, bot_plan=None):
     # over is a chance to show what the AI captain actually chose.
     if bot_plan:
         lines.append(f"🤖 Bot's plan: {bot_plan}")
+        # ...and to say so out loud when it has caught the player repeating
+        # themselves, so the mind game is visible and not just felt.
+        try:
+            from services.bot_captain import take_read_note
+            note = take_read_note(state)
+        except Exception:
+            note = None
+        if note:
+            lines.append(f"🧠 <i>{html.escape(str(note))}</i>")
     c = cipl_match.chase(state)
     if c and c["runs_required"] > 0:
         lines.append(f"🎯 Need {c['runs_required']} off {c['balls_remaining']} "
@@ -2181,10 +2221,17 @@ async def _complete_match(context, mid, state):
             f"🤝 {result['loser']}: +{prize_info['l_coins']:,} coins, "
             f"+{prize_info['l_gems']} 💎")
     text = f"🏁 <b>Match Over</b>\n<blockquote expandable>{body}</blockquote>"
-    miniapp_row = _miniapp_row(state)
-    if _is_bot_match(state):
-        text += f"\n\n{UNRANKED_NOTE}"
-        miniapp_row = (miniapp_row or []) + _rematch_row(state)
+    # Build the end-of-match keyboard defensively: this runs BEFORE the result
+    # message and the Match Summary card, so anything raising here would cost
+    # the player both of them (and leave the live state uncleaned).
+    try:
+        miniapp_row = list(_miniapp_row(state) or [])
+        if _is_bot_match(state):
+            text += f"\n\n{UNRANKED_NOTE}"
+            miniapp_row += _rematch_row(state)
+    except Exception:
+        logger.exception("cipl end-of-match keyboard build failed for match %s", mid)
+        miniapp_row = []
     # The result is already committed at this point — a failed send must not
     # abort the function, or the live state would stay parked on the last
     # (consumed) approach pick and /rcl would bowl an over past the limit.
@@ -2204,10 +2251,12 @@ async def _complete_match(context, mid, state):
             # so anyone can open this exact match in the Mini App.
             await context.bot.send_photo(
                 state["chat_id"], photo=BytesIO(img),
-                caption=f"🏆 <b>Match Summary</b> — {result_line}",
+                caption=_summary_caption(state, result_line),
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(miniapp_row)
                 if miniapp_row else None)
+        else:
+            logger.warning("cipl match summary image came back empty for match %s", mid)
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
 
@@ -2414,6 +2463,32 @@ def _record_cipl_potm(session, state, best):
         row.potm = (row.potm or 0) + 1
     else:
         session.add(PlayerGameStats(user_id=owner_uid, player_id=pid, potm=1))
+
+
+def _summary_caption(state, result_line):
+    """Caption under the Match Summary card.
+
+    The result, the venue, and — for a practice match — which captaincy style
+    the bot was playing, so the player can see it really does change match to
+    match. Never raises: a caption is not worth losing the card over.
+    """
+    lines = [f"🏆 <b>Match Summary</b> — {result_line}"]
+    try:
+        stadium = state.get("stadium")
+        if stadium:
+            # Match the start card's wording: a 100-ball match is not "20 overs".
+            overs_label = ("The Hundred (100 balls)"
+                           if state.get("ball_format") == "The100"
+                           else f"{state.get('overs', CIPL_OVERS)} overs")
+            lines.append(f"🏟️ {html.escape(str(stadium))} • {overs_label}")
+        if _is_bot_match(state):
+            from services.bot_captain import persona_label
+            lines.append(f"🤖 Bot captain: <b>{html.escape(persona_label(state))}</b> "
+                         f"• <i>unranked practice</i>")
+    except Exception:
+        logger.exception("cipl summary caption build failed for match %s",
+                         state.get("match_id"))
+    return "\n".join(lines)
 
 
 def _build_cipl_summary_image(state, result):

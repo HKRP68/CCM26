@@ -4506,6 +4506,24 @@ def webapp_player_detail(player_id):
         db.close()
 
 
+def _team_locked_response(db, user, action="change your Playing XI", market=False):
+    """A 409 payload when a live match freezes this user's squad, else ``None``.
+
+    The Mini App edits the same roster the chat commands do — the XI order, the
+    traits on a player, and who is in the squad at all — so it has to honour the
+    same in-match freeze (``services.roster_lock``), otherwise the chat guard is
+    one tap away from being bypassed. ``market=True`` switches the wording and
+    the error code to buying/selling.
+    """
+    from services.roster_lock import active_match_for
+    if not active_match_for(db, user.id):
+        return None
+    error = "market_locked" if market else "match_in_progress"
+    return {"ok": False, "error": error,
+            "message": f"You can't {action} during a match. "
+                       f"Finish the game first."}, 409
+
+
 @app.route("/api/webapp/buy/<int:player_id>", methods=["POST"])
 @csrf_exempt
 def webapp_buy(player_id):
@@ -4514,6 +4532,9 @@ def webapp_buy(player_id):
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "buy players", market=True)
+        if locked:
+            return locked
         from datetime import datetime as _dt
         from models import UserRoster
         from services.version_service import user_owns_any_version
@@ -4579,6 +4600,27 @@ def webapp_buy(player_id):
         db.close()
 
 
+def _release_prompt_open(tg_id):
+    """A 409 payload while this user has a chat release awaiting confirmation.
+
+    The Mini App and the chat share one roster, and the chat prompt is written
+    in roster POSITIONS — confirming a Mini App release underneath it would
+    renumber the roster and the pending prompt would then point at different
+    players. The Flask panel runs in the bot's own process (see bot.py), so it
+    can read the same registry the /release handler writes.
+    """
+    try:
+        from handlers.release import pending_release
+        if not pending_release(tg_id):
+            return None
+    except Exception:
+        logger.exception("webapp release: pending-prompt check failed")
+        return None
+    return {"ok": False, "error": "release_pending",
+            "message": "You already have a release waiting for confirmation in "
+                       "chat. Confirm or cancel it first."}, 409
+
+
 @app.route("/api/webapp/release/<int:roster_id>", methods=["POST"])
 @csrf_exempt
 def webapp_release(roster_id):
@@ -4591,6 +4633,12 @@ def webapp_release(roster_id):
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "sell players", market=True)
+        if locked:
+            return locked
+        busy = _release_prompt_open(tg_id)
+        if busy:
+            return busy
         from models import UserRoster
         from config import get_sell_value
 
@@ -4675,6 +4723,12 @@ def webapp_release_multi():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "sell players", market=True)
+        if locked:
+            return locked
+        busy = _release_prompt_open(tg_id)
+        if busy:
+            return busy
         from models import UserRoster
         from config import get_sell_value
 
@@ -6093,6 +6147,9 @@ def webapp_market_buy(slot_id):
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "buy players", market=True)
+        if locked:
+            return locked
         from models import GlobalPlayerMarket, UserRoster
 
         slot = db.query(GlobalPlayerMarket).filter(
@@ -6245,6 +6302,9 @@ def webapp_xi_autobuild():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "rebuild your Playing XI")
+        if locked:
+            return locked
         from services import subscription_service
         if not subscription_service.has_premium_commands(user):
             return {"ok": False, "error": "premium_required",
@@ -6289,6 +6349,9 @@ def webapp_xi_reorder():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "change your batting order")
+        if locked:
+            return locked
         from models import UserRoster
         data = request.get_json(silent=True) or {}
         ids = data.get("ordered_roster_ids") or []
@@ -6340,6 +6403,9 @@ def webapp_xi_swap_bench():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "swap players in your XI")
+        if locked:
+            return locked
         from models import UserRoster
         data = request.get_json(silent=True) or {}
         bench_id = int(data.get("bench_roster_id") or 0)
@@ -7019,6 +7085,9 @@ def webapp_trait_apply():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "apply a trait to a player")
+        if locked:
+            return locked
         from services.trait_service import apply_trait_to_player
         data = request.get_json(silent=True) or {}
         roster_id = int(data.get("roster_id") or 0)
@@ -7070,6 +7139,9 @@ def webapp_trait_remove():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "remove a player's trait")
+        if locked:
+            return locked
         # Same service the chat command /removetrait uses, so both surfaces
         # return the trait to inventory at exactly the same level.
         from services.trait_service import remove_trait_from_player
@@ -7098,6 +7170,9 @@ def webapp_trait_upgrade():
         return err
     db, user, tg_id = auth
     try:
+        locked = _team_locked_response(db, user, "upgrade an equipped trait")
+        if locked:
+            return locked
         from services.trait_service import upgrade_player_trait
         data = request.get_json(silent=True) or {}
         ptid = int(data.get("player_trait_id") or 0)

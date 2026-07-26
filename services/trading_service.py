@@ -1,10 +1,16 @@
-"""Player trading services for exact same-OVR swaps."""
+"""Player trading services for exact same-OVR swaps.
+
+Trades are not free: each side pays a fee of ``TRADE_FEE_PERCENT`` of the traded
+player's buy value (1%). Both cards have the same OVR — that is the rule the
+whole flow is built on — so both captains pay the same amount, and the coins
+leave the economy rather than moving between the two.
+"""
 
 import logging
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from config import TRADE_EXPIRES_SECONDS
+from config import TRADE_EXPIRES_SECONDS, TRADE_FEE_PERCENT, get_buy_value
 from models import Player, Trade, User, UserRoster
 from services.activity_service import log_activity
 from services.rating_matcher_service import (
@@ -14,6 +20,21 @@ from services.rating_matcher_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def trade_fee_for(rating) -> int:
+    """Coins each side pays to trade a card of this OVR.
+
+    ``TRADE_FEE_PERCENT`` of the player's buy value, rounded up so a cheap card
+    still costs something rather than being free by rounding.
+    """
+    try:
+        buy_value = int(get_buy_value(int(rating)))
+    except (TypeError, ValueError):
+        return 0
+    if buy_value <= 0:
+        return 0
+    return max(1, -(-buy_value * TRADE_FEE_PERCENT // 100))   # ceil division
 
 
 def expire_stale_trades(session: Session):
@@ -75,6 +96,14 @@ def create_pending_trade(
     if error:
         return {"success": False, "message": error}
 
+    # Both cards are the same OVR, so one fee figure covers both captains. It is
+    # quoted on the confirmation card and charged again (re-checked) on
+    # completion — the balance can move while the prompt is on screen.
+    fee = trade_fee_for(init_player.rating)
+    short = _cannot_afford(initiator, receiver, fee)
+    if short:
+        return {"success": False, "message": short, "fee": fee}
+
     now = datetime.utcnow()
     trade = Trade(
         initiator_id=initiator.id,
@@ -84,7 +113,7 @@ def create_pending_trade(
         initiator_roster_id=init_entry.id,
         receiver_roster_id=recv_entry.id,
         status="pending",
-        trade_fee=0,
+        trade_fee=fee,
         created_at=now,
         expires_at=now + timedelta(seconds=TRADE_EXPIRES_SECONDS),
         updated_at=now,
@@ -97,8 +126,45 @@ def create_pending_trade(
         "trade_id": trade.id,
         "init_player": init_player,
         "recv_player": recv_player,
+        "fee": fee,
         "message": "Trade confirmation started",
     }
+
+
+def _user_label(user) -> str:
+    if not user:
+        return "A player"
+    return f"@{user.username}" if getattr(user, "username", None) else (
+        getattr(user, "first_name", None) or "A player")
+
+
+def _lock_wallets(session: Session, user_ids):
+    """SELECT … FOR UPDATE both captains' rows, refreshing the in-session copies.
+
+    Serialises concurrent trade completions against each other on Postgres. A
+    backend without row locking (sqlite in the tests) simply ignores the clause,
+    and any failure is non-fatal — the affordability check below still runs, it
+    just isn't protected from a simultaneous completion.
+    """
+    try:
+        (session.query(User)
+         .filter(User.id.in_(list(user_ids)))
+         .with_for_update()
+         .all())
+    except Exception:
+        logger.debug("trade: wallet row lock unavailable", exc_info=True)
+
+
+def _cannot_afford(initiator: User, receiver: User, fee: int):
+    """Message naming whoever can't cover the trade fee, or ``None``."""
+    if fee <= 0:
+        return None
+    broke = [u for u in (initiator, receiver) if (u.total_coins or 0) < fee]
+    if not broke:
+        return None
+    who = " and ".join(_user_label(u) for u in broke)
+    return (f"Trade cancelled — {who} can't cover the {fee:,} 🪙 trade fee "
+            f"({TRADE_FEE_PERCENT}% of the card's buy value).")
 
 
 def complete_trade(session: Session, trade_id: int) -> dict:
@@ -127,6 +193,24 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         session.flush()
         return {"success": False, "message": error}
 
+    # Charge the fee before the cards change hands — re-priced and re-checked
+    # here because a balance can be spent while the confirmation is on screen.
+    # The bot serves updates concurrently, so take a row lock on both wallets
+    # first: without it two completions can both read the pre-charge balance and
+    # each decide the fee is affordable.
+    fee = trade_fee_for(init_player.rating)
+    _lock_wallets(session, (initiator.id, receiver.id))
+    short = _cannot_afford(initiator, receiver, fee)
+    if short:
+        trade.status = "cancelled"
+        trade.updated_at = now
+        session.flush()
+        return {"success": False, "message": short, "fee": fee}
+    if fee > 0:
+        for side in (initiator, receiver):
+            side.total_coins = (side.total_coins or 0) - fee
+    trade.trade_fee = fee
+
     # Traits do NOT travel with a traded player. Each side's equipped traits go
     # back to the inventory of the captain who owned them (at their current
     # level) before the roster rows change hands — otherwise the trait would
@@ -142,11 +226,13 @@ def complete_trade(session: Session, trade_id: int) -> dict:
     trade.completed_at = now
     trade.updated_at = now
 
+    fee_note = f" (fee {fee:,} coins)" if fee else ""
     log_activity(
         session,
         initiator.id,
         "trade",
-        f"Received {recv_player.name} | OVR {recv_player.rating}; gave {init_player.name} | OVR {init_player.rating}",
+        f"Received {recv_player.name} | OVR {recv_player.rating}; gave {init_player.name} | OVR {init_player.rating}{fee_note}",
+        coins_change=-fee if fee else 0,
         player_name=recv_player.name,
         player_rating=recv_player.rating,
     )
@@ -154,7 +240,8 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         session,
         receiver.id,
         "trade",
-        f"Received {init_player.name} | OVR {init_player.rating}; gave {recv_player.name} | OVR {recv_player.rating}",
+        f"Received {init_player.name} | OVR {init_player.rating}; gave {recv_player.name} | OVR {recv_player.rating}{fee_note}",
+        coins_change=-fee if fee else 0,
         player_name=init_player.name,
         player_rating=init_player.rating,
     )
@@ -175,6 +262,7 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         "init_player": init_player,
         "recv_player": recv_player,
         "traits_returned": traits_returned,
+        "fee": fee,
         "message": "Trade completed",
     }
 

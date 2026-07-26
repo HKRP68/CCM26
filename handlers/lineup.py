@@ -1,4 +1,8 @@
-"""Handlers for /playingxi (/pxi), /swapplayers, /setcaptain, bench, XI validation."""
+"""Handlers for /playingxi (/pxi), /swapplayers, /setcaptain, bench, XI validation.
+
+Viewing the XI is always allowed; *editing* it is not while a match is running —
+see ``services.roster_lock``.
+"""
 
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -7,6 +11,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Player, UserRoster
 from services.activity_service import log_activity
+from services.roster_lock import match_lock_message
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.flags import get_flag
 from services import xi_rules
@@ -281,6 +286,11 @@ async def swapplayers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Do /debut first!")
             return
 
+        locked = match_lock_message(session, user.id, "swap players in your XI")
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
+            return
+
         # Get roster in raw order first (to ensure order_position is clean)
         raw_roster = _get_ordered_roster(session, user.id)
 
@@ -325,6 +335,10 @@ async def setcaptain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+        locked = match_lock_message(session, user.id, "change your captain")
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
         result = (session.query(UserRoster, Player).join(Player, UserRoster.player_id == Player.id)
                   .filter(UserRoster.user_id == user.id, Player.name.ilike(f"%{search}%")).first())
@@ -464,6 +478,11 @@ async def autobuild_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        locked = match_lock_message(session, user.id, "rebuild your Playing XI")
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
 
         from services import subscription_service

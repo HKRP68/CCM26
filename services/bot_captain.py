@@ -11,27 +11,55 @@ quotas and the no-back-to-back rule are NOT re-implemented here: they come from
 ``services.cipl_match.eligible_bowlers``, which the human picker uses too, so
 the bot plays under exactly the same constraints as its opponent.
 
-The decisions read the match, not a dice roll: phase, wickets in hand, the
-striker's ability and form, and the chase maths all move the answer. A small
-weighted-random top is layered on the bowler choice so two matches never unfold
-identically.
+Three things keep the bot from feeling like a script:
+
+  • **Nothing is deterministic.** Every decision builds a *weight* for each of
+    the five approaches from the match situation and then samples it. The same
+    situation twice will not reliably give the same answer, and no over is ever
+    a foregone conclusion.
+  • **A persona per match.** Each match the bot draws a captaincy style
+    (:data:`PERSONAS`) that biases how aggressive it is and how often it
+    bluffs, so two matches from the same scoreline still unfold differently.
+  • **It reads its opponent.** ``observe_over`` records what the human picked
+    and what it cost them; later overs counter the habits that show up —
+    including a hard counter when the human repeats themselves — and lean on
+    whatever has actually been working this match.
+
+None of that comes at the cost of strength: the situation (phase, the chase
+maths, wickets in hand, who is on strike, who is bowling) is still the dominant
+term in every weight, so the bot is a genuinely hard opponent that happens to be
+unpredictable, rather than a random one.
 """
 
 import logging
+import math
 import random
 
 from engine.approach_modifiers import (
-    BATTING_APPROACHES, BOWLING_APPROACHES, DEFAULT_BATTING, DEFAULT_BOWLING,
+    BATTING_APPROACHES, BATTING_KEYS, BOWLING_APPROACHES, BOWLING_KEYS,
+    DEFAULT_BATTING, DEFAULT_BOWLING, normalize_batting, normalize_bowling,
 )
 from services import cipl_match
 
 logger = logging.getLogger(__name__)
 
 
-# Batting approaches ordered least → most aggressive. The chase logic picks an
-# index into this ladder and then nudges it up or down, which keeps "one notch
-# more/less aggressive" honest instead of scattering magic strings around.
+# Batting approaches ordered least → most aggressive. The batting logic picks a
+# (fractional) position on this ladder and spreads its weights around it, which
+# keeps "one notch more/less aggressive" honest instead of scattering magic
+# strings around.
 BAT_LADDER = ["defensive", "rotate", "balanced", "aggressive", "ultra"]
+BOWL_PLANS = ["defensive", "balanced", "mixed", "aggressive", "variation"]
+
+# These two lists ARE the sampling space: a key the engine has that is missing
+# here would silently never be picked, and a key here that the engine dropped
+# would make ``BAT_LADDER.index()`` raise mid-over. Fail at import instead.
+assert set(BAT_LADDER) == BATTING_KEYS, (
+    f"BAT_LADDER is out of step with engine.approach_modifiers: "
+    f"{set(BAT_LADDER) ^ BATTING_KEYS}")
+assert set(BOWL_PLANS) == BOWLING_KEYS, (
+    f"BOWL_PLANS is out of step with engine.approach_modifiers: "
+    f"{set(BOWL_PLANS) ^ BOWLING_KEYS}")
 
 # Overs that count as the death at the end of an innings.
 DEATH_UNITS = 4
@@ -41,6 +69,57 @@ POWERPLAY_UNITS = 6
 # Trait bonuses when choosing who bowls, by phase.
 _POWERPLAY_TRAITS = {"bowl_powerplay"}
 _DEATH_TRAITS = {"bowl_death", "bowl_yorker"}
+_WICKET_TRAITS = {"bowl_wicket_hunter", "bowl_strike"}
+
+# A par over in a T20 innings — the yardstick for "is this plan working?".
+PAR_RUNS_PER_OVER = 8.0
+
+
+# ════════════════════════════════════════════════════════════════════
+# Captaincy personas — the macro variety between one match and the next
+# ════════════════════════════════════════════════════════════════════
+
+# ``aggression`` shifts every decision along the attack/defend axis, ``bluff``
+# is the chance of throwing a completely off-script plan (the curveball that
+# stops a human from ever settling into a read), ``noise`` is how much the
+# sampled weights jitter, and ``temperature`` is how loosely the bowler choice
+# follows its own ranking.
+PERSONAS = {
+    "aggressor": {"label": "🔥 Aggressor", "aggression": 0.55, "bluff": 0.12,
+                  "noise": 0.30, "temperature": 7.0},
+    "tactician": {"label": "🧠 Tactician", "aggression": 0.05, "bluff": 0.16,
+                  "noise": 0.22, "temperature": 6.0},
+    "grinder": {"label": "🧱 Grinder", "aggression": -0.45, "bluff": 0.10,
+                "noise": 0.25, "temperature": 6.5},
+    "maverick": {"label": "🎲 Maverick", "aggression": 0.20, "bluff": 0.30,
+                 "noise": 0.50, "temperature": 11.0},
+}
+DEFAULT_PERSONA = "tactician"
+
+
+def assign_persona(state, key=None):
+    """Draw (or force) this match's captaincy style and remember it on ``state``.
+
+    Called once when a practice match is created so the style is stable for the
+    whole match — and shown to the player — instead of flickering over by over.
+    """
+    if key not in PERSONAS:
+        key = random.choice(list(PERSONAS))
+    state["bot_persona"] = key
+    return key
+
+
+def _persona(state):
+    """This match's persona dict, drawing one lazily for older/None states."""
+    key = (state or {}).get("bot_persona")
+    if key not in PERSONAS:
+        key = assign_persona(state) if isinstance(state, dict) else DEFAULT_PERSONA
+    return PERSONAS[key]
+
+
+def persona_label(state):
+    """Human-readable captaincy style for the match cards (e.g. "🧠 Tactician")."""
+    return _persona(state)["label"]
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -121,6 +200,233 @@ def _wickets_lost(state):
         return 0
 
 
+def _wickets_in_hand(state):
+    try:
+        limit = int(state.get("wicket_limit") or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    return max(0, limit - _wickets_lost(state))
+
+
+def _rating(player, *keys, default=50.0):
+    for key in keys:
+        try:
+            value = player.get(key)
+        except AttributeError:
+            return default
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _economy(state, rid):
+    """``(overs_bowled, runs_per_over)`` for a bowler in the current innings."""
+    stats = (state.get("bowl_stats") or {}).get(str(rid), {})
+    balls = int(stats.get("balls", 0) or 0)
+    if balls <= 0:
+        return 0.0, None
+    runs = int(stats.get("runs", 0) or 0)
+    return balls / 6.0, runs / balls * 6.0
+
+
+def _bot_is_batting(state):
+    """True when the AI captain owns the batting side of ``state``."""
+    bot_uid = (state or {}).get("bot_user_id")
+    return bot_uid is not None and state.get("bat_team_id") == bot_uid
+
+
+# ════════════════════════════════════════════════════════════════════
+# Opponent memory — what the human does, and what it costs them
+# ════════════════════════════════════════════════════════════════════
+
+# The plan that hurts each batting approach most, used when the human has shown
+# they will keep picking the same thing.
+_BAT_COUNTER = {
+    "ultra": "variation",       # cut the six off and the risk stays
+    "aggressive": "mixed",      # boundaries down, wicket chance up
+    "balanced": "aggressive",   # nothing to fear — hunt the wicket
+    "rotate": "aggressive",
+    "defensive": "aggressive",
+}
+
+# ...and the reply to a bowling plan the human keeps repeating.
+_BOWL_COUNTER = {
+    "defensive": "rotate",      # boundaries are shut off — milk the singles
+    "balanced": "aggressive",
+    "mixed": "rotate",
+    "aggressive": "rotate",     # their wicket multiplier only bites a slogger
+    "variation": "rotate",
+}
+
+_MEMORY_SHAPE = ("opp_bat", "opp_bowl", "own_bat", "own_bowl")
+_RECENT_KEEP = 6
+
+
+def _memory(state, create=True):
+    """The bot's per-match read of its opponent, created on first use.
+
+    Plain nested dicts/lists of primitives so it survives the JSON round-trip
+    every ``save_state`` does, and tolerant of a partial dict restored from a
+    match that started before this existed.
+
+    ``create=False`` returns a throwaway empty memory instead of writing one onto
+    ``state`` — used by the read paths so a state that is not a bot match never
+    picks up a ``bot_memory`` blob it would then persist.
+    """
+    mem = state.get("bot_memory")
+    if not isinstance(mem, dict):
+        mem = {}
+        if create:
+            state["bot_memory"] = mem
+    for key in _MEMORY_SHAPE:
+        if not isinstance(mem.get(key), dict):
+            mem[key] = {}
+    for key in ("recent_opp_bat", "recent_opp_bowl"):
+        if not isinstance(mem.get(key), list):
+            mem[key] = []
+    return mem
+
+
+def _record(bucket, key, runs, wickets):
+    slot = bucket.get(key)
+    if not isinstance(slot, dict):
+        slot = {"n": 0, "runs": 0, "wkts": 0}
+        bucket[key] = slot
+    slot["n"] = int(slot.get("n", 0)) + 1
+    slot["runs"] = int(slot.get("runs", 0)) + runs
+    slot["wkts"] = int(slot.get("wkts", 0)) + wickets
+
+
+def observe_over(state, summary):
+    """Feed a completed over back into the bot's read of the match.
+
+    Safe to call for every over of every match (it no-ops when the bot isn't
+    playing), and never raises — a memory failure must not cost anybody an over.
+    """
+    try:
+        if not state or not state.get("is_bot_match") or not summary:
+            return
+        mem = _memory(state)
+        bat_app = normalize_batting(summary.get("batting_approach"))
+        bowl_app = normalize_bowling(summary.get("bowling_approach"))
+        runs = int(summary.get("over_runs") or 0)
+        wickets = int(summary.get("over_wickets") or 0)
+
+        if _bot_is_batting(state):
+            _record(mem["own_bat"], bat_app, runs, wickets)
+            _record(mem["opp_bowl"], bowl_app, runs, wickets)
+            mem["recent_opp_bowl"] = (mem["recent_opp_bowl"] + [bowl_app])[-_RECENT_KEEP:]
+            mem["last_own_bat"] = bat_app
+        else:
+            _record(mem["opp_bat"], bat_app, runs, wickets)
+            _record(mem["own_bowl"], bowl_app, runs, wickets)
+            mem["recent_opp_bat"] = (mem["recent_opp_bat"] + [bat_app])[-_RECENT_KEEP:]
+            mem["last_own_bowl"] = bowl_app
+    except Exception:
+        logger.exception("bot captain: recording the over failed (match %s)",
+                         (state or {}).get("match_id"))
+
+
+def _share(bucket, keys):
+    """Fraction of recorded overs that used one of ``keys`` (0.0 when empty)."""
+    total = sum(int((s or {}).get("n", 0)) for s in bucket.values())
+    if total <= 0:
+        return 0.0, 0
+    hits = sum(int((bucket.get(k) or {}).get("n", 0)) for k in keys)
+    return hits / total, total
+
+
+def _repeated_pick(recent, times=3):
+    """The approach the opponent has picked ``times`` overs running, if any."""
+    if len(recent) < times:
+        return None
+    tail = recent[-times:]
+    return tail[0] if len(set(tail)) == 1 else None
+
+
+def _note_read(state, text):
+    """Leave a one-line note that the bot has spotted a pattern.
+
+    ``handlers.cipl_play._render_over_summary`` shows and clears it, so the
+    player can see the AI reacting to them instead of just feeling it.
+    """
+    state["bot_read_note"] = text
+
+
+def take_read_note(state):
+    """Pop the pending "the bot has read you" line, if there is one."""
+    if not isinstance(state, dict):
+        return None
+    return state.pop("bot_read_note", None)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Weighted sampling
+# ════════════════════════════════════════════════════════════════════
+
+def _tilt(weights, key, factor):
+    """Scale one weight, chosen at runtime (e.g. a counter looked up by name)."""
+    if key in weights:
+        weights[key] *= factor
+
+
+def _tilts(weights, **factors):
+    """Scale several named weights at once: ``_tilts(w, aggressive=1.9, ...)``.
+
+    The keyword form keeps each situation's adjustment readable as one table
+    instead of a column of near-identical single-key calls.
+    """
+    for key, factor in factors.items():
+        if key in weights:
+            weights[key] *= factor
+
+
+def _sample(weights, noise=0.0):
+    """Pick one key at random, in proportion to its weight.
+
+    ``noise`` jitters each weight multiplicatively (log-normal) so even a
+    lopsided situation occasionally produces the second- or third-best plan —
+    which is what stops a human from ever being sure what is coming.
+    """
+    keys = [k for k, w in weights.items() if w is not None]
+    if not keys:
+        return None
+    vals = []
+    for key in keys:
+        weight = max(0.01, float(weights[key]))
+        if noise > 0:
+            weight *= math.exp(random.gauss(0.0, noise))
+        vals.append(weight)
+    return random.choices(keys, weights=vals, k=1)[0]
+
+
+def _apply_learning(weights, record, *, bowling):
+    """Nudge weights toward whatever has actually been working this match.
+
+    Bowling wants cheap overs and wickets; batting wants runs without losing the
+    top order. The tilt is bounded and confidence-scaled, so one lucky over never
+    hijacks the plan but a plan that keeps going for 15 quietly falls away.
+    """
+    for key, slot in (record or {}).items():
+        if key not in weights or not isinstance(slot, dict):
+            continue
+        n = int(slot.get("n", 0) or 0)
+        if n <= 0:
+            continue
+        rpo = float(slot.get("runs", 0)) / n
+        wpo = float(slot.get("wkts", 0)) / n
+        if bowling:
+            edge = (PAR_RUNS_PER_OVER - rpo) * 0.06 + wpo * 0.35
+        else:
+            edge = (rpo - PAR_RUNS_PER_OVER) * 0.06 - wpo * 0.30
+        edge = max(-0.8, min(0.8, edge)) * min(1.0, n / 4.0)
+        weights[key] *= math.exp(edge)
+
+
 # ════════════════════════════════════════════════════════════════════
 # Bowler selection
 # ════════════════════════════════════════════════════════════════════
@@ -130,9 +436,13 @@ def _bowler_score(state, player, ph, hold_back):
 
     Rating is the backbone; phase-matched traits add a real but not overwhelming
     bump; a part-timer is a last resort; and in the middle overs the frontline
-    quicks are pushed down so their overs survive until the death.
+    quicks are pushed down so their overs survive until the death. On top of
+    that the bot captains to what is happening in front of it — the best bowler
+    is thrown at a set batter, a wicket-taker greets a new one, and whoever is
+    being carted this innings gets taken out of the attack.
     """
-    score = float(player.get("bowl_rating") or 0)
+    bowl_rating = _rating(player, "bowl_rating", default=0.0)
+    score = bowl_rating
     traits = _traits_of(player)
 
     if ph == "powerplay" and traits & _POWERPLAY_TRAITS:
@@ -147,6 +457,29 @@ def _bowler_score(state, player, ph, hold_back):
 
     if player.get("roster_id") in hold_back:
         score -= 30
+
+    # ── Matchup: who is on strike right now ──
+    balls_faced, sr = _striker_form(state)
+    if balls_faced >= 12 and sr >= 130:
+        # A set batter needs the best bowler in the side, not a holding over.
+        score += (bowl_rating - 70) * 0.15
+    elif balls_faced < 4:
+        # Fresh batter: back a wicket-taker to make the new-batter over count.
+        if traits & _WICKET_TRAITS:
+            score += 10
+
+    # ── This innings' evidence: economy so far ──
+    overs_done, rpo = _economy(state, player.get("roster_id"))
+    if rpo is not None and overs_done >= 1.0:
+        if rpo >= 11:
+            score -= 9
+        elif rpo >= 9.5:
+            score -= 4
+        elif rpo <= 6:
+            score += 6
+        wickets = int((state.get("bowl_stats") or {})
+                      .get(str(player.get("roster_id")), {}).get("wickets", 0) or 0)
+        score += min(10, wickets * 5)   # a bowler on a roll keeps the ball
 
     return score
 
@@ -180,7 +513,10 @@ def pick_bowler(state):
 
     Only ever returns a player ``cipl_match.eligible_bowlers`` already approved,
     so the quota, the no-back-to-back rule and the part-timer tiers are honoured
-    exactly as they are for a human captain. Returns ``None`` only when the XI
+    exactly as they are for a human captain. The choice is a softmax over the
+    whole eligible list rather than a fixed top-three lottery: the right bowler
+    still bowls most of the time, but the attack is never a fixed rotation the
+    opponent can plan an innings around. Returns ``None`` only when the XI
     somehow has nobody to bowl.
     """
     candidates = cipl_match.eligible_bowlers(state)
@@ -191,54 +527,123 @@ def pick_bowler(state):
     if len(candidates) == 1:
         return candidates[0]
 
+    persona = _persona(state)
     ph = phase(state)
     hold_back = _hold_back_for_death(state, candidates)
-    ranked = sorted(candidates,
-                    key=lambda p: _bowler_score(state, p, ph, hold_back),
-                    reverse=True)
-    # Weighted-random over the best three so the attack isn't robotic, while the
-    # top choice still bowls most of the time.
-    top = ranked[:3]
-    weights = [6, 3, 1][:len(top)]
-    return random.choices(top, weights=weights, k=1)[0]
+    scored = [(p, _bowler_score(state, p, ph, hold_back)) for p in candidates]
+    best = max(score for _p, score in scored)
+    temperature = max(1.0, float(persona["temperature"]))
+
+    keys = list(range(len(scored)))
+    weights = [math.exp(max(-40.0, (score - best) / temperature))
+               for _player, score in scored]
+    chosen = random.choices(keys, weights=weights, k=1)[0]
+    return scored[chosen][0]
 
 
 # ════════════════════════════════════════════════════════════════════
 # Bowling approach
 # ════════════════════════════════════════════════════════════════════
 
-def pick_bowling_approach(state):
-    """Choose the bot's Bowling Approach for the over.
-
-    Attack a new batter, mix it up at the death, use variations against someone
-    who is set, and shut up shop when a chase has already run away from the
-    batting side.
-    """
+def _bowling_weights(state):
+    """Raw per-plan weights from the match situation alone."""
     ph = phase(state)
     balls_faced, sr = _striker_form(state)
     chase = cipl_match.chase(state)
+    wickets_lost = _wickets_lost(state)
 
-    # Defending, and the chase is comfortably behind — squeeze rather than gamble.
-    if chase and chase["balls_remaining"] > 0 and chase["rrr"] >= 13:
-        return "defensive"
+    w = {"defensive": 1.0, "balanced": 1.3, "mixed": 1.2,
+         "aggressive": 1.2, "variation": 1.3}
 
-    if ph == "death":
-        return "mixed"
-
-    # A brand-new batter is at their most vulnerable — go after them.
-    if balls_faced < 6:
-        return "aggressive"
-
-    # Someone flying: change of pace beats more of the same.
-    if sr >= 150 and balls_faced >= 8:
-        return "variation"
-
+    # ── Phase ──
     if ph == "powerplay":
-        return random.choices(["aggressive", "balanced"], weights=[3, 2], k=1)[0]
+        _tilts(w, aggressive=1.9, balanced=1.2, variation=0.9, defensive=0.5)
+    elif ph == "death":
+        _tilts(w, mixed=2.0, variation=1.6, defensive=1.2, balanced=0.7,
+               aggressive=0.8)
+    else:
+        _tilts(w, balanced=1.3, variation=1.3, mixed=1.1)
 
-    # Middle overs: control, with the occasional wicket-hunting over.
-    return random.choices(["balanced", "variation", "aggressive"],
-                          weights=[4, 3, 2], k=1)[0]
+    # ── Who is on strike ──
+    if balls_faced < 6:
+        # A brand-new batter is at their most vulnerable — go after them.
+        _tilts(w, aggressive=2.2, mixed=1.15, defensive=0.6)
+    elif balls_faced >= 8 and sr >= 150:
+        # Someone flying: change of pace beats more of the same.
+        _tilts(w, variation=2.1, mixed=1.8, aggressive=0.6)
+    elif balls_faced >= 10 and sr < 95:
+        # Bogged down — squeeze harder and the wicket usually follows.
+        _tilts(w, aggressive=1.5, defensive=0.75)
+
+    # ── Wickets: into the tail, bowl them out ──
+    if wickets_lost >= 7:
+        _tilts(w, aggressive=1.7, mixed=1.2, defensive=0.6)
+    elif wickets_lost >= 5:
+        _tilt(w, "aggressive", 1.2)
+
+    # ── The chase maths, when defending ──
+    if chase and chase["balls_remaining"] > 0:
+        rrr = chase["rrr"]
+        if rrr >= 13:
+            # They have to swing at everything: deny the boundary, take the risk.
+            _tilts(w, defensive=2.6, mixed=1.5, aggressive=0.5)
+        elif rrr >= 10:
+            _tilts(w, mixed=1.5, variation=1.4)
+        elif rrr <= 6:
+            # Cruising — only wickets change this game.
+            _tilts(w, aggressive=1.8, variation=1.3, defensive=0.6)
+        if chase["runs_required"] <= 12 and chase["balls_remaining"] <= 12:
+            # A tight finish is won by dots, not by heroics.
+            _tilts(w, defensive=1.8, mixed=1.5, aggressive=0.7)
+    return w
+
+
+def _read_the_batter(state, w):
+    """Counter the way this human has actually been batting."""
+    mem = _memory(state, create=False)
+    attack_share, samples = _share(mem["opp_bat"], ("aggressive", "ultra"))
+    block_share, _ = _share(mem["opp_bat"], ("defensive", "rotate"))
+    if samples >= 3:
+        if attack_share >= 0.5:
+            # A swinger: take the boundary away and let the risk do the work.
+            _tilts(w, variation=1.5, mixed=1.4, aggressive=1.15, defensive=0.8)
+        if block_share >= 0.5:
+            # A blocker gives up nothing but their wicket — so go get it.
+            _tilts(w, aggressive=1.6, balanced=1.1, defensive=0.6)
+    repeated = _repeated_pick(mem["recent_opp_bat"])
+    if repeated:
+        _tilt(w, _BAT_COUNTER.get(repeated, "balanced"), 1.9)
+        _note_read(state, f"The bot has spotted three straight "
+                          f"{batting_label(repeated)} overs — it's planning for it.")
+    # Don't bowl the same plan over after over — the human is reading us too.
+    last = mem.get("last_own_bowl")
+    if last in w:
+        _tilt(w, last, 0.6)
+    _apply_learning(w, mem["own_bowl"], bowling=True)
+
+
+def pick_bowling_approach(state):
+    """Choose the bot's Bowling Approach for the over.
+
+    Situation first — the phase, the batter on strike, wickets in hand and the
+    chase maths — then the read on the opponent, then the persona, and finally a
+    sampled draw so the plan is never a foregone conclusion. Occasionally the
+    bot bluffs with something completely off-script.
+    """
+    persona = _persona(state)
+    take_read_note(state)          # last over's note, if the chat never used it
+    if random.random() < persona["bluff"]:
+        return random.choice(BOWL_PLANS)
+
+    w = _bowling_weights(state)
+    _read_the_batter(state, w)
+
+    aggression = persona["aggression"]
+    _tilts(w, aggressive=math.exp(aggression),
+           mixed=math.exp(aggression * 0.35),
+           defensive=math.exp(-aggression))
+
+    return _sample(w, noise=persona["noise"]) or DEFAULT_BOWLING
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -246,70 +651,143 @@ def pick_bowling_approach(state):
 # ════════════════════════════════════════════════════════════════════
 
 def _base_bat_index(state):
-    """Where on the aggression ladder this situation starts, before adjustments."""
+    """Where on the aggression ladder this situation sits, as a float.
+
+    A fraction rather than a rung, because the weights below are spread around
+    it — "2.6" leans balanced with a real chance of aggressive, which is how a
+    captain's intent actually reads.
+    """
     ph = phase(state)
     chase = cipl_match.chase(state)
 
     if chase and chase["balls_remaining"] > 0:
-        rrr = chase["rrr"]
-        if rrr < 6:
-            return BAT_LADDER.index("rotate")
-        if rrr < 8:
-            return BAT_LADDER.index("balanced")
-        if rrr < 10:
-            return BAT_LADDER.index("aggressive")
-        return BAT_LADDER.index("ultra")
+        # Straight off the required rate: ~4.5 rpo is a stroll, 14+ is a slog.
+        idx = 0.9 + max(0.0, chase["rrr"] - 4.0) / 2.3
+        return max(0.5, min(4.4, idx))
 
-    # First innings — build, then accelerate.
-    if ph == "powerplay":
-        return BAT_LADDER.index("aggressive")
-    if ph == "death":
-        return BAT_LADDER.index("ultra")
-    return BAT_LADDER.index("balanced")
+    # First innings — build, then accelerate, with the scoreboard as a check.
+    idx = {"powerplay": 3.0, "middle": 2.2, "death": 4.0}[ph]
+    balls = cipl_match.balls_bowled(state)
+    if balls >= 24:
+        run_rate = int(state.get("total_runs") or 0) / (balls / 6.0)
+        if run_rate < PAR_RUNS_PER_OVER - 2:
+            idx += 0.5          # behind par — somebody has to take a risk
+        elif run_rate > PAR_RUNS_PER_OVER + 2:
+            idx -= 0.3          # well ahead — no need to force it
+    return idx
+
+
+def _bat_situation_index(state):
+    """The base intent, adjusted for wickets, the striker and the bowler."""
+    idx = _base_bat_index(state)
+    chase = cipl_match.chase(state)
+    desperate = bool(chase and chase["balls_remaining"] > 0 and chase["rrr"] >= 12)
+    wickets_lost = _wickets_lost(state)
+
+    # Wickets in hand buy risk; wickets lost demand care.
+    if wickets_lost >= 8:
+        idx -= 1.8
+    elif wickets_lost >= 6:
+        idx -= 0.9
+    elif wickets_lost <= 2 and _units_left(state) <= 8:
+        idx += 0.4          # plenty in the shed and not long left — cash in
+
+    if phase(state) == "death":
+        idx += 0.8
+
+    # Ability + form check — mirrors the rating-aware shot logic in bot_ai.
+    striker = _striker(state)
+    bat_rating = _rating(striker, "bat_rating", "rating", default=50.0)
+    balls_faced, sr = _striker_form(state)
+    if not desperate:
+        if bat_rating < 45:
+            idx -= 0.9
+        elif bat_rating >= 85:
+            idx += 0.5
+        if balls_faced <= 3:
+            idx -= 0.5      # let a new batter have a look first
+        elif balls_faced >= 15 and sr >= 130:
+            idx += 0.5      # set and seeing it well — press the advantage
+
+    # Who is bowling: attack the weak link, respect the spearhead.
+    bowler = state.get("current_bowler") or {}
+    if bowler:
+        bowl_rating = _rating(bowler, "bowl_rating", default=60.0)
+        if cipl_match.is_part_time_bowler(bowler) or bowl_rating < 55:
+            idx += 0.7
+        elif bowl_rating >= 85:
+            idx -= 0.3
+
+    return idx, desperate
+
+
+def _read_the_bowler(state, w, desperate):
+    """Counter the way this human has actually been bowling."""
+    mem = _memory(state, create=False)
+    attack_share, samples = _share(mem["opp_bowl"], ("aggressive",))
+    defend_share, _ = _share(mem["opp_bowl"], ("defensive", "mixed"))
+    wickets_in_hand = _wickets_in_hand(state)
+    if samples >= 3:
+        if defend_share >= 0.5:
+            # They are shutting the boundary down — take the singles on offer.
+            _tilts(w, rotate=1.6, balanced=1.2, ultra=0.75)
+        if attack_share >= 0.5 and not desperate:
+            if wickets_in_hand >= 7:
+                # Their wicket-hunting plan leaks boundaries — make it hurt.
+                _tilts(w, aggressive=1.4, ultra=1.2)
+            else:
+                # Too thin to trade wickets with them.
+                _tilts(w, rotate=1.5, balanced=1.2, ultra=0.7)
+    repeated = _repeated_pick(mem["recent_opp_bowl"])
+    if repeated and not desperate:
+        _tilt(w, _BOWL_COUNTER.get(repeated, "balanced"), 1.7)
+        _note_read(state, f"The bot has read three straight "
+                          f"{bowling_label(repeated)} overs — it's countering.")
+    last = mem.get("last_own_bat")
+    if last in w:
+        _tilt(w, last, 0.65)
+    _apply_learning(w, mem["own_bat"], bowling=False)
 
 
 def pick_batting_approach(state):
     """Choose the bot's Batting Approach for the over.
 
     Situation first (phase, or the required rate when chasing), then adjusted for
-    wickets in hand, how close the finish is, and who is actually on strike — a
-    number eleven does not slog like a top-order batter unless the chase leaves
-    no choice.
+    wickets in hand, who is on strike and who is bowling — a number eleven does
+    not slog like a top-order batter unless the chase leaves no choice. The
+    resulting intent is a *spread* over the ladder, not a single rung, so the
+    same scoreline produces genuinely different overs.
     """
-    idx = _base_bat_index(state)
-    wickets = _wickets_lost(state)
-    chase = cipl_match.chase(state)
-    desperate = bool(chase and chase["balls_remaining"] > 0 and chase["rrr"] >= 12)
+    persona = _persona(state)
+    take_read_note(state)          # last over's note, if the chat never used it
+    idx, desperate = _bat_situation_index(state)
+    idx += persona["aggression"] * 0.8
 
-    # Wickets in hand buy risk; wickets lost demand care.
-    if wickets >= 8:
-        idx -= 2
-    elif wickets >= 6:
-        idx -= 1
+    if random.random() < persona["bluff"] and not desperate:
+        # Total curveball: a block in the powerplay, a slog out of nowhere. It
+        # still goes through the hard rules below — a bluff is a tactic, not a
+        # licence to throw the innings away.
+        choice = random.choice(BAT_LADDER)
+    else:
+        # Spread the intent over neighbouring rungs — wider for a loose persona.
+        spread = 0.55 + persona["noise"]
+        w = {key: math.exp(-((pos - idx) ** 2) / (2 * spread * spread))
+             for pos, key in enumerate(BAT_LADDER)}
 
-    # The last few overs of an innings are worth swinging at regardless.
-    if phase(state) == "death":
-        idx += 1
+        _read_the_bowler(state, w, desperate)
 
-    # Ability check — mirrors the rating-aware shot logic in services/bot_ai.py.
-    striker = _striker(state)
-    try:
-        bat_rating = float(striker.get("bat_rating")
-                           or striker.get("rating") or 50)
-    except (TypeError, ValueError):
-        bat_rating = 50.0
-    if not desperate:
-        if bat_rating < 45:
-            idx -= 1
-        elif bat_rating >= 85:
-            idx += 1
+        choice = _sample(w, noise=persona["noise"] * 0.5) or DEFAULT_BATTING
 
-    # A desperate chase overrides caution: you cannot block your way to a win.
+    # ── Hard rules the dice never override ──
     if desperate:
-        idx = max(idx, BAT_LADDER.index("aggressive"))
-
-    idx = max(0, min(len(BAT_LADDER) - 1, idx))
-    return BAT_LADDER[idx]
+        # A desperate chase overrides caution: you cannot block your way to a win.
+        if BAT_LADDER.index(choice) < BAT_LADDER.index("aggressive"):
+            choice = random.choice(("aggressive", "ultra"))
+    elif _wickets_in_hand(state) <= 1 and _units_left(state) >= 3:
+        # Last pair with overs to survive — bat, don't gift it away.
+        if BAT_LADDER.index(choice) > BAT_LADDER.index("balanced"):
+            choice = random.choice(("rotate", "balanced"))
+    return choice
 
 
 # ════════════════════════════════════════════════════════════════════

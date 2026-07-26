@@ -34,6 +34,7 @@ from database import get_session
 from models import User
 from services.activity_service import log_activity
 from services.bowling_service import is_spinner as _is_spin
+from services.roster_lock import match_lock_message
 from handlers.lineup import _get_ordered_roster, validate_xi
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,13 @@ async def setbo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             await msg.reply_text(text, parse_mode="HTML",
                                  disable_web_page_preview=True)
+            return
+
+        # Everything past this point CHANGES the order. Viewing it above is
+        # always fine; rewriting the line-up mid-match is not.
+        locked = match_lock_message(session, user.id, "change your batting order")
+        if locked:
+            await msg.reply_text(locked, parse_mode="HTML")
             return
 
         # ── /setbo auto → back to rating order ──

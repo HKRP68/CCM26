@@ -27,6 +27,7 @@ from services.market_image import generate_market_image
 from services.card_generator import generate_card
 from services.activity_service import log_activity
 from services.button_timeout import schedule_button_timeout
+from services.roster_lock import match_lock_alert
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +331,12 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
         if not user:
             release(key)
             await q.answer("Do /debut first")
+            return
+
+        locked = match_lock_alert(session, user.id, "buy players")
+        if locked:
+            release(key)
+            await q.answer(locked, show_alert=True)
             return
 
         ok, msg = buy_player(session, user, slot)

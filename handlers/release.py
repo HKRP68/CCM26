@@ -1,6 +1,19 @@
-"""Release player handlers — /release (supports name, position, ranges) + /releasemultiple."""
+"""Release player handlers — /release (supports name, position, ranges) + /releasemultiple.
+
+One release at a time
+─────────────────────
+Both commands work the same way: they post a confirmation prompt and the actual
+delete happens when the button is tapped. Two of those open at once is a trap —
+the roster is renumbered by the first confirmation, so the second prompt is
+describing positions that have already moved, and a player the user never looked
+at gets sold. So while a user has a release (or a multi-release) waiting for an
+answer, a second one is refused until they confirm it, cancel it, or it times
+out with the buttons.
+"""
 
 import logging
+import threading
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -10,8 +23,80 @@ from config import get_sell_value
 from utils.idempotency import claim_once, release
 from services.activity_service import log_activity
 from services.flags import get_flag
+from services.roster_lock import MARKET_REASON, match_lock_alert, match_lock_message
 
 logger = logging.getLogger(__name__)
+
+# How long a confirmation prompt stays live. The buttons are cleared on the same
+# schedule (``schedule_button_timeout`` below), so an abandoned prompt can never
+# block the next release for longer than it is tappable.
+RELEASE_PROMPT_TTL = 120
+
+# telegram_id -> {"kind", "chat_id", "expires_at"} for the prompt awaiting an
+# answer, behind a lock like utils.idempotency's claim table: the bot runs with
+# concurrent_updates, and the Flask Mini App reads this table from its own thread
+# (admin._release_prompt_open), so every lookup-then-mutate below has to be
+# atomic or a chat prompt and a Mini App release can cross past each other.
+_open_prompts = {}
+_PROMPTS_LOCK = threading.Lock()
+
+_KIND_LABEL = {"release": "release", "multi": "multi-release"}
+
+
+def pending_release(tg_id):
+    """This user's un-answered release prompt, or ``None``.
+
+    Expired entries are dropped on read, so a prompt whose buttons have already
+    timed out never blocks anything.
+    """
+    with _PROMPTS_LOCK:
+        row = _open_prompts.get(tg_id)
+        if not row:
+            return None
+        if row["expires_at"] <= time.monotonic():
+            _open_prompts.pop(tg_id, None)
+            return None
+        return row
+
+
+def _open_prompt(tg_id, kind, chat_id):
+    now = time.monotonic()
+    with _PROMPTS_LOCK:
+        # Opportunistic sweep: an abandoned prompt is only ever read again if that
+        # same user comes back, so purge the dead ones when the table grows.
+        if len(_open_prompts) > 256:
+            for stale in [k for k, v in _open_prompts.items()
+                          if v["expires_at"] <= now]:
+                _open_prompts.pop(stale, None)
+        _open_prompts[tg_id] = {"kind": kind, "chat_id": chat_id,
+                                "expires_at": now + RELEASE_PROMPT_TTL}
+
+
+def _close_prompt(tg_id):
+    with _PROMPTS_LOCK:
+        _open_prompts.pop(tg_id, None)
+
+
+def _busy_text(row):
+    """What to say when a second release is attempted."""
+    seconds = max(1, int(row["expires_at"] - time.monotonic()))
+    what = _KIND_LABEL.get(row.get("kind"), "release")
+    return (
+        f"⚠️ <b>You already have a {what} waiting.</b>\n"
+        f"Confirm it or tap ❌ Cancel first — releasing two sets of players at "
+        f"once would renumber your roster underneath the other prompt.\n\n"
+        f"<i>It expires on its own in {seconds}s.</i>"
+    )
+
+
+def _schedule_prompt_timeout(context, sent):
+    """Clear the prompt's buttons after the TTL (best-effort, as before)."""
+    try:
+        from services.button_timeout import schedule_button_timeout
+        schedule_button_timeout(context, sent.chat_id, sent.message_id,
+                                delay_seconds=RELEASE_PROMPT_TTL)
+    except Exception:
+        logger.debug("release: button timeout scheduling failed", exc_info=True)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -220,11 +305,22 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     arg = " ".join(context.args).strip()
 
+    busy = pending_release(tg_user.id)
+    if busy:
+        await update.message.reply_text(_busy_text(busy), parse_mode="HTML")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        locked = match_lock_message(session, user.id, "sell players",
+                                    reason=MARKET_REASON)
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
 
         matches = _find_by_arg(session, user.id, arg)
@@ -247,11 +343,8 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = f"🔍 Found <b>{len(matches)}</b> matching players:\n\nChoose one to release:"
             sent = await update.message.reply_text(text, parse_mode="HTML",
                                             reply_markup=InlineKeyboardMarkup(btns))
-            try:
-                from services.button_timeout import schedule_button_timeout
-                schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
-            except Exception:
-                pass
+            _open_prompt(tg_user.id, "release", sent.chat_id)
+            _schedule_prompt_timeout(context, sent)
             return
 
         # Single match — show confirm
@@ -276,11 +369,8 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
         sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
-        try:
-            from services.button_timeout import schedule_button_timeout
-            schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
-        except Exception:
-            pass
+        _open_prompt(tg_user.id, "release", sent.chat_id)
+        _schedule_prompt_timeout(context, sent)
 
     except Exception:
         logger.exception("Release error")
@@ -312,6 +402,12 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if not user:
             release(key)
             await query.answer("Not authorized")
+            return
+
+        locked = match_lock_alert(session, user.id, "sell players")
+        if locked:
+            release(key)
+            await query.answer(locked, show_alert=True)
             return
 
         entry = session.query(UserRoster).filter(
@@ -371,11 +467,15 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
     finally:
+        # However this ended, the prompt has been answered — let the user start
+        # another release straight away.
+        _close_prompt(tg_user.id)
         session.close()
 
 
 async def release_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    _close_prompt(query.from_user.id)
     await query.answer("Cancelled")
     try:
         await query.edit_message_text("❌ Release cancelled.")
@@ -410,11 +510,22 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ Position must be 1 or higher.")
         return
 
+    busy = pending_release(tg_user.id)
+    if busy:
+        await update.message.reply_text(_busy_text(busy), parse_mode="HTML")
+        return
+
     session = get_session()
     try:
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        locked = match_lock_message(session, user.id, "sell players",
+                                    reason=MARKET_REASON)
+        if locked:
+            await update.message.reply_text(locked, parse_mode="HTML")
             return
 
         from handlers.lineup import _build_display_order
@@ -465,11 +576,8 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             InlineKeyboardButton("❌ Cancel", callback_data="rlcancel"),
         ]])
         sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
-        try:
-            from services.button_timeout import schedule_button_timeout
-            schedule_button_timeout(context, sent.chat_id, sent.message_id, delay_seconds=120)
-        except Exception:
-            pass
+        _open_prompt(tg_user.id, "multi", sent.chat_id)
+        _schedule_prompt_timeout(context, sent)
 
     except Exception:
         logger.exception("ReleaseMultiple handler error")
@@ -515,6 +623,12 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
         if not user:
             release(key)
             await query.answer("Not authorized")
+            return
+
+        locked = match_lock_alert(session, user.id, "sell players")
+        if locked:
+            release(key)
+            await query.answer(locked, show_alert=True)
             return
 
         await query.answer()
@@ -586,4 +700,6 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
             parse_mode="HTML")
         except Exception: pass
     finally:
+        # The prompt has been answered either way — unblock the next release.
+        _close_prompt(tg_user.id)
         session.close()

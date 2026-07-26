@@ -121,11 +121,19 @@ from handlers.sim import sim_handler
 from handlers.traits import (
     traits_handler, traitshop_handler, traitapply_handler,
     traitupgrade_handler, traitreplace_handler, removetrait_handler,
+    selltrait_handler,
     traitbuy_callback, traitreroll_callback, traitshop_cancel_callback,
     trapply_inv_callback, trapply_pl_callback,
     trup_pt_callback, trup_inv_callback,
     trrep_pt_callback, trrep_inv_callback, trrem_pt_callback,
+    trsell_callback, trsellok_callback,
     trait_cancel_callback,
+)
+
+# Trait-for-trait trading (/tradetrait)
+from handlers.tradetrait import (
+    tradetrait_handler, tradetrait_user1_callback, tradetrait_user2_callback,
+    tradetrait_confirm_callback, tradetrait_cancel_callback,
 )
 
 # Player market handlers
@@ -289,7 +297,10 @@ logger = logging.getLogger(__name__)
 #     /frwd_grp, /frwd_prvt, /tourallow, /tourblock, /tourallowlist) and the
 #     /testwpm diagnostic — these must not show up in everyone's slash menu;
 #   • /eu and /cu, which the Unscramble lobby message already spells out for the
-#     players in it.
+#     players in it;
+#   • /tradetrait, which is at the mercy of the 100-command ceiling below — it is
+#     spelled out in /traits, /help and /howto instead, and adding it here means
+#     dropping something else.
 # All of those still work as commands — they are simply not advertised.
 #
 # HARD LIMIT: Telegram's setMyCommands accepts at most 100 commands. Going over
@@ -367,6 +378,7 @@ BOT_MENU_COMMANDS = (
     ("traitupgrade", "Upgrade a player trait"),
     ("traitreplace", "Replace a player trait"),
     ("removetrait", "Remove a trait from a player (back to inventory)"),
+    ("selltrait", "Sell a trait from your inventory for gems"),
     ("playermarket", "Browse the player market"),
     ("buypack", "Browse and buy card packs"),
     ("openpack", "Open a pack from your inventory"),
@@ -617,6 +629,8 @@ async def start_handler(update, context):
         "/traitupgrade /tup - Level up a trait\n"
         "/traitreplace /trep - Replace a trait\n"
         "/removetrait /rtrait - Remove a trait (back to inventory)\n"
+        "/selltrait /tsell - Sell an inventory trait for gems\n"
+        "/tradetrait /ttrade @user - Swap a trait, same level both ways\n"
         "/leaderboard /lb /top - Leaderboard"
         + _get_start_branding(),
         parse_mode="HTML",
@@ -1186,6 +1200,12 @@ def main():
         app.add_handler(CommandHandler(["traitupgrade", "tup"], traitupgrade_handler))
         app.add_handler(CommandHandler(["traitreplace", "trep"], traitreplace_handler))
         app.add_handler(CommandHandler(["removetrait", "rtrait"], removetrait_handler))
+        # /selltrait — cash an inventory trait in for gems (30% below buy value).
+        app.add_handler(CommandHandler(
+            ["selltrait", "tsell", "straits"], selltrait_handler))
+        # /tradetrait @user — swap an inventory trait, same level both ways.
+        app.add_handler(CommandHandler(
+            ["tradetrait", "ttrade", "trtrade"], tradetrait_handler))
 
         app.add_handler(CallbackQueryHandler(traitbuy_callback, pattern=r"^trbuy_"))
         app.add_handler(CallbackQueryHandler(traitreroll_callback, pattern=r"^trreroll_"))
@@ -1197,7 +1217,17 @@ def main():
         app.add_handler(CallbackQueryHandler(trrep_pt_callback, pattern=r"^trrep_pt_"))
         app.add_handler(CallbackQueryHandler(trrep_inv_callback, pattern=r"^trrep_inv_"))
         app.add_handler(CallbackQueryHandler(trrem_pt_callback, pattern=r"^trrem_pt_"))
+        # Sell: picker → confirm screen (trsell_) → the sale itself (trsellok_).
+        # Both patterns are anchored on a trailing id, so "trsellok_5" can never
+        # fall through to the confirm-screen handler.
+        app.add_handler(CallbackQueryHandler(trsellok_callback, pattern=r"^trsellok_\d+$"))
+        app.add_handler(CallbackQueryHandler(trsell_callback, pattern=r"^trsell_\d+$"))
         app.add_handler(CallbackQueryHandler(trait_cancel_callback, pattern=r"^trcancel$"))
+        # Trait-for-trait swap.
+        app.add_handler(CallbackQueryHandler(tradetrait_user1_callback, pattern=r"^tt1_"))
+        app.add_handler(CallbackQueryHandler(tradetrait_user2_callback, pattern=r"^tt2_"))
+        app.add_handler(CallbackQueryHandler(tradetrait_confirm_callback, pattern=r"^ttcfrm_"))
+        app.add_handler(CallbackQueryHandler(tradetrait_cancel_callback, pattern=r"^ttcancel_"))
 
         # ── Player Market ────────────────────────────────────────────
         app.add_handler(CommandHandler(["playermarket", "pmarket", "market"], playermarket_handler))
