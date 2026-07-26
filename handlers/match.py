@@ -2753,13 +2753,13 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
                 bw_ovr = st.get("bowl_team_ovr", 0)
                 await context.bot.send_message(
                     cid,
-                    "⚠️ <b>Stats WON'T count this match.</b>\n"
+                    "⚠️ <b>This match WON'T count.</b>\n"
                     f"Team Overall gap is too wide — {bat_team} <b>{b_ovr}</b> "
                     f"vs {bowl_team} <b>{bw_ovr}</b> "
                     f"(<b>{abs(b_ovr - bw_ovr)}</b> apart, limit "
-                    f"{STATS_FAIRNESS_OVR_GAP}). No career batting/bowling stats "
-                    "and no Win/Loss or streak change — it keeps the game fair "
-                    "and stops stat-farming. The match still plays out as normal.",
+                    f"{STATS_FAIRNESS_OVR_GAP}). No career stats, no Win/Loss or "
+                    "streak, and no coins or gems — it keeps the game fair and "
+                    "stops farming. The match still plays out as normal.",
                     parse_mode="HTML")
         except Exception:
             logger.exception("wpm fair-stats warning failed (non-fatal)")

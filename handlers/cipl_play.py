@@ -1790,9 +1790,9 @@ async def _complete_match(context, mid, state):
                     try:
                         from services.match_rewards import award_match_rewards_core
                         overs = state.get("overs") or CIPL_OVERS
-                        # A /letsplay mismatch flagged for anti stat-farming still
-                        # pays coins/gems, but its result must not touch the W/L
-                        # record or streak. Tournament matches never set the flag.
+                        # A /letsplay mismatch flagged for anti stat-farming
+                        # counts for nothing — no coins/gems, no W/L, no streak
+                        # (award returns zeros). Tournaments never set the flag.
                         w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
                             session, match.winner_id, match.loser_id, overs,
                             is_vsbot=False,

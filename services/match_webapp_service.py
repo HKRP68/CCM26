@@ -2798,8 +2798,9 @@ def finalize_webapp_match(session, match_id):
     try:
         from services.match_rewards import award_match_rewards_core
         is_vsbot = bool((state or {}).get("is_vsbot"))
-        # A /wpm mismatch flagged for anti stat-farming still plays and pays
-        # coins/gems, but its result must NOT touch the W/L record or streak.
+        # A /wpm mismatch flagged for anti stat-farming counts for nothing —
+        # no coins/gems, no W/L record, no streak, no matches-played, no active
+        # day. count_result=False makes every reward path below a no-op.
         count_result = not bool((state or {}).get("stats_disabled"))
         # tie → no winner; both still get a "played" + loss-tier reward each
         if result.get("margin_type") == "tie":
@@ -2813,7 +2814,8 @@ def finalize_webapp_match(session, match_id):
                         usr.matches_played = (usr.matches_played or 0) + 1
             # A tie breaks nobody's streak, but it was still a day spent playing.
             from services.match_rewards import record_match_result_stats
-            record_match_result_stats(session, None, None, tie_user_ids=(u1, u2))
+            record_match_result_stats(session, None, None, tie_user_ids=(u1, u2),
+                                      count_result=count_result)
         elif winner_uid:
             wc, wg, lc, lg = award_match_rewards_core(
                 session, winner_uid, loser_uid, m.overs or 1, is_vsbot=is_vsbot,
@@ -3072,17 +3074,16 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
 
     applied_penalty = 0
     compensation = 0
-    # A /wpm mismatch flagged for anti stat-farming still applies the quit coin
-    # penalty/compensation, but its result must NOT touch the W/L record or streak.
+    # A /wpm mismatch flagged for anti stat-farming counts for nothing: no coin
+    # penalty/compensation and no W/L record or streak — quitting it is free.
     count_result = not bool((state or {}).get("stats_disabled"))
-    if q["has_progress"]:
+    if q["has_progress"] and count_result:
         # Quitter loses coins (never below zero).
         applied_penalty = min(penalty, quitter.total_coins or 0) if quitter else 0
         if quitter:
             quitter.total_coins = (quitter.total_coins or 0) - applied_penalty
-            if count_result:
-                quitter.matches_lost = (quitter.matches_lost or 0) + 1
-                quitter.matches_played = (quitter.matches_played or 0) + 1
+            quitter.matches_lost = (quitter.matches_lost or 0) + 1
+            quitter.matches_played = (quitter.matches_played or 0) + 1
             log_activity(session, quitter.id, "match_quit",
                          f"Quit match #{match_id} ({balls} balls) — penalty",
                          coins_change=-applied_penalty)
@@ -3090,9 +3091,8 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
         compensation = penalty
         if opponent:
             opponent.total_coins = (opponent.total_coins or 0) + compensation
-            if count_result:
-                opponent.matches_won = (opponent.matches_won or 0) + 1
-                opponent.matches_played = (opponent.matches_played or 0) + 1
+            opponent.matches_won = (opponent.matches_won or 0) + 1
+            opponent.matches_played = (opponent.matches_played or 0) + 1
             log_activity(session, opponent.id, "match_quit_comp",
                          f"Opponent quit match #{match_id} — compensation",
                          coins_change=compensation)
@@ -3100,11 +3100,15 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
         win_id, lose_id = opponent_id, quitter_id
         result_text = f"Won by forfeit ({reason})"
         # A forfeit is still a decided match: it extends the winner's streak,
-        # breaks the quitter's, and counts as an active day for both — unless the
-        # match is a flagged mismatch, when the streak is left untouched.
+        # breaks the quitter's, and counts as an active day for both.
         from services.match_rewards import record_match_result_stats
-        record_match_result_stats(session, win_id, lose_id,
-                                  count_result=count_result)
+        record_match_result_stats(session, win_id, lose_id)
+    elif q["has_progress"] and not count_result:
+        # Mismatch: the game happened, but no coins/records change hands. Still
+        # mark it a forfeit result so the winner/loser show on the match card.
+        margin_type = "forfeit"
+        win_id, lose_id = opponent_id, quitter_id
+        result_text = f"Won by forfeit ({reason})"
     else:
         # No progress → clean cancel, no rewards, no records.
         margin_type = "cancelled"

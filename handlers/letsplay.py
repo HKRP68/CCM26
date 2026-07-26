@@ -696,12 +696,12 @@ def _stats_fairness_note(host_pairs, guest_pairs):
     gap = abs(host_ovr - guest_ovr)
     if gap >= STATS_FAIRNESS_OVR_GAP:
         return (
-            f"⚠️ <b>Stats WON'T count this match.</b>\n"
+            f"⚠️ <b>This match WON'T count.</b>\n"
             f"Team Overall gap is too wide — Host <b>{host_ovr}</b> vs "
             f"Guest <b>{guest_ovr}</b> (<b>{gap}</b> apart, limit "
-            f"{STATS_FAIRNESS_OVR_GAP}). No career batting/bowling stats and no "
-            "Win/Loss or streak change — it keeps things fair. Play on for fun, "
-            "or even up the XIs with <code>/change</code>.\n"
+            f"{STATS_FAIRNESS_OVR_GAP}). No career stats, no Win/Loss or streak, "
+            "and no coins or gems — it keeps things fair. Play on for fun, or "
+            "even up the XIs with <code>/change</code>.\n"
             "━━━━━━━━━━━━━━━━━━━")
     return (
         f"📊 <b>Team Overall:</b> Host <b>{host_ovr}</b> vs Guest "

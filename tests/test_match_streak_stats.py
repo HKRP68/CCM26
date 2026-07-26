@@ -180,9 +180,9 @@ def test_reward_core_moves_the_streak_counters():
 
 # ── anti stat-farming: count_result=False (a /letsplay or /wpm mismatch) ──
 
-def test_record_match_result_skips_streak_when_not_counted():
-    """A flagged mismatch must not move either side's streak, but it is still an
-    active day for both."""
+def test_record_match_result_is_a_noop_when_not_counted():
+    """A flagged mismatch counts for nothing — no streak change AND no active
+    day for either side."""
     winner = _user(id=1, win_streak=2, best_streak=4)
     loser = _user(id=2, win_streak=7, best_streak=7)
     session = _FakeSession({1: winner, 2: loser})
@@ -191,12 +191,12 @@ def test_record_match_result_skips_streak_when_not_counted():
 
     assert winner.win_streak == 2 and winner.best_streak == 4   # untouched
     assert loser.win_streak == 7 and loser.best_streak == 7      # NOT reset
-    assert winner.active_days == 1 and loser.active_days == 1     # still played
+    assert winner.active_days == 0 and loser.active_days == 0     # nothing counts
 
 
-def test_reward_core_skips_team_stats_but_still_pays_when_not_counted():
-    """A flagged mismatch pays coins/gems and counts an active day, but leaves
-    the W/L record and streak alone (no season points either)."""
+def test_reward_core_awards_nothing_when_not_counted():
+    """A flagged mismatch earns nothing: no coins/gems, no W/L, no streak, no
+    season points, no active day. Returns all zeros."""
     import services.match_rewards as mr
 
     winner = _user(id=1, total_coins=0, total_gems=0, matches_played=3,
@@ -205,15 +205,7 @@ def test_reward_core_skips_team_stats_but_still_pays_when_not_counted():
                   matches_won=1, matches_lost=2, win_streak=6, best_streak=6)
     session = _FakeSession({1: winner, 2: loser})
 
-    import services.config_service as cs
-    import services.activity_service as acts
     season_calls = []
-    orig_cfg, orig_log = cs.get_config, acts.log_activity
-    cs.get_config = lambda _s=None: {
-        "match_win_coins_per_over": 10, "match_win_gems_per_over": 0,
-        "match_loss_coins_per_over": 5, "match_loss_gems_per_over": 0}
-    acts.log_activity = lambda *a, **k: None
-    # PvP would normally award season points — prove it does not here.
     import services.season_service as ss
     orig_season = getattr(ss, "safe_add_season_points", None)
     ss.safe_add_season_points = lambda *a, **k: season_calls.append((a, k))
@@ -221,18 +213,15 @@ def test_reward_core_skips_team_stats_but_still_pays_when_not_counted():
         wc, wg, lc, lg = mr.award_match_rewards_core(
             session, 1, 2, overs=20, is_vsbot=False, count_result=False)
     finally:
-        cs.get_config, acts.log_activity = orig_cfg, orig_log
         if orig_season is not None:
             ss.safe_add_season_points = orig_season
 
-    # Coins/gems still paid, active day still counted.
-    assert wc == 200 and lc == 100
-    assert winner.total_coins == 200 and loser.total_coins == 100
-    assert winner.active_days == 1 and loser.active_days == 1
-    # Team stats frozen.
+    # Nothing awarded, nothing recorded.
+    assert (wc, wg, lc, lg) == (0, 0, 0, 0)
+    assert winner.total_coins == 0 and loser.total_coins == 0
+    assert winner.active_days == 0 and loser.active_days == 0
     assert winner.matches_won == 2 and winner.matches_played == 3
     assert winner.win_streak == 1 and winner.best_streak == 1
     assert loser.matches_lost == 2 and loser.matches_played == 3
     assert loser.win_streak == 6
-    # No season points on a non-counting match.
     assert season_calls == []

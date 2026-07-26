@@ -58,11 +58,14 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
     A tie touches neither streak (nobody won, nobody lost) but still counts as
     an active day for both participants. Caller commits.
 
-    count_result: when False (a /letsplay or /wpm mismatch flagged for
-    anti stat-farming), the win/loss STREAK is left untouched — the match is
-    still an active day, but it doesn't count toward the competitive record.
+    count_result: when False (a /letsplay or /wpm mismatch flagged for anti
+    stat-farming) the match counts for NOTHING — no streak change and no active
+    day — so this is a no-op.
     """
     from models import User
+
+    if not count_result:
+        return
 
     now = datetime.utcnow()
     if tie_user_ids:
@@ -79,8 +82,7 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
         u = session.query(User).get(uid)
         if not u:
             continue
-        if count_result:
-            apply_win_streak(u, won)
+        apply_win_streak(u, won)
         record_active_day(u, now)
 
 
@@ -97,15 +99,18 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
       a match WITHOUT paying rewards (a tie, a forfeit) call
       record_match_result_stats directly instead.
     - count_result: when False (a /letsplay or /wpm mismatch flagged for anti
-      stat-farming), the "team stats" — Win/Loss record, matches-played, the
-      win streak, and season points — are NOT touched. Coins/gems and the
-      active-day counter are still awarded: the match is a real game played,
-      it just doesn't count toward the competitive record.
+      stat-farming), the match counts for NOTHING — no coins, no gems, no
+      Win/Loss record, no matches-played, no win streak, no season points and
+      no active day. Returns (0, 0, 0, 0). This is what stops players farming
+      rewards/stats against a deliberately weak opponent.
     Caller commits.
     """
     from models import User
     from services.config_service import get_config
     from services.activity_service import log_activity
+
+    if not count_result:
+        return 0, 0, 0, 0
 
     cfg = get_config(session)
     w = session.query(User).get(winner_user_id) if winner_user_id else None
@@ -127,10 +132,9 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
     if w:
         w.total_coins = (w.total_coins or 0) + w_coins
         w.total_gems = (w.total_gems or 0) + w_gems
-        if count_result:
-            w.matches_played = (w.matches_played or 0) + 1
-            w.matches_won = (w.matches_won or 0) + 1
-            apply_win_streak(w, True)
+        w.matches_played = (w.matches_played or 0) + 1
+        w.matches_won = (w.matches_won or 0) + 1
+        apply_win_streak(w, True)
         record_active_day(w)
         try:
             log_activity(session, w.id, "match_reward",
@@ -141,10 +145,9 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
     if l:
         l.total_coins = (l.total_coins or 0) + l_coins
         l.total_gems = (l.total_gems or 0) + l_gems
-        if count_result:
-            l.matches_played = (l.matches_played or 0) + 1
-            l.matches_lost = (l.matches_lost or 0) + 1
-            apply_win_streak(l, False)
+        l.matches_played = (l.matches_played or 0) + 1
+        l.matches_lost = (l.matches_lost or 0) + 1
+        apply_win_streak(l, False)
         record_active_day(l)
         try:
             log_activity(session, l.id, "match_reward",
@@ -153,9 +156,8 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
         except Exception:
             pass
 
-    # Season points — PvP only (matches existing policy), and only when the
-    # result counts (a mismatch flagged for anti stat-farming earns none).
-    if not is_vsbot and count_result:
+    # Season points — PvP only (matches existing policy).
+    if not is_vsbot:
         try:
             from services.season_service import safe_add_season_points
             if w:
