@@ -1,158 +1,307 @@
 {% extends "base.html" %}
 {% block title %}Challenge League Tournaments{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
-<style>
-.tour-shell { display:flex; flex-direction:column; gap:1rem; }
-.tour-head { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; flex-wrap:wrap; }
-.tour-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
-.tour-form-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:.8rem; align-items:end; }
-.tour-form-grid label { color:var(--muted); display:block; font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.25rem; }
-.tour-form-grid input, .tour-form-grid select, .tour-form-grid textarea { width:100%; }
-.tour-list { display:flex; flex-direction:column; gap:.7rem; }
-.tour-row { display:grid; grid-template-columns:minmax(200px,1fr) minmax(140px,auto) minmax(120px,auto) auto; gap:1rem; align-items:center; background:var(--bg-soft); border:1px solid var(--border); border-radius:14px; padding:.85rem; }
-.tour-row:hover { border-color:rgba(212,168,42,.45); }
-.tour-name { font-weight:800; font-size:1.04rem; }
-.tour-meta { color:var(--muted); font-size:.84rem; margin-top:.2rem; display:flex; gap:.5rem; flex-wrap:wrap; }
-.tour-actions { display:flex; gap:.45rem; flex-wrap:wrap; justify-content:flex-end; }
-.status-pill { border-radius:999px; padding:.22rem .55rem; font-size:.74rem; font-weight:700; border:1px solid var(--border); text-transform:capitalize; }
-.status-pill.active { color:#86efac; border-color:rgba(134,239,172,.4); background:rgba(34,197,94,.12); }
-.status-pill.paused { color:#fde68a; border-color:rgba(253,230,138,.4); background:rgba(234,179,8,.12); }
-.status-pill.draft, .status-pill.scheduled { color:#93c5fd; border-color:rgba(147,197,253,.4); background:rgba(59,130,246,.12); }
-.status-pill.completed { color:#c4b5fd; border-color:rgba(196,181,253,.4); background:rgba(139,92,246,.12); }
-.status-pill.cancelled { color:#fca5a5; border-color:rgba(252,165,165,.4); background:rgba(239,68,68,.12); }
-.live-dot { color:#86efac; font-weight:800; }
-.team-checks { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:.4rem; margin-top:.4rem; }
-.team-checks label { display:flex; gap:.4rem; align-items:center; font-size:.86rem; text-transform:none; letter-spacing:0; color:var(--text); }
-.empty-state { border:1px dashed var(--border); border-radius:16px; padding:2rem; text-align:center; color:var(--muted); }
-@media (max-width: 900px) { .tour-row { grid-template-columns:1fr; } .tour-actions { justify-content:flex-start; } }
-</style>
-
-<div class="tour-shell">
-  <div class="tour-head">
-    <div>
-      <h2 style="margin:0;">🏆 Challenge League Tournaments</h2>
-      <p style="color:var(--muted); margin:.25rem 0 0;">Create and manage tournaments for any Challenge League. Only one tournament can be active at a time.</p>
+{% macro tour_tile(t, is_current) %}
+<div class="tour-tile">
+  <div class="tour-tile-head">
+    <div class="trophy-badge" style="width:42px;height:42px;font-size:1.15rem;">🏆</div>
+    <div style="min-width:0;flex:1;">
+      <div class="tour-tile-title">{% if t.is_active %}<span style="color:#22c55e;">●</span> {% endif %}{{ t.name }}</div>
+      <div class="tour-tile-meta">
+        <span>{{ t.league_name or '—' }}</span><span>•</span>
+        <span>{{ t.format }}</span><span>•</span>
+        <span>{{ t.overs }} ov</span><span>•</span>
+        <span>{{ t.teams|length }} teams</span>
+      </div>
     </div>
-    <div>
-      <span class="badge">{{ current|length }} active/draft</span>
-      <span class="badge">{{ history|length }} completed</span>
+    <span class="status-pill {{ t.status }}"><span class="dot">●</span>{{ t.status }}</span>
+  </div>
+  <div class="tour-tile-actions">
+    <a class="action-btn accent-btn" href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}"><i class="fas fa-chart-line"></i> Overview</a>
+    <a class="action-btn outline-btn" href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"><i class="fas fa-sliders-h"></i> Manage</a>
+    {% if is_current %}
+      {% if t.is_active %}
+      <form method="POST" class="inline-form" style="flex:1;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="deactivate"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="action-btn outline-btn" type="submit">Deactivate</button></form>
+      {% else %}
+      <form method="POST" class="inline-form" style="flex:1;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="activate"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="action-btn play-btn" type="submit">Activate</button></form>
+      {% endif %}
+      <form method="POST" class="inline-form" style="flex:0 0 auto;" onsubmit="return confirm('Delete this tournament and all its data?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="action-btn danger-btn" type="submit" title="Delete"><i class="fas fa-trash"></i></button></form>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+<div class="tour-page">
+  <div class="hero-content" style="margin-bottom:.25rem;">
+    <div class="hero-left">
+      <div class="trophy-badge"><i class="fas fa-trophy"></i>🏆</div>
+      <div class="hero-text">
+        <h1 class="hero-title" style="font-size:1.5rem;">Challenge League Tournaments</h1>
+        <div class="hero-meta">
+          <span class="meta-detail">{{ current|length }} active/draft</span>
+          <span class="meta-divider">•</span>
+          <span class="meta-detail">{{ history|length }} completed</span>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- Create -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">Create a new tournament</h3>
+  <!-- ============ CREATE ============ -->
+  <section class="section-card">
+    <div class="section-header">
+      <div>
+        <h2 class="section-title"><i class="fas fa-plus-circle"></i> Create a tournament</h2>
+        <div class="section-subtitle">Pick a format — fixtures are generated automatically.</div>
+      </div>
+    </div>
+
     {% if leagues %}
-    <form method="POST">
+    <form method="POST" id="createForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="create_tournament">
-      <div class="tour-form-grid">
-        <div><label>Tournament name</label><input name="name" placeholder="IPL Champions Cup" required></div>
+      <input type="hidden" name="tour_format" id="tourFormat" value="round_robin">
+      <input type="hidden" name="overs" id="oversField" value="20">
+
+      <div class="form-grid" style="margin-top:0;">
+        <div style="grid-column:span 2;">
+          <label>Tournament name</label>
+          <input name="name" placeholder="IPL Champions Cup" required>
+        </div>
         <div>
           <label>Challenge League</label>
           <select name="league_id" id="league_select" required>
             {% for lg in leagues %}<option value="{{ lg.id }}">{{ lg.name }}{% if lg.tournament_command %} ({{ lg.tournament_command }}){% endif %}</option>{% endfor %}
           </select>
         </div>
-        <div><label>Format</label><input name="format" value="League" placeholder="League"></div>
-        <div><label>Overs</label><input type="number" name="overs" value="20"></div>
-        <div><label>Max teams</label><input type="number" name="max_teams" value="8"></div>
       </div>
-      <div class="tour-form-grid" style="margin-top:.6rem;">
-        <div><label>Points: Win</label><input type="number" name="points_win" value="2"></div>
-        <div><label>Points: Tie</label><input type="number" name="points_tie" value="1"></div>
-        <div><label>Points: Loss</label><input type="number" name="points_loss" value="0"></div>
-        <div><label>Points: No result</label><input type="number" name="points_no_result" value="1"></div>
-        <div><label>Min balls (Strike rate)</label><input type="number" name="min_balls_for_sr" value="20"></div>
-        <div><label>Min balls (Economy)</label><input type="number" name="min_balls_for_econ" value="12"></div>
+
+      <!-- Match format -->
+      <div class="create-section">
+        <label>Match format</label>
+        <div class="match-format-grid" id="matchFormatGrid">
+          <label class="fmt-card selected" data-overs="20">
+            <input type="radio" name="mf" value="T20" checked>
+            <div class="fmt-icon"><i class="fas fa-bolt"></i></div>
+            <div class="fmt-info"><span class="fmt-name">T20</span><span class="fmt-desc">20 overs a side</span></div>
+            <div class="fmt-check"><i class="fas fa-check-circle"></i></div>
+          </label>
+          <label class="fmt-card" data-overs="50">
+            <input type="radio" name="mf" value="ListA">
+            <div class="fmt-icon"><i class="fas fa-clock"></i></div>
+            <div class="fmt-info"><span class="fmt-name">List A</span><span class="fmt-desc">50 overs a side</span></div>
+            <div class="fmt-check"><i class="fas fa-check-circle"></i></div>
+          </label>
+          <label class="fmt-card" data-overs="10">
+            <input type="radio" name="mf" value="T10">
+            <div class="fmt-icon"><i class="fas fa-fire"></i></div>
+            <div class="fmt-info"><span class="fmt-name">T10</span><span class="fmt-desc">10 overs a side</span></div>
+            <div class="fmt-check"><i class="fas fa-check-circle"></i></div>
+          </label>
+          <label class="fmt-card" data-overs="custom">
+            <input type="radio" name="mf" value="Custom">
+            <div class="fmt-icon"><i class="fas fa-sliders-h"></i></div>
+            <div class="fmt-info"><span class="fmt-name">Custom</span>
+              <span class="fmt-desc"><input type="number" id="customOvers" value="16" min="1" max="50" style="width:70px;" disabled> overs</span></div>
+            <div class="fmt-check"><i class="fas fa-check-circle"></i></div>
+          </label>
+        </div>
       </div>
-      <div style="margin-top:.7rem;">
-        <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Description</label>
-        <textarea name="description" rows="2" style="width:100%;" placeholder="Optional"></textarea>
-      </div>
-      <div style="margin-top:.7rem;">
-        <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Participating teams</label>
+
+      <!-- Participating teams -->
+      <div class="create-section">
+        <label>Participating teams (<span id="teamCount">0</span> selected)</label>
         <div class="team-checks" id="team_checks"></div>
       </div>
-      <button class="btn btn-primary" type="submit" style="margin-top:.8rem;">+ Create Tournament</button>
+
+      <!-- Tournament format (structure) -->
+      <div class="create-section">
+        <label>Tournament format</label>
+        <div class="format-grid" id="formatGrid">
+          {% set fmts = [
+            ('round_robin','Round Robin','trophy','rr',2),
+            ('double_round_robin','Double Round Robin','sync-alt','drr',2),
+            ('pure_knockout','Pure Knockout','sitemap','ko',2),
+            ('custom_series','Custom Series','list-ol','series',2),
+            ('league_semis_final','League + Semis + Final','ranking-star','rr3',4),
+            ('double_league_semis','Double League + Playoffs','ranking-star','drr3',4),
+            ('ipl_style','IPL-Style Playoffs','crown','ipl',4),
+            ('groups_knockout','Groups + Knockout','layer-group','groups',4)
+          ] %}
+          {% for id, name, icon, ct, mint in fmts %}
+          <label class="fmt-card format-card{% if id == 'round_robin' %} selected{% endif %}"
+                 data-format="{{ id }}" data-min="{{ mint }}" data-count="{{ ct }}">
+            <input type="radio" name="tf" value="{{ id }}"{% if id == 'round_robin' %} checked{% endif %}>
+            <div class="fmt-icon"><i class="fas fa-{{ icon }}"></i></div>
+            <div class="fmt-info">
+              <span class="fmt-name">{{ name }}</span>
+              <span class="fmt-desc"><span class="fmt-mc">Select teams</span></span>
+            </div>
+            <div class="fmt-check"><i class="fas fa-check-circle"></i></div>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="series-stepper" id="seriesStepper">
+          <span class="field-label" style="margin:0;">Series length</span>
+          <button type="button" class="series-btn" onclick="adjustSeries(-2)">−</button>
+          <input type="number" class="series-input" name="series_matches" id="seriesMatches" value="3" min="1" max="7" readonly>
+          <button type="button" class="series-btn" onclick="adjustSeries(2)">+</button>
+          <span class="fmt-desc">Best of 3, 5, or 7 (2 teams only)</span>
+        </div>
+      </div>
+
+      <!-- Advanced -->
+      <details class="advanced-toggle">
+        <summary>⚙️ Advanced settings (points, limits, description)</summary>
+        <div class="form-grid">
+          <div><label>Max teams</label><input type="number" name="max_teams" value="8"></div>
+          <div><label>Points: Win</label><input type="number" name="points_win" value="2"></div>
+          <div><label>Points: Tie</label><input type="number" name="points_tie" value="1"></div>
+          <div><label>Points: Loss</label><input type="number" name="points_loss" value="0"></div>
+          <div><label>Points: No result</label><input type="number" name="points_no_result" value="1"></div>
+          <div><label>Min balls (SR)</label><input type="number" name="min_balls_for_sr" value="20"></div>
+          <div><label>Min balls (Econ)</label><input type="number" name="min_balls_for_econ" value="12"></div>
+        </div>
+        <div style="margin-top:.6rem;">
+          <label class="field-label">Description</label>
+          <textarea name="description" rows="2" style="width:100%;" placeholder="Optional"></textarea>
+        </div>
+      </details>
+
+      <button class="action-btn accent-btn" type="submit" style="margin-top:1rem;width:auto;padding:.7rem 1.4rem;">
+        <i class="fas fa-plus"></i> Create Tournament
+      </button>
     </form>
+
     <script>
       const LEAGUE_TEAMS = {{ league_teams|tojson }};
+
       function renderTeams() {
         const lid = document.getElementById('league_select').value;
         const box = document.getElementById('team_checks');
         box.innerHTML = '';
-        (LEAGUE_TEAMS[lid] || []).forEach(function(t) {
+        (LEAGUE_TEAMS[lid] || []).forEach(function (t) {
           const lab = document.createElement('label');
-          lab.innerHTML = '<input type="checkbox" name="team_ids" value="' + t.id + '" style="width:auto;"> ' + t.name;
+          lab.innerHTML = '<input type="checkbox" name="team_ids" value="' + t.id + '"> ' + t.name;
+          lab.querySelector('input').addEventListener('change', updateFormats);
           box.appendChild(lab);
         });
-        if (!(LEAGUE_TEAMS[lid] || []).length) box.innerHTML = '<span style="color:var(--muted);">No teams in this league yet.</span>';
+        if (!(LEAGUE_TEAMS[lid] || []).length)
+          box.innerHTML = '<span style="color:var(--muted);">No teams in this league yet.</span>';
+        updateFormats();
       }
+
+      function selectedTeamCount() {
+        return document.querySelectorAll('#team_checks input[type=checkbox]:checked').length;
+      }
+
+      function matchCount(type, n) {
+        const rr = n * (n - 1) / 2;
+        switch (type) {
+          case 'rr': return rr;
+          case 'drr': return rr * 2;
+          case 'ko': return n >= 2 ? n - 1 : 0;
+          case 'rr3': return rr + 3;
+          case 'drr3': return rr * 2 + 3;
+          case 'ipl': return rr * 2 + 4;
+          case 'series': return parseInt(document.getElementById('seriesMatches').value || 3, 10);
+          case 'groups': return null;
+          default: return null;
+        }
+      }
+
+      function updateFormats() {
+        const n = selectedTeamCount();
+        document.getElementById('teamCount').textContent = n;
+        document.querySelectorAll('.format-card').forEach(function (card) {
+          const min = parseInt(card.dataset.min, 10);
+          const ct = card.dataset.count;
+          const isSeries = card.dataset.format === 'custom_series';
+          // Series needs exactly 2 teams; others need >= min.
+          const ok = isSeries ? (n === 2) : (n >= min);
+          card.classList.toggle('disabled', !ok);
+          const mc = card.querySelector('.fmt-mc');
+          if (n < 2) { mc.textContent = 'Select teams'; }
+          else if (!ok) { mc.textContent = isSeries ? 'Exactly 2 teams' : ('Needs ' + min + '+ teams'); }
+          else {
+            const c = matchCount(ct, n);
+            mc.textContent = (c === null) ? 'After groups set' : (c + ' match' + (c === 1 ? '' : 'es'));
+          }
+        });
+        // If the selected format became disabled, fall back to Round Robin.
+        const sel = document.querySelector('.format-card input:checked');
+        if (sel && sel.closest('.format-card').classList.contains('disabled')) {
+          pickFormat(document.querySelector('.format-card[data-format="round_robin"]'));
+        }
+      }
+
+      function pickFormat(card) {
+        if (!card || card.classList.contains('disabled')) return;
+        document.querySelectorAll('.format-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        card.querySelector('input').checked = true;
+        document.getElementById('tourFormat').value = card.dataset.format;
+        document.getElementById('seriesStepper').classList.toggle('show', card.dataset.format === 'custom_series');
+      }
+
+      function pickMatchFormat(card) {
+        document.querySelectorAll('#matchFormatGrid .fmt-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        card.querySelector('input').checked = true;
+        const ov = card.dataset.overs;
+        const custom = document.getElementById('customOvers');
+        custom.disabled = (ov !== 'custom');
+        document.getElementById('oversField').value = (ov === 'custom') ? (custom.value || 16) : ov;
+      }
+
+      function adjustSeries(delta) {
+        const el = document.getElementById('seriesMatches');
+        let v = parseInt(el.value || 3, 10) + delta;
+        v = Math.max(1, Math.min(7, v));
+        el.value = v; updateFormats();
+      }
+
       document.getElementById('league_select').addEventListener('change', renderTeams);
+      document.querySelectorAll('.format-card').forEach(c => c.addEventListener('click', () => pickFormat(c)));
+      document.querySelectorAll('#matchFormatGrid .fmt-card').forEach(c => c.addEventListener('click', () => pickMatchFormat(c)));
+      document.getElementById('customOvers').addEventListener('input', function () {
+        document.getElementById('oversField').value = this.value || 16;
+      });
       renderTeams();
     </script>
     {% else %}
-    <div class="empty-state">No Challenge Leagues exist yet. Create a league in <a href="{{ url_for('admin_challenge_data') }}">Challenge Data</a> first.</div>
+    <div class="empty-state">
+      <i class="fas fa-layer-group"></i>
+      <p>No Challenge Leagues exist yet. Create a league in
+        <a href="{{ url_for('admin_challenge_data') }}">Challenge Data</a> first.</p>
+    </div>
     {% endif %}
   </section>
 
-  <!-- Current tournaments -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">Tournaments</h3>
+  <!-- ============ CURRENT ============ -->
+  <section class="section-card">
+    <div class="section-header"><h2 class="section-title"><i class="fas fa-fire"></i> Tournaments</h2></div>
     {% if current %}
-    <div class="tour-list">
+    <div class="tour-card-grid">
       {% for t in current %}
-      <div class="tour-row">
-        <div>
-          <div class="tour-name">{% if t.is_active %}<span class="live-dot">●</span> {% endif %}{{ t.name }}</div>
-          <div class="tour-meta">
-            <span>{{ t.league_name or '—' }}</span>
-            <span>•</span><span>{{ t.format }}</span>
-            <span>•</span><span>{{ t.overs }} overs</span>
-            <span>•</span><span>{{ t.teams|length }} teams</span>
-          </div>
-        </div>
-        <div><span class="status-pill {{ t.status }}">{{ t.status }}</span>{% if t.is_active %} <span class="status-pill active">active flag</span>{% endif %}</div>
-        <div><a class="btn" href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">Manage</a></div>
-        <div class="tour-actions">
-          <a class="btn" href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">📊 Dashboard</a>
-          {% if t.is_active %}
-          <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="deactivate"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn" type="submit">Deactivate</button></form>
-          {% else %}
-          <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="activate"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn btn-primary" type="submit">Activate</button></form>
-          {% endif %}
-          <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this tournament and all its data?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn" type="submit">🗑️</button></form>
-        </div>
-      </div>
+      {{ tour_tile(t, True) }}
       {% endfor %}
     </div>
     {% else %}
-    <div class="empty-state">No tournaments yet. Create one above.</div>
+    <div class="empty-state"><i class="fas fa-trophy"></i><p>No tournaments yet. Create one above.</p></div>
     {% endif %}
   </section>
 
-  <!-- History -->
-  <section class="tour-card">
-    <h3 style="margin-top:0;">Tournament History</h3>
-    {% if history %}
-    <div class="tour-list">
+  <!-- ============ HISTORY ============ -->
+  {% if history %}
+  <section class="section-card">
+    <div class="section-header"><h2 class="section-title"><i class="fas fa-clock-rotate-left"></i> History</h2></div>
+    <div class="tour-card-grid">
       {% for t in history %}
-      <div class="tour-row">
-        <div>
-          <div class="tour-name">{{ t.name }}</div>
-          <div class="tour-meta"><span>{{ t.league_name or '—' }}</span><span>•</span><span>{{ t.teams|length }} teams</span>{% if t.completed_at %}<span>•</span><span>{{ t.completed_at | ist_short }}</span>{% endif %}</div>
-        </div>
-        <div><span class="status-pill {{ t.status }}">{{ t.status }}</span></div>
-        <div><a class="btn" href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">Manage</a></div>
-        <div class="tour-actions"><a class="btn" href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">📊 Dashboard</a></div>
-      </div>
+      {{ tour_tile(t, False) }}
       {% endfor %}
     </div>
-    {% else %}
-    <div class="empty-state">No completed tournaments yet.</div>
-    {% endif %}
   </section>
+  {% endif %}
 </div>
 {% endblock %}

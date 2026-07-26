@@ -137,6 +137,43 @@ def generate_schedule(session, tournament_id):
     return created
 
 
+def generate_series(session, tournament_id, matches):
+    """Generate an N-match head-to-head series between the two teams. Caller commits.
+
+    Used by the "Custom Series" format (best-of 3/5/7). Requires exactly two
+    participating teams; home/away alternates each match. Fixtures are ordinary
+    league rows so the points table (and its leader = series winner) works as
+    usual. Refuses to run if a completed match already exists.
+    """
+    from models import Tournament, TournamentTeam, TournamentMatch
+    tid = int(tournament_id)
+    n = max(1, min(15, int(matches or 1)))
+
+    if (session.query(TournamentMatch).filter_by(tournament_id=tid)
+            .filter(TournamentMatch.status == "completed").count()):
+        raise ValueError(
+            "Completed matches exist — reset the tournament before regenerating.")
+    (session.query(TournamentMatch).filter_by(tournament_id=tid)
+     .filter(TournamentMatch.status != "completed")
+     .delete(synchronize_session=False))
+
+    teams = (session.query(TournamentTeam).filter_by(tournament_id=tid)
+             .order_by(TournamentTeam.sort_order, TournamentTeam.id).all())
+    if len(teams) != 2:
+        raise ValueError("A custom series needs exactly 2 teams.")
+    t1, t2 = teams[0].id, teams[1].id
+    for i in range(n):
+        a, b = (t1, t2) if i % 2 == 0 else (t2, t1)
+        add_fixture(session, tid, a, b, round_no=i + 1)
+
+    tour = session.query(Tournament).get(tid)
+    if tour:
+        tour.schedule_generated = True
+    session.flush()
+    logger.info("Generated %s-match series for tournament %s", n, tid)
+    return n
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Fixture editing (DB)
 # ──────────────────────────────────────────────────────────────────────

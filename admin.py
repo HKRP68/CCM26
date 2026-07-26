@@ -13469,6 +13469,20 @@ def admin_tournaments_list():
                     name = (request.form.get("name") or "").strip()
                     league = db.query(ChallengeLeague).get(_int_form("league_id")) \
                         if _int_form("league_id") else None
+                    # Tournament Format → (league_format, knockout_type, display label).
+                    # Each preset maps a SimCricketX-style structure onto the engine.
+                    _FMT = {
+                        "round_robin":         ("single_rr", None,             "Round Robin"),
+                        "double_round_robin":  ("double_rr", None,             "Double Round Robin"),
+                        "league_semis_final":  ("single_rr", "top4_sf",        "League + Playoffs"),
+                        "double_league_semis": ("double_rr", "top4_sf",        "Double League + Playoffs"),
+                        "ipl_style":           ("double_rr", "ipl_playoffs",   "IPL Playoffs"),
+                        "groups_knockout":     ("groups",    "groups_top2_sf", "Groups + Knockout"),
+                        "pure_knockout":       ("single_rr", "pure_knockout",  "Knockout"),
+                        "custom_series":       ("single_rr", None,             "Custom Series"),
+                    }
+                    tf = (request.form.get("tour_format") or "round_robin").strip()
+                    lf, kt, label = _FMT.get(tf, _FMT["round_robin"])
                     if not name:
                         flash("Tournament name is required.", "error")
                     elif not league:
@@ -13478,7 +13492,7 @@ def admin_tournaments_list():
                             name=name[:120], league_id=league.id, league_name=league.name,
                             command_snapshot=league.tournament_command,
                             description=(request.form.get("description") or "").strip() or None,
-                            format=(request.form.get("format") or "League").strip()[:40],
+                            format=label[:40], league_format=lf, knockout_type=kt,
                             overs=_int_form("overs", 20), max_teams=_int_form("max_teams", 8),
                             points_win=_int_form("points_win", 2),
                             points_tie=_int_form("points_tie", 1),
@@ -13497,10 +13511,32 @@ def admin_tournaments_list():
                                     tournament_id=t.id, challenge_team_id=ct.id,
                                     name=ct.name, short_name=ct.short_name,
                                     logo_url=ct.logo_url, sort_order=ct.sort_order))
+                        db.flush()
+                        # One-step setup: build the structure the chosen format implies.
+                        setup_msg = ""
+                        try:
+                            from services import league_schedule_service, knockout_service
+                            if tf == "pure_knockout":
+                                n = knockout_service.generate_knockout(db, t.id)
+                                setup_msg = f" — {n}-match knockout bracket ready."
+                            elif tf == "custom_series":
+                                n = league_schedule_service.generate_series(
+                                    db, t.id, _int_form("series_matches", 3))
+                                setup_msg = f" — {n}-match series ready."
+                            elif tf == "groups_knockout":
+                                setup_msg = (" — now add groups & assign teams on the Manage "
+                                             "page, then generate the schedule.")
+                            else:
+                                n = league_schedule_service.generate_schedule(db, t.id)
+                                setup_msg = f" — {n} fixtures scheduled."
+                        except ValueError as ve:
+                            setup_msg = f" — ⚠️ {ve} Finish setup on the Manage page."
                         log_admin(db, "tournament_create", "tournament", t.id, t.name)
                         db.commit()
-                        flash(f"✅ Created tournament {t.name}.", "success")
-                        return redirect(url_for("admin_tournament_detail", tournament_id=t.id))
+                        flash(f"✅ Created {label} tournament “{t.name}”.{setup_msg}", "success")
+                        dest = ("admin_tournament_detail" if tf == "groups_knockout"
+                                else "admin_tournament_dashboard")
+                        return redirect(url_for(dest, tournament_id=t.id))
                 elif action in {"activate", "deactivate", "delete"}:
                     t = db.query(Tournament).get(_int_form("tournament_id"))
                     if not t:
@@ -13613,7 +13649,7 @@ def admin_tournament_detail(tournament_id):
                 elif action == "save_knockout":
                     kt = (request.form.get("knockout_type") or "").strip()
                     valid = {"top4_sf", "ipl_playoffs", "groups_top2_sf",
-                             "groups_top4_qf", "custom"}
+                             "groups_top4_qf", "pure_knockout", "custom"}
                     t.knockout_type = kt if kt in valid else None
                     cfg = (request.form.get("knockout_config_json") or "").strip()
                     t.knockout_config_json = cfg or None
@@ -13856,8 +13892,17 @@ def admin_tournament_dashboard(tournament_id):
         matches = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
                    .filter(TournamentMatch.status == "completed")
                    .order_by(TournamentMatch.id.desc()).all())
-        tt_map = {tt.id: tt.name for tt in
+        # Full team objects (badge logo/short name) keyed by id.
+        tt_map = {tt.id: tt for tt in
                   db.query(TournamentTeam).filter_by(tournament_id=t.id).all()}
+        # All fixtures (scheduled + completed) so the Overview shows the schedule,
+        # league rounds first then knockout, with a "Next Up" highlight.
+        fixtures = (db.query(TournamentMatch).filter_by(tournament_id=t.id)
+                    .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
+                              TournamentMatch.id).all())
+        next_fixture_id = next(
+            (f.id for f in fixtures
+             if f.status == "scheduled" and f.team1_id and f.team2_id), None)
         players = (db.query(TournamentPlayerStats).filter_by(tournament_id=t.id)
                    .order_by(TournamentPlayerStats.bat_runs.desc()).all())
         match_cards = []
@@ -13873,6 +13918,7 @@ def admin_tournament_dashboard(tournament_id):
             "admin_tournament_dashboard.html",
             t=t, table=table, group_tables=group_tables, leaders=leaders,
             match_cards=match_cards, tt_map=tt_map, players=players,
+            fixtures=fixtures, next_fixture_id=next_fixture_id,
             champion=champion, league_played=played, league_total=total)
     finally:
         db.close()
