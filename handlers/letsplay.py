@@ -1393,8 +1393,11 @@ async def _launch_match(context, draft, decision, winner_side):
     if draft.get("vs_bot"):
         # /lpbot: unranked practice, and the AI captain plays the bot's turns.
         # Nothing is at stake, so the anti stat-farming gap check is moot.
+        from handlers.botlevel import level_for_match
         from handlers.cipl_play import mark_bot_match
-        mark_bot_match(state, guest_info["user_id"])
+        mark_bot_match(state, guest_info["user_id"],
+                       difficulty=level_for_match(context.bot_data,
+                                                  host_info["user_id"]))
     elif is_stat_farming_mismatch(bat_xi, bowl_xi):
         # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
         # flag the match so no career stats are recorded (anti stat-farming). The
@@ -1432,8 +1435,9 @@ async def _announce(context, state, pitch_type):
     bot_line = ""
     if state.get("is_bot_match"):
         try:
-            from services.bot_captain import persona_label
-            bot_line = f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}\n"
+            from services.bot_captain import difficulty_label, persona_label
+            bot_line = (f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}"
+                        f" • {html.escape(difficulty_label(state))}\n")
         except Exception:
             logger.exception("letsplay: bot persona line failed")
     text = (

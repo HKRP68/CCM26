@@ -11,24 +11,32 @@ quotas and the no-back-to-back rule are NOT re-implemented here: they come from
 ``services.cipl_match.eligible_bowlers``, which the human picker uses too, so
 the bot plays under exactly the same constraints as its opponent.
 
-Three things keep the bot from feeling like a script:
+**How a decision is actually made.** Five layers, in order:
 
-  • **Nothing is deterministic.** Every decision builds a *weight* for each of
-    the five approaches from the match situation and then samples it. The same
-    situation twice will not reliably give the same answer, and no over is ever
-    a foregone conclusion.
-  • **A persona per match.** Each match the bot draws a captaincy style
-    (:data:`PERSONAS`) that biases how aggressive it is and how often it
-    bluffs, so two matches from the same scoreline still unfold differently.
-  • **It reads its opponent.** ``observe_over`` records what the human picked
-    and what it cost them; later overs counter the habits that show up —
-    including a hard counter when the human repeats themselves — and lean on
-    whatever has actually been working this match.
+  1. **The game solver** (:mod:`services.bot_tactics`) is the brain. It rebuilds
+     the ball-outcome odds for the upcoming over, runs all 25 approach match-ups
+     through the *engine's own* modifiers, scores each one on win probability
+     (chasing) or runs-minus-the-real-price-of-wickets (batting first), and
+     solves the resulting 5×5 zero-sum game. What comes back is a Nash mixed
+     strategy: the mix no human counter-strategy can beat.
+  2. **The situational read** below — phase, who is on strike, the chase maths,
+     wickets in hand — is kept as a *prior* on top of the solver. It carries the
+     cricketing sense the crude model can't see, but it no longer decides alone.
+  3. **The opponent model.** ``observe_over`` records what the human picked and
+     what it cost them. Once there is enough evidence, the bot computes the
+     best response to their habits and blends it in — capped, so reading you
+     never makes the bot itself readable.
+  4. **A persona per match.** Each match the bot draws a captaincy style
+     (:data:`PERSONAS`) that biases how aggressive it is and how often it
+     bluffs, so two matches from the same scoreline still unfold differently.
+  5. **The difficulty the player chose** (:data:`DIFFICULTIES`) scales all of
+     the above — how far the solver leads, how wide the mix stays, how hard the
+     read is pressed. It never changes the rules the bot plays under, only how
+     well it plays them.
 
-None of that comes at the cost of strength: the situation (phase, the chase
-maths, wickets in hand, who is on strike, who is bowling) is still the dominant
-term in every weight, so the bot is a genuinely hard opponent that happens to be
-unpredictable, rather than a random one.
+That ordering is deliberate. An equilibrium mix is unpredictable *because* it is
+optimal, not in spite of it — so the bot stopped being a table a player can
+memorise without becoming a random one.
 """
 
 import logging
@@ -39,7 +47,10 @@ from engine.approach_modifiers import (
     BATTING_APPROACHES, BATTING_KEYS, BOWLING_APPROACHES, BOWLING_KEYS,
     DEFAULT_BATTING, DEFAULT_BOWLING, normalize_batting, normalize_bowling,
 )
-from services import cipl_match
+from services import bot_tactics, cipl_match
+from services.bot_tactics import (            # noqa: F401  (re-exported)
+    DEATH_UNITS, POWERPLAY_UNITS, phase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +72,22 @@ assert set(BOWL_PLANS) == BOWLING_KEYS, (
     f"BOWL_PLANS is out of step with engine.approach_modifiers: "
     f"{set(BOWL_PLANS) ^ BOWLING_KEYS}")
 
-# Overs that count as the death at the end of an innings.
-DEATH_UNITS = 4
-# Overs that count as the powerplay at the start (scaled down for short formats).
-POWERPLAY_UNITS = 6
+# How much the situational prior counts once the game solver has spoken. Below
+# 1.0 it shades the solver's mix rather than overriding it — the solver knows
+# what the approaches *do*, the prior knows what a captain would *feel*.
+PRIOR_EXPONENT = 0.55
+
+# Hardest the bot will ever lean into its read of the opponent. Going all-in on
+# a best response wins more against a predictable human and turns the bot into a
+# pure function of their last few picks, which is exactly the trap we came from.
+MAX_EXPLOIT = 0.55
+
+# Overs of evidence at which the opponent model is taken half seriously.
+EXPLOIT_PRIOR = 4.0
+
+# Bounded nudge (± points) the tactical model may apply to the bowler ranking,
+# small enough that traits, quotas and the death hold-back still lead.
+MATCHUP_SWING = 8.0
 
 # Trait bonuses when choosing who bowls, by phase.
 _POWERPLAY_TRAITS = {"bowl_powerplay"}
@@ -97,6 +120,65 @@ PERSONAS = {
 DEFAULT_PERSONA = "tactician"
 
 
+# ════════════════════════════════════════════════════════════════════
+# Difficulty — how close to optimal the AI captain actually plays
+# ════════════════════════════════════════════════════════════════════
+
+# Persona is *flavour* (two Hard bots still feel different); difficulty is
+# *strength*. Every setting plays the same game with the same information — a
+# weaker bot is not given worse cards or fed dumber rules, it simply trusts the
+# solver less, reads you less, and misjudges an over more often. That keeps Easy
+# beatable without making it behave like nonsense.
+#
+#   solver      how hard the equilibrium mix outweighs the situational prior
+#   explore     how far the mix is pulled back toward "anything is possible"
+#   exploit     ceiling on leaning into the read of your habits
+#   temperature looseness of the bowler ranking (higher = sloppier)
+#   matchup     how much the bowler match-up model counts
+#   blunder     chance per decision of simply picking wrong
+#
+# ``explore`` matters more than it looks. A Nash mix is often close to pure —
+# when one plan really is the answer to this batter in this phase, the solver
+# says so with 99% of its weight, and a bot that obeyed it would be back to
+# bowling the same thing over after over. Mixing a slice of uniform back in
+# costs very little (near the equilibrium the alternatives are worth almost the
+# same) and buys back the unpredictability that makes the bot worth playing.
+DIFFICULTIES = {
+    "easy": {"label": "🟢 Easy", "solver": 0.30, "explore": 0.50, "exploit": 0.10,
+             "temperature": 2.2, "matchup": 0.25, "blunder": 0.22},
+    "normal": {"label": "🟡 Normal", "solver": 0.80, "explore": 0.32, "exploit": 0.35,
+               "temperature": 1.0, "matchup": 0.70, "blunder": 0.07},
+    "hard": {"label": "🔴 Hard", "solver": 1.30, "explore": 0.18, "exploit": 0.55,
+             "temperature": 0.55, "matchup": 1.00, "blunder": 0.0},
+}
+DEFAULT_DIFFICULTY = "normal"
+DIFFICULTY_ORDER = ("easy", "normal", "hard")
+
+
+def normalize_difficulty(key):
+    """Coerce anything to a real difficulty key, defaulting to Normal."""
+    key = (key or "").strip().lower()
+    return key if key in DIFFICULTIES else DEFAULT_DIFFICULTY
+
+
+def assign_difficulty(state, key=None):
+    """Fix this match's difficulty on ``state`` and return the key used."""
+    key = normalize_difficulty(key)
+    if isinstance(state, dict):
+        state["bot_difficulty"] = key
+    return key
+
+
+def _difficulty(state):
+    """This match's difficulty settings — Normal for a state that has none."""
+    return DIFFICULTIES[normalize_difficulty((state or {}).get("bot_difficulty"))]
+
+
+def difficulty_label(state):
+    """Human-readable difficulty for the match cards (e.g. "🔴 Hard")."""
+    return _difficulty(state)["label"]
+
+
 def assign_persona(state, key=None):
     """Draw (or force) this match's captaincy style and remember it on ``state``.
 
@@ -126,101 +208,24 @@ def persona_label(state):
 # Match-reading helpers
 # ════════════════════════════════════════════════════════════════════
 
-def _total_units(state):
-    try:
-        return max(1, int(state.get("overs") or 20))
-    except (TypeError, ValueError):
-        return 20
-
-
-def _current_unit(state):
-    try:
-        return max(1, int(state.get("current_over") or 1))
-    except (TypeError, ValueError):
-        return 1
-
-
-def phase(state):
-    """``"powerplay"`` / ``"middle"`` / ``"death"`` for the upcoming over.
-
-    Scaled for short formats so a 5-over match still has all three phases
-    instead of being one long powerplay.
-    """
-    total = _total_units(state)
-    over = _current_unit(state)
-    pp = POWERPLAY_UNITS if total >= 20 else max(1, round(total * 0.3))
-    death = DEATH_UNITS if total >= 20 else max(1, round(total * 0.2))
-    if over <= pp:
-        return "powerplay"
-    if over > total - death:
-        return "death"
-    return "middle"
-
-
-def _units_left(state):
-    """Overs still to be bowled in this innings, counting the upcoming one."""
-    return max(0, _total_units(state) - _current_unit(state) + 1)
-
-
-def _death_units_left(state):
-    """How many of the remaining overs fall in the death phase."""
-    total = _total_units(state)
-    death = DEATH_UNITS if total >= 20 else max(1, round(total * 0.2))
-    first_death_over = total - death + 1
-    return max(0, total - max(_current_unit(state), first_death_over) + 1)
+# The phase/units/striker/rating readers all live in ``bot_tactics`` so the
+# solver and the captaincy layer can never drift apart on what "the death" or
+# "wickets in hand" means. These aliases keep the call sites here readable.
+_total_units = bot_tactics.total_units
+_current_unit = bot_tactics.current_unit
+_units_left = bot_tactics.units_left
+_death_units_left = bot_tactics.death_units_left
+_striker = bot_tactics.striker
+_striker_form = bot_tactics.striker_form
+_wickets_lost = bot_tactics.wickets_lost
+_wickets_in_hand = bot_tactics.wickets_in_hand
+_rating = bot_tactics.rating
 
 
 def _traits_of(player):
+    """The set of trait effect keys on a player, ignoring malformed entries."""
     return {str((t or {}).get("effect_key") or "")
             for t in (player.get("traits") or []) if isinstance(t, dict)}
-
-
-def _striker(state):
-    order = state.get("batting_order") or []
-    idx = state.get("striker_idx", 0)
-    if 0 <= idx < len(order):
-        return order[idx]
-    return {}
-
-
-def _striker_form(state):
-    """``(balls_faced, strike_rate)`` for the batter on strike."""
-    striker = _striker(state)
-    stats = (state.get("bat_stats") or {}).get(str(striker.get("roster_id")), {})
-    balls = int(stats.get("balls", 0) or 0)
-    runs = int(stats.get("runs", 0) or 0)
-    sr = (runs / balls * 100.0) if balls else 0.0
-    return balls, sr
-
-
-def _wickets_lost(state):
-    try:
-        return int(state.get("total_wickets") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _wickets_in_hand(state):
-    try:
-        limit = int(state.get("wicket_limit") or 10)
-    except (TypeError, ValueError):
-        limit = 10
-    return max(0, limit - _wickets_lost(state))
-
-
-def _rating(player, *keys, default=50.0):
-    for key in keys:
-        try:
-            value = player.get(key)
-        except AttributeError:
-            return default
-        if value in (None, ""):
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return default
 
 
 def _economy(state, rid):
@@ -292,6 +297,7 @@ def _memory(state, create=True):
 
 
 def _record(bucket, key, runs, wickets):
+    """Fold one over's runs and wickets into a memory bucket for ``key``."""
     slot = bucket.get(key)
     if not isinstance(slot, dict):
         slot = {"n": 0, "runs": 0, "wkts": 0}
@@ -428,6 +434,137 @@ def _apply_learning(weights, record, *, bowling):
 
 
 # ════════════════════════════════════════════════════════════════════
+# The game-solver layer
+# ════════════════════════════════════════════════════════════════════
+
+def _predict_opponent(state, *, bot_batting):
+    """``({approach: probability}, exploit_weight)`` for the human's next pick.
+
+    Counts every approach they have used this match, weights the last three
+    overs double (people drift, and the recent drift is the exploitable part),
+    and smooths so a plan they have not shown yet is never treated as
+    impossible. ``exploit_weight`` scales with the evidence and is capped at
+    :data:`MAX_EXPLOIT`: with two overs on the board the bot barely leans on the
+    read, with a dozen it leans hard — but never all the way.
+    """
+    mem = _memory(state, create=False)
+    ceiling = min(MAX_EXPLOIT, _difficulty(state)["exploit"])
+    if ceiling <= 0:
+        return None, 0.0
+    if bot_batting:
+        bucket, recent, keys = mem["opp_bowl"], mem["recent_opp_bowl"], BOWL_PLANS
+    else:
+        bucket, recent, keys = mem["opp_bat"], mem["recent_opp_bat"], BAT_LADDER
+
+    counts = {k: float(int((bucket.get(k) or {}).get("n", 0) or 0)) for k in keys}
+    for key in recent[-3:]:
+        if key in counts:
+            counts[key] += 1.0
+
+    observed = sum(counts.values())
+    if observed <= 0:
+        return None, 0.0
+
+    smoothing = 0.5
+    denominator = observed + smoothing * len(keys)
+    predicted = {k: (counts[k] + smoothing) / denominator for k in keys}
+    weight = ceiling * (observed / (observed + EXPLOIT_PRIOR))
+    return predicted, weight
+
+
+def _explore(state, mix, keys):
+    """Pull a mix back toward uniform by the difficulty's exploration share."""
+    epsilon = max(0.0, min(0.9, float(_difficulty(state)["explore"])))
+    if epsilon <= 0:
+        return mix
+    share = epsilon / len(keys)
+    return {key: (1.0 - epsilon) * mix.get(key, 0.0) + share for key in keys}
+
+
+def _solver_mix(state, *, bot_batting):
+    """The solver's recommended mix over the bot's five approaches, or ``None``.
+
+    Nash equilibrium for the over, blended toward the best response to whatever
+    the opponent model has picked up. Never raises: a modelling failure drops
+    the bot back to the situational prior below rather than costing anyone an
+    over.
+    """
+    try:
+        bat_mix, bowl_mix, matrix = bot_tactics.tactical_mixes(state)
+        if not bot_tactics.matrix_is_decisive(matrix):
+            # Every approach leads to the same place — a chase already gone, or
+            # a total already out of reach. There is nothing for the solver to
+            # say, and letting it speak anyway would replace the situational
+            # read with a coin toss.
+            return None
+        if bot_batting:
+            keys, vector = bot_tactics.BAT_KEYS, bat_mix
+        else:
+            keys, vector = bot_tactics.BOWL_KEYS, bowl_mix
+        if not vector:
+            return None
+        nash = {key: vector[idx] for idx, key in enumerate(keys)}
+
+        predicted, weight = _predict_opponent(state, bot_batting=bot_batting)
+        if predicted and weight > 0:
+            counter = bot_tactics.exploit_mix(matrix, predicted,
+                                              batting=bot_batting, keys=keys)
+            nash = {key: (1.0 - weight) * nash[key] + weight * counter[key]
+                    for key in keys}
+        return _explore(state, nash, keys)
+    except Exception:
+        logger.exception("bot captain: the game solver failed (match %s) — "
+                         "falling back to the situational read",
+                         (state or {}).get("match_id"))
+        return None
+
+
+# How hard the bot avoids repeating the plan it used last over. This is applied
+# to the *final* distribution, after the solver has had its say: an equilibrium
+# mix is unexploitable in a one-shot over but an opponent watching a sequence of
+# them still reads a repeat, so the damping has to survive the blend.
+REPEAT_DAMPING = 0.6
+
+
+def _damp_repeat(state, weights, *, bot_batting):
+    """Push down whatever the bot picked last over, whoever suggested it."""
+    mem = _memory(state, create=False)
+    last = mem.get("last_own_bat" if bot_batting else "last_own_bowl")
+    if last in weights:
+        weights[last] *= REPEAT_DAMPING
+    return weights
+
+
+def _blend_with_solver(state, prior, *, bot_batting):
+    """Fold the solver's mix into the situational weights.
+
+    A geometric blend, so the two layers argue in the same (multiplicative)
+    currency the rest of this module uses: the solver sets the shape of the
+    distribution and the prior — raised to :data:`PRIOR_EXPONENT` — shades it.
+    Neither can veto the other, which is the point: the solver is right about
+    the odds, the prior is right about the cricket.
+    """
+    solved = _solver_mix(state, bot_batting=bot_batting)
+    if not solved:
+        return prior
+
+    trust = _difficulty(state)["solver"]
+    total = sum(max(0.0, v) for v in prior.values()) or 1.0
+    blended = {}
+    for key, weight in prior.items():
+        share = max(1e-6, weight / total)
+        blended[key] = ((share ** PRIOR_EXPONENT)
+                        * (max(1e-6, solved.get(key, 0.0)) ** trust))
+    # Normalise before handing the mix on. The product of two sub-1 numbers
+    # raised to powers lands anywhere on the number line depending on the
+    # difficulty, and ``_sample``'s ``max(0.01, ...)`` guard would then quietly
+    # become the thing setting the mix — compressing a 200:1 solver preference
+    # into 20:1 on Hard. The guard should catch bad input, not do the tuning.
+    scale = sum(blended.values()) or 1.0
+    return {key: value / scale for key, value in blended.items()}
+
+
+# ════════════════════════════════════════════════════════════════════
 # Bowler selection
 # ════════════════════════════════════════════════════════════════════
 
@@ -508,6 +645,34 @@ def _hold_back_for_death(state, candidates):
     return hold
 
 
+def _matchup_bonuses(state, candidates):
+    """A bounded ranking nudge per candidate from the tactical model.
+
+    Each candidate's over is solved as its own 5×5 game and scored on what it
+    would be worth to the *batting* side; the cheapest over earns the biggest
+    bonus. That is how the bot notices that the spinner rated 80 is a better
+    answer to this batter, in this phase, on this pitch, than the quick rated
+    86 — a comparison ``bowl_rating`` on its own cannot make. Rescaled into
+    ±:data:`MATCHUP_SWING` points so it informs the ranking without overruling
+    the trait, quota and death-reserve logic around it.
+    """
+    if len(candidates) < 2:
+        return [0.0] * len(candidates)
+    try:
+        values = [bot_tactics.bowler_edge(state, p) for p in candidates]
+    except Exception:
+        logger.exception("bot captain: bowler match-up model failed (match %s)",
+                         (state or {}).get("match_id"))
+        return [0.0] * len(candidates)
+    low, high = min(values), max(values)
+    span = high - low
+    if span <= 1e-9:
+        return [0.0] * len(candidates)
+    swing = MATCHUP_SWING * _difficulty(state)["matchup"]
+    # Lower value = the over is worth less to the batting side = better bowler.
+    return [swing * (2.0 * (high - v) / span - 1.0) for v in values]
+
+
 def pick_bowler(state):
     """Choose the bot's bowler for the upcoming over.
 
@@ -530,9 +695,16 @@ def pick_bowler(state):
     persona = _persona(state)
     ph = phase(state)
     hold_back = _hold_back_for_death(state, candidates)
-    scored = [(p, _bowler_score(state, p, ph, hold_back)) for p in candidates]
+    matchup = _matchup_bonuses(state, candidates)
+    scored = [(p, _bowler_score(state, p, ph, hold_back) + bonus)
+              for p, bonus in zip(candidates, matchup)]
     best = max(score for _p, score in scored)
-    temperature = max(1.0, float(persona["temperature"]))
+    # Floor only guards against a zero/negative temperature blowing up the
+    # softmax below. It used to be 1.0, which would silently cancel Hard's 0.55
+    # multiplier for any persona rated under ~1.8 — none are today, but the
+    # difficulty knob should not quietly stop working if one is ever added.
+    temperature = max(0.15, float(persona["temperature"])
+                      * float(_difficulty(state)["temperature"]))
 
     keys = list(range(len(scored)))
     weights = [math.exp(max(-40.0, (score - best) / temperature))
@@ -615,28 +787,29 @@ def _read_the_batter(state, w):
         _tilt(w, _BAT_COUNTER.get(repeated, "balanced"), 1.9)
         _note_read(state, f"The bot has spotted three straight "
                           f"{batting_label(repeated)} overs — it's planning for it.")
-    # Don't bowl the same plan over after over — the human is reading us too.
-    last = mem.get("last_own_bowl")
-    if last in w:
-        _tilt(w, last, 0.6)
     _apply_learning(w, mem["own_bowl"], bowling=True)
 
 
 def pick_bowling_approach(state):
     """Choose the bot's Bowling Approach for the over.
 
-    Situation first — the phase, the batter on strike, wickets in hand and the
-    chase maths — then the read on the opponent, then the persona, and finally a
-    sampled draw so the plan is never a foregone conclusion. Occasionally the
-    bot bluffs with something completely off-script.
+    The solver decides the shape: it prices all 25 approach match-ups for this
+    exact over and returns the equilibrium mix, pulled toward the best response
+    to whatever the human has been doing. The situational read below — phase,
+    the batter on strike, wickets in hand, the chase maths — shades that mix,
+    the persona tilts it along the attack/defend axis, and the final draw is
+    sampled so the plan is never a foregone conclusion. Occasionally the bot
+    bluffs with something completely off-script.
     """
     persona = _persona(state)
     take_read_note(state)          # last over's note, if the chat never used it
-    if random.random() < persona["bluff"]:
+    if random.random() < persona["bluff"] + _difficulty(state)["blunder"]:
         return random.choice(BOWL_PLANS)
 
     w = _bowling_weights(state)
     _read_the_batter(state, w)
+    w = _damp_repeat(state, _blend_with_solver(state, w, bot_batting=False),
+                     bot_batting=False)
 
     aggression = persona["aggression"]
     _tilts(w, aggressive=math.exp(aggression),
@@ -743,27 +916,27 @@ def _read_the_bowler(state, w, desperate):
         _tilt(w, _BOWL_COUNTER.get(repeated, "balanced"), 1.7)
         _note_read(state, f"The bot has read three straight "
                           f"{bowling_label(repeated)} overs — it's countering.")
-    last = mem.get("last_own_bat")
-    if last in w:
-        _tilt(w, last, 0.65)
     _apply_learning(w, mem["own_bat"], bowling=False)
 
 
 def pick_batting_approach(state):
     """Choose the bot's Batting Approach for the over.
 
-    Situation first (phase, or the required rate when chasing), then adjusted for
-    wickets in hand, who is on strike and who is bowling — a number eleven does
-    not slog like a top-order batter unless the chase leaves no choice. The
-    resulting intent is a *spread* over the ladder, not a single rung, so the
-    same scoreline produces genuinely different overs.
+    The intent starts as a *spread* over the aggression ladder — the phase or
+    the required rate, adjusted for wickets in hand, who is on strike and who is
+    bowling, so a number eleven does not slog like a top-order batter unless the
+    chase leaves no choice. The solver then reprices that spread against what
+    each approach really does to this over's odds: chasing, every rung is scored
+    on the win probability it leaves behind, which is what makes the bot's death
+    overs add up instead of just looking busy.
     """
     persona = _persona(state)
     take_read_note(state)          # last over's note, if the chat never used it
     idx, desperate = _bat_situation_index(state)
     idx += persona["aggression"] * 0.8
 
-    if random.random() < persona["bluff"] and not desperate:
+    if (random.random() < persona["bluff"] + _difficulty(state)["blunder"]
+            and not desperate):
         # Total curveball: a block in the powerplay, a slog out of nowhere. It
         # still goes through the hard rules below — a bluff is a tactic, not a
         # licence to throw the innings away.
@@ -775,6 +948,8 @@ def pick_batting_approach(state):
              for pos, key in enumerate(BAT_LADDER)}
 
         _read_the_bowler(state, w, desperate)
+        w = _damp_repeat(state, _blend_with_solver(state, w, bot_batting=True),
+                         bot_batting=True)
 
         choice = _sample(w, noise=persona["noise"] * 0.5) or DEFAULT_BATTING
 
@@ -799,11 +974,13 @@ _BOWL_LABELS = {key: (emoji, label) for key, emoji, label in BOWLING_APPROACHES}
 
 
 def batting_label(key):
+    """A Batting Approach as it reads in chat, e.g. ``"💥 Ultra Attack"``."""
     emoji, label = _BAT_LABELS.get(key, _BAT_LABELS[DEFAULT_BATTING])
     return f"{emoji} {label}"
 
 
 def bowling_label(key):
+    """A Bowling Approach as it reads in chat, e.g. ``"🌀 Variation"``."""
     emoji, label = _BOWL_LABELS.get(key, _BOWL_LABELS[DEFAULT_BOWLING])
     return f"{emoji} {label}"
 

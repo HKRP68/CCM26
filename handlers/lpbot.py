@@ -51,6 +51,13 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg is None or tg is None or chat is None:
         return
 
+    # Difficulty first: the prompt sends a keyboard and this returns, and the
+    # button re-enters here with the choice already banked.
+    from handlers.botlevel import prompt_difficulty, take_pending_choice
+    if not take_pending_choice(context):
+        await prompt_difficulty(update, context, "lp")
+        return
+
     session = get_session()
     try:
         host = sync_telegram_user(session, tg)

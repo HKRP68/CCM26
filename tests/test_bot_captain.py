@@ -203,16 +203,27 @@ class BowlingApproachTests(SeededTestCase):
         # ...and no single plan may swallow the over.
         self.assertLess(max(seen.values()) / SAMPLES, 0.8)
 
-    def test_attacks_a_brand_new_batter(self):
-        """A wicket is worth more than a dot while the batter is still looking
-        for the pace, so the attacking plans come out far more often than they
-        do against the same batter once they are set."""
+    def test_it_reads_how_set_the_batter_is(self):
+        """Change of pace is for a batter timing it, not for a new one.
+
+        This test used to assert the opposite — that the bot should hunt a
+        fresh batter with attacking plans, because "a wicket is worth more
+        than a dot while the batter is still looking for the pace". Sampling
+        the engine says that belief is simply wrong: a batter who has not got
+        their eye in is only about 6% more likely to get out, but scores
+        roughly 45% fewer boundaries. There is very little wicket to buy and a
+        lot of cheap containment to give away, so the bot is right to save its
+        change-of-pace plans for the batter who is actually hurting it.
+        """
         fresh = _sample_counts(bc.pick_bowling_approach, _state(current_over=9))
-        settled = _state(current_over=9)
-        settled["bat_stats"]["100"] = {"runs": 14, "balls": 14}
-        set_in = _sample_counts(bc.pick_bowling_approach, settled)
-        self.assertGreater(fresh.get("aggressive", 0), set_in.get("aggressive", 0))
-        self.assertGreater(fresh.get("aggressive", 0), fresh.get("defensive", 0) * 2)
+        flying = _state(current_over=9)
+        flying["bat_stats"]["100"] = {"runs": 40, "balls": 20}    # SR 200
+        against_flyer = _sample_counts(bc.pick_bowling_approach, flying)
+        self.assertGreater(against_flyer.get("variation", 0),
+                           fresh.get("variation", 0))
+        # ...and neither situation is answered with one plan on repeat.
+        for counts in (fresh, against_flyer):
+            self.assertLess(max(counts.values()) / SAMPLES, 0.8)
 
     def test_mixes_it_up_at_the_death(self):
         state = _state(current_over=18)

@@ -37,30 +37,128 @@ BOWLING_KEYS = {k for k, _, _ in BOWLING_APPROACHES}
 DEFAULT_BATTING = "balanced"
 DEFAULT_BOWLING = "balanced"
 
+# ── Balance note ──────────────────────────────────────────────────────
+# The first version of these tables was measurably broken: simulated against
+# the live engine (500 overs per cell, four pitches, seven rating match-ups),
+# Ultra Attack beat every other batting approach in *every* bowling column and
+# Defensive bowling beat every other plan in *every* batting row. Held for a
+# whole innings that was 244 all-out-proof runs for Ultra against 180 for
+# Defensive, so the approach layer had exactly one correct answer for each
+# captain and picking anything else was a mistake. The tables below restore the
+# trade-off, along two axes:
+#
+#   • **Risk is priced.** Aggressive and Ultra now buy their boundaries with a
+#     genuinely higher wicket rate, so slogging from ball one runs out of
+#     batting long before it runs out of overs — which is what stops "always
+#     Ultra" from being free.
+#   • **Every plan has a weakness** (:data:`_COUNTER_MULT`). Defensive bowling
+#     shuts the boundary down but hands over singles; attacking plans buy
+#     wickets by offering pace to hit; change-of-pace punishes a slogger but is
+#     wasted on a batter content to knock it around.
+#
+# Between them those make the over a real simultaneous-move game with a mixed
+# solution instead of a table with one right answer. Measured the same way
+# afterwards, the best reply now moves with what the other captain picked:
+#
+#   vs Defensive bowling → Ultra          vs Defensive batting  → Aggressive
+#   vs Balanced  bowling → Ultra          vs Rotate    batting  → Defensive
+#   vs Mixed     bowling → Rotate         vs Balanced  batting  → Mixed
+#   vs Aggressive bowling→ Aggressive     vs Aggressive batting → Variation
+#   vs Variation bowling → Balanced       vs Ultra     batting  → Variation
+#
+# Two options are deliberately never *optimal* on runs alone and that is the
+# role they play rather than a bug: Balanced bowling is the safe neutral, and
+# Defensive batting is a survival tool whose value (protecting the last wicket,
+# seeing off a spell) a runs-scored yardstick cannot show.
+#
+# Any retune should be re-checked the same way — ``tests/test_cipl_approach.py``
+# asserts the no-dominant-approach property directly, so a change that brings
+# back a single right answer fails the suite rather than shipping quietly.
+
 # Per-approach outcome multipliers. Missing outcomes default to 1.0.
 _BATTING_MULT = {
-    "defensive": {"Dot": 1.40, "Single": 1.20, "Double": 0.90, "Three": 0.80,
-                  "Four": 0.50, "Six": 0.30, "Wicket": 0.60},
-    "rotate":    {"Dot": 0.80, "Single": 1.50, "Double": 1.40, "Three": 1.10,
-                  "Four": 0.70, "Six": 0.50, "Wicket": 0.75},
+    "defensive": {"Dot": 1.45, "Single": 1.25, "Double": 0.90, "Three": 0.80,
+                  "Four": 0.45, "Six": 0.25, "Wicket": 0.45},
+    "rotate":    {"Dot": 0.78, "Single": 1.66, "Double": 1.45, "Three": 1.15,
+                  "Four": 0.72, "Six": 0.48, "Wicket": 0.64},
     "balanced":  {},
-    "aggressive": {"Dot": 0.85, "Single": 0.95, "Double": 1.00, "Three": 1.00,
-                   "Four": 1.40, "Six": 1.50, "Wicket": 1.22},
-    "ultra":     {"Dot": 0.70, "Single": 0.80, "Double": 0.90, "Three": 0.90,
-                  "Four": 1.60, "Six": 2.20, "Wicket": 1.35},
+    "aggressive": {"Dot": 0.86, "Single": 0.92, "Double": 1.00, "Three": 1.00,
+                   "Four": 1.38, "Six": 1.45, "Wicket": 1.45},
+    "ultra":     {"Dot": 0.72, "Single": 0.78, "Double": 0.88, "Three": 0.90,
+                  "Four": 1.51, "Six": 1.98, "Wicket": 1.80},
 }
 
 _BOWLING_MULT = {
-    "defensive": {"Dot": 1.35, "Single": 1.10, "Double": 0.95,
-                  "Four": 0.55, "Six": 0.45, "Wicket": 0.80},
+    "defensive": {"Dot": 1.04, "Single": 1.48, "Double": 0.98,
+                  "Four": 0.76, "Six": 0.70, "Wicket": 0.66},
     "balanced":  {},
-    "mixed":     {"Dot": 1.15, "Single": 1.00, "Four": 0.80,
-                  "Six": 0.60, "Wicket": 1.10},
-    "aggressive": {"Dot": 0.95, "Single": 1.00, "Four": 1.20,
-                   "Six": 1.20, "Wicket": 1.30},
-    "variation": {"Dot": 1.10, "Single": 1.00, "Four": 0.85,
-                  "Six": 0.80, "Wicket": 1.25},
+    "mixed":     {"Dot": 1.00, "Single": 1.14, "Double": 1.08, "Four": 0.84,
+                  "Six": 0.60, "Wicket": 1.18},
+    "aggressive": {"Dot": 0.86, "Single": 1.02, "Four": 1.29,
+                   "Six": 1.30, "Wicket": 1.55},
+    "variation": {"Dot": 1.05, "Single": 0.98, "Four": 0.90,
+                  "Six": 0.84, "Wicket": 1.10},
 }
+
+# ── The counter matrix ───────────────────────────────────────────────
+# Applied on top of both tables above, keyed (batting approach, bowling plan).
+# The per-approach tables alone are separable — each one scales its outcomes
+# the same way whatever the other captain does — and a separable game collapses
+# to one dominant answer per side. These interaction terms are what make the
+# over rock-paper-scissors: the same plan is a match-winner against one intent
+# and a gift against another, so neither captain can settle on a favourite.
+#
+# Read each line as the cricket it describes.
+_COUNTER_MULT = {
+    # Change of pace is the answer to a slogger — but only to a slogger.
+    ("ultra", "variation"):      {"Six": 0.55, "Four": 0.72, "Wicket": 1.48},
+    ("aggressive", "variation"): {"Six": 0.68, "Four": 0.82, "Wicket": 1.34},
+    ("ultra", "mixed"):          {"Six": 0.70, "Four": 0.86, "Wicket": 1.24},
+    ("aggressive", "mixed"):     {"Six": 0.82, "Four": 0.92, "Wicket": 1.22},
+
+    # ...and pace on a length to a batter swinging through the line is a gift.
+    ("ultra", "aggressive"):      {"Four": 1.10, "Six": 1.12, "Wicket": 0.90},
+    ("aggressive", "aggressive"): {"Four": 1.16, "Six": 1.20, "Wicket": 0.94},
+
+    # Attacking fields against someone with no intent of scoring: all upside.
+    ("defensive", "aggressive"): {"Wicket": 1.75, "Four": 0.78, "Six": 0.72,
+                                  "Dot": 1.12},
+    ("rotate", "aggressive"):    {"Wicket": 1.45, "Four": 0.84, "Six": 0.80,
+                                  "Single": 1.14},
+
+    # Boundary-denial concedes the single — so milking it beats it.
+    ("rotate", "defensive"):     {"Single": 1.30, "Double": 1.12, "Dot": 0.84},
+    ("balanced", "defensive"):   {"Single": 1.12, "Dot": 0.94},
+    ("aggressive", "defensive"): {"Four": 1.14, "Six": 1.18},
+    ("ultra", "defensive"):      {"Four": 1.18, "Six": 1.24},
+    # Two captains both refusing to take a risk: nobody scores, nobody gets out.
+    ("defensive", "defensive"):  {"Dot": 1.14, "Wicket": 0.82},
+
+    # Mixed and Variation are built to strangle the single, which is exactly
+    # what a strike-rotator needs — and they nip at a batter with no answer.
+    ("rotate", "mixed"):         {"Single": 0.84, "Dot": 1.12, "Wicket": 1.14},
+    ("rotate", "variation"):     {"Single": 1.02, "Dot": 0.98, "Wicket": 0.96},
+    ("balanced", "mixed"):       {"Wicket": 1.24, "Four": 0.88},
+    ("defensive", "mixed"):      {"Wicket": 1.10},
+    ("defensive", "variation"):  {"Wicket": 1.12},
+}
+
+
+# A typo in the tables above ("Sixes", "Wickets") would silently be a no-op —
+# no error, just a quietly unbalanced match-up that the directional tests would
+# not catch. Fail at import instead.
+_OUTCOME_KEYS = {"Dot", "Single", "Double", "Three", "Four", "Six",
+                 "Wicket", "Extras"}
+for _table, _label in ((_BATTING_MULT, "_BATTING_MULT"),
+                       (_BOWLING_MULT, "_BOWLING_MULT"),
+                       (_COUNTER_MULT, "_COUNTER_MULT")):
+    for _key, _mults in _table.items():
+        _unknown = set(_mults) - _OUTCOME_KEYS
+        assert not _unknown, (
+            f"{_label}[{_key!r}] scales unknown outcome(s) {sorted(_unknown)} — "
+            f"valid outcomes are {sorted(_OUTCOME_KEYS)}")
+assert set(_COUNTER_MULT) <= {(b, w) for b in BATTING_KEYS for w in BOWLING_KEYS}, (
+    "_COUNTER_MULT is keyed on an approach pair that does not exist")
 
 
 def normalize_batting(approach):
@@ -94,10 +192,14 @@ def apply_approach_modifiers(weights, batting_approach=None, bowling_approach=No
     weights: {outcome_key: float} as built inside calculate_outcome.
     batting_approach / bowling_approach: approach keys (normalized internally).
     bowler_rating: used for Mixed bowling's rating-scaled six suppression.
+
+    Three layers multiply together: the batting intent, the bowling plan, and
+    the :data:`_COUNTER_MULT` term for how those two specific choices interact.
     """
     bat = normalize_batting(batting_approach)
     bowl = normalize_bowling(bowling_approach)
-    if bat == DEFAULT_BATTING and bowl == DEFAULT_BOWLING:
+    counter = _COUNTER_MULT.get((bat, bowl), {})
+    if bat == DEFAULT_BATTING and bowl == DEFAULT_BOWLING and not counter:
         return dict(weights)
 
     bat_tbl = _BATTING_MULT.get(bat, {})
@@ -107,7 +209,8 @@ def apply_approach_modifiers(weights, batting_approach=None, bowling_approach=No
 
     out = {}
     for key, val in weights.items():
-        mult = bat_tbl.get(key, 1.0) * bowl_tbl.get(key, 1.0)
+        mult = (bat_tbl.get(key, 1.0) * bowl_tbl.get(key, 1.0)
+                * counter.get(key, 1.0))
         out[key] = max(0.0, val * mult)
     return out
 

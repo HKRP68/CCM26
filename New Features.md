@@ -298,3 +298,99 @@ fill gaps the spec left open and keep the new mode isolated from existing flows.
 8. **Reuse over rewrite** — Stats persistence reuses `player_stats_service`,
    the SimCricketX engine (`engine/`) and `services/sim_match` adapters are reused
    rather than duplicated, and match state reuses the existing `match_state` store.
+---
+
+## Approach counters and the AI captain (2026 update)
+
+### Why the approach tables changed
+
+The five batting and five bowling approaches above were each scaled by their own
+fixed multipliers, applied independently. That made the over *separable*: an
+approach shifted the odds the same way whatever the other captain chose, and a
+separable game always collapses to a single right answer for each side.
+
+Simulated against the live engine (500 overs per cell, four pitches, seven
+rating match-ups), that is exactly what had happened:
+
+* **Ultra Attack** out-scored every other batting approach against **every**
+  bowling plan — 244 runs an innings against 200 for the next best.
+* **Defensive** out-contained every other bowling plan against **every** batting
+  approach.
+
+So a player who simply picked Ultra Attack and Defensive every over was playing
+optimally, and eight of the ten options were decoration. It is also why the bots
+felt easy: they varied their plans, and varying was strictly worse.
+
+### What replaced it
+
+Two changes, both in `engine/approach_modifiers.py`:
+
+1. **Risk is priced.** Aggressive and Ultra buy their boundaries with a
+   genuinely higher wicket rate, so slogging from ball one runs out of batting
+   before it runs out of overs.
+2. **A counter matrix** (`_COUNTER_MULT`) multiplies on top of both tables, keyed
+   by the *pair* of choices. This is the layer that makes the over
+   rock-paper-scissors — the same plan wins one match-up and loses another:
+
+   | If they bat…    | …the best bowling plan is | If they bowl…  | …the best batting intent is |
+   |-----------------|---------------------------|----------------|------------------------------|
+   | Defensive       | 🔥 Aggressive              | 🛡 Defensive    | 💥 Ultra Attack              |
+   | Rotate Strike   | 🛡 Defensive               | ⚖ Balanced     | 💥 Ultra Attack              |
+   | Balanced        | ☠️ Mixed                   | ☠️ Mixed        | 🔁 Rotate Strike             |
+   | Aggressive      | 🌀 Variation               | 🔥 Aggressive   | 🚀 Aggressive                |
+   | Ultra Attack    | 🌀 Variation               | 🌀 Variation    | ⚖ Balanced                   |
+
+   Two options stay deliberately "safe but not optimal" on runs alone, which is
+   the role they play rather than a bug: **Balanced bowling** is the neutral
+   baseline, and **Defensive batting** is a survival tool whose value (protecting
+   the last wicket, seeing off a spell) a runs-scored yardstick cannot show.
+
+`tests/test_cipl_approach.py` asserts the no-dominant-approach property directly,
+so a future retune that brings back a single right answer fails the suite.
+
+### The AI captain (/lpbot, /ciplbot)
+
+`services/bot_tactics.py` is the bot's brain. Each time it must pick an approach
+it rebuilds the ball-outcome odds for the coming over, runs all 25 match-ups
+through the engine's own modifiers, scores each on **win probability** (chasing)
+or **runs minus the real price of the wickets risked** (batting first), and
+solves the resulting 5×5 zero-sum game by regret matching. It plays the Nash
+mixed strategy — the mix no fixed counter-strategy beats — pulled toward a best
+response when the player's own picks start showing a pattern.
+
+The ball model is fitted, not guessed: its coefficients come from a
+least-squares fit to ~170 situations sampled out of `cipl_match.simulate_over`,
+and it tracks the real engine to about 14% RMS across run rates from 2.9 to 20
+an over.
+
+### Difficulty
+
+`/lpbot` and `/ciplbot` open with a difficulty prompt (🟢 Easy / 🟡 Normal /
+🔴 Hard); the choice is remembered per player and shown on the match card next to
+the bot's captaincy persona. Difficulty scales **how well the bot captains** —
+how far the solver leads, how wide its mix stays, how hard it presses a read on
+you, and how often it simply misjudges an over. It never changes the squad, the
+engine or the rules: an Easy bot plays under the same bowler quotas and the same
+laws as a Hard one.
+
+### Scorecard attribution (2026 update)
+
+* **The bot's Approach is no longer published.** The over summary used to print
+  "🤖 Bot's plan: 🌀 Variation" after every over, on the reasoning that there was
+  no opponent to keep it from. But the player *is* the opponent: a bot whose
+  every pick is printed is a bot whose mix can be written down over a few matches
+  and countered, which defeats the point of solving for an unexploitable one. Its
+  plans are now hidden exactly as a human captain's are. What the bot has
+  *noticed* is still said out loud ("it has spotted three straight Ultra Attack
+  overs") — a warning is not a plan, and it keeps the mind game visible.
+* **A bot-run side is named on the summary card** — `RCB (Bot)`. In a league bot
+  match the bot fields a real franchise, so without it "RCB won by 8 wickets"
+  reads exactly like a result against a human. Applied at render time only; the
+  plain team name stays the key for POTM and result logic.
+* **The archived text scorecard credits the captains** — `RCB (@alice) vs CSK
+  (@bob)`, with a bot side credited as `(Bot)`. `MatchNo<id>.txt` is the durable
+  record, and two different players fielding RCB previously produced identical
+  files. The archive also now carries the pitch, the ground and the Player of the
+  Match, which the on-screen card had and the file did not. An `@` is only
+  prefixed when the stored value could actually be a handle — a first name is
+  left as plain text rather than dressed up as one.
