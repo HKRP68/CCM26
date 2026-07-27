@@ -150,6 +150,7 @@ def _arm_bot_watchdog(context, mid):
 
         s = _gs(context, mid)
         if not s or not s.get("is_vsbot") or s.get("result_finalized"):
+            context.bot_data.pop(nudges_key, None)
             return
         if _ball_signature(s) != before:
             context.bot_data.pop(nudges_key, None)  # play moved on
@@ -162,6 +163,10 @@ def _arm_bot_watchdog(context, mid):
         nudges = context.bot_data.get(nudges_key, 0) + 1
         context.bot_data[nudges_key] = nudges
         if nudges > BOT_WATCHDOG_MAX_NUDGES:
+            # Terminal: we've handed it back to the player, so stop carrying the
+            # count. (cleanup_state also sweeps `_{mid}`-suffixed keys at match
+            # end; this just keeps the watchdog's own bookkeeping self-contained.)
+            context.bot_data.pop(nudges_key, None)
             logger.error(
                 "vsbot match %s stuck on %s after %s nudges — asking the player",
                 mid, next_act, nudges - 1)
@@ -894,35 +899,26 @@ def build_adaptive_bot_xi(session, user_id):
 # ════════════════════════════════════════════════════════════════════
 
 def _setup_xi(context, mid, key):
-    """Read ``bat_xi``/``bowl_xi`` for a setup picker, state first.
+    """Read ``bat_xi``/``bowl_xi`` for a /vsbot setup picker.
 
-    ``bot_data`` is process memory: after a restart the XI is gone and the
-    picker callback used to fall through to a bare ``return``, leaving dead
-    buttons with no message. Once the match has state, that state is durable.
+    Thin alias for the shared implementation in handlers.match — /vsbot's
+    pickers have the same "durable state first, then bot_data" need.
     """
-    from handlers.match import _gs
-    s = _gs(context, mid)
-    if s and s.get(key):
-        return s[key]
-    return context.bot_data.get(f"{key}_{mid}", [])
+    from handlers.match import _setup_xi as _shared_setup_xi
+    return _shared_setup_xi(context, mid, key)
 
 
 async def _vsbot_pick_lost(context, q, mid):
-    """Explain a stale setup button instead of ignoring the tap."""
-    try:
-        await q.answer("That pick is no longer available.", show_alert=True)
-    except Exception:
-        pass
-    from handlers.match import _gs, render_screen
-    if _gs(context, mid):
-        await render_screen(context, mid)
-        return
-    try:
-        await context.bot.send_message(
-            q.message.chat_id,
-            "⚠️ That /vsbot setup expired. Start a fresh match with /vsbot.")
-    except Exception:
-        pass
+    """Explain a stale /vsbot setup button instead of ignoring the tap.
+
+    /vsbot's toss-time pickers run before any match state exists, so there may
+    be nothing to re-render — hence the expiry message.
+    """
+    from handlers.match import _setup_pick_lost
+    await _setup_pick_lost(
+        context, q, mid,
+        expired_message="⚠️ That /vsbot setup expired. "
+                        "Start a fresh match with /vsbot.")
 
 
 async def _show_user_opener_picker(context, chat_id, mid, user, bat_xi, opener_num=1):

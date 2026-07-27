@@ -203,10 +203,14 @@ async def _auto_decide(context, mid, state, next_act):
 
         elif next_act == A_PICK_NEW_BATSMAN:
             # Promote next available not-out batsman
+            from services.bot_ai import _stat_row
             for i, p in enumerate(state["batting_order"]):
                 if i == state["striker_idx"] or i == state["non_striker_idx"]:
                     continue
-                bs = state["bat_stats"].get(p["roster_id"], {})
+                # Tolerant read: after a cold read the keys are strings, and
+                # a raw int lookup would miss and report every batter not-out —
+                # promoting someone already dismissed.
+                bs = _stat_row(state.get("bat_stats"), p["roster_id"])
                 if not bs.get("out", False):
                     state["striker_idx"] = i
                     save_state(context, mid, state, next_action=A_PICK_DELIVERY)

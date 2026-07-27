@@ -138,6 +138,12 @@ def _stats_row(stats, roster_id, blank):
         if row is None:
             row = blank
         stats[key] = row
+    elif key != roster_id:
+        # Both forms present (only reachable for a state written before keys
+        # were canonicalized). Drop the twin now: leaving it means the store's
+        # merge later picks a winner by tally, which may not be the row this
+        # handler has been mutating.
+        stats.pop(roster_id, None)
     return row
 
 
@@ -3245,35 +3251,34 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 # ═══════════════════════════ OPENERS ═════════════════════════════════
 
-def _batting_xi_for_setup(ctx, mid):
-    """Batting XI for the opener pickers, preferring the persisted state.
+def _setup_xi(ctx, mid, key):
+    """Read ``bat_xi``/``bowl_xi`` for a setup picker, persisted state first.
 
     The setup pickers used to read ``bot_data`` only, which lives in process
     memory: after a restart or redeploy the lookup came back empty and the
     handler returned silently, leaving the player with dead buttons and no
     explanation. The match state is durable, so ask it first.
+
+    Shared with handlers/vsbot.py, which has the same pickers on its own
+    callbacks.
     """
     s = _gs(ctx, mid)
-    if s and s.get("bat_xi"):
-        return s["bat_xi"]
-    return ctx.bot_data.get(f"bat_xi_{mid}", [])
+    if s and s.get(key):
+        return s[key]
+    return ctx.bot_data.get(f"{key}_{mid}", [])
 
 
-def _bowling_xi_for_setup(ctx, mid):
-    """Bowling XI for the opening-bowler picker. See _batting_xi_for_setup."""
-    s = _gs(ctx, mid)
-    if s and s.get("bowl_xi"):
-        return s["bowl_xi"]
-    return ctx.bot_data.get(f"bowl_xi_{mid}", [])
-
-
-async def _setup_pick_lost(ctx, q, mid):
+async def _setup_pick_lost(ctx, q, mid, expired_message=None):
     """Tell the player their setup button went stale, and re-offer the choice.
 
     Reached when a tapped player is in neither the persisted XI nor bot_data —
     a button left over from a previous match, or one clicked after the state was
     cleaned up. Silence here is what sent players to /resume; say something and
     re-render whatever the match is actually waiting for.
+
+    ``expired_message`` is for callers whose setup runs before any match state
+    exists (/vsbot's toss-time pickers): with nothing to re-render, the player
+    needs to be told to start over.
     """
     try:
         await q.answer("That pick is no longer available.", show_alert=True)
@@ -3281,6 +3286,12 @@ async def _setup_pick_lost(ctx, q, mid):
         pass
     if _gs(ctx, mid):
         await render_screen(ctx, mid)
+        return
+    if expired_message:
+        try:
+            await ctx.bot.send_message(q.message.chat_id, expired_message)
+        except Exception:
+            pass
 
 
 async def opener1_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3290,7 +3301,7 @@ async def opener1_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         u = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u or u.id != buid: await q.answer("Not yours!"); return
-        bxi = _batting_xi_for_setup(context, mid)
+        bxi = _setup_xi(context, mid, "bat_xi")
         pk = next((p for p in bxi if p["roster_id"] == rid), None)
         if not pk:
             await _setup_pick_lost(context, q, mid)
@@ -3312,7 +3323,7 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         u = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u or u.id != buid: await q.answer("Not yours!"); return
-        bxi = _batting_xi_for_setup(context, mid)
+        bxi = _setup_xi(context, mid, "bat_xi")
         pk = next((p for p in bxi if p["roster_id"] == rid), None)
         if not pk:
             await _setup_pick_lost(context, q, mid)
@@ -3330,7 +3341,7 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             m = session.query(Match).get(mid)
             bwu = session.query(User).get(m.bowling_first_id)
 
-        bwxi = _bowling_xi_for_setup(context, mid)
+        bwxi = _setup_xi(context, mid, "bowl_xi")
 
         # ── If the bowling user is the bot (vsbot innings 2 with user batting),
         # auto-pick the bowler instead of showing a picker tagged to the bot
@@ -3383,7 +3394,10 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Otherwise: human bowling user, show ALL 11 bowlers sorted by bowl rating.
         # Record what we're waiting on so /resume (and the heartbeat) re-show
-        # this picker rather than jumping straight to a delivery.
+        # this picker rather than jumping straight to a delivery. This only takes
+        # effect from innings 2 onwards: set_next_action updates an existing
+        # MatchState row, and innings 1 has none until select_bowler_callback
+        # creates one.
         set_next_action(context, mid, A_PICK_OPENING_BOWLER)
         all_bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
         btns = [[InlineKeyboardButton(
@@ -3406,7 +3420,7 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
         u = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u or u.id != bwuid: await q.answer("Not yours!"); return
 
-        bwxi = _bowling_xi_for_setup(context, mid)
+        bwxi = _setup_xi(context, mid, "bowl_xi")
         bowler = next((p for p in bwxi if p["roster_id"] == rid), None)
         if not bowler:
             await _setup_pick_lost(context, q, mid)
@@ -3694,7 +3708,7 @@ async def _show_innings_opening_bowler(ctx, mid):
         all_bowlers = sorted(s["bowl_xi"],
                              key=lambda x: x.get("bowl_rating", 0), reverse=True)
         btns = [[InlineKeyboardButton(
-            f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
+            f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p.get('bowl_rating', 0)}",
             callback_data=f"selbowl_{mid}_{bwu.id}_{p['roster_id']}")]
             for p in all_bowlers]
         await ctx.bot.send_message(

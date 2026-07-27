@@ -42,12 +42,17 @@ class _Ctx:
 # ════════════════════════════════════════════════════════════════════
 
 class StatKeyNormalizationTests(unittest.TestCase):
-    def test_int_keys_become_strings_on_deserialize(self):
+    def test_deserialize_leaves_stat_keys_in_the_canonical_string_form(self):
+        # JSON can't carry an int key, so this guards the round-trip shape the
+        # readers depend on rather than the int->str conversion itself — that is
+        # covered by the _normalize_state cases below, which is the only way a
+        # raw int key can reach the normalizer.
         raw = json.dumps({"bat_stats": {"12": {"runs": 40, "out": True}},
                           "bowl_stats": {"7": {"overs_done": 2}}})
         state = store._deserialize(raw)
         self.assertEqual(set(state["bat_stats"]), {"12"})
         self.assertEqual(set(state["bowl_stats"]), {"7"})
+        self.assertEqual(state["bat_stats"]["12"]["runs"], 40)
 
     def test_int_and_str_twins_merge_keeping_the_busier_row(self):
         # A state written before keys were canonicalized can hold both forms:
@@ -70,6 +75,30 @@ class StatKeyNormalizationTests(unittest.TestCase):
             },
         })
         self.assertEqual(state["bat_stats"]["9"]["runs"], 12)
+
+    def test_merge_carries_a_dismissal_off_the_losing_row(self):
+        # A non-striker run out has an "out" flag but no balls or runs to weigh,
+        # so picking purely by tally would drop the dismissal and resurrect them.
+        state = store._normalize_state({
+            "bat_stats": {
+                8: {"runs": 0, "balls": 0, "out": True,
+                    "how_out": "run out (Fielder)"},
+                "8": {"runs": 14, "balls": 11, "out": False, "how_out": ""},
+            },
+        })
+        row = state["bat_stats"]["8"]
+        self.assertEqual(row["runs"], 14)      # busier tally still wins
+        self.assertTrue(row["out"])            # dismissal survives
+        self.assertEqual(row["how_out"], "run out (Fielder)")
+
+    def test_merge_does_not_invent_a_dismissal(self):
+        state = store._normalize_state({
+            "bat_stats": {
+                8: {"runs": 0, "balls": 0, "out": False},
+                "8": {"runs": 14, "balls": 11, "out": False},
+            },
+        })
+        self.assertFalse(state["bat_stats"]["8"]["out"])
 
     def test_non_numeric_keys_are_left_alone(self):
         state = store._normalize_state({"bat_stats": {"total": {"runs": 3}}})
@@ -124,6 +153,15 @@ class StatAccessorTests(unittest.TestCase):
         row = hm._stats_row(stats, 3, {"runs": 0, "balls": 0})
         self.assertEqual(row["runs"], 25)
         self.assertEqual(list(stats), ["3"])
+
+    def test_stats_row_drops_an_int_twin_when_both_forms_exist(self):
+        # Leaving the twin means the store's later merge picks a winner by tally,
+        # which need not be the row this handler has been mutating.
+        stats = {"3": {"runs": 25, "balls": 20}, 3: {"runs": 0, "balls": 0}}
+        row = hm._stats_row(stats, 3, {"runs": 0, "balls": 0})
+        self.assertEqual(list(stats), ["3"])
+        self.assertIs(stats["3"], row)
+        self.assertEqual(row["runs"], 25)
 
     def test_stats_row_inserts_a_blank_under_the_string_key(self):
         stats = {}
@@ -274,13 +312,12 @@ class WatchdogTests(unittest.TestCase):
         async def _render(ctx, mid):
             self.rendered.append(mid)
 
+        sent = self.sent
+
         class _Bot:
-            outer = self
-
             async def send_message(self, chat_id, text, parse_mode=None):
-                WatchdogTests.instance.sent.append(text)
+                sent.append(text)
 
-        WatchdogTests.instance = self
         self.render = _render
         self.ctx = SimpleNamespace(bot=_Bot(), bot_data={})
 
@@ -339,6 +376,19 @@ class WatchdogTests(unittest.TestCase):
     def test_a_completed_ball_clears_the_nudge_count(self):
         self.ctx.bot_data["vsbot_nudges_7"] = 2
         self._run([self._live(), self._live(current_ball=1)],
+                  hm.A_PICK_DELIVERY)
+        self.assertNotIn("vsbot_nudges_7", self.ctx.bot_data)
+
+    def test_giving_up_clears_the_nudge_count_too(self):
+        # Terminal path: don't leave the counter behind for a restarted match to
+        # inherit.
+        self.ctx.bot_data["vsbot_nudges_7"] = hv.BOT_WATCHDOG_MAX_NUDGES
+        self._run([self._live(), self._live()], hm.A_PICK_DELIVERY)
+        self.assertNotIn("vsbot_nudges_7", self.ctx.bot_data)
+
+    def test_a_finished_match_clears_the_nudge_count(self):
+        self.ctx.bot_data["vsbot_nudges_7"] = 2
+        self._run([self._live(), self._live(result_finalized=True)],
                   hm.A_PICK_DELIVERY)
         self.assertNotIn("vsbot_nudges_7", self.ctx.bot_data)
 
@@ -672,6 +722,21 @@ class HeartbeatInningsBreakTests(unittest.TestCase):
         self.assertIsNotNone(state["current_bowler"])
         self.assertEqual(saved[-1], store.A_PICK_DELIVERY)
         self.assertNotIn("Auto openers", sent[-1])
+
+    def test_new_batsman_branch_skips_a_dismissed_batter(self):
+        # Same defect as pick_bot_next_batsman: a raw int lookup against a
+        # reloaded (string-keyed) state reads every batter as not-out.
+        state = self._state()
+        state["batting_order"] = [_p(i, f"Bat{i}") for i in range(1, 12)]
+        state["striker_idx"] = 0
+        state["non_striker_idx"] = 1
+        state["bat_stats"] = {"3": {"out": True}, "4": {"out": False}}
+        saved, rendered, sent = self._auto_decide(
+            store.A_PICK_NEW_BATSMAN, state)
+        self.assertEqual(state["batting_order"][state["striker_idx"]]["name"],
+                         "Bat4")
+        self.assertEqual(saved[-1], store.A_PICK_DELIVERY)
+        self.assertEqual(rendered, [9])
 
     def test_the_opening_bowler_comes_from_the_bowling_xi(self):
         state = self._state()

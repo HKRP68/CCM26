@@ -191,20 +191,36 @@ _ROSTER_KEYED_STATS = (
 )
 
 
+# Dismissal is sticky: a batter who is out stays out no matter which row of a
+# duplicate pair carries the bigger tally, so these fields survive the merge
+# even when they sit on the row that loses.
+_STICKY_STAT_FIELDS = ("out", "how_out", "bowled_by")
+
+
 def _merge_stat_rows(existing, incoming):
     """Fold a duplicate int-keyed row into its string-keyed twin.
 
     Only reachable for states written before keys were canonicalized, where one
     of the pair carries the real tallies and the other is a leftover zeroed row.
-    Keeping the busier row avoids resurrecting a dismissed batter or wiping a
-    part-finished innings mid-match.
+    Keeping the busier row avoids wiping a part-finished innings mid-match; the
+    sticky fields are then carried across so the merge can't resurrect a batter
+    who was dismissed without facing a ball (a non-striker run out has a
+    dismissal but no balls or runs to weigh).
     """
     def _work(row):
         if not isinstance(row, dict):
             return -1
         return (row.get("balls", 0) or 0) + (row.get("runs", 0) or 0)
 
-    return incoming if _work(incoming) > _work(existing) else existing
+    winner = incoming if _work(incoming) > _work(existing) else existing
+    if not isinstance(winner, dict) or winner.get("out"):
+        return winner
+    loser = existing if winner is incoming else incoming
+    if isinstance(loser, dict) and loser.get("out"):
+        for field in _STICKY_STAT_FIELDS:
+            if field in loser:
+                winner[field] = loser[field]
+    return winner
 
 
 def _str_keys(mapping):
