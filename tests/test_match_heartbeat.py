@@ -58,6 +58,8 @@ def test_timeout_auto_bowler_ignores_inactive_impact_replacement(monkeypatch):
     fake_state_store.A_PICK_SHOT = "PICK_SHOT"
     fake_state_store.A_PICK_NEW_BATSMAN = "PICK_NEW_BATSMAN"
     fake_state_store.A_PICK_NEW_BOWLER = A_PICK_NEW_BOWLER
+    fake_state_store.A_PICK_OPENERS = "PICK_OPENERS"
+    fake_state_store.A_PICK_OPENING_BOWLER = "PICK_OPENING_BOWLER"
     monkeypatch.setitem(sys.modules, "services.match_state_store", fake_state_store)
 
     fake_match = types.ModuleType("handlers.match")

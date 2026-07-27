@@ -140,6 +140,7 @@ async def _auto_decide(context, mid, state, next_act):
     from services.match_state_store import (
         save_state, A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
         A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER,
+        A_PICK_OPENERS, A_PICK_OPENING_BOWLER,
     )
 
     try:
@@ -202,10 +203,14 @@ async def _auto_decide(context, mid, state, next_act):
 
         elif next_act == A_PICK_NEW_BATSMAN:
             # Promote next available not-out batsman
+            from services.bot_ai import _stat_row
             for i, p in enumerate(state["batting_order"]):
                 if i == state["striker_idx"] or i == state["non_striker_idx"]:
                     continue
-                bs = state["bat_stats"].get(p["roster_id"], {})
+                # Tolerant read: after a cold read the keys are strings, and
+                # a raw int lookup would miss and report every batter not-out —
+                # promoting someone already dismissed.
+                bs = _stat_row(state.get("bat_stats"), p["roster_id"])
                 if not bs.get("out", False):
                     state["striker_idx"] = i
                     save_state(context, mid, state, next_action=A_PICK_DELIVERY)
@@ -231,6 +236,36 @@ async def _auto_decide(context, mid, state, next_act):
             await context.bot.send_message(
                 chat_id, f"🤖 Auto next bowler: <b>{new_bowler['name']}</b>",
                 parse_mode="HTML")
+            from handlers.match import render_screen
+            await render_screen(context, mid)
+
+        elif next_act in (A_PICK_OPENERS, A_PICK_OPENING_BOWLER):
+            # Nobody answered the innings-break picker. Field the top of the
+            # order and the best available bowler so the chase actually starts —
+            # both selections in one pass, rather than making the chat wait out
+            # a second idle window just for the bowler.
+            from services.bot_ai import pick_bot_next_bowler
+            from services.match_engine import _active_players
+            note = []
+            if next_act == A_PICK_OPENERS:
+                state["batting_order"] = list(state["bat_xi"])
+                state["striker_idx"] = 0
+                state["non_striker_idx"] = 1
+                state["next_batsman_idx"] = 2
+                openers = state["bat_xi"][:2]
+                note.append("🤖 Auto openers: <b>"
+                            + "</b> & <b>".join(p["name"] for p in openers)
+                            + "</b>")
+            # Over 1: no previous bowler and nobody has used any quota yet.
+            bowler = pick_bot_next_bowler(
+                _active_players(state["bowl_xi"]), None, {}, state["overs"])
+            state["current_bowler"] = bowler
+            state["prev_bowler_rid"] = None
+            state["selected_variation"] = None
+            note.append(f"🤖 Auto opening bowler: <b>{bowler['name']}</b>")
+            save_state(context, mid, state, next_action=A_PICK_DELIVERY)
+            await context.bot.send_message(chat_id, "\n".join(note),
+                                           parse_mode="HTML")
             from handlers.match import render_screen
             await render_screen(context, mid)
 
