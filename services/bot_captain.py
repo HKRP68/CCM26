@@ -156,6 +156,7 @@ DIFFICULTY_ORDER = ("easy", "normal", "hard")
 
 
 def normalize_difficulty(key):
+    """Coerce anything to a real difficulty key, defaulting to Normal."""
     key = (key or "").strip().lower()
     return key if key in DIFFICULTIES else DEFAULT_DIFFICULTY
 
@@ -169,6 +170,7 @@ def assign_difficulty(state, key=None):
 
 
 def _difficulty(state):
+    """This match's difficulty settings — Normal for a state that has none."""
     return DIFFICULTIES[normalize_difficulty((state or {}).get("bot_difficulty"))]
 
 
@@ -221,6 +223,7 @@ _rating = bot_tactics.rating
 
 
 def _traits_of(player):
+    """The set of trait effect keys on a player, ignoring malformed entries."""
     return {str((t or {}).get("effect_key") or "")
             for t in (player.get("traits") or []) if isinstance(t, dict)}
 
@@ -294,6 +297,7 @@ def _memory(state, create=True):
 
 
 def _record(bucket, key, runs, wickets):
+    """Fold one over's runs and wickets into a memory bucket for ``key``."""
     slot = bucket.get(key)
     if not isinstance(slot, dict):
         slot = {"n": 0, "runs": 0, "wkts": 0}
@@ -970,11 +974,13 @@ _BOWL_LABELS = {key: (emoji, label) for key, emoji, label in BOWLING_APPROACHES}
 
 
 def batting_label(key):
+    """A Batting Approach as it reads in chat, e.g. ``"💥 Ultra Attack"``."""
     emoji, label = _BAT_LABELS.get(key, _BAT_LABELS[DEFAULT_BATTING])
     return f"{emoji} {label}"
 
 
 def bowling_label(key):
+    """A Bowling Approach as it reads in chat, e.g. ``"🌀 Variation"``."""
     emoji, label = _BOWL_LABELS.get(key, _BOWL_LABELS[DEFAULT_BOWLING])
     return f"{emoji} {label}"
 

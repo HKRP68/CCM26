@@ -130,6 +130,7 @@ RM_ITERS = 400
 # ════════════════════════════════════════════════════════════════════
 
 def total_units(state):
+    """Overs (or 5-ball sets) in this innings — 20 unless the format says else."""
     try:
         return max(1, int((state or {}).get("overs") or 20))
     except (TypeError, ValueError):
@@ -137,6 +138,7 @@ def total_units(state):
 
 
 def current_unit(state):
+    """The over about to be bowled, 1-based."""
     try:
         return max(1, int((state or {}).get("current_over") or 1))
     except (TypeError, ValueError):
@@ -186,6 +188,7 @@ def rating(player, *keys, default=50.0):
 
 
 def striker(state):
+    """The batter on strike, or ``{}`` when the order cannot be read."""
     order = (state or {}).get("batting_order") or []
     idx = (state or {}).get("striker_idx", 0) or 0
     if 0 <= idx < len(order):
@@ -203,6 +206,7 @@ def striker_form(state):
 
 
 def wickets_lost(state):
+    """Wickets the batting side has already lost this innings."""
     try:
         return int((state or {}).get("total_wickets") or 0)
     except (TypeError, ValueError):
@@ -210,6 +214,8 @@ def wickets_lost(state):
 
 
 def wickets_in_hand(state):
+    """Wickets the batting side has left — the scarce resource the value model
+    prices every aggressive approach against."""
     try:
         limit = int((state or {}).get("wicket_limit") or 10)
     except (TypeError, ValueError):
@@ -218,6 +224,7 @@ def wickets_in_hand(state):
 
 
 def _balls_left(state):
+    """Legal balls remaining in the innings, falling back to whole overs."""
     try:
         return max(0, cipl_match.total_balls(state) - cipl_match.balls_bowled(state))
     except Exception:
@@ -225,6 +232,7 @@ def _balls_left(state):
 
 
 def _balls_per_unit(state):
+    """6 for T20, 5 for The Hundred — how long the over being modelled is."""
     try:
         return max(1, int(cipl_match.balls_per_unit(state)))
     except Exception:
@@ -304,6 +312,7 @@ def ball_probabilities(state, bowler=None):
 
 
 def _normalized(probs):
+    """Scale weights to sum to 1, falling back to uniform on a degenerate set."""
     total = sum(probs.values())
     if total <= 0:
         return {k: 1.0 / len(probs) for k in probs}
@@ -491,6 +500,7 @@ def _fingerprint(state, bowler):
 
 
 def _chase(state):
+    """The live chase maths, or ``None`` when this is not a second innings."""
     try:
         return cipl_match.chase(state)
     except Exception:
@@ -567,6 +577,8 @@ def matrix_is_decisive(matrix):
 
 
 def _regret_strategy(regret):
+    """Regret matching's next mix: play each action in proportion to how much
+    not having played it has cost so far. Uniform while nothing has regret yet."""
     pos = [r if r > 0.0 else 0.0 for r in regret]
     total = sum(pos)
     if total <= 0.0:

@@ -66,6 +66,7 @@ def level_for_match(bot_data, user_id):
 
 
 def _rows(mode, league, current, owner_id):
+    """The three difficulty buttons, with the player's last pick marked."""
     buttons = []
     for key in DIFFICULTY_ORDER:
         label = DIFFICULTIES[key]["label"]
