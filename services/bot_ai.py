@@ -215,16 +215,21 @@ def pick_bot_shot(striker, bowler, over, total_overs,
 # Bowler rotation — picks who bowls next
 # ════════════════════════════════════════════════════════════════════
 
-def _overs_done(bowl_stats, roster_id):
-    """Read a bowler's completed-overs count, tolerant of roster-id keys that
-    JSON serialization may have stringified (live state round-trips through the
-    match-state store, so ``bowl_stats`` keys are strings while ``roster_id`` in
-    the XI stays an int). A raw ``.get(int_key)`` would miss the string key and
-    silently report 0 overs, letting a bowler blow past their quota."""
-    row = bowl_stats.get(roster_id)
+def _stat_row(stats, roster_id):
+    """Read one player's stat row, tolerant of roster-id keys that JSON
+    serialization stringifies (live state round-trips through the match-state
+    store, so stat keys are strings while ``roster_id`` in the XI stays an int).
+    A raw ``.get(int_key)`` would miss the string key and report an empty row."""
+    row = (stats or {}).get(roster_id)
     if row is None:
-        row = bowl_stats.get(str(roster_id), {})
-    return row.get("overs_done", 0)
+        row = (stats or {}).get(str(roster_id))
+    return row or {}
+
+
+def _overs_done(bowl_stats, roster_id):
+    """Completed-overs count for a bowler. An empty row must not read as 0 overs
+    by accident — that would let a bowler blow past their quota."""
+    return _stat_row(bowl_stats, roster_id).get("overs_done", 0)
 
 
 def pick_bot_next_bowler(bowl_xi, prev_bowler_rid, bowl_stats, total_overs):
@@ -261,11 +266,15 @@ def pick_bot_next_bowler(bowl_xi, prev_bowler_rid, bowl_stats, total_overs):
 # ════════════════════════════════════════════════════════════════════
 
 def pick_bot_next_batsman(batting_order, striker_idx, non_striker_idx, bat_stats):
-    """Pick next batsman from batting order: first available not-out player."""
+    """Pick next batsman from batting order: first available not-out player.
+
+    Reads through ``_stat_row`` because a raw int-key lookup misses the string
+    keys a reloaded state carries — which made every batter look not-out and
+    sent an already-dismissed player back to the crease.
+    """
     for i, p in enumerate(batting_order):
         if i in (striker_idx, non_striker_idx):
             continue
-        bs = bat_stats.get(p["roster_id"], {})
-        if not bs.get("out", False):
+        if not _stat_row(bat_stats, p["roster_id"]).get("out", False):
             return i, p
     return None, None

@@ -19,13 +19,15 @@ Design:
     goes to the DB, exactly the pre-cache behavior).
 
 Action constants (next_action enum):
-  PICK_DELIVERY      — bowler picks variation (or spinner picks delivery directly)
-  PICK_LENGTH        — bowler picks length after picking variation (pacers only)
-  PICK_SHOT          — batsman picks shot
-  PICK_NEW_BATSMAN   — wicket fell, batting side picks next batsman
-  PICK_NEW_BOWLER    — over ended, bowling side picks next bowler
-  INNINGS_BREAK      — innings ended, transition to 2nd innings
-  COMPLETED          — match finished
+  PICK_DELIVERY        — bowler picks variation (or spinner picks delivery directly)
+  PICK_LENGTH          — bowler picks length after picking variation (pacers only)
+  PICK_SHOT            — batsman picks shot
+  PICK_NEW_BATSMAN     — wicket fell, batting side picks next batsman
+  PICK_NEW_BOWLER      — over ended, bowling side picks next bowler
+  PICK_OPENERS         — innings start, batting side picks its two openers
+  PICK_OPENING_BOWLER  — innings start, bowling side picks who bowls over 1
+  INNINGS_BREAK        — innings ended, transition to 2nd innings
+  COMPLETED            — match finished
 """
 
 import json
@@ -46,6 +48,12 @@ A_PICK_LENGTH = "PICK_LENGTH"
 A_PICK_SHOT = "PICK_SHOT"
 A_PICK_NEW_BATSMAN = "PICK_NEW_BATSMAN"
 A_PICK_NEW_BOWLER = "PICK_NEW_BOWLER"
+# Innings-start selections. These exist because an innings break waits on a
+# human pick that is NOT a delivery: pointing next_action at PICK_DELIVERY
+# through the break made /resume (and the heartbeat) bowl a phantom ball with
+# the previous innings' bowler, who by then belongs to the batting side.
+A_PICK_OPENERS = "PICK_OPENERS"
+A_PICK_OPENING_BOWLER = "PICK_OPENING_BOWLER"
 A_INNINGS_BREAK = "INNINGS_BREAK"
 A_COMPLETED = "COMPLETED"
 
@@ -169,8 +177,60 @@ def _serialize(state):
                            for k, v in state.items()}, default=str)
 
 
+# Per-player stat maps are keyed by ``roster_id``. JSON object keys are always
+# strings, so ``str(roster_id)`` is the only key form that survives a DB
+# round-trip unchanged — and it is what create_match_state / cipl_match write.
+# Any int key written by a live handler therefore turns into a string on the
+# next read, and ``stats[p["roster_id"]]`` starts missing: a reloaded match
+# forgets who is out and shows every batter as 0(0). Worse, a caller that then
+# re-creates the missing row under the int key ends up with two rows for one
+# player, one of which never updates. Canonicalize to the string form on the
+# way out of JSON so every tier agrees.
+_ROSTER_KEYED_STATS = (
+    "bat_stats", "bowl_stats", "inn1_bat_stats", "inn1_bowl_stats",
+)
+
+
+def _merge_stat_rows(existing, incoming):
+    """Fold a duplicate int-keyed row into its string-keyed twin.
+
+    Only reachable for states written before keys were canonicalized, where one
+    of the pair carries the real tallies and the other is a leftover zeroed row.
+    Keeping the busier row avoids resurrecting a dismissed batter or wiping a
+    part-finished innings mid-match.
+    """
+    def _work(row):
+        if not isinstance(row, dict):
+            return -1
+        return (row.get("balls", 0) or 0) + (row.get("runs", 0) or 0)
+
+    return incoming if _work(incoming) > _work(existing) else existing
+
+
+def _str_keys(mapping):
+    """Re-key a stat dict by ``str(roster_id)``, merging any int/str duplicates."""
+    out = {}
+    for k, v in mapping.items():
+        key = str(k)
+        if key in out:
+            v = _merge_stat_rows(out[key], v)
+        out[key] = v
+    return out
+
+
+def _normalize_state(state):
+    """Canonicalize roster-keyed stat maps to the JSON-stable string form."""
+    if not isinstance(state, dict):
+        return state
+    for key in _ROSTER_KEYED_STATS:
+        stats = state.get(key)
+        if isinstance(stats, dict) and stats:
+            state[key] = _str_keys(stats)
+    return state
+
+
 def _deserialize(json_str):
-    return json.loads(json_str) if json_str else {}
+    return _normalize_state(json.loads(json_str)) if json_str else {}
 
 
 @perf_timed("store.get_state")
@@ -248,6 +308,12 @@ def save_state(ctx, mid, state, next_action=None, last_prompt_msg_id=None,
 
     Returns the new ball_seq when bump_ball_seq is True (else None).
     """
+    # Canonicalize roster-keyed stat maps in place before anything caches them,
+    # so the in-memory tier and the DB agree on key form. Without this, a live
+    # handler's int keys survive in bot_data and only turn into strings on the
+    # next cold read — a difference the readers would trip over.
+    _normalize_state(state)
+
     # Update memory immediately (fast path)
     ctx.bot_data[_mem_key(mid)] = state
 

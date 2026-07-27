@@ -46,6 +46,150 @@ _ADAPTIVE_TRAIT_BY_CATEGORY = {
 }
 
 
+# ── Pacing ───────────────────────────────────────────────────────────
+# Small deliberate pauses so the AI's turn reads as a beat in the game rather
+# than instant text. Kept short: at 60+ balls a match, every tenth of a second
+# here is multiplied by the whole scorecard.
+BOT_DELIVERY_PACING = 0.4   # before the AI's delivery reaches the batter
+BOT_SHOT_PACING = 0.35      # before the AI plays its shot
+
+# ── AI-turn watchdog ─────────────────────────────────────────────────
+# The AI needs no thinking time, so if the state still says "AI to act" several
+# seconds after we handed it the turn, that turn died — a Telegram send that
+# failed both attempts, a state write lost to a redeploy, a task killed
+# mid-sleep. The player has no button to press in that situation and the global
+# match heartbeat only re-renders after 90s idle, which is why /vsbot so often
+# needed a manual /resume. Detect it in seconds and re-dispatch instead.
+BOT_WATCHDOG_DELAY = 8        # seconds to allow an AI turn before nudging it
+BOT_WATCHDOG_MAX_NUDGES = 3   # after this many, tell the player instead of looping
+
+
+def _is_spectator_match(s):
+    """True when both sides are AI (/botvsbot), so no player prompt is coming."""
+    return (s.get("bat_user_tg") == BOT_TG_ID
+            and s.get("bowl_user_tg") == BOT_TG_ID)
+
+
+async def _ai_say(context, s, line):
+    """Surface one AI announcement the cheapest way that still gets it seen.
+
+    In a normal /vsbot match a player prompt always follows, so the line rides
+    along in that prompt's header for free. A spectator bot-vs-bot match has no
+    prompt to attach to, so there the line has to be its own message.
+
+    Call this before persisting ``s`` — the queued form is part of the state.
+    """
+    from handlers.match import _queue_ai_note
+    if _is_spectator_match(s):
+        try:
+            await context.bot.send_message(s["chat_id"], line, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+    _queue_ai_note(s, line)
+
+
+def _bot_owes_action(s, next_act):
+    """True when ``next_act`` is an action the AI must take for itself."""
+    from handlers.match import (
+        A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT,
+        A_PICK_NEW_BATSMAN, A_PICK_NEW_BOWLER,
+    )
+    bat_is_bot = s.get("bat_user_tg") == BOT_TG_ID
+    bowl_is_bot = s.get("bowl_user_tg") == BOT_TG_ID
+    if next_act in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+        return bowl_is_bot
+    if next_act in (A_PICK_SHOT, A_PICK_NEW_BATSMAN):
+        return bat_is_bot
+    return False
+
+
+def _ball_signature(s):
+    """A value that changes on every delivery, legal or not.
+
+    A legal ball advances ``current_ball``; a wide or no-ball adds at least one
+    run instead. So two consecutive deliveries can never share a signature,
+    which is what lets the watchdog tell "the AI's turn never happened" apart
+    from "we are already a ball further on". Read straight from the in-memory
+    state so arming the watchdog costs no DB round trip on the ball hot path.
+    """
+    return (s.get("innings"), s.get("current_over"), s.get("current_ball"),
+            s.get("total_runs"), s.get("total_wickets"))
+
+
+def _arm_bot_watchdog(context, mid):
+    """(Re)arm the stall detector for a match whose next action is the AI's.
+
+    Snapshots where the match stands now, then checks back after
+    ``BOT_WATCHDOG_DELAY``. If the match is still on an AI-owned action and has
+    not moved a ball, that AI turn died — re-dispatch through ``render_screen``,
+    which re-queues it. The nudge counter bounds the retries so a permanently
+    broken match reports itself to the player instead of spinning forever.
+    """
+    from handlers.match import _gs
+
+    key = f"vsbot_watchdog_{mid}"
+    nudges_key = f"vsbot_nudges_{mid}"
+    prev = context.bot_data.get(key)
+    if prev and not prev.done():
+        prev.cancel()
+
+    armed_state = _gs(context, mid)
+    if not armed_state:
+        return None
+    before = _ball_signature(armed_state)
+
+    async def _runner():
+        try:
+            await asyncio.sleep(BOT_WATCHDOG_DELAY)
+        except asyncio.CancelledError:
+            return
+
+        from handlers.match import render_screen
+        from services.match_state_store import get_next_action
+
+        s = _gs(context, mid)
+        if not s or not s.get("is_vsbot") or s.get("result_finalized"):
+            return
+        if _ball_signature(s) != before:
+            context.bot_data.pop(nudges_key, None)  # play moved on
+            return
+
+        next_act = get_next_action(context, mid)
+        if not _bot_owes_action(s, next_act):
+            return  # waiting on the player, not on us — the heartbeat owns this
+
+        nudges = context.bot_data.get(nudges_key, 0) + 1
+        context.bot_data[nudges_key] = nudges
+        if nudges > BOT_WATCHDOG_MAX_NUDGES:
+            logger.error(
+                "vsbot match %s stuck on %s after %s nudges — asking the player",
+                mid, next_act, nudges - 1)
+            try:
+                await context.bot.send_message(
+                    s["chat_id"],
+                    "⚠️ The AI's turn isn't going through. Your progress is "
+                    "saved — send /r to retry, or /endmatch to stop here.",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            return
+
+        logger.warning("vsbot match %s stalled on %s — re-dispatching (nudge %s)",
+                       mid, next_act, nudges)
+        await render_screen(context, mid)
+
+    task = asyncio.create_task(_runner(), name=key)
+    context.bot_data[key] = task
+
+    def _cleanup(done_task):
+        if context.bot_data.get(key) is done_task:
+            context.bot_data.pop(key, None)
+
+    task.add_done_callback(_cleanup)
+    return task
+
+
 def _queue_bot_action(context, mid, action_name, action):
     """Queue one AI action without blocking Telegram callback handling.
 
@@ -79,6 +223,10 @@ def _queue_bot_action(context, mid, action_name, action):
             context.bot_data.pop(key, None)
 
     task.add_done_callback(_cleanup)
+    # The task above can die in ways its own except clause never sees (cancelled
+    # by a shutdown, or "succeeding" after both Telegram sends failed silently),
+    # so watch the state itself rather than trusting the task.
+    _arm_bot_watchdog(context, mid)
     return task
 
 
@@ -745,6 +893,38 @@ def build_adaptive_bot_xi(session, user_id):
 # User opener picker (for /vsbot only)
 # ════════════════════════════════════════════════════════════════════
 
+def _setup_xi(context, mid, key):
+    """Read ``bat_xi``/``bowl_xi`` for a setup picker, state first.
+
+    ``bot_data`` is process memory: after a restart the XI is gone and the
+    picker callback used to fall through to a bare ``return``, leaving dead
+    buttons with no message. Once the match has state, that state is durable.
+    """
+    from handlers.match import _gs
+    s = _gs(context, mid)
+    if s and s.get(key):
+        return s[key]
+    return context.bot_data.get(f"{key}_{mid}", [])
+
+
+async def _vsbot_pick_lost(context, q, mid):
+    """Explain a stale setup button instead of ignoring the tap."""
+    try:
+        await q.answer("That pick is no longer available.", show_alert=True)
+    except Exception:
+        pass
+    from handlers.match import _gs, render_screen
+    if _gs(context, mid):
+        await render_screen(context, mid)
+        return
+    try:
+        await context.bot.send_message(
+            q.message.chat_id,
+            "⚠️ That /vsbot setup expired. Start a fresh match with /vsbot.")
+    except Exception:
+        pass
+
+
 async def _show_user_opener_picker(context, chat_id, mid, user, bat_xi, opener_num=1):
     """Show the user a picker for opener 1 or 2."""
     if opener_num == 1:
@@ -787,12 +967,12 @@ async def vsbot_op1_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not user or user.id != uid:
             await q.answer("Not yours!")
             return
-        await q.answer()
-
-        bat_xi = context.bot_data.get(f"bat_xi_{mid}", [])
+        bat_xi = _setup_xi(context, mid, "bat_xi")
         chosen = next((p for p in bat_xi if p["roster_id"] == rid), None)
         if not chosen:
+            await _vsbot_pick_lost(context, q, mid)
             return
+        await q.answer()
         context.bot_data[f"opener1_{mid}"] = chosen
 
         try:
@@ -824,12 +1004,12 @@ async def vsbot_op2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not user or user.id != uid:
             await q.answer("Not yours!")
             return
-        await q.answer()
-
-        bat_xi = context.bot_data.get(f"bat_xi_{mid}", [])
+        bat_xi = _setup_xi(context, mid, "bat_xi")
         chosen = next((p for p in bat_xi if p["roster_id"] == rid), None)
         if not chosen:
+            await _vsbot_pick_lost(context, q, mid)
             return
+        await q.answer()
         context.bot_data[f"opener2_{mid}"] = chosen
         op1 = context.bot_data.get(f"opener1_{mid}", {})
 
@@ -843,7 +1023,7 @@ async def vsbot_op2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Now bowling side picks opening bowler
         bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
         bot_uid = context.bot_data.get(f"vsbot_bot_uid_{mid}")
-        bowl_xi = context.bot_data.get(f"bowl_xi_{mid}", [])
+        bowl_xi = _setup_xi(context, mid, "bowl_xi")
 
         if bowl_uid == bot_uid:
             # Bot picks bowler
@@ -858,8 +1038,12 @@ async def vsbot_op2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         session.close()
 
 
-async def _show_user_opening_bowler(context, chat_id, mid, bwu, bowl_xi):
-    """Show the user a picker for opening bowler."""
+async def _show_user_opening_bowler(context, chat_id, mid, bwu, bowl_xi, note=""):
+    """Show the user a picker for opening bowler.
+
+    ``note`` carries any pending AI announcement (e.g. the bot's openers) so it
+    arrives in this message instead of costing a separate send.
+    """
     sorted_xi = sorted(bowl_xi, key=lambda x: x["bowl_rating"], reverse=True)
     btns = [[InlineKeyboardButton(
         f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
@@ -867,7 +1051,7 @@ async def _show_user_opening_bowler(context, chat_id, mid, bwu, bowl_xi):
     )] for p in sorted_xi]
     sent = await context.bot.send_message(
         chat_id,
-        f"🎳 <b>SELECT OPENING BOWLER</b>\n\n@{bwu.username}, pick:",
+        f"{note}🎳 <b>SELECT OPENING BOWLER</b>\n\n@{bwu.username}, pick:",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns),
     )
     try:
@@ -893,12 +1077,12 @@ async def vsbot_selbowl_callback(update: Update, context: ContextTypes.DEFAULT_T
         if not user or user.id != bwuid:
             await q.answer("Not yours!")
             return
-        await q.answer()
-
-        bowl_xi = context.bot_data.get(f"bowl_xi_{mid}", [])
+        bowl_xi = _setup_xi(context, mid, "bowl_xi")
         bowler = next((p for p in bowl_xi if p["roster_id"] == rid), None)
         if not bowler:
+            await _vsbot_pick_lost(context, q, mid)
             return
+        await q.answer()
 
         try:
             await q.edit_message_reply_markup(reply_markup=None)
@@ -908,7 +1092,7 @@ async def vsbot_selbowl_callback(update: Update, context: ContextTypes.DEFAULT_T
         # ── INNINGS 2 path: state already exists, just plug in the bowler ──
         # If we ALSO build a fresh state here, we'd reset innings, target, and
         # all the inn1_* snapshots — sending the user back to bat from scratch.
-        from handlers.match import _gs, _ss, render_screen, _send_batsman_card, _send_bowler_card
+        from handlers.match import _gs, _ss, render_screen, _send_innings_cards
         from services.match_state_store import A_PICK_DELIVERY
         existing = _gs(context, mid)
         if existing and existing.get("innings") == 2:
@@ -938,9 +1122,9 @@ async def vsbot_selbowl_callback(update: Update, context: ContextTypes.DEFAULT_T
                     f"🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
                     parse_mode="HTML",
                 )
-                await _send_batsman_card(context, q.message.chat_id, op1, bat_team_id)
-                await _send_batsman_card(context, q.message.chat_id, op2, bat_team_id)
-                await _send_bowler_card(context, q.message.chat_id, bowler, bowl_team_id)
+                await _send_innings_cards(
+                    context, q.message.chat_id, (op1, op2), bowler,
+                    bat_team_id, bowl_team_id)
             except Exception:
                 logger.exception("inn2 cards failed (non-fatal)")
 
@@ -982,7 +1166,7 @@ async def _bot_pick_and_start(context, chat_id, mid):
 async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
     """Initialize match state and start the first delivery."""
     from handlers.match import (
-        _ss, _gs, _show_delivery, _send_batsman_card, _send_bowler_card,
+        _ss, _gs, _show_delivery, _send_innings_cards,
     )
 
     session = get_session()
@@ -1044,11 +1228,13 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
             "current_bowler": opening_bowler,
             "prev_bowler_rid": None,
 
-            "bat_stats": {p["roster_id"]: {
+            # Keyed by str(roster_id) to match create_match_state and to survive
+            # the JSON round-trip the state store does (see match_state_store).
+            "bat_stats": {str(p["roster_id"]): {
                 "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
                 "out": False, "how_out": "", "bowled_by": "",
             } for p in bat_xi},
-            "bowl_stats": {p["roster_id"]: {
+            "bowl_stats": {str(p["roster_id"]): {
                 "balls": 0, "runs": 0, "wickets": 0,
                 "overs_done": 0, "this_over_balls": 0,
                 "maidens": 0, "this_over_runs": 0,
@@ -1064,26 +1250,12 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
         from services.match_state_store import save_state, A_PICK_DELIVERY
         save_state(context, mid, state, next_action=A_PICK_DELIVERY)
 
-        # Show opening cards
-        striker = bat_xi[striker_idx]
-        non_striker = bat_xi[non_striker_idx]
-
-        # For bot players, just send a text intro instead of card image
-        if not striker.get("is_bot_player"):
-            try:
-                await _send_batsman_card(context, chat_id, striker, bat_user.id)
-            except Exception:
-                pass
-        if not non_striker.get("is_bot_player"):
-            try:
-                await _send_batsman_card(context, chat_id, non_striker, bat_user.id)
-            except Exception:
-                pass
-        if not opening_bowler.get("is_bot_player"):
-            try:
-                await _send_bowler_card(context, chat_id, opening_bowler, bowl_user.id)
-            except Exception:
-                pass
+        # Show opening cards (bot players are skipped; the rest go out together
+        # rather than one upload after another)
+        await _send_innings_cards(
+            context, chat_id,
+            (bat_xi[striker_idx], bat_xi[non_striker_idx]), opening_bowler,
+            bat_user.id, bowl_user.id)
 
         # First delivery prompt. Route through the dispatcher so bot actions
         # use the same responsive queue as every later delivery.
@@ -1113,8 +1285,7 @@ def _get_vsbot_difficulty(session, context, mid):
 
 async def _bot_bowl_delivery(context, mid):
     """Bot is bowling — auto-pick variation/length and proceed to shot."""
-    import asyncio
-    await asyncio.sleep(1.5)  # Pacing
+    await asyncio.sleep(BOT_DELIVERY_PACING)
 
     from handlers.match import _gs, _ss, render_screen, _show_shot
     from services.bot_ai import pick_bot_delivery
@@ -1130,22 +1301,14 @@ async def _bot_bowl_delivery(context, mid):
     pick = pick_bot_delivery(bowler, over, total_overs, difficulty)
     s["current_delivery"] = pick["delivery"]
     s["selected_variation"] = None
+    # The delivery rides on the shot prompt rather than a message of its own —
+    # the batter reads both together anyway, and one send beats two.
+    await _ai_say(context, s, f"🤖 {bowler['name']}: <b>{pick['delivery']}</b>")
     # Persist the shot step before rendering it.  Recovery must never replay
     # a bot delivery after the AI has already selected one.
     from services.match_state_store import A_PICK_SHOT
     _ss(context, mid, s, next_action=A_PICK_SHOT)
 
-    # Announce
-    try:
-        await context.bot.send_message(
-            s["chat_id"],
-            f"🤖 {bowler['name']}: <b>{pick['delivery']}</b>",
-            parse_mode="HTML",
-        )
-    except Exception:
-        pass
-
-    # Now show user the shot picker (since user is batting if bot is bowling)
     if s.get("bat_user_tg") == BOT_TG_ID:
         # Spectator bot-vs-bot mode: dispatch the next AI choice separately
         # instead of recursively awaiting the entire match.
@@ -1160,8 +1323,7 @@ async def _bot_bowl_delivery(context, mid):
 
 async def _bot_play_shot(context, mid):
     """Bot is batting — auto-pick a shot and route through shot processing."""
-    import asyncio
-    await asyncio.sleep(1.2)  # pacing
+    await asyncio.sleep(BOT_SHOT_PACING)
 
     from handlers.match import _gs, _bot_process_shot
     from services.bot_ai import pick_bot_shot
@@ -1183,14 +1345,10 @@ async def _bot_play_shot(context, mid):
         current_ball=s["current_ball"], difficulty=difficulty,
     )
 
-    try:
-        await context.bot.send_message(
-            s["chat_id"],
-            f"🤖 {striker['name']} plays: <b>{shot_name}</b>",
-            parse_mode="HTML",
-        )
-    except Exception:
-        pass
+    # No "plays: <shot>" message here on purpose — the ball result that lands
+    # a moment later already reads "🏏 <striker> played <shot>", so announcing
+    # it first only spent a Telegram round trip to say the same thing twice.
+    logger.debug("vsbot match %s: %s plays %s", mid, striker["name"], shot_name)
 
     # Process the shot using a slim version of shot_callback logic
     await _bot_process_shot(context, mid, shot_idx)
@@ -1239,18 +1397,12 @@ async def vsbot_auto_continue(context, mid):
                 next_action = (A_PICK_NEW_BOWLER
                                if s["current_ball"] == 0 and s["current_over"] > 1
                                else A_PICK_DELIVERY)
+                await _ai_say(context, s, f"🤖 New batsman: <b>{p['name']}</b>")
                 _ss(context, mid, s, next_action=next_action)
-                try:
-                    await context.bot.send_message(
-                        s["chat_id"],
-                        f"🤖 New batsman: <b>{p['name']}</b>",
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    pass
                 # We handled the batsman selection. Always route the next
                 # state through the dispatcher: it may be a fresh delivery or,
                 # after a last-ball wicket, the next-over bowler picker.
+                _arm_bot_watchdog(context, mid)
                 from handlers.match import render_screen
                 await render_screen(context, mid)
                 return True
@@ -1270,17 +1422,14 @@ async def vsbot_auto_continue(context, mid):
                 s["overs"],
             )
             s["current_bowler"] = new_bowler
+            await _ai_say(
+                context, s,
+                f"🤖 New bowler: <b>{new_bowler['name']}</b> | "
+                f"{new_bowler.get('bowl_hand','R')[:1]}-{new_bowler['bowl_style']}")
             _ss(context, mid, s, next_action=A_PICK_DELIVERY)
-            try:
-                await context.bot.send_message(
-                    s["chat_id"],
-                    f"🤖 New bowler: <b>{new_bowler['name']}</b> | {new_bowler.get('bowl_hand','R')[:1]}-{new_bowler['bowl_style']}",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
             # Continue through the dispatcher.  AI work is queued below so
             # a full spectator match does not become one recursive await chain.
+            _arm_bot_watchdog(context, mid)
             from handlers.match import render_screen
             await render_screen(context, mid)
             return True
