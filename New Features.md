@@ -372,3 +372,25 @@ how far the solver leads, how wide its mix stays, how hard it presses a read on
 you, and how often it simply misjudges an over. It never changes the squad, the
 engine or the rules: an Easy bot plays under the same bowler quotas and the same
 laws as a Hard one.
+
+### Scorecard attribution (2026 update)
+
+* **The bot's Approach is no longer published.** The over summary used to print
+  "🤖 Bot's plan: 🌀 Variation" after every over, on the reasoning that there was
+  no opponent to keep it from. But the player *is* the opponent: a bot whose
+  every pick is printed is a bot whose mix can be written down over a few matches
+  and countered, which defeats the point of solving for an unexploitable one. Its
+  plans are now hidden exactly as a human captain's are. What the bot has
+  *noticed* is still said out loud ("it has spotted three straight Ultra Attack
+  overs") — a warning is not a plan, and it keeps the mind game visible.
+* **A bot-run side is named on the summary card** — `RCB (Bot)`. In a league bot
+  match the bot fields a real franchise, so without it "RCB won by 8 wickets"
+  reads exactly like a result against a human. Applied at render time only; the
+  plain team name stays the key for POTM and result logic.
+* **The archived text scorecard credits the captains** — `RCB (@alice) vs CSK
+  (@bob)`, with a bot side credited as `(Bot)`. `MatchNo<id>.txt` is the durable
+  record, and two different players fielding RCB previously produced identical
+  files. The archive also now carries the pitch, the ground and the Player of the
+  Match, which the on-screen card had and the file did not. An `@` is only
+  prefixed when the stored value could actually be a handle — a first name is
+  left as plain text rather than dressed up as one.

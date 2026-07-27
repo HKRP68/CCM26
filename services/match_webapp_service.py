@@ -2406,7 +2406,7 @@ def build_scorecard(match_id, user_id):
 # ══════════════════ Persisted scorecards (completed matches) ═════════
 
 def save_final_scorecard(session, match_id, result_text=None, extra_innings=None,
-                         super_over=None):
+                         super_over=None, potm=None):
     """Snapshot the final scorecard from live state into MatchScorecard so it
     can be viewed read-only after the match. Idempotent. Call at completion,
     BEFORE the live state is cleaned up.
@@ -2414,7 +2414,8 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
     ``extra_innings`` (optional) is appended after the main innings — used to
     carry Super Over innings so the Mini App shows them like the main match.
     ``super_over`` (optional) is a compact summary (winner + per-innings totals)
-    surfaced on the Mini App result screen.
+    surfaced on the Mini App result screen. ``potm`` (optional) is
+    ``(name, stats, team)`` for the archived text scorecard's byline.
     """
     import json as _json
     from models import MatchScorecard
@@ -2451,23 +2452,114 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
     # Archive a human-readable text scorecard (MatchNo<id>.txt) to the Telegram
     # storage channel — once, on first save — for every match that flows through
     # this seam (Mini-App /cm, /cipl, Super Over), complete or abandoned.
-    _archive_text_scorecard(match_id, all_innings, result_text, super_over)
+    _archive_text_scorecard(match_id, all_innings, result_text, super_over,
+                            potm=potm)
     return True
 
 
-def _build_text_scorecard(match_id, innings, result_text=None, super_over=None):
+BOT_CREDIT = "Bot"
+
+
+def _team_credits(state):
+    """``{team name: "@username"}`` for the two captains in a live match state.
+
+    The archived scorecard used to name only the teams, which is fine for a
+    league fixture and useless for working out *who* played it months later —
+    two different players fielding RCB produce identical files. The live state
+    still holds both captains when the archive is written, so the credit is
+    recoverable exactly once: here.
+
+    A bot side is credited as "Bot" rather than given an @handle, since the
+    shared bot user is not a person anyone can look up.
+    """
+    if not isinstance(state, dict):
+        return {}
+    names = state.get("user_names") or {}
+    bot_uid = state.get("bot_user_id") if state.get("is_bot_match") else None
+
+    credits = {}
+    for side in ("bat", "bowl"):
+        team = state.get(f"{side}_team_name")
+        if not team:
+            continue
+        if bot_uid is not None and state.get(f"{side}_team_id") == bot_uid:
+            credits[team] = BOT_CREDIT
+            continue
+        raw = names.get(str(state.get(f"{side}_user_tg")))
+        if not raw:
+            continue
+        raw = str(raw).strip()
+        # user_names holds "username or first_name". A handle has no spaces, so
+        # only prefix "@" when the value can actually be one — inventing
+        # "@Ranjan Himanshu" would be worse than plain text.
+        credits[team] = raw if (" " in raw or raw.startswith("@")) else f"@{raw}"
+
+    # Innings 1's batting side is stored under its own key once the innings
+    # closes, and by then bat_/bowl_ have swapped — cover it either way.
+    inn1 = state.get("inn1_team") or state.get("inn1_bat_team")
+    if inn1 and inn1 not in credits and len(credits) == 1:
+        (other,) = credits.keys()
+        if other != inn1:
+            credits[inn1] = credits[other]
+    return credits
+
+
+def _credited(team, credits):
+    """``"RCB"`` → ``"RCB (@alice)"`` when we know who was captaining it."""
+    tag = (credits or {}).get(team)
+    return f"{team} ({tag})" if tag else team
+
+
+def _potm_line(potm, credits=None):
+    """``"Player of the Match: Kohli (74(48)) — RCB (@alice)"``, or ``None``."""
+    if not potm:
+        return None
+    name, stats, team = (list(potm) + [None, None, None])[:3]
+    if not name:
+        return None
+    line = f"Player of the Match: {name}"
+    if stats:
+        line += f" ({stats})"
+    if team:
+        line += f" — {_credited(team, credits)}"
+    return line
+
+
+def _build_text_scorecard(match_id, innings, result_text=None, super_over=None,
+                          state=None, potm=None):
     """Render the persisted innings list into a plain-text scorecard string
-    (same spirit as the main-engine MatchNo<id>.txt archive)."""
+    (same spirit as the main-engine MatchNo<id>.txt archive).
+
+    ``state`` is the live match state, still present when the archive is
+    written. It carries the things the persisted innings list does not — who
+    captained each side, the pitch, the ground — and every one of them is worth
+    more in an archive than on screen, because the archive is what anyone reads
+    after the match is gone. ``potm`` is ``(name, stats, team)`` for the Player
+    of the Match, which the on-screen card has always shown and this file never
+    did.
+    """
+    credits = _team_credits(state)
     teams = [inn.get("bat_team") or f"Innings {inn.get('number', '?')}" for inn in innings]
-    title = " vs ".join(dict.fromkeys(t for t in teams if t)) or "Match"
+    title = " vs ".join(_credited(t, credits)
+                        for t in dict.fromkeys(t for t in teams if t)) or "Match"
     out = [f"Match Summary: {title}", f"Match Number: #{match_id}"]
+    for label, key in (("Pitch", "pitch_type"), ("Stadium", "stadium")):
+        value = (state or {}).get(key)
+        if value:
+            out.append(f"{label}: {value}")
     if result_text:
         out.append(f"Result: {result_text}")
+    potm_line = _potm_line(potm, credits)
+    if potm_line:
+        out.append(potm_line)
     out.append("")
 
     for inn in innings:
         bat_team = inn.get("bat_team") or f"Innings {inn.get('number', '?')}"
-        out.append(f"{bat_team.upper()} INNINGS")
+        # Only the team name is shouted — an upper-cased "@ALICE" reads like a
+        # different handle from the one it credits.
+        tag = credits.get(bat_team)
+        out.append(f"{bat_team.upper()} INNINGS" + (f"  —  {tag}" if tag else ""))
         bsep = "-" * 95
         out.append(bsep)
         out.append(f"{'Batsman':<22}{'Status':<38}{'R':>3} {'B':>4} {'4s':>4} {'6s':>4} {'SR':>7}")
@@ -2500,7 +2592,8 @@ def _build_text_scorecard(match_id, innings, result_text=None, super_over=None):
     return "\n".join(out).rstrip() + "\n"
 
 
-def _archive_text_scorecard(match_id, innings, result_text, super_over=None):
+def _archive_text_scorecard(match_id, innings, result_text, super_over=None,
+                            potm=None):
     """Best-effort, non-blocking upload of the text scorecard. Schedules the
     async upload on the running loop; silently no-ops if storage is unconfigured
     or there is no running loop."""
@@ -2508,7 +2601,12 @@ def _archive_text_scorecard(match_id, innings, result_text, super_over=None):
         from services import tg_storage_service
         if not tg_storage_service.is_configured():
             return
-        text = _build_text_scorecard(match_id, innings, result_text, super_over)
+        # Read the live state here rather than taking it from the caller: every
+        # entry point into this archive (Mini-App /cm, /cipl, Super Over) has a
+        # state in the store at completion time, and none of them had to be
+        # changed to say so.
+        text = _build_text_scorecard(match_id, innings, result_text, super_over,
+                                     state=mwa.get_state(match_id), potm=potm)
         import asyncio
         loop = asyncio.get_running_loop()
         loop.create_task(tg_storage_service.upload_text_async(

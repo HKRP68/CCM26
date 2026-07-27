@@ -174,10 +174,14 @@ class BotTurnFlowTests(unittest.TestCase):
         first_send = self.ctx.bot.send_message.call_args_list[0]
         self.assertIsNone(first_send.kwargs.get("reply_markup"))
 
-    def test_over_summary_reports_the_plan_the_bot_actually_used(self):
-        """A completed over clears both approaches on the state, so the summary
-        must be built from the plan captured before the over was simulated —
-        otherwise it always reports the neutral default."""
+    def test_the_over_summary_never_publishes_the_bot_s_plan(self):
+        """The summary used to print "Bot's plan: 🌀 Variation" after every over.
+
+        That was a mistake: the player *is* the opponent, and a bot whose every
+        pick is published is a bot whose mix can be written down over a few
+        matches and countered. Its approach is now kept exactly as a human
+        captain's is — the over tells you what happened, not what was planned.
+        """
         from services import bot_captain
 
         state = self._state(bot_bowls=True)
@@ -185,20 +189,28 @@ class BotTurnFlowTests(unittest.TestCase):
         state["bowling_approach"] = "variation"
         state["batting_approach"] = "balanced"
 
-        plan = cp._bot_plan_label(state)
-        self.assertEqual(plan, bot_captain.bowling_label("variation"))
-
         summary = cipl_match.simulate_over(state)
         self.assertIsNone(state["bowling_approach"])   # cleared for the next over
-        text = cp._render_over_summary(state, summary, bot_plan=plan)
-        self.assertIn(bot_captain.bowling_label("variation"), text)
-        self.assertNotIn(bot_captain.bowling_label("balanced"), text)
+        text = cp._render_over_summary(state, summary)
 
-    def test_a_human_match_summary_has_no_bot_plan_line(self):
+        self.assertNotIn("Bot's plan", text)
+        for key in bot_captain.BOWL_PLANS:
+            self.assertNotIn(bot_captain.bowling_label(key), text)
+        for key in bot_captain.BAT_LADDER:
+            self.assertNotIn(bot_captain.batting_label(key), text)
+        # The over itself is still reported in full.
+        self.assertIn(summary["bowler"]["name"], text)
+
+    def test_a_human_match_summary_carries_no_bot_line_at_all(self):
         state = self._state(bot_bowls=True)
         state["is_bot_match"] = False
+        state["current_bowler"] = cipl_match.eligible_bowlers(state)[0]
         state["bowling_approach"] = "variation"
-        self.assertIsNone(cp._bot_plan_label(state))
+        state["batting_approach"] = "balanced"
+        summary = cipl_match.simulate_over(state)
+        text = cp._render_over_summary(state, summary)
+        self.assertNotIn("🤖", text)
+        self.assertNotIn("🧠", text)
 
     def test_a_failed_bot_toss_launch_still_reaches_the_player(self):
         """On the bot-elects route the callback query was already answered during

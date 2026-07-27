@@ -309,6 +309,42 @@ def _is_bot_match(state):
     return bool(state) and bool(state.get("is_bot_match"))
 
 
+BOT_TEAM_SUFFIX = "(Bot)"
+
+
+def bot_team_name(state):
+    """The team name the AI captain is playing as, or ``None``.
+
+    In a league bot match the bot fields a real franchise, so "RCB" on the
+    scorecard is indistinguishable from a human playing RCB. Resolving which
+    side the bot owns is what lets every card say so.
+    """
+    if not _is_bot_match(state):
+        return None
+    bot_uid = state.get("bot_user_id")
+    if bot_uid is None:
+        return None
+    if state.get("bat_team_id") == bot_uid:
+        return state.get("bat_team_name")
+    if state.get("bowl_team_id") == bot_uid:
+        return state.get("bowl_team_name")
+    return None
+
+
+def with_bot_tag(state, name):
+    """``"RCB"`` → ``"RCB (Bot)"`` when that team is the AI captain's.
+
+    Display only — the undecorated name stays the key for POTM, results and
+    anything else that matches teams by name.
+    """
+    bot_name = bot_team_name(state)
+    if not name or not bot_name or str(name) != str(bot_name):
+        return name
+    if str(name).endswith(BOT_TEAM_SUFFIX):
+        return name
+    return f"{name} {BOT_TEAM_SUFFIX}"
+
+
 def _bot_bowls(state):
     """True when the AI captain is the one who must pick this over's bowler."""
     return (_is_bot_match(state)
@@ -1775,7 +1811,6 @@ async def _run_over(context, mid, state):
     # Capture the AI captain's plan BEFORE the over is simulated: a completed
     # over resets both approaches on the state, so reading them afterwards would
     # always report the neutral default.
-    bot_plan = _bot_plan_label(state)
 
     # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
     # engines). Run it in a worker thread so it can't block the event loop — and
@@ -1805,7 +1840,7 @@ async def _run_over(context, mid, state):
     # next /rcl would bowl another over.
     try:
         await _post_tracked(context, state,
-                            _render_over_summary(state, summary, bot_plan=bot_plan),
+                            _render_over_summary(state, summary),
                             keyboard=_miniapp_row(state))
     except Exception:
         logger.exception("cipl over summary post failed for match %s", mid)
@@ -1816,23 +1851,7 @@ async def _run_over(context, mid, state):
         await _prompt_bowler(context, mid, state)
 
 
-def _bot_plan_label(state):
-    """The AI captain's approach for the over about to be bowled, as a label.
-
-    Read while the approach is still on the state (a completed over clears it).
-    ``None`` for a human-vs-human match.
-    """
-    if not _is_bot_match(state):
-        return None
-    from services import bot_captain
-    if _bot_bowls(state):
-        return bot_captain.bowling_label(state.get("bowling_approach"))
-    if _bot_bats(state):
-        return bot_captain.batting_label(state.get("batting_approach"))
-    return None
-
-
-def _render_over_summary(state, summary, bot_plan=None):
+def _render_over_summary(state, summary):
     timeline = " ".join(cipl_match._SYM.get(_sym_key(s), s)
                         for s in summary["over_timeline"]) or "—"
     striker = state["batting_order"][state["striker_idx"]]
@@ -1842,8 +1861,12 @@ def _render_over_summary(state, summary, bot_plan=None):
     n_line = _bat_line(non_striker, bs)
     mo = summary["momentum_shift"]
     arrow = "📈" if mo > 1 else ("📉" if mo < -1 else "➖")
-    # Bowling/Batting approaches are deliberately NOT shown in the public over
-    # summary — revealing them would let the opponent read each captain's plan.
+    # Neither captain's approach is shown here, and that now includes the bot's.
+    # The summary used to print "Bot's plan: ..." after every over on the grounds
+    # that there was no opponent to keep it from — but the player IS the
+    # opponent, and a bot whose every pick is published is a bot whose mix can be
+    # written down and countered. Its plans are hidden for exactly the reason a
+    # human's are.
     lines = [
         f"<b>End of {_unit_word(state, cap=True)} {summary['over_no']}</b> — {summary['bowler']['name']}",
         f"Timeline: {timeline}",
@@ -1857,16 +1880,15 @@ def _render_over_summary(state, summary, bot_plan=None):
         f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
         f"{arrow} Momentum: {state['bat_team_name']}",
     ]
-    # Against the bot there is no opponent left to keep the plan from, so the
-    # over is a chance to show what the AI captain actually chose.
-    if bot_plan:
-        lines.append(f"🤖 Bot's plan: {bot_plan}")
-        # ...and to say so out loud when it has caught the player repeating
-        # themselves, so the mind game is visible and not just felt.
+    # What the bot has *noticed* is still said out loud — that it has caught the
+    # player repeating themselves is a warning, not a plan, so it keeps the mind
+    # game visible without handing over the counter.
+    if _is_bot_match(state):
         try:
             from services.bot_captain import take_read_note
             note = take_read_note(state)
         except Exception:
+            logger.exception("cipl: bot read note failed")
             note = None
         if note:
             lines.append(f"🧠 <i>{html.escape(str(note))}</i>")
@@ -2194,10 +2216,21 @@ async def _complete_match(context, mid, state):
         else:
             result_text = (f"{result['winner']} beat {result['loser']} by "
                            f"{result['margin']} {result['margin_type']}")
+        # POTM for the archived MatchNo<id>.txt. Computed here rather than
+        # reusing the card's copy below because the card is rendered later, in a
+        # worker thread, and the archive is written from this block — the
+        # selection is a cheap pure read of the finished state either way.
+        try:
+            archive_potm = _cipl_calc_potm(
+                state, None if result["tie"] else result.get("winner"))
+        except Exception:
+            logger.exception("cipl archive POTM failed for match %s", mid)
+            archive_potm = None
         from services.match_webapp_service import save_final_scorecard
         sc_session = get_session()
         try:
-            save_final_scorecard(sc_session, mid, result_text=result_text)
+            save_final_scorecard(sc_session, mid, result_text=result_text,
+                                 potm=archive_potm)
             sc_session.commit()
         except Exception:
             sc_session.rollback()
@@ -2561,26 +2594,33 @@ def _build_cipl_summary_image(state, result):
         inn2_overs_val = cipl_match.format_overs(state)
         overs_total_val = state.get("overs", 0)
 
+    # Mark the AI captain's side on the card itself. In a league bot match the
+    # bot fields a real franchise, so without this "RCB won by 8 wickets" reads
+    # exactly like a result against a human. Applied only here, at render time —
+    # POTM and the result logic above still key off the plain team name.
+    inn1_label = with_bot_tag(state, inn1_team)
+    inn2_label = with_bot_tag(state, inn2_team)
+
     return generate_match_summary(
-        inn1_team=inn1_team,
+        inn1_team=inn1_label,
         inn1_runs=state.get("inn1_runs", 0),
         inn1_wickets=state.get("inn1_wickets", 0),
         inn1_overs=inn1_overs_val,
-        inn2_team=inn2_team,
+        inn2_team=inn2_label,
         inn2_runs=state.get("total_runs", 0),
         inn2_wickets=state.get("total_wickets", 0),
         inn2_overs=inn2_overs_val,
-        winner_name=winner_name,
+        winner_name=with_bot_tag(state, winner_name),
         win_margin_text=margin_text,
         overs_total=overs_total_val,
         is_hundred=is_hundred,
         stadium=state.get("stadium"),
         potm_name=potm_name,
         potm_stats=potm_stats,
-        potm_team=potm_team,
+        potm_team=with_bot_tag(state, potm_team),
         top_per_team={
-            "inn1": {"team": inn1_team, "batters": inn1_bats, "bowlers": inn1_bowls},
-            "inn2": {"team": inn2_team, "batters": inn2_bats, "bowlers": inn2_bowls},
+            "inn1": {"team": inn1_label, "batters": inn1_bats, "bowlers": inn1_bowls},
+            "inn2": {"team": inn2_label, "batters": inn2_bats, "bowlers": inn2_bowls},
         },
         match_no=state.get("match_id"),
         text_settings=text_settings,
