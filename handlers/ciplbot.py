@@ -125,6 +125,13 @@ async def ciplbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ {league_name} needs at least two teams to play a bot match.")
             return
 
+        # Ask for difficulty once the league is known to be valid, so the
+        # button that resumes this command can name the same league back.
+        from handlers.botlevel import prompt_difficulty, take_pending_choice
+        if not take_pending_choice(context):
+            await prompt_difficulty(update, context, "cipl", league_key)
+            return
+
         from handlers.vsbot import _get_or_create_bot_user
         bot_user = _get_or_create_bot_user(session)
         session.commit()

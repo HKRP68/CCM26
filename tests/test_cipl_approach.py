@@ -50,14 +50,154 @@ class ApproachModifierTests(unittest.TestCase):
         self.assertLess(hi["Six"], lo["Six"])  # high-rated bowler concedes fewer sixes
 
     def test_combined_multipliers(self):
+        """All three layers multiply: batting intent × bowling plan × counter."""
         out = am.apply_approach_modifiers(BASE_WEIGHTS, "ultra", "aggressive")
-        # ultra Six 2.2 * aggressive Six 1.2 = 2.64
-        self.assertAlmostEqual(out["Six"], BASE_WEIGHTS["Six"] * 2.2 * 1.2, places=5)
+        expected = (BASE_WEIGHTS["Six"]
+                    * am._BATTING_MULT["ultra"]["Six"]
+                    * am._BOWLING_MULT["aggressive"]["Six"]
+                    * am._COUNTER_MULT[("ultra", "aggressive")]["Six"])
+        self.assertAlmostEqual(out["Six"], expected, places=5)
+
+    def test_the_counter_matrix_makes_the_over_non_separable(self):
+        """Without an interaction term the game collapses to one right answer.
+
+        Ultra into Variation must not be the same trade as Ultra into Balanced
+        scaled by a constant — if it were, the best batting approach would be
+        the same whatever the bowler did, which is exactly the bug the counter
+        matrix exists to fix.
+        """
+        def six_ratio(bowl):
+            a = am.apply_approach_modifiers(BASE_WEIGHTS, "ultra", bowl)["Six"]
+            b = am.apply_approach_modifiers(BASE_WEIGHTS, "rotate", bowl)["Six"]
+            return a / b
+
+        self.assertNotAlmostEqual(six_ratio("variation"), six_ratio("balanced"),
+                                  places=3)
 
     def test_no_negative_weights(self):
         weird = dict(BASE_WEIGHTS, Six=-5.0)
         out = am.apply_approach_modifiers(weird, "defensive", "defensive")
         self.assertGreaterEqual(out["Six"], 0.0)
+
+
+class ApproachBalanceTests(unittest.TestCase):
+    """The approach layer has to stay a *choice*.
+
+    Before this was enforced, Ultra Attack beat every other batting approach in
+    every bowling column and Defensive bowling beat every plan in every batting
+    row: two dominant strategies, and the other eight options were decoration —
+    which is exactly why the bots were easy to beat by rote.
+
+    Scoring uses ``services.bot_tactics``, whose ball model is fitted to the
+    live engine, across the situations a player actually meets (phases, rating
+    match-ups, pitches). A raw multiplier table with no rating model is not
+    enough here: the rating gap reshapes the outcome mix far more than the
+    approaches do, so dominance measured without it gives the wrong answer.
+    """
+
+    BAT = [k for k, _e, _l in am.BATTING_APPROACHES]
+    BOWL = [k for k, _e, _l in am.BOWLING_APPROACHES]
+
+    # Batting Defensive is a survival tool and Balanced bowling is the neutral
+    # baseline; neither is meant to top a runs-scored table, so neither is held
+    # to the "best somewhere" bar. Everything else must earn its place.
+    SITUATIONAL = {"bat": {"defensive"}, "bowl": {"balanced"}}
+
+    def _states(self):
+        from tests.test_bot_captain import _player
+        out = []
+        for over in (3, 9, 18):
+            for bat_r, bowl_r in ((70, 70), (85, 60), (55, 85)):
+                for pitch, faced in (("Hard", 10), ("Flat", 0), ("Green", 10)):
+                    order = [_player(100 + i, f"B{i}", "Batsman", 20, bat_r)
+                             for i in range(11)]
+                    out.append({
+                        "overs": 20, "current_over": over, "pitch_type": pitch,
+                        "batting_order": order, "striker_idx": 0,
+                        "total_wickets": 2, "wicket_limit": 10,
+                        "bat_stats": {str(order[0]["roster_id"]):
+                                      {"runs": int(faced * 1.2), "balls": faced}},
+                        "current_bowler": _player(1, "W", "Bowler", bowl_r, 30),
+                    })
+        return out
+
+    def _grid(self, state):
+        """Projected innings total for each of the 25 match-ups in ``state``."""
+        from services import bot_tactics as bt
+        base = bt.ball_probabilities(state)
+        grid = {}
+        for ba in self.BAT:
+            for bo in self.BOWL:
+                p = bt.approach_probabilities(base, ba, bo, 75)
+                rpo = sum(p[k] * bt.RUN_VALUE[k] for k in p) * 6.0
+                wpo = p["Wicket"] * 6.0
+                overs = min(20.0, 10.0 / wpo) if wpo > 0 else 20.0
+                grid[(ba, bo)] = rpo * overs
+        return grid
+
+    def test_every_approach_is_the_right_answer_somewhere(self):
+        best_bat, best_bowl = set(), set()
+        for state in self._states():
+            grid = self._grid(state)
+            for bo in self.BOWL:
+                best_bat.add(max(self.BAT, key=lambda ba: grid[(ba, bo)]))
+            for ba in self.BAT:
+                best_bowl.add(min(self.BOWL, key=lambda bo: grid[(ba, bo)]))
+        missing_bat = set(self.BAT) - best_bat - self.SITUATIONAL["bat"]
+        missing_bowl = set(self.BOWL) - best_bowl - self.SITUATIONAL["bowl"]
+        self.assertFalse(missing_bat,
+                         f"batting {sorted(missing_bat)} is never the best reply "
+                         f"to anything — it may as well not be on the keyboard")
+        self.assertFalse(missing_bowl,
+                         f"bowling {sorted(missing_bowl)} is never the best reply "
+                         f"to anything — it may as well not be on the keyboard")
+
+    def test_the_best_reply_depends_on_what_the_opponent_picked(self):
+        """The property that makes the over a game rather than a lookup.
+
+        The two sides are held to different bars on purpose, because the
+        measured behaviour differs and pretending otherwise would make this
+        test a wish rather than a check. The bowling captain faces a real
+        decision in *every* situation sampled — what beats a slogger is not
+        what beats an accumulator. The batting captain faces one less often:
+        plenty of scorelines (the death, a big rating mismatch) genuinely do
+        have one right intent whatever the bowler tries, and forcing a dilemma
+        there would mean making the game lie.
+        """
+        varied_bat = varied_bowl = 0
+        states = self._states()
+        for state in states:
+            grid = self._grid(state)
+            if len({max(self.BAT, key=lambda ba: grid[(ba, bo)])
+                    for bo in self.BOWL}) > 1:
+                varied_bat += 1
+            if len({min(self.BOWL, key=lambda bo: grid[(ba, bo)])
+                    for ba in self.BAT}) > 1:
+                varied_bowl += 1
+        self.assertGreater(varied_bat, len(states) * 0.25)
+        self.assertGreater(varied_bowl, len(states) * 0.80)
+
+    def test_no_approach_is_dominated_in_every_situation(self):
+        alive_bat = {k: False for k in self.BAT}
+        alive_bowl = {k: False for k in self.BOWL}
+        for state in self._states():
+            grid = self._grid(state)
+            for ba in self.BAT:
+                if not any(all(grid[(o, bo)] > grid[(ba, bo)] for bo in self.BOWL)
+                           for o in self.BAT if o != ba):
+                    alive_bat[ba] = True
+            for bo in self.BOWL:
+                if not any(all(grid[(ba, o)] < grid[(ba, bo)] for ba in self.BAT)
+                           for o in self.BOWL if o != bo):
+                    alive_bowl[bo] = True
+        dead_bat = [k for k, ok in alive_bat.items()
+                    if not ok and k not in self.SITUATIONAL["bat"]]
+        dead_bowl = [k for k, ok in alive_bowl.items()
+                     if not ok and k not in self.SITUATIONAL["bowl"]]
+        self.assertFalse(dead_bat, f"batting {dead_bat} is strictly dominated "
+                                   f"in every situation tested")
+        self.assertFalse(dead_bowl, f"bowling {dead_bowl} is strictly dominated "
+                                    f"in every situation tested")
 
 
 def _mk(rid, name, cat, bat, bowl, style="Fast"):

@@ -270,7 +270,7 @@ def _draft_key(draft_id):
 # Bot matches (/lpbot, /ciplbot) — unranked practice vs the AI captain
 # ════════════════════════════════════════════════════════════════════
 
-def mark_bot_match(state, bot_user_id):
+def mark_bot_match(state, bot_user_id, difficulty=None):
     """Tag a freshly built state as an unranked practice match vs the bot.
 
     ``stats_disabled`` is the existing gate every reward/stat path already
@@ -280,19 +280,21 @@ def mark_bot_match(state, bot_user_id):
     or active day). ``is_bot_match`` is what drives the AI's turns and the
     no-penalty timeout; ``unranked`` is a plain label for the UI.
 
-    The AI captain also draws its style for this match here (see
-    ``services.bot_captain.PERSONAS``) so it is fixed — and can be shown on the
-    match card — before the first ball instead of being decided mid-over.
+    The AI captain also fixes its two settings for the match here, before the
+    first ball rather than mid-over, so both can be shown on the match card: the
+    captaincy *style* it drew (``services.bot_captain.PERSONAS``) and the
+    *difficulty* the player chose at the difficulty prompt.
     """
     state["is_bot_match"] = True
     state["bot_user_id"] = bot_user_id
     state["stats_disabled"] = True
     state["unranked"] = True
     try:
-        from services.bot_captain import assign_persona
+        from services.bot_captain import assign_difficulty, assign_persona
         assign_persona(state)
+        assign_difficulty(state, difficulty)
     except Exception:
-        logger.exception("bot captain: persona draw failed for match %s",
+        logger.exception("bot captain: persona/difficulty draw failed for match %s",
                          state.get("match_id"))
     # A practice match must never touch a tournament table or a tour series.
     state["tournament_id"] = None
@@ -1133,7 +1135,10 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
     # This clears the tournament/tour identity set just above, so a practice
     # match can never be recorded against a real competition.
     if draft and draft.get("vs_bot"):
-        mark_bot_match(state, draft.get("target_user_id"))
+        from handlers.botlevel import level_for_match
+        mark_bot_match(state, draft.get("target_user_id"),
+                       difficulty=level_for_match(context.bot_data,
+                                                  draft.get("host_user_id")))
         state["user_names"][str(BOT_TG_ID_)] = "🤖 Bot"
         # Remembered so the Rematch button reopens the same league.
         state["league_key"] = draft.get("league_key")
@@ -1205,8 +1210,9 @@ def _match_start_announcement(state):
     bot_line = ""
     if _is_bot_match(state):
         try:
-            from services.bot_captain import persona_label
+            from services.bot_captain import difficulty_label, persona_label
             bot_line = (f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}"
+                        f" • {html.escape(difficulty_label(state))}"
                         f" • <i>unranked</i>\n")
         except Exception:
             logger.exception("cipl: bot persona line failed")
@@ -1299,7 +1305,10 @@ async def _bot_take_the_ball(context, mid, state):
     """
     from services import bot_captain
 
-    bowler = bot_captain.pick_bowler(state)
+    # The AI captain solves a 5x5 game per candidate bowler, which is ~150ms of
+    # pure Python. Cheap in absolute terms, but it must not sit on the event
+    # loop while every other live match waits its turn.
+    bowler = await asyncio.to_thread(bot_captain.pick_bowler, state)
     if bowler is None:
         # Nothing legal to bowl — the innings has nowhere left to go.
         logger.warning("bot captain: no bowler available for match %s — "
@@ -1324,7 +1333,8 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
         # The bot's plan is hidden from the batting captain, exactly as a human
         # opponent's would be — it is revealed only once the over is bowled.
         from services import bot_captain
-        state["bowling_approach"] = bot_captain.pick_bowling_approach(state)
+        state["bowling_approach"] = await asyncio.to_thread(
+            bot_captain.pick_bowling_approach, state)
         await _ss(context, mid, state)
         await _prompt_bat_approach(context, mid, state)
         return
@@ -1345,7 +1355,8 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
 async def _prompt_bat_approach(context, mid, state, auto=False):
     if _bot_bats(state):
         from services import bot_captain
-        state["batting_approach"] = bot_captain.pick_batting_approach(state)
+        state["batting_approach"] = await asyncio.to_thread(
+            bot_captain.pick_batting_approach, state)
         await _ss(context, mid, state)
         await asyncio.sleep(BOT_THINK_DELAY)
         await _run_over(context, mid, state)

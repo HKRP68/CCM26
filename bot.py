@@ -1184,6 +1184,9 @@ def main():
                                        ciplbot_handler))
         app.add_handler(CallbackQueryHandler(botmatch_again_callback,
                                              pattern=r"^botmatch_again_"))
+        from handlers.botlevel import difficulty_callback
+        app.add_handler(CallbackQueryHandler(difficulty_callback,
+                                             pattern=r"^botdiff_"))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
