@@ -1808,10 +1808,6 @@ async def _run_over(context, mid, state):
         f"{_header(state)}\n\n⏳ Simulating {_unit_word(state)} {state['current_over']} — "
         f"{bowler_name} bowling…", None)
 
-    # Capture the AI captain's plan BEFORE the over is simulated: a completed
-    # over resets both approaches on the state, so reading them afterwards would
-    # always report the neutral default.
-
     # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
     # engines). Run it in a worker thread so it can't block the event loop — and
     # every other user's command/button — for the duration of the over.

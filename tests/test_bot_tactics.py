@@ -213,11 +213,22 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(len(bt._SOLVE_CACHE), 2)
 
     def test_the_cache_cannot_grow_without_bound(self):
-        bt._SOLVE_CACHE.clear()
-        for over in range(1, 21):
-            for runs in range(0, 40, 5):
-                bt.solved_over(_state(over=over, runs=runs))
-        self.assertLessEqual(len(bt._SOLVE_CACHE), bt._SOLVE_CACHE_MAX)
+        """Enough distinct situations to cross the cap, without paying for them.
+
+        The property under test is the eviction, not the arithmetic, and a real
+        solve per situation made this comfortably the slowest test in the suite.
+        Stubbing the matrix keeps every cache code path exercised for free.
+        """
+        real_payoff_matrix = bt.payoff_matrix
+        bt.payoff_matrix = lambda state, bowler=None: [[1.0, 0.0], [0.0, 1.0]]
+        try:
+            bt._SOLVE_CACHE.clear()
+            for runs in range(bt._SOLVE_CACHE_MAX * 2):
+                bt.solved_over(_state(runs=runs))
+            self.assertLessEqual(len(bt._SOLVE_CACHE), bt._SOLVE_CACHE_MAX)
+            self.assertGreater(len(bt._SOLVE_CACHE), 0)
+        finally:
+            bt.payoff_matrix = real_payoff_matrix
 
 
 if __name__ == "__main__":

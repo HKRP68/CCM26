@@ -125,11 +125,6 @@ SET_BALLS, SET_STRIKE_RATE = 15, 130
 # matrix this small and costs well under a millisecond.
 RM_ITERS = 400
 
-# No approach is ever ruled out completely: a floor on every probability keeps
-# the bot's mix genuinely unreadable.
-MIN_PROB = 0.02
-
-
 # ════════════════════════════════════════════════════════════════════
 # Match-reading helpers (shared with services.bot_captain)
 # ════════════════════════════════════════════════════════════════════
@@ -624,9 +619,17 @@ def solve_zero_sum(matrix, iters=RM_ITERS):
             regret_c[j] += util_c[j] - value_c
         value = value_r
 
+    # Score the *average* strategies, which are what this returns. ``value``
+    # inside the loop is the payoff of the last iterate, and the last iterate of
+    # regret matching oscillates — reporting it alongside the averaged mixes
+    # would put avoidable noise into the bowler ranking that reads it.
     tr = sum(sum_r) or 1.0
     tc = sum(sum_c) or 1.0
-    return ([s / tr for s in sum_r], [s / tc for s in sum_c], lo + span * value)
+    avg_r = [x / tr for x in sum_r]
+    avg_c = [x / tc for x in sum_c]
+    value = sum(norm[i][j] * avg_r[i] * avg_c[j]
+                for i in range(rows) for j in range(cols))
+    return (avg_r, avg_c, lo + span * value)
 
 
 def best_response(matrix, opponent, *, batting, sharpness=6.0):
@@ -657,21 +660,6 @@ def best_response(matrix, opponent, *, batting, sharpness=6.0):
     weights = [math.exp((v - top) / scale) for v in values]
     total = sum(weights)
     return [w / total for w in weights]
-
-
-def mix(vectors_and_weights, keys):
-    """Blend probability vectors into a ``{key: probability}`` dict with a floor."""
-    total_weight = sum(w for _v, w in vectors_and_weights if w > 0) or 1.0
-    out = {}
-    for idx, key in enumerate(keys):
-        acc = 0.0
-        for vector, weight in vectors_and_weights:
-            if weight <= 0 or idx >= len(vector):
-                continue
-            acc += weight * vector[idx]
-        out[key] = max(MIN_PROB, acc / total_weight)
-    total = sum(out.values())
-    return {k: v / total for k, v in out.items()}
 
 
 # ════════════════════════════════════════════════════════════════════

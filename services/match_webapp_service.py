@@ -2477,13 +2477,13 @@ def _team_credits(state):
     names = state.get("user_names") or {}
     bot_uid = state.get("bot_user_id") if state.get("is_bot_match") else None
 
-    credits = {}
+    team_credits = {}
     for side in ("bat", "bowl"):
         team = state.get(f"{side}_team_name")
         if not team:
             continue
         if bot_uid is not None and state.get(f"{side}_team_id") == bot_uid:
-            credits[team] = BOT_CREDIT
+            team_credits[team] = BOT_CREDIT
             continue
         raw = names.get(str(state.get(f"{side}_user_tg")))
         if not raw:
@@ -2492,25 +2492,23 @@ def _team_credits(state):
         # user_names holds "username or first_name". A handle has no spaces, so
         # only prefix "@" when the value can actually be one — inventing
         # "@Ranjan Himanshu" would be worse than plain text.
-        credits[team] = raw if (" " in raw or raw.startswith("@")) else f"@{raw}"
+        team_credits[team] = raw if (" " in raw or raw.startswith("@")) else f"@{raw}"
 
-    # Innings 1's batting side is stored under its own key once the innings
-    # closes, and by then bat_/bowl_ have swapped — cover it either way.
-    inn1 = state.get("inn1_team") or state.get("inn1_bat_team")
-    if inn1 and inn1 not in credits and len(credits) == 1:
-        (other,) = credits.keys()
-        if other != inn1:
-            credits[inn1] = credits[other]
-    return credits
+    # No fallback beyond this point on purpose. An earlier version filled a
+    # missing innings-1 credit from the only other one it had, which in a
+    # two-team match is by definition the *opponent's* captain — a wrong byline
+    # is worse than no byline in a permanent record. Both sides are already
+    # covered by bat_/bowl_ whichever way the innings has swapped.
+    return team_credits
 
 
-def _credited(team, credits):
+def _credited(team, team_credits):
     """``"RCB"`` → ``"RCB (@alice)"`` when we know who was captaining it."""
-    tag = (credits or {}).get(team)
+    tag = (team_credits or {}).get(team)
     return f"{team} ({tag})" if tag else team
 
 
-def _potm_line(potm, credits=None):
+def _potm_line(potm, team_credits=None):
     """``"Player of the Match: Kohli (74(48)) — RCB (@alice)"``, or ``None``."""
     if not potm:
         return None
@@ -2521,7 +2519,7 @@ def _potm_line(potm, credits=None):
     if stats:
         line += f" ({stats})"
     if team:
-        line += f" — {_credited(team, credits)}"
+        line += f" — {_credited(team, team_credits)}"
     return line
 
 
@@ -2538,9 +2536,9 @@ def _build_text_scorecard(match_id, innings, result_text=None, super_over=None,
     of the Match, which the on-screen card has always shown and this file never
     did.
     """
-    credits = _team_credits(state)
+    team_credits = _team_credits(state)
     teams = [inn.get("bat_team") or f"Innings {inn.get('number', '?')}" for inn in innings]
-    title = " vs ".join(_credited(t, credits)
+    title = " vs ".join(_credited(t, team_credits)
                         for t in dict.fromkeys(t for t in teams if t)) or "Match"
     out = [f"Match Summary: {title}", f"Match Number: #{match_id}"]
     for label, key in (("Pitch", "pitch_type"), ("Stadium", "stadium")):
@@ -2549,7 +2547,7 @@ def _build_text_scorecard(match_id, innings, result_text=None, super_over=None,
             out.append(f"{label}: {value}")
     if result_text:
         out.append(f"Result: {result_text}")
-    potm_line = _potm_line(potm, credits)
+    potm_line = _potm_line(potm, team_credits)
     if potm_line:
         out.append(potm_line)
     out.append("")
@@ -2558,7 +2556,7 @@ def _build_text_scorecard(match_id, innings, result_text=None, super_over=None,
         bat_team = inn.get("bat_team") or f"Innings {inn.get('number', '?')}"
         # Only the team name is shouted — an upper-cased "@ALICE" reads like a
         # different handle from the one it credits.
-        tag = credits.get(bat_team)
+        tag = team_credits.get(bat_team)
         out.append(f"{bat_team.upper()} INNINGS" + (f"  —  {tag}" if tag else ""))
         bsep = "-" * 95
         out.append(bsep)
@@ -2942,7 +2940,19 @@ def finalize_webapp_match(session, match_id):
         state["match_result"] = result
         mwa.save_state(match_id, state, next_action=A_COMPLETED)
     try:
-        save_final_scorecard(session, match_id, result_text=result.get("text"))
+        # The archived scorecard's POTM byline. ``_pick_player_of_match``
+        # returns a dict with no team, so the team slot stays empty rather than
+        # being guessed — the name and figures are the part worth keeping.
+        archive_potm = None
+        if pom and pom.get("name"):
+            figures = []
+            if pom.get("runs"):
+                figures.append(f"{pom['runs']} runs")
+            if pom.get("wickets"):
+                figures.append(f"{pom['wickets']} wkts")
+            archive_potm = (pom["name"], " | ".join(figures) or None, None)
+        save_final_scorecard(session, match_id, result_text=result.get("text"),
+                             potm=archive_potm)
     except Exception:
         logger.exception("save_final_scorecard failed")
 

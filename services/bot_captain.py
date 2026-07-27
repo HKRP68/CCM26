@@ -11,7 +11,7 @@ quotas and the no-back-to-back rule are NOT re-implemented here: they come from
 ``services.cipl_match.eligible_bowlers``, which the human picker uses too, so
 the bot plays under exactly the same constraints as its opponent.
 
-**How a decision is actually made.** Four layers, in order:
+**How a decision is actually made.** Five layers, in order:
 
   1. **The game solver** (:mod:`services.bot_tactics`) is the brain. It rebuilds
      the ball-outcome odds for the upcoming over, runs all 25 approach match-ups
@@ -551,7 +551,13 @@ def _blend_with_solver(state, prior, *, bot_batting):
         share = max(1e-6, weight / total)
         blended[key] = ((share ** PRIOR_EXPONENT)
                         * (max(1e-6, solved.get(key, 0.0)) ** trust))
-    return blended
+    # Normalise before handing the mix on. The product of two sub-1 numbers
+    # raised to powers lands anywhere on the number line depending on the
+    # difficulty, and ``_sample``'s ``max(0.01, ...)`` guard would then quietly
+    # become the thing setting the mix — compressing a 200:1 solver preference
+    # into 20:1 on Hard. The guard should catch bad input, not do the tuning.
+    scale = sum(blended.values()) or 1.0
+    return {key: value / scale for key, value in blended.items()}
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -689,7 +695,11 @@ def pick_bowler(state):
     scored = [(p, _bowler_score(state, p, ph, hold_back) + bonus)
               for p, bonus in zip(candidates, matchup)]
     best = max(score for _p, score in scored)
-    temperature = max(1.0, float(persona["temperature"])
+    # Floor only guards against a zero/negative temperature blowing up the
+    # softmax below. It used to be 1.0, which would silently cancel Hard's 0.55
+    # multiplier for any persona rated under ~1.8 — none are today, but the
+    # difficulty knob should not quietly stop working if one is ever added.
+    temperature = max(0.15, float(persona["temperature"])
                       * float(_difficulty(state)["temperature"]))
 
     keys = list(range(len(scored)))

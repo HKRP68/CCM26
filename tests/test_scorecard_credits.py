@@ -60,14 +60,14 @@ class TextScorecardCreditTests(unittest.TestCase):
 
     def test_a_handle_is_only_invented_when_it_could_be_one(self):
         """A stored first name is not an @username, so it is not dressed as one."""
-        credits = mws._team_credits(_pvp_state())
-        self.assertEqual(credits["RCB"], "@alice")      # no spaces → a handle
-        self.assertEqual(credits["CSK"], "Bob Singh")   # a name → left alone
+        team_credits = mws._team_credits(_pvp_state())
+        self.assertEqual(team_credits["RCB"], "@alice")     # no spaces → a handle
+        self.assertEqual(team_credits["CSK"], "Bob Singh")  # a name → left alone
 
     def test_a_bot_side_is_credited_as_the_bot(self):
-        credits = mws._team_credits(_bot_state())
-        self.assertEqual(credits["RCB"], mws.BOT_CREDIT)
-        self.assertEqual(credits["CSK"], "@alice")
+        team_credits = mws._team_credits(_bot_state())
+        self.assertEqual(team_credits["RCB"], mws.BOT_CREDIT)
+        self.assertEqual(team_credits["CSK"], "@alice")
 
     def test_the_innings_header_does_not_shout_the_handle(self):
         text = mws._build_text_scorecard(42, _INNINGS, None, state=_pvp_state())

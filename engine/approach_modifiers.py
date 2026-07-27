@@ -144,6 +144,23 @@ _COUNTER_MULT = {
 }
 
 
+# A typo in the tables above ("Sixes", "Wickets") would silently be a no-op —
+# no error, just a quietly unbalanced match-up that the directional tests would
+# not catch. Fail at import instead.
+_OUTCOME_KEYS = {"Dot", "Single", "Double", "Three", "Four", "Six",
+                 "Wicket", "Extras"}
+for _table, _label in ((_BATTING_MULT, "_BATTING_MULT"),
+                       (_BOWLING_MULT, "_BOWLING_MULT"),
+                       (_COUNTER_MULT, "_COUNTER_MULT")):
+    for _key, _mults in _table.items():
+        _unknown = set(_mults) - _OUTCOME_KEYS
+        assert not _unknown, (
+            f"{_label}[{_key!r}] scales unknown outcome(s) {sorted(_unknown)} — "
+            f"valid outcomes are {sorted(_OUTCOME_KEYS)}")
+assert set(_COUNTER_MULT) <= {(b, w) for b in BATTING_KEYS for w in BOWLING_KEYS}, (
+    "_COUNTER_MULT is keyed on an approach pair that does not exist")
+
+
 def normalize_batting(approach):
     a = (approach or "").strip().lower()
     return a if a in BATTING_KEYS else DEFAULT_BATTING
