@@ -2534,6 +2534,11 @@
     <p style="color:var(--muted);font-size:0.8rem;margin:0 0 0.8rem;line-height:1.5;">
       Log in every day to climb the ladder. Miss a day and it resets to Day 1.
     </p>
+    <!-- Subscription perk banner (💎 Diamond doubles every payout) -->
+    <div id="login-tier-multiplier"
+         style="display:none;font-size:0.8rem;font-weight:700;color:var(--accent);
+                background:rgba(255,255,255,0.05);border-radius:8px;
+                padding:0.45rem 0.6rem;margin-bottom:0.7rem;"></div>
     <div id="login-ladder" class="login-ladder"></div>
     <button class="spin-button" id="login-claim-btn" onclick="claimLoginReward()" style="margin-top:1rem;width:100%;">
       🎁 Claim today's reward
@@ -6009,6 +6014,15 @@ function renderLoginLadder() {
   const ls = loginStreakStatus;
   if (!ls) return;
   const ladder = ls.ladder || [];
+  // Subscription multiplier (💎 Diamond = 2×) applies to every ladder payout.
+  const tierMult = Number(ls.tier_multiplier || 1);
+  const multEl = document.getElementById('login-tier-multiplier');
+  if (multEl) {
+    multEl.style.display = tierMult > 1 ? 'block' : 'none';
+    multEl.textContent = tierMult > 1
+      ? `⭐ Membership perk: ${tierMult}× on every daily login reward`
+      : '';
+  }
   const el = document.getElementById('login-ladder');
   el.innerHTML = ladder.map(d => {
     const isToday = d.day === ls.ladder_day && ls.last_login_today !== false;
@@ -6052,6 +6066,7 @@ async function claimLoginReward() {
   if (r.coins) parts.push(`+${formatNum(r.coins)}🪙`);
   if (r.gems) parts.push(`+${r.gems}💎`);
   if (r.granted_pack) parts.push('+1 free pack 🎴');
+  if (Number(r.tier_multiplier || 1) > 1) parts.push(`(${r.tier_multiplier}× perk)`);
   toast(`🎉 Day ${r.day}: ${parts.join(' ')}`, 'success');
   hapticNotif('success');
   loginStreakStatus = data.status;

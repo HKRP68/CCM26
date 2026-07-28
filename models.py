@@ -72,7 +72,8 @@ class User(Base):
     # this user's Mini App actions into groups. Toggled via /notifications.
     notifications_enabled = Column(Boolean, default=True, nullable=False)
     # ── Paid subscription (manually granted by an admin from the website) ──
-    # 'none' = free user. 'silver'/'platinum' = active paid tiers. Access is
+    # 'none' = free user. 'bronze'/'silver'/'platinum'/'diamond' = the paid
+    # tiers declared in config.SUBSCRIPTION_TIERS (cheapest → richest). Access is
     # time-boxed: a tier is only "active" while subscription_expires_at is in the
     # future — see services/subscription_service.get_tier(), which treats an
     # expired tier as 'none' everywhere without needing a background job.

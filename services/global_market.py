@@ -337,8 +337,8 @@ def buy_player(session, user, slot_index):
     if user.roster_count >= MAX_ROSTER:
         return False, f"Roster full ({MAX_ROSTER}). Release players first."
 
-    # The market discount is a Platinum perk: Platinum pays final_price (5% off),
-    # everyone else pays the full base_price.
+    # The market discount is a membership perk (Platinum 5%, Diamond 10%);
+    # tiers without it pay the full base_price.
     from services import subscription_service
     price = subscription_service.market_price(user, slot.base_price, slot.final_price)
 

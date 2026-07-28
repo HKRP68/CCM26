@@ -129,13 +129,14 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             subtitle=subtitle,
         )
 
-        # The market discount is a Platinum perk: non-Platinum users see/pay the
-        # full base_price; Platinum sees the discounted final_price.
+        # The market discount is a membership perk (Platinum 5%, Diamond 10%):
+        # tiers without it see and pay the full base_price.
         from services import subscription_service
-        is_plat = subscription_service.is_platinum(user)
+        discount_pct = subscription_service.market_discount_pct(user)
 
         def _slot_price(slot):
-            return slot.final_price if is_plat else slot.base_price
+            return subscription_service.market_price(
+                user, slot.base_price, slot.final_price)
 
         # Build buttons: one per player (their name) + Cancel
         btns = []
@@ -151,9 +152,10 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         btns.append([InlineKeyboardButton(
             "❌ Cancel", callback_data=f"pmcancel_{tg_user.id}")])
 
-        discount_line = ("🏷️ All cards <b>5% off</b> · Refreshes every 24h"
-                         if is_plat else
-                         "🏷️ <b>Platinum</b> perk: 5% off all cards · Refreshes every 24h")
+        discount_line = (f"🏷️ All cards <b>{discount_pct}% off</b> · Refreshes every 24h"
+                         if discount_pct else
+                         "🏷️ <b>Platinum</b> 5% / <b>Diamond</b> 10% off all cards "
+                         "· Refreshes every 24h")
         caption = (
             f"💰 <b>{user.total_coins:,}</b> 🪙 · "
             f"📊 {user.roster_count}/25 roster\n"
@@ -239,7 +241,8 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
 
         sold = (slot.purchased_count >= slot.quantity)
 
-        # The market discount is a Platinum perk: non-Platinum pays base_price.
+        # The market discount is a membership perk (Platinum 5%, Diamond 10%);
+        # everyone else pays base_price.
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         from services import subscription_service
         price = subscription_service.market_price(user, slot.base_price, slot.final_price)

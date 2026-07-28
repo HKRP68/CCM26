@@ -278,8 +278,7 @@
       <td style="color:var(--accent2);">{{ u.total_gems }}</td>
       <td style="font-size:.8rem;">
         {% set t = active_tier(u) %}
-        {% if t == 'platinum' %}<span style="color:#b9f2ff;font-weight:600;">🏆 Platinum</span>
-        {% elif t == 'silver' %}<span style="color:#cbd5e1;font-weight:600;">🥈 Silver</span>
+        {% if t in subscription_tiers %}<span style="color:#b9f2ff;font-weight:600;">{{ tier_label(t) }}</span>
         {% else %}<span style="color:var(--muted);">Free</span>{% endif %}
       </td>
       <td>{{ u.roster_count }}/25</td>

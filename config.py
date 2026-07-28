@@ -21,8 +21,9 @@ MEDIA_STORAGE_CHAT_ID = os.getenv("MEDIA_STORAGE_CHAT_ID", "").strip()
 # ── Cooldowns (seconds) ─────────────────────────────────────────────
 # These are the base (free-user) cooldowns. Paid tiers get a proportional
 # reduction applied via services.subscription_service.cooldown_seconds
-# (Silver −10 min/hr → ×0.833, Platinum −20 min/hr → ×0.667). For example
-# /daily at 12h → Silver 10h, Platinum 8h.
+# (Bronze −5 min/hr → ×0.917, Silver −10 min/hr → ×0.833, Platinum −20 min/hr
+# → ×0.667, Diamond −30 min/hr → ×0.5). For example /daily at 12h → Bronze 11h,
+# Silver 10h, Platinum 8h, Diamond 6h.
 CLAIM_COOLDOWN = 3600    # 1 hour
 DAILY_COOLDOWN = 43200   # 12 hours
 GSPIN_COOLDOWN = 28800   # 8 hours
@@ -32,26 +33,61 @@ XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
 # Manually granted by an admin from the website (no self-serve payment).
 # A tier stays active for `duration_days` from activation.
 #   instant                 — one-time rewards credited on activation.
+#   upgrade_from            — per-source top-up bundle credited when a member
+#                             steps UP into this tier (see below).
 #   mysterybox_cooldown_days — /cmumysterybox recurrence.
 #   cooldown_reduction_min_per_hour — shaves this many minutes off every hour
-#                             of a normal command cooldown (Silver 10, Plat 20).
-#   market_discount_pct     — % off player purchases (Platinum only).
+#                             of a normal command cooldown (Bronze 5, Silver 10,
+#                             Platinum 20, Diamond 30).
+#   market_discount_pct     — % off player purchases (Platinum 5, Diamond 10).
 #   weekly_card             — enables /cmuweekly (guaranteed 85+ card, 7-day cd).
-#   coin_chests             — enables /cmuchest (Platinum recurring coin chests).
+#   coin_chests             — enables /cmuchest (recurring coin chests).
+#   daily_login_multiplier  — multiplies the Mini App daily login reward.
 #   premium_commands        — unlocks /autobuild and /wpmbot.
 #   autoplay                — unlocks the Mini App Autoplay button.
+#
+# DECLARATION ORDER IS THE TIER RANK (bronze < silver < platinum < diamond) —
+# services.subscription_service.tier_rank reads it, so keep tiers ordered from
+# cheapest to richest.
+#
+# Upgrade top-ups follow one rule: roughly HALF the raw instant difference
+# between the two tiers, plus whichever signature packs the source tier never
+# granted. The member keeps their remaining paid time, so an upgrade tops them
+# up instead of handing out a second subscription. The halves are also chosen so
+# hopping (Bronze → Silver → Diamond) never pays more than going direct.
 SUBSCRIPTION_TIERS = {
+    "bronze": {
+        "label": "🥉 Bronze",
+        "price_inr": 19,
+        "duration_days": 30,
+        "instant": {"coins": 29000, "gems": 150, "quest_points": 0,
+                    "packs": []},
+        "mysterybox_cooldown_days": 15,
+        "cooldown_reduction_min_per_hour": 5,
+        "market_discount_pct": 0,
+        "weekly_card": False,
+        "coin_chests": None,
+        "daily_login_multiplier": 1,
+        "premium_commands": True,
+        # Autoplay stays a Silver-and-above perk — Bronze is the entry tier.
+        "autoplay": False,
+    },
     "silver": {
         "label": "🥈 Silver",
         "price_inr": 59,
         "duration_days": 30,
         "instant": {"coins": 49000, "gems": 499, "quest_points": 499,
                     "packs": ["Star Pack"]},
+        "upgrade_from": {
+            "bronze": {"coins": 10000, "gems": 175, "quest_points": 250,
+                       "packs": ["Star Pack"]},
+        },
         "mysterybox_cooldown_days": 8,
         "cooldown_reduction_min_per_hour": 10,
         "market_discount_pct": 0,
         "weekly_card": False,
         "coin_chests": None,
+        "daily_login_multiplier": 1,
         "premium_commands": True,
         "autoplay": True,
     },
@@ -69,6 +105,8 @@ SUBSCRIPTION_TIERS = {
         # is granted — the Star Pack the user got from Silver is already theirs.
         # Set "packs": [] here if you don't want any pack on upgrade.
         "upgrade_from": {
+            "bronze": {"coins": 485000, "gems": 425, "quest_points": 500,
+                       "packs": ["Legend Pack"]},
             "silver": {"coins": 451000, "gems": 251, "quest_points": 251,
                        "packs": ["Legend Pack"]},
         },
@@ -78,6 +116,33 @@ SUBSCRIPTION_TIERS = {
         "weekly_card": True,
         "coin_chests": {"count": 3, "min": 60000, "max": 99000,
                         "cooldown_days": 10},
+        "daily_login_multiplier": 1,
+        "premium_commands": True,
+        "autoplay": True,
+    },
+    "diamond": {
+        "label": "💎 Diamond",
+        "price_inr": 149,
+        "duration_days": 30,
+        "instant": {"coins": 2000000, "gems": 1500, "quest_points": 1500,
+                    "packs": ["Legend Pack", "Ultimate Legend Pack"]},
+        "upgrade_from": {
+            "bronze": {"coins": 985000, "gems": 675, "quest_points": 750,
+                       "packs": ["Legend Pack", "Ultimate Legend Pack"]},
+            "silver": {"coins": 975000, "gems": 500, "quest_points": 500,
+                       "packs": ["Legend Pack", "Ultimate Legend Pack"]},
+            # Platinum already handed out the Legend Pack — only the Ultimate
+            # Legend Pack is new on this step.
+            "platinum": {"coins": 500000, "gems": 250, "quest_points": 250,
+                         "packs": ["Ultimate Legend Pack"]},
+        },
+        "mysterybox_cooldown_days": 2,
+        "cooldown_reduction_min_per_hour": 30,
+        "market_discount_pct": 10,
+        "weekly_card": True,
+        "coin_chests": {"count": 5, "min": 70000, "max": 110000,
+                        "cooldown_days": 7},
+        "daily_login_multiplier": 2,
         "premium_commands": True,
         "autoplay": True,
     },

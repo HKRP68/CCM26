@@ -5,7 +5,7 @@ Each user gets, per rolling cycle:
   - N AD-gated uses (N = `spin_ad_quota` or `daily_ad_quota` from GameConfig)
 
 The cycle length is the command's effective, subscription-tier-reduced cooldown
-(spin 8h, daily 12h at base; shorter for Silver/Platinum) — the same value the
+(spin 8h, daily 12h at base; shorter on every paid tier) — the same value the
 bot and the Mini App's cooldown timer use — so the Mini App becomes available
 again on that schedule rather than a fixed 24h window.
 

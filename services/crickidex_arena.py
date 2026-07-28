@@ -302,6 +302,23 @@ def _parse_overs_str(ov):
         return 0, 0
 
 
+def _viewer_has_autoplay(viewer_user):
+    """True if this viewer's active subscription tier unlocks Autoplay.
+
+    Spectators (``viewer_user`` is None) and free members get False, which locks
+    the Arena's Autoplay pill. Fails closed: a lookup error keeps the pill
+    locked rather than handing a free user the AI.
+    """
+    if viewer_user is None:
+        return False
+    try:
+        from services import subscription_service
+        return bool(subscription_service.has_autoplay(viewer_user))
+    except Exception:
+        logger.exception("autoplay entitlement check failed (locking)")
+        return False
+
+
 # ── viewer / match resolution ────────────────────────────────────────
 
 def resolve_viewer(session, user_id_param):
@@ -700,6 +717,11 @@ def _serialize_match_state_impl(session, match, viewer_user):
         (team for team in autoplay_teams if team.get("userId") != viewer_uid),
         None,
     )
+    # Autoplay is a paid perk (Silver and above). The Arena client keeps the
+    # pill locked (🔒 PRO) whenever this is false, and both autoplay endpoints
+    # reject the request server-side, so free users can never hand their side
+    # to the AI.
+    my_autoplay_premium = _viewer_has_autoplay(viewer_user)
 
     # ── Impact Player availability/summary ──
     impact_player = {"canUse": False, "used": False, "summary": _impact_summary_for_result(state)}
@@ -809,6 +831,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "lastAutoplayShot": state.get("last_autoplay_shot"),
         "autoplay": {
             "isOnForMe": my_autoplay_active,
+            "premium": my_autoplay_premium,
             "opponent": opponent_autoplay,
             "teams": autoplay_teams,
         },

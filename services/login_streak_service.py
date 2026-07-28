@@ -43,11 +43,12 @@ def _yesterday():
     return (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def touch_login_streak(session, stats):
+def touch_login_streak(session, stats, user=None):
     """Advance the login streak on app open. Idempotent within a calendar day.
 
-    Returns dict {streak, best, ladder_day, claimable_today, already_claimed_today}.
-    Caller commits.
+    Returns dict {streak, best, ladder_day, claimable_today,
+    already_claimed_today, tier_multiplier}. ``user`` is optional and only used
+    to report the subscription multiplier. Caller commits.
     """
     today = _today()
     last = stats.last_login_date
@@ -67,11 +68,31 @@ def touch_login_streak(session, stats):
     if (stats.login_streak or 0) > (stats.login_best_streak or 0):
         stats.login_best_streak = stats.login_streak
 
-    return get_login_status(session, stats)
+    return get_login_status(session, stats, user=user)
 
 
-def get_login_status(session, stats):
-    """Return the current login-streak status for display."""
+def _tier_multiplier(user):
+    """The active subscription tier's daily-login multiplier (Diamond = 2×).
+
+    Best-effort: any failure falls back to 1× so a login reward is never lost
+    to a subscription lookup problem.
+    """
+    if user is None:
+        return 1
+    try:
+        from services import subscription_service
+        return subscription_service.daily_login_multiplier(user)
+    except Exception:
+        logger.exception("login reward tier multiplier failed (non-fatal)")
+        return 1
+
+
+def get_login_status(session, stats, user=None):
+    """Return the current login-streak status for display.
+
+    ``user`` is optional; pass it so the Mini App can show the member's tier
+    multiplier (Diamond doubles every ladder payout) next to the ladder.
+    """
     streak = stats.login_streak or 0
     # Ladder day is 1-based position within the looping 7-day cycle.
     # streak 1 -> day 1, ... streak 7 -> day 7, streak 8 -> day 1, etc.
@@ -94,6 +115,8 @@ def get_login_status(session, stats):
         "ladder_length": LADDER_LENGTH,
         "claimable_today": claimable_today,
         "already_claimed_today": already_claimed_today,
+        # Subscription multiplier applied to the day's coins/gems on claim.
+        "tier_multiplier": _tier_multiplier(user),
     }
 
 
@@ -126,6 +149,14 @@ def claim_login_reward(session, user, stats):
         coins, mult_used = apply_coin_multiplier(session, coins)
     except Exception:
         pass
+
+    # Subscription perk: the tier's daily-login multiplier (Diamond = 2×)
+    # multiplies BOTH currencies, and stacks on top of any active event
+    # multiplier — the perk is advertised as "2X Daily Login Reward".
+    tier_mult = _tier_multiplier(user)
+    if tier_mult > 1:
+        coins = int(coins * tier_mult)
+        gems = int(gems * tier_mult)
 
     if coins:
         user.total_coins = (user.total_coins or 0) + coins
@@ -161,6 +192,7 @@ def claim_login_reward(session, user, stats):
         log_activity(session, user.id, "login_reward",
                      f"Login streak day {ladder_day} (streak {streak}): "
                      f"+{coins} coins, +{gems} gems"
+                     + (f" ({tier_mult}× tier)" if tier_mult > 1 else "")
                      + (" + free pack" if granted_pack else ""),
                      coins_change=coins)
     except Exception:
@@ -175,6 +207,7 @@ def claim_login_reward(session, user, stats):
             "granted_pack": granted_pack,
             "label": reward["label"],
             "multiplier": mult_used,
+            "tier_multiplier": tier_mult,
         },
         "streak": streak,
         "balance": {

@@ -2,15 +2,15 @@
 
 Subscriptions are granted manually by an admin from the website (there is no
 self-serve payment). A user's ``subscription_tier`` is one of ``none``,
-``silver`` or ``platinum`` and stays active until ``subscription_expires_at``.
-An expired tier is treated as ``none`` everywhere WITHOUT needing a background
-job — every access check goes through :func:`get_tier`, which compares the
-expiry to ``utcnow()`` on read.
+``bronze``, ``silver``, ``platinum`` or ``diamond`` and stays active until
+``subscription_expires_at``. An expired tier is treated as ``none`` everywhere
+WITHOUT needing a background job — every access check goes through
+:func:`get_tier`, which compares the expiry to ``utcnow()`` on read.
 
 All tier perks (instant signup rewards, mystery-box cadence, cooldown
-reduction, market discount, premium commands, autoplay) are configured in
-``config.SUBSCRIPTION_TIERS`` and read through the helpers here so callers never
-hard-code tier logic.
+reduction, market discount, daily-login multiplier, premium commands, autoplay)
+are configured in ``config.SUBSCRIPTION_TIERS`` and read through the helpers
+here so callers never hard-code tier logic.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from config import SUBSCRIPTION_TIERS
 
 logger = logging.getLogger(__name__)
 
-VALID_TIERS = tuple(SUBSCRIPTION_TIERS.keys())  # ("silver", "platinum")
+# ("bronze", "silver", "platinum", "diamond") — cheapest → richest.
+VALID_TIERS = tuple(SUBSCRIPTION_TIERS.keys())
 
 
 # ── Tier state ──────────────────────────────────────────────────────
@@ -48,17 +49,36 @@ def tier_config(tier: str) -> dict | None:
 def tier_rank(tier: str) -> int:
     """Ordinal rank of a tier for comparisons; higher = better, ``none`` = 0.
 
-    Ranks follow the declaration order of ``SUBSCRIPTION_TIERS`` (silver=1,
-    platinum=2), so callers never hard-code which tier outranks which.
+    Ranks follow the declaration order of ``SUBSCRIPTION_TIERS`` (bronze=1,
+    silver=2, platinum=3, diamond=4), so callers never hard-code which tier
+    outranks which.
     """
     order = list(SUBSCRIPTION_TIERS.keys())
     tier = (tier or "").lower()
     return order.index(tier) + 1 if tier in order else 0
 
 
+def tier_label(tier: str) -> str:
+    """Display label for a tier ('🏆 Platinum'), or 'Free' for none/unknown."""
+    cfg = tier_config(tier)
+    if cfg:
+        return cfg.get("label", (tier or "").title())
+    return "Free"
+
+
 def can_upgrade(user, target_tier: str) -> bool:
     """True if ``target_tier`` is strictly higher than the user's active tier."""
     return tier_rank(target_tier) > tier_rank(get_tier(user))
+
+
+def upgrade_targets(tier: str) -> list[str]:
+    """Every tier a member on ``tier`` can step UP into, cheapest first.
+
+    Drives the admin website's upgrade buttons and /grant, so a new tier added
+    to ``SUBSCRIPTION_TIERS`` becomes upgradable everywhere with no code change.
+    """
+    rank = tier_rank(tier)
+    return [name for name in SUBSCRIPTION_TIERS if tier_rank(name) > rank]
 
 
 def is_subscribed(user) -> bool:
@@ -67,7 +87,12 @@ def is_subscribed(user) -> bool:
 
 
 def is_platinum(user) -> bool:
-    """True if the user's active tier is Platinum."""
+    """True if the user's active tier is Platinum.
+
+    Kept for callers that genuinely mean "exactly Platinum". Perk checks should
+    use the perk helpers (e.g. :func:`market_discount_pct`) instead, so higher
+    tiers like Diamond inherit the perk automatically.
+    """
     return get_tier(user) == "platinum"
 
 
@@ -87,6 +112,18 @@ def has_weekly_card(user) -> bool:
     """True if the active tier grants the /cmuweekly card."""
     cfg = tier_config(get_tier(user))
     return bool(cfg and cfg.get("weekly_card"))
+
+
+def daily_login_multiplier(user) -> int:
+    """Multiplier the active tier applies to the Mini App daily login reward.
+
+    ``1`` for free users and every tier without the perk; Diamond doubles it.
+    """
+    cfg = tier_config(get_tier(user))
+    try:
+        return max(1, int((cfg or {}).get("daily_login_multiplier", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
 def coin_chest_config(user) -> dict | None:
@@ -135,11 +172,19 @@ def discounted_price(user, price: int) -> int:
     return price * (100 - pct) // 100
 
 
-def market_price(user, base_price: int, final_price: int) -> int:
-    """Player Market price for this user. The market's discount is a Platinum
-    perk: Platinum pays the discounted ``final_price``; everyone else pays the
-    full ``base_price``."""
-    return final_price if is_platinum(user) else base_price
+def market_price(user, base_price: int, final_price: int | None = None) -> int:
+    """Player Market price for this user.
+
+    The discount is a paid perk driven by the tier's ``market_discount_pct``
+    (Platinum 5%, Diamond 10%): it comes off ``base_price``, and free/Bronze/
+    Silver members pay the full ``base_price``. ``final_price`` — the market's
+    own precomputed 5%-off column — caps the result, so a discounted member
+    never pays more than the price the market itself advertises.
+    """
+    price = discounted_price(user, base_price)
+    if final_price is not None and market_discount_pct(user) > 0:
+        return min(price, final_price)
+    return price
 
 
 # ── Messaging ───────────────────────────────────────────────────────
@@ -188,11 +233,32 @@ def activation_dm_text(tier: str, granted: dict | None, *,
     return "\n".join(lines).strip()
 
 
-def premium_required_message(feature: str = "This feature") -> str:
+def tier_price_list(min_tier: str | None = None) -> str:
+    """Render the tier list used by upsell messages — 🥉 Bronze (₹19/mo),
+    🥈 Silver (₹59/mo), … — from the config, so a new tier shows up everywhere
+    automatically. ``min_tier`` drops every tier ranked below it (use it when a
+    perk starts partway up the ladder).
+    """
+    floor = tier_rank(min_tier) if min_tier else 0
+    bits = [f"<b>{cfg.get('label', name.title())}</b> (₹{cfg.get('price_inr')}/mo)"
+            for name, cfg in SUBSCRIPTION_TIERS.items()
+            if tier_rank(name) >= floor]
+    if len(bits) > 1:
+        return ", ".join(bits[:-1]) + " or " + bits[-1]
+    return bits[0] if bits else ""
+
+
+def premium_required_message(feature: str = "This feature",
+                             min_tier: str | None = None) -> str:
+    """Upsell shown when a free (or too-low) member hits a paid feature.
+
+    ``min_tier`` names the cheapest tier that unlocks ``feature`` so the message
+    only advertises tiers that actually include it.
+    """
     return (
         f"🔒 <b>{feature} is a premium feature.</b>\n\n"
-        "Upgrade to <b>🥈 Silver</b> (₹59/mo) or <b>🏆 Platinum</b> (₹99/mo) "
-        "to unlock it, plus Mystery Boxes, faster cooldowns and more.\n\n"
+        f"Upgrade to {tier_price_list(min_tier)} to unlock it, plus Mystery "
+        "Boxes, faster cooldowns and more.\n\n"
         "Ask an admin to activate your subscription."
     )
 

@@ -1,5 +1,9 @@
-"""Platinum recurring drops: /cmuweekly (weekly guaranteed card) and
-/cmuchest (coin chests every 10 days)."""
+"""Top-tier recurring drops: /cmuweekly (weekly guaranteed card) and /cmuchest
+(coin chests — Platinum 3 per 10 days, Diamond 5 per 7 days).
+
+Both are config-driven perks: any tier whose SUBSCRIPTION_TIERS entry sets
+``weekly_card`` / ``coin_chests`` unlocks them, so tiers are never hard-coded
+here."""
 
 import html
 import logging
@@ -47,7 +51,7 @@ def _weighted_weekly_band() -> tuple[int, int]:
 # ── /cmuweekly ──────────────────────────────────────────────────────
 
 async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Grant a Platinum subscriber their weekly guaranteed 85+ card (7-day cd)."""
+    """Grant an eligible subscriber their weekly guaranteed 85+ card (7-day cd)."""
     uid = update.effective_user.id
     session = get_session()
     try:
@@ -61,7 +65,7 @@ async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not subscription_service.has_weekly_card(user):
             await update.message.reply_text(
                 subscription_service.premium_required_message(
-                    "The Weekly Card (🏆 Platinum only)"),
+                    "The Weekly Card", min_tier="platinum"),
                 parse_mode="HTML")
             return
 
@@ -98,7 +102,7 @@ async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── /cmuchest ───────────────────────────────────────────────────────
 
 async def cmuchest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Grant a Platinum subscriber their recurring coin chests (10-day cd)."""
+    """Grant an eligible subscriber their recurring coin chests."""
     uid = update.effective_user.id
     session = get_session()
     try:
@@ -113,7 +117,7 @@ async def cmuchest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not chest_cfg:
             await update.message.reply_text(
                 subscription_service.premium_required_message(
-                    "Coin Chests (🏆 Platinum only)"),
+                    "Coin Chests", min_tier="platinum"),
                 parse_mode="HTML")
             return
 
