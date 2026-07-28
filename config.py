@@ -21,11 +21,18 @@ MEDIA_STORAGE_CHAT_ID = os.getenv("MEDIA_STORAGE_CHAT_ID", "").strip()
 # ── Cooldowns (seconds) ─────────────────────────────────────────────
 # These are the base (free-user) cooldowns. Paid tiers get a proportional
 # reduction applied via services.subscription_service.cooldown_seconds
-# (Bronze −5 min/hr → ×0.917, Silver −10 min/hr → ×0.833, Platinum −20 min/hr
-# → ×0.667, Diamond −30 min/hr → ×0.5). For example /daily at 12h → Bronze 11h,
-# Silver 10h, Platinum 8h, Diamond 6h.
+# (Bronze −0 min/hr, Silver −5 → ×0.917, Platinum −10 → ×0.833,
+# Diamond −15 → ×0.75). The resulting ladder:
+#
+#   command  | Free & Bronze | Silver  | Platinum | Diamond
+#   /claim   | 1h            | 55m     | 50m      | 45m
+#   /gspin   | 8h            | 7h 20m  | 6h 40m   | 6h
+#   /daily   | 24h           | 22h     | 20h      | 18h
+#
+# An admin cooldown override saved on the website (BotCommand.cooldown_seconds)
+# replaces the base value below; the tier reduction still applies on top.
 CLAIM_COOLDOWN = 3600    # 1 hour
-DAILY_COOLDOWN = 43200   # 12 hours
+DAILY_COOLDOWN = 86400   # 24 hours
 GSPIN_COOLDOWN = 28800   # 8 hours
 XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
 
@@ -37,8 +44,8 @@ XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
 #                             steps UP into this tier (see below).
 #   mysterybox_cooldown_days — /cmumysterybox recurrence.
 #   cooldown_reduction_min_per_hour — shaves this many minutes off every hour
-#                             of a normal command cooldown (Bronze 5, Silver 10,
-#                             Platinum 20, Diamond 30).
+#                             of a normal command cooldown (Bronze 0, Silver 5,
+#                             Platinum 10, Diamond 15) — see the ladder above.
 #   market_discount_pct     — % off player purchases (Platinum 5, Diamond 10).
 #   weekly_card             — enables /cmuweekly (guaranteed 85+ card, 7-day cd).
 #   coin_chests             — enables /cmuchest (recurring coin chests).
@@ -63,7 +70,9 @@ SUBSCRIPTION_TIERS = {
         "instant": {"coins": 29000, "gems": 150, "quest_points": 0,
                     "packs": []},
         "mysterybox_cooldown_days": 15,
-        "cooldown_reduction_min_per_hour": 5,
+        # Bronze runs on the free-user cooldowns — the entry tier buys the
+        # rewards and premium commands, not faster timers.
+        "cooldown_reduction_min_per_hour": 0,
         "market_discount_pct": 0,
         "weekly_card": False,
         "coin_chests": None,
@@ -83,7 +92,7 @@ SUBSCRIPTION_TIERS = {
                        "packs": ["Star Pack"]},
         },
         "mysterybox_cooldown_days": 8,
-        "cooldown_reduction_min_per_hour": 10,
+        "cooldown_reduction_min_per_hour": 5,
         "market_discount_pct": 0,
         "weekly_card": False,
         "coin_chests": None,
@@ -111,7 +120,7 @@ SUBSCRIPTION_TIERS = {
                        "packs": ["Legend Pack"]},
         },
         "mysterybox_cooldown_days": 4,
-        "cooldown_reduction_min_per_hour": 20,
+        "cooldown_reduction_min_per_hour": 10,
         "market_discount_pct": 5,
         "weekly_card": True,
         "coin_chests": {"count": 3, "min": 60000, "max": 99000,
@@ -137,7 +146,7 @@ SUBSCRIPTION_TIERS = {
                          "packs": ["Ultimate Legend Pack"]},
         },
         "mysterybox_cooldown_days": 2,
-        "cooldown_reduction_min_per_hour": 30,
+        "cooldown_reduction_min_per_hour": 15,
         "market_discount_pct": 10,
         "weekly_card": True,
         "coin_chests": {"count": 5, "min": 70000, "max": 110000,

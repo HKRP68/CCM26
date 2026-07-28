@@ -22,9 +22,28 @@ Declaration order in `SUBSCRIPTION_TIERS` **is** the rank
 | `/cmuchest` coin chests | — | — | 3 per 10 days (60k–99k) | 5 per 7 days (70k–110k) |
 | Player Market discount | — | — | 5% | 10% |
 | Mini App daily login reward | 1× | 1× | 1× | **2×** |
-| Cooldown reduction | −5 min/hr | −10 min/hr | −20 min/hr | −30 min/hr |
+| Cooldown reduction | — | −5 min/hr | −10 min/hr | −15 min/hr |
 | `/autobuild` + `/wpmbot` | ✅ | ✅ | ✅ | ✅ |
 | Mini App Autoplay | — | ✅ | ✅ | ✅ |
+
+### Command cooldowns
+
+`cooldown_reduction_min_per_hour` shaves N minutes off every hour of a
+command's base cooldown (`×(1 − N/60)`), so one number drives every command.
+Bronze deliberately runs on the free-user timers — the entry tier buys rewards
+and premium commands, not speed.
+
+| Command | Base (free & 🥉 Bronze) | 🥈 Silver | 🏆 Platinum | 💎 Diamond |
+|---|---|---|---|---|
+| `/claim` | 1h | 55m | 50m | 45m |
+| `/gspin` (Mini App) | 8h | 7h 20m | 6h 40m | 6h |
+| `/daily` (Mini App) | 24h | 22h | 20h | 18h |
+
+Base values live in `config.py` (`CLAIM_COOLDOWN`, `GSPIN_COOLDOWN`,
+`DAILY_COOLDOWN`). An admin override saved on the website
+(`BotCommand.cooldown_seconds`) replaces the base value, and the tier reduction
+still applies on top — so retuning a base cooldown from the admin panel keeps
+the ladder proportional.
 
 A tier is active only while `subscription_expires_at` is in the future.
 `get_tier()` checks that on every read, so an expired tier behaves exactly like

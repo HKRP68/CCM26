@@ -244,6 +244,59 @@ class UpgradePathTests(unittest.TestCase):
             self.svc.upgrade(None, _member("silver"), "bronze")
 
 
+class CooldownLadderTests(unittest.TestCase):
+    """Pins the exact per-tier cooldowns for /claim, /gspin and /daily.
+
+    One config number (cooldown_reduction_min_per_hour) drives all three, so
+    these assertions are what stops a retune from silently skewing a command.
+    """
+
+    # command → (base seconds, {tier: expected seconds})
+    EXPECTED = {
+        "/claim": (3600, {"none": 3600, "bronze": 3600, "silver": 55 * 60,
+                          "platinum": 50 * 60, "diamond": 45 * 60}),
+        "/gspin": (28800, {"none": 28800, "bronze": 28800,
+                           "silver": 7 * 3600 + 20 * 60,
+                           "platinum": 6 * 3600 + 40 * 60,
+                           "diamond": 6 * 3600}),
+        "/daily": (86400, {"none": 86400, "bronze": 86400,
+                           "silver": 22 * 3600, "platinum": 20 * 3600,
+                           "diamond": 18 * 3600}),
+    }
+
+    def setUp(self):
+        self.svc = _load_service()
+
+    def test_base_cooldowns_match_config(self):
+        from config import CLAIM_COOLDOWN, GSPIN_COOLDOWN, DAILY_COOLDOWN
+        self.assertEqual(CLAIM_COOLDOWN, self.EXPECTED["/claim"][0])
+        self.assertEqual(GSPIN_COOLDOWN, self.EXPECTED["/gspin"][0])
+        self.assertEqual(DAILY_COOLDOWN, self.EXPECTED["/daily"][0])
+
+    def test_every_tier_cooldown_matches_the_spec(self):
+        for command, (base, per_tier) in self.EXPECTED.items():
+            for tier, expected in per_tier.items():
+                self.assertEqual(
+                    self.svc.cooldown_seconds(_member(tier), base), expected,
+                    f"{command} on {tier}")
+
+    def test_bronze_runs_on_free_user_timers(self):
+        for base in (3600, 28800, 86400):
+            self.assertEqual(self.svc.cooldown_seconds(_member("bronze"), base),
+                             base)
+
+    def test_cooldowns_shorten_as_the_tier_rises(self):
+        for base in (3600, 28800, 86400):
+            values = [self.svc.cooldown_seconds(_member(t), base)
+                      for t in ("none", "bronze", "silver", "platinum", "diamond")]
+            self.assertEqual(values, sorted(values, reverse=True))
+
+    def test_expired_tier_falls_back_to_the_base_cooldown(self):
+        lapsed = _member("diamond")
+        lapsed.subscription_expires_at = datetime.utcnow() - timedelta(days=1)
+        self.assertEqual(self.svc.cooldown_seconds(lapsed, 3600), 3600)
+
+
 class AutoplayLockTests(unittest.TestCase):
     """Autoplay is paid-only — free users must stay locked out of the Mini App
     toggle (the Arena reads this same helper to render the 🔒 pill)."""
