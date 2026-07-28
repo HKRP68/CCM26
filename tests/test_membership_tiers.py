@@ -12,21 +12,52 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 
+# Real modules displaced by the stubs below, so tearDownModule can put them
+# back. unittest imports every test module before running any of them, so a
+# stub left in sys.modules would otherwise be inherited by whatever runs next.
+_DISPLACED = {}
+
+
+def _stub(name, module):
+    """Install a stub module, remembering whatever it displaced."""
+    if name not in _DISPLACED:
+        _DISPLACED[name] = sys.modules.get(name)
+    sys.modules[name] = module
+
+
+def tearDownModule():
+    """Undo every stub this module installed."""
+    import services
+    for name, original in _DISPLACED.items():
+        if original is None:
+            sys.modules.pop(name, None)
+            # Drop the attribute the import machinery cached on the package
+            # too, or `from services import x` keeps handing out the stub.
+            attr = name.split(".", 1)[1] if name.startswith("services.") else None
+            if attr and hasattr(services, attr):
+                delattr(services, attr)
+        else:
+            sys.modules[name] = original
+    _DISPLACED.clear()
+    sys.modules.pop("services.subscription_service", None)
+
+
 def _load_service():
     # Real config carries the SUBSCRIPTION_TIERS table the service reads.
     # python-dotenv isn't installed in the test env — stub load_dotenv.
-    dotenv = types.ModuleType("dotenv")
-    dotenv.load_dotenv = lambda *a, **k: None
-    sys.modules.setdefault("dotenv", dotenv)
+    if "dotenv" not in sys.modules:
+        dotenv = types.ModuleType("dotenv")
+        dotenv.load_dotenv = lambda *a, **k: None
+        _stub("dotenv", dotenv)
     sys.modules.pop("services.subscription_service", None)
     # Stub the lazily-imported side effects so no DB/pack catalogue is needed.
     activity = types.ModuleType("services.activity_service")
     activity.log_activity = lambda *a, **k: None
-    sys.modules["services.activity_service"] = activity
+    _stub("services.activity_service", activity)
     pack = types.ModuleType("services.pack_service")
     pack.list_packs = lambda *a, **k: []          # empty catalogue → packs skipped
     pack.grant_pack = lambda *a, **k: None
-    sys.modules["services.pack_service"] = pack
+    _stub("services.pack_service", pack)
 
     from services import subscription_service
     return subscription_service
@@ -317,6 +348,25 @@ class AutoplayLockTests(unittest.TestCase):
         self.assertFalse(self.svc.has_autoplay(_member("bronze")))
         for tier in ("silver", "platinum", "diamond"):
             self.assertTrue(self.svc.has_autoplay(_member(tier)), tier)
+
+    def test_upsell_names_exactly_the_tiers_that_grant_it(self):
+        # The 403 message is built from this list, so it can never name a tier
+        # that doesn't actually unlock the perk.
+        self.assertEqual(self.svc.tiers_with_perk("autoplay"),
+                         ["silver", "platinum", "diamond"])
+        names = self.svc.tier_names(self.svc.tiers_with_perk("autoplay"))
+        self.assertIn("Silver", names)
+        self.assertIn("Diamond", names)
+        self.assertNotIn("Bronze", names)
+        self.assertNotIn("<b>", names)   # plain text — it goes into a JSON alert
+
+    def test_perk_lookup_covers_the_other_config_flags(self):
+        self.assertEqual(self.svc.tiers_with_perk("weekly_card"),
+                         ["platinum", "diamond"])
+        self.assertEqual(self.svc.tiers_with_perk("coin_chests"),
+                         ["platinum", "diamond"])
+        self.assertEqual(self.svc.tiers_with_perk("premium_commands"),
+                         ["bronze", "silver", "platinum", "diamond"])
 
 
 class MessagingTests(unittest.TestCase):

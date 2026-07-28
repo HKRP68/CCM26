@@ -2,8 +2,11 @@
 
 Four paid tiers, granted manually by an admin (there is no self-serve payment).
 Everything below is configured in **`config.SUBSCRIPTION_TIERS`** and read
-through `services/subscription_service.py` — no tier name is hard-coded in
-feature code, so adding or retuning a tier is a config change.
+through `services/subscription_service.py` — no server-side feature code, admin
+page or upsell message hard-codes a tier name, so adding or retuning a tier is a
+config change. (The one exception is the Arena client's pre-flight Autoplay
+alert in `static/cricket/app.js`, which has no access to the config; the
+server's own 403 message is built from `tiers_with_perk("autoplay")`.)
 
 Declaration order in `SUBSCRIPTION_TIERS` **is** the rank
 (`bronze < silver < platinum < diamond`); `tier_rank()` reads it.

@@ -248,6 +248,26 @@ def tier_price_list(min_tier: str | None = None) -> str:
     return bits[0] if bits else ""
 
 
+def tiers_with_perk(perk: str) -> list[str]:
+    """Names of every tier whose config enables ``perk``, in rank order.
+
+    Lets a caller ask "who gets Autoplay?" instead of naming tiers, so moving a
+    perk up or down the ladder needs no code change.
+    """
+    return [name for name, cfg in SUBSCRIPTION_TIERS.items() if cfg.get(perk)]
+
+
+def tier_names(tiers) -> str:
+    """"🥈 Silver, 🏆 Platinum or 💎 Diamond" — a plain-text (no HTML) tier list
+    for JSON API messages and Mini App alerts, where markup would show through
+    as literal tags. See :func:`tier_price_list` for the HTML+price version.
+    """
+    labels = [tier_label(t) for t in tiers]
+    if len(labels) > 1:
+        return ", ".join(labels[:-1]) + " or " + labels[-1]
+    return labels[0] if labels else ""
+
+
 def premium_required_message(feature: str = "This feature",
                              min_tier: str | None = None) -> str:
     """Upsell shown when a free (or too-low) member hits a paid feature.

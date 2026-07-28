@@ -12,10 +12,42 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 
+# Real modules displaced by the stubs below, so tearDownModule can put them
+# back. unittest imports every test module before running any of them, so a
+# stub left in sys.modules would otherwise be inherited by whatever runs next.
+_DISPLACED = {}
+
+
+def _stub(name, module):
+    """Install a stub module, remembering whatever it displaced."""
+    if name not in _DISPLACED:
+        _DISPLACED[name] = sys.modules.get(name)
+    sys.modules[name] = module
+
+
+def tearDownModule():
+    """Undo every stub this module installed."""
+    import services
+    for name, original in _DISPLACED.items():
+        if original is None:
+            sys.modules.pop(name, None)
+            # Drop the attribute the import machinery cached on the package
+            # too, or `from services import x` keeps handing out the stub.
+            attr = name.split(".", 1)[1] if name.startswith("services.") else None
+            if attr and hasattr(services, attr):
+                delattr(services, attr)
+        else:
+            sys.modules[name] = original
+    _DISPLACED.clear()
+    for name in ("services.subscription_service", "services.login_streak_service"):
+        sys.modules.pop(name, None)
+
+
 def _load_service():
-    dotenv = types.ModuleType("dotenv")
-    dotenv.load_dotenv = lambda *a, **k: None
-    sys.modules.setdefault("dotenv", dotenv)
+    if "dotenv" not in sys.modules:
+        dotenv = types.ModuleType("dotenv")
+        dotenv.load_dotenv = lambda *a, **k: None
+        _stub("dotenv", dotenv)
     # sqlalchemy isn't installed in the test env, so the real `models` module
     # can't import. login_streak_service only needs the name to exist.
     models_mod = types.ModuleType("models")
@@ -28,14 +60,14 @@ def _load_service():
 
     models_mod.UserStats = UserStats
     models_mod.Pack = Pack
-    sys.modules["models"] = models_mod
+    _stub("models", models_mod)
     activity = types.ModuleType("services.activity_service")
     activity.log_activity = lambda *a, **k: None
-    sys.modules["services.activity_service"] = activity
+    _stub("services.activity_service", activity)
     pack = types.ModuleType("services.pack_service")
     pack.list_packs = lambda *a, **k: []
     pack.grant_pack = lambda *a, **k: None
-    sys.modules["services.pack_service"] = pack
+    _stub("services.pack_service", pack)
     sys.modules.pop("services.subscription_service", None)
     sys.modules.pop("services.login_streak_service", None)
     from services import login_streak_service

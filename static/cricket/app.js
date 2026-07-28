@@ -745,11 +745,10 @@ function applyMatchState(nextState, { force = false } = {}) {
   preloadEventSounds(matchState.eventSounds || {});
   pollFailureCount = 0;
 
-  // Autoplay is a paid membership perk (Silver and above). The server reports
-  // whether this user may use it; keep the pill locked (🔒) for free users.
-  if (matchState.autoplay && matchState.autoplay.premium !== undefined) {
-    autoplayPremium = !!matchState.autoplay.premium;
-  }
+  // Autoplay is a paid membership perk (Silver and above). Every state payload
+  // carries the verdict, so assign it UNCONDITIONALLY: a missing field means
+  // "not entitled", never "keep whatever the last match said".
+  autoplayPremium = !!(matchState.autoplay && matchState.autoplay.premium);
 
   // Autoplay must default OFF for every new match. The flag is a module global,
   // so in a reused webview it would otherwise leak from a previous match and
@@ -759,7 +758,9 @@ function applyMatchState(nextState, { force = false } = {}) {
     autoplayMatchId = matchState.id;
     setAutoplayActive(false);
   } else if (!autoplayOffPending && matchState.autoplay?.isOnForMe !== undefined) {
-    setAutoplayActive(!!matchState.autoplay.isOnForMe);
+    // A persisted "on" from before the member's tier lapsed must not switch the
+    // loop back on — entitlement wins over the stored toggle.
+    setAutoplayActive(autoplayPremium && !!matchState.autoplay.isOnForMe);
   }
 
   // Apply the premium lock LAST so the 🔒 PRO label wins over the ON/OFF label
@@ -2857,9 +2858,13 @@ function setAutoplayActive(active) {
 // Reflect premium state on the Autoplay pill: locked pills show a 🔒 and a
 // "PRO" label, and never render as active.
 function applyAutoplayLock() {
+  const locked = !autoplayPremium;
+  // A locked pill must stop the LOOP, not just the styling: clearing the
+  // logical flag is what keeps runAutoplayAction() from firing a request the
+  // server 403s on every poll tick.
+  if (locked) autoplayActive = false;
   const btn = document.getElementById('autoplay-toggle-btn');
   if (!btn) return;
-  const locked = !autoplayPremium;
   btn.classList.toggle('locked', locked);
   const label = btn.querySelector('.pill-label');
   if (locked) {

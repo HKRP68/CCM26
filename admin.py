@@ -7487,6 +7487,29 @@ def _match_rest_full_state(db, match_id, user_id):
     }
 
 
+def _as_bool(value) -> bool:
+    """Read a JSON flag without bool()'s string trap.
+
+    ``bool("false")`` is True, so a client that sends the STRING "false"/"0"
+    would flip a toggle on. Real booleans pass through; the usual textual and
+    numeric spellings of false are honoured; anything else falls back to
+    ordinary truthiness."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "off", "null")
+    return bool(value)
+
+
+def _autoplay_upsell() -> str:
+    """Plain-text 403 message naming the tiers that actually unlock Autoplay.
+
+    Read from SUBSCRIPTION_TIERS rather than spelled out, so moving the perk up
+    or down the ladder can't leave a stale tier list in an API response."""
+    from services import subscription_service
+    tiers = subscription_service.tier_names(
+        subscription_service.tiers_with_perk("autoplay"))
+    return f"Autoplay is a membership feature. Upgrade to {tiers} to unlock it."
+
+
 def _user_has_autoplay(db, user_id) -> bool:
     """True if the given internal user id has an active tier that unlocks
     the Mini App Autoplay toggle."""
@@ -7876,8 +7899,7 @@ def match_rest_autoplay():
         from services import subscription_service
         if not subscription_service.has_autoplay(user):
             return {"ok": False, "error": "premium_required",
-                    "message": "Autoplay is a membership feature. Upgrade to "
-                               "Silver, Platinum or Diamond to unlock it."}, 403
+                    "message": _autoplay_upsell()}, 403
         from services.match_webapp_service import (
             auto_play_user_turns, auto_play_bot_turns, get_state_is_vsbot)
         from services.match_webapp_access import get_state, get_next_action
@@ -8206,13 +8228,14 @@ def match_rest_autoplay_status():
         from services.crickidex_arena import serialize_match_state
         # Autoplay is a paid perk. Turning it ON is refused for free members
         # (turning it OFF always works, so a lapsed subscriber is never stuck
-        # with the toggle on).
-        active = bool(data.get("active"))
+        # with the toggle on) — which makes reading `active` correctly matter:
+        # bool("false") is True, so a client sending the string would both flip
+        # the toggle ON and turn its own attempted disable into a 403.
+        active = _as_bool(data.get("active"))
         from services import subscription_service
         if active and not subscription_service.has_autoplay(user):
             return {"ok": False, "error": "premium_required",
-                    "message": "Autoplay is a membership feature. Upgrade to "
-                               "Silver, Platinum or Diamond to unlock it."}, 403
+                    "message": _autoplay_upsell()}, 403
         state = save_autoplay_users(match.id, user.id, active)
         if not state:
             return {"ok": False, "error": "no_match"}, 404
