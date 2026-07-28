@@ -299,10 +299,43 @@ MAX_INVENTORY = 50  # max unopened packs a user can hold
 PITY_THRESHOLD = 10
 
 
+def _lock_buyer_row(session, user):
+    """Row-lock the buyer for the rest of this transaction.
+
+    ``buy_pack`` does check-then-charge: it validates the balance, the
+    inventory cap and the daily limit, and only then deducts. Two buys that
+    overlap — the classic double-tap on the Mini App "Buy" button, which fires
+    a second POST before the first has committed — each read the same
+    pre-deduction snapshot from their own session, both pass validation, and
+    both charge. The user ends up with two packs for one price, or past the
+    daily limit.
+
+    ``SELECT … FOR UPDATE`` makes the second buy wait until the first commits,
+    then re-read the charged balance. Real lock on Postgres, a harmless no-op
+    on SQLite (dev/tests), where writes serialize anyway. Best-effort: a
+    session that cannot lock (a test double, an exotic backend) must never
+    stop a legitimate purchase.
+    """
+    try:
+        # autoflush is off, so flush first — populate_existing() would
+        # otherwise overwrite pending in-session writes to this User.
+        session.flush()
+        (session.query(User)
+         .filter(User.id == user.id)
+         .populate_existing()
+         .with_for_update()
+         .first())
+    except Exception:
+        logger.debug("buy_pack: buyer row lock unavailable", exc_info=True)
+
+
 def buy_pack(session, user, pack):
     """Validate cost + limits, charge user, add an UnopenedPack to inventory.
 
     Does NOT roll players — that happens in open_unopened_pack().
+
+    Concurrency: the buyer row is locked first (see ``_lock_buyer_row``) so
+    duplicate/rapid purchases can't both spend the same balance.
 
     Returns dict:
       success: bool
@@ -311,6 +344,8 @@ def buy_pack(session, user, pack):
       currency: str
       inventory_id: int (the UnopenedPack.id created)
     """
+    _lock_buyer_row(session, user)
+
     if pack.cost_coins and user.total_coins < pack.cost_coins:
         return {"success": False,
                 "message": f"❌ Need {pack.cost_coins:,} coins (you have {user.total_coins:,})."}

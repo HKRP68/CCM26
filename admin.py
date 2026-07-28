@@ -4045,6 +4045,14 @@ def health():
 # in the Authorization header. CSRF is exempt — Telegram's HMAC signature
 # is the authentication.
 
+from utils.idempotency import claim_once, release
+
+# How long a pack buy/open claim survives if the request never reaches its
+# `finally` (worker killed mid-request). Normal requests release the claim as
+# soon as they commit, so this only bounds the worst case.
+_WEBAPP_PACK_GUARD_TTL = 30.0
+
+
 def _webapp_auth(allow_not_debuted=False):
     """Verify Telegram initData from Authorization header.
 
@@ -5958,6 +5966,18 @@ def webapp_packs_buy():
     if err:
         return err
     db, user, tg_id = auth
+
+    # Server-side double-tap guard. The Mini App disables the Buy button on
+    # the first click, but a laggy WebView can still emit two clicks (or a
+    # replayed request) before that runs — and each one used to charge the
+    # user and drop another pack in their inventory. Only one purchase per
+    # user may be in flight; the claim is released once this request has
+    # committed, so a deliberate second purchase right after works fine.
+    guard_key = f"webapp_packbuy_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_PACK_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A pack purchase is already going through — hang tight."}, 409
     try:
         from models import Pack
         from services.pack_service import buy_pack, get_user_pack_purchases_today
@@ -6001,6 +6021,7 @@ def webapp_packs_buy():
         logger.exception("webapp_packs_buy failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -6013,6 +6034,14 @@ def webapp_packs_open():
     if err:
         return err
     db, user, tg_id = auth
+
+    # Same double-tap guard as buying: two concurrent opens of the same
+    # inventory row would both roll players off it.
+    guard_key = f"webapp_packopen_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_PACK_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "That pack is already being opened — hang tight."}, 409
     try:
         from services.pack_service import open_unopened_pack
         data = request.get_json(silent=True) or {}
@@ -6078,6 +6107,7 @@ def webapp_packs_open():
         logger.exception("webapp_packs_open failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 

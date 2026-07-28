@@ -671,7 +671,13 @@
     transition: transform 0.15s, box-shadow 0.15s;
   }
   .pack-buy-btn:not(:disabled):active { transform: scale(0.97); box-shadow: 0 1px 6px rgba(232,184,75,0.2); }
-  .pack-buy-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  /* Locked while a purchase is in flight — kills the double-tap double-buy.
+     pointer-events:none also swallows taps queued during the same gesture. */
+  .pack-buy-btn:disabled,
+  .pack-open-btn:disabled {
+    opacity: 0.45; cursor: not-allowed; pointer-events: none;
+    box-shadow: none; transform: none;
+  }
   .pack-inv-card {
     display: flex; align-items: center; gap: 0.8rem;
     background: var(--card); border: 1px solid var(--border);
@@ -681,6 +687,14 @@
     margin-left: auto; padding: 0.55rem 1.1rem; border: none; border-radius: 8px;
     background: var(--green); color: #0a0f1a; font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
+  }
+  /* The in-flight spinner sits on a gold/green button — the shared .spinner
+     is gold-on-dark, so borrow the button's own ink instead. */
+  .pack-buy-btn .spinner,
+  .pack-open-btn .spinner {
+    width: 14px; height: 14px; margin-right: 0.3rem;
+    border-color: rgba(7,12,24,0.28);
+    border-top-color: currentColor;
   }
 
   /* Pack opening animation */
@@ -5786,6 +5800,19 @@ function closeFreePackReveal() {
 let packsData = null;
 let currentPacksTab = 'shop';
 let pendingRevealPlayers = null;
+// One pack action (buy or open) at a time. A tap in the Telegram WebView can
+// fire again before the first response lands, and every extra tap used to be
+// another charged purchase — so the whole shop locks until the round trip is
+// done, not just the button that was pressed.
+let packActionBusy = false;
+let packRevealing = false;   // reveal animation running — ignore extra taps
+
+/** Disable/enable every pack button. Buttons marked data-locked (sold out for
+ *  the day) stay disabled either way. */
+function setPackButtonsBusy(busy) {
+  document.querySelectorAll('#packs-content .pack-buy-btn, #packs-content .pack-open-btn')
+    .forEach(b => { b.disabled = busy || b.dataset.locked === '1'; });
+}
 
 function switchPacksTab(tab) {
   currentPacksTab = tab;
@@ -5836,7 +5863,7 @@ function renderPacks() {
       let btnLabel, btnDisabled = '';
       if (p.sold_out_today) {
         btnLabel = `Sold out today (${p.bought_today}/${p.daily_limit})`;
-        btnDisabled = 'disabled';
+        btnDisabled = 'disabled data-locked="1"';
       } else {
         btnLabel = `Buy · ${cost}`;
         if (p.daily_limit > 0) btnLabel += ` (${p.bought_today}/${p.daily_limit})`;
@@ -5852,7 +5879,7 @@ function renderPacks() {
             </div>
           </div>
           <div class="pack-shop-contents">${contents.join('')}</div>
-          <button class="pack-buy-btn" ${btnDisabled} onclick="buyPack(${p.id})">${btnLabel}</button>
+          <button class="pack-buy-btn" ${btnDisabled} onclick="buyPack(${p.id}, this)">${btnLabel}</button>
         </div>
       `;
     }).join('');
@@ -5876,40 +5903,80 @@ function renderPacks() {
             ${inv.main_count}× main${inv.bonus_count ? ` + ${inv.bonus_count}× bonus` : ''}
           </div>
         </div>
-        <button class="pack-open-btn" onclick="openPack(${inv.inventory_id})">Open</button>
+        <button class="pack-open-btn" onclick="openPack(${inv.inventory_id}, this)">Open</button>
       </div>
     `).join('');
   }
 }
 
-async function buyPack(packId) {
+async function buyPack(packId, btn) {
+  // Drop every tap after the first until this purchase resolves. The flag
+  // catches clicks queued before the button was disabled; the disabled
+  // buttons stop everything after that.
+  if (packActionBusy) return;
+  packActionBusy = true;
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/packs/buy', { pack_id: packId });
-  if (!ok) {
-    toast(data.message || 'Purchase failed', 'error');
-    hapticNotif('error');
-    return;
+
+  const label = btn ? btn.innerHTML : '';
+  setPackButtonsBusy(true);
+  if (btn) btn.innerHTML = '<span class="spinner"></span> Buying…';
+
+  try {
+    const { ok, data } = await api('/api/webapp/packs/buy', { pack_id: packId });
+    if (!ok) {
+      // 409 = the server's own duplicate guard caught a request this client
+      // let slip. Not the user's fault, so don't shout about it.
+      if (data.error === 'in_progress') {
+        toast(data.message || 'Purchase already in progress', 'info');
+      } else {
+        toast(data.message || 'Purchase failed', 'error');
+        hapticNotif('error');
+      }
+      if (btn) btn.innerHTML = label;
+      setPackButtonsBusy(false);
+      return;
+    }
+    toast('✅ Pack added to your inventory!', 'success');
+    hapticNotif('success');
+    refreshDashboard();
+    await loadPacks();   // re-renders the shop → fresh, re-enabled buttons
+    // Nudge them to the inventory tab
+    switchPacksTab('inventory');
+  } finally {
+    packActionBusy = false;
   }
-  toast('✅ Pack added to your inventory!', 'success');
-  hapticNotif('success');
-  refreshDashboard();
-  await loadPacks();
-  // Nudge them to the inventory tab
-  switchPacksTab('inventory');
 }
 
-async function openPack(inventoryId) {
+async function openPack(inventoryId, btn) {
+  if (packActionBusy) return;
+  packActionBusy = true;
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/packs/open', { inventory_id: inventoryId });
-  if (!ok) {
-    toast(data.message || 'Could not open pack', 'error');
-    hapticNotif('error');
-    return;
+
+  const label = btn ? btn.innerHTML : '';
+  setPackButtonsBusy(true);
+  if (btn) btn.innerHTML = '<span class="spinner"></span>';
+
+  try {
+    const { ok, data } = await api('/api/webapp/packs/open', { inventory_id: inventoryId });
+    if (!ok) {
+      if (data.error === 'in_progress') {
+        toast(data.message || 'Already opening that pack', 'info');
+      } else {
+        toast(data.message || 'Could not open pack', 'error');
+        hapticNotif('error');
+      }
+      if (btn) btn.innerHTML = label;
+      setPackButtonsBusy(false);
+      return;
+    }
+    // Store revealed players and start the animation. The inventory stays
+    // locked behind the reveal overlay and is re-rendered by closePackOpen().
+    pendingRevealPlayers = data;
+    startPackOpenAnimation();
+    refreshDashboard();
+  } finally {
+    packActionBusy = false;
   }
-  // Store revealed players and start the animation
-  pendingRevealPlayers = data;
-  startPackOpenAnimation();
-  refreshDashboard();
 }
 
 function startPackOpenAnimation() {
@@ -5924,11 +5991,15 @@ function startPackOpenAnimation() {
   cards.innerHTML = '';
   doneBtn.style.display = 'none';
   overlay.style.display = 'flex';
+  packRevealing = false;
   hapticNotif('success');
 }
 
 function revealPackCards() {
-  if (!pendingRevealPlayers) return;
+  // Same story as the Buy button: an impatient double-tap on the pack used to
+  // restart the burst animation and re-append the card list.
+  if (!pendingRevealPlayers || packRevealing) return;
+  packRevealing = true;
   haptic('heavy');
   const pack = document.getElementById('pack-open-pack');
   const cards = document.getElementById('pack-open-cards');
@@ -5995,7 +6066,8 @@ function closePackOpen() {
   haptic('light');
   document.getElementById('pack-open-overlay').style.display = 'none';
   pendingRevealPlayers = null;
-  loadPacks();  // refresh inventory
+  packRevealing = false;
+  loadPacks();  // refresh inventory — also re-enables the pack buttons
 }
 
 // ════════════════ Login streak ════════════════
