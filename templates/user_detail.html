@@ -155,10 +155,10 @@
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;">
     <div>
       <strong style="font-size:.95rem;">⭐ Subscription:</strong>
-      {% if tier == 'platinum' %}
-        <span style="color:#b9f2ff;font-weight:600;">🏆 Platinum</span>
-      {% elif tier == 'silver' %}
-        <span style="color:#cbd5e1;font-weight:600;">🥈 Silver</span>
+      {% if tier in subscription_tiers %}
+        <span style="color:#b9f2ff;font-weight:600;">{{ tier_label(tier) }}</span>
+        <span style="font-size:.75rem;color:var(--muted);">
+          · ₹{{ subscription_tiers[tier].price_inr }}/mo</span>
       {% else %}
         <span style="color:var(--muted);">Free (no subscription)</span>
       {% endif %}
@@ -169,27 +169,27 @@
       {% endif %}
     </div>
     <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
+      {# Activation buttons — one per tier in config.SUBSCRIPTION_TIERS. #}
+      {% for name, cfg in subscription_tiers.items() %}
       <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="action" value="silver">
+        <input type="hidden" name="action" value="{{ name }}">
         <button type="submit" class="btn btn-blue btn-sm"
-                onclick="return confirm('Activate 🥈 Silver for this user? Instant rewards are granted on a new activation.')">🥈 Silver</button>
+                onclick="return confirm('Activate {{ cfg.label }} (₹{{ cfg.price_inr }}/mo) for this user? Instant rewards are granted on a new activation.')">{{ cfg.label }}</button>
       </form>
-      <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="action" value="platinum">
-        <button type="submit" class="btn btn-blue btn-sm"
-                onclick="return confirm('Activate 🏆 Platinum for this user? Instant rewards are granted on a new activation.')">🏆 Platinum</button>
-      </form>
-      {% if tier == 'silver' %}
+      {% endfor %}
+      {# Upgrade buttons — every tier ranked above the active one. The member
+         KEEPS their remaining paid time and gets the configured top-up. #}
+      {% for target in upgrade_targets(tier) if tier != 'none' %}
+      {% set topup = upgrade_rewards(tier, target) %}
       <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="upgrade">
-        <input type="hidden" name="target" value="platinum">
+        <input type="hidden" name="target" value="{{ target }}">
         <button type="submit" class="btn btn-green btn-sm"
-                onclick="return confirm('Upgrade this user from 🥈 Silver to 🏆 Platinum?\n\nThey KEEP their remaining time and get a top-up (451k coins, 251 gems, 251 QP) plus the 🏆 Legend Pack — NOT a full second subscription.')">⬆️ Upgrade → Platinum</button>
+                onclick="return confirm('Upgrade this user from {{ tier_label(tier) }} to {{ tier_label(target) }}?\n\nThey KEEP their remaining time and get a top-up ({{ '{:,}'.format(topup.coins) }} coins, {{ topup.gems }} gems, {{ topup.quest_points }} QP{% if topup.packs %} plus {{ topup.packs | join(', ') }}{% endif %}) — NOT a full second subscription.')">⬆️ Upgrade → {{ tier_label(target) }}</button>
       </form>
-      {% endif %}
+      {% endfor %}
       {% if tier != 'none' %}
       <form method="POST" action="{{ url_for('user_subscription', user_id=user.id) }}" style="display:inline;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

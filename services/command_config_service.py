@@ -43,8 +43,8 @@ def get_user_cooldown(session, user, command_key, default_seconds):
     """Effective cooldown for a specific ``user``: the admin/base cooldown for
     the command with the user's subscription-tier reduction applied on top.
 
-    Free users (or ``user`` is None) get the base value unchanged; Silver and
-    Platinum tiers get their proportional reduction. Use this at every point
+    Free users (or ``user`` is None) get the base value unchanged; every paid
+    tier gets its proportional reduction. Use this at every point
     that gates or displays a per-user cooldown so paid tiers are honoured
     consistently across the bot and Mini App.
     """

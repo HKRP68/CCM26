@@ -1,7 +1,9 @@
 """/cmumysterybox — subscriber-only 3x3 Mystery Box reveal.
 
-Silver/Platinum subscribers open ONE box per cooldown window (Silver every 8
-days, Platinum every 4). Picking a box generates weighted rewards (coins, gems,
+Subscribers open ONE box per cooldown window, at their tier's cadence (Bronze
+every 15 days, Silver 8, Platinum 4, Diamond 2 — see
+config.SUBSCRIPTION_TIERS["…"]["mysterybox_cooldown_days"]). Picking a box
+generates weighted rewards (coins, gems,
 quest points and one random OVR-banded player), reveals them in place, and locks
 all nine buttons so the box cannot be re-opened until the cooldown resets.
 """

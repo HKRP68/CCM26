@@ -50,7 +50,10 @@ function formatInningsProgress(overs, balls) {
 let selectedDelivery = null;
 let selectedSpeed = 'normal';
 let autoplayActive = false;
-let autoplayPremium = true; // set from server state; false locks the pill for free users
+// Set from server state on every poll. Defaults to LOCKED so a free user can
+// never toggle Autoplay before the first state arrives (or if the field is
+// ever missing) — the server refuses them anyway.
+let autoplayPremium = false;
 let autoplayMatchId = null; // match id Autoplay was last applied to (reset per match)
 let activeScorecardTab = 'innings1'; // 'innings1' or 'innings2'
 let lastBallUniqueId = null;
@@ -742,8 +745,8 @@ function applyMatchState(nextState, { force = false } = {}) {
   preloadEventSounds(matchState.eventSounds || {});
   pollFailureCount = 0;
 
-  // Autoplay is a premium (Silver/Platinum) feature. The server reports whether
-  // this user may use it; keep the pill locked (🔒) for free users.
+  // Autoplay is a paid membership perk (Silver and above). The server reports
+  // whether this user may use it; keep the pill locked (🔒) for free users.
   if (matchState.autoplay && matchState.autoplay.premium !== undefined) {
     autoplayPremium = !!matchState.autoplay.premium;
   }
@@ -2806,6 +2809,16 @@ async function postAutoplayStatus(active) {
       body: JSON.stringify({ userId, matchId, active: !!active }),
     });
     const data = await resp.json();
+    // The server has the final say on entitlement: a refused ON (free user)
+    // locks the pill and flips it straight back off.
+    if (data && data.ok === false && data.error === 'premium_required') {
+      autoplayPremium = false;
+      setAutoplayActive(false);
+      applyAutoplayLock();
+      const msg = data.message || 'Autoplay is a membership feature 🔒';
+      if (tg && tg.showAlert) { tg.showAlert(msg); } else { alert(msg); }
+      return;
+    }
     if (data && data.matchState) applyMatchState(data.matchState);
   } catch (e) {
     console.error('[Autoplay] status update failed', e);
@@ -2816,8 +2829,8 @@ function handleAutoplayToggle(active) {
   // Premium gate: free users see a 🔒 pill and get an upgrade prompt instead of
   // toggling. The server also rejects /api/match/autoplay for them (403).
   if (active && !autoplayPremium) {
-    const msg = 'Autoplay is a premium feature 🔒\n\nUpgrade to 🥈 Silver or '
-      + '🏆 Platinum to hand your side to the AI.';
+    const msg = 'Autoplay is a membership feature 🔒\n\nUpgrade to 🥈 Silver, '
+      + '🏆 Platinum or 💎 Diamond to hand your side to the AI.';
     if (tg && tg.showAlert) { tg.showAlert(msg); } else { alert(msg); }
     return;
   }
@@ -2880,6 +2893,15 @@ async function runAutoplayAction() {
       body: JSON.stringify({ userId, matchId }),
     });
     const data = await resp.json();
+    // Entitlement lapsed mid-match (or the pill was forced on): stop the loop
+    // and lock the pill instead of retrying every tick.
+    if (data && data.ok === false && data.error === 'premium_required') {
+      autoplayPremium = false;
+      autoplayOffPending = false;
+      setAutoplayActive(false);
+      applyAutoplayLock();
+      return;
+    }
     if (data && data.matchState) applyMatchState(data.matchState, { force: true });
   } catch (e) {
     console.error('[Autoplay] server autoplay failed', e);

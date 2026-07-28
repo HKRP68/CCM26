@@ -127,9 +127,21 @@ except ImportError:
 
 @app.context_processor
 def _inject_subscription_helpers():
-    """Expose the ACTIVE subscription tier to templates (expired → 'none')."""
+    """Expose the subscription tier table + helpers to templates.
+
+    Templates render the tier buttons/badges from ``subscription_tiers`` rather
+    than hard-coding names, so a tier added to config.SUBSCRIPTION_TIERS shows
+    up on the admin pages automatically.
+    """
+    from config import SUBSCRIPTION_TIERS
     from services import subscription_service
-    return {"active_tier": subscription_service.get_tier}
+    return {
+        "active_tier": subscription_service.get_tier,      # expired → 'none'
+        "subscription_tiers": SUBSCRIPTION_TIERS,
+        "tier_label": subscription_service.tier_label,
+        "upgrade_targets": subscription_service.upgrade_targets,
+        "upgrade_rewards": subscription_service.upgrade_rewards,
+    }
 
 
 @app.context_processor
@@ -3259,10 +3271,12 @@ def _notify_subscription(telegram_id, tier, granted, *, expires_at=None,
 @app.route("/users/<int:user_id>/subscription", methods=["POST"])
 @login_required
 def user_subscription(user_id):
-    """Activate (silver/platinum) or deactivate a user's paid subscription.
+    """Activate, upgrade or deactivate a user's paid subscription.
 
-    Activating grants the tier's one-time instant rewards on a NEW activation
-    (repeated clicks / same-tier renewals don't re-grant — see
+    ``action`` is any tier name from config.SUBSCRIPTION_TIERS (bronze / silver
+    / platinum / diamond), ``upgrade`` (with a ``target`` tier) or
+    ``deactivate``. Activating grants the tier's one-time instant rewards on a
+    NEW activation (repeated clicks / same-tier renewals don't re-grant — see
     subscription_service.activate)."""
     from services import subscription_service
     db = get_session()
@@ -3273,7 +3287,7 @@ def user_subscription(user_id):
             return redirect(url_for("users_list"))
         action = (request.form.get("action", "") or "").strip().lower()
         name = user.username or user.first_name or f"#{user.id}"
-        if action in ("silver", "platinum"):
+        if action in subscription_service.VALID_TIERS:
             result = subscription_service.activate(db, user, action)
             log_admin(db, "user_subscription", target_type="user",
                       target_id=user.id, target_name=name,
@@ -4326,7 +4340,7 @@ def _touch_login_safe(db, user, stats):
     """Advance login streak on app open; return status. Never raises."""
     try:
         from services.login_streak_service import touch_login_streak
-        status = touch_login_streak(db, stats)
+        status = touch_login_streak(db, stats, user=user)
         db.commit()
         return status
     except Exception:
@@ -6096,18 +6110,19 @@ def webapp_market():
                  db.query(UserRoster.player_id)
                    .filter(UserRoster.user_id == user.id).all()}
 
-        # The market discount is a Platinum perk: non-Platinum users see and pay
-        # the full base_price (no discount), Platinum sees the discounted price.
+        # The market discount is a membership perk (Platinum 5%, Diamond 10%):
+        # tiers without it see and pay the full base_price.
         from services import subscription_service
-        is_plat = subscription_service.is_platinum(user)
+        tier_discount = subscription_service.market_discount_pct(user)
 
         results = []
         for s in slots:
             p = players.get(s.player_id)
             if not p: continue
-            eff_price = s.final_price if is_plat else s.base_price
-            disc = (int((1 - s.final_price / s.base_price) * 100)
-                    if is_plat and s.base_price > 0 and s.final_price < s.base_price
+            eff_price = subscription_service.market_price(
+                user, s.base_price, s.final_price)
+            disc = (int(round((1 - eff_price / s.base_price) * 100))
+                    if tier_discount and s.base_price > 0 and eff_price < s.base_price
                     else 0)
             results.append({
                 "slot_id": s.id,
@@ -6718,7 +6733,7 @@ def webapp_login_streak():
         if not stats:
             stats = UserStats(user_id=user.id)
             db.add(stats); db.flush()
-        status = touch_login_streak(db, stats)
+        status = touch_login_streak(db, stats, user=user)
         db.commit()
         return {"ok": True, **status}
     except Exception as e:
@@ -6748,7 +6763,7 @@ def webapp_login_streak_claim():
             db.rollback()
             return result, 400
         db.commit()
-        result["status"] = get_login_status(db, stats)
+        result["status"] = get_login_status(db, stats, user=user)
         return result
     except Exception as e:
         db.rollback()
@@ -7466,7 +7481,7 @@ def _match_rest_full_state(db, match_id, user_id):
         "roles": participant_roles,
         "snapshot": build_snapshot(db, match_id, user_id),
         "state": _copy.deepcopy(state),
-        # Autoplay is a premium (Silver/Platinum) feature. The client renders the
+        # Autoplay is a paid perk (Silver and above). The client renders the
         # toggle locked when `premium` is false.
         "autoplay": {"premium": _user_has_autoplay(db, user_id)},
     }
@@ -7857,12 +7872,12 @@ def match_rest_autoplay():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
-        # Autoplay is a premium (Silver/Platinum) feature.
+        # Autoplay is a paid perk (Silver and above) — free members are refused.
         from services import subscription_service
         if not subscription_service.has_autoplay(user):
             return {"ok": False, "error": "premium_required",
-                    "message": "Autoplay is a premium feature. Upgrade to "
-                               "Silver or Platinum to unlock it."}, 403
+                    "message": "Autoplay is a membership feature. Upgrade to "
+                               "Silver, Platinum or Diamond to unlock it."}, 403
         from services.match_webapp_service import (
             auto_play_user_turns, auto_play_bot_turns, get_state_is_vsbot)
         from services.match_webapp_access import get_state, get_next_action
@@ -8189,7 +8204,16 @@ def match_rest_autoplay_status():
             return err
         from services.match_webapp_access import save_autoplay_users
         from services.crickidex_arena import serialize_match_state
-        state = save_autoplay_users(match.id, user.id, bool(data.get("active")))
+        # Autoplay is a paid perk. Turning it ON is refused for free members
+        # (turning it OFF always works, so a lapsed subscriber is never stuck
+        # with the toggle on).
+        active = bool(data.get("active"))
+        from services import subscription_service
+        if active and not subscription_service.has_autoplay(user):
+            return {"ok": False, "error": "premium_required",
+                    "message": "Autoplay is a membership feature. Upgrade to "
+                               "Silver, Platinum or Diamond to unlock it."}, 403
+        state = save_autoplay_users(match.id, user.id, active)
         if not state:
             return {"ok": False, "error": "no_match"}, 404
         return {
