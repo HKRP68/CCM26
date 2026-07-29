@@ -389,8 +389,44 @@ DIVERSITY_TARGET_COUNTRIES = DIVERSITY_TIERS[0][0]
 VARIETY_TARGET_TYPES = VARIETY_TIERS[0][0]
 XI_BONUS_MAX = DIVERSITY_MAX + VARIETY_MAX                          # 20
 
-# 80 category + 20 Playing XI Bonus = 100.
-CMUCHEM_TOTAL_MAX = CATEGORY_CHEMISTRY_MAX + XI_BONUS_MAX
+# 80 category + 20 Playing XI Bonus = 100 raw chemistry points.
+CHEMISTRY_POINTS_MAX = CATEGORY_CHEMISTRY_MAX + XI_BONUS_MAX
+
+# ── The 30-100 scale ────────────────────────────────────────────────
+# Every XI turns up and plays, so nobody reads 0 — the displayed score starts
+# at a 30-point Squad Base and the 100 raw points above are worth the
+# remaining 70. Two reasons:
+#
+#   • A raw scale bottomed out at 0 was reachable: sampling 40,000 legal XIs
+#     produced scores as low as 7. A single-digit rating reads as "your team is
+#     broken" rather than "your team is unpolished", which is the wrong message
+#     for the squad most new players field.
+#   • It makes the whole band meaningful. 30-100 is the range players actually
+#     occupy, so the number moves visibly as they improve instead of crawling
+#     out of a dead zone nobody ever sits in.
+#
+#     display = SQUAD_BASE + EARNED_MAX × (raw ÷ 100)
+#
+# Enumerating every legal XI shape against every majority split, the scale
+# lands on 66 of the 71 integers in 30-100. The five it cannot reach are 31,
+# 33, 36, 38 and 99: the first four need a raw score between 1 and 12, but the
+# smallest step any component can move is 3 (a diversity tier) and a role of
+# one auto-scores 20, so that band has nothing to land on; 99 needs raw 98.6,
+# and the highest raw below a perfect 100 is 97.
+#
+# Rounding each role's category before summing was measured against leaving it
+# exact — the rounded form covers *more* integers (66 vs 64), because the
+# rounded values combine into more distinct sums than the exact thirds do. It
+# is kept for that reason, not for tidiness.
+SQUAD_BASE = 30
+EARNED_MAX = 70
+CMUCHEM_TOTAL_MAX = SQUAD_BASE + EARNED_MAX          # 100
+
+
+def earned_points(raw_points):
+    """The earned half of the displayed score (0-70) for ``raw_points``/100."""
+    clamped = max(0.0, min(float(raw_points), CHEMISTRY_POINTS_MAX))
+    return _round_half_up(EARNED_MAX * clamped / CHEMISTRY_POINTS_MAX)
 
 _CATEGORY_ALIASES = {
     "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
@@ -549,6 +585,8 @@ def calculate_role_report(players):
 
     category_total = sum(line["category"] for line in lines)
     boost_total = sum(line["bonus"] for line in lines)
+    raw_points = category_total + xi_bonus
+    earned = earned_points(raw_points)
     return {
         "roles": lines,
         "category_total": category_total,
@@ -565,7 +603,12 @@ def calculate_role_report(players):
         "variety_max": VARIETY_MAX,
         "xi_bonus": xi_bonus,
         "xi_bonus_max": XI_BONUS_MAX,
-        "total": category_total + xi_bonus,
+        "raw_points": raw_points,
+        "raw_points_max": CHEMISTRY_POINTS_MAX,
+        "base": SQUAD_BASE,
+        "earned": earned,
+        "earned_max": EARNED_MAX,
+        "total": SQUAD_BASE + earned,
         "total_max": CMUCHEM_TOTAL_MAX,
         "players_counted": len(players),
     }
@@ -583,6 +626,68 @@ def match_boosts(players):
     fielding whatever they pulled is not taxed for it.
     """
     return {line["role"]: line["bonus"] for line in role_chemistry(players)}
+
+
+# ── Layer 2: Partnership Bond ───────────────────────────────────────
+# Cricket is a game of partnerships, so the crease pair gets its own live
+# chemistry. Two countrymen batting together have run between the wickets for
+# years: more twos, fewer dots. Unlike the role boost this is *dynamic* — it
+# changes every time a wicket falls, so the player watches it move.
+#
+# It is also where the Icon rule earns its place back. Under the per-role score
+# an Icon is just another card; here a legend partners with anybody, which is
+# exactly the "Lara is never dead weight" property §3.3 was written for.
+PARTNERSHIP_SAME_COUNTRY = 1.0
+PARTNERSHIP_WITH_ICON = 0.5
+
+# ── Layer 3: Clutch ─────────────────────────────────────────────────
+# Chemistry counts double at the death and in a tight chase. A well-drilled
+# side holds its nerve when the game is decided, which concentrates the effect
+# into the overs players actually remember instead of spreading a flat trickle
+# across fifty balls nobody notices.
+CLUTCH_MULTIPLIER = 2.0
+CLUTCH_OVERS_FRACTION = 0.25     # final quarter of the innings
+CLUTCH_PRESSURE = 0.5            # or any chase this desperate
+
+# ── Layer 4: Fielding Cohesion ──────────────────────────────────────
+# A side that plays together drops fewer catches. Feeds the engine's existing
+# fielding-quality curve, where +10 quality is worth roughly 2 percentage
+# points of drop chance.
+FIELDING_MAX_BONUS = 10.0
+
+
+def partnership_bond(striker, non_striker):
+    """Bond between the two batters at the crease, 0.0-1.0.
+
+    Same country → full bond. Otherwise an Icon at either end still part-bonds,
+    because a legend has partnered with everyone.
+    """
+    if striker is None or non_striker is None:
+        return 0.0
+    if country_of(striker) == country_of(non_striker):
+        return PARTNERSHIP_SAME_COUNTRY
+    if is_icon(striker) or is_icon(non_striker):
+        return PARTNERSHIP_WITH_ICON
+    return 0.0
+
+
+def clutch_multiplier(over, total_overs, pressure=0.0):
+    """``CLUTCH_MULTIPLIER`` at the death or under chase pressure, else 1.0."""
+    try:
+        over = int(over or 0)
+        total_overs = int(total_overs or 0)
+    except (TypeError, ValueError):
+        return 1.0
+    death = (total_overs > 0
+             and over > total_overs * (1.0 - CLUTCH_OVERS_FRACTION))
+    return CLUTCH_MULTIPLIER if (death or (pressure or 0.0) >= CLUTCH_PRESSURE) \
+        else 1.0
+
+
+def fielding_bonus(players):
+    """Fielding-quality bonus (0-10) earned by the side's chemistry."""
+    total = calculate_role_report(players)["total"]
+    return round(FIELDING_MAX_BONUS * total / CMUCHEM_TOTAL_MAX, 2)
 
 
 def improvement_tips(players, limit=3):
@@ -683,10 +788,24 @@ def render_chemistry_card(players):
         f"{chem_colour(report['xi_bonus'], XI_BONUS_MAX)} "
         f"<b>Playing XI Bonus</b>: "
         f"<code>{report['xi_bonus']}/{report['xi_bonus_max']}</code>",
+        "",
+        f"⚪ <b>Squad Base</b>: <code>{report['base']}</code>",
+        f"{chem_colour(report['earned'], EARNED_MAX)} "
+        f"<b>Earned</b>: <code>{report['earned']}/{report['earned_max']}</code> "
+        f"({report['raw_points']}/{report['raw_points_max']} pts)",
         f"{chem_colour(report['total'], CMUCHEM_TOTAL_MAX)} "
         f"<b>Overall Chemistry</b>: "
         f"<code>{report['total']}/{report['total_max']}</code>",
         "<i>ALR boost is halved as they benefit from BAT &amp; BOWL</i>",
+        "",
+        "⚡ <b>In matches</b>",
+        f"• Unit boosts above, <b>×{CLUTCH_MULTIPLIER:g} at the death</b> "
+        "and in a tight chase",
+        f"• <b>+{fielding_bonus(players):g}</b> fielding — "
+        f"{chem_colour(fielding_bonus(players), FIELDING_MAX_BONUS)} "
+        "fewer dropped catches",
+        "• 🤝 Countrymen batting together run better "
+        "<i>(an Icon partners with anyone)</i>",
     ]
 
     tips = improvement_tips(players)

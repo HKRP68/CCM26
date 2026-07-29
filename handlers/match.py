@@ -4519,6 +4519,37 @@ def _fielding_quality_for(s):
     return quality
 
 
+def _chem_fielding_bonus(s):
+    """Fielding-quality bonus (0-10) the bowling side's chemistry earns.
+
+    Cached per innings alongside the base fielding quality — a well-drilled
+    side drops fewer catches, which is the same curve the engine already uses.
+    """
+    cache = s.setdefault("_chem_field_cache", {})
+    key = str(s.get("innings", 1))
+    if key not in cache:
+        try:
+            from services import chemistry
+            cache[key] = chemistry.fielding_bonus(s.get("bowl_xi") or [])
+        except Exception:
+            cache[key] = 0.0
+    return cache[key]
+
+
+def _chem_bond_for(s, striker, non_striker):
+    """Partnership bond (0-1) between the two batters currently at the crease.
+
+    Not cached: the pair changes on every wicket and every strike rotation,
+    which is the point — this is the one part of chemistry that moves during
+    an innings rather than being fixed at team selection.
+    """
+    try:
+        from services import chemistry
+        return chemistry.partnership_bond(striker, non_striker)
+    except Exception:
+        return 0.0
+
+
 def _chem_mod_for(s, player, xi, team_key):
     """Team Chemistry stat boost for this player, per-match cached.
 
@@ -4900,6 +4931,30 @@ def _calc(s, striker, bowler, shot, delivery):
     except Exception:
         pressure = 0.0
 
+    # Chemistry counts double at the death and in a tight chase — a well-drilled
+    # side holds its nerve when the game is decided. Only the extra multiple is
+    # added here; the base boost is already inside eff_bat/eff_bowl above.
+    # Fielding cohesion and the crease pair's bond are resolved here too, since
+    # both depend on live match state rather than selection.
+    chem_bond = 0.0
+    try:
+        from services import chemistry
+        clutch = chemistry.clutch_multiplier(over, total_overs, pressure)
+        if clutch != 1.0:
+            eff_bat += bat_chem_mod * (clutch - 1.0)
+            eff_bowl += bowl_chem_mod * (clutch - 1.0)
+        bat_order = s.get("batting_order") or []
+        ns_idx = s.get("non_striker_idx")
+        non_striker = (bat_order[ns_idx]
+                       if isinstance(ns_idx, int) and 0 <= ns_idx < len(bat_order)
+                       else None)
+        chem_bond = _chem_bond_for(s, striker, non_striker)
+        if fielding_quality is not None:
+            fielding_quality = min(95.0,
+                                   fielding_quality + _chem_fielding_bonus(s))
+    except Exception:
+        logger.exception("Chemistry match effects skipped for this ball")
+
     return calculate_outcome(
         bowler.get("bowl_style", "Medium Pacer"),
         bowler.get("bowl_hand", "Right"),
@@ -4920,6 +4975,7 @@ def _calc(s, striker, bowler, shot, delivery):
         batter_runs=bs.get("runs", 0),
         fielding_quality=fielding_quality,
         bat_hand=striker.get("bat_hand"),
+        chem_bond=chem_bond,
     )
 
 

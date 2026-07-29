@@ -576,9 +576,17 @@ FREE_HIT_BOUNDARY_MULT = 1.35  # +35% boundaries on a free hit
 FREE_HIT_WICKET_MULT   = 0.10  # only a run-out is possible on a free hit
 
 
+# Partnership Bond — two batters who share a country (or bat with an Icon) run
+# better together: more twos and singles, fewer dots. Deltas are percentage
+# points on a ~100-point distribution, applied at full bond.
+BOND_TWO_BONUS = 1.6
+BOND_ONE_BONUS = 1.0
+BOND_DOT_PENALTY = 2.6
+
+
 def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
                         recent_runs=0, consec_wickets=0, delivery_repeat=0,
-                        pressure=0.0):
+                        pressure=0.0, chem_bond=0.0):
     """Multiplicatively adjust the prob distribution for live-match mechanics.
 
     Runs after every additive layer and before _normalize, so the relative
@@ -587,7 +595,21 @@ def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
 
     pressure: 0.0..1.0 chase/scenario desperation. Models a batting side forced
     to take risks — boundaries AND wickets rise, dots/ones fall (slogging).
+
+    chem_bond: 0.0..1.0 Team Chemistry partnership bond between the two batters
+    at the crease (services.chemistry.partnership_bond). Countrymen who have run
+    together for years turn dots into ones and ones into twos. Deliberately
+    touches only running — a bond makes a pair harder to tie down, it does not
+    make them better strikers of the ball.
     """
+    # Partnership Bond — better running between the wickets.
+    if chem_bond:
+        bond = max(0.0, min(1.0, chem_bond))
+        probs["2"] = probs.get("2", 0.0) + BOND_TWO_BONUS * bond
+        probs["1"] = probs.get("1", 0.0) + BOND_ONE_BONUS * bond
+        probs["dot"] = max(0.1, probs.get("dot", 0.0)
+                           - BOND_DOT_PENALTY * bond)
+
     # Mystery ball — wicket spike, scoring slump (lost runs flow into dots).
     if mystery:
         probs["W"] *= MYSTERY_WICKET_MULT
@@ -641,7 +663,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
                       pressure=0.0, balls_faced=None, batter_runs=None,
-                      fielding_quality=None, bat_hand=None):
+                      fielding_quality=None, bat_hand=None, chem_bond=0.0):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -652,6 +674,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
       recent_runs     — runs scored over the last ~12 balls (batting momentum)
       consec_wickets  — wickets in a row for the bowling side (bowling momentum)
       delivery_repeat — times this exact delivery was bowled in a row (spam)
+      chem_bond       — Team Chemistry partnership bond (0..1) between the two
+                        batters at the crease; improves running only
 
     Batter innings context (None → no-op, so legacy callers are unchanged):
       balls_faced     — balls this batter has faced (early vulnerability)
@@ -790,6 +814,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         probs, free_hit=free_hit, mystery=mystery,
         recent_runs=recent_runs, consec_wickets=consec_wickets,
         delivery_repeat=delivery_repeat, pressure=pressure,
+        chem_bond=chem_bond,
     )
 
     # Final normalize

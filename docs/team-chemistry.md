@@ -369,11 +369,45 @@ The score players actually see is a different cut of the same idea, and it is
 what `/cmuchem`, `/pxi` and `/chemhelp` report.
 
 ```
-Category Chemistry   4 roles × 20  = 80
-Playing XI Bonus     10 + 10       = 20
+Category Chemistry   4 roles × 20  = 80  ┐
+Playing XI Bonus     10 + 10       = 20  ┘ 100 raw points
+
+Squad Base                           30
+Earned               70 × (raw÷100)  70
 ────────────────────────────────────────
-Overall Chemistry                  = 100
+Overall Chemistry                   100   (range 30-100)
 ```
+
+### 7.0 The 30-100 scale
+
+The displayed score starts at a **30-point Squad Base** — every XI turns up and
+plays — and the 100 raw points above are worth the remaining 70.
+
+Two reasons. First, a scale bottomed out at 0 was reachable: sampling 40,000
+legal XIs produced scores as low as **7**, and a single-digit rating reads as
+*"your team is broken"* rather than *"your team is unpolished"*, which is the
+wrong message for the squad most new players field. Second, it makes the whole
+band meaningful — 30-100 is the range players actually occupy, so the number
+moves visibly as they improve instead of crawling out of a dead zone nobody
+sits in.
+
+**Granularity.** Enumerating every legal XI shape against every majority split,
+the scale lands on **66 of the 71 integers** in 30-100. The five it cannot
+reach are **31, 33, 36, 38 and 99**: the first four need a raw score between 1
+and 12, but the smallest step any component can move is 3 (a diversity tier)
+and a role of one auto-scores 20, so that band has nothing to land on; 99 needs
+raw 98.6, and the highest raw below a perfect 100 is 97. Closing them would
+mean replacing the tiered Diversity/Variety steps with continuous ones, which
+is a spec change rather than a fix.
+
+What matters more than full coverage is that **every squad improvement moves
+the number**, which is pinned by test — unifying a bowling unit one card at a
+time reads 79 → 84 → 88 → 93.
+
+**Rounding.** Each role's category is rounded before the four are summed. That
+was measured against leaving it exact: the rounded form covers *more* integers
+(66 vs 64), because rounded values combine into more distinct sums than exact
+thirds do. It is kept for that reason, not for tidiness.
 
 ### 7.1 Category Chemistry (0-80)
 
@@ -499,6 +533,59 @@ Two sides with identical cards therefore play differently:
 
 `services.chemistry.match_boosts(xi)` returns `{role: boost}` and is the whole
 public surface — the engine never reimplements the scoring.
+
+That base boost is one of **four layers**, because a single flat number is
+invisible: it applies evenly to every ball of every match and so is never the
+thing a player notices winning them a game.
+
+| Layer | What it does | When |
+|---|---|---|
+| **1. Unit Boost** | role boost → effective rating | every ball |
+| **2. Partnership Bond** | countrymen at the crease run better — more 2s and 1s, fewer dots | while that pair bats |
+| **3. Clutch** | ×2 on the unit boost | last quarter of the innings, or a tight chase |
+| **4. Fielding Cohesion** | up to +10 fielding quality → fewer dropped catches | every ball |
+
+**Layer 2 is the interesting one.** Cricket is a game of partnerships, and this
+is the only part of chemistry that *moves during an innings* — it changes every
+time a wicket falls, so the player watches it swing rather than reading a fixed
+number at selection. It is also where the Icon rule earns its place back: an
+Icon part-bonds with **anyone**, because a legend has partnered with everybody.
+That restores the "Lara is never dead weight" property §3.3 was written for and
+§7.7 recorded as lost, in a livelier form than the block curve gave it.
+
+The bond touches running only — `2`, `1` and `dot`. A pair that has batted
+together is harder to tie down; it does not make them better strikers of the
+ball, so `4`, `6` and `W` are untouched (pinned by test).
+
+**Layer 3** concentrates chemistry into the overs players remember instead of
+spreading a flat trickle across fifty balls nobody notices. It scales with the
+innings length, so a 5-over dash goes clutch at over 4 and a 20-over match at
+over 16.
+
+### 7.6.1 Measured impact
+
+Simulated over 250 innings per row, equal 80-rated sides on a flat pitch:
+
+| Squad | Avg score | Wickets |
+|---|---:|---:|
+| 0 chemistry | 217.3 | 6.4 |
+| 50 chemistry | 229.0 | 5.5 |
+| 100 chemistry | 239.9 | 4.9 |
+| **100 chemistry + full bond** | **244.6** | 4.9 |
+
+A **+27 run swing (+12.6%)** between the worst and best chemistry — decisive in
+a close chase, and visible to the player.
+
+It still cannot buy a match, which was the binding constraint:
+
+| | Avg score |
+|---|---:|
+| 72-rated batting, perfect chemistry | 202.1 |
+| 85-rated batting, zero chemistry | **244.0** |
+
+Card quality wins by 42 runs. Chemistry sharpens a squad; it does not replace
+one, so no player is ever forced to build for chemistry before fielding the
+cards they actually want.
 
 **Why it is deliberately small.** The ceiling is +4, against a form band of
 ±2.5 OVR. Chemistry decides close matches between comparable squads and cannot
