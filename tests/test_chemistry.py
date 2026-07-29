@@ -263,10 +263,13 @@ class RoleChemistryTests(unittest.TestCase):
 
     def test_role_maximums_match_the_card(self):
         lines = {l["label"]: l for l in chemistry.role_chemistry(self._squad())}
-        self.assertEqual(lines["BAT"]["max_bonus"], 4)
-        self.assertEqual(lines["BOWL"]["max_bonus"], 4)
-        self.assertEqual(lines["WK"]["max_bonus"], 4)
-        self.assertEqual(lines["ALR"]["max_bonus"], 3)
+        self.assertEqual(lines["BAT"]["max_bonus"], 12)
+        self.assertEqual(lines["BOWL"]["max_bonus"], 12)
+        self.assertEqual(lines["WK"]["max_bonus"], 12)
+        self.assertEqual(lines["ALR"]["max_bonus"], 9)
+        # 12/12/12/9 must stay ×3 of the 4/4/4/3 weighting it scaled from.
+        self.assertEqual(lines["ALR"]["max_bonus"] * 4,
+                         lines["BAT"]["max_bonus"] * 3)
 
     def test_connected_role_scores_full_country_component(self):
         lines = {l["label"]: l for l in chemistry.role_chemistry(self._squad())}
@@ -285,16 +288,16 @@ class RoleChemistryTests(unittest.TestCase):
         lines = chemistry.role_chemistry(
             [_rc("India", "Bowler")] * 4, xi_bonus=20)
         bowl = [l for l in lines if l["label"] == "BOWL"][0]
-        self.assertEqual(bowl["bonus"], 4)
+        self.assertEqual(bowl["bonus"], 12)
 
     def test_all_rounder_ceiling_is_reachable(self):
-        # Dividing the halved component by the full 40 would cap ALR at 2.25,
-        # so +3/3 could never appear however good the squad was.
+        # Dividing the halved component by the full 40 would cap ALR at 75% of
+        # its ceiling, so a perfect ALR line could never appear.
         lines = chemistry.role_chemistry(
             [_rc("India", "All-rounder")] * 3, xi_bonus=20)
         alr = [l for l in lines if l["label"] == "ALR"][0]
-        self.assertEqual(alr["bonus"], 3)
-        self.assertEqual(alr["max_bonus"], 3)
+        self.assertEqual(alr["bonus"], 9)
+        self.assertEqual(alr["max_bonus"], 9)
 
     def test_a_core_of_three_connects_a_role(self):
         # Role connection is measured on the 3-block so that full diversity
@@ -328,19 +331,22 @@ class RoleChemistryTests(unittest.TestCase):
 
     def test_diversity_and_variety_target_four(self):
         squad = [_rc(f"C{i}", "Batsman") for i in range(4)]
-        self.assertEqual(chemistry.country_diversity(squad), (10, 4))
+        self.assertEqual(chemistry.country_diversity(squad), (20, 4))
         squad = [_rc("India", "Batsman") for _ in range(2)]
-        self.assertEqual(chemistry.country_diversity(squad), (3, 1))
+        self.assertEqual(chemistry.country_diversity(squad), (5, 1))
 
         varied = [_rc("India", "Batsman", v) for v in
                   ("Icon", "TOTY", "Prime", "Legend")]
-        self.assertEqual(chemistry.card_variety(varied), (10, 4))
+        self.assertEqual(chemistry.card_variety(varied), (15, 4))
         self.assertEqual(chemistry.card_variety(
             [_rc("India", "Batsman", "Base card")]), (0, 0))
 
     def test_diversity_and_variety_are_capped(self):
         squad = [_rc(f"C{i}", "Batsman") for i in range(8)]
-        self.assertEqual(chemistry.country_diversity(squad)[0], 10)
+        self.assertEqual(chemistry.country_diversity(squad)[0], 20)
+        varied = [_rc("India", "Batsman", v) for v in
+                  ("Icon", "TOTY", "Prime", "Legend", "Star Card")]
+        self.assertEqual(chemistry.card_variety(varied)[0], 15)
 
     def test_overall_is_the_honest_sum_of_the_parts(self):
         report = chemistry.calculate_role_report(self._squad())
@@ -348,7 +354,7 @@ class RoleChemistryTests(unittest.TestCase):
             report["total"],
             report["role_total"] + report["diversity"]
             + report["variety"] + report["xi_bonus"])
-        self.assertEqual(report["total_max"], 55)
+        self.assertEqual(report["total_max"], 100)
         self.assertEqual(report["total_max"],
                          report["role_max"] + report["diversity_max"]
                          + report["variety_max"] + report["xi_bonus_max"])
@@ -368,11 +374,11 @@ class RoleChemistryTests(unittest.TestCase):
                                          "Star Card")):
             card.version = version
         report = chemistry.calculate_role_report(squad)
-        self.assertEqual(report["role_total"], 15)
-        self.assertEqual(report["diversity"], 10)
-        self.assertEqual(report["variety"], 10)
+        self.assertEqual(report["role_total"], 45)
+        self.assertEqual(report["diversity"], 20)
+        self.assertEqual(report["variety"], 15)
         self.assertEqual(report["xi_bonus"], 20)
-        self.assertEqual(report["total"], 55)
+        self.assertEqual(report["total"], 100)
 
     def test_every_component_ceiling_is_independently_reachable(self):
         # Guards the whole card against the flaw the 80/20 rework exists to
@@ -388,6 +394,16 @@ class RoleChemistryTests(unittest.TestCase):
         squad = [_rc(f"C{i % 5}", "Batsman", "Icon") for i in range(11)]
         report = chemistry.calculate_role_report(squad)
         self.assertLessEqual(report["total"], report["total_max"])
+
+    def test_the_parts_are_defined_to_sum_to_one_hundred(self):
+        # The card's whole contract: it reads /100 because the components
+        # genuinely add to 100, not because a smaller total was normalised up.
+        self.assertEqual(
+            sum(chemistry.ROLE_MAX_BONUS.values())
+            + chemistry.DIVERSITY_MAX + chemistry.VARIETY_MAX
+            + chemistry.SPECIAL_CHEMISTRY_CAP,
+            100)
+        self.assertEqual(chemistry.CMUCHEM_TOTAL_MAX, 100)
 
     def test_rounding_is_half_up_not_bankers(self):
         # round(0.5) is 0 in Python; a role bonus of 0.5 must render as +1.

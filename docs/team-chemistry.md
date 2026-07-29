@@ -360,7 +360,90 @@ one shape exceeds ~40% usage, the curve has an unintended peak.
 
 ---
 
-## 7. Reference
+## 7. The /cmuchem card
+
+`/cmuchem` (aliases `/chem`, `/chemistry`) re-cuts the same score by role, so a
+manager sees *which unit* is badly connected rather than one opaque number. It
+adds no new scoring rules — every figure is derived from §3.
+
+```
+🧪 TEAM CHEMISTRY
+━━━━━━━━━━━━━━━━━━━
+🟥 BAT:  20/20 + 20/20 = +12/12
+🟦 BOWL: 20/20 + 20/20 = +12/12
+🟦 WK:   20/20 + 20/20 = +12/12
+🟧 ALR:  (20/20 ÷ 2) + 20/20 = +9/9
+
+Country Diversity: 20/20 (4/4 countries)
+Card Variety:      15/15 (5/4 special types)
+Playing XI Bonus:  20/20
+Overall Chemistry: 100/100
+ALR boost is halved as they benefit from BAT & BOWL
+```
+
+Each role line is `country/20 + xi/20 = +bonus/max`, where the country
+component is how well that role's players sit inside the **XI's** national
+blocks (not how they cluster among themselves — so a lone keeper is judged on
+having countrymen in the side, not on being alone in his role), and the shared
+component is the Playing XI Bonus from §3.4.
+
+```
+bonus = (country_component + xi_bonus) ÷ role_ceiling × role_max
+role split: BAT 12, BOWL 12, WK 12, ALR 9  = 45
+          + Country Diversity 20 + Card Variety 15 + Playing XI Bonus 20 = 100
+```
+
+**The card totals 100 because its parts add to 100**, not because a smaller
+total was normalised up — every number printed is a real component, and a test
+pins the sum. `12/12/12/9` is ×3 of the `4/4/4/3` role weighting, the only
+clean-integer split preserving that ratio.
+
+### 7.1 Two ceilings that had to be made reachable
+
+Both would have repeated the flaw §2.1 exists to fix — a maximum nobody can hit
+reads to players as a broken stat:
+
+- **All-rounders** are halved on the country component. Dividing by the full 40
+  anyway capped them at 75% of their ceiling, so a perfect ALR line could never
+  appear. They divide by their own halved ceiling (`10 + 20`) instead.
+- **Role connection** is measured against a *three*-man core, not the four-man
+  sweet spot. Full diversity wants four countries, and 4 × 4 = 16 is more than
+  an XI holds, so a four-block target made `role_total` 45 and `diversity` 20
+  mutually exclusive. Three-man cores fit as 3-3-3-2, so one squad can reach
+  every ceiling. The 80-point country score still peaks at four; this axis only
+  asks whether a player is connected to anyone.
+
+A perfect 100 is consequently buildable and pinned by test: **3-3-3-2 across
+four countries, the two-man block sized up to three by an Icon, carrying one
+card of each of the five special types.** The Icon rule from §3.3 is what makes
+the perfect card possible at all.
+
+### 7.2 Known skew: collecting outweighs squad-building
+
+Special cards are counted three times on this card — once inside every role
+line, again as Card Variety, and again as the Playing XI Bonus. The result:
+
+| Squad | Score |
+|---|---:|
+| Perfect country blocks, **zero** special cards | **41/100** |
+| **No** country connection, full card variety | **80/100** |
+
+A player who builds a well-connected XI from base cards scores about half of
+what an unconnected squad of five special cards scores. That runs against the
+anti-pay-to-win property §3.4 was designed for, and it is a property of the
+card's *shape* (the shared component appearing in every role line) rather than
+of any one constant.
+
+The cheap correction, if it proves a problem in telemetry, is to stop feeding
+the Playing XI Bonus into the role lines and score roles on country connection
+alone. That single change moves the two rows to **65 vs 57**, putting the
+squad-builder ahead of the collector without touching any other constant. It
+costs the role lines their `a/20 + b/20` shape, which is why it is recorded
+here as a lever rather than applied — worth watching in telemetry first.
+
+---
+
+## 8. Reference
 
 `services/chemistry.py` — pure standard library, no Telegram or SQLAlchemy
 imports, matching the house style of `services/xi_rules.py` so the match engine,

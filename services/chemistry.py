@@ -339,8 +339,15 @@ ROLE_LABEL = {"Batsman": "BAT", "Bowler": "BOWL",
               "Wicket Keeper": "WK", "All-rounder": "ALR"}
 ROLE_EMOJI = {"Batsman": "🟥", "Bowler": "🟦",
               "Wicket Keeper": "🟦", "All-rounder": "🟧"}
-ROLE_MAX_BONUS = {"Batsman": 4, "Bowler": 4, "Wicket Keeper": 4,
-                  "All-rounder": 3}
+# The card totals 100, and every figure printed on it adds up to that 100 —
+# no normalising a smaller total up to a friendlier-looking scale, because then
+# the parts visibly fail to sum to the whole. So the maxima below *are* the
+# split: 45 roles + 20 diversity + 15 variety + 20 Playing XI Bonus.
+#
+# 12/12/12/9 is ×3 of the 4/4/4/3 role weighting, the only clean-integer split
+# that preserves that ratio exactly while the four roles sum to 45.
+ROLE_MAX_BONUS = {"Batsman": 12, "Bowler": 12, "Wicket Keeper": 12,
+                  "All-rounder": 9}
 # Roles whose country component is halved to avoid double-counting.
 ROLE_HALVED = ("All-rounder",)
 
@@ -352,13 +359,15 @@ ROLE_COMPONENT_MAX = 20
 # pressure to stack, which is what the block curve exists to remove.
 ROLE_CONNECTION_TARGET = COUNTRY_BLOCK_VALUE[3]     # 18
 
-# Squad-wide bonuses, both scored against a target of four.
+# Squad-wide bonuses, both scored against a target of four. Diversity is worth
+# slightly more than variety because it rewards the thing the player controls
+# by selection rather than by collection.
 DIVERSITY_TARGET_COUNTRIES = 4
-DIVERSITY_MAX = 10
+DIVERSITY_MAX = 20
 VARIETY_TARGET_TYPES = 4
-VARIETY_MAX = 10
+VARIETY_MAX = 15
 
-# 4 + 4 + 4 + 3 roles, + diversity, + variety, + the Playing XI Bonus.
+# 45 roles + 20 diversity + 15 variety + 20 Playing XI Bonus = 100.
 CMUCHEM_TOTAL_MAX = (sum(ROLE_MAX_BONUS.values())
                      + DIVERSITY_MAX + VARIETY_MAX + SPECIAL_CHEMISTRY_CAP)
 
@@ -473,7 +482,8 @@ def calculate_role_report(players):
 
     Overall is the honest sum of the parts shown on screen — role bonuses plus
     country diversity, card variety and the Playing XI Bonus — out of
-    ``CMUCHEM_TOTAL_MAX`` (55), so every figure on the card adds up.
+    ``CMUCHEM_TOTAL_MAX`` (100). The card reads /100 because its components add
+    to 100, not because a smaller total is normalised up; a test pins the sum.
     """
     players = list(players)
     xi_bonus, special_detail = special_chemistry(players)
