@@ -226,6 +226,11 @@ from handlers.howto import (
     howto_tab_callback,
     howto_close_callback,
 )
+from handlers.chemhelp import (
+    chemhelp_handler,
+    chemhelp_tab_callback,
+    chemhelp_close_callback,
+)
 
 # Bot vs Bot
 from handlers.botvsbot import (
@@ -326,6 +331,7 @@ BOT_MENU_COMMANDS = (
     ("playingxi", "View or manage your playing XI"),
     ("ximage", "View your Playing XI as an image"),
     ("cmuchem", "Check your Playing XI's Team Chemistry 🧪"),
+    ("chemhelp", "How Team Chemistry works 📖"),
     ("autobuild", "Build your best available playing XI"),
     ("swapplayers", "Swap two players in your lineup"),
     ("setbo", "View or change your batting order (e.g. /sbo 2 11)"),
@@ -1324,6 +1330,11 @@ def main():
         app.add_handler(CommandHandler(["howto", "help", "guide"], howto_handler))
         app.add_handler(CallbackQueryHandler(howto_tab_callback, pattern=r"^howto_tab_"))
         app.add_handler(CallbackQueryHandler(howto_close_callback, pattern=r"^howto_close_"))
+
+        # ── /chemhelp Chemistry guide ───────────────────────────────
+        app.add_handler(CommandHandler(["chemhelp", "chemguide"], chemhelp_handler))
+        app.add_handler(CallbackQueryHandler(chemhelp_tab_callback, pattern=r"^chemhelp_tab_"))
+        app.add_handler(CallbackQueryHandler(chemhelp_close_callback, pattern=r"^chemhelp_close_"))
 
         # ── /invite Referral system ─────────────────────────────────
         from handlers.invite import invite_handler
