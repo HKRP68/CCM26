@@ -329,8 +329,19 @@ async def swapplayers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.commit()
 
         xi_note = "\n🏏 Playing XI updated!" if pos1 <= 11 or pos2 <= 11 else ""
+        # /swapplayers numbers by the /pxi DISPLAY order (batsmen → keepers →
+        # all-rounders → pacers → spinners), which is not the batting order. For
+        # a player whose saved batting order is now what every match bats, that
+        # mismatch matters, so point them at the command that speaks in batting
+        # slots instead of letting them guess.
+        from services import batting_order_service as _bos
+        order_note = ""
+        if (pos1 <= 11 or pos2 <= 11) and _bos.has_custom_order(user):
+            order_note = ("\n\n⚠️ This moved squad slots, not batting slots — "
+                          "check your line-up with /sbo (it edits batting "
+                          "positions 1-11 directly).")
         await update.message.reply_text(
-            f"✅ Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}{xi_note}")
+            f"✅ Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}{xi_note}{order_note}")
     except Exception:
         session.rollback()
         logger.exception("Swap err")

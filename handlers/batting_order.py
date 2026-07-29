@@ -9,6 +9,12 @@ The batting order IS the roster's ``order_position``: slots 1-11 are the
 Playing XI in batting order, 12+ is the bench. That is the same order the Mini
 App XI screen edits, so both stay in sync.
 
+Once saved, the order is used in **every** mode — /playmatch, /vsbot, /letsplay,
+/lpbot, /wpm, /wsp, /sim, tour matches and Quick Match all bat it as written:
+slots 1 and 2 open and a wicket brings in the next player down, with no
+per-match opener prompt. ``services.batting_order_service`` is the single place
+that decides this; see its docstring for the two states.
+
 Commands
 ────────
   /setbo                      show the current order (XI + bench)
@@ -32,6 +38,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User
+from services import batting_order_service as bos
 from services.activity_service import log_activity
 from services.bowling_service import is_spinner as _is_spin
 from services.roster_lock import match_lock_message
@@ -39,7 +46,7 @@ from handlers.lineup import _get_ordered_roster, validate_xi
 
 logger = logging.getLogger(__name__)
 
-XI_SIZE = 11
+XI_SIZE = bos.XI_SIZE
 
 USAGE = (
     "🏏 <b>How to set your batting order</b>\n"
@@ -86,7 +93,7 @@ def format_order_card(pairs, user, custom: bool):
     bench = pairs[XI_SIZE:]
     cap_rid = user.captain_roster_id
 
-    source = ("✍️ <i>Your custom order</i>" if custom
+    source = ("✍️ <i>Your custom order — used in every match</i>" if custom
               else "🤖 <i>Auto order (batting rating, high → low)</i>")
     lines = [
         "🏏 <b>MY BATTING ORDER</b>",
@@ -115,8 +122,19 @@ def format_order_card(pairs, user, custom: bool):
         "",
         f"📊 <b>Top-6 batting strength:</b> {top}",
         "━━━━━━━━━━━━━━━━━━━",
-        USAGE,
     ]
+    if custom:
+        lines.append(
+            "🔒 <i>Every match bats this order — /playmatch, /vsbot, /letsplay, "
+            "/wpm, /wsp, /sim, tours and Quick Match. Slots 1 &amp; 2 open, and a "
+            "wicket brings in the next player down, so you are never asked to "
+            "pick openers again.</i>\n")
+    else:
+        lines.append(
+            "🤖 <i>You have not saved an order, so every match sorts your XI by "
+            "batting rating and asks you for openers. Set one below and it is "
+            "used everywhere.</i>\n")
+    lines.append(USAGE)
     return "\n".join(lines)
 
 
@@ -178,12 +196,8 @@ def apply_full_order(xi_ids, numbers):
 
 def auto_order(xi_pairs):
     """Batting rating high → low (ties: overall rating, then name) — the order
-    /letsplay used to force on everyone."""
-    return sorted(
-        xi_pairs,
-        key=lambda ep: (int(ep[1].bat_rating or 0), int(ep[1].rating or 0),
-                        str(ep[1].name or "")),
-        reverse=True)
+    every mode falls back to for a player who never saved one."""
+    return bos.sort_pairs_by_bat_rating(xi_pairs)
 
 
 def _persist(session, user, ordered_pairs, bench_pairs, custom: bool):
@@ -196,7 +210,7 @@ def _persist(session, user, ordered_pairs, bench_pairs, custom: bool):
 
 
 def has_custom_order(user) -> bool:
-    return getattr(user, "batting_order_set_at", None) is not None
+    return bos.has_custom_order(user)
 
 
 # ════════════════════════════════════════════════════════════════════

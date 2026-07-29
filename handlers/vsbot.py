@@ -11,6 +11,7 @@ Flow:
 """
 
 import asyncio
+import html
 import logging
 import random
 from datetime import datetime, timedelta
@@ -749,8 +750,13 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
             else:
                 await _bot_pick_and_start(context, chat_id, mid)
         else:
-            # Original bot gameplay: the user picks both openers in chat.
-            await _show_user_opener_picker(context, chat_id, mid, user, bat_xi, opener_num=1)
+            # Original bot gameplay: the user picks both openers in chat —
+            # unless they already saved a batting order with /sbo, in which case
+            # slots 1 and 2 open and nothing is asked.
+            if not await _auto_openers_from_saved_order(
+                    context, session, chat_id, mid, bat_xi):
+                await _show_user_opener_picker(context, chat_id, mid, user,
+                                               bat_xi, opener_num=1)
 
     except Exception:
         session.rollback()
@@ -1006,7 +1012,6 @@ async def vsbot_op2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await _vsbot_pick_lost(context, q, mid)
             return
         await q.answer()
-        context.bot_data[f"opener2_{mid}"] = chosen
         op1 = context.bot_data.get(f"opener1_{mid}", {})
 
         try:
@@ -1016,22 +1021,62 @@ async def vsbot_op2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             pass
 
-        # Now bowling side picks opening bowler
-        bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
-        bot_uid = context.bot_data.get(f"vsbot_bot_uid_{mid}")
-        bowl_xi = _setup_xi(context, mid, "bowl_xi")
-
-        if bowl_uid == bot_uid:
-            # Bot picks bowler
-            await _bot_pick_and_start(context, q.message.chat_id, mid)
-        else:
-            # Show user bowler picker
-            bwu = session.query(User).get(bowl_uid)
-            await _show_user_opening_bowler(context, q.message.chat_id, mid, bwu, bowl_xi)
+        await _vsbot_openers_locked(context, session, q.message.chat_id, mid,
+                                    op1, chosen)
     except Exception:
         logger.exception("vsbot_op2_callback error")
     finally:
         session.close()
+
+
+async def _vsbot_openers_locked(context, session, chat_id, mid, op1, op2):
+    """Openers settled — hand over to whoever picks the opening bowler.
+
+    Shared by the opener picker and the saved-order path below, so a /sbo
+    line-up reaches the bowler step through exactly the same code as a
+    hand-picked one.
+    """
+    context.bot_data[f"opener1_{mid}"] = op1
+    context.bot_data[f"opener2_{mid}"] = op2
+
+    bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
+    bot_uid = context.bot_data.get(f"vsbot_bot_uid_{mid}")
+    bowl_xi = _setup_xi(context, mid, "bowl_xi")
+
+    if bowl_uid == bot_uid:
+        # Bot picks bowler
+        await _bot_pick_and_start(context, chat_id, mid)
+    else:
+        # Show user bowler picker
+        bwu = session.query(User).get(bowl_uid)
+        await _show_user_opening_bowler(context, chat_id, mid, bwu, bowl_xi)
+
+
+async def _auto_openers_from_saved_order(context, session, chat_id, mid, bat_xi):
+    """Open the innings from the user's saved batting order, if they have one.
+
+    Mirrors ``handlers.match._auto_openers_from_saved_order`` for the /vsbot
+    flow, which owns its own pickers. Returns True when the openers were
+    settled here and the caller must not show a picker.
+    """
+    from services import batting_order_service as bos
+    if not bos.is_order_locked(bat_xi):
+        return False
+    op1, op2 = bos.openers_from_order(bat_xi)
+    if not op1 or not op2:
+        return False
+    try:
+        await context.bot.send_message(
+            chat_id,
+            f"🏏 <b>OPENERS</b> — from your saved batting order\n\n"
+            f"<b>1.</b> {html.escape(str(op1.get('name', '?')))}\n"
+            f"<b>2.</b> {html.escape(str(op2.get('name', '?')))}\n\n"
+            f"<i>Change it any time with /sbo.</i>",
+            parse_mode="HTML")
+    except Exception:
+        logger.exception("vsbot saved-order opener announcement failed (%s)", mid)
+    await _vsbot_openers_locked(context, session, chat_id, mid, op1, op2)
+    return True
 
 
 async def _show_user_opening_bowler(context, chat_id, mid, bwu, bowl_xi, note=""):

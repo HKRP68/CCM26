@@ -252,12 +252,19 @@ def play_quick_match(session, user, user_choices, opponent_difficulty="medium"):
 # ── XI-based simulation (v2) ──────────────────────────────────────────
 
 def get_user_xi(session, user_id):
-    """Return the user's playing XI (positions 1-11), sorted by position.
+    """Return the user's playing XI (positions 1-11) IN BATTING ORDER.
+
+    Slots 1-11 come back in the order the player saved with /sbo; if they never
+    saved one the XI is sorted by batting rating (see
+    ``services.batting_order_service``). ``position`` is renumbered to the
+    resulting batting position, because that is what the innings distribution
+    below weights runs and balls by.
 
     Returns: list of dicts with {roster_id, player_id, name, rating,
     category, country, version, position, is_captain}.
     """
     from models import UserRoster, User
+    from services import batting_order_service as bos
     user = session.query(User).get(user_id)
     captain_rid = user.captain_roster_id if user else None
     from models import Player as _P
@@ -267,7 +274,7 @@ def get_user_xi(session, user_id):
                     UserRoster.order_position >= 1,
                     UserRoster.order_position <= 11)
             .order_by(UserRoster.order_position.asc()).all())
-    return [{
+    xi = bos.ordered_xi_dicts(session, user_id, [{
         "roster_id": r.id, "player_id": p.id, "name": p.name,
         "rating": p.rating,
         "bat_rating": p.bat_rating or 0,
@@ -276,7 +283,10 @@ def get_user_xi(session, user_id):
         "version": p.version or "Base",
         "position": r.order_position,
         "is_captain": (captain_rid == r.id),
-    } for r, p in rows]
+    } for r, p in rows])
+    for i, entry in enumerate(xi, start=1):
+        entry["position"] = i
+    return xi
 
 
 def _generate_bot_xi(session, target_rating, opponent_country=None):

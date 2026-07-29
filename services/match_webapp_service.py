@@ -346,6 +346,34 @@ def _bowling_eligible(players):
     return elig or list(players or [])
 
 
+def _apply_saved_batting_order(state, bat_xi=None):
+    """Open the innings from the batting side's saved order, when it has one.
+
+    A player who arranged their line-up with /sbo (or the Mini App XI screen)
+    has already named their openers: slots 1 and 2. So the batting order is the
+    XI as it stands, the openers are settled, and the Mini App never shows the
+    "pick your openers" screen for that side. A side with no saved order is left
+    alone and picks as before.
+
+    Mutates ``state`` in place. Returns True when the openers were locked.
+    """
+    from services import batting_order_service as bos
+    xi = bat_xi if bat_xi is not None else state.get("bat_xi") or []
+    if state.get("openers_done") or not bos.is_order_locked(xi):
+        return False
+    order = _active_players(xi)
+    op1, op2 = bos.openers_from_order(order)
+    if not op1 or not op2:
+        return False
+    state["batting_order"] = list(order)
+    state["striker_idx"] = 0
+    state["non_striker_idx"] = 1
+    state["next_batsman_idx"] = 2
+    state["openers_done"] = True
+    state["openers_from_saved_order"] = True
+    return True
+
+
 def _bot_bowler_pool(state, players, prev_rid):
     """Players a bot-match team may pick from for the next over.
 
@@ -627,6 +655,9 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
         return False, "Players missing."
 
     def _xi(uid):
+        """Playing XI in batting order — the one saved with /sbo when there is
+        one, batting rating high → low when there is not."""
+        from services import batting_order_service as bos
         if uid in xi_overrides:
             return xi_overrides[uid]
         rows = (session.query(UserRoster, Player)
@@ -634,14 +665,14 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
                 .filter(UserRoster.user_id == uid)
                 .order_by(UserRoster.order_position).limit(11).all())
         cmap = _career_map(session, uid)
-        return [{
+        return bos.ordered_xi_dicts(session, uid, [{
             "roster_id": e.id, "player_id": p.id, "name": p.name,
             "rating": p.rating, "category": p.category,
             "bat_rating": p.bat_rating, "bowl_rating": p.bowl_rating,
             "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand,
             "bat_hand": p.bat_hand,
             **cmap.get(p.id, {}),
-        } for e, p in rows]
+        } for e, p in rows])
 
     bxi = _xi(bu.id)
     bwxi = _xi(bwu.id)
@@ -710,6 +741,11 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     except Exception:
         logger.exception("vsbot init detection failed (non-fatal)")
 
+    # A batting side that saved its order with /sbo has already named its
+    # openers — slots 1 and 2. Lock them in here rather than opening the Mini
+    # App on a picker asking for something the player settled days ago.
+    _apply_saved_batting_order(s, bxi)
+
     # Fair-match stat gate (user-vs-user /wpm). Record each side's Team Overall
     # (average XI rating) so the launch card can show it, and disable career
     # stats when the gap is too wide — this stops players farming stats against
@@ -763,6 +799,9 @@ def init_match_for_wsp(session, match_id, xi_overrides=None):
         return False, "Players missing."
 
     def _xi(uid):
+        """Playing XI in batting order — the one saved with /sbo when there is
+        one, batting rating high → low when there is not."""
+        from services import batting_order_service as bos
         if uid in xi_overrides:
             return xi_overrides[uid]
         rows = (session.query(UserRoster, Player)
@@ -770,14 +809,14 @@ def init_match_for_wsp(session, match_id, xi_overrides=None):
                 .filter(UserRoster.user_id == uid)
                 .order_by(UserRoster.order_position).limit(11).all())
         cmap = _career_map(session, uid)
-        return [{
+        return bos.ordered_xi_dicts(session, uid, [{
             "roster_id": e.id, "player_id": p.id, "name": p.name,
             "rating": p.rating, "category": p.category,
             "bat_rating": p.bat_rating, "bowl_rating": p.bowl_rating,
             "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand,
             "bat_hand": p.bat_hand,
             **cmap.get(p.id, {}),
-        } for e, p in rows]
+        } for e, p in rows])
 
     bxi = _xi(bu.id)
     bwxi = _xi(bwu.id)
@@ -1192,6 +1231,10 @@ def _resume_after_innings_break(state):
     state["openers_done"] = False
     state["bowler_done"] = False
     state["current_bowler"] = None
+    # …except a chasing side that saved its batting order with /sbo, which
+    # opens with slots 1 and 2 in the chase exactly as it did in the first
+    # innings. Only the bowling side is left to pick.
+    _apply_saved_batting_order(state)
     return "SETUP"
 
 
@@ -1744,8 +1787,13 @@ def set_shot_action(match_id, user_id, shot):
         return False, f"Unknown shot '{shot}'. Options: {', '.join(AVAILABLE_SHOTS)}", None
 
     from services.bowling_service import AVAILABLE_SHOTS
+    from services import batting_order_service as _bos
     state["current_shot"] = AVAILABLE_SHOTS[idx]
-    state["manual_batsman"] = True   # envelope flow: player picks next batsman
+    # Envelope flow: the batting player picks the next batsman after a wicket —
+    # unless they saved a batting order with /sbo, in which case the next player
+    # down walks in on their own, the way a real line-up works.
+    state["manual_batsman"] = not _bos.is_order_locked(
+        state.get("batting_order") or state.get("bat_xi"))
     # In-process guard instead of persisting a processing flag: skips two DB
     # commits per ball while keeping the same 1.5s double-tap window. The
     # mutated local state (current_shot/manual_batsman) rides into play_shot
