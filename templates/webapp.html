@@ -4398,44 +4398,129 @@ function _tryInitAdController() {
   }
 }
 
+// "No ads available" is almost never a permanent state — it is Adsgram's ad
+// network reporting no fill for THIS request, and the very next request often
+// fills. So a no-fill is retried on a short backoff instead of being handed
+// straight to the user as a dead end. A user skipping the ad, or any other
+// error, is NOT retried: replaying an ad someone just closed is hostile.
+const AD_NOFILL_RETRY_DELAYS = [900, 2200];
+
+function _adFailureKind(err) {
+  // The SDK's rejection shape varies by version: sometimes {error, description},
+  // sometimes {state}. Classify off whatever is present.
+  const desc = (err?.description || err?.message || '').toString();
+  const state = (err?.state || err?.error || '').toString().toLowerCase();
+  if (/no.?banner|not.?loaded|unavailable|empty|no.?ad|nofill|no.?fill/i.test(desc)
+      || state.includes('nofill') || state.includes('no_banner')
+      || state.includes('load')) {
+    return 'nofill';
+  }
+  if (/skip|closed|cancel/i.test(desc) || state.includes('skip')
+      || state.includes('closed')) {
+    return 'skipped';
+  }
+  return err?.error ? 'error' : 'skipped';
+}
+
+const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// One-shot re-fetch of the Adsgram SDK. The page-level <script> tag is loaded
+// once at boot; a Telegram WebView that opened on a flaky connection therefore
+// spent the WHOLE session with `__adsgramFailed` set and every ad reported as
+// unavailable, even after the network came back. Re-injecting on demand costs
+// nothing when the SDK is already there and rescues the common case where the
+// user simply opened the app a few seconds too early.
+let _adsRetryLoad = null;
+
+function _reloadAdsgramSdk() {
+  if (window.Adsgram?.init) return Promise.resolve(true);
+  if (_adsRetryLoad) return _adsRetryLoad;   // a load is already in flight
+  _adsRetryLoad = new Promise((resolve) => {
+    // Memoizing a FAILED load would rebuild the whole-session dead end this
+    // function exists to fix — every later tap would get the cached false and
+    // never re-attempt. Only a load still in flight (or one that succeeded, via
+    // the window.Adsgram check above) is worth reusing.
+    const done = (ok) => {
+      if (!ok) _adsRetryLoad = null;
+      resolve(ok);
+    };
+    const el = document.createElement('script');
+    el.src = 'https://sad.adsgram.ai/js/sad.min.js';
+    el.async = true;
+    el.onload = () => {
+      window.__adsgramFailed = false;
+      done(!!window.Adsgram?.init);
+    };
+    // Drop the dead tag so retries don't stack duplicates in <head>.
+    el.onerror = () => { el.remove(); done(false); };
+    document.head.appendChild(el);
+    // Don't let a hanging request block the tap forever.
+    setTimeout(() => done(!!window.Adsgram?.init), 6000);
+  });
+  return _adsRetryLoad;
+}
+
 async function showAd() {
   // Real Adsgram SDK if configured + initialised. The SDK loads async, so
   // if the controller isn't up yet, try once more before giving up.
   if (!_adController) _tryInitAdController();
+  if (!_adController && _adsConfigured && _adsBlockId) {
+    // Configured, but the SDK never arrived. Give it one more chance now that
+    // the user has actually asked for an ad.
+    toast('📺 Loading ad…', 'info');
+    if (await _reloadAdsgramSdk()) _tryInitAdController();
+  }
 
   if (_adController) {
-    try {
-      toast('📺 Loading ad…', 'info');
-      const result = await _adController.show();
-      // SDK promise resolves only if user watched ad till the end
-      if (result && result.done) {
-        // Tell our backend the ad was completed → returns a single-use token
-        const r = await api('/api/webapp/ad-completed', {});
-        if (r.ok && r.data.ad_token) return r.data.ad_token;
-        toast('Ad watched but token failed', 'error');
+    let lastErr = null;
+    // One initial attempt plus the no-fill retries.
+    for (let attempt = 0; attempt <= AD_NOFILL_RETRY_DELAYS.length; attempt++) {
+      try {
+        toast(attempt === 0 ? '📺 Loading ad…'
+                            : '📺 Finding an ad… hang on', 'info');
+        const result = await _adController.show();
+        // SDK promise resolves only if user watched ad till the end
+        if (result && result.done) {
+          // Tell our backend the ad was completed → returns a single-use token
+          const r = await api('/api/webapp/ad-completed', {});
+          if (r.ok && r.data.ad_token) return r.data.ad_token;
+          toast('Ad watched but the reward didn\'t register — try again', 'error');
+          return null;
+        }
+        // Resolved without `done` — the SDK's "closed early" path on the
+        // versions that resolve rather than reject. Say so: returning silently
+        // left the user staring at a "Loading ad…" toast that never resolved
+        // into anything.
+        toast('Ad skipped — watch it fully to claim the reward', 'info');
         return null;
+      } catch (err) {
+        lastErr = err;
+        if (_adFailureKind(err) !== 'nofill') break;
+        const delay = AD_NOFILL_RETRY_DELAYS[attempt];
+        if (delay === undefined) break;   // out of retries
+        await _sleep(delay);
       }
-      return null;
-    } catch (err) {
-      // SDK rejects on skip/error/no-banner — show friendly message
-      const desc = err?.description || err?.message || '';
-      const state = (err?.state || err?.error || '').toString().toLowerCase();
-      if (state.includes('no') || /no.?banner|not.?loaded|unavailable|empty/i.test(desc)) {
-        toast('No ads available right now — try again shortly', 'info');
-      } else if (err?.error) {
-        toast(`Ad error: ${desc || 'unavailable'}`, 'error');
-      } else {
-        toast('Ad skipped — no spin granted', 'info');
-      }
-      return null;
     }
+
+    const kind = _adFailureKind(lastErr);
+    if (kind === 'nofill') {
+      toast('No ad available right now — the ad network is out of stock. '
+            + 'Try again in a minute.', 'info');
+    } else if (kind === 'error') {
+      const desc = lastErr?.description || lastErr?.message || 'unavailable';
+      toast(`Ad error: ${desc}`, 'error');
+    } else {
+      toast('Ad skipped — watch it fully to claim the reward', 'info');
+    }
+    return null;
   }
 
   // Real ads are configured but the SDK never became available (blocked
   // domain / DNS failure / init error). Don't hand back a MOCK token — the
   // backend would reject it and the user would be stuck. Tell them plainly.
   if (_adsConfigured) {
-    toast('Ads are temporarily unavailable — please try again later', 'error');
+    toast('Ads can\'t load right now — check your connection and reopen the app',
+          'error');
     return null;
   }
 

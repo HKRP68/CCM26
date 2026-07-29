@@ -94,8 +94,18 @@ def _load_users(session, state):
             session.query(User).get(state["user2_id"]))
 
 
-async def _answer_not_part(query):
-    await query.answer("You are not part of this trade.", show_alert=True)
+async def _answer_not_part(query, message="You are not part of this trade."):
+    await query.answer(message, show_alert=True)
+
+
+def _side_name(state, side):
+    """'@rohit' for the stored side, for turn-order alerts.
+
+    The trade state keeps telegram ids, not names, so fall back to a neutral
+    label rather than guessing — the point of the alert is *whose turn it is*,
+    and "the other captain" says that perfectly well when the name is unknown.
+    """
+    return state.get(f"{side}_name") or "the other captain"
 
 
 def _pick_buttons(trade_id, rows, prefix):
@@ -186,6 +196,7 @@ async def tradetrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "id": trade_id,
             "user1_id": user1.id, "user2_id": user2.id,
             "user1_tg_id": user1.telegram_id, "user2_tg_id": user2.telegram_id,
+            "user1_name": _mention(user1), "user2_name": _mention(user2),
             "chat_id": update.effective_chat.id,
             "status": "awaiting_user1_trait",
             "created_at": time.time(),
@@ -229,7 +240,13 @@ async def tradetrait_user1_callback(update: Update, context: ContextTypes.DEFAUL
         await query.answer("Trade expired.", show_alert=True)
         return
     if query.from_user.id != state["user1_tg_id"]:
-        await _answer_not_part(query)
+        # The other captain tapping here isn't a stranger — it's simply not
+        # their turn yet, so say that instead of "you are not part of this".
+        await _answer_not_part(
+            query,
+            f"{_side_name(state, 'user1')} picks first — yours is next."
+            if query.from_user.id == state["user2_tg_id"]
+            else "You are not part of this trade.")
         return
     await query.answer()
     if _is_expired(state):
@@ -293,7 +310,12 @@ async def tradetrait_user2_callback(update: Update, context: ContextTypes.DEFAUL
         await query.answer("Trade expired.", show_alert=True)
         return
     if query.from_user.id != state["user2_tg_id"]:
-        await _answer_not_part(query)
+        await _answer_not_part(
+            query,
+            f"You've made your offer — it's {_side_name(state, 'user2')}'s "
+            f"turn to pick."
+            if query.from_user.id == state["user1_tg_id"]
+            else "You are not part of this trade.")
         return
     await query.answer()
     if _is_expired(state):
@@ -360,10 +382,16 @@ async def tradetrait_confirm_callback(update: Update, context: ContextTypes.DEFA
     try:
         user1, user2 = _load_users(session, state)
         user = user1 if query.from_user.id == state["user1_tg_id"] else user2
-        if not user or user.id != expected_user_id:
-            await query.answer("This confirm button is not for you.", show_alert=True)
+        if not user:
+            await _answer_not_part(query)
             return
-        await query.answer()
+        # Both captains' Confirm buttons sit side by side, so hitting the wrong
+        # one is a near-miss, not an attack. Confirm the TAPPER's own side
+        # rather than refusing: a tap can only ever confirm for whoever made it
+        # (``user`` is resolved from the telegram id, never from the button), so
+        # nobody can confirm on the other captain's behalf.
+        await query.answer("Confirmed for you." if user.id != expected_user_id
+                           else None)
         if _is_expired(state):
             await query.edit_message_text("⌛ Trait trade expired.")
             _clear_trade(context, trade_id)

@@ -261,6 +261,10 @@ def cp_to_player_dict(cp):
         return default
 
     category = _g("category", "role", default="Batsman")
+    # Deliberately no ``country``/``version``: Challenge League squads are league
+    # rosters handed to both captains, not cards anyone collected, so — exactly
+    # like traits — Team Chemistry does not apply to them. See
+    # handlers.cipl_play._chem_line for the display side of the same rule.
     return {
         "roster_id": int(getattr(cp, "id")),
         "player_id": _g("source_player_id", default=getattr(cp, "source_player_id", None)),

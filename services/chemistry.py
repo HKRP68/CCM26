@@ -755,6 +755,68 @@ def xi_summary(players):
     return total, shape
 
 
+# ── Live-match display ──────────────────────────────────────────────
+# Bands for the in-match badge. Scored on the DISPLAYED 30-100 number rather
+# than reusing ``CHEM_COLOURS`` (which is calibrated for a 0-20 component), so
+# the four colours actually spread across the range a real XI can reach: the
+# 30-point squad floor means nothing ever lands below 30, and a side that never
+# leaves 🟧 tells the player nothing.
+LIVE_CHEM_BANDS = ((85, "🟩"), (70, "🟨"), (55, "🟧"), (0, "🟥"))
+
+BOND_LABELS = ((PARTNERSHIP_SAME_COUNTRY, "🤝 <b>Bonded partnership</b>"),
+               (PARTNERSHIP_WITH_ICON, "🤝 <b>Icon partnership</b>"))
+
+
+def live_colour(total):
+    """Band colour for a displayed 30-100 chemistry total."""
+    for threshold, colour in LIVE_CHEM_BANDS:
+        if total >= threshold:
+            return colour
+    return LIVE_CHEM_BANDS[-1][1]
+
+
+def live_badge(players):
+    """In-match chemistry badge for an XI — ``'🟩 88/100'`` — or ``None``.
+
+    Uses the same 30-100 number as /cmuchem and /pxi rather than inventing a
+    third scale, and returns None for anything that can't honestly be scored, so
+    the board shows nothing instead of a number that moves for reasons the
+    player can't see:
+
+      • a part-built squad, exactly like ``xi_summary``;
+      • an XI whose cards carry no country. Scoring is built on country blocks,
+        and ``country_of`` deliberately folds missing data into a single
+        ``Unknown`` country — which is right for an admin breakdown (it makes a
+        bad row visible) but badly wrong here, because a synthetic XI with no
+        country data at all would read as one perfect 11-man national block and
+        out-score every real squad. ``Player.country`` is non-nullable, so any
+        side failing this test is synthetic by construction.
+
+    Card version is deliberately NOT required: an XI of ordinary base cards is
+    perfectly scorable, and ``Player.version`` is NULL on older rows.
+    """
+    players = list(players)
+    if len(players) < XI_SIZE:
+        return None
+    if any(not str(_field(player, "country") or "").strip() for player in players):
+        return None
+    total = calculate_role_report(players)["total"]
+    return f"{live_colour(total)} {total}/{CMUCHEM_TOTAL_MAX}"
+
+
+def bond_label(bond):
+    """Crease-pair bond as a display string, or ``None`` when there is no bond.
+
+    The bond is the one part of chemistry that moves during an innings, so it
+    gets called out on the board the same way an activated trait does — the
+    player can see the pair that runs well together while they're at the crease.
+    """
+    for level, label in BOND_LABELS:
+        if bond >= level:
+            return label
+    return None
+
+
 def render_chemistry_card(players):
     """The /cmuchem card as Telegram HTML.
 

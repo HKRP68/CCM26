@@ -176,6 +176,24 @@ class ButtonAccessTests(unittest.TestCase):
                 update = DummyUpdate(DummyQuery(222, callback_data))
                 self.assertTrue(button_access.check_callback_owner(update))
 
+    def test_trade_flow_buttons_are_shared_for_both_captains(self):
+        # /trade and /tradetrait both run one message through "user1 picks" →
+        # "user2 picks" → "both confirm", first sent while handling user1's
+        # command. The second captain's tap must reach the handler (which
+        # validates by telegram_id) instead of being owner-blocked with
+        # "This button is not for you" the moment it becomes their turn.
+        button_access.register_button_owner(100, 200, 111)
+        callbacks = [
+            "t1p_abc123_42", "t2p_abc123_84",
+            "tcfrm_abc123_7", "tcancel_abc123",
+            "tt1_abc123_42", "tt2_abc123_84",
+            "ttcfrm_abc123_7", "ttcancel_abc123",
+        ]
+        for callback_data in callbacks:
+            with self.subTest(callback_data=callback_data):
+                update = DummyUpdate(DummyQuery(222, callback_data))
+                self.assertTrue(button_access.check_callback_owner(update))
+
     def test_unregistered_legacy_buttons_remain_usable(self):
         update = DummyUpdate(DummyQuery(222, "roster_page_2"))
 

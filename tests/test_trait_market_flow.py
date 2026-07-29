@@ -343,12 +343,22 @@ class TraitMarketFlowTests(unittest.TestCase):
         msg = self._start_trade(context)
         trade_id = [b.callback_data for b in msg.buttons()][0].split("_")[1]
 
-        # The receiver tapping the initiator's picker, and vice versa.
+        # Someone with no stake in the trade is told exactly that.
+        outsider = _Query(f"tt1_{trade_id}_{self.inv1_id}", 999_999)
+        asyncio.run(h.tradetrait_user1_callback(_update(query=outsider), context))
+        self.assertEqual(outsider.edits, [])
+        self.assertIn("not part of this trade", " ".join(
+            a for a in outsider.answers if a))
+
+        # The counterparty tapping the initiator's picker is refused just as
+        # firmly, but told whose turn it is instead of that they're a stranger
+        # to their own trade.
         wrong = _Query(f"tt1_{trade_id}_{self.inv1_id}", self.tg2)
         asyncio.run(h.tradetrait_user1_callback(_update(query=wrong), context))
         self.assertEqual(wrong.edits, [])
-        self.assertIn("not part of this trade", " ".join(
-            a for a in wrong.answers if a))
+        answered = " ".join(a for a in wrong.answers if a)
+        self.assertIn("picks first", answered)
+        self.assertNotIn("not part of this trade", answered)
 
     def test_only_one_trait_trade_per_captain(self):
         from handlers import tradetrait as h

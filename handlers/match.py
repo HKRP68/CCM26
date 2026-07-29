@@ -4395,6 +4395,12 @@ async def _process_shot_core(context, mid, si, *, q=None):
             if activated:
                 unique_act = list(dict.fromkeys(activated))[:3]
                 traits_line = "\n💎 " + " · ".join(unique_act)
+            # Chemistry gets the same treatment as a trait: it is announced on
+            # the ball where it does something the player can feel. The static
+            # team numbers live on the scorecard below (build_chemistry_line);
+            # this is the death-overs/clutch doubling firing right now.
+            if s.pop("_chem_clutch_live", False):
+                traits_line += "\n🧪 <i>Clutch chemistry — the drilled side holds its nerve</i>"
             # Prefer the rich SimCricketX engine (situation + sequence aware);
             # fall back to the configured per-event line when it yields nothing.
             commentary_line = _engine_commentary(
@@ -5010,6 +5016,9 @@ def _calc(s, striker, bowler, shot, delivery):
     # Fielding cohesion and the crease pair's bond are resolved here too, since
     # both depend on live match state rather than selection.
     chem_bond = 0.0
+    # Reset up front so a ball whose chemistry block raised can never inherit
+    # the previous ball's cue.
+    s["_chem_clutch_live"] = False
     try:
         from services import chemistry
         clutch = chemistry.clutch_multiplier(over, total_overs, pressure)
@@ -5025,6 +5034,11 @@ def _calc(s, striker, bowler, shot, delivery):
         if fielding_quality is not None:
             fielding_quality = min(95.0,
                                    fielding_quality + _chem_fielding_bonus(s))
+        # Recorded so the ball message can call the doubling out the way it
+        # calls out a trait firing — chemistry does its loudest work here, and
+        # a player who can't see it can't reason about their squad.
+        s["_chem_clutch_live"] = bool(clutch != 1.0 and
+                                      (bat_chem_mod or bowl_chem_mod))
     except Exception:
         logger.exception("Chemistry match effects skipped for this ball")
 

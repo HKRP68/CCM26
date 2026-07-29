@@ -22,6 +22,7 @@ Flow:
     → over-by-over match in the chat (shared with /cipl), traits active.
 """
 
+import asyncio
 import html
 import logging
 from datetime import datetime, timedelta
@@ -143,6 +144,11 @@ def _xi_to_engine(session, pairs):
             "bowl_style": player.bowl_style or "",
             "bowl_hand": player.bowl_hand or "Right",
             "bat_hand": player.bat_hand or "Right",
+            # Country + card version let the live board score this XI for Team
+            # Chemistry without a second DB round trip mid-match (same reason
+            # handlers.match._pd carries them).
+            "country": player.country or "",
+            "version": player.version or "",
             "traits": _roster_traits(session, entry.id),
         })
     return out
@@ -1247,7 +1253,7 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
                        show_alert=True)
         return
     if draft.get("match_launched"):
-        await q.answer("Match already started.", show_alert=True)
+        await q.answer("Match already started — play on the board below 👇")
         return
     if q.from_user.id != draft[winner_side]["tg_id"]:
         await q.answer("Toss winner only.", show_alert=True)
@@ -1257,18 +1263,61 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
     _cancel_setup_timeout(context, invite_id)
     await q.answer()
     winner = draft[winner_side]
-    await q.edit_message_text(
-        f"✅ {_m(winner)} elected to "
-        f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
-        f"The match begins below — play over by over!",
-        parse_mode="HTML")
+    # Cosmetic: the toss-result edit must never be able to stop the match from
+    # starting. An unguarded edit here left `match_launched` set on a match that
+    # was never created, so every retry answered "Match already started".
+    try:
+        await q.edit_message_text(
+            f"✅ {_m(winner)} elected to "
+            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
+            f"The match begins below — play over by over!",
+            parse_mode="HTML")
+    except Exception:
+        logger.warning("letsplay toss result edit failed for invite %s — "
+                       "starting the match anyway", invite_id, exc_info=True)
     try:
         await _launch_match(context, draft, decision, winner_side)
     except Exception:
         logger.exception("letsplay launch failed for invite %s", invite_id)
-        await context.bot.send_message(
-            draft["chat_id"], "⚠️ Failed to start the match. Please try /letsplay again.")
-        draft["status"] = "failed"
+        # The Match row committed, so the match itself is real — only the board
+        # is missing. Re-send the outstanding prompt instead of throwing the
+        # match away.
+        mid = draft.get("match_id")
+        if mid:
+            from handlers.cipl_play import cipl_resume, _cancel_orphan_match_row
+            if await cipl_resume(context, mid):
+                return
+            # cipl_resume returns False exactly when no state was saved — there
+            # is nothing for /rcl to resume, and the committed row would hold the
+            # per-chat and per-player active-match gates shut against every
+            # future /letsplay in this chat. Cancel it (the /cipl path does the
+            # same) so the players can simply start again.
+            await asyncio.to_thread(_cancel_orphan_match_row, mid)
+            await context.bot.send_message(
+                draft["chat_id"],
+                "⚠️ The match didn't start — nothing was lost. "
+                "Run /letsplay again.")
+            return
+        # Nothing playable came out of this, so put the toss back in the
+        # winner's hands rather than leaving a draft that answers "already
+        # started" forever.
+        draft["match_launched"] = False
+        _rearm_setup_timeout(context, invite_id)
+        try:
+            await context.bot.send_message(
+                draft["chat_id"],
+                f"⚠️ The match didn't start — nothing was lost.\n"
+                f"{_m(winner)}, choose again:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏏 Bat First",
+                                         callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
+                    InlineKeyboardButton("🎳 Bowl First",
+                                         callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
+                ]]))
+        except Exception:
+            logger.exception("letsplay toss re-prompt after failed launch failed "
+                             "for invite %s", invite_id)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1354,6 +1403,10 @@ async def _launch_match(context, draft, decision, winner_side):
         session.commit()
         match_id = match.id
         stadium = match.stadium
+        # Recorded before the draft is retired so the caller's failure path can
+        # tell "the Match row never existed" (re-prompt the toss) apart from
+        # "the row exists, only the board is missing" (resume it).
+        draft["match_id"] = match_id
     except Exception:
         session.rollback()
         raise
@@ -1430,6 +1483,21 @@ async def _announce(context, state, pitch_type):
                         f" • {html.escape(difficulty_label(state))}\n")
         except Exception:
             logger.exception("letsplay: bot persona line failed")
+    # Both sides' Team Chemistry in full (colour + x/100), at the one moment
+    # both XIs are locked and nothing has happened yet — the over-by-over board
+    # carries the compact version from over 1 onward. /letsplay is a personal
+    # roster mode, so the number describes a team the player actually built;
+    # Challenge League's card deliberately carries no such line.
+    chem_line = ""
+    try:
+        from services import chemistry
+        bat_chem = chemistry.live_badge(state.get("bat_xi") or [])
+        bowl_chem = chemistry.live_badge(state.get("bowl_xi") or [])
+        if bat_chem and bowl_chem:
+            chem_line = (f"🧪 <b>Chemistry:</b> {bat} {bat_chem}  •  "
+                         f"{bowl} {bowl_chem}\n")
+    except Exception:
+        logger.exception("letsplay: chemistry announcement line failed")
     text = (
         f"{title}\n"
         f"{rule}\n"
@@ -1437,6 +1505,7 @@ async def _announce(context, state, pitch_type):
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
+        + chem_line
         + bot_line
         + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"
            if state.get("is_bot_match") else "")

@@ -821,3 +821,71 @@ class ThirtyToHundredScaleTests(unittest.TestCase):
     def test_earned_points_clamps(self):
         self.assertEqual(chemistry.earned_points(-40), 0)
         self.assertEqual(chemistry.earned_points(500), 70)
+
+
+class LiveDisplayTests(unittest.TestCase):
+    """The in-match badge and the crease-pair bond cue.
+
+    Chemistry already decides real things during a match (a role bonus on every
+    effective rating, fielding cohesion, a doubling at the death). These are the
+    two renderings that finally let a player SEE it while they play, so they
+    have to agree with /cmuchem rather than invent a second scale.
+    """
+
+    def _xi(self, country="India"):
+        return ([_rc(country, "Batsman") for _ in range(5)]
+                + [_rc(country, "Bowler") for _ in range(3)]
+                + [_rc(country, "All-rounder") for _ in range(2)]
+                + [_rc(country, "Wicket Keeper")])
+
+    def test_badge_reports_the_cmuchem_number(self):
+        xi = self._xi()
+        total = chemistry.calculate_role_report(xi)["total"]
+        badge = chemistry.live_badge(xi)
+        self.assertIn(f"{total}/{chemistry.CMUCHEM_TOTAL_MAX}", badge)
+
+    def test_a_part_built_side_shows_nothing(self):
+        # Same rule as the /pxi summary: no number beats a number that moves for
+        # reasons the player can't see (and the bot's synthetic XI has no cards).
+        self.assertIsNone(chemistry.live_badge(self._xi()[:10]))
+        self.assertIsNone(chemistry.live_badge([]))
+
+    def test_the_badge_colour_spreads_across_the_reachable_range(self):
+        # The displayed score can never drop below the 30-point squad floor, so
+        # the bands have to be read on the 30-100 scale — a side stuck on one
+        # colour for every possible XI would tell the player nothing.
+        colours = {chemistry.live_colour(total) for total in range(30, 101)}
+        self.assertEqual(len(colours), len(chemistry.LIVE_CHEM_BANDS))
+
+    def test_a_synthetic_xi_without_country_data_is_never_scored(self):
+        # handlers/vsbot.py builds its bot XI without country/version. country_of
+        # folds missing data into a single "Unknown" country, so scoring one
+        # would read as a perfect 11-man national block and beat every real
+        # squad on the board. It must render nothing instead.
+        synthetic = [SimpleNamespace(category=c)
+                     for c in (["Batsman"] * 5 + ["Bowler"] * 3
+                               + ["All-rounder"] * 2 + ["Wicket Keeper"])]
+        self.assertIsNone(chemistry.live_badge(synthetic))
+        self.assertIsNone(chemistry.live_badge(
+            [_rc("", "Batsman")] + self._xi()[1:]))
+
+    def test_a_base_card_xi_is_still_scored(self):
+        # Only country gates the badge. Card version does not: an XI of ordinary
+        # base cards is perfectly scorable, and Player.version is NULL on older
+        # rows — requiring it would blank the badge for most real squads.
+        base = [_rc("India", c, version=None)
+                for c in (["Batsman"] * 5 + ["Bowler"] * 3
+                          + ["All-rounder"] * 2 + ["Wicket Keeper"])]
+        self.assertIsNotNone(chemistry.live_badge(base))
+
+    def test_bond_label_tracks_the_partnership_bond(self):
+        india = _rc("India", "Batsman")
+        other = _rc("Australia", "Batsman")
+        icon = _rc("West Indies", "Batsman", version="Icon")
+
+        self.assertIn("Bonded", chemistry.bond_label(
+            chemistry.partnership_bond(india, _rc("India", "Bowler"))))
+        self.assertIn("Icon", chemistry.bond_label(
+            chemistry.partnership_bond(icon, other)))
+        self.assertIsNone(chemistry.bond_label(
+            chemistry.partnership_bond(india, other)))
