@@ -195,6 +195,25 @@ def link_match_to_cl_tour(session, cl_tour_match_id, match_id):
     return tm
 
 
+def unlink_match_from_cl_tour(session, cl_tour_match_id):
+    """Hand a series slot back when its /cipl match never became playable.
+
+    The mirror of ``link_match_to_cl_tour``: a launch that committed a Match row
+    and then died before the board appeared would otherwise leave the slot stuck
+    on ``playing`` forever — and ``next_pending_match`` refuses to open the next
+    slot while any slot is playing, so the whole tour would deadlock on a match
+    that was never bowled. Only reverts a slot that is still ``playing``, so a
+    finished result is never rewound. Caller commits.
+    """
+    tm = session.query(CLTourMatch).get(cl_tour_match_id)
+    if not tm or tm.status != "playing":
+        return None
+    tm.match_id = None
+    tm.status = "pending"
+    session.flush()
+    return tm
+
+
 def record_cl_match_result(session, cl_tour_match_id, winner_user_id):
     """Called from the /cipl match-end hook for tour matches.
 

@@ -180,6 +180,51 @@ def projected_score(s):
     return int(rate_per_ball * total_balls)
 
 
+def build_chemistry_line(s):
+    """Team Chemistry block for the live board — both sides, or '' if unscorable.
+
+    Chemistry already decides real things in a live match (a role bonus on every
+    effective rating, a fielding-quality bonus, a doubled effect at the death),
+    but until now the only place a player could see the number was /cmuchem
+    before the toss. Traits announce themselves ball by ball; chemistry should
+    too, so it sits on the board next to the partnership it feeds.
+
+    Renders nothing rather than a wrong number when a side can't be scored — a
+    bot/synthetic XI carries no country or card version, and inventing 30/100
+    for it would read as a bug.
+    """
+    try:
+        from services import chemistry
+        bat = chemistry.live_badge(s.get("bat_xi") or [])
+        bowl = chemistry.live_badge(s.get("bowl_xi") or [])
+    except Exception:
+        return ""
+    if not bat and not bowl:
+        return ""
+    rows = []
+    if bat:
+        rows.append(f"🏏 {s.get('bat_team_name', 'Batting')}: {bat}")
+    if bowl:
+        rows.append(f"🎯 {s.get('bowl_team_name', 'Bowling')}: {bowl}")
+    return "🧪 <b>TEAM CHEMISTRY</b>\n" + "\n".join(rows) + "\n\n"
+
+
+def build_bond_line(s, striker, non_striker):
+    """Partnership-bond cue for the pair at the crease, or ''.
+
+    The bond is the one live-moving part of chemistry — it changes on every
+    wicket and every strike rotation — so it is called out on the partnership
+    line itself rather than in the static team block above.
+    """
+    try:
+        from services import chemistry
+        label = chemistry.bond_label(
+            chemistry.partnership_bond(striker, non_striker))
+    except Exception:
+        return ""
+    return f"\n{label}" if label else ""
+
+
 def build_live_scorecard(s):
     """Build the live match update message."""
     striker = get_striker(s)
@@ -236,6 +281,9 @@ def build_live_scorecard(s):
     except Exception:
         pass
 
+    chem_line = build_chemistry_line(s)
+    bond_line = build_bond_line(s, striker, non_striker)
+
     return (
         f"🏏 <b>LIVE MATCH UPDATE</b>\n\n"
         f"{inn1_line}\n\n"
@@ -246,7 +294,9 @@ def build_live_scorecard(s):
         f"✦ {striker['name']:<18} {bs_strike['runs']} ({bs_strike['balls']}){strike_mark_s}\n"
         f"  {non_striker['name']:<18} {bs_non['runs']} ({bs_non['balls']}){strike_mark_n}\n\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🤝 <b>PARTNERSHIP</b>  ➤ {s['partnership_runs']} ({s['partnership_balls']})\n\n"
+        f"{chem_line}"
+        f"🤝 <b>PARTNERSHIP</b>  ➤ {s['partnership_runs']} ({s['partnership_balls']})"
+        f"{bond_line}\n\n"
         f"📊 <b>RUN RATE</b>\n{rr_line}\n\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
         f"🎯 <b>BOWLER</b>\n"

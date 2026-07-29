@@ -138,6 +138,17 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "t2p_",
     "tcfrm_",
     "tcancel_",
+    # /tradetrait — the trait-for-trait twin of /trade above, and shared for the
+    # same reason: one message is edited from "user1 picks" (tt1_) to "user2
+    # picks" (tt2_) to "both confirm" (ttcfrm_), but it was first sent while
+    # handling user1's command. Without these the second captain's tap was
+    # owner-blocked with "This button is not for you" the moment it became their
+    # turn, so no trait trade could ever be completed. handlers/tradetrait.py
+    # validates every click by telegram_id.
+    "tt1_",
+    "tt2_",
+    "ttcfrm_",
+    "ttcancel_",
     "us_join",
     "us_ans_",
     "mh_join_",

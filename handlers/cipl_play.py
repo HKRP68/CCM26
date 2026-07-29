@@ -889,14 +889,128 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if draft.get("launch_in_progress"):
         await q.answer("Starting the match…")
         return
-    if draft.get("match_launched"):
-        await q.answer("Match already started — play on the board below 👇")
-        return
     winner_tg = draft.get("target_tg_id") if winner_side == "target" else draft.get("host_tg_id")
+    if draft.get("match_launched"):
+        # `match_launched` only proves a Match row was COMMITTED — not that the
+        # board ever reached the chat. Everything after that commit (the toss
+        # edit, the state write, the first bowler prompt) can still fail, and
+        # when it did the old code answered "Match already started" forever on a
+        # match nobody could play. Check the live state before claiming it
+        # started, and heal whichever half is broken.
+        state = await _live_cipl_state(context, draft)
+        if state is not None:
+            await q.answer("Match already started — play on the board below 👇")
+            # No action message means the prompt never landed (or was deleted):
+            # put the board back in front of them instead of leaving them
+            # tapping a dead toss message.
+            if not state.get("action_msg_id"):
+                await cipl_resume(context, draft["match_id"])
+            return
+        # Committed but never playable. Rolling that back writes to the database,
+        # so it is the toss winner's tap that does it — anyone else in the chat
+        # gets the same reassuring toast they'd get mid-launch.
+        if q.from_user.id != winner_tg:
+            await q.answer("Starting the match…")
+            return
+        # Clear the wreckage — the cancelled row also frees the per-chat and
+        # per-player active-match gates — so the launch below can proceed.
+        await _abandon_failed_launch(context, draft)
     if q.from_user.id != winner_tg:
         await q.answer("Toss winner only.", show_alert=True)
         return
     await _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
+
+
+async def _live_cipl_state(context, draft):
+    """The saved state of this draft's launched match, or None if it isn't playable.
+
+    "Playable" means a Challenge League state exists for the committed match id
+    and the match has not already finished. Used to tell a genuine double-tap
+    ("the match IS running, look below") apart from a launch that committed a
+    Match row and then died before the board appeared.
+    """
+    mid = draft.get("match_id")
+    if not mid:
+        return None
+    try:
+        state = await _gs(context, mid)
+        if not is_cipl_state(state):
+            return None
+        if await _get_next_action(context, mid) == A_COMPLETED:
+            return None
+        return state
+    except Exception:
+        logger.exception("cipl launch health check failed for match %s", mid)
+        return None
+
+
+def _cancel_orphan_match_row(mid):
+    """Blocking: cancel a Match that committed but never became playable.
+
+    Also releases anything the launch reserved on the way in — a tournament
+    fixture (live → scheduled) and a CL Tour slot (playing → pending) — so the
+    same pairing can be replayed instead of being burned by a launch that never
+    produced a single ball.
+    """
+    session = get_session()
+    try:
+        match = session.query(Match).get(mid)
+        if not match or match.status not in ("active", "playing", "in_progress"):
+            return
+        match.status = "cancelled"
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("cancelling orphan cipl match %s failed", mid)
+    finally:
+        session.close()
+
+
+def _release_launch_reservations(draft):
+    """Blocking: hand back the fixture / tour slot a failed launch reserved."""
+    fixture_id = draft.get("reserved_fixture_id")
+    tour_match_id = draft.get("cl_tour_match_id")
+    if not fixture_id and not tour_match_id:
+        return
+    session = get_session()
+    try:
+        if fixture_id:
+            from services import league_schedule_service
+            league_schedule_service.release_fixture(session, fixture_id)
+        if tour_match_id:
+            from services.cl_tour_service import unlink_match_from_cl_tour
+            unlink_match_from_cl_tour(session, tour_match_id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("releasing cipl launch reservations failed")
+    finally:
+        session.close()
+
+
+async def _abandon_failed_launch(context, draft):
+    """Undo a launch that committed a Match row but never reached the board.
+
+    Leaves the draft in the state it was in just before the winner tapped, so
+    the very next Bat/Bowl tap replays the launch cleanly: the Match row is
+    cancelled (freeing the per-chat and per-player active-match gates that would
+    otherwise reject the retry with "A match is already active in this chat"),
+    the half-written match state is dropped, and the reservations are handed
+    back.
+    """
+    mid = draft.get("match_id")
+    if mid:
+        try:
+            cleanup_state(context, mid)
+            release_match_lock(mid)
+        except Exception:
+            logger.exception("clearing dead cipl state failed for match %s", mid)
+        await asyncio.to_thread(_cancel_orphan_match_row, mid)
+    await asyncio.to_thread(_release_launch_reservations, draft)
+    draft["match_id"] = None
+    draft["match_launched"] = False
+    draft["launch_in_progress"] = False
+    draft.pop("reserved_fixture_id", None)
 
 
 async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side):
@@ -1081,6 +1195,9 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         # active match rather than to setup, so flip `match_launched` (the flag
         # the draft expiry job keys off) here, not before the commit.
         draft["match_launched"] = True
+        # Remembered so a later tap (and the failure path below) can tell whether
+        # the launch actually produced a playable board — see _live_cipl_state.
+        draft["match_id"] = match.id
         match_obj = SimpleMatch(match.id, match.overs, match.stadium)
         pitch_type = match.pitch_type
     except Exception:
@@ -1115,23 +1232,77 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
     winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
     fmt_label = "The Hundred (100 balls)" if ball_format == "The100" else f"{match_obj.overs} overs"
     unit_flow = "set by set" if ball_format == "The100" else "over by over"
-    await q.edit_message_text(
-        f"✅ {_mention(winner_tg_val, winner_name)} "
-        f"elected to <b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n"
-        f"🏟️ {match_obj.stadium} • {pitch_type} pitch • {fmt_label}\n\n"
-        f"The match begins below — play {unit_flow}!",
-        parse_mode="HTML")
-    # The toss-result message (this one) is kept; every other setup message is
-    # swept away when the match starts.
-    if getattr(q, "message", None) is not None:
-        draft["toss_result_msg_id"] = q.message.message_id
+    # The toss-result edit is cosmetic. If Telegram rejects it (the message was
+    # deleted, a network blip, an "unmodified" reply) the match must still start
+    # — an unguarded edit here used to abort the launch AFTER the Match row had
+    # committed, which is exactly how a match ended up "already started" with no
+    # board anywhere.
+    try:
+        await q.edit_message_text(
+            f"✅ {_mention(winner_tg_val, winner_name)} "
+            f"elected to <b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n"
+            f"🏟️ {match_obj.stadium} • {pitch_type} pitch • {fmt_label}\n\n"
+            f"The match begins below — play {unit_flow}!",
+            parse_mode="HTML")
+        # The toss-result message (this one) is kept; every other setup message is
+        # swept away when the match starts.
+        if getattr(q, "message", None) is not None:
+            draft["toss_result_msg_id"] = q.message.message_id
+    except Exception:
+        logger.warning("/cipl toss result edit failed for match %s — "
+                       "starting the match anyway", match_obj.id, exc_info=True)
 
-    await begin_cipl_match(context, draft["chat_id"], match_obj, bat_info, bowl_info,
-                           bat_xi, bowl_xi, bat_team_name, bowl_team_name,
-                           pitch_type,
-                           bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
-                           bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
-                           draft=draft, ball_format=ball_format)
+    try:
+        await begin_cipl_match(context, draft["chat_id"], match_obj, bat_info, bowl_info,
+                               bat_xi, bowl_xi, bat_team_name, bowl_team_name,
+                               pitch_type,
+                               bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
+                               bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
+                               draft=draft, ball_format=ball_format)
+    except Exception:
+        logger.exception("/cipl match hand-off failed for match %s", match_obj.id)
+        await _recover_failed_handoff(context, draft, draft_id,
+                                      winner_side, winner_tg_val, winner_name)
+
+
+async def _recover_failed_handoff(context, draft, draft_id, winner_side,
+                                  winner_tg, winner_name):
+    """Rescue a launch whose Match row committed but whose board never appeared.
+
+    Two outcomes, in order of preference:
+
+    1. The state write survived (``begin_cipl_match`` saves before it prompts),
+       so the match is playable and only the prompt is missing — ``cipl_resume``
+       re-sends it and the match carries on from over 1.
+    2. Nothing usable was written. Roll the launch back completely and put the
+       Bat/Bowl buttons back so the winner can simply tap again, instead of
+       being told "Match already started" about a match that never was.
+    """
+    mid = draft.get("match_id")
+    chat_id = draft.get("chat_id")
+    if mid and await _live_cipl_state(context, draft) is not None:
+        if await cipl_resume(context, mid):
+            logger.info("/cipl recovered stalled launch for match %s", mid)
+            return
+
+    await _abandon_failed_launch(context, draft)
+    if chat_id is None:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id,
+            f"⚠️ The match didn't start — nothing was lost.\n"
+            f"{_mention(winner_tg, winner_name)}, choose again:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏏 Bat First",
+                                     callback_data=f"cipl_toss_bat_{draft_id}_{winner_side}"),
+                InlineKeyboardButton("🎳 Bowl First",
+                                     callback_data=f"cipl_toss_bowl_{draft_id}_{winner_side}"),
+            ]]))
+    except Exception:
+        logger.exception("/cipl toss re-prompt after failed launch failed "
+                         "for draft %s", draft_id)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1252,6 +1423,19 @@ def _match_start_announcement(state):
                         f" • <i>unranked</i>\n")
         except Exception:
             logger.exception("cipl: bot persona line failed")
+    # Both sides' Team Chemistry, in full (colour + x/100), at the one moment
+    # both XIs are locked and nothing has happened yet — the board carries the
+    # compact version from over 1 onward.
+    chem_line = ""
+    try:
+        from services import chemistry
+        bat_chem = chemistry.live_badge(state.get("bat_xi") or [])
+        bowl_chem = chemistry.live_badge(state.get("bowl_xi") or [])
+        if bat_chem and bowl_chem:
+            chem_line = (f"🧪 <b>Chemistry:</b> {bat} {bat_chem}  •  "
+                         f"{bowl} {bowl_chem}\n")
+    except Exception:
+        logger.exception("cipl: chemistry announcement line failed")
     return (
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
         f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
@@ -1259,6 +1443,7 @@ def _match_start_announcement(state):
         f"🏟️ {stadium} • {overs_label}\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"{cond_line}"
+        f"{chem_line}"
         f"{bot_line}"
         f"🏏 {bat} batting first\n"
         f"{rule}\n"
@@ -2034,9 +2219,44 @@ def _approach_card(state):
         if bws:
             lines += [rule,
                       f"{html.escape(str(bowler['name']))} - {_compact_bowler_figs(bws)}"]
+    chem = _chem_line(state)
+    if chem:
+        lines += [rule, chem]
     card = "\n".join(lines)
     card += _commentary_block(state)
     return card
+
+
+def _chem_line(state):
+    """``🧪 CHEM  MI 🟩 88  ·  CSK 🟨 74`` for the board, or '' if unscorable.
+
+    Traits announce themselves over by over; Team Chemistry — the other thing
+    the player builds their XI around — was only ever visible before the toss.
+    This puts both sides' numbers on the same board, on the same 30-100 scale
+    /cmuchem and /pxi use, so a squad decision and its match are finally
+    readable together.
+
+    Renders nothing rather than a wrong number when a side can't be scored: the
+    bot's synthetic XI carries no card data, and a fabricated 30/100 next to a
+    real one would read as a bug.
+    """
+    try:
+        from services import chemistry
+        bat = chemistry.live_badge(state.get("bat_xi") or [])
+        bowl = chemistry.live_badge(state.get("bowl_xi") or [])
+    except Exception:
+        logger.exception("cipl chemistry line failed")
+        return ""
+    if not bat or not bowl:
+        return ""
+    bat_code = html.escape(str(state.get("bat_team_code")
+                               or state.get("bat_team_name") or "Bat"))
+    bowl_code = html.escape(str(state.get("bowl_team_code")
+                                or state.get("bowl_team_name") or "Bowl"))
+    # Only the colour + number: the board is already dense, and the /100 is
+    # implied by the scale players know from /cmuchem.
+    return (f"🧪 CHEM  {bat_code} {bat.split('/')[0]}  ·  "
+            f"{bowl_code} {bowl.split('/')[0]}")
 
 
 async def _innings_break(context, mid, state):
