@@ -418,7 +418,40 @@ four countries, the two-man block sized up to three by an Icon, carrying one
 card of each of the five special types.** The Icon rule from §3.3 is what makes
 the perfect card possible at all.
 
-### 7.2 Known skew: collecting outweighs squad-building
+### 7.2 On the /pxi lineup card
+
+`/pxi` carries a compact form of the same score — `chemistry.xi_summary()` —
+so squad-building and its feedback live on one screen:
+
+```
+👑 Himanshu's PLAYING XI
+⭐ AVG: 89.2   🧪 CHEM: 63/100
+...
+⑥ ʙᴇɴ sᴛᴏᴋᴇs  🇬🇧  𝟖𝟖 | 𝟖𝟐 | 𝟖𝟎 ⚠️
+...
+▫️⚡ 𝐓𝐎𝐓𝐀𝐋 𝐎𝐕𝐑: 𝟗𝟖𝟏 ▫️
+🧪 CHEMISTRY: 63/100  •  shape 6-3-1-1
+```
+
+Three additions, nothing removed and no layout moved — `/pxi` is read
+constantly, so chemistry sits in its margins rather than restructuring it.
+
+- **Header stat**, beside AVG because it answers the same kind of question:
+  AVG says how good the cards are, CHEM says how well they fit.
+- **A ⚠️ per player** whose country block is under `ROLE_CONNECTION_TARGET`.
+  This is the part that makes the score actionable: a total says chemistry is
+  poor, the marker says *who* to swap. Both singletons (0) and pairs (8) are
+  flagged, since both leave their role short of a full country component — a
+  lone Icon is flagged too, because sizing its block to two halves the problem
+  without removing it.
+- **Footer** naming the shape, so the §3.2 combination table means something.
+
+The threshold is deliberately the one the `/cmuchem` role lines use, so a
+player is never warned about on one screen and counted as fine on the other.
+A part-built side shows none of this rather than a number that moves for
+reasons the player cannot yet see.
+
+### 7.3 Known skew: collecting outweighs squad-building
 
 Special cards are counted three times on this card — once inside every role
 line, again as Card Variety, and again as the Playing XI Bonus. The result:

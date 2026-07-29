@@ -439,6 +439,62 @@ class MessageRenderTests(unittest.TestCase):
         self.assertIn("/4 special types", text)
 
 
+class XiSummaryTests(unittest.TestCase):
+    """The compact summary /pxi puts in its header and footer."""
+
+    def _full_xi(self):
+        return ([_rc("India", "Batsman") for _ in range(6)]
+                + [_rc("Australia", "Bowler") for _ in range(3)]
+                + [_rc("England", "All-rounder"),
+                   _rc("Afghanistan", "Wicket Keeper")])
+
+    def test_part_built_side_shows_nothing(self):
+        self.assertIsNone(chemistry.xi_summary(self._full_xi()[:7]))
+        self.assertIsNone(chemistry.xi_summary([]))
+
+    def test_full_xi_reports_total_and_shape(self):
+        total, shape, _weak = chemistry.xi_summary(self._full_xi())
+        self.assertEqual(shape, "6-3-1-1")
+        self.assertTrue(0 <= total <= chemistry.CMUCHEM_TOTAL_MAX)
+
+    def test_lone_countrymen_are_flagged(self):
+        _total, _shape, weak = chemistry.xi_summary(self._full_xi())
+        self.assertEqual(weak, {"England", "Afghanistan"})
+
+    def test_connected_blocks_are_not_flagged(self):
+        squad = ([_rc("India", "Batsman") for _ in range(4)]
+                 + [_rc("Australia", "Bowler") for _ in range(4)]
+                 + [_rc("England", "All-rounder") for _ in range(3)])
+        _total, shape, weak = chemistry.xi_summary(squad)
+        self.assertEqual(shape, "4-4-3")
+        self.assertEqual(weak, set())
+
+    def test_a_pair_is_still_flagged(self):
+        # Two countrymen score 8, well under the 18 a role needs to connect.
+        squad = ([_rc("India", "Batsman") for _ in range(5)]
+                 + [_rc("Australia", "Bowler") for _ in range(4)]
+                 + [_rc("England", "All-rounder") for _ in range(2)])
+        _total, _shape, weak = chemistry.xi_summary(squad)
+        self.assertEqual(weak, {"England"})
+
+    def test_flag_threshold_matches_the_cmuchem_role_lines(self):
+        # The consistency guarantee: anything flagged on /pxi is also scoring
+        # below a full country component on /cmuchem, and vice versa.
+        squad = self._full_xi()
+        _total, _shape, weak = chemistry.xi_summary(squad)
+        for line in chemistry.role_chemistry(squad):
+            members = [p for p in squad if chemistry.role_of(p) == line["role"]]
+            if members and all(chemistry.country_of(p) in weak for p in members):
+                self.assertLess(line["country_component"],
+                                chemistry.ROLE_COMPONENT_MAX, line["role"])
+
+    def test_summary_total_agrees_with_the_full_card(self):
+        squad = self._full_xi()
+        total, _shape, _weak = chemistry.xi_summary(squad)
+        self.assertEqual(total,
+                         chemistry.calculate_role_report(squad)["total"])
+
+
 class MatchEffectTests(unittest.TestCase):
 
     def test_bonus_band_endpoints(self):
