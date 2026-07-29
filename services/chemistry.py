@@ -513,6 +513,29 @@ def calculate_role_report(players):
     }
 
 
+def xi_summary(players):
+    """Compact chemistry summary for the /pxi lineup card.
+
+    Returns ``(total, shape, unconnected_countries)``, or ``None`` when the
+    side isn't a full XI yet — a part-built squad shows nothing rather than a
+    number that moves for reasons the player can't yet see.
+
+    ``unconnected_countries`` uses the same threshold as the /cmuchem role
+    lines, so a player is never flagged on one screen and counted as fine on
+    the other.
+    """
+    players = list(players)
+    if len(players) < XI_SIZE:
+        return None
+    total = calculate_role_report(players)["total"]
+    _country_total, blocks = country_chemistry(players)
+    shape = "-".join(str(b["count"]) for b in
+                     sorted(blocks, key=lambda b: -b["count"]))
+    unconnected = {b["country"] for b in blocks
+                   if b["value"] < ROLE_CONNECTION_TARGET}
+    return total, shape, unconnected
+
+
 def render_chemistry_card(players):
     """The /cmuchem card as Telegram HTML.
 

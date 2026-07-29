@@ -18,6 +18,7 @@ from services import xi_rules
 from services.bowling_service import is_spinner as _is_spin, get_bowler_profile_key
 from services.fancy_text import small_caps, bold_digits, bold_serif, circled
 from services.miniapp_buttons import miniapp_deep_link
+from services import chemistry
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +73,23 @@ def _build_display_order(roster_list):
     return batsmen + keepers + allrounders + pacers + spinners + bench
 
 
-def _xi_player_line(serial, entry, player, captain_rid):
-    """One stylised XI line: ① ɴᴀᴍᴇ  🇮🇳  𝟗𝟗 | 𝟗𝟗 | 𝟐𝟑."""
+def _xi_player_line(serial, entry, player, captain_rid, unconnected=False):
+    """One stylised XI line: ① ɴᴀᴍᴇ  🇮🇳  𝟗𝟗 | 𝟗𝟗 | 𝟐𝟑.
+
+    ``unconnected`` appends a ⚠️ when this player's country block is too small
+    to carry chemistry — the total tells you chemistry is poor, this tells you
+    which player to swap.
+    """
     flag = get_flag(player.country)
     cap = " 👑" if captain_rid is not None and entry.id == captain_rid else ""
+    warn = " ⚠️" if unconnected else ""
     stats = f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)} | {bold_digits(player.bowl_rating)}"
-    return f"{circled(serial)} {small_caps(player.name)}  {flag}  {stats}{cap}"
+    return f"{circled(serial)} {small_caps(player.name)}  {flag}  {stats}{cap}{warn}"
+
+
+def _xi_chemistry(top_11):
+    """``chemistry.xi_summary`` for a list of ``(UserRoster, Player)`` pairs."""
+    return chemistry.xi_summary([player for _entry, player in top_11])
 
 
 def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
@@ -117,9 +129,14 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
     bowlers_raw = pacers_raw + spinners_raw
     avg_ovr = round(total_ovr / count, 1) if count else 0
 
+    chem = _xi_chemistry(top_11)
+    header = f"⭐ AVG: {avg_ovr}"
+    if chem:
+        header += f"   🧪 CHEM: <b>{chem[0]}/{chemistry.CMUCHEM_TOTAL_MAX}</b>"
+
     lines = [
         f"👑 {team_name}'s <b>PLAYING XI</b>",
-        f"⭐ AVG: {avg_ovr}\n",
+        f"{header}\n",
     ]
 
     # Continuous serial across all sections (1..11)
@@ -132,7 +149,9 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
         body = []
         for entry, player in pairs:
             serial += 1
-            body.append(_xi_player_line(serial, entry, player, captain_rid))
+            weak = bool(chem) and chemistry.country_of(player) in chem[2]
+            body.append(_xi_player_line(serial, entry, player, captain_rid,
+                                        unconnected=weak))
         lines.append(f"{emoji} <b>{bold_serif(title)}</b>")
         lines.append("<blockquote>" + "\n".join(body) + "</blockquote>")
 
@@ -142,6 +161,10 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
     _section("🎯", "BOWLERS", bowlers_raw)
 
     lines.append(f"\n▫️⚡ <b>{bold_serif('TOTAL OVR')}: {bold_digits(total_ovr)}</b> ▫️")
+
+    if chem:
+        lines.append(f"🧪 <b>CHEMISTRY</b>: {chem[0]}/{chemistry.CMUCHEM_TOTAL_MAX}"
+                     f"  •  shape {chem[1]}")
 
     link = miniapp_deep_link("xi", origin_chat_id=origin_chat_id)
     if link:
