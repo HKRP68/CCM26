@@ -76,5 +76,34 @@ class ChemistryScopeTests(unittest.TestCase):
         self.assertNotIn("🧪", card)
 
 
+class ChemistryBlockTests(unittest.TestCase):
+    """services.match_engine.build_chemistry_line — the /pm live scorecard."""
+
+    def _block(self, bowl_xi):
+        from services import match_engine
+        return match_engine.build_chemistry_line(
+            {"bat_xi": _roster_xi(), "bowl_xi": bowl_xi,
+             "bat_team_name": "Team A", "bowl_team_name": "Team B"})
+
+    def test_both_sides_or_nothing(self):
+        # A half-rendered block invites a comparison that can't be made — and
+        # the side that goes missing is exactly the unscorable synthetic one
+        # (/vsbot builds its XI with no country data).
+        synthetic = [{"category": c, "name": "bot"}
+                     for c in (["Batsman"] * 5 + ["Bowler"] * 3
+                               + ["All-rounder"] * 2 + ["Wicket Keeper"])]
+        self.assertEqual(self._block(synthetic), "")
+        self.assertEqual(self._block([]), "")
+        self.assertIn("Team B", self._block(_roster_xi()))
+
+    def test_team_names_are_escaped(self):
+        from services import match_engine
+        block = match_engine.build_chemistry_line(
+            {"bat_xi": _roster_xi(), "bowl_xi": _roster_xi(),
+             "bat_team_name": "A & B", "bowl_team_name": "<b>X</b>"})
+        self.assertIn("A &amp; B", block)
+        self.assertIn("&lt;b&gt;X&lt;/b&gt;", block)
+
+
 if __name__ == "__main__":
     unittest.main()

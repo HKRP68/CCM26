@@ -1,5 +1,6 @@
 """Match engine — state management for ball-by-ball play."""
 
+import html
 import random
 
 
@@ -199,14 +200,15 @@ def build_chemistry_line(s):
         bowl = chemistry.live_badge(s.get("bowl_xi") or [])
     except Exception:
         return ""
-    if not bat and not bowl:
+    # All or nothing. One side's number alone invites a comparison that can't be
+    # made — and the side that renders nothing is precisely the synthetic one.
+    if not bat or not bowl:
         return ""
-    rows = []
-    if bat:
-        rows.append(f"🏏 {s.get('bat_team_name', 'Batting')}: {bat}")
-    if bowl:
-        rows.append(f"🎯 {s.get('bowl_team_name', 'Bowling')}: {bowl}")
-    return "🧪 <b>TEAM CHEMISTRY</b>\n" + "\n".join(rows) + "\n\n"
+    bat_name = html.escape(str(s.get("bat_team_name") or "Batting"))
+    bowl_name = html.escape(str(s.get("bowl_team_name") or "Bowling"))
+    return ("🧪 <b>TEAM CHEMISTRY</b>\n"
+            f"🏏 {bat_name}: {bat}\n"
+            f"🎯 {bowl_name}: {bowl}\n\n")
 
 
 def build_bond_line(s, striker, non_striker):

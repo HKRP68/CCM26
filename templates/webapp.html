@@ -4434,16 +4434,28 @@ let _adsRetryLoad = null;
 
 function _reloadAdsgramSdk() {
   if (window.Adsgram?.init) return Promise.resolve(true);
-  if (_adsRetryLoad) return _adsRetryLoad;
+  if (_adsRetryLoad) return _adsRetryLoad;   // a load is already in flight
   _adsRetryLoad = new Promise((resolve) => {
+    // Memoizing a FAILED load would rebuild the whole-session dead end this
+    // function exists to fix — every later tap would get the cached false and
+    // never re-attempt. Only a load still in flight (or one that succeeded, via
+    // the window.Adsgram check above) is worth reusing.
+    const done = (ok) => {
+      if (!ok) _adsRetryLoad = null;
+      resolve(ok);
+    };
     const el = document.createElement('script');
     el.src = 'https://sad.adsgram.ai/js/sad.min.js';
     el.async = true;
-    el.onload = () => { window.__adsgramFailed = false; resolve(true); };
-    el.onerror = () => resolve(false);
+    el.onload = () => {
+      window.__adsgramFailed = false;
+      done(!!window.Adsgram?.init);
+    };
+    // Drop the dead tag so retries don't stack duplicates in <head>.
+    el.onerror = () => { el.remove(); done(false); };
     document.head.appendChild(el);
     // Don't let a hanging request block the tap forever.
-    setTimeout(() => resolve(!!window.Adsgram?.init), 6000);
+    setTimeout(() => done(!!window.Adsgram?.init), 6000);
   });
   return _adsRetryLoad;
 }
@@ -4475,6 +4487,11 @@ async function showAd() {
           toast('Ad watched but the reward didn\'t register — try again', 'error');
           return null;
         }
+        // Resolved without `done` — the SDK's "closed early" path on the
+        // versions that resolve rather than reject. Say so: returning silently
+        // left the user staring at a "Loading ad…" toast that never resolved
+        // into anything.
+        toast('Ad skipped — watch it fully to claim the reward', 'info');
         return null;
       } catch (err) {
         lastErr = err;

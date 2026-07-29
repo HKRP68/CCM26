@@ -22,6 +22,7 @@ Flow:
     → over-by-over match in the chat (shared with /cipl), traits active.
 """
 
+import asyncio
 import html
 import logging
 from datetime import datetime, timedelta
@@ -1283,12 +1284,19 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
         # match away.
         mid = draft.get("match_id")
         if mid:
-            from handlers.cipl_play import cipl_resume
+            from handlers.cipl_play import cipl_resume, _cancel_orphan_match_row
             if await cipl_resume(context, mid):
                 return
+            # cipl_resume returns False exactly when no state was saved — there
+            # is nothing for /rcl to resume, and the committed row would hold the
+            # per-chat and per-player active-match gates shut against every
+            # future /letsplay in this chat. Cancel it (the /cipl path does the
+            # same) so the players can simply start again.
+            await asyncio.to_thread(_cancel_orphan_match_row, mid)
             await context.bot.send_message(
                 draft["chat_id"],
-                "⚠️ The match stalled while starting. Run /rcl to resume it.")
+                "⚠️ The match didn't start — nothing was lost. "
+                "Run /letsplay again.")
             return
         # Nothing playable came out of this, so put the toss back in the
         # winner's hands rather than leaving a draft that answers "already

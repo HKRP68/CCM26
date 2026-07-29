@@ -779,12 +779,26 @@ def live_badge(players):
     """In-match chemistry badge for an XI — ``'🟩 88/100'`` — or ``None``.
 
     Uses the same 30-100 number as /cmuchem and /pxi rather than inventing a
-    third scale, and returns None for anything short of a full XI (the bot's
-    synthetic sides and part-built squads) so the board shows nothing instead of
-    a number that moves for reasons the player can't see.
+    third scale, and returns None for anything that can't honestly be scored, so
+    the board shows nothing instead of a number that moves for reasons the
+    player can't see:
+
+      • a part-built squad, exactly like ``xi_summary``;
+      • an XI whose cards carry no country. Scoring is built on country blocks,
+        and ``country_of`` deliberately folds missing data into a single
+        ``Unknown`` country — which is right for an admin breakdown (it makes a
+        bad row visible) but badly wrong here, because a synthetic XI with no
+        country data at all would read as one perfect 11-man national block and
+        out-score every real squad. ``Player.country`` is non-nullable, so any
+        side failing this test is synthetic by construction.
+
+    Card version is deliberately NOT required: an XI of ordinary base cards is
+    perfectly scorable, and ``Player.version`` is NULL on older rows.
     """
     players = list(players)
     if len(players) < XI_SIZE:
+        return None
+    if any(not str(_field(player, "country") or "").strip() for player in players):
         return None
     total = calculate_role_report(players)["total"]
     return f"{live_colour(total)} {total}/{CMUCHEM_TOTAL_MAX}"

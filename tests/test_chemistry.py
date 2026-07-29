@@ -857,6 +857,27 @@ class LiveDisplayTests(unittest.TestCase):
         colours = {chemistry.live_colour(total) for total in range(30, 101)}
         self.assertEqual(len(colours), len(chemistry.LIVE_CHEM_BANDS))
 
+    def test_a_synthetic_xi_without_country_data_is_never_scored(self):
+        # handlers/vsbot.py builds its bot XI without country/version. country_of
+        # folds missing data into a single "Unknown" country, so scoring one
+        # would read as a perfect 11-man national block and beat every real
+        # squad on the board. It must render nothing instead.
+        synthetic = [SimpleNamespace(category=c)
+                     for c in (["Batsman"] * 5 + ["Bowler"] * 3
+                               + ["All-rounder"] * 2 + ["Wicket Keeper"])]
+        self.assertIsNone(chemistry.live_badge(synthetic))
+        self.assertIsNone(chemistry.live_badge(
+            [_rc("", "Batsman")] + self._xi()[1:]))
+
+    def test_a_base_card_xi_is_still_scored(self):
+        # Only country gates the badge. Card version does not: an XI of ordinary
+        # base cards is perfectly scorable, and Player.version is NULL on older
+        # rows — requiring it would blank the badge for most real squads.
+        base = [_rc("India", c, version=None)
+                for c in (["Batsman"] * 5 + ["Bowler"] * 3
+                          + ["All-rounder"] * 2 + ["Wicket Keeper"])]
+        self.assertIsNotNone(chemistry.live_badge(base))
+
     def test_bond_label_tracks_the_partnership_bond(self):
         india = _rc("India", "Batsman")
         other = _rc("Australia", "Batsman")
