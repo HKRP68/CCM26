@@ -1423,19 +1423,10 @@ def _match_start_announcement(state):
                         f" • <i>unranked</i>\n")
         except Exception:
             logger.exception("cipl: bot persona line failed")
-    # Both sides' Team Chemistry, in full (colour + x/100), at the one moment
-    # both XIs are locked and nothing has happened yet — the board carries the
-    # compact version from over 1 onward.
-    chem_line = ""
-    try:
-        from services import chemistry
-        bat_chem = chemistry.live_badge(state.get("bat_xi") or [])
-        bowl_chem = chemistry.live_badge(state.get("bowl_xi") or [])
-        if bat_chem and bowl_chem:
-            chem_line = (f"🧪 <b>Chemistry:</b> {bat} {bat_chem}  •  "
-                         f"{bowl} {bowl_chem}\n")
-    except Exception:
-        logger.exception("cipl: chemistry announcement line failed")
+    # No Team Chemistry line here: this card is Challenge League's, and a league
+    # squad handed to both captains isn't a team anyone assembled. Same rule as
+    # traits — see _chem_line. /letsplay's own card (letsplay._announce) does
+    # carry it.
     return (
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
         f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
@@ -1443,7 +1434,6 @@ def _match_start_announcement(state):
         f"🏟️ {stadium} • {overs_label}\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"{cond_line}"
-        f"{chem_line}"
         f"{bot_line}"
         f"🏏 {bat} batting first\n"
         f"{rule}\n"
@@ -2228,7 +2218,7 @@ def _approach_card(state):
 
 
 def _chem_line(state):
-    """``🧪 CHEM  MI 🟩 88  ·  CSK 🟨 74`` for the board, or '' if unscorable.
+    """``🧪 CHEM  MI 🟩 88  ·  CSK 🟨 74`` for the board, or '' if it doesn't apply.
 
     Traits announce themselves over by over; Team Chemistry — the other thing
     the player builds their XI around — was only ever visible before the toss.
@@ -2236,16 +2226,21 @@ def _chem_line(state):
     /cmuchem and /pxi use, so a squad decision and its match are finally
     readable together.
 
-    Renders nothing rather than a wrong number when a side can't be scored: the
-    bot's synthetic XI carries no card data, and a fabricated 30/100 next to a
-    real one would read as a bug.
+    Scoped exactly like traits: **only sides playing their own roster XI**. This
+    board is shared with Challenge League, whose squads are league rosters
+    handed to both captains rather than cards anyone collected — chemistry is a
+    property of the team you assembled, so scoring a squad you were dealt would
+    be meaningless. Renders nothing, rather than a wrong number, whenever a side
+    can't be scored.
     """
+    if not state.get("is_letsplay"):
+        return ""
     try:
         from services import chemistry
         bat = chemistry.live_badge(state.get("bat_xi") or [])
         bowl = chemistry.live_badge(state.get("bowl_xi") or [])
     except Exception:
-        logger.exception("cipl chemistry line failed")
+        logger.exception("letsplay chemistry line failed")
         return ""
     if not bat or not bowl:
         return ""

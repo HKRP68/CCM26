@@ -1475,6 +1475,21 @@ async def _announce(context, state, pitch_type):
                         f" • {html.escape(difficulty_label(state))}\n")
         except Exception:
             logger.exception("letsplay: bot persona line failed")
+    # Both sides' Team Chemistry in full (colour + x/100), at the one moment
+    # both XIs are locked and nothing has happened yet — the over-by-over board
+    # carries the compact version from over 1 onward. /letsplay is a personal
+    # roster mode, so the number describes a team the player actually built;
+    # Challenge League's card deliberately carries no such line.
+    chem_line = ""
+    try:
+        from services import chemistry
+        bat_chem = chemistry.live_badge(state.get("bat_xi") or [])
+        bowl_chem = chemistry.live_badge(state.get("bowl_xi") or [])
+        if bat_chem and bowl_chem:
+            chem_line = (f"🧪 <b>Chemistry:</b> {bat} {bat_chem}  •  "
+                         f"{bowl} {bowl_chem}\n")
+    except Exception:
+        logger.exception("letsplay: chemistry announcement line failed")
     text = (
         f"{title}\n"
         f"{rule}\n"
@@ -1482,6 +1497,7 @@ async def _announce(context, state, pitch_type):
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
+        + chem_line
         + bot_line
         + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"
            if state.get("is_bot_match") else "")
