@@ -603,3 +603,133 @@ class MatchBoostTests(unittest.TestCase):
                       [_rc(None, None, None)]):
             boosts = chemistry.match_boosts(squad)
             self.assertEqual(set(boosts), set(chemistry.ROLE_ORDER))
+
+
+class PartnershipBondTests(unittest.TestCase):
+    """The live layer: the crease pair's own chemistry."""
+
+    def test_countrymen_bond_fully(self):
+        self.assertEqual(
+            chemistry.partnership_bond(_rc("India", "Batsman"),
+                                       _rc("India", "Batsman")), 1.0)
+
+    def test_strangers_do_not_bond(self):
+        self.assertEqual(
+            chemistry.partnership_bond(_rc("India", "Batsman"),
+                                       _rc("Australia", "Batsman")), 0.0)
+
+    def test_an_icon_part_bonds_with_anyone(self):
+        # This is where the Icon rule earns its place back: a legend has
+        # partnered with everyone, so Lara is never dead weight at the crease.
+        bond = chemistry.partnership_bond(
+            _rc("West Indies", "Batsman", "Icon"),
+            _rc("Australia", "Batsman"))
+        self.assertEqual(bond, chemistry.PARTNERSHIP_WITH_ICON)
+        self.assertGreater(bond, 0.0)
+        self.assertLess(bond, 1.0)
+
+    def test_icon_at_either_end_counts(self):
+        icon = _rc("West Indies", "Batsman", "Icon")
+        plain = _rc("Australia", "Batsman")
+        self.assertEqual(chemistry.partnership_bond(icon, plain),
+                         chemistry.partnership_bond(plain, icon))
+
+    def test_missing_partner_is_safe(self):
+        self.assertEqual(
+            chemistry.partnership_bond(_rc("India", "Batsman"), None), 0.0)
+        self.assertEqual(chemistry.partnership_bond(None, None), 0.0)
+
+    def test_bond_accepts_engine_dicts(self):
+        pair = {"country": "India", "category": "Batsman", "version": "Base"}
+        self.assertEqual(chemistry.partnership_bond(pair, dict(pair)), 1.0)
+
+
+class ClutchTests(unittest.TestCase):
+    """Chemistry counts double when the game is decided."""
+
+    def test_normal_overs_are_unmultiplied(self):
+        self.assertEqual(chemistry.clutch_multiplier(5, 20), 1.0)
+        self.assertEqual(chemistry.clutch_multiplier(14, 20), 1.0)
+
+    def test_death_overs_multiply(self):
+        self.assertEqual(chemistry.clutch_multiplier(16, 20),
+                         chemistry.CLUTCH_MULTIPLIER)
+        self.assertEqual(chemistry.clutch_multiplier(20, 20),
+                         chemistry.CLUTCH_MULTIPLIER)
+
+    def test_chase_pressure_multiplies_at_any_stage(self):
+        self.assertEqual(chemistry.clutch_multiplier(3, 20, pressure=0.9),
+                         chemistry.CLUTCH_MULTIPLIER)
+        self.assertEqual(chemistry.clutch_multiplier(3, 20, pressure=0.1), 1.0)
+
+    def test_clutch_scales_with_the_innings_length(self):
+        # A 5-over dash should go clutch earlier in absolute overs than a 20.
+        self.assertEqual(chemistry.clutch_multiplier(5, 5),
+                         chemistry.CLUTCH_MULTIPLIER)
+        self.assertEqual(chemistry.clutch_multiplier(5, 20), 1.0)
+
+    def test_garbage_input_is_safe(self):
+        self.assertEqual(chemistry.clutch_multiplier(None, None), 1.0)
+        self.assertEqual(chemistry.clutch_multiplier("x", "y"), 1.0)
+        self.assertEqual(chemistry.clutch_multiplier(1, 0), 1.0)
+
+
+class FieldingCohesionTests(unittest.TestCase):
+
+    def _unified(self):
+        squad = ([_rc("India", "Batsman") for _ in range(4)]
+                 + [_rc("Australia", "Bowler") for _ in range(4)]
+                 + [_rc("England", "All-rounder") for _ in range(2)]
+                 + [_rc("South Africa", "Wicket Keeper")])
+        for card, version in zip(squad, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        return squad
+
+    def test_perfect_chemistry_earns_the_full_bonus(self):
+        self.assertEqual(chemistry.fielding_bonus(self._unified()),
+                         chemistry.FIELDING_MAX_BONUS)
+
+    def test_scattered_side_earns_far_less(self):
+        roles = ["Batsman", "Bowler", "Wicket Keeper", "All-rounder"]
+        scattered = [_rc(f"C{i}", roles[i % 4]) for i in range(11)]
+        self.assertLess(chemistry.fielding_bonus(scattered),
+                        chemistry.fielding_bonus(self._unified()))
+
+    def test_bonus_is_never_negative(self):
+        self.assertGreaterEqual(chemistry.fielding_bonus([]), 0.0)
+
+
+class BondEngineTests(unittest.TestCase):
+    """The bond as the ball engine actually applies it."""
+
+    def _mods(self, bond):
+        from services.probability_engine import _apply_dynamic_mods, BASE
+        probs = dict(BASE)
+        _apply_dynamic_mods(probs, chem_bond=bond)
+        return probs
+
+    def test_bond_improves_running_only(self):
+        base, bonded = self._mods(0.0), self._mods(1.0)
+        self.assertGreater(bonded["2"], base["2"])
+        self.assertGreater(bonded["1"], base["1"])
+        self.assertLess(bonded["dot"], base["dot"])
+        # A bond is about running, not ball-striking or survival.
+        for key in ("4", "6", "W"):
+            self.assertEqual(bonded[key], base[key], key)
+
+    def test_no_bond_is_a_no_op(self):
+        from services.probability_engine import BASE
+        self.assertEqual(self._mods(0.0), dict(BASE))
+
+    def test_partial_bond_is_partial(self):
+        half, full = self._mods(0.5), self._mods(1.0)
+        base = self._mods(0.0)
+        self.assertGreater(half["2"], base["2"])
+        self.assertLess(half["2"], full["2"])
+
+    def test_bond_is_clamped(self):
+        self.assertEqual(self._mods(5.0), self._mods(1.0))
+        self.assertEqual(self._mods(-3.0), self._mods(0.0))
+
+    def test_dot_never_goes_negative(self):
+        self.assertGreater(self._mods(1.0)["dot"], 0)

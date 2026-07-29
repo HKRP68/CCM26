@@ -500,6 +500,59 @@ Two sides with identical cards therefore play differently:
 `services.chemistry.match_boosts(xi)` returns `{role: boost}` and is the whole
 public surface — the engine never reimplements the scoring.
 
+That base boost is one of **four layers**, because a single flat number is
+invisible: it applies evenly to every ball of every match and so is never the
+thing a player notices winning them a game.
+
+| Layer | What it does | When |
+|---|---|---|
+| **1. Unit Boost** | role boost → effective rating | every ball |
+| **2. Partnership Bond** | countrymen at the crease run better — more 2s and 1s, fewer dots | while that pair bats |
+| **3. Clutch** | ×2 on the unit boost | last quarter of the innings, or a tight chase |
+| **4. Fielding Cohesion** | up to +10 fielding quality → fewer dropped catches | every ball |
+
+**Layer 2 is the interesting one.** Cricket is a game of partnerships, and this
+is the only part of chemistry that *moves during an innings* — it changes every
+time a wicket falls, so the player watches it swing rather than reading a fixed
+number at selection. It is also where the Icon rule earns its place back: an
+Icon part-bonds with **anyone**, because a legend has partnered with everybody.
+That restores the "Lara is never dead weight" property §3.3 was written for and
+§7.7 recorded as lost, in a livelier form than the block curve gave it.
+
+The bond touches running only — `2`, `1` and `dot`. A pair that has batted
+together is harder to tie down; it does not make them better strikers of the
+ball, so `4`, `6` and `W` are untouched (pinned by test).
+
+**Layer 3** concentrates chemistry into the overs players remember instead of
+spreading a flat trickle across fifty balls nobody notices. It scales with the
+innings length, so a 5-over dash goes clutch at over 4 and a 20-over match at
+over 16.
+
+### 7.6.1 Measured impact
+
+Simulated over 250 innings per row, equal 80-rated sides on a flat pitch:
+
+| Squad | Avg score | Wickets |
+|---|---:|---:|
+| 0 chemistry | 217.3 | 6.4 |
+| 50 chemistry | 229.0 | 5.5 |
+| 100 chemistry | 239.9 | 4.9 |
+| **100 chemistry + full bond** | **244.6** | 4.9 |
+
+A **+27 run swing (+12.6%)** between the worst and best chemistry — decisive in
+a close chase, and visible to the player.
+
+It still cannot buy a match, which was the binding constraint:
+
+| | Avg score |
+|---|---:|
+| 72-rated batting, perfect chemistry | 202.1 |
+| 85-rated batting, zero chemistry | **244.0** |
+
+Card quality wins by 42 runs. Chemistry sharpens a squad; it does not replace
+one, so no player is ever forced to build for chemistry before fielding the
+cards they actually want.
+
 **Why it is deliberately small.** The ceiling is +4, against a form band of
 ±2.5 OVR. Chemistry decides close matches between comparable squads and cannot
 overturn a real rating gap. If it could, it would stop being an optimisation
