@@ -73,18 +73,12 @@ def _build_display_order(roster_list):
     return batsmen + keepers + allrounders + pacers + spinners + bench
 
 
-def _xi_player_line(serial, entry, player, captain_rid, unconnected=False):
-    """One stylised XI line: ① ɴᴀᴍᴇ  🇮🇳  𝟗𝟗 | 𝟗𝟗 | 𝟐𝟑.
-
-    ``unconnected`` appends a ⚠️ when this player's country block is too small
-    to carry chemistry — the total tells you chemistry is poor, this tells you
-    which player to swap.
-    """
+def _xi_player_line(serial, entry, player, captain_rid):
+    """One stylised XI line: ① ɴᴀᴍᴇ  🇮🇳  𝟗𝟗 | 𝟗𝟗 | 𝟐𝟑."""
     flag = get_flag(player.country)
     cap = " 👑" if captain_rid is not None and entry.id == captain_rid else ""
-    warn = " ⚠️" if unconnected else ""
     stats = f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)} | {bold_digits(player.bowl_rating)}"
-    return f"{circled(serial)} {small_caps(player.name)}  {flag}  {stats}{cap}{warn}"
+    return f"{circled(serial)} {small_caps(player.name)}  {flag}  {stats}{cap}"
 
 
 def _xi_chemistry(top_11):
@@ -149,9 +143,7 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
         body = []
         for entry, player in pairs:
             serial += 1
-            weak = bool(chem) and chemistry.country_of(player) in chem[2]
-            body.append(_xi_player_line(serial, entry, player, captain_rid,
-                                        unconnected=weak))
+            body.append(_xi_player_line(serial, entry, player, captain_rid))
         lines.append(f"{emoji} <b>{bold_serif(title)}</b>")
         lines.append("<blockquote>" + "\n".join(body) + "</blockquote>")
 
