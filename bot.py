@@ -56,6 +56,7 @@ from handlers.trade import (
 from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_handler, bench_callback, autobuild_handler
 from handlers.batting_order import setbo_handler
 from handlers.ximage import ximage_handler
+from handlers.cmuchem import cmuchem_handler
 from handlers.search import (
     searchpl_handler, searchovr_handler,
     searchpl_page_callback, searchovr_page_callback,
@@ -324,6 +325,7 @@ BOT_MENU_COMMANDS = (
     ("trade", "Trade players with another user"),
     ("playingxi", "View or manage your playing XI"),
     ("ximage", "View your Playing XI as an image"),
+    ("cmuchem", "Check your Playing XI's Team Chemistry 🧪"),
     ("autobuild", "Build your best available playing XI"),
     ("swapplayers", "Swap two players in your lineup"),
     ("setbo", "View or change your batting order (e.g. /sbo 2 11)"),
@@ -978,6 +980,7 @@ def main():
         app.add_handler(CommandHandler(["trade", "tr"], trade_handler))
         app.add_handler(CommandHandler(["playingxi", "pxi", "xi"], playingxi_handler))
         app.add_handler(CommandHandler(["ximage", "xiimg", "xipic"], ximage_handler))
+        app.add_handler(CommandHandler(["cmuchem", "chem", "chemistry"], cmuchem_handler))
         app.add_handler(CommandHandler(["autobuild", "ab", "best11"], autobuild_handler))
         app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
         # /setbo, /sbo — set your own batting order (roster slots 1-11). The
