@@ -125,6 +125,18 @@ _BASE_VERSIONS = ("", "base", "basic", "standard", "normal", "common", "none")
 _VERSION_NOISE = (" card", " cards", " edition", " version")
 
 
+def _field(player, name):
+    """Read ``name`` off a card, whether it's an ORM row or a plain dict.
+
+    The match engine carries its XI as dicts (``handlers.match._pd``), so the
+    scorer accepts both rather than forcing the engine to build shim objects on
+    a per-ball path.
+    """
+    if isinstance(player, dict):
+        return player.get(name)
+    return getattr(player, name, None)
+
+
 def special_type(version):
     """The canonical special type for a ``Player.version`` string, or ``None``.
 
@@ -145,7 +157,7 @@ def special_type(version):
 
 def is_icon(player):
     """True when the card is an Icon, which counts double in its block."""
-    return special_type(getattr(player, "version", None)) == "icon"
+    return special_type(_field(player, "version")) == "icon"
 
 
 # Spelling variants that must fold onto one nation, because a split block is
@@ -174,7 +186,7 @@ def country_of(player):
     missing country data forms one block rather than silently scoring zero.
     The caller surfaces it in the breakdown so an admin can spot bad rows.
     """
-    raw = " ".join(str(getattr(player, "country", "") or "").split())
+    raw = " ".join(str(_field(player, "country") or "").split())
     if not raw:
         return "Unknown"
     return COUNTRY_ALIASES.get(raw.lower(), raw)
@@ -232,7 +244,7 @@ def special_chemistry(players):
     present = []
     cards = 0
     for player in players:
-        kind = special_type(getattr(player, "version", None))
+        kind = special_type(_field(player, "version"))
         if kind is None:
             continue
         cards += 1
@@ -404,7 +416,7 @@ def role_of(player):
     Unrecognised roles fall back to Batsman, matching how
     ``services.xi_rules.validate_roster_xi`` buckets an unknown category.
     """
-    raw = str(getattr(player, "category", "") or "").strip()
+    raw = str(_field(player, "category") or "").strip()
     if raw in ROLE_MAX_BONUS:
         return raw
     return _CATEGORY_ALIASES.get(raw.lower().replace("-", " "), "Batsman")
@@ -441,7 +453,7 @@ def card_variety(players):
 
     4+ special types → 10, 3 → 7, 2 → 3, otherwise 0.
     """
-    types = {special_type(getattr(p, "version", None)) for p in players}
+    types = {special_type(_field(p, "version")) for p in players}
     types.discard(None)
     return _tier_score(len(types), VARIETY_TIERS), len(types)
 
@@ -559,6 +571,20 @@ def calculate_role_report(players):
     }
 
 
+def match_boosts(players):
+    """In-match stat boost per role for an XI: ``{role: boost}``.
+
+    This is what chemistry actually *does*. The match engine adds a player's
+    role boost to their effective rating, exactly as player form already does,
+    so a unified unit in a varied squad plays slightly above its card ratings.
+
+    Always ≥ 0: chemistry is a bonus band, never a penalty. A squad with no
+    chemistry plays at its raw ratings rather than below them, so a new player
+    fielding whatever they pulled is not taxed for it.
+    """
+    return {line["role"]: line["bonus"] for line in role_chemistry(players)}
+
+
 def improvement_tips(players, limit=3):
     """Concrete, ranked next steps for raising this XI's chemistry.
 
@@ -674,15 +700,8 @@ def render_chemistry_card(players):
 
 
 # ── Match effect ────────────────────────────────────────────────────
-# Chemistry is a tie-breaker, never a substitute for card quality. It maps to
-# a small bonus band only: a 100-chemistry XI plays ~3% above its raw ratings
-# and a 0-chemistry XI plays exactly at them. Nothing is ever *penalised*
-# below par, so a new player fielding whatever they pulled is not taxed for
-# it — they are simply not yet earning the bonus.
-CHEMISTRY_MAX_BONUS_PCT = 3.0
-
-
-def chemistry_bonus_pct(total):
-    """Performance bonus (0.0-3.0%) earned by a chemistry score of ``total``."""
-    clamped = max(0, min(int(total), TOTAL_CHEMISTRY_CAP))
-    return round(CHEMISTRY_MAX_BONUS_PCT * clamped / TOTAL_CHEMISTRY_CAP, 3)
+# See ``match_boosts`` above: chemistry lifts a player's effective rating by
+# their role's boost, which the match engine adds alongside player form. An
+# earlier flat "+3% for the whole side" band was replaced by that per-role
+# model — a single team-wide percentage could not express *which unit* the
+# chemistry belonged to, which is the whole point of the per-role card.

@@ -144,6 +144,10 @@ def _lpbot_player_dict(player, traits=None):
         "bowl_style": player.bowl_style or "",
         "bowl_hand": player.bowl_hand or "Right",
         "bat_hand": player.bat_hand or "Right",
+        # Carried so a bot XI is scored for Team Chemistry on its real
+        # countries and editions rather than on missing fields.
+        "country": getattr(player, "country", None),
+        "version": getattr(player, "version", None),
         "is_bot_player": True,
         "traits": list(traits or []),
     }

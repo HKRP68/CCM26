@@ -175,11 +175,11 @@ across the whole special-card market instead of piling onto the top tier.
 
 ### 3.5 What chemistry does in a match
 
-Chemistry is a **tie-breaker, not a substitute for card quality**:
-
-```
-bonus % = 3.0 × (chemistry / 100)      →  0% at 0 chem, 3% at 100 chem
-```
+Chemistry is a **tie-breaker, not a substitute for card quality**. This section
+proposed a flat team-wide band; the shipped mechanism is the per-role effective
+rating boost in **§7.6**, which a single percentage could not express — it
+cannot say *which unit* the chemistry belongs to. The two rules below carried
+over unchanged and still govern the shipped version.
 
 Two rules matter more than the number:
 
@@ -187,14 +187,10 @@ Two rules matter more than the number:
   raw ratings. New players fielding whatever they pulled are not taxed; they are
   simply not yet earning the bonus. A penalty model would make the first week
   feel broken.
-- **3% is small on purpose.** Chemistry should decide close matches between
-  similar squads, never let a weak squad beat a strong one. If chemistry can
-  overturn a rating gap, it stops being a fun optimisation and becomes a
-  mandatory tax on squad-building.
-
-Wiring `chemistry_bonus_pct()` into `services/probability_engine.py` alongside the
-existing trait deltas is the follow-up step; the calculator is engine-agnostic
-and ships standalone.
+- **The band is small on purpose.** Chemistry should decide close matches
+  between similar squads, never let a weak squad beat a strong one. If
+  chemistry can overturn a rating gap, it stops being a fun optimisation and
+  becomes a mandatory tax on squad-building.
 
 ---
 
@@ -482,7 +478,55 @@ moves by points on offer, so the advice is specific rather than generic:
 The same ranked tips appear at the foot of `/cmuchem`. When a player has no
 XI yet, the tab falls back to the generic four-step guide.
 
-### 7.6 What this model gives up
+### 7.6 What chemistry actually does
+
+Chemistry is wired into the live match engine. Each role's boost is added to
+the **effective rating** of every player in that role, exactly as player form
+already is (`handlers/match.py`):
+
+```python
+eff_bat  = striker["bat_rating"] + bat_form_mod  + bat_chem_mod
+eff_bowl = bowler["bowl_rating"] + bowl_form_mod + bowl_chem_mod
+```
+
+Two sides with identical cards therefore play differently:
+
+| | Team A (100 chem) | Team B (30 chem) |
+|---|---|---|
+| Opening bat, 90 raw | **94** | 91 |
+| Opening bowl, 92 raw | **96** | 93 |
+| All-rounder, 75 raw | **78** | 76 |
+
+`services.chemistry.match_boosts(xi)` returns `{role: boost}` and is the whole
+public surface — the engine never reimplements the scoring.
+
+**Why it is deliberately small.** The ceiling is +4, against a form band of
+±2.5 OVR. Chemistry decides close matches between comparable squads and cannot
+overturn a real rating gap. If it could, it would stop being an optimisation
+and become a tax: every player would be forced to build for chemistry before
+they could field the cards they actually wanted.
+
+**Why it is never negative.** A 0-chemistry XI plays at exactly its raw
+ratings. A new player fielding whatever they pulled is not punished — they are
+simply not yet earning the bonus. A penalty model would make the first week
+feel broken, which is the worst possible moment for it.
+
+**Cost control.** An XI is locked for a match, so chemistry is constant for its
+duration. Boosts are computed once per side and cached on the match state
+(`_chem_mod_for`), keyed by team id so the innings swap — which exchanges
+`bat_xi` and `bowl_xi` — reuses the right entry rather than recomputing or
+serving the opposition's numbers. Any failure returns 0.0: chemistry must never
+be able to break a live match, and 0 is the correct neutral for a bonus band.
+
+Bot XIs carry their real `country`/`version` (`services/bot_xi_builder.py`), so
+they are scored on genuine data rather than on missing fields.
+
+**Not yet wired.** `handlers/match.py` is the live PvP/vsbot ball path. `/sim`
+(`services/sim_match.py`), Challenge League (`services/cipl_match.py`) and the
+super over call `calculate_outcome` through separate engines with different
+rating keys; each needs its own seam before chemistry applies there.
+
+### 7.7 What this model gives up
 
 Category chemistry replaced the block curve as the player-facing score, and two
 properties from §3 no longer reach the player:

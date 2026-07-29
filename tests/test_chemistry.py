@@ -541,17 +541,65 @@ class XiSummaryTests(unittest.TestCase):
                          chemistry.calculate_role_report(squad)["total"])
 
 
-class MatchEffectTests(unittest.TestCase):
+class MatchBoostTests(unittest.TestCase):
+    """What chemistry actually does: a per-role effective-rating lift."""
 
-    def test_bonus_band_endpoints(self):
-        self.assertEqual(chemistry.chemistry_bonus_pct(0), 0.0)
-        self.assertEqual(chemistry.chemistry_bonus_pct(100), 3.0)
-        self.assertEqual(chemistry.chemistry_bonus_pct(80), 2.4)
+    def _unified(self):
+        return ([_rc("India", "Batsman") for _ in range(4)]
+                + [_rc("Australia", "Bowler") for _ in range(4)]
+                + [_rc("England", "All-rounder") for _ in range(2)]
+                + [_rc("South Africa", "Wicket Keeper")])
 
-    def test_bonus_is_never_negative_and_never_runs_away(self):
-        self.assertEqual(chemistry.chemistry_bonus_pct(-50), 0.0)
-        self.assertEqual(chemistry.chemistry_bonus_pct(1000), 3.0)
+    def _scattered(self):
+        roles = ["Batsman", "Bowler", "Wicket Keeper", "All-rounder"]
+        return [_rc(f"C{i}", roles[i % 4]) for i in range(11)]
 
+    def test_boosts_are_returned_per_role(self):
+        boosts = chemistry.match_boosts(self._unified())
+        self.assertEqual(set(boosts), set(chemistry.ROLE_ORDER))
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_unified_squad_out_boosts_a_scattered_one(self):
+        unified = chemistry.match_boosts(self._unified())
+        scattered = chemistry.match_boosts(self._scattered())
+        self.assertGreater(sum(unified.values()), sum(scattered.values()))
+
+    def test_boost_never_penalises(self):
+        # Chemistry is a bonus band — the worst squad plays at raw ratings,
+        # never below them.
+        for squad in (self._scattered(), [], [_rc("India", "Batsman")]):
+            for boost in chemistry.match_boosts(squad).values():
+                self.assertGreaterEqual(boost, 0)
+
+    def test_boost_is_capped_at_the_published_maximum(self):
+        squad = self._unified()
+        for card, version in zip(squad, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        boosts = chemistry.match_boosts(squad)
+        for role, boost in boosts.items():
+            self.assertLessEqual(boost, chemistry.ROLE_MAX_BONUS[role], role)
+        self.assertEqual(boosts["Batsman"], 4)
+        self.assertEqual(boosts["All-rounder"], 3)
+
+    def test_swing_between_best_and_worst_is_bounded(self):
+        # The whole point of the cap: chemistry decides close matches, it must
+        # not overturn a rating gap.
+        best = self._unified()
+        for card, version in zip(best, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        swing = max(chemistry.match_boosts(best).values())
+        self.assertLessEqual(swing, 4)
+
+    def test_engine_dicts_are_accepted_without_shims(self):
+        # The match engine carries its XI as plain dicts (handlers.match._pd).
+        as_dicts = [{"country": "India", "category": "Bowler",
+                     "version": "Base card"} for _ in range(4)]
+        self.assertEqual(chemistry.match_boosts(as_dicts)["Bowler"],
+                         chemistry.match_boosts(
+                             [_rc("India", "Bowler") for _ in range(4)])["Bowler"])
+
+    def test_missing_country_or_version_does_not_raise(self):
+        for squad in ([{"category": "Bowler"}],
+                      [{"country": None, "category": None, "version": None}],
+                      [_rc(None, None, None)]):
+            boosts = chemistry.match_boosts(squad)
+            self.assertEqual(set(boosts), set(chemistry.ROLE_ORDER))

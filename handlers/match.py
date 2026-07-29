@@ -209,9 +209,12 @@ def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None,
                        bump_ball_seq=bump_ball_seq)
 
 def _pd(e, p):
+    # country/version are carried so the XI can be scored for Team Chemistry
+    # (services.chemistry) without a second DB round trip mid-match.
     return {"roster_id": e.id, "player_id": p.id, "name": p.name, "rating": p.rating,
             "category": p.category, "bat_rating": p.bat_rating, "bowl_rating": p.bowl_rating,
-            "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand, "bat_hand": p.bat_hand}
+            "bowl_style": p.bowl_style, "bowl_hand": p.bowl_hand, "bat_hand": p.bat_hand,
+            "country": p.country, "version": p.version}
 
 def _gxi(session, uid):
     rows = (session.query(UserRoster, Player).join(Player, UserRoster.player_id == Player.id)
@@ -4516,6 +4519,34 @@ def _fielding_quality_for(s):
     return quality
 
 
+def _chem_mod_for(s, player, xi, team_key):
+    """Team Chemistry stat boost for this player, per-match cached.
+
+    An XI is locked for the duration of a match, so its chemistry is constant —
+    the role boosts are computed once per side and cached on the match state
+    rather than rescored on every ball. Keyed by team so the innings swap (which
+    exchanges ``bat_xi``/``bowl_xi``) reuses the right entry instead of
+    recomputing or, worse, serving the opposition's numbers.
+
+    Returns 0.0 on any failure: chemistry must never be able to break a live
+    match, and 0 is the correct neutral because the boost is a bonus band.
+    """
+    cache = s.setdefault("_chem_cache", {})
+    key = str(team_key)
+    if key not in cache:
+        try:
+            from services import chemistry
+            cache[key] = chemistry.match_boosts(xi)
+        except Exception:
+            logger.exception("Chemistry boost failed; playing at raw ratings")
+            cache[key] = {}
+    try:
+        from services import chemistry
+        return float(cache[key].get(chemistry.role_of(player), 0))
+    except Exception:
+        return 0.0
+
+
 def _form_mod_for(s, roster_id):
     """Per-match cached form rating modifier for a real roster entry.
 
@@ -4796,8 +4827,16 @@ def _calc(s, striker, bowler, shot, delivery):
     bat_form_mod = _form_mod_for(s, striker.get("roster_id", 0))
     bowl_form_mod = _form_mod_for(s, bowler.get("roster_id", 0))
 
-    eff_bat = striker["bat_rating"] + bat_form_mod
-    eff_bowl = bowler["bowl_rating"] + bowl_form_mod
+    # Team Chemistry lifts a player's effective rating by their role's boost
+    # (max +4 BAT/BOWL/WK, +3 ALR). Same shape as form, and likewise constant
+    # for the match, so it is cached per side rather than rescored per ball.
+    bat_chem_mod = _chem_mod_for(s, striker, s.get("bat_xi") or [],
+                                 s.get("bat_team_id"))
+    bowl_chem_mod = _chem_mod_for(s, bowler, s.get("bowl_xi") or [],
+                                  s.get("bowl_team_id"))
+
+    eff_bat = striker["bat_rating"] + bat_form_mod + bat_chem_mod
+    eff_bowl = bowler["bowl_rating"] + bowl_form_mod + bowl_chem_mod
 
     # Fetch traits for striker and bowler (per-match cached — traits don't
     # change mid-match, so this is a DB hit only on the first ball each faces).
