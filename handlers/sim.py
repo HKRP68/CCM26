@@ -3,7 +3,8 @@
 Unlike /wpm and /cm (interactive, ball-by-ball via the Mini App), /sim resolves a
 whole match server-side and posts the scorecard, a winner announcement, and the
 ball-by-ball commentary as a JSON file. Team setup is automatic:
-  - batting order = highest batting rating to lowest
+  - batting order = the one you saved with /sbo; highest batting rating to
+    lowest if you never saved one
   - only Bowlers + All-rounders bowl (rotated, no consecutive overs)
 """
 
@@ -103,8 +104,18 @@ def _reply_target_user(session, update):
     return sync_telegram_user(session, tg_user)
 
 
-def _xi_from_roster(roster):
-    return [_player_to_dict(p) for _, p in roster[:11]]
+def _xi_from_roster(session, user_id, roster):
+    """The user's top 11 as engine dicts, in their saved batting order.
+
+    ``roster`` is in ``order_position`` order, so a line-up saved with /sbo is
+    already correct and is stamped ``order_locked`` — that marker is what stops
+    ``services.sim_match`` from re-sorting it by batting rating. Without a saved
+    order the XI gets that rating sort here instead, which is the same line-up
+    /sim used to build for everyone.
+    """
+    from services import batting_order_service as bos
+    return bos.ordered_xi_dicts(
+        session, user_id, [_player_to_dict(p) for _, p in roster[:11]])
 
 
 def _parse_format(args):
@@ -191,7 +202,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(text, parse_mode="HTML")
             return
 
-        user_xi = _xi_from_roster(roster)
+        user_xi = _xi_from_roster(session, user.id, roster)
         team_name = _team_display_name(user, "Your XI")
 
         opponent = _reply_target_user(session, update)
@@ -221,7 +232,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text(text, parse_mode="HTML")
                 return
-            opponent_xi = _xi_from_roster(opponent_roster)
+            opponent_xi = _xi_from_roster(session, opponent.id, opponent_roster)
             opponent_name = _team_display_name(opponent, "Opponent XI")
         else:
             avg_rating = round(sum(p.rating for _, p in roster[:11]) / 11)

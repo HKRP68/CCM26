@@ -1,6 +1,6 @@
 """Handler for /playmatch — full match with endmatch, timeouts, rewards."""
 
-import asyncio, io, os, random, logging
+import asyncio, html, io, os, random, logging
 from datetime import datetime, timedelta
 from sqlalchemy import or_
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -217,9 +217,18 @@ def _pd(e, p):
             "country": p.country, "version": p.version}
 
 def _gxi(session, uid):
+    """The user's Playing XI as engine dicts, IN BATTING ORDER.
+
+    Roster slots 1-11 are read in ``order_position`` order, which is the order
+    the player saved with /sbo. If they never saved one the XI is sorted by
+    batting rating instead — the same fallback every other mode uses — and each
+    dict is stamped with ``order_locked`` so the rest of the match knows whether
+    the line-up is the player's own (see services.batting_order_service).
+    """
+    from services import batting_order_service as bos
     rows = (session.query(UserRoster, Player).join(Player, UserRoster.player_id == Player.id)
             .filter(UserRoster.user_id == uid).order_by(UserRoster.order_position).limit(11).all())
-    return [_pd(e, p) for e, p in rows]
+    return bos.ordered_xi_dicts(session, uid, [_pd(e, p) for e, p in rows])
 
 def _bowl_label(p, s):
     bws = _stats_get(s["bowl_stats"], p["roster_id"])
@@ -3238,6 +3247,10 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
                     context, cid, m, bt, bwt, _mention(bu), _mention(bwu))
             except Exception:
                 logger.exception("match-ready mini app message failed")
+        elif await _auto_openers_from_saved_order(context, session, cid, mid, bxi):
+            # The batting captain already saved a batting order with /sbo, so
+            # slots 1 and 2 walk out — nothing to ask.
+            pass
         else:
             # Original bot gameplay: show all 11 players for opener selection.
             btns = [[InlineKeyboardButton(
@@ -3250,6 +3263,39 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception: session.rollback(); logger.exception("Toss err")
     finally: session.close()
+
+
+async def _auto_openers_from_saved_order(context, session, cid, mid, bxi):
+    """Open the innings from the batting side's saved order, if they have one.
+
+    A player who arranged their line-up with /sbo (or the Mini App XI screen)
+    has already said who opens: slots 1 and 2. Asking them again every match is
+    exactly the thing the saved order is meant to stop, so the pickers are
+    skipped and the innings starts with those two. Returns True when it handled
+    the openers, False when the caller should show the picker (no saved order,
+    or an XI too short to open with).
+
+    ``bxi`` is the batting XI in batting order — ``order_locked`` on it is what
+    says the order came from the player rather than a rating sort.
+    """
+    from services import batting_order_service as bos
+    if not bos.is_order_locked(bxi):
+        return False
+    op1, op2 = bos.openers_from_order(bxi)
+    if not op1 or not op2:
+        return False
+    try:
+        await context.bot.send_message(
+            cid,
+            f"🏏 <b>OPENERS</b> — from your saved batting order\n\n"
+            f"<b>1.</b> {html.escape(str(op1.get('name', '?')))}\n"
+            f"<b>2.</b> {html.escape(str(op2.get('name', '?')))}\n\n"
+            f"<i>Change it any time with /sbo.</i>",
+            parse_mode="HTML")
+    except Exception:
+        logger.exception("saved-order opener announcement failed (match %s)", mid)
+    await _openers_locked(context, session, cid, mid, op1, op2)
+    return True
 
 
 # ═══════════════════════════ OPENERS ═════════════════════════════════
@@ -3332,85 +3378,100 @@ async def opener2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _setup_pick_lost(context, q, mid)
             return
         await q.answer()
-        context.bot_data[f"opener2_{mid}"] = pk; op1 = context.bot_data.get(f"opener1_{mid}", {})
+        op1 = context.bot_data.get(f"opener1_{mid}", {})
         await q.edit_message_text(f"✅ Openers: {op1.get('name')} & {pk['name']}\n\n⏳ Bowler...", parse_mode="HTML")
-
-        # Get bowling user from bot_data (works for both innings)
-        bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
-        if bowl_uid:
-            bwu = session.query(User).get(bowl_uid)
-        else:
-            # Fallback: 1st innings — read from Match record
-            m = session.query(Match).get(mid)
-            bwu = session.query(User).get(m.bowling_first_id)
-
-        bwxi = _setup_xi(context, mid, "bowl_xi")
-
-        # ── If the bowling user is the bot (vsbot innings 2 with user batting),
-        # auto-pick the bowler instead of showing a picker tagged to the bot
-        # (the bot can't click buttons; it'd freeze the match).
-        if bwu and bwu.telegram_id == BOT_TG_ID_:
-            # Auto-pick best bowler (highest bowl_rating), avoiding prev_bowler if set
-            existing = _gs(context, mid)
-            prev_rid = (existing or {}).get("prev_bowler_rid")
-            candidates = [b for b in bwxi
-                          if b.get("roster_id") != prev_rid] or bwxi
-            opening_bowler = max(candidates, key=lambda p: p.get("bowl_rating", 0))
-
-            if existing and existing.get("innings") == 2:
-                # Wire up the state for innings 2 startup, same as
-                # select_bowler_callback does for the human case.
-                s = existing
-                s["current_bowler"] = opening_bowler
-                # Rebuild batting_order with user-selected openers at index 0/1
-                order = [op1, pk]
-                for p in s["bat_xi"]:
-                    if p["roster_id"] not in (op1.get("roster_id"),
-                                                pk.get("roster_id")):
-                        order.append(p)
-                s["batting_order"] = order
-                s["striker_idx"] = 0
-                s["non_striker_idx"] = 1
-                s["next_batsman_idx"] = 2
-                s["prev_bowler_rid"] = None
-                s["selected_variation"] = None
-                _ss(context, mid, s, next_action=A_PICK_DELIVERY)
-
-                await context.bot.send_message(
-                    cid,
-                    f"🤖 Opening bowler: <b>{opening_bowler['name']}</b>",
-                    parse_mode="HTML")
-                await context.bot.send_message(
-                    cid,
-                    f"🏏 <b>2ND INNINGS!</b>\n\n"
-                    f"🟢 {s['bat_team_name']} needs {s['target']} to win\n"
-                    f"🏏 {op1.get('name', '?')} & {pk['name']}\n"
-                    f"🎳 {opening_bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
-                    parse_mode="HTML")
-                await _send_innings_cards(context, cid, (op1, pk),
-                                          opening_bowler,
-                                          s["bat_team_id"], s["bowl_team_id"])
-                await render_screen(context, mid)
-                return
-            # If this is innings 1 (shouldn't happen — vsbot innings 1 has its own
-            # path in handlers/vsbot.py) we fall through to the normal picker.
-
-        # Otherwise: human bowling user, show ALL 11 bowlers sorted by bowl rating.
-        # Record what we're waiting on so /resume (and the heartbeat) re-show
-        # this picker rather than jumping straight to a delivery. This only takes
-        # effect from innings 2 onwards: set_next_action updates an existing
-        # MatchState row, and innings 1 has none until select_bowler_callback
-        # creates one.
-        set_next_action(context, mid, A_PICK_OPENING_BOWLER)
-        all_bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
-        btns = [[InlineKeyboardButton(
-            f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
-            callback_data=f"selbowl_{mid}_{bwu.id}_{p['roster_id']}"
-        )] for p in all_bowlers]
-        bwu_mention = _mention(bwu)
-        await context.bot.send_message(cid, f"🎳 <b>SELECT OPENING BOWLER</b>\n\n{bwu_mention}, pick your opening bowler:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        await _openers_locked(context, session, cid, mid, op1, pk)
     except Exception: logger.exception("Op2 err")
     finally: session.close()
+
+
+async def _openers_locked(context, session, cid, mid, op1, op2):
+    """Openers are settled — record them and move on to the opening bowler.
+
+    Reached two ways: the captain picked them from the pickers, or the batting
+    side has a batting order saved with /sbo and slots 1 and 2 walked out
+    without being asked (see ``_auto_openers_from_saved_order``). Everything
+    downstream — the vsbot auto-bowler, the innings-2 wiring, the human bowler
+    picker — is identical either way, so it lives here rather than in the
+    callback.
+    """
+    context.bot_data[f"opener1_{mid}"] = op1
+    context.bot_data[f"opener2_{mid}"] = op2
+
+    # Get bowling user from bot_data (works for both innings)
+    bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
+    if bowl_uid:
+        bwu = session.query(User).get(bowl_uid)
+    else:
+        # Fallback: 1st innings — read from Match record
+        m = session.query(Match).get(mid)
+        bwu = session.query(User).get(m.bowling_first_id)
+
+    bwxi = _setup_xi(context, mid, "bowl_xi")
+
+    # ── If the bowling user is the bot (vsbot innings 2 with user batting),
+    # auto-pick the bowler instead of showing a picker tagged to the bot
+    # (the bot can't click buttons; it'd freeze the match).
+    if bwu and bwu.telegram_id == BOT_TG_ID_:
+        # Auto-pick best bowler (highest bowl_rating), avoiding prev_bowler if set
+        existing = _gs(context, mid)
+        prev_rid = (existing or {}).get("prev_bowler_rid")
+        candidates = [b for b in bwxi
+                      if b.get("roster_id") != prev_rid] or bwxi
+        opening_bowler = max(candidates, key=lambda p: p.get("bowl_rating", 0))
+
+        if existing and existing.get("innings") == 2:
+            # Wire up the state for innings 2 startup, same as
+            # select_bowler_callback does for the human case.
+            s = existing
+            s["current_bowler"] = opening_bowler
+            # Rebuild batting_order with user-selected openers at index 0/1
+            order = [op1, op2]
+            for p in s["bat_xi"]:
+                if p["roster_id"] not in (op1.get("roster_id"),
+                                          op2.get("roster_id")):
+                    order.append(p)
+            s["batting_order"] = order
+            s["striker_idx"] = 0
+            s["non_striker_idx"] = 1
+            s["next_batsman_idx"] = 2
+            s["prev_bowler_rid"] = None
+            s["selected_variation"] = None
+            _ss(context, mid, s, next_action=A_PICK_DELIVERY)
+
+            await context.bot.send_message(
+                cid,
+                f"🤖 Opening bowler: <b>{opening_bowler['name']}</b>",
+                parse_mode="HTML")
+            await context.bot.send_message(
+                cid,
+                f"🏏 <b>2ND INNINGS!</b>\n\n"
+                f"🟢 {s['bat_team_name']} needs {s['target']} to win\n"
+                f"🏏 {op1.get('name', '?')} & {op2['name']}\n"
+                f"🎳 {opening_bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
+                parse_mode="HTML")
+            await _send_innings_cards(context, cid, (op1, op2),
+                                      opening_bowler,
+                                      s["bat_team_id"], s["bowl_team_id"])
+            await render_screen(context, mid)
+            return
+        # If this is innings 1 (shouldn't happen — vsbot innings 1 has its own
+        # path in handlers/vsbot.py) we fall through to the normal picker.
+
+    # Otherwise: human bowling user, show ALL 11 bowlers sorted by bowl rating.
+    # Record what we're waiting on so /resume (and the heartbeat) re-show
+    # this picker rather than jumping straight to a delivery. This only takes
+    # effect from innings 2 onwards: set_next_action updates an existing
+    # MatchState row, and innings 1 has none until select_bowler_callback
+    # creates one.
+    set_next_action(context, mid, A_PICK_OPENING_BOWLER)
+    all_bowlers = sorted(bwxi, key=lambda x: x["bowl_rating"], reverse=True)
+    btns = [[InlineKeyboardButton(
+        f"{p['name']} | {p.get('bowl_hand','R')[:1]}-{p.get('bowl_style','Medium')} | BWL {p['bowl_rating']}",
+        callback_data=f"selbowl_{mid}_{bwu.id}_{p['roster_id']}"
+    )] for p in all_bowlers]
+    bwu_mention = _mention(bwu)
+    await context.bot.send_message(cid, f"🎳 <b>SELECT OPENING BOWLER</b>\n\n{bwu_mention}, pick your opening bowler:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
 
 
 # ═══════════════════════════ FIRST BOWLER → START ════════════════════
@@ -3661,10 +3722,22 @@ async def _show_innings_openers(ctx, mid):
     Split out of ``_end_innings`` so ``render_screen`` can re-send the exact
     same picker: an innings break waits on a selection, not on a delivery, and
     re-rendering it is what /resume should do during the break.
+
+    A side that saved a batting order with /sbo is not asked at all — slots 1
+    and 2 open the chase, exactly as they opened the first innings.
     """
     s = _gs(ctx, mid)
     if not s:
         return
+    session = get_session()
+    try:
+        if await _auto_openers_from_saved_order(
+                ctx, session, s["chat_id"], mid, s.get("bat_xi") or []):
+            return
+    except Exception:
+        logger.exception("saved-order openers failed for match %s innings 2", mid)
+    finally:
+        session.close()
     try:
         buid = s["bat_team_id"]
         btns = [[InlineKeyboardButton(
@@ -4981,9 +5054,54 @@ def _calc(s, striker, bowler, shot, delivery):
 
 # ═══════════════════════════ NEW BATSMAN ═════════════════════════════
 
+async def _walk_in_next_batsman(ctx, mid, s):
+    """Send in the next player down, for a side batting a saved /sbo order.
+
+    A batting order is a promise about who comes in next, so a captain who set
+    one is not asked again mid-innings: the next player down the order who is
+    neither out nor already at the crease walks out. Returns True when a batter
+    was installed (and the screen re-rendered), False to fall back to the
+    picker — including when nobody is left, which the picker path already knows
+    how to turn into an innings end.
+    """
+    from services import batting_order_service as bos
+    order = s.get("batting_order") or []
+    if not bos.is_order_locked(order):
+        return False
+    idx = bos.next_batsman_index(order, s.get("bat_stats", {}),
+                                 s.get("striker_idx"), s.get("non_striker_idx"))
+    if idx is None:
+        return False
+    nb = order[idx]
+    s["striker_idx"] = idx
+    s["next_batsman_idx"] = max(s.get("next_batsman_idx", 2), idx + 1)
+    # Same branch as the manual pick: a wicket on the last ball of an over still
+    # owes the bowling side a new bowler.
+    if s["current_ball"] == 0 and s["current_over"] > 1:
+        next_act = A_PICK_NEW_BOWLER
+    else:
+        next_act = A_PICK_DELIVERY
+    _ss(ctx, mid, s, next_action=next_act)
+    try:
+        await ctx.bot.send_message(
+            s["chat_id"],
+            f"🏏 <b>#{idx + 1} {html.escape(str(nb.get('name', '?')))}</b> walks out "
+            f"— next in your saved batting order.",
+            parse_mode="HTML")
+    except Exception:
+        logger.exception("walk-in announcement failed for match %s", mid)
+    await render_screen(ctx, mid)
+    return True
+
+
 async def _show_new_batsman(ctx, mid):
     s = _gs(ctx, mid)
     if not s: return
+    try:
+        if await _walk_in_next_batsman(ctx, mid, s):
+            return
+    except Exception:
+        logger.exception("saved-order walk-in failed for match %s", mid)
     try:
         available = []
         for i, p in enumerate(s["batting_order"]):

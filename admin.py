@@ -6476,6 +6476,13 @@ def webapp_xi_swap_bench():
         xi_pos = xi_row.order_position
         bench_row.order_position = xi_pos
         xi_row.order_position = bench_pos
+
+        # Putting a bench player into a specific batting slot is the user
+        # arranging their line-up, exactly like `/sbo 2 13`. Mark the order as
+        # theirs so every mode bats it as saved instead of re-sorting by rating.
+        from datetime import datetime as _dt
+        user.batting_order_set_at = _dt.utcnow()
+
         db.commit()
         return {"ok": True}
     except Exception as e:

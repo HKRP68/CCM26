@@ -35,6 +35,7 @@ from services.match_constants import PITCH_TYPES, MATCH_EXPIRE, random_match_set
 from services.telegram_user_service import sync_telegram_user, resolve_command_target
 from services.match_state_store import save_state, A_PICK_CIPL_BOWLER
 from services import cipl_match
+from services import batting_order_service as _bos
 from handlers.match import (
     _mention, _active_match_in_chat, _active_match_for_user,
     _cric_lobby_for_user, _chat_busy_message, _user_busy_message)
@@ -203,26 +204,15 @@ def _format_batting_order(pairs, header, bench_pairs=None):
 
 
 def _sort_batting_order(pairs):
-    """Order (entry, player) pairs by batting rating (high → low) — the same
-    auto batting order /letsplay applies everywhere else."""
-    return sorted(
-        pairs,
-        key=lambda ep: (int(ep[1].bat_rating or 0), int(ep[1].rating or 0),
-                        str(ep[1].name or "")),
-        reverse=True)
+    """Order (entry, player) pairs by batting rating (high → low) — the auto
+    batting order every mode falls back to (services.batting_order_service)."""
+    return _bos.sort_pairs_by_bat_rating(pairs)
 
 
 def _has_custom_batting_order(session, user_id):
     """True once this user has arranged their own batting order (/setbo, /sbo
     or the Mini App XI reorder). Their saved roster order is then the line-up."""
-    try:
-        row = (session.query(User.batting_order_set_at)
-               .filter(User.id == user_id).first())
-        return bool(row and row[0])
-    except Exception:
-        logger.exception("letsplay: batting-order flag lookup failed (user %s)",
-                         user_id)
-        return False
+    return _bos.user_has_custom_order(session, user_id)
 
 
 def _bench_pairs(full_pairs, xi_ids):

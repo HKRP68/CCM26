@@ -7,7 +7,9 @@ Uses the SimCricketX engine (engine/) which provides:
   - Format-aware bowler rotation (bowler_manager / format_config)
 
 Team setup:
-  - Batting order  = highest batting rating to lowest.
+  - Batting order  = the order the player saved with /sbo, when they saved one
+                     (the XI arrives stamped ``order_locked``); otherwise
+                     highest batting rating to lowest.
   - Bowling        = Bowlers and All-rounders bowl; BowlerManager enforces quota
                      and no-consecutive-overs rule automatically.
 
@@ -27,6 +29,7 @@ from engine.game_state_engine import (
 )
 from engine.format_config import get_format, FORMAT_REGISTRY, FormatConfig, Phase
 from engine.bowler_manager import BowlerManager
+from services import batting_order_service as _bos
 
 # Wicket type → commentary event key.
 _WICKET_EVENT = {
@@ -353,11 +356,20 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 ground_config's pitch scoring matrix directly).
     """
     # -- Player adaptation --
-    batting_order = sorted(
-        [_adapt_player(p) for p in batting_xi],
-        key=lambda p: p.get("bat_rating") or p.get("batting_rating") or p.get("rating") or 0,
-        reverse=True,
-    )
+    # A line-up the player saved with /sbo is already in the order they want to
+    # bat in, so it is used verbatim (``order_locked`` is stamped by
+    # services.batting_order_service and survives _adapt_player's dict copy).
+    # Everything else — bot XIs, and users who never saved an order — still gets
+    # the batting-rating sort.
+    adapted = [_adapt_player(p) for p in batting_xi]
+    if _bos.is_order_locked(adapted):
+        batting_order = adapted
+    else:
+        batting_order = sorted(
+            adapted,
+            key=lambda p: p.get("bat_rating") or p.get("batting_rating") or p.get("rating") or 0,
+            reverse=True,
+        )
     bowling_adapted = [_adapt_player(p) for p in bowling_xi]
 
     # Ensure we always have enough bowlers: promote batters/keepers if needed
