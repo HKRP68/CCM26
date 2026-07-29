@@ -90,7 +90,8 @@ TOTAL_CHEMISTRY_CAP = COUNTRY_CHEMISTRY_CAP + SPECIAL_CHEMISTRY_CAP
 # precedence: "Ultimate Legend" contains both "ultimate" and "legend", and an
 # "Icon Prime" is an Icon. Player.version is free text entered by admins, so
 # matching is keyword based rather than an enum lookup.
-SPECIAL_TYPES = ("icon", "toty", "prime", "legend", "event")
+SPECIAL_TYPES = ("icon", "toty", "prime", "legend", "star",
+                 "ipl", "wpl", "bbl", "psl", "sa20", "cpl", "event")
 
 _TYPE_KEYWORDS = (
     ("icon", ("icon", "immortal", "hall of fame")),
@@ -98,9 +99,19 @@ _TYPE_KEYWORDS = (
               "team of the month")),
     ("prime", ("prime", "peak", "moments")),
     ("legend", ("legend", "ultimate", "goat")),
-    # Everything else that is not a base card is an Event edition: World Cup,
-    # IPL, Ashes, Gold, and any future named drop. Deliberately a catch-all so
-    # a new edition is scored the day it ships without a config change.
+    ("star", ("star",)),
+    # League editions are separate types, not one lumped "event" — Card Variety
+    # asks for four *different* types, so an IPL and a BBL card have to count as
+    # two. Checked before the catch-all.
+    ("ipl", ("ipl", "indian premier")),
+    ("wpl", ("wpl", "women's premier", "womens premier")),
+    ("bbl", ("bbl", "big bash")),
+    ("psl", ("psl", "pakistan super")),
+    ("sa20", ("sa20", "sa 20")),
+    ("cpl", ("cpl", "caribbean premier")),
+    # Everything else that is not a base card: World Cup, Ashes, Gold, and any
+    # future named drop. Deliberately a catch-all so a new edition scores the
+    # day it ships without a config change.
     ("event", ()),
 )
 
@@ -112,6 +123,18 @@ _BASE_VERSIONS = ("", "base", "basic", "standard", "normal", "common", "none")
 # before matching. Without this every one of the 1228 base cards in
 # data/players.json would fall through to the Event catch-all and score.
 _VERSION_NOISE = (" card", " cards", " edition", " version")
+
+
+def _field(player, name):
+    """Read ``name`` off a card, whether it's an ORM row or a plain dict.
+
+    The match engine carries its XI as dicts (``handlers.match._pd``), so the
+    scorer accepts both rather than forcing the engine to build shim objects on
+    a per-ball path.
+    """
+    if isinstance(player, dict):
+        return player.get(name)
+    return getattr(player, name, None)
 
 
 def special_type(version):
@@ -134,7 +157,7 @@ def special_type(version):
 
 def is_icon(player):
     """True when the card is an Icon, which counts double in its block."""
-    return special_type(getattr(player, "version", None)) == "icon"
+    return special_type(_field(player, "version")) == "icon"
 
 
 # Spelling variants that must fold onto one nation, because a split block is
@@ -163,7 +186,7 @@ def country_of(player):
     missing country data forms one block rather than silently scoring zero.
     The caller surfaces it in the breakdown so an admin can spot bad rows.
     """
-    raw = " ".join(str(getattr(player, "country", "") or "").split())
+    raw = " ".join(str(_field(player, "country") or "").split())
     if not raw:
         return "Unknown"
     return COUNTRY_ALIASES.get(raw.lower(), raw)
@@ -221,7 +244,7 @@ def special_chemistry(players):
     present = []
     cards = 0
     for player in players:
-        kind = special_type(getattr(player, "version", None))
+        kind = special_type(_field(player, "version"))
         if kind is None:
             continue
         cards += 1
@@ -304,72 +327,70 @@ def calculate_chemistry(players):
 # ════════════════════════════════════════════════════════════════════
 # Role chemistry — the /cmuchem breakdown
 # ════════════════════════════════════════════════════════════════════
-# /cmuchem re-cuts the same 80/20 score by role, so a manager can see *which
-# part* of the XI is badly connected rather than one opaque number. It adds no
-# new scoring rules: every figure below is derived from the country blocks and
-# special-card variety computed above.
+# The player-facing score, shown by /cmuchem, /pxi and /chemhelp.
 #
-# Each role line reads:  comp1/20 + comp2/20 = +bonus/max
+#   Category Chemistry   4 roles × 20 = 80
+#   Playing XI Bonus     diversity 10 + variety 10 = 20
+#   ─────────────────────────────────────────────────
+#   Overall Chemistry                          = 100
 #
-#   comp1 — how well that role's players sit inside the XI's national blocks.
-#   comp2 — the Playing XI Bonus (special-card variety), shared by every role
-#           because a varied card pool lifts the whole side, not one unit.
-#   bonus — (comp1 + comp2) / 40 × the role's maximum.
+# CATEGORY CHEMISTRY asks a different question from the country blocks above:
+# not "how big is this nation's block" but "does this *unit* share a country".
+# A role starts at 20 and loses ground for every player who is not from the
+# role's majority country:
 #
-# All-rounders are halved on comp1 and capped at 3 rather than 4: they already
-# collect the batting and bowling benefit, so paying them a full third share
-# would count the same connection twice.
+#     N ≤ 1               → 20   (a lone keeper is trivially unified)
+#     otherwise           → 20 × (M − 1) ÷ (N − 1)
 #
-# Two ceilings here have to be *reachable*, or this card repeats the mistake the
-# 80/20 rework exists to fix — a maximum nobody can hit reads as a broken stat:
+# where N is the role's size and M the headcount of its most common country.
+# All from one country → 20; all different → 0. It reads as "lose 20 ÷ (N−1)
+# per outsider", which is the same arithmetic from the player's side.
 #
-#   • The all-rounder line divides by its own halved ceiling (10 + 20 = 30),
-#     not the full 40. Dividing by 40 caps ALR at 2.25 of 3, so +3/3 could
-#     never appear however good the squad was.
-#   • Role connection is measured against a *three*-man core, not the four-man
-#     sweet spot. Full diversity wants four countries, and 4 countries × 4
-#     players is 16 — more than an XI holds — so a four-block target would make
-#     role_total 15 and diversity 10 mutually exclusive. Three-man cores fit
-#     (3-3-3-2), so both ceilings can be reached by the same squad. The 80-point
-#     country score still peaks at four; this axis only asks "is this player
-#     connected to anyone?", and a three-man core answers yes.
+# This rewards *unit* cohesion — an all-Australian pace battery, an all-Indian
+# top order — while the Playing XI Bonus rewards spread across the XI. The two
+# pull in useful opposite directions: the best squads are a handful of unified
+# national units rather than one stack or eleven strangers.
+#
+# Each role line reads:  category/20 + xi/20 = +boost/max
+#
+# The boost is the *in-match* stat lift for that unit, capped at +4 for
+# BAT/BOWL/WK and +3 for ALR. All-rounders are halved on the category component
+# because they already collect the batting and bowling benefit; paying them a
+# full share would count the same cohesion twice. Their line divides by its own
+# halved ceiling (10 + 20 = 30) rather than the full 40 — dividing by 40 caps
+# ALR at 2.25 of 3, so +3/3 could never appear however good the squad was, and
+# a ceiling nobody can reach reads to players as a broken stat.
 
 ROLE_ORDER = ("Batsman", "Bowler", "Wicket Keeper", "All-rounder")
 ROLE_LABEL = {"Batsman": "BAT", "Bowler": "BOWL",
               "Wicket Keeper": "WK", "All-rounder": "ALR"}
-ROLE_EMOJI = {"Batsman": "🟥", "Bowler": "🟦",
-              "Wicket Keeper": "🟦", "All-rounder": "🟧"}
-# The card totals 100, and every figure printed on it adds up to that 100 —
-# no normalising a smaller total up to a friendlier-looking scale, because then
-# the parts visibly fail to sum to the whole. So the maxima below *are* the
-# split: 45 roles + 20 diversity + 15 variety + 20 Playing XI Bonus.
-#
-# 12/12/12/9 is ×3 of the 4/4/4/3 role weighting, the only clean-integer split
-# that preserves that ratio exactly while the four roles sum to 45.
-ROLE_MAX_BONUS = {"Batsman": 12, "Bowler": 12, "Wicket Keeper": 12,
-                  "All-rounder": 9}
-# Roles whose country component is halved to avoid double-counting.
+
+# Role colour is a severity read-out, not a fixed per-role brand: green means
+# this unit is unified, red means it is eleven strangers. A player should be
+# able to scan the left column and know where the work is.
+CHEM_COLOURS = ((15, "🟩"), (10, "🟨"), (5, "🟧"), (0, "🟥"))
+
+ROLE_MAX_BONUS = {"Batsman": 4, "Bowler": 4, "Wicket Keeper": 4,
+                  "All-rounder": 3}
+# Roles whose category component is halved to avoid double-counting.
 ROLE_HALVED = ("All-rounder",)
 
 ROLE_COMPONENT_MAX = 20
+CATEGORY_CHEMISTRY_MAX = ROLE_COMPONENT_MAX * len(ROLE_ORDER)      # 80
 
-# A player counts as fully connected once their country block reaches three.
-# See the note above on why this is the 3-block and not the 4-block. Measuring
-# against the 7-block (50) would be worse still — it would quietly re-introduce
-# pressure to stack, which is what the block curve exists to remove.
-ROLE_CONNECTION_TARGET = COUNTRY_BLOCK_VALUE[3]     # 18
+# Playing XI Bonus — two tiered halves, both scored on a target of four.
+# Tiers rather than a smooth ramp because players need to know what the next
+# step costs: "one more country" is a decision, "+2.5 per country" is not.
+DIVERSITY_TIERS = ((4, 10), (3, 7), (2, 3))
+DIVERSITY_MAX = 10
+VARIETY_TIERS = ((4, 10), (3, 7), (2, 3))
+VARIETY_MAX = 10
+DIVERSITY_TARGET_COUNTRIES = DIVERSITY_TIERS[0][0]
+VARIETY_TARGET_TYPES = VARIETY_TIERS[0][0]
+XI_BONUS_MAX = DIVERSITY_MAX + VARIETY_MAX                          # 20
 
-# Squad-wide bonuses, both scored against a target of four. Diversity is worth
-# slightly more than variety because it rewards the thing the player controls
-# by selection rather than by collection.
-DIVERSITY_TARGET_COUNTRIES = 4
-DIVERSITY_MAX = 20
-VARIETY_TARGET_TYPES = 4
-VARIETY_MAX = 15
-
-# 45 roles + 20 diversity + 15 variety + 20 Playing XI Bonus = 100.
-CMUCHEM_TOTAL_MAX = (sum(ROLE_MAX_BONUS.values())
-                     + DIVERSITY_MAX + VARIETY_MAX + SPECIAL_CHEMISTRY_CAP)
+# 80 category + 20 Playing XI Bonus = 100.
+CMUCHEM_TOTAL_MAX = CATEGORY_CHEMISTRY_MAX + XI_BONUS_MAX
 
 _CATEGORY_ALIASES = {
     "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
@@ -395,47 +416,90 @@ def role_of(player):
     Unrecognised roles fall back to Batsman, matching how
     ``services.xi_rules.validate_roster_xi`` buckets an unknown category.
     """
-    raw = str(getattr(player, "category", "") or "").strip()
+    raw = str(_field(player, "category") or "").strip()
     if raw in ROLE_MAX_BONUS:
         return raw
     return _CATEGORY_ALIASES.get(raw.lower().replace("-", " "), "Batsman")
 
 
+def _tier_score(count, tiers):
+    """Score ``count`` against a descending ``(threshold, points)`` table."""
+    for threshold, points in tiers:
+        if count >= threshold:
+            return points
+    return 0
+
+
+def chem_colour(score, maximum=ROLE_COMPONENT_MAX):
+    """Severity colour for a score: 🟩 strong → 🟥 broken."""
+    scaled = (score / maximum * ROLE_COMPONENT_MAX) if maximum else 0
+    for threshold, colour in CHEM_COLOURS:
+        if scaled >= threshold:
+            return colour
+    return CHEM_COLOURS[-1][1]
+
+
 def country_diversity(players):
-    """Squad-wide country spread, 0-10, full marks at four countries."""
+    """Squad-wide country spread. Returns ``(score, countries)``.
+
+    4+ countries → 10, 3 → 7, 2 → 3, otherwise 0.
+    """
     countries = {country_of(p) for p in players}
-    score = min(DIVERSITY_MAX,
-                _round_half_up(len(countries) * DIVERSITY_MAX
-                               / DIVERSITY_TARGET_COUNTRIES))
-    return score, len(countries)
+    return _tier_score(len(countries), DIVERSITY_TIERS), len(countries)
 
 
 def card_variety(players):
-    """Squad-wide special-type spread, 0-10, full marks at four types."""
-    types = {special_type(getattr(p, "version", None)) for p in players}
+    """Squad-wide special-edition spread. Returns ``(score, types)``.
+
+    4+ special types → 10, 3 → 7, 2 → 3, otherwise 0.
+    """
+    types = {special_type(_field(p, "version")) for p in players}
     types.discard(None)
-    score = min(VARIETY_MAX,
-                _round_half_up(len(types) * VARIETY_MAX
-                               / VARIETY_TARGET_TYPES))
-    return score, len(types)
+    return _tier_score(len(types), VARIETY_TIERS), len(types)
+
+
+def playing_xi_bonus(players):
+    """Country Diversity + Card Variety, 0-20, with both halves."""
+    diversity, countries = country_diversity(players)
+    variety, types = card_variety(players)
+    return diversity + variety, {
+        "diversity": diversity, "countries": countries,
+        "variety": variety, "types": types,
+    }
+
+
+def category_chemistry(members):
+    """Cohesion of one role, 0-20, and the country carrying it.
+
+    Starts at 20 and loses ``20 ÷ (N−1)`` for every player who is not from the
+    role's majority country: all one country → 20, all different → 0. A role of
+    one is trivially unified and scores 20; an empty role scores 0.
+    """
+    if not members:
+        return 0, None, 0
+    counts = {}
+    for player in members:
+        name = country_of(player)
+        counts[name] = counts.get(name, 0) + 1
+    # Ties break alphabetically so the reported country is stable run to run.
+    majority = max(sorted(counts), key=lambda name: counts[name])
+    biggest = counts[majority]
+    if len(members) <= 1:
+        return ROLE_COMPONENT_MAX, majority, biggest
+    score = ROLE_COMPONENT_MAX * (biggest - 1) / (len(members) - 1)
+    return _round_half_up(score), majority, biggest
 
 
 def role_chemistry(players, xi_bonus=None):
     """Per-role chemistry lines for /cmuchem.
 
-    ``xi_bonus`` is the shared Playing XI Bonus (0-20); computed from
-    ``special_chemistry`` when not supplied. Returns a list of dicts in
-    ``ROLE_ORDER``, each carrying the two components, the halved flag, the
-    earned bonus and its maximum.
+    ``xi_bonus`` is the shared Playing XI Bonus (0-20); computed from the squad
+    when not supplied. Returns a list of dicts in ``ROLE_ORDER``, each carrying
+    the two components, the halved flag, the in-match boost and its maximum.
     """
     players = list(players)
     if xi_bonus is None:
-        xi_bonus = special_chemistry(players)[0]
-
-    # Block value per country across the whole XI — a role's players are scored
-    # on how they sit in the *team's* blocks, not on clustering among themselves.
-    _total, blocks = country_chemistry(players)
-    value_by_country = {b["country"]: b["value"] for b in blocks}
+        xi_bonus = playing_xi_bonus(players)[0]
 
     grouped = {role: [] for role in ROLE_ORDER}
     for player in players:
@@ -444,34 +508,29 @@ def role_chemistry(players, xi_bonus=None):
     lines = []
     for role in ROLE_ORDER:
         members = grouped[role]
-        if members:
-            connection = sum(
-                min(1.0, value_by_country.get(country_of(p), 0)
-                    / ROLE_CONNECTION_TARGET)
-                for p in members) / len(members)
-        else:
-            connection = 0.0
+        category, majority, majority_count = category_chemistry(members)
 
-        raw = connection * ROLE_COMPONENT_MAX
         halved = role in ROLE_HALVED
-        effective = raw / 2 if halved else raw
+        effective = category / 2 if halved else category
         maximum = ROLE_MAX_BONUS[role]
         # Divide by what this role can actually score, so a halved role can
         # still reach its stated ceiling.
         ceiling = (ROLE_COMPONENT_MAX / 2 if halved
-                   else ROLE_COMPONENT_MAX) + SPECIAL_CHEMISTRY_CAP
-        bonus = _round_half_up((effective + xi_bonus) / ceiling * maximum)
+                   else ROLE_COMPONENT_MAX) + XI_BONUS_MAX
+        boost = _round_half_up((effective + xi_bonus) / ceiling * maximum)
 
         lines.append({
             "role": role,
             "label": ROLE_LABEL[role],
-            "emoji": ROLE_EMOJI[role],
+            "emoji": chem_colour(category),
             "players": len(members),
-            "country_component": _round_half_up(raw),
-            "country_component_exact": raw,
+            "category": category,
+            "majority_country": majority,
+            "majority_count": majority_count,
+            "outsiders": max(0, len(members) - majority_count),
             "xi_component": xi_bonus,
             "halved": halved,
-            "bonus": bonus,
+            "bonus": boost,
             "max_bonus": maximum,
         })
     return lines
@@ -480,37 +539,98 @@ def role_chemistry(players, xi_bonus=None):
 def calculate_role_report(players):
     """The full /cmuchem report.
 
-    Overall is the honest sum of the parts shown on screen — role bonuses plus
-    country diversity, card variety and the Playing XI Bonus — out of
-    ``CMUCHEM_TOTAL_MAX`` (100). The card reads /100 because its components add
-    to 100, not because a smaller total is normalised up; a test pins the sum.
+    Overall is Category Chemistry (4 roles × 20 = 80) plus the Playing XI Bonus
+    (diversity 10 + variety 10 = 20), so the card reads /100 because its parts
+    genuinely add to 100 rather than being normalised up. A test pins the sum.
     """
     players = list(players)
-    xi_bonus, special_detail = special_chemistry(players)
+    xi_bonus, xi_detail = playing_xi_bonus(players)
     lines = role_chemistry(players, xi_bonus=xi_bonus)
-    diversity, country_count = country_diversity(players)
-    variety, type_count = card_variety(players)
 
-    role_total = sum(line["bonus"] for line in lines)
+    category_total = sum(line["category"] for line in lines)
+    boost_total = sum(line["bonus"] for line in lines)
     return {
         "roles": lines,
-        "role_total": role_total,
-        "role_max": sum(ROLE_MAX_BONUS.values()),
-        "diversity": diversity,
-        "diversity_countries": country_count,
+        "category_total": category_total,
+        "category_max": CATEGORY_CHEMISTRY_MAX,
+        "boost_total": boost_total,
+        "boost_max": sum(ROLE_MAX_BONUS.values()),
+        "diversity": xi_detail["diversity"],
+        "diversity_countries": xi_detail["countries"],
         "diversity_target": DIVERSITY_TARGET_COUNTRIES,
         "diversity_max": DIVERSITY_MAX,
-        "variety": variety,
-        "variety_types": type_count,
+        "variety": xi_detail["variety"],
+        "variety_types": xi_detail["types"],
         "variety_target": VARIETY_TARGET_TYPES,
         "variety_max": VARIETY_MAX,
         "xi_bonus": xi_bonus,
-        "xi_bonus_max": SPECIAL_CHEMISTRY_CAP,
-        "special_detail": special_detail,
-        "total": role_total + diversity + variety + xi_bonus,
+        "xi_bonus_max": XI_BONUS_MAX,
+        "total": category_total + xi_bonus,
         "total_max": CMUCHEM_TOTAL_MAX,
         "players_counted": len(players),
     }
+
+
+def match_boosts(players):
+    """In-match stat boost per role for an XI: ``{role: boost}``.
+
+    This is what chemistry actually *does*. The match engine adds a player's
+    role boost to their effective rating, exactly as player form already does,
+    so a unified unit in a varied squad plays slightly above its card ratings.
+
+    Always ≥ 0: chemistry is a bonus band, never a penalty. A squad with no
+    chemistry plays at its raw ratings rather than below them, so a new player
+    fielding whatever they pulled is not taxed for it.
+    """
+    return {line["role"]: line["bonus"] for line in role_chemistry(players)}
+
+
+def improvement_tips(players, limit=3):
+    """Concrete, ranked next steps for raising this XI's chemistry.
+
+    Ordered by points available, so the first tip is always the best move.
+    Returns a list of ``(points, text)`` — empty when the XI is already at 100.
+    """
+    report = calculate_role_report(players)
+    tips = []
+
+    for line in report["roles"]:
+        gap = ROLE_COMPONENT_MAX - line["category"]
+        if gap <= 0 or not line["players"]:
+            continue
+        outsiders = line["outsiders"]
+        tips.append((gap, (
+            f"<b>{line['label']}</b> +{gap} — {outsiders} player"
+            f"{'s' if outsiders != 1 else ''} outside "
+            f"{line['majority_country']}. Match them up for a unified unit."
+        )))
+
+    countries = report["diversity_countries"]
+    if report["diversity"] < DIVERSITY_MAX:
+        nxt = next((t for t, _p in reversed(DIVERSITY_TIERS) if t > countries),
+                   DIVERSITY_TARGET_COUNTRIES)
+        gain = _tier_score(nxt, DIVERSITY_TIERS) - report["diversity"]
+        if gain > 0:
+            tips.append((gain, (
+                f"<b>Country Diversity</b> +{gain} — you field {countries} "
+                f"countr{'ies' if countries != 1 else 'y'}. Reach {nxt} for "
+                f"{_tier_score(nxt, DIVERSITY_TIERS)}/{DIVERSITY_MAX}."
+            )))
+
+    types = report["variety_types"]
+    if report["variety"] < VARIETY_MAX:
+        nxt = next((t for t, _p in reversed(VARIETY_TIERS) if t > types),
+                   VARIETY_TARGET_TYPES)
+        gain = _tier_score(nxt, VARIETY_TIERS) - report["variety"]
+        if gain > 0:
+            tips.append((gain, (
+                f"<b>Card Variety</b> +{gain} — you hold {types} special "
+                f"type{'s' if types != 1 else ''}. Reach {nxt} for "
+                f"{_tier_score(nxt, VARIETY_TIERS)}/{VARIETY_MAX}."
+            )))
+
+    tips.sort(key=lambda t: -t[0])
+    return tips[:limit]
 
 
 def xi_summary(players):
@@ -541,42 +661,47 @@ def render_chemistry_card(players):
     lines = ["🧪 <b>TEAM CHEMISTRY</b>", "━━━━━━━━━━━━━━━━━━━"]
     for role in report["roles"]:
         # All-rounders show the halving inline so the number explains itself.
-        left = (f"({role['country_component']}/{ROLE_COMPONENT_MAX} ÷ 2)"
+        left = (f"({role['category']}/{ROLE_COMPONENT_MAX} ÷ 2)"
                 if role["halved"]
-                else f"{role['country_component']}/{ROLE_COMPONENT_MAX}")
+                else f"{role['category']}/{ROLE_COMPONENT_MAX}")
         lines.append(
             f"{role['emoji']} <b>{role['label']}</b>: "
-            f"<code>{left} + {role['xi_component']}/{ROLE_COMPONENT_MAX} "
+            f"<code>{left} + {role['xi_component']}/{XI_BONUS_MAX} "
             f"= +{role['bonus']}/{role['max_bonus']}</code>"
         )
 
     lines += [
         "",
+        f"{chem_colour(report['diversity'], DIVERSITY_MAX)} "
         f"<b>Country Diversity</b>: "
         f"<code>{report['diversity']}/{report['diversity_max']}</code> "
         f"({report['diversity_countries']}/{report['diversity_target']} countries)",
+        f"{chem_colour(report['variety'], VARIETY_MAX)} "
         f"<b>Card Variety</b>: "
         f"<code>{report['variety']}/{report['variety_max']}</code> "
         f"({report['variety_types']}/{report['variety_target']} special types)",
+        f"{chem_colour(report['xi_bonus'], XI_BONUS_MAX)} "
         f"<b>Playing XI Bonus</b>: "
         f"<code>{report['xi_bonus']}/{report['xi_bonus_max']}</code>",
+        f"{chem_colour(report['total'], CMUCHEM_TOTAL_MAX)} "
         f"<b>Overall Chemistry</b>: "
         f"<code>{report['total']}/{report['total_max']}</code>",
         "<i>ALR boost is halved as they benefit from BAT &amp; BOWL</i>",
     ]
+
+    tips = improvement_tips(players)
+    if tips:
+        lines.append("")
+        lines.append("💡 <b>How to improve</b>")
+        lines.extend(f"• {text}" for _points, text in tips)
+        lines.append("<i>/chemhelp for the full guide</i>")
+
     return "\n".join(lines)
 
 
 # ── Match effect ────────────────────────────────────────────────────
-# Chemistry is a tie-breaker, never a substitute for card quality. It maps to
-# a small bonus band only: a 100-chemistry XI plays ~3% above its raw ratings
-# and a 0-chemistry XI plays exactly at them. Nothing is ever *penalised*
-# below par, so a new player fielding whatever they pulled is not taxed for
-# it — they are simply not yet earning the bonus.
-CHEMISTRY_MAX_BONUS_PCT = 3.0
-
-
-def chemistry_bonus_pct(total):
-    """Performance bonus (0.0-3.0%) earned by a chemistry score of ``total``."""
-    clamped = max(0, min(int(total), TOTAL_CHEMISTRY_CAP))
-    return round(CHEMISTRY_MAX_BONUS_PCT * clamped / TOTAL_CHEMISTRY_CAP, 3)
+# See ``match_boosts`` above: chemistry lifts a player's effective rating by
+# their role's boost, which the match engine adds alongside player form. An
+# earlier flat "+3% for the whole side" band was replaced by that per-role
+# model — a single team-wide percentage could not express *which unit* the
+# chemistry belonged to, which is the whole point of the per-role card.

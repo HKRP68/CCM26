@@ -146,7 +146,12 @@ class SpecialChemistryTests(unittest.TestCase):
             "TOTY": "toty", "Team of the Year 2026": "toty",
             "Prime": "prime", "Peak": "prime",
             "Legend": "legend", "Ultimate Legend": "legend",
-            "World Cup 2023": "event", "Gold": "event", "IPL 2026": "event",
+            "Star Card": "star",
+            # League editions are distinct types, not one lumped "event".
+            "IPL 2026": "ipl", "WPL": "wpl", "BBL 2025": "bbl",
+            "PSL": "psl", "SA20": "sa20", "CPL": "cpl",
+            # Only genuinely unclassified drops fall through to the catch-all.
+            "World Cup 2023": "event", "Gold": "event",
         }
         for version, expected in cases.items():
             self.assertEqual(chemistry.special_type(version), expected,
@@ -216,7 +221,7 @@ class FullReportTests(unittest.TestCase):
         # must not fall through to the Event catch-all.
         self.assertIsNone(chemistry.special_type("Base card"))
         self.assertEqual(chemistry.special_type("Legend card"), "legend")
-        self.assertEqual(chemistry.special_type("Star Card"), "event")
+        self.assertEqual(chemistry.special_type("Star Card"), "star")
 
     def test_live_country_spellings_fold_onto_one_block(self):
         # data/players.json carries both spellings of Ireland.
@@ -245,16 +250,17 @@ def _rc(country, category, version="Base card"):
 
 
 class RoleChemistryTests(unittest.TestCase):
-    """The /cmuchem breakdown."""
+    """Category Chemistry: 20 per role, lost to players outside the majority."""
 
     def _squad(self):
-        # 6 Indians (4 bowlers + keeper + all-rounder), 4 lone batsmen,
-        # 1 unconnected all-rounder.
-        squad = [_rc(f"Solo{i}", "Batsman") for i in range(4)]
-        squad += [_rc("India", "Bowler") for _ in range(4)]
-        squad += [_rc("India", "Wicket Keeper"), _rc("India", "All-rounder")]
-        squad += [_rc("SoloA", "All-rounder")]
-        return squad
+        # BAT 4 all India, BOWL 4 = 3 Australia + 1 India, WK 1 England,
+        # ALR 2 = England + South Africa.
+        return ([_rc("India", "Batsman") for _ in range(4)]
+                + [_rc("Australia", "Bowler") for _ in range(3)]
+                + [_rc("India", "Bowler")]
+                + [_rc("England", "Wicket Keeper")]
+                + [_rc("England", "All-rounder"),
+                   _rc("South Africa", "All-rounder")])
 
     def test_role_lines_are_ordered_and_labelled(self):
         lines = chemistry.role_chemistry(self._squad())
@@ -263,20 +269,58 @@ class RoleChemistryTests(unittest.TestCase):
 
     def test_role_maximums_match_the_card(self):
         lines = {l["label"]: l for l in chemistry.role_chemistry(self._squad())}
-        self.assertEqual(lines["BAT"]["max_bonus"], 12)
-        self.assertEqual(lines["BOWL"]["max_bonus"], 12)
-        self.assertEqual(lines["WK"]["max_bonus"], 12)
-        self.assertEqual(lines["ALR"]["max_bonus"], 9)
-        # 12/12/12/9 must stay ×3 of the 4/4/4/3 weighting it scaled from.
-        self.assertEqual(lines["ALR"]["max_bonus"] * 4,
-                         lines["BAT"]["max_bonus"] * 3)
+        self.assertEqual(lines["BAT"]["max_bonus"], 4)
+        self.assertEqual(lines["BOWL"]["max_bonus"], 4)
+        self.assertEqual(lines["WK"]["max_bonus"], 4)
+        self.assertEqual(lines["ALR"]["max_bonus"], 3)
 
-    def test_connected_role_scores_full_country_component(self):
+    def test_category_curve_for_four_players(self):
+        # The published example table in /chemhelp.
+        def score(countries):
+            return chemistry.category_chemistry(
+                [_rc(c, "Batsman") for c in countries])[0]
+        self.assertEqual(score(["IND"] * 4), 20)          # all same
+        self.assertEqual(score(["IND"] * 3 + ["AUS"]), 13)
+        self.assertEqual(score(["IND"] * 2 + ["AUS"] * 2), 7)
+        self.assertEqual(score(["IND", "AUS", "ENG", "SA"]), 0)  # all different
+
+    def test_all_same_country_always_scores_full(self):
+        for size in range(1, 6):
+            members = [_rc("India", "Bowler") for _ in range(size)]
+            self.assertEqual(chemistry.category_chemistry(members)[0], 20,
+                             f"size {size}")
+
+    def test_all_different_always_scores_zero(self):
+        for size in range(2, 6):
+            members = [_rc(f"C{i}", "Bowler") for i in range(size)]
+            self.assertEqual(chemistry.category_chemistry(members)[0], 0,
+                             f"size {size}")
+
+    def test_single_player_role_is_trivially_unified(self):
+        score, country, count = chemistry.category_chemistry(
+            [_rc("England", "Wicket Keeper")])
+        self.assertEqual((score, country, count), (20, "England", 1))
+
+    def test_empty_role_scores_zero_without_dividing_by_zero(self):
+        self.assertEqual(chemistry.category_chemistry([]), (0, None, 0))
+        lines = chemistry.role_chemistry([_rc("India", "Bowler")])
+        bat = [l for l in lines if l["label"] == "BAT"][0]
+        self.assertEqual((bat["players"], bat["category"]), (0, 0))
+
+    def test_majority_country_and_outsiders_are_reported(self):
         lines = {l["label"]: l for l in chemistry.role_chemistry(self._squad())}
-        # Four bowlers all inside India's block → fully connected.
-        self.assertEqual(lines["BOWL"]["country_component"], 20)
-        # Four batsmen each alone in their country → nothing.
-        self.assertEqual(lines["BAT"]["country_component"], 0)
+        self.assertEqual(lines["BOWL"]["majority_country"], "Australia")
+        self.assertEqual(lines["BOWL"]["majority_count"], 3)
+        self.assertEqual(lines["BOWL"]["outsiders"], 1)
+        self.assertEqual(lines["BAT"]["outsiders"], 0)
+
+    def test_tied_majority_is_stable(self):
+        # 2-2 split: whichever country is reported must not vary run to run.
+        members = [_rc("India", "Bowler"), _rc("Australia", "Bowler"),
+                   _rc("Australia", "Bowler"), _rc("India", "Bowler")]
+        first = chemistry.category_chemistry(members)[1]
+        for _ in range(5):
+            self.assertEqual(chemistry.category_chemistry(members)[1], first)
 
     def test_only_all_rounders_are_halved(self):
         lines = {l["label"]: l for l in chemistry.role_chemistry(self._squad())}
@@ -284,133 +328,160 @@ class RoleChemistryTests(unittest.TestCase):
         for label in ("BAT", "BOWL", "WK"):
             self.assertFalse(lines[label]["halved"])
 
-    def test_fully_connected_role_reaches_its_ceiling(self):
-        lines = chemistry.role_chemistry(
-            [_rc("India", "Bowler")] * 4, xi_bonus=20)
-        bowl = [l for l in lines if l["label"] == "BOWL"][0]
-        self.assertEqual(bowl["bonus"], 12)
+    def test_halving_applies_to_the_boost_not_the_hundred(self):
+        # ALR contributes its full category to Overall; only its match boost
+        # is halved, matching the worked example on the card.
+        squad = [_rc("India", "All-rounder") for _ in range(2)]
+        report = chemistry.calculate_role_report(squad)
+        alr = [l for l in report["roles"] if l["label"] == "ALR"][0]
+        self.assertEqual(alr["category"], 20)
+        self.assertEqual(report["category_total"], 20)
 
-    def test_all_rounder_ceiling_is_reachable(self):
-        # Dividing the halved component by the full 40 would cap ALR at 75% of
-        # its ceiling, so a perfect ALR line could never appear.
-        lines = chemistry.role_chemistry(
-            [_rc("India", "All-rounder")] * 3, xi_bonus=20)
-        alr = [l for l in lines if l["label"] == "ALR"][0]
-        self.assertEqual(alr["bonus"], 9)
-        self.assertEqual(alr["max_bonus"], 9)
+    def test_every_role_ceiling_is_reachable(self):
+        # A ceiling nobody can hit reads to players as a broken stat.
+        for role in chemistry.ROLE_ORDER:
+            unified = [_rc("India", role) for _ in range(3)]
+            line = [l for l in chemistry.role_chemistry(unified, xi_bonus=20)
+                    if l["role"] == role][0]
+            self.assertEqual(line["bonus"], line["max_bonus"], role)
 
-    def test_a_core_of_three_connects_a_role(self):
-        # Role connection is measured on the 3-block so that full diversity
-        # (4 countries) and connected roles can co-exist inside 11 players.
-        three = chemistry.role_chemistry([_rc("India", "Bowler")] * 3)
-        seven = chemistry.role_chemistry([_rc("India", "Bowler")] * 7)
-        self.assertEqual(three[1]["country_component"], 20)
-        self.assertEqual(three[1]["country_component"],
-                         seven[1]["country_component"])
-
-    def test_icon_connects_an_otherwise_short_block(self):
-        # A pair plus an Icon sizes as three, which is what makes a perfect
-        # 3-3-3-2 card possible at all.
-        pair = chemistry.role_chemistry([_rc("India", "Bowler")] * 2)
-        with_icon = chemistry.role_chemistry(
-            [_rc("India", "Bowler"), _rc("India", "Bowler", "Icon")])
-        self.assertLess(pair[1]["country_component"], 20)
-        self.assertEqual(with_icon[1]["country_component"], 20)
-
-    def test_empty_role_scores_zero_rather_than_dividing_by_zero(self):
-        lines = chemistry.role_chemistry([_rc("India", "Bowler")])
-        bat = [l for l in lines if l["label"] == "BAT"][0]
-        self.assertEqual(bat["players"], 0)
-        self.assertEqual(bat["country_component"], 0)
-
-    def test_unknown_category_falls_back_to_batsman(self):
-        self.assertEqual(chemistry.role_of(_rc("India", "Mystery")), "Batsman")
-        self.assertEqual(chemistry.role_of(_rc("India", "WK")), "Wicket Keeper")
-        self.assertEqual(chemistry.role_of(_rc("India", "allrounder")),
-                         "All-rounder")
-
-    def test_diversity_and_variety_target_four(self):
-        squad = [_rc(f"C{i}", "Batsman") for i in range(4)]
-        self.assertEqual(chemistry.country_diversity(squad), (20, 4))
-        squad = [_rc("India", "Batsman") for _ in range(2)]
-        self.assertEqual(chemistry.country_diversity(squad), (5, 1))
-
-        varied = [_rc("India", "Batsman", v) for v in
-                  ("Icon", "TOTY", "Prime", "Legend")]
-        self.assertEqual(chemistry.card_variety(varied), (15, 4))
-        self.assertEqual(chemistry.card_variety(
-            [_rc("India", "Batsman", "Base card")]), (0, 0))
-
-    def test_diversity_and_variety_are_capped(self):
-        squad = [_rc(f"C{i}", "Batsman") for i in range(8)]
-        self.assertEqual(chemistry.country_diversity(squad)[0], 20)
-        varied = [_rc("India", "Batsman", v) for v in
-                  ("Icon", "TOTY", "Prime", "Legend", "Star Card")]
-        self.assertEqual(chemistry.card_variety(varied)[0], 15)
-
-    def test_overall_is_the_honest_sum_of_the_parts(self):
-        report = chemistry.calculate_role_report(self._squad())
+    def test_worked_example_from_the_spec(self):
+        # BAT all different + full XI bonus -> +2/4; ALR at 7 halved -> +2/3.
+        bat = chemistry.role_chemistry(
+            [_rc(f"C{i}", "Batsman") for i in range(4)], xi_bonus=20)
         self.assertEqual(
-            report["total"],
-            report["role_total"] + report["diversity"]
-            + report["variety"] + report["xi_bonus"])
-        self.assertEqual(report["total_max"], 100)
-        self.assertEqual(report["total_max"],
-                         report["role_max"] + report["diversity_max"]
-                         + report["variety_max"] + report["xi_bonus_max"])
+            [l for l in bat if l["label"] == "BAT"][0]["bonus"], 2)
+        alr = chemistry.role_chemistry(
+            [_rc("India", "All-rounder")] * 2
+            + [_rc("Australia", "All-rounder"), _rc("England", "All-rounder")],
+            xi_bonus=20)
+        line = [l for l in alr if l["label"] == "ALR"][0]
+        self.assertEqual(line["category"], 7)
+        self.assertEqual(line["bonus"], 2)
+
+    def test_colour_tracks_severity(self):
+        self.assertEqual(chemistry.chem_colour(20), "🟩")
+        self.assertEqual(chemistry.chem_colour(13), "🟨")
+        self.assertEqual(chemistry.chem_colour(7), "🟧")
+        self.assertEqual(chemistry.chem_colour(0), "🟥")
+
+    def test_colour_scales_to_other_maximums(self):
+        self.assertEqual(chemistry.chem_colour(10, 10), "🟩")
+        self.assertEqual(chemistry.chem_colour(0, 10), "🟥")
+        self.assertEqual(chemistry.chem_colour(100, 100), "🟩")
+
+    def test_diversity_tiers(self):
+        def score(n):
+            return chemistry.country_diversity(
+                [_rc(f"C{i}", "Batsman") for i in range(n)])[0]
+        self.assertEqual(score(5), 10)
+        self.assertEqual(score(4), 10)
+        self.assertEqual(score(3), 7)
+        self.assertEqual(score(2), 3)
+        self.assertEqual(score(1), 0)
+
+    def test_variety_tiers(self):
+        types = ("Icon", "TOTY", "Prime", "Legend card", "IPL 2026")
+        def score(n):
+            return chemistry.card_variety(
+                [_rc("India", "Batsman", v) for v in types[:n]])[0]
+        self.assertEqual(score(5), 10)
+        self.assertEqual(score(4), 10)
+        self.assertEqual(score(3), 7)
+        self.assertEqual(score(2), 3)
+        self.assertEqual(score(1), 0)
+
+    def test_league_editions_are_distinct_types(self):
+        # Card Variety wants four *different* types, so leagues cannot all
+        # collapse into one "event" bucket.
+        squad = [_rc("India", "Batsman", v) for v in
+                 ("IPL 2026", "BBL 2025", "PSL", "SA20")]
+        score, types = chemistry.card_variety(squad)
+        self.assertEqual(types, 4)
+        self.assertEqual(score, 10)
+
+    def test_playing_xi_bonus_is_diversity_plus_variety(self):
+        squad = ([_rc("India", "Batsman", "Icon"),
+                  _rc("Australia", "Bowler", "TOTY"),
+                  _rc("England", "All-rounder", "IPL 2026"),
+                  _rc("South Africa", "Wicket Keeper", "BBL")])
+        total, detail = chemistry.playing_xi_bonus(squad)
+        self.assertEqual(detail["diversity"], 10)
+        self.assertEqual(detail["variety"], 10)
+        self.assertEqual(total, 20)
+
+    def test_the_parts_are_defined_to_sum_to_one_hundred(self):
+        self.assertEqual(
+            chemistry.CATEGORY_CHEMISTRY_MAX + chemistry.XI_BONUS_MAX, 100)
+        self.assertEqual(chemistry.CMUCHEM_TOTAL_MAX, 100)
+        self.assertEqual(chemistry.CATEGORY_CHEMISTRY_MAX, 80)
+        self.assertEqual(chemistry.XI_BONUS_MAX, 20)
+
+    def test_overall_is_category_plus_xi_bonus(self):
+        report = chemistry.calculate_role_report(self._squad())
+        self.assertEqual(report["total"],
+                         report["category_total"] + report["xi_bonus"])
 
     def test_total_can_actually_reach_its_maximum(self):
-        # A perfect card is genuinely buildable: 3-3-3-2 across four countries,
-        # the two-man block sized up to three by an Icon, and one card of each
-        # of the five special types. This is the test that would have caught
-        # the unreachable-maximum bug.
-        squad = ([_rc("India", "Batsman") for _ in range(3)]
-                 + [_rc("Australia", "Bowler") for _ in range(3)]
+        # Every role unified, four countries, four special types.
+        squad = ([_rc("India", "Batsman") for _ in range(4)]
+                 + [_rc("Australia", "Bowler") for _ in range(4)]
                  + [_rc("England", "All-rounder") for _ in range(2)]
-                 + [_rc("England", "Wicket Keeper")]
-                 + [_rc("West Indies", "Batsman", "Icon"),
-                    _rc("West Indies", "Bowler")])
-        for card, version in zip(squad, ("TOTY", "Prime", "Legend",
-                                         "Star Card")):
+                 + [_rc("South Africa", "Wicket Keeper")])
+        for card, version in zip(squad, ("Icon", "TOTY", "IPL 2026", "BBL")):
             card.version = version
         report = chemistry.calculate_role_report(squad)
-        self.assertEqual(report["role_total"], 45)
-        self.assertEqual(report["diversity"], 20)
-        self.assertEqual(report["variety"], 15)
+        self.assertEqual(report["category_total"], 80)
         self.assertEqual(report["xi_bonus"], 20)
         self.assertEqual(report["total"], 100)
-
-    def test_every_component_ceiling_is_independently_reachable(self):
-        # Guards the whole card against the flaw the 80/20 rework exists to
-        # fix: a ceiling nobody can hit reads to players as a broken stat.
-        for line in chemistry.role_chemistry([], xi_bonus=0):
-            role = line["role"]
-            connected = [_rc("India", role)] * 3
-            best = chemistry.role_chemistry(connected, xi_bonus=20)
-            earned = [l for l in best if l["role"] == role][0]
-            self.assertEqual(earned["bonus"], earned["max_bonus"], role)
+        self.assertEqual(report["boost_total"], report["boost_max"])
 
     def test_report_never_exceeds_its_maximum(self):
         squad = [_rc(f"C{i % 5}", "Batsman", "Icon") for i in range(11)]
         report = chemistry.calculate_role_report(squad)
         self.assertLessEqual(report["total"], report["total_max"])
 
-    def test_the_parts_are_defined_to_sum_to_one_hundred(self):
-        # The card's whole contract: it reads /100 because the components
-        # genuinely add to 100, not because a smaller total was normalised up.
-        self.assertEqual(
-            sum(chemistry.ROLE_MAX_BONUS.values())
-            + chemistry.DIVERSITY_MAX + chemistry.VARIETY_MAX
-            + chemistry.SPECIAL_CHEMISTRY_CAP,
-            100)
-        self.assertEqual(chemistry.CMUCHEM_TOTAL_MAX, 100)
-
     def test_rounding_is_half_up_not_bankers(self):
-        # round(0.5) is 0 in Python; a role bonus of 0.5 must render as +1.
         self.assertEqual(chemistry._round_half_up(0.5), 1)
         self.assertEqual(chemistry._round_half_up(1.5), 2)
         self.assertEqual(chemistry._round_half_up(2.5), 3)
 
+
+class ImprovementTipTests(unittest.TestCase):
+    """The /cmuchem and /chemhelp "how to improve" advice."""
+
+    def test_perfect_squad_has_nothing_to_suggest(self):
+        squad = ([_rc("India", "Batsman") for _ in range(4)]
+                 + [_rc("Australia", "Bowler") for _ in range(4)]
+                 + [_rc("England", "All-rounder") for _ in range(2)]
+                 + [_rc("South Africa", "Wicket Keeper")])
+        for card, version in zip(squad, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        self.assertEqual(chemistry.improvement_tips(squad), [])
+
+    def test_tips_are_ranked_by_points_available(self):
+        squad = ([_rc(f"C{i}", "Batsman") for i in range(4)]
+                 + [_rc("India", "Bowler") for _ in range(3)]
+                 + [_rc("Australia", "Bowler")]
+                 + [_rc("India", "Wicket Keeper")]
+                 + [_rc("India", "All-rounder") for _ in range(2)])
+        tips = chemistry.improvement_tips(squad)
+        points = [p for p, _text in tips]
+        self.assertEqual(points, sorted(points, reverse=True))
+
+    def test_broken_role_is_the_top_tip(self):
+        squad = ([_rc(f"C{i}", "Batsman") for i in range(4)]
+                 + [_rc("India", "Bowler") for _ in range(4)]
+                 + [_rc("India", "All-rounder") for _ in range(2)]
+                 + [_rc("India", "Wicket Keeper")])
+        top = chemistry.improvement_tips(squad)[0]
+        self.assertEqual(top[0], 20)
+        self.assertIn("BAT", top[1])
+
+    def test_tips_are_capped(self):
+        squad = [_rc(f"C{i}", ["Batsman", "Bowler", "Wicket Keeper",
+                               "All-rounder"][i % 4]) for i in range(11)]
+        self.assertLessEqual(len(chemistry.improvement_tips(squad, limit=3)), 3)
 
 class MessageRenderTests(unittest.TestCase):
     """The rendered card, independent of Telegram."""
@@ -470,17 +541,65 @@ class XiSummaryTests(unittest.TestCase):
                          chemistry.calculate_role_report(squad)["total"])
 
 
-class MatchEffectTests(unittest.TestCase):
+class MatchBoostTests(unittest.TestCase):
+    """What chemistry actually does: a per-role effective-rating lift."""
 
-    def test_bonus_band_endpoints(self):
-        self.assertEqual(chemistry.chemistry_bonus_pct(0), 0.0)
-        self.assertEqual(chemistry.chemistry_bonus_pct(100), 3.0)
-        self.assertEqual(chemistry.chemistry_bonus_pct(80), 2.4)
+    def _unified(self):
+        return ([_rc("India", "Batsman") for _ in range(4)]
+                + [_rc("Australia", "Bowler") for _ in range(4)]
+                + [_rc("England", "All-rounder") for _ in range(2)]
+                + [_rc("South Africa", "Wicket Keeper")])
 
-    def test_bonus_is_never_negative_and_never_runs_away(self):
-        self.assertEqual(chemistry.chemistry_bonus_pct(-50), 0.0)
-        self.assertEqual(chemistry.chemistry_bonus_pct(1000), 3.0)
+    def _scattered(self):
+        roles = ["Batsman", "Bowler", "Wicket Keeper", "All-rounder"]
+        return [_rc(f"C{i}", roles[i % 4]) for i in range(11)]
 
+    def test_boosts_are_returned_per_role(self):
+        boosts = chemistry.match_boosts(self._unified())
+        self.assertEqual(set(boosts), set(chemistry.ROLE_ORDER))
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_unified_squad_out_boosts_a_scattered_one(self):
+        unified = chemistry.match_boosts(self._unified())
+        scattered = chemistry.match_boosts(self._scattered())
+        self.assertGreater(sum(unified.values()), sum(scattered.values()))
+
+    def test_boost_never_penalises(self):
+        # Chemistry is a bonus band — the worst squad plays at raw ratings,
+        # never below them.
+        for squad in (self._scattered(), [], [_rc("India", "Batsman")]):
+            for boost in chemistry.match_boosts(squad).values():
+                self.assertGreaterEqual(boost, 0)
+
+    def test_boost_is_capped_at_the_published_maximum(self):
+        squad = self._unified()
+        for card, version in zip(squad, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        boosts = chemistry.match_boosts(squad)
+        for role, boost in boosts.items():
+            self.assertLessEqual(boost, chemistry.ROLE_MAX_BONUS[role], role)
+        self.assertEqual(boosts["Batsman"], 4)
+        self.assertEqual(boosts["All-rounder"], 3)
+
+    def test_swing_between_best_and_worst_is_bounded(self):
+        # The whole point of the cap: chemistry decides close matches, it must
+        # not overturn a rating gap.
+        best = self._unified()
+        for card, version in zip(best, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        swing = max(chemistry.match_boosts(best).values())
+        self.assertLessEqual(swing, 4)
+
+    def test_engine_dicts_are_accepted_without_shims(self):
+        # The match engine carries its XI as plain dicts (handlers.match._pd).
+        as_dicts = [{"country": "India", "category": "Bowler",
+                     "version": "Base card"} for _ in range(4)]
+        self.assertEqual(chemistry.match_boosts(as_dicts)["Bowler"],
+                         chemistry.match_boosts(
+                             [_rc("India", "Bowler") for _ in range(4)])["Bowler"])
+
+    def test_missing_country_or_version_does_not_raise(self):
+        for squad in ([{"category": "Bowler"}],
+                      [{"country": None, "category": None, "version": None}],
+                      [_rc(None, None, None)]):
+            boosts = chemistry.match_boosts(squad)
+            self.assertEqual(set(boosts), set(chemistry.ROLE_ORDER))

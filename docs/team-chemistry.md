@@ -7,6 +7,11 @@ recommended system that replaces it.
 Reference implementation: `services/chemistry.py`. Tests: `tests/test_chemistry.py`.
 Every number in this document is produced by that module, not by hand.
 
+> **Reading order.** §2-6 are the country-block design and the analysis behind
+> it. **§7 is the score players actually see** — a per-role cohesion model that
+> shipped in its place. Both are implemented; §7.6 records what the switch gave
+> up.
+
 ---
 
 ## 1. Summary
@@ -170,11 +175,11 @@ across the whole special-card market instead of piling onto the top tier.
 
 ### 3.5 What chemistry does in a match
 
-Chemistry is a **tie-breaker, not a substitute for card quality**:
-
-```
-bonus % = 3.0 × (chemistry / 100)      →  0% at 0 chem, 3% at 100 chem
-```
+Chemistry is a **tie-breaker, not a substitute for card quality**. This section
+proposed a flat team-wide band; the shipped mechanism is the per-role effective
+rating boost in **§7.6**, which a single percentage could not express — it
+cannot say *which unit* the chemistry belongs to. The two rules below carried
+over unchanged and still govern the shipped version.
 
 Two rules matter more than the number:
 
@@ -182,14 +187,10 @@ Two rules matter more than the number:
   raw ratings. New players fielding whatever they pulled are not taxed; they are
   simply not yet earning the bonus. A penalty model would make the first week
   feel broken.
-- **3% is small on purpose.** Chemistry should decide close matches between
-  similar squads, never let a weak squad beat a strong one. If chemistry can
-  overturn a rating gap, it stops being a fun optimisation and becomes a
-  mandatory tax on squad-building.
-
-Wiring `chemistry_bonus_pct()` into `services/probability_engine.py` alongside the
-existing trait deltas is the follow-up step; the calculator is engine-agnostic
-and ships standalone.
+- **The band is small on purpose.** Chemistry should decide close matches
+  between similar squads, never let a weak squad beat a strong one. If
+  chemistry can overturn a rating gap, it stops being a fun optimisation and
+  becomes a mandatory tax on squad-building.
 
 ---
 
@@ -360,130 +361,190 @@ one shape exceeds ~40% usage, the curve has an unintended peak.
 
 ---
 
-## 7. The /cmuchem card
+## 7. The shipped player-facing score
 
-`/cmuchem` (aliases `/chem`, `/chemistry`) re-cuts the same score by role, so a
-manager sees *which unit* is badly connected rather than one opaque number. It
-adds no new scoring rules — every figure is derived from §3.
-
-```
-🧪 TEAM CHEMISTRY
-━━━━━━━━━━━━━━━━━━━
-🟥 BAT:  20/20 + 20/20 = +12/12
-🟦 BOWL: 20/20 + 20/20 = +12/12
-🟦 WK:   20/20 + 20/20 = +12/12
-🟧 ALR:  (20/20 ÷ 2) + 20/20 = +9/9
-
-Country Diversity: 20/20 (4/4 countries)
-Card Variety:      15/15 (5/4 special types)
-Playing XI Bonus:  20/20
-Overall Chemistry: 100/100
-ALR boost is halved as they benefit from BAT & BOWL
-```
-
-Each role line is `country/20 + xi/20 = +bonus/max`, where the country
-component is how well that role's players sit inside the **XI's** national
-blocks (not how they cluster among themselves — so a lone keeper is judged on
-having countrymen in the side, not on being alone in his role), and the shared
-component is the Playing XI Bonus from §3.4.
+Sections 2-6 are the country-block design: how national blocks *should* be
+valued, and the analysis that produced the concave curve and the Icon rule.
+The score players actually see is a different cut of the same idea, and it is
+what `/cmuchem`, `/pxi` and `/chemhelp` report.
 
 ```
-bonus = (country_component + xi_bonus) ÷ role_ceiling × role_max
-role split: BAT 12, BOWL 12, WK 12, ALR 9  = 45
-          + Country Diversity 20 + Card Variety 15 + Playing XI Bonus 20 = 100
+Category Chemistry   4 roles × 20  = 80
+Playing XI Bonus     10 + 10       = 20
+────────────────────────────────────────
+Overall Chemistry                  = 100
 ```
 
-**The card totals 100 because its parts add to 100**, not because a smaller
-total was normalised up — every number printed is a real component, and a test
-pins the sum. `12/12/12/9` is ×3 of the `4/4/4/3` role weighting, the only
-clean-integer split preserving that ratio.
+### 7.1 Category Chemistry (0-80)
 
-### 7.1 Two ceilings that had to be made reachable
-
-Both would have repeated the flaw §2.1 exists to fix — a maximum nobody can hit
-reads to players as a broken stat:
-
-- **All-rounders** are halved on the country component. Dividing by the full 40
-  anyway capped them at 75% of their ceiling, so a perfect ALR line could never
-  appear. They divide by their own halved ceiling (`10 + 20`) instead.
-- **Role connection** is measured against a *three*-man core, not the four-man
-  sweet spot. Full diversity wants four countries, and 4 × 4 = 16 is more than
-  an XI holds, so a four-block target made `role_total` 45 and `diversity` 20
-  mutually exclusive. Three-man cores fit as 3-3-3-2, so one squad can reach
-  every ceiling. The 80-point country score still peaks at four; this axis only
-  asks whether a player is connected to anyone.
-
-A perfect 100 is consequently buildable and pinned by test: **3-3-3-2 across
-four countries, the two-man block sized up to three by an Icon, carrying one
-card of each of the five special types.** The Icon rule from §3.3 is what makes
-the perfect card possible at all.
-
-### 7.2 On the /pxi lineup card
-
-`/pxi` carries a compact form of the same score — `chemistry.xi_summary()` —
-so squad-building and its feedback live on one screen:
+Where the block curve asks *"how big is this nation's block"*, category
+chemistry asks *"does this **unit** share a country"*. A role starts at 20 and
+loses ground for every player outside its majority country:
 
 ```
-👑 Himanshu's PLAYING XI
-⭐ AVG: 89.2   🧪 CHEM: 63/100
-...
-▫️⚡ 𝐓𝐎𝐓𝐀𝐋 𝐎𝐕𝐑: 𝟗𝟖𝟏 ▫️
-🧪 CHEMISTRY: 63/100  •  shape 6-3-1-1
+N ≤ 1      → 20                    (a lone keeper is trivially unified)
+otherwise  → 20 × (M − 1) ÷ (N − 1)
 ```
 
-Two additions, nothing removed and no layout moved — `/pxi` is read
-constantly, so chemistry sits in its margins rather than restructuring it.
+N is the role's size, M the headcount of its most common country. All one
+country → 20; all different → 0. From the player's side it reads as *"lose
+20 ÷ (N−1) per outsider"*, which is the same arithmetic.
 
-- **Header stat**, beside AVG because it answers the same kind of question:
-  AVG says how good the cards are, CHEM says how well they fit.
-- **Footer** naming the shape, so the §3.2 combination table means something
-  when a player sees `6-3-1-1`.
+| 4 batsmen | Category | |
+|---|---:|---|
+| 4 same country | 20/20 | 🟩 |
+| 3 + 1 outsider | 13/20 | 🟨 |
+| 2 + 2 outsiders | 7/20 | 🟧 |
+| all 4 different | 0/20 | 🟥 |
 
-A part-built side shows neither, rather than a number that moves for reasons
-the player cannot yet see.
+This rewards **unit cohesion** — an all-Australian pace battery, an all-Indian
+top order — while the Playing XI Bonus rewards spread. The two pull in useful
+opposite directions, so the best squads are a handful of unified national units
+rather than one stack or eleven strangers. A 7-stack is not the answer here
+either: seven countrymen spill across roles while leaving the XI on two
+countries, which caps Country Diversity at 3 of 10.
 
-Per-player ⚠️ markers on badly connected cards were built and then removed as
-visual noise on an already-dense screen. The diagnosis lives in `/cmuchem` and
-`/chemhelp` instead; restoring the markers means re-adding an `unconnected`
-set to `xi_summary()` (blocks below `ROLE_CONNECTION_TARGET`) and a flag on
-`_xi_player_line`.
+### 7.2 Playing XI Bonus (0-20)
 
-### 7.3 /chemhelp
+Two tiered halves, both scored on a target of four. Tiers rather than a smooth
+ramp because a player needs to know what the next step costs — *"one more
+country"* is a decision, *"+2.5 per country"* is not.
 
-`/chemhelp` (alias `/chemguide`) is the player-facing rulebook — five tabbed
-sections mirroring `/howto`: **Basics**, **Country**, **Icons**, **Cards**,
-**Reading your card**.
+| Countries | Diversity | | Special types | Variety |
+|---|---:|---|---|---:|
+| 4+ | 10 | | 4+ | 10 |
+| 3 | 7 | | 3 | 7 |
+| 2 | 3 | | 2 | 3 |
+| 1 | 0 | | 1 | 0 |
 
-Its tables are rendered from the constants in `services/chemistry.py` rather
-than typed out — the block curve, the role split, the shape examples and every
-threshold are read at display time, and the shape examples are scored by the
-real calculator. The guide therefore cannot drift away from the maths it
-explains when a constant is retuned.
+Special types are `Icon, TOTY, Prime, Legend, Star, IPL, WPL, BBL, PSL, SA20,
+CPL` plus an `event` catch-all for anything else non-base. **League editions
+are separate types** — Card Variety asks for four *different* types, so an IPL
+card and a BBL card must count as two, not collapse into one bucket.
 
-### 7.4 Known skew: collecting outweighs squad-building
+### 7.3 Stat boosts in matches
 
-Special cards are counted three times on this card — once inside every role
-line, again as Card Variety, and again as the Playing XI Bonus. The result:
+Each role converts its chemistry into an in-match lift for that unit:
 
-| Squad | Score |
-|---|---:|
-| Perfect country blocks, **zero** special cards | **41/100** |
-| **No** country connection, full card variety | **80/100** |
+```
+boost = (category + xi_bonus) ÷ ceiling × max
+max:  BAT 4   BOWL 4   WK 4   ALR 3
+```
 
-A player who builds a well-connected XI from base cards scores about half of
-what an unconnected squad of five special cards scores. That runs against the
-anti-pay-to-win property §3.4 was designed for, and it is a property of the
-card's *shape* (the shared component appearing in every role line) rather than
-of any one constant.
+All-rounders are halved on the category component — they already collect the
+batting and bowling boosts, so paying them a full share would count the same
+cohesion twice. Their line divides by its own halved ceiling (10 + 20 = 30)
+rather than the full 40: dividing by 40 caps ALR at 2.25 of 3, so **+3/3 could
+never appear** however good the squad was, and a ceiling nobody can reach reads
+to players as a broken stat. The halving applies to the *boost* only — an
+all-rounder's full category still counts toward the 100.
 
-The cheap correction, if it proves a problem in telemetry, is to stop feeding
-the Playing XI Bonus into the role lines and score roles on country connection
-alone. That single change moves the two rows to **65 vs 57**, putting the
-squad-builder ahead of the collector without touching any other constant. It
-costs the role lines their `a/20 + b/20` shape, which is why it is recorded
-here as a lever rather than applied — worth watching in telemetry first.
+### 7.4 Colour coding
 
----
+Role colour is a severity read-out, not a per-role brand, so a player can scan
+the left column and see where the work is:
+
+```
+🟩 15-20    🟨 10-14    🟧 5-9    🟥 0-4
+```
+
+The same scale is applied to Diversity, Variety and the Overall line, rescaled
+to their own maxima.
+
+### 7.5 On /pxi and /chemhelp
+
+`/pxi` carries the total beside AVG and the block shape in the footer — two
+lines, nothing removed, no layout moved. A part-built side shows neither,
+rather than a number that moves for reasons the player cannot yet see.
+
+`/chemhelp` (alias `/chemguide`) is the player-facing rulebook: five tabbed
+sections — **Overview**, **Category**, **Bonus**, **Boosts**, **Improve**. Its
+tables are rendered from the constants in `services/chemistry.py` rather than
+typed out, so the guide cannot drift away from the maths when a constant is
+retuned.
+
+The **Improve** tab reads the player's own XI and ranks their best available
+moves by points on offer, so the advice is specific rather than generic:
+
+```
+🟨 Your chemistry: 53/100
+
+• ALR  +20 — 1 player outside England. Match them up for a unified unit.
+• BOWL +13 — 2 players outside Australia. Match them up for a unified unit.
+• BAT   +7 — 1 player outside India. Match them up for a unified unit.
+• Card Variety +4 — you hold 2 special types. Reach 3 for 7/10.
+```
+
+The same ranked tips appear at the foot of `/cmuchem`. When a player has no
+XI yet, the tab falls back to the generic four-step guide.
+
+### 7.6 What chemistry actually does
+
+Chemistry is wired into the live match engine. Each role's boost is added to
+the **effective rating** of every player in that role, exactly as player form
+already is (`handlers/match.py`):
+
+```python
+eff_bat  = striker["bat_rating"] + bat_form_mod  + bat_chem_mod
+eff_bowl = bowler["bowl_rating"] + bowl_form_mod + bowl_chem_mod
+```
+
+Two sides with identical cards therefore play differently:
+
+| | Team A (100 chem) | Team B (30 chem) |
+|---|---|---|
+| Opening bat, 90 raw | **94** | 91 |
+| Opening bowl, 92 raw | **96** | 93 |
+| All-rounder, 75 raw | **78** | 76 |
+
+`services.chemistry.match_boosts(xi)` returns `{role: boost}` and is the whole
+public surface — the engine never reimplements the scoring.
+
+**Why it is deliberately small.** The ceiling is +4, against a form band of
+±2.5 OVR. Chemistry decides close matches between comparable squads and cannot
+overturn a real rating gap. If it could, it would stop being an optimisation
+and become a tax: every player would be forced to build for chemistry before
+they could field the cards they actually wanted.
+
+**Why it is never negative.** A 0-chemistry XI plays at exactly its raw
+ratings. A new player fielding whatever they pulled is not punished — they are
+simply not yet earning the bonus. A penalty model would make the first week
+feel broken, which is the worst possible moment for it.
+
+**Cost control.** An XI is locked for a match, so chemistry is constant for its
+duration. Boosts are computed once per side and cached on the match state
+(`_chem_mod_for`), keyed by team id so the innings swap — which exchanges
+`bat_xi` and `bowl_xi` — reuses the right entry rather than recomputing or
+serving the opposition's numbers. Any failure returns 0.0: chemistry must never
+be able to break a live match, and 0 is the correct neutral for a bonus band.
+
+Bot XIs carry their real `country`/`version` (`services/bot_xi_builder.py`), so
+they are scored on genuine data rather than on missing fields.
+
+**Not yet wired.** `handlers/match.py` is the live PvP/vsbot ball path. `/sim`
+(`services/sim_match.py`), Challenge League (`services/cipl_match.py`) and the
+super over call `calculate_outcome` through separate engines with different
+rating keys; each needs its own seam before chemistry applies there.
+
+### 7.7 What this model gives up
+
+Category chemistry replaced the block curve as the player-facing score, and two
+properties from §3 no longer reach the player:
+
+- **The Icon rule is no longer in the score.** §3.3 existed specifically so a
+  lone Brian Lara or Richard Hadlee was not dead weight. Under category
+  chemistry a lone West Indian in a role of one scores a full 20, which is
+  generous — but a lone Icon among three Australians is worth exactly the same
+  as any other outsider. The protection for small-nation legends is currently
+  carried by Card Variety alone.
+- **The concave block curve** (§3.1) is no longer scored. It still backs the
+  shape string on `/pxi` and remains the analysis of record, but the
+  "4 is the sweet spot" incentive is not what the player optimises against.
+
+`country_chemistry()`, `calculate_chemistry()` and the Icon rule remain
+implemented and tested, so restoring either property is a scoring change rather
+than a rebuild.
+
 
 ## 8. Reference
 
@@ -494,14 +555,23 @@ Mini App, bot XI builder and tests can all share it.
 ```python
 from services import chemistry
 
-report = chemistry.calculate_chemistry(players)   # any objects with .country/.version
-report["total"]    # 0-100
-report["country"]  # 0-80
-report["special"]  # 0-20
-report["shape"]    # "7-4"
-report["blocks"]   # per-country breakdown for the UI
+# The shipped player-facing score (§7)
+report = chemistry.calculate_role_report(players)  # .country/.category/.version
+report["total"]           # 0-100
+report["category_total"]  # 0-80, the four role scores
+report["xi_bonus"]        # 0-20, diversity + variety
+report["roles"]           # per-role lines for the card
+
+chemistry.render_chemistry_card(players)  # the /cmuchem HTML
+chemistry.improvement_tips(players)       # ranked [(points, text), ...]
+chemistry.xi_summary(players)             # (total, shape) for /pxi, or None
+
+# The country-block design (§2-6), still implemented and tested
+chemistry.calculate_chemistry(players)    # 80 country + 20 special
+chemistry.country_chemistry(players)      # (total, blocks) — backs the shape
 ```
 
-`tests/test_chemistry.py` — 29 tests pinning the curve, the published
-combination table, the Icon rule, variety-over-quantity, the closed exploits and
-the live-data edge cases.
+`tests/test_chemistry.py` — 64 tests pinning both models: the block curve, the
+published combination table, the Icon rule, the per-role category curve, the
+tiered bonus, colour severity, reachable ceilings, the ranked tips, the closed
+exploits and the live-data edge cases.

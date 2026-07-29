@@ -986,7 +986,8 @@ def main():
         app.add_handler(CommandHandler(["trade", "tr"], trade_handler))
         app.add_handler(CommandHandler(["playingxi", "pxi", "xi"], playingxi_handler))
         app.add_handler(CommandHandler(["ximage", "xiimg", "xipic"], ximage_handler))
-        app.add_handler(CommandHandler(["cmuchem", "chem", "chemistry"], cmuchem_handler))
+        app.add_handler(CommandHandler(
+            ["cmuchem", "cmuchemistry", "chem", "chemistry"], cmuchem_handler))
         app.add_handler(CommandHandler(["autobuild", "ab", "best11"], autobuild_handler))
         app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
         # /setbo, /sbo — set your own batting order (roster slots 1-11). The
