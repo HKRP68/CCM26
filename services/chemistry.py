@@ -301,6 +301,245 @@ def calculate_chemistry(players):
     }
 
 
+# ════════════════════════════════════════════════════════════════════
+# Role chemistry — the /cmuchem breakdown
+# ════════════════════════════════════════════════════════════════════
+# /cmuchem re-cuts the same 80/20 score by role, so a manager can see *which
+# part* of the XI is badly connected rather than one opaque number. It adds no
+# new scoring rules: every figure below is derived from the country blocks and
+# special-card variety computed above.
+#
+# Each role line reads:  comp1/20 + comp2/20 = +bonus/max
+#
+#   comp1 — how well that role's players sit inside the XI's national blocks.
+#   comp2 — the Playing XI Bonus (special-card variety), shared by every role
+#           because a varied card pool lifts the whole side, not one unit.
+#   bonus — (comp1 + comp2) / 40 × the role's maximum.
+#
+# All-rounders are halved on comp1 and capped at 3 rather than 4: they already
+# collect the batting and bowling benefit, so paying them a full third share
+# would count the same connection twice.
+#
+# Two ceilings here have to be *reachable*, or this card repeats the mistake the
+# 80/20 rework exists to fix — a maximum nobody can hit reads as a broken stat:
+#
+#   • The all-rounder line divides by its own halved ceiling (10 + 20 = 30),
+#     not the full 40. Dividing by 40 caps ALR at 2.25 of 3, so +3/3 could
+#     never appear however good the squad was.
+#   • Role connection is measured against a *three*-man core, not the four-man
+#     sweet spot. Full diversity wants four countries, and 4 countries × 4
+#     players is 16 — more than an XI holds — so a four-block target would make
+#     role_total 15 and diversity 10 mutually exclusive. Three-man cores fit
+#     (3-3-3-2), so both ceilings can be reached by the same squad. The 80-point
+#     country score still peaks at four; this axis only asks "is this player
+#     connected to anyone?", and a three-man core answers yes.
+
+ROLE_ORDER = ("Batsman", "Bowler", "Wicket Keeper", "All-rounder")
+ROLE_LABEL = {"Batsman": "BAT", "Bowler": "BOWL",
+              "Wicket Keeper": "WK", "All-rounder": "ALR"}
+ROLE_EMOJI = {"Batsman": "🟥", "Bowler": "🟦",
+              "Wicket Keeper": "🟦", "All-rounder": "🟧"}
+ROLE_MAX_BONUS = {"Batsman": 4, "Bowler": 4, "Wicket Keeper": 4,
+                  "All-rounder": 3}
+# Roles whose country component is halved to avoid double-counting.
+ROLE_HALVED = ("All-rounder",)
+
+ROLE_COMPONENT_MAX = 20
+
+# A player counts as fully connected once their country block reaches three.
+# See the note above on why this is the 3-block and not the 4-block. Measuring
+# against the 7-block (50) would be worse still — it would quietly re-introduce
+# pressure to stack, which is what the block curve exists to remove.
+ROLE_CONNECTION_TARGET = COUNTRY_BLOCK_VALUE[3]     # 18
+
+# Squad-wide bonuses, both scored against a target of four.
+DIVERSITY_TARGET_COUNTRIES = 4
+DIVERSITY_MAX = 10
+VARIETY_TARGET_TYPES = 4
+VARIETY_MAX = 10
+
+# 4 + 4 + 4 + 3 roles, + diversity, + variety, + the Playing XI Bonus.
+CMUCHEM_TOTAL_MAX = (sum(ROLE_MAX_BONUS.values())
+                     + DIVERSITY_MAX + VARIETY_MAX + SPECIAL_CHEMISTRY_CAP)
+
+_CATEGORY_ALIASES = {
+    "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
+    "wicketkeeper": "Wicket Keeper", "wicket keeper": "Wicket Keeper",
+    "wicket keeper batter": "Wicket Keeper",
+    "wicket keeper batsman": "Wicket Keeper",
+    "all rounder": "All-rounder", "allrounder": "All-rounder",
+    "all-rounder": "All-rounder", "alr": "All-rounder",
+    "bowler": "Bowler", "bowl": "Bowler",
+    "batsman": "Batsman", "batter": "Batsman", "bat": "Batsman",
+}
+
+
+def _round_half_up(value):
+    """Round halves upward. ``round()`` is banker's rounding, which would show
+    a 0.5 role bonus as +0 and read like a bug on the card."""
+    return int(value + 0.5) if value >= 0 else -int(-value + 0.5)
+
+
+def role_of(player):
+    """Normalised role for a player card.
+
+    Unrecognised roles fall back to Batsman, matching how
+    ``services.xi_rules.validate_roster_xi`` buckets an unknown category.
+    """
+    raw = str(getattr(player, "category", "") or "").strip()
+    if raw in ROLE_MAX_BONUS:
+        return raw
+    return _CATEGORY_ALIASES.get(raw.lower().replace("-", " "), "Batsman")
+
+
+def country_diversity(players):
+    """Squad-wide country spread, 0-10, full marks at four countries."""
+    countries = {country_of(p) for p in players}
+    score = min(DIVERSITY_MAX,
+                _round_half_up(len(countries) * DIVERSITY_MAX
+                               / DIVERSITY_TARGET_COUNTRIES))
+    return score, len(countries)
+
+
+def card_variety(players):
+    """Squad-wide special-type spread, 0-10, full marks at four types."""
+    types = {special_type(getattr(p, "version", None)) for p in players}
+    types.discard(None)
+    score = min(VARIETY_MAX,
+                _round_half_up(len(types) * VARIETY_MAX
+                               / VARIETY_TARGET_TYPES))
+    return score, len(types)
+
+
+def role_chemistry(players, xi_bonus=None):
+    """Per-role chemistry lines for /cmuchem.
+
+    ``xi_bonus`` is the shared Playing XI Bonus (0-20); computed from
+    ``special_chemistry`` when not supplied. Returns a list of dicts in
+    ``ROLE_ORDER``, each carrying the two components, the halved flag, the
+    earned bonus and its maximum.
+    """
+    players = list(players)
+    if xi_bonus is None:
+        xi_bonus = special_chemistry(players)[0]
+
+    # Block value per country across the whole XI — a role's players are scored
+    # on how they sit in the *team's* blocks, not on clustering among themselves.
+    _total, blocks = country_chemistry(players)
+    value_by_country = {b["country"]: b["value"] for b in blocks}
+
+    grouped = {role: [] for role in ROLE_ORDER}
+    for player in players:
+        grouped[role_of(player)].append(player)
+
+    lines = []
+    for role in ROLE_ORDER:
+        members = grouped[role]
+        if members:
+            connection = sum(
+                min(1.0, value_by_country.get(country_of(p), 0)
+                    / ROLE_CONNECTION_TARGET)
+                for p in members) / len(members)
+        else:
+            connection = 0.0
+
+        raw = connection * ROLE_COMPONENT_MAX
+        halved = role in ROLE_HALVED
+        effective = raw / 2 if halved else raw
+        maximum = ROLE_MAX_BONUS[role]
+        # Divide by what this role can actually score, so a halved role can
+        # still reach its stated ceiling.
+        ceiling = (ROLE_COMPONENT_MAX / 2 if halved
+                   else ROLE_COMPONENT_MAX) + SPECIAL_CHEMISTRY_CAP
+        bonus = _round_half_up((effective + xi_bonus) / ceiling * maximum)
+
+        lines.append({
+            "role": role,
+            "label": ROLE_LABEL[role],
+            "emoji": ROLE_EMOJI[role],
+            "players": len(members),
+            "country_component": _round_half_up(raw),
+            "country_component_exact": raw,
+            "xi_component": xi_bonus,
+            "halved": halved,
+            "bonus": bonus,
+            "max_bonus": maximum,
+        })
+    return lines
+
+
+def calculate_role_report(players):
+    """The full /cmuchem report.
+
+    Overall is the honest sum of the parts shown on screen — role bonuses plus
+    country diversity, card variety and the Playing XI Bonus — out of
+    ``CMUCHEM_TOTAL_MAX`` (55), so every figure on the card adds up.
+    """
+    players = list(players)
+    xi_bonus, special_detail = special_chemistry(players)
+    lines = role_chemistry(players, xi_bonus=xi_bonus)
+    diversity, country_count = country_diversity(players)
+    variety, type_count = card_variety(players)
+
+    role_total = sum(line["bonus"] for line in lines)
+    return {
+        "roles": lines,
+        "role_total": role_total,
+        "role_max": sum(ROLE_MAX_BONUS.values()),
+        "diversity": diversity,
+        "diversity_countries": country_count,
+        "diversity_target": DIVERSITY_TARGET_COUNTRIES,
+        "diversity_max": DIVERSITY_MAX,
+        "variety": variety,
+        "variety_types": type_count,
+        "variety_target": VARIETY_TARGET_TYPES,
+        "variety_max": VARIETY_MAX,
+        "xi_bonus": xi_bonus,
+        "xi_bonus_max": SPECIAL_CHEMISTRY_CAP,
+        "special_detail": special_detail,
+        "total": role_total + diversity + variety + xi_bonus,
+        "total_max": CMUCHEM_TOTAL_MAX,
+        "players_counted": len(players),
+    }
+
+
+def render_chemistry_card(players):
+    """The /cmuchem card as Telegram HTML.
+
+    Lives here rather than in the handler so it can be rendered — and tested —
+    without importing Telegram, and reused by the Mini App.
+    """
+    report = calculate_role_report(players)
+
+    lines = ["🧪 <b>TEAM CHEMISTRY</b>", "━━━━━━━━━━━━━━━━━━━"]
+    for role in report["roles"]:
+        # All-rounders show the halving inline so the number explains itself.
+        left = (f"({role['country_component']}/{ROLE_COMPONENT_MAX} ÷ 2)"
+                if role["halved"]
+                else f"{role['country_component']}/{ROLE_COMPONENT_MAX}")
+        lines.append(
+            f"{role['emoji']} <b>{role['label']}</b>: "
+            f"<code>{left} + {role['xi_component']}/{ROLE_COMPONENT_MAX} "
+            f"= +{role['bonus']}/{role['max_bonus']}</code>"
+        )
+
+    lines += [
+        "",
+        f"<b>Country Diversity</b>: "
+        f"<code>{report['diversity']}/{report['diversity_max']}</code> "
+        f"({report['diversity_countries']}/{report['diversity_target']} countries)",
+        f"<b>Card Variety</b>: "
+        f"<code>{report['variety']}/{report['variety_max']}</code> "
+        f"({report['variety_types']}/{report['variety_target']} special types)",
+        f"<b>Playing XI Bonus</b>: "
+        f"<code>{report['xi_bonus']}/{report['xi_bonus_max']}</code>",
+        f"<b>Overall Chemistry</b>: "
+        f"<code>{report['total']}/{report['total_max']}</code>",
+        "<i>ALR boost is halved as they benefit from BAT &amp; BOWL</i>",
+    ]
+    return "\n".join(lines)
+
+
 # ── Match effect ────────────────────────────────────────────────────
 # Chemistry is a tie-breaker, never a substitute for card quality. It maps to
 # a small bonus band only: a 100-chemistry XI plays ~3% above its raw ratings
