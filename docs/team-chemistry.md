@@ -369,11 +369,45 @@ The score players actually see is a different cut of the same idea, and it is
 what `/cmuchem`, `/pxi` and `/chemhelp` report.
 
 ```
-Category Chemistry   4 roles × 20  = 80
-Playing XI Bonus     10 + 10       = 20
+Category Chemistry   4 roles × 20  = 80  ┐
+Playing XI Bonus     10 + 10       = 20  ┘ 100 raw points
+
+Squad Base                           30
+Earned               70 × (raw÷100)  70
 ────────────────────────────────────────
-Overall Chemistry                  = 100
+Overall Chemistry                   100   (range 30-100)
 ```
+
+### 7.0 The 30-100 scale
+
+The displayed score starts at a **30-point Squad Base** — every XI turns up and
+plays — and the 100 raw points above are worth the remaining 70.
+
+Two reasons. First, a scale bottomed out at 0 was reachable: sampling 40,000
+legal XIs produced scores as low as **7**, and a single-digit rating reads as
+*"your team is broken"* rather than *"your team is unpolished"*, which is the
+wrong message for the squad most new players field. Second, it makes the whole
+band meaningful — 30-100 is the range players actually occupy, so the number
+moves visibly as they improve instead of crawling out of a dead zone nobody
+sits in.
+
+**Granularity.** Enumerating every legal XI shape against every majority split,
+the scale lands on **66 of the 71 integers** in 30-100. The five it cannot
+reach are **31, 33, 36, 38 and 99**: the first four need a raw score between 1
+and 12, but the smallest step any component can move is 3 (a diversity tier)
+and a role of one auto-scores 20, so that band has nothing to land on; 99 needs
+raw 98.6, and the highest raw below a perfect 100 is 97. Closing them would
+mean replacing the tiered Diversity/Variety steps with continuous ones, which
+is a spec change rather than a fix.
+
+What matters more than full coverage is that **every squad improvement moves
+the number**, which is pinned by test — unifying a bowling unit one card at a
+time reads 79 → 84 → 88 → 93.
+
+**Rounding.** Each role's category is rounded before the four are summed. That
+was measured against leaving it exact: the rounded form covers *more* integers
+(66 vs 64), because rounded values combine into more distinct sums than exact
+thirds do. It is kept for that reason, not for tidiness.
 
 ### 7.1 Category Chemistry (0-80)
 

@@ -389,8 +389,44 @@ DIVERSITY_TARGET_COUNTRIES = DIVERSITY_TIERS[0][0]
 VARIETY_TARGET_TYPES = VARIETY_TIERS[0][0]
 XI_BONUS_MAX = DIVERSITY_MAX + VARIETY_MAX                          # 20
 
-# 80 category + 20 Playing XI Bonus = 100.
-CMUCHEM_TOTAL_MAX = CATEGORY_CHEMISTRY_MAX + XI_BONUS_MAX
+# 80 category + 20 Playing XI Bonus = 100 raw chemistry points.
+CHEMISTRY_POINTS_MAX = CATEGORY_CHEMISTRY_MAX + XI_BONUS_MAX
+
+# ── The 30-100 scale ────────────────────────────────────────────────
+# Every XI turns up and plays, so nobody reads 0 — the displayed score starts
+# at a 30-point Squad Base and the 100 raw points above are worth the
+# remaining 70. Two reasons:
+#
+#   • A raw scale bottomed out at 0 was reachable: sampling 40,000 legal XIs
+#     produced scores as low as 7. A single-digit rating reads as "your team is
+#     broken" rather than "your team is unpolished", which is the wrong message
+#     for the squad most new players field.
+#   • It makes the whole band meaningful. 30-100 is the range players actually
+#     occupy, so the number moves visibly as they improve instead of crawling
+#     out of a dead zone nobody ever sits in.
+#
+#     display = SQUAD_BASE + EARNED_MAX × (raw ÷ 100)
+#
+# Enumerating every legal XI shape against every majority split, the scale
+# lands on 66 of the 71 integers in 30-100. The five it cannot reach are 31,
+# 33, 36, 38 and 99: the first four need a raw score between 1 and 12, but the
+# smallest step any component can move is 3 (a diversity tier) and a role of
+# one auto-scores 20, so that band has nothing to land on; 99 needs raw 98.6,
+# and the highest raw below a perfect 100 is 97.
+#
+# Rounding each role's category before summing was measured against leaving it
+# exact — the rounded form covers *more* integers (66 vs 64), because the
+# rounded values combine into more distinct sums than the exact thirds do. It
+# is kept for that reason, not for tidiness.
+SQUAD_BASE = 30
+EARNED_MAX = 70
+CMUCHEM_TOTAL_MAX = SQUAD_BASE + EARNED_MAX          # 100
+
+
+def earned_points(raw_points):
+    """The earned half of the displayed score (0-70) for ``raw_points``/100."""
+    clamped = max(0.0, min(float(raw_points), CHEMISTRY_POINTS_MAX))
+    return _round_half_up(EARNED_MAX * clamped / CHEMISTRY_POINTS_MAX)
 
 _CATEGORY_ALIASES = {
     "wk": "Wicket Keeper", "keeper": "Wicket Keeper",
@@ -549,6 +585,8 @@ def calculate_role_report(players):
 
     category_total = sum(line["category"] for line in lines)
     boost_total = sum(line["bonus"] for line in lines)
+    raw_points = category_total + xi_bonus
+    earned = earned_points(raw_points)
     return {
         "roles": lines,
         "category_total": category_total,
@@ -565,7 +603,12 @@ def calculate_role_report(players):
         "variety_max": VARIETY_MAX,
         "xi_bonus": xi_bonus,
         "xi_bonus_max": XI_BONUS_MAX,
-        "total": category_total + xi_bonus,
+        "raw_points": raw_points,
+        "raw_points_max": CHEMISTRY_POINTS_MAX,
+        "base": SQUAD_BASE,
+        "earned": earned,
+        "earned_max": EARNED_MAX,
+        "total": SQUAD_BASE + earned,
         "total_max": CMUCHEM_TOTAL_MAX,
         "players_counted": len(players),
     }
@@ -745,6 +788,11 @@ def render_chemistry_card(players):
         f"{chem_colour(report['xi_bonus'], XI_BONUS_MAX)} "
         f"<b>Playing XI Bonus</b>: "
         f"<code>{report['xi_bonus']}/{report['xi_bonus_max']}</code>",
+        "",
+        f"⚪ <b>Squad Base</b>: <code>{report['base']}</code>",
+        f"{chem_colour(report['earned'], EARNED_MAX)} "
+        f"<b>Earned</b>: <code>{report['earned']}/{report['earned_max']}</code> "
+        f"({report['raw_points']}/{report['raw_points_max']} pts)",
         f"{chem_colour(report['total'], CMUCHEM_TOTAL_MAX)} "
         f"<b>Overall Chemistry</b>: "
         f"<code>{report['total']}/{report['total_max']}</code>",

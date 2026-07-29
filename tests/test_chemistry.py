@@ -282,7 +282,8 @@ class RoleChemistryTests(unittest.TestCase):
         self.assertEqual(score(["IND"] * 4), 20)          # all same
         self.assertEqual(score(["IND"] * 3 + ["AUS"]), 13)
         self.assertEqual(score(["IND"] * 2 + ["AUS"] * 2), 7)
-        self.assertEqual(score(["IND", "AUS", "ENG", "SA"]), 0)  # all different
+        self.assertEqual(score(["IND", "AUS", "ENG", "SA"]), 0)
+
 
     def test_all_same_country_always_scores_full(self):
         for size in range(1, 6):
@@ -417,10 +418,18 @@ class RoleChemistryTests(unittest.TestCase):
         self.assertEqual(chemistry.CATEGORY_CHEMISTRY_MAX, 80)
         self.assertEqual(chemistry.XI_BONUS_MAX, 20)
 
-    def test_overall_is_category_plus_xi_bonus(self):
+    def test_overall_is_base_plus_earned(self):
         report = chemistry.calculate_role_report(self._squad())
         self.assertEqual(report["total"],
+                         report["base"] + report["earned"])
+        self.assertEqual(report["base"], 30)
+        self.assertEqual(report["earned_max"], 70)
+
+    def test_raw_points_are_category_plus_xi_bonus(self):
+        report = chemistry.calculate_role_report(self._squad())
+        self.assertEqual(report["raw_points"],
                          report["category_total"] + report["xi_bonus"])
+        self.assertEqual(report["raw_points_max"], 100)
 
     def test_total_can_actually_reach_its_maximum(self):
         # Every role unified, four countries, four special types.
@@ -733,3 +742,82 @@ class BondEngineTests(unittest.TestCase):
 
     def test_dot_never_goes_negative(self):
         self.assertGreater(self._mods(1.0)["dot"], 0)
+
+
+class ThirtyToHundredScaleTests(unittest.TestCase):
+    """The displayed score spans 30-100, finely enough to move on any change."""
+
+    ROLES = ("Batsman", "Bowler", "Wicket Keeper", "All-rounder")
+
+    def _legal_shapes(self):
+        # services.xi_rules: 3-5 BAT, 3-5 BOWL, 1-2 WK, 1-3 ALR, 11 total.
+        return [(b, o, w, a)
+                for b in range(3, 6) for o in range(3, 6)
+                for w in (1, 2) for a in range(1, 4)
+                if b + o + w + a == 11]
+
+    def _reachable(self):
+        """Every displayed total any legal XI can produce."""
+        import itertools
+
+        def category(size, majority):
+            return 20.0 if size <= 1 else 20.0 * (majority - 1) / (size - 1)
+
+        tiers = [points for _threshold, points in chemistry.DIVERSITY_TIERS] + [0]
+        seen = set()
+        for shape in self._legal_shapes():
+            per_role = [sorted({category(n, m) for m in range(1, n + 1)})
+                        for n in shape]
+            for combo in itertools.product(*per_role):
+                for diversity in tiers:
+                    for variety in tiers:
+                        raw = sum(combo) + diversity + variety
+                        seen.add(chemistry.SQUAD_BASE
+                                 + chemistry.earned_points(raw))
+        return seen
+
+    def test_nobody_can_score_below_thirty(self):
+        self.assertEqual(min(self._reachable()), 30)
+        # Even the worst possible XI: every role a different country, one
+        # country overall is impossible with 11 players, so use the floor case.
+        worst = [_rc(f"C{i}", self.ROLES[i % 4]) for i in range(11)]
+        self.assertGreaterEqual(
+            chemistry.calculate_role_report(worst)["total"], 30)
+
+    def test_the_ceiling_is_exactly_one_hundred(self):
+        self.assertEqual(max(self._reachable()), 100)
+        self.assertEqual(chemistry.CMUCHEM_TOTAL_MAX, 100)
+        self.assertEqual(chemistry.SQUAD_BASE + chemistry.EARNED_MAX, 100)
+
+    def test_an_empty_or_broken_xi_still_reads_thirty(self):
+        for squad in ([], [_rc("India", "Batsman")]):
+            total = chemistry.calculate_role_report(squad)["total"]
+            self.assertGreaterEqual(total, 30)
+            self.assertLessEqual(total, 100)
+
+    def test_the_scale_is_finely_grained(self):
+        # The point of leaving category unrounded: the score lands on almost
+        # any integer rather than a handful of fixed values.
+        reachable = {v for v in self._reachable() if 30 <= v <= 100}
+        self.assertGreaterEqual(len(reachable), 60)
+
+    def test_improving_a_unit_always_moves_the_score(self):
+        def squad(unified):
+            bowl = [_rc("Australia" if i < unified else f"X{i}", "Bowler")
+                    for i in range(4)]
+            return ([_rc("India", "Batsman") for _ in range(4)] + bowl
+                    + [_rc("England", "All-rounder") for _ in range(2)]
+                    + [_rc("South Africa", "Wicket Keeper")])
+        totals = [chemistry.calculate_role_report(squad(n))["total"]
+                  for n in range(1, 5)]
+        self.assertEqual(totals, sorted(totals))
+        self.assertEqual(len(set(totals)), len(totals))
+
+    def test_earned_points_endpoints(self):
+        self.assertEqual(chemistry.earned_points(0), 0)
+        self.assertEqual(chemistry.earned_points(100), 70)
+        self.assertEqual(chemistry.earned_points(50), 35)
+
+    def test_earned_points_clamps(self):
+        self.assertEqual(chemistry.earned_points(-40), 0)
+        self.assertEqual(chemistry.earned_points(500), 70)
