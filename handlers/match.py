@@ -2043,12 +2043,28 @@ async def _is_chat_admin(context, chat, user_id):
         return False
 
 
+def _clear_letsplay_drafts(context, cid):
+    """Drop leftover /letsplay + /lpbot invite/setup drafts for ``cid``.
+
+    These live only in ``bot_data`` (no Match row exists until the toss is done),
+    so /clearmatches used to report "no ongoing matches here" while /letsplay
+    kept insisting one was in progress. Returns how many drafts were dropped.
+    """
+    try:
+        from handlers.letsplay import clear_letsplay_drafts_in_chat
+        return clear_letsplay_drafts_in_chat(context, cid)
+    except Exception:
+        logger.exception("clearmatches: Lets Play draft cleanup failed for chat %s", cid)
+        return 0
+
+
 def _clear_chat_memory(context, cid):
     """Tear down in-memory match state, lobbies and challenge drafts for ``cid``.
 
     Returns the set of in-memory match ids found, so the caller can also drop
     their per-match locks / timers. Direct chat-keyed lobby pointers (the /wpm
-    Mini-App lobby and the /cm league lobby pointer) are removed here too.
+    Mini-App lobby and the /cm league lobby pointer) and any pending Lets Play
+    setup drafts are removed here too.
     """
     bd = context.bot_data
     mids = set()
@@ -2067,6 +2083,7 @@ def _clear_chat_memory(context, cid):
     # Chat-keyed lobby pointers (not match-state dicts)
     bd.pop(_cric_lobby_key(cid), None)
     bd.pop(f"cm_lobby_chat_{cid}", None)
+    _clear_letsplay_drafts(context, cid)
     return mids
 
 
@@ -2177,6 +2194,9 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # In-memory teardown: cleared DB matches + any leftover state for this chat.
     # Skip the chat-wide wipe when a non-admin cleared only a subset (a
     # co-existing match must keep its in-memory state).
+    # Lets Play drafts are cleared first so the count can be reported: a chat can
+    # be blocked by a draft alone, with no Match row to show for it.
+    lp_cleared = _clear_letsplay_drafts(context, cid) if wipe_chat_memory else 0
     mem_mids = _clear_chat_memory(context, cid) if wipe_chat_memory else set()
     for mid in set(cleared) | mem_mids:
         try:
@@ -2193,17 +2213,22 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
     n = len(cleared)
+    lp_note = ""
+    if lp_cleared:
+        lp_note = (f"\n<i>{lp_cleared} Lets Play setup"
+                   f"{'s' if lp_cleared != 1 else ''} cleared.</i>")
     if n == 0:
         await update.message.reply_text(
             "✅ <b>No ongoing matches here.</b>\n"
-            "The chat is already clear — you can start a new match. 🏏",
+            "The chat is already clear — you can start a new match. 🏏"
+            + lp_note,
             parse_mode="HTML")
         return
     await update.message.reply_text(
         f"🧹 <b>Matches cleared.</b>\n\n"
         f"All ongoing matches in this chat were marked "
         f"<b>Completed — no team won</b>.\n"
-        f"<i>{n} match{'es' if n != 1 else ''} cleared.</i>\n\n"
+        f"<i>{n} match{'es' if n != 1 else ''} cleared.</i>{lp_note}\n\n"
         f"You can start a fresh match now. 🏏",
         parse_mode="HTML")
 
