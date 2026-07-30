@@ -34,12 +34,13 @@ from database import get_session
 from models import Match, User, UserRoster, Player, PlayerTrait, Trait
 from services.match_constants import PITCH_TYPES, MATCH_EXPIRE, random_match_settings
 from services.telegram_user_service import sync_telegram_user, resolve_command_target
-from services.match_state_store import save_state, A_PICK_CIPL_BOWLER
+from services.match_state_store import save_state, cleanup_state, A_PICK_CIPL_BOWLER
 from services import cipl_match
 from services import batting_order_service as _bos
 from handlers.match import (
     _mention, _active_match_in_chat, _active_match_for_user,
-    _cric_lobby_for_user, _chat_busy_message, _user_busy_message)
+    _cric_lobby_for_user, _chat_busy_message, _user_busy_message,
+    ACTIVE_MATCH_STATUSES)
 from handlers.lineup import _get_ordered_roster, validate_xi
 
 logger = logging.getLogger(__name__)
@@ -81,24 +82,144 @@ def _m(info):
     return _mention(info["tg_id"], info["name"])
 
 
-def _active_letsplay_in_chat(context, chat_id):
+# Every live draft carries its own stage deadline (``expires_at``), refreshed
+# whenever a timer is armed. The timeout jobs normally retire a draft on time,
+# so the deadline only matters when the job never ran — no job queue configured,
+# a job lost to a restart, or an unhandled error between two setup stages. Those
+# used to leave "a Lets Play match is already in progress" wedged in the chat
+# with no way out (not even /clearmatches, which never looked at these drafts).
+STALE_GRACE = 60       # seconds past the deadline before a draft counts as dead
+
+
+def _parse_ts(value):
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _touch_deadline(draft, seconds):
+    """Stamp the stage deadline a stalled-draft sweep can judge the draft by."""
+    if isinstance(draft, dict):
+        draft["expires_at"] = (
+            datetime.utcnow() + timedelta(seconds=seconds)).isoformat()
+
+
+def _draft_is_stale(draft, now=None):
+    """True if this draft's stage deadline passed and its timer never fired."""
+    if draft.get("match_launched"):
+        return False
+    deadline = _parse_ts(draft.get("expires_at"))
+    if deadline is None:
+        # Pre-deadline draft (or one whose timer was never armed): fall back to
+        # creation time and the longest stage a draft can legitimately sit in.
+        created = _parse_ts(draft.get("created_at"))
+        if created is None:
+            return False       # nothing to judge by — leave it alone
+        deadline = created + timedelta(seconds=max(INVITE_TIMEOUT, SETUP_TIMEOUT))
+    return (now or datetime.utcnow()) > deadline + timedelta(seconds=STALE_GRACE)
+
+
+def _reap_draft(context, invite_id):
+    """Drop a dead draft and cancel whatever timers it still owns."""
+    _cancel_invite_timeout(context, invite_id)
+    _cancel_setup_timeout(context, invite_id)
+    _drop_draft(context, invite_id)
+    logger.info("letsplay: reaped stale draft %s", invite_id)
+
+
+def _stale_live_state(session, state):
+    """True if this ``ms_`` Lets Play state outlived its Match row.
+
+    A finished match has its state cleaned up, so a lingering one normally means
+    the match is still live. Normally — a crash mid-completion can strand the
+    board in memory, and then the chat is blocked by a match that is already
+    over in the database. With a session in hand we can just ask.
+    """
+    if session is None:
+        return False
+    mid = state.get("match_id")
+    if not mid:
+        return False
+    try:
+        row = session.query(Match).filter(Match.id == int(mid)).first()
+    except Exception:
+        logger.debug("letsplay: live-state check failed for match %s", mid,
+                     exc_info=True)
+        return False
+    return row is not None and row.status not in ACTIVE_MATCH_STATUSES
+
+
+def _active_letsplay_in_chat(context, chat_id, session=None):
     """True if a Lets Play invite/setup or live match is already running here.
 
     Guards against two concurrent /letsplay matches stepping on each other's
     per-over messages in the same chat. Checks both pending drafts and live
-    ``cipl_approach`` states flagged ``is_letsplay`` (a completed match has its
-    state cleaned up, so a lingering one means it's still live).
+    ``cipl_approach`` states flagged ``is_letsplay``.
+
+    Anything found dead on the way — a draft whose stage deadline lapsed without
+    its timer firing, or a board whose Match row is no longer active — is torn
+    down here instead of blocking the chat, so the guard heals itself on the
+    next /letsplay rather than needing an admin.
     """
     for k, v in list(context.bot_data.items()):
         if not isinstance(k, str) or not isinstance(v, dict):
             continue
         if k.startswith("lp_") and v.get("chat_id") == chat_id \
                 and v.get("status") in ("pending", "pitch", "showxi", "toss"):
+            if _draft_is_stale(v):
+                _reap_draft(context, v.get("invite_id", k[3:]))
+                continue
             return True
         if k.startswith("ms_") and v.get("chat_id") == chat_id \
                 and v.get("is_letsplay") and v.get("mode") == "cipl_approach":
+            if _stale_live_state(session, v):
+                _drop_live_state(context, v.get("match_id"))
+                continue
             return True
     return False
+
+
+def _drop_live_state(context, match_id):
+    """Tear down a stranded live board (memory + its MatchState row)."""
+    try:
+        cleanup_state(context, int(match_id))
+    except Exception:
+        logger.debug("letsplay: cleanup of stranded state %s failed", match_id,
+                     exc_info=True)
+        context.bot_data.pop(f"ms_{match_id}", None)
+    logger.info("letsplay: cleared stranded live state for match %s", match_id)
+
+
+def _draft_player_tg_ids(draft):
+    return {(draft.get(side) or {}).get("tg_id") for side in ("host", "guest")}
+
+
+def clear_letsplay_drafts_in_chat(context, chat_id, tg_id=None):
+    """Drop Lets Play drafts for ``chat_id``; return ``(dropped, skipped)``.
+
+    /clearmatches only ever cleared Match rows and match-state dicts, so a chat
+    wedged by a leftover invite/setup draft stayed wedged. This is the hook that
+    lets it clear those too.
+
+    ``tg_id`` scopes the sweep the same way /clearmatches scopes Match rows: that
+    user may clear the drafts they are playing in, plus any draft already past
+    its deadline (dead either way), but not a live negotiation between two other
+    players. Pass None — bot admin, or an internal teardown that has already
+    authorised itself — to clear the lot.
+    """
+    dropped = skipped = 0
+    for k, v in list(context.bot_data.items()):
+        if not (isinstance(k, str) and k.startswith("lp_")
+                and isinstance(v, dict) and v.get("chat_id") == chat_id):
+            continue
+        if tg_id is not None and tg_id not in _draft_player_tg_ids(v) \
+                and not _draft_is_stale(v):
+            skipped += 1
+            continue
+        _reap_draft(context, v.get("invite_id", k[3:]))
+        dropped += 1
+    return dropped, skipped
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -277,7 +398,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("❌ Do /debut first to get a roster!")
             return
 
-        if _active_letsplay_in_chat(context, chat.id):
+        if _active_letsplay_in_chat(context, chat.id, session):
             await msg.reply_text(
                 "⚠️ A Lets Play match is already in progress in this chat. "
                 "Finish it first before starting another.")
@@ -418,6 +539,10 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════════
 
 def _arm_invite_timeout(context, invite_id):
+    # Stamp the deadline first: without a job queue there is no timer to fire,
+    # and the deadline is then the only thing that stops an abandoned invite
+    # from blocking the chat forever.
+    _touch_deadline(_get_draft(context, invite_id), INVITE_TIMEOUT)
     if not getattr(context, "job_queue", None):
         return
     _cancel_invite_timeout(context, invite_id)
@@ -469,6 +594,7 @@ def _rearm_setup_timeout(context, invite_id):
     """(Re)start the rolling setup timer. Called on every setup transition so a
     draft that stalls in pitch/XI/toss is abandoned instead of blocking the chat
     forever — the accept path cancels the invite timer but never replaced it."""
+    _touch_deadline(_get_draft(context, invite_id), SETUP_TIMEOUT)
     if not getattr(context, "job_queue", None):
         return
     _cancel_setup_timeout(context, invite_id)
@@ -856,8 +982,12 @@ def _letsplay_draft_in_chat(context, chat_id, statuses=None):
     for k, v in list(context.bot_data.items()):
         if (isinstance(k, str) and k.startswith("lp_")
                 and isinstance(v, dict) and v.get("chat_id") == chat_id):
-            if statuses is None or v.get("status") in statuses:
-                return v
+            if statuses is not None and v.get("status") not in statuses:
+                continue
+            if _draft_is_stale(v):
+                _reap_draft(context, v.get("invite_id", k[3:]))
+                continue
+            return v
     return None
 
 

@@ -65,7 +65,7 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("❌ Do /debut first to get a roster!")
             return
 
-        if _active_letsplay_in_chat(context, chat.id):
+        if _active_letsplay_in_chat(context, chat.id, session):
             await msg.reply_text(
                 "⚠️ A Lets Play match is already in progress in this chat. "
                 "Finish it first before starting another.")
