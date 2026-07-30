@@ -2043,28 +2043,33 @@ async def _is_chat_admin(context, chat, user_id):
         return False
 
 
-def _clear_letsplay_drafts(context, cid):
+def _clear_letsplay_drafts(context, cid, tg_id=None):
     """Drop leftover /letsplay + /lpbot invite/setup drafts for ``cid``.
 
     These live only in ``bot_data`` (no Match row exists until the toss is done),
     so /clearmatches used to report "no ongoing matches here" while /letsplay
-    kept insisting one was in progress. Returns how many drafts were dropped.
+    kept insisting one was in progress.
+
+    ``tg_id`` scopes the sweep to the drafts that user may clear (their own, plus
+    any already past their deadline); None clears every draft in the chat.
+    Returns ``(dropped, skipped)``.
     """
     try:
         from handlers.letsplay import clear_letsplay_drafts_in_chat
-        return clear_letsplay_drafts_in_chat(context, cid)
+        return clear_letsplay_drafts_in_chat(context, cid, tg_id)
     except Exception:
         logger.exception("clearmatches: Lets Play draft cleanup failed for chat %s", cid)
-        return 0
+        return 0, 0
 
 
-def _clear_chat_memory(context, cid):
+def _clear_chat_memory(context, cid, lp_tg_id=None):
     """Tear down in-memory match state, lobbies and challenge drafts for ``cid``.
 
     Returns the set of in-memory match ids found, so the caller can also drop
     their per-match locks / timers. Direct chat-keyed lobby pointers (the /wpm
     Mini-App lobby and the /cm league lobby pointer) and any pending Lets Play
-    setup drafts are removed here too.
+    setup drafts are removed here too — ``lp_tg_id`` scopes the Lets Play sweep
+    to what that user is allowed to clear (None clears every draft in the chat).
     """
     bd = context.bot_data
     mids = set()
@@ -2083,7 +2088,7 @@ def _clear_chat_memory(context, cid):
     # Chat-keyed lobby pointers (not match-state dicts)
     bd.pop(_cric_lobby_key(cid), None)
     bd.pop(f"cm_lobby_chat_{cid}", None)
-    _clear_letsplay_drafts(context, cid)
+    _clear_letsplay_drafts(context, cid, lp_tg_id)
     return mids
 
 
@@ -2120,15 +2125,16 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         # somehow co-exist in one chat, a player from one must not be able to end
         # a different pair's game. So they clear their own rows and any co-existing
         # match is left untouched.
+        is_admin = False
+        try:
+            from handlers.forward_broadcast import is_forward_admin
+            is_admin = bool(is_forward_admin(tg.id))
+        except Exception:
+            logger.debug("clearmatches: is_forward_admin check failed",
+                         exc_info=True)
+
         rows_to_clear = rows
         if rows:
-            is_admin = False
-            try:
-                from handlers.forward_broadcast import is_forward_admin
-                is_admin = bool(is_forward_admin(tg.id))
-            except Exception:
-                logger.debug("clearmatches: is_forward_admin check failed",
-                             exc_info=True)
             if not is_admin:
                 me = (session.query(User)
                       .filter(User.telegram_id == tg.id).first())
@@ -2195,9 +2201,15 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # Skip the chat-wide wipe when a non-admin cleared only a subset (a
     # co-existing match must keep its in-memory state).
     # Lets Play drafts are cleared first so the count can be reported: a chat can
-    # be blocked by a draft alone, with no Match row to show for it.
-    lp_cleared = _clear_letsplay_drafts(context, cid) if wipe_chat_memory else 0
-    mem_mids = _clear_chat_memory(context, cid) if wipe_chat_memory else set()
+    # be blocked by a draft alone, with no Match row to show for it. A draft has
+    # no Match row, so the row-based permission check above never sees it —
+    # scope the sweep by caller instead, or a bystander could kill a live
+    # negotiation between two other players.
+    lp_cleared, lp_skipped = (
+        _clear_letsplay_drafts(context, cid, None if is_admin else tg.id)
+        if wipe_chat_memory else (0, 0))
+    mem_mids = (_clear_chat_memory(context, cid, None if is_admin else tg.id)
+                if wipe_chat_memory else set())
     for mid in set(cleared) | mem_mids:
         try:
             cleanup_state(context, mid)
@@ -2215,8 +2227,12 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     n = len(cleared)
     lp_note = ""
     if lp_cleared:
-        lp_note = (f"\n<i>{lp_cleared} Lets Play setup"
-                   f"{'s' if lp_cleared != 1 else ''} cleared.</i>")
+        lp_note += (f"\n<i>{lp_cleared} Lets Play setup"
+                    f"{'s' if lp_cleared != 1 else ''} cleared.</i>")
+    if lp_skipped:
+        lp_note += (f"\n<i>{lp_skipped} Lets Play setup"
+                    f"{'s' if lp_skipped != 1 else ''} left alone — only the "
+                    f"players in it (or a bot admin) can clear it.</i>")
     if n == 0:
         await update.message.reply_text(
             "✅ <b>No ongoing matches here.</b>\n"

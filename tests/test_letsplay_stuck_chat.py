@@ -49,11 +49,16 @@ class _Session:
         return self._row
 
 
+HOST_TG, GUEST_TG, BYSTANDER_TG = 111, 222, 333
+
+
 def _draft(chat_id=-100, status="pitch", age_seconds=0, invite_id=1):
     created = datetime.utcnow() - timedelta(seconds=age_seconds)
     return {
         "invite_id": invite_id, "chat_id": chat_id, "status": status,
         "created_at": created.isoformat(),
+        "host": {"tg_id": HOST_TG, "name": "Host"},
+        "guest": {"tg_id": GUEST_TG, "name": "Guest"},
     }
 
 
@@ -131,7 +136,7 @@ class ClearMatchesTests(unittest.TestCase):
         ctx = _Ctx({"lp_1": _draft(chat_id=-100, invite_id=1),
                     "lp_2": _draft(chat_id=-200, invite_id=2),
                     "_lp_seq": 2})
-        self.assertEqual(letsplay.clear_letsplay_drafts_in_chat(ctx, -100), 1)
+        self.assertEqual(letsplay.clear_letsplay_drafts_in_chat(ctx, -100), (1, 0))
         self.assertNotIn("lp_1", ctx.bot_data)
         self.assertIn("lp_2", ctx.bot_data)
         self.assertEqual(ctx.bot_data["_lp_seq"], 2)
@@ -139,7 +144,7 @@ class ClearMatchesTests(unittest.TestCase):
     def test_clear_helper_drops_drafts_in_any_setup_stage(self):
         ctx = _Ctx({f"lp_{i}": _draft(status=s, invite_id=i)
                     for i, s in enumerate(("pending", "pitch", "showxi", "toss"))})
-        self.assertEqual(letsplay.clear_letsplay_drafts_in_chat(ctx, -100), 4)
+        self.assertEqual(letsplay.clear_letsplay_drafts_in_chat(ctx, -100), (4, 0))
         self.assertEqual([k for k in ctx.bot_data if k.startswith("lp_")], [])
 
     def test_chat_memory_teardown_clears_letsplay_drafts(self):
@@ -153,6 +158,46 @@ class ClearMatchesTests(unittest.TestCase):
         self.assertTrue(letsplay._active_letsplay_in_chat(ctx, -100))
         letsplay.clear_letsplay_drafts_in_chat(ctx, -100)
         self.assertFalse(letsplay._active_letsplay_in_chat(ctx, -100))
+
+
+class ClearPermissionTests(unittest.TestCase):
+    """A draft has no Match row, so /clearmatches' row-based permission check
+    never sees it. The sweep is scoped by caller instead — otherwise clearing a
+    chat with no matches would let any bystander kill a live negotiation."""
+
+    def test_bystander_cannot_clear_someone_elses_live_draft(self):
+        ctx = _Ctx({"lp_1": _draft()})
+        self.assertEqual(
+            letsplay.clear_letsplay_drafts_in_chat(ctx, -100, BYSTANDER_TG), (0, 1))
+        self.assertIn("lp_1", ctx.bot_data)
+
+    def test_a_player_can_clear_their_own_draft(self):
+        for tg_id in (HOST_TG, GUEST_TG):
+            ctx = _Ctx({"lp_1": _draft()})
+            self.assertEqual(
+                letsplay.clear_letsplay_drafts_in_chat(ctx, -100, tg_id), (1, 0))
+            self.assertNotIn("lp_1", ctx.bot_data)
+
+    def test_anyone_can_clear_a_draft_that_is_already_dead(self):
+        # The stuck-chat case: the draft is past its deadline, so it is a corpse
+        # rather than a negotiation — no reason to make bystanders wait it out.
+        stale = _draft()
+        stale["expires_at"] = (datetime.utcnow() - timedelta(seconds=300)).isoformat()
+        ctx = _Ctx({"lp_1": stale})
+        self.assertEqual(
+            letsplay.clear_letsplay_drafts_in_chat(ctx, -100, BYSTANDER_TG), (1, 0))
+        self.assertNotIn("lp_1", ctx.bot_data)
+
+    def test_admin_scope_clears_everything(self):
+        ctx = _Ctx({"lp_1": _draft()})
+        self.assertEqual(letsplay.clear_letsplay_drafts_in_chat(ctx, -100, None), (1, 0))
+        self.assertNotIn("lp_1", ctx.bot_data)
+
+    def test_scoped_chat_teardown_leaves_other_players_drafts_alone(self):
+        from handlers import match as match_handlers
+        ctx = _Ctx({"lp_1": _draft()})
+        match_handlers._clear_chat_memory(ctx, -100, BYSTANDER_TG)
+        self.assertIn("lp_1", ctx.bot_data)
 
 
 if __name__ == "__main__":

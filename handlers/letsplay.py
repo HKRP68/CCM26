@@ -191,20 +191,35 @@ def _drop_live_state(context, match_id):
     logger.info("letsplay: cleared stranded live state for match %s", match_id)
 
 
-def clear_letsplay_drafts_in_chat(context, chat_id):
-    """Drop every Lets Play draft belonging to ``chat_id``; return how many.
+def _draft_player_tg_ids(draft):
+    return {(draft.get(side) or {}).get("tg_id") for side in ("host", "guest")}
+
+
+def clear_letsplay_drafts_in_chat(context, chat_id, tg_id=None):
+    """Drop Lets Play drafts for ``chat_id``; return ``(dropped, skipped)``.
 
     /clearmatches only ever cleared Match rows and match-state dicts, so a chat
     wedged by a leftover invite/setup draft stayed wedged. This is the hook that
     lets it clear those too.
+
+    ``tg_id`` scopes the sweep the same way /clearmatches scopes Match rows: that
+    user may clear the drafts they are playing in, plus any draft already past
+    its deadline (dead either way), but not a live negotiation between two other
+    players. Pass None — bot admin, or an internal teardown that has already
+    authorised itself — to clear the lot.
     """
-    dropped = 0
+    dropped = skipped = 0
     for k, v in list(context.bot_data.items()):
-        if isinstance(k, str) and k.startswith("lp_") \
-                and isinstance(v, dict) and v.get("chat_id") == chat_id:
-            _reap_draft(context, v.get("invite_id", k[3:]))
-            dropped += 1
-    return dropped
+        if not (isinstance(k, str) and k.startswith("lp_")
+                and isinstance(v, dict) and v.get("chat_id") == chat_id):
+            continue
+        if tg_id is not None and tg_id not in _draft_player_tg_ids(v) \
+                and not _draft_is_stale(v):
+            skipped += 1
+            continue
+        _reap_draft(context, v.get("invite_id", k[3:]))
+        dropped += 1
+    return dropped, skipped
 
 
 # ════════════════════════════════════════════════════════════════════
