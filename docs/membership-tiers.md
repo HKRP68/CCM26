@@ -47,9 +47,13 @@ applies to everyone, and the membership discount comes off it. Listing a slot �
 whether by reroll or `add_player_to_market` — always writes
 `final_price = base_price`, so there is no blanket discount for anyone.
 
-`migrate_market_sell_price.py` normalises rows listed before this rule (they
-carried a baked-in 5%/10% cut); the daily reroll would fix them within a day
-anyway.
+`migrate_market_sell_price.py` retires the baked-in cut from rows listed before
+this rule. It resets a slot **only** when its sell price is exactly what the old
+listing code wrote (`int(base × 0.95)` global, `int(base × 0.9)` per-user), so an
+admin's deliberate sale price is recognised and left alone — the new model
+honours those and applies the membership discount on top. Run it with
+`--dry-run` first to see which slots it would touch. The daily reroll would fix
+the global market within a day anyway.
 
 ### Command cooldowns
 
