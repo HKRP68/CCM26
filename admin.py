@@ -6140,20 +6140,22 @@ def webapp_market():
                  db.query(UserRoster.player_id)
                    .filter(UserRoster.user_id == user.id).all()}
 
-        # The market discount is a membership perk (Platinum 5%, Diamond 10%):
-        # tiers without it see and pay the full base_price.
+        # Free, Bronze and Silver see and pay the slot's sell price (== base
+        # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
         from services import subscription_service
-        tier_discount = subscription_service.market_discount_pct(user)
 
         results = []
         for s in slots:
             p = players.get(s.player_id)
             if not p: continue
+            sell_price = subscription_service.market_sell_price(
+                s.base_price, s.final_price)
             eff_price = subscription_service.market_price(
                 user, s.base_price, s.final_price)
-            disc = (int(round((1 - eff_price / s.base_price) * 100))
-                    if tier_discount and s.base_price > 0 and eff_price < s.base_price
-                    else 0)
+            # Struck-through original + "-N%" badge, shown only to tiers that
+            # actually get a discount.
+            disc = (int(round((1 - eff_price / sell_price) * 100))
+                    if sell_price > 0 and eff_price < sell_price else 0)
             results.append({
                 "slot_id": s.id,
                 "slot_index": s.slot_index,
@@ -6164,7 +6166,7 @@ def webapp_market():
                 "category": p.category,
                 "country": p.country,
                 "version": p.version or "Base",
-                "base_price": s.base_price,
+                "base_price": sell_price,
                 "final_price": eff_price,
                 "discount_pct": disc,
                 "quantity": s.quantity,
@@ -6227,8 +6229,8 @@ def webapp_market_buy(slot_id):
             return {"ok": False, "error": "roster_full",
                     "message": "Your roster is full (25/25)."}, 400
 
-        # The market discount is a Platinum perk: Platinum pays final_price
-        # (5% off), everyone else pays the full base_price.
+        # Free, Bronze and Silver pay the slot's sell price (== base price);
+        # Platinum gets 5% off it and Diamond 10%.
         from services import subscription_service
         price = subscription_service.market_price(user, slot.base_price, slot.final_price)
 

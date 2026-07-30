@@ -173,8 +173,8 @@ class DiamondPerksTests(unittest.TestCase):
 
     def test_ten_percent_market_discount(self):
         self.assertEqual(self.svc.market_discount_pct(self.user), 10)
-        # 10% off the base price, beating Platinum's 5% final_price column.
-        self.assertEqual(self.svc.market_price(self.user, 100000, 95000), 90000)
+        # 10% off the sell price — double Platinum's cut.
+        self.assertEqual(self.svc.market_price(self.user, 100000, 100000), 90000)
 
     def test_double_daily_login_reward(self):
         self.assertEqual(self.svc.daily_login_multiplier(self.user), 2)
@@ -185,23 +185,59 @@ class DiamondPerksTests(unittest.TestCase):
 
 
 class MarketDiscountTests(unittest.TestCase):
+    """Base price == sell price == what free/Bronze/Silver pay. Platinum takes
+    5% off it, Diamond 10%, and nobody else gets a cut."""
+
     def setUp(self):
         self.svc = _load_service()
+
+    def test_sell_price_is_the_base_price(self):
+        # A freshly listed slot carries final_price == base_price…
+        self.assertEqual(self.svc.market_sell_price(100000, 100000), 100000)
+        # …and a slot with no sell price of its own falls back to base.
+        self.assertEqual(self.svc.market_sell_price(100000, None), 100000)
 
     def test_free_and_low_tiers_pay_base_price(self):
         for tier in ("none", "bronze", "silver"):
             self.assertEqual(
-                self.svc.market_price(_member(tier), 100000, 95000), 100000,
+                self.svc.market_price(_member(tier), 100000, 100000), 100000,
                 f"{tier} must pay the full base price")
 
-    def test_platinum_keeps_its_five_percent(self):
+    def test_platinum_pays_five_percent_less(self):
         self.assertEqual(
-            self.svc.market_price(_member("platinum"), 100000, 95000), 95000)
+            self.svc.market_price(_member("platinum"), 100000, 100000), 95000)
+
+    def test_diamond_pays_ten_percent_less(self):
+        self.assertEqual(
+            self.svc.market_price(_member("diamond"), 100000, 100000), 90000)
+
+    def test_discount_ladder_is_strictly_ordered(self):
+        prices = [self.svc.market_price(_member(t), 100000, 100000)
+                  for t in ("none", "bronze", "silver", "platinum", "diamond")]
+        self.assertEqual(prices, [100000, 100000, 100000, 95000, 90000])
 
     def test_expired_diamond_pays_full_price(self):
         lapsed = _member("diamond")
         lapsed.subscription_expires_at = datetime.utcnow() - timedelta(days=1)
-        self.assertEqual(self.svc.market_price(lapsed, 100000, 95000), 100000)
+        self.assertEqual(self.svc.market_price(lapsed, 100000, 100000), 100000)
+
+    def test_admin_sale_price_applies_to_everyone(self):
+        # An admin who lowers a slot's "Sell" column puts it on sale for all
+        # tiers; the membership discount then stacks on top of the sale price.
+        self.assertEqual(
+            self.svc.market_price(_member("none"), 100000, 80000), 80000)
+        self.assertEqual(
+            self.svc.market_price(_member("silver"), 100000, 80000), 80000)
+        self.assertEqual(
+            self.svc.market_price(_member("platinum"), 100000, 80000), 76000)
+        self.assertEqual(
+            self.svc.market_price(_member("diamond"), 100000, 80000), 72000)
+
+    def test_no_slot_price_falls_back_to_base(self):
+        self.assertEqual(
+            self.svc.market_price(_member("none"), 100000), 100000)
+        self.assertEqual(
+            self.svc.market_price(_member("diamond"), 100000), 90000)
 
 
 class UpgradePathTests(unittest.TestCase):

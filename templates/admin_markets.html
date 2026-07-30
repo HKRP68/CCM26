@@ -5,7 +5,7 @@
 <h1>🛒 Markets</h1>
 
 <div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ Markets are <strong>shared by all users</strong>. Both refresh once daily at <strong>{{ '%02d:00 IST' | format(cfg.market_refresh_hour_ist or 0) }}</strong>. Player cards always sell at <strong>5% off</strong>. Race-safe atomic stock updates.
+  ℹ️ Markets are <strong>shared by all users</strong>. Both refresh once daily at <strong>{{ '%02d:00 IST' | format(cfg.market_refresh_hour_ist or 0) }}</strong>. Player cards list at their <strong>base price</strong> — that's what Free, Bronze and Silver pay; <strong>Platinum</strong> saves 5% and <strong>Diamond</strong> 10%. Lower a slot's <strong>Sell</strong> price to put it on sale for everyone. Race-safe atomic stock updates.
 </div>
 
 <!-- ── Market settings ── -->
@@ -117,8 +117,9 @@
     <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
       <th style="padding:.5rem;">Slot</th>
       <th style="padding:.5rem; text-align:left;">Player</th>
-      <th style="padding:.5rem;">Base 🪙</th>
-      <th style="padding:.5rem;">Sell 🪙</th>
+      <th style="padding:.5rem;" title="Normal /buy value for this rating.">Base 🪙</th>
+      <th style="padding:.5rem;"
+          title="What every buyer pays. Equals Base when the slot is listed — lower it to put the slot on sale for everyone. Platinum (-5%) and Diamond (-10%) come off this price automatically.">Sell 🪙</th>
       <th style="padding:.5rem;">Stock</th>
       <th style="padding:.5rem;">Active</th>
       <th style="padding:.5rem;"></th>

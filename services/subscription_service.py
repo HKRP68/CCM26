@@ -172,19 +172,29 @@ def discounted_price(user, price: int) -> int:
     return price * (100 - pct) // 100
 
 
+def market_sell_price(base_price: int, final_price: int | None = None) -> int:
+    """The market's own asking price for a slot, before any membership discount.
+
+    Every freshly listed slot carries ``final_price == base_price`` — the base
+    price *is* the sell price — so this normally just returns ``base_price``.
+    ``final_price`` is the admin-editable "Sell" column on the markets page, and
+    an admin who puts a slot on sale there lowers the price for everyone.
+    """
+    if final_price is None:
+        return base_price
+    return final_price
+
+
 def market_price(user, base_price: int, final_price: int | None = None) -> int:
     """Player Market price for this user.
 
-    The discount is a paid perk driven by the tier's ``market_discount_pct``
-    (Platinum 5%, Diamond 10%): it comes off ``base_price``, and free/Bronze/
-    Silver members pay the full ``base_price``. ``final_price`` — the market's
-    own precomputed 5%-off column — caps the result, so a discounted member
-    never pays more than the price the market itself advertises.
+    Free, Bronze and Silver members all pay the market's sell price in full
+    (see :func:`market_sell_price`). The discount is a paid perk driven by the
+    tier's ``market_discount_pct`` — Platinum 5% off, Diamond 10% off — and
+    comes off that same sell price, so one price ladder drives every surface
+    (bot ``/playermarket``, the Mini App market and ``global_market.buy_player``).
     """
-    price = discounted_price(user, base_price)
-    if final_price is not None and market_discount_pct(user) > 0:
-        return min(price, final_price)
-    return price
+    return discounted_price(user, market_sell_price(base_price, final_price))
 
 
 # ── Messaging ───────────────────────────────────────────────────────

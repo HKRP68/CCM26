@@ -1,4 +1,10 @@
-"""Player Market service — daily 5-slot shop of 87+ rated players at 10% off."""
+"""Player Market service — daily 5-slot shop of 87+ rated players.
+
+Slots list at the normal /buy value: base price IS the sell price, and free,
+Bronze and Silver members all pay it in full. The only discount is the
+membership perk applied per-buyer by ``subscription_service.market_price``
+(Platinum 5% off, Diamond 10% off).
+"""
 
 import random
 import logging
@@ -12,7 +18,6 @@ logger = logging.getLogger(__name__)
 # Configuration
 PLAYER_MARKET_SLOTS = 5
 PLAYER_MARKET_MIN_RATING = 87
-PLAYER_MARKET_DISCOUNT = 0.10        # 10% off buy value
 PLAYER_MARKET_REFRESH_HOURS = 24
 
 
@@ -53,13 +58,12 @@ def get_or_refresh_market(session, user_id, force=False):
 
         for i, p in enumerate(chosen):
             base = get_buy_value(p.rating)
-            final = int(base * (1 - PLAYER_MARKET_DISCOUNT))
             row = PlayerMarket(
                 user_id=user_id,
                 slot_index=i + 1,
                 player_id=p.id,
                 base_price=base,
-                final_price=final,
+                final_price=base,      # sell price == base price
                 purchased=False,
                 refreshed_at=now,
             )
@@ -107,13 +111,18 @@ def buy_from_player_market(session, user, slot_index):
     if user.roster_count >= MAX_ROSTER:
         return False, f"Roster full ({MAX_ROSTER}). Release players first."
 
+    # Price: the slot's sell price, less the buyer's membership discount
+    # (Platinum 5%, Diamond 10%; free/Bronze/Silver pay it in full).
+    from services import subscription_service
+    price = subscription_service.market_price(user, row.base_price, row.final_price)
+
     # Coin check
-    if user.total_coins < row.final_price:
-        shortage = row.final_price - user.total_coins
+    if user.total_coins < price:
+        shortage = price - user.total_coins
         return False, f"Need {shortage:,} more coins."
 
     # Process buy
-    user.total_coins -= row.final_price
+    user.total_coins -= price
     entry = UserRoster(
         user_id=user.id, player_id=player.id,
         order_position=user.roster_count + 1,
@@ -123,4 +132,4 @@ def buy_from_player_market(session, user, slot_index):
     user.roster_count += 1
     row.purchased = True
 
-    return True, f"✅ Bought <b>{player.name}</b> ({player.rating} OVR) for {row.final_price:,} 🪙"
+    return True, f"✅ Bought <b>{player.name}</b> ({player.rating} OVR) for {price:,} 🪙"
