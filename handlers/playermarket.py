@@ -129,8 +129,8 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             subtitle=subtitle,
         )
 
-        # The market discount is a membership perk (Platinum 5%, Diamond 10%):
-        # tiers without it see and pay the full base_price.
+        # Free, Bronze and Silver see and pay the slot's sell price (== base
+        # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
         from services import subscription_service
         discount_pct = subscription_service.market_discount_pct(user)
 
@@ -152,7 +152,8 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         btns.append([InlineKeyboardButton(
             "❌ Cancel", callback_data=f"pmcancel_{tg_user.id}")])
 
-        discount_line = (f"🏷️ All cards <b>{discount_pct}% off</b> · Refreshes every 24h"
+        discount_line = (f"🏷️ Your membership: <b>{discount_pct}% off</b> all cards "
+                         "· Refreshes every 24h"
                          if discount_pct else
                          "🏷️ <b>Platinum</b> 5% / <b>Diamond</b> 10% off all cards "
                          "· Refreshes every 24h")
@@ -241,10 +242,12 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
 
         sold = (slot.purchased_count >= slot.quantity)
 
-        # The market discount is a membership perk (Platinum 5%, Diamond 10%);
-        # everyone else pays base_price.
+        # Free, Bronze and Silver pay the slot's sell price (== base price);
+        # Platinum gets 5% off it and Diamond 10%.
         user = session.query(User).filter(User.telegram_id == tg.id).first()
         from services import subscription_service
+        sell_price = subscription_service.market_sell_price(
+            slot.base_price, slot.final_price)
         price = subscription_service.market_price(user, slot.base_price, slot.final_price)
 
         # Build the player's full card
@@ -259,9 +262,9 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
             "",
             f"💸 Price: <b>{price:,}</b> 🪙",
         ]
-        if price < slot.base_price:
-            disc = int((1 - price / slot.base_price) * 100)
-            cap_lines.insert(3, f"<s>{slot.base_price:,}</s> 🪙  <i>(-{disc}%)</i>")
+        if price < sell_price:
+            disc = int(round((1 - price / sell_price) * 100))
+            cap_lines.insert(3, f"<s>{sell_price:,}</s> 🪙  <i>(-{disc}%)</i>")
         if sold:
             cap_lines.append("\n❌ <i>Sold out</i>")
         cap = "\n".join(cap_lines)

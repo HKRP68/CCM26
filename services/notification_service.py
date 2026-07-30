@@ -60,9 +60,10 @@ STARTER_TEMPLATES = [
     {
         "name": "Player market refresh",
         "message": ("🛒 <b>The market just refreshed!</b>\n\n"
-                    "5 new <b>87+ rated</b> players are available at <b>5% off</b> "
-                    "for the next 24 hours. Tap <b>/playermarket</b> to grab them "
-                    "before someone else does!"),
+                    "5 new <b>87+ rated</b> players are listed for the next 24 "
+                    "hours — <b>Platinum</b> members save 5% and <b>Diamond</b> "
+                    "10%. Tap <b>/playermarket</b> to grab them before someone "
+                    "else does!"),
         "target_filter": "all",
         "fire_hour": 12, "fire_minute": 0,
         "window_start_hour": 10, "window_end_hour": 14,

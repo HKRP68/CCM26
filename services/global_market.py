@@ -105,9 +105,11 @@ def reroll_player_market(session, num_slots=None, min_rating=None):
         if not p:
             continue
         base_price = _calc_player_price(p)
-        # Flat 5% discount off normal sell price
-        discount_pct = 5
-        final_price = int(base_price * (1 - discount_pct / 100))
+        # Base price IS the sell price — the market lists at the normal /buy
+        # value and gives nobody a blanket discount. The only thing that lowers
+        # it is the membership perk applied per-buyer in
+        # subscription_service.market_price (Platinum 5%, Diamond 10%).
+        final_price = base_price
         row = GlobalPlayerMarket(
             slot_index=slot,
             player_id=p.id,
@@ -286,7 +288,8 @@ def add_player_to_market(session, player_id, custom_price=None):
     next_slot = (max_slot[0] + 1) if max_slot else 0
 
     base_price = custom_price if custom_price else _calc_player_price(player)
-    final_price = custom_price if custom_price else int(base_price * 0.95)
+    # Sell price == base price; the membership discount is applied per-buyer.
+    final_price = base_price
     row = GlobalPlayerMarket(
         slot_index=next_slot,
         player_id=player.id,
@@ -337,8 +340,8 @@ def buy_player(session, user, slot_index):
     if user.roster_count >= MAX_ROSTER:
         return False, f"Roster full ({MAX_ROSTER}). Release players first."
 
-    # The market discount is a membership perk (Platinum 5%, Diamond 10%);
-    # tiers without it pay the full base_price.
+    # Free, Bronze and Silver pay the slot's sell price (== base price); the
+    # discount is a membership perk (Platinum 5%, Diamond 10%).
     from services import subscription_service
     price = subscription_service.market_price(user, slot.base_price, slot.final_price)
 

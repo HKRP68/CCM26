@@ -23,11 +23,33 @@ Declaration order in `SUBSCRIPTION_TIERS` **is** the rank
 | `/cmumysterybox` | every 15 days | every 8 days | every 4 days | every 2 days |
 | `/cmuweekly` (85+ card, 7-day cd) | — | — | ✅ | ✅ |
 | `/cmuchest` coin chests | — | — | 3 per 10 days (60k–99k) | 5 per 7 days (70k–110k) |
-| Player Market discount | — | — | 5% | 10% |
+| Player Market discount | — | — | 5% off | 10% off |
 | Mini App daily login reward | 1× | 1× | 1× | **2×** |
 | Cooldown reduction | — | −5 min/hr | −10 min/hr | −15 min/hr |
 | `/autobuild` + `/wpmbot` | ✅ | ✅ | ✅ | ✅ |
 | Mini App Autoplay | — | ✅ | ✅ | ✅ |
+
+### Player Market pricing
+
+The market lists every slot at the normal `/buy` value — **base price *is* the
+sell price**, and free, Bronze and Silver members all pay it in full. The
+discount is the paid perk, applied per-buyer by
+`subscription_service.market_price`, so one ladder drives every surface (bot
+`/playermarket`, the Mini App market, `global_market.buy_player`):
+
+| Slot at 100,000 🪙 | Free | 🥉 Bronze | 🥈 Silver | 🏆 Platinum | 💎 Diamond |
+|---|---|---|---|---|---|
+| Pays | 100,000 | 100,000 | 100,000 | 95,000 | 90,000 |
+
+An admin can still put an individual slot on sale by lowering its **Sell**
+column (`GlobalPlayerMarket.final_price`) on the markets page; that sale price
+applies to everyone, and the membership discount comes off it. Listing a slot —
+whether by reroll or `add_player_to_market` — always writes
+`final_price = base_price`, so there is no blanket discount for anyone.
+
+`migrate_market_sell_price.py` normalises rows listed before this rule (they
+carried a baked-in 5%/10% cut); the daily reroll would fix them within a day
+anyway.
 
 ### Command cooldowns
 
@@ -103,7 +125,7 @@ source is always the member's live tier.
 | Instant / upgrade bundles | `subscription_service.grant_instant_rewards`, `grant_upgrade_rewards` |
 | Mystery Box cadence | `handlers/cmumysterybox.py` via `mysterybox_cooldown_seconds` |
 | Weekly card, coin chests | `handlers/premium_drops.py` via `has_weekly_card`, `coin_chest_config` |
-| Market discount | `subscription_service.market_price` (bot `/playermarket`, Mini App market API, `services/global_market.buy_player`) |
+| Market discount | `subscription_service.market_price` / `market_sell_price` (bot `/playermarket`, Mini App market API, `services/global_market.buy_player`) |
 | Daily login multiplier | `services/login_streak_service.claim_login_reward` via `daily_login_multiplier` |
 | Command cooldowns | `services/command_config_service.get_user_cooldown` via `cooldown_seconds` |
 | `/autobuild`, `/wpmbot` | `handlers/lineup.py`, `handlers/wpmbot.py` via `has_premium_commands` |

@@ -490,7 +490,7 @@ class TraitDaily(Base):
 
 class PlayerMarket(Base):
     """Daily player market snapshot. 5 slots per user, refreshes every 24h.
-    Each slot = a high-rated (87+) player at 10% off buy price."""
+    Each slot = a high-rated (87+) player at the normal buy price."""
     __tablename__ = "player_market"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -498,7 +498,7 @@ class PlayerMarket(Base):
     slot_index = Column(Integer, nullable=False)  # 1..5 (display)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
     base_price = Column(Integer, nullable=False)
-    final_price = Column(Integer, nullable=False)  # 10% off
+    final_price = Column(Integer, nullable=False)  # sell price == base_price
     purchased = Column(Boolean, default=False)
     refreshed_at = Column(DateTime, default=datetime.utcnow)
 
@@ -969,8 +969,10 @@ class GlobalPlayerMarket(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     slot_index = Column(Integer, nullable=False, unique=True, index=True)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
-    base_price = Column(Integer, nullable=False)        # price before discount
-    final_price = Column(Integer, nullable=False)       # actual sell price
+    base_price = Column(Integer, nullable=False)        # normal /buy value
+    # Sell price everyone pays; equals base_price when listed, admin-editable to
+    # put a slot on sale. Platinum/Diamond discounts come off it per-buyer.
+    final_price = Column(Integer, nullable=False)
     quantity = Column(Integer, default=1)               # how many can be bought
     purchased_count = Column(Integer, default=0)        # how many already sold
     listed_at = Column(DateTime, default=datetime.utcnow)
