@@ -16826,6 +16826,8 @@ def admin_card_template():
         from services.card_template_service import TEMPLATES_ROOT, ALLOWED_FONT_EXT
         has_font = any(os.path.isfile(os.path.join(TEMPLATES_ROOT, f"font.{ext}"))
                        for ext in ALLOWED_FONT_EXT) or bool(cfg.card_template_font_path)
+        from services.card_template_service import list_template_fonts
+        variant_fonts = list_template_fonts(db)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, variant_settings=variant_settings,
                                default_settings=DEFAULT_TEMPLATE_SETTINGS,
@@ -16835,7 +16837,9 @@ def admin_card_template():
                                color_keys=COLOR_SETTING_KEYS,
                                variants=variants, career_faces=career_faces,
                                has_template=has_template,
-                               template_variants=template_variants, has_font=has_font, country_flags=list_country_flags(),
+                               template_variants=template_variants, has_font=has_font,
+                               variant_fonts=variant_fonts,
+                               country_flags=list_country_flags(),
                                has_global_portrait=has_global_player_portrait(),
                                stats_settings=stats_settings)
     finally:
@@ -16863,15 +16867,27 @@ def admin_card_template_save():
                     flash(f"❌ {_template_variant_label(variant, db)}: {msg}", "error")
                     return redirect(url_for("admin_card_template"))
 
-        # Optional font upload. This is the font used for every generated card.
+        # Optional font uploads: the shared fallback, plus a font of its own for
+        # any card design that needs one (a Career face matching its artwork,
+        # say) without changing how the other cards look.
+        from services.card_template_service import save_template_font
         font_file = request.files.get("font_file")
         if font_file and font_file.filename:
-            from services.card_template_service import save_template_font
             ok, msg, path = save_template_font(font_file.read(), font_file.filename)
             if not ok:
                 db.rollback()
                 flash(f"❌ {msg}", "error")
                 return redirect(url_for("admin_card_template"))
+        for variant in all_template_variants(db):
+            variant_font = request.files.get(f"font_file_{variant}")
+            if variant_font and variant_font.filename:
+                ok, msg, _path = save_template_font(
+                    variant_font.read(), variant_font.filename, variant=variant)
+                if not ok:
+                    db.rollback()
+                    flash(f"❌ {_template_variant_label(variant, db)} font: {msg}",
+                          "error")
+                    return redirect(url_for("admin_card_template"))
 
         # Style and concrete v7.1 HTML generator controls.
         from services.cmu_stats_card_service import normalise_stats_card_settings
@@ -16945,6 +16961,17 @@ def admin_card_template_layout_save():
                 flash(f"❌ {label}: {msg}", "error")
                 return redirect(url_for("admin_card_template"))
 
+        # This card may carry its own typeface, so the tab's save button takes
+        # a font upload alongside the blank template and the layout numbers.
+        variant_font = request.files.get(f"font_file_{variant}")
+        if variant_font and variant_font.filename:
+            from services.card_template_service import save_template_font
+            ok, msg, _path = save_template_font(
+                variant_font.read(), variant_font.filename, variant=variant)
+            if not ok:
+                flash(f"❌ {label} font: {msg}", "error")
+                return redirect(url_for("admin_card_template"))
+
         from services.card_template_storage_service import get_state
         state = get_state() or {}
         variant_settings = _collect_variant_settings(db, only_variant=variant)
@@ -16998,6 +17025,28 @@ def admin_card_template_remove_image():
         pass
     flash(f"✅ Removed the {label} template.", "info")
     return redirect(url_for("admin_card_template"))
+
+
+@app.route("/card-template/font/variant-remove", methods=["POST"])
+@login_required
+def admin_card_template_remove_variant_font():
+    """Remove one card's own font so it falls back to the shared one."""
+    from services.card_template_service import remove_template_font
+    variant = _known_template_variant(request.form.get("variant"))
+    if not variant:
+        flash("❌ Unknown card-template variant.", "error")
+        return redirect(url_for("admin_card_template"))
+    label = _template_variant_label(variant)
+    if not remove_template_font(variant):
+        flash(f"❌ {label} has no font of its own.", "error")
+        return redirect(url_for("admin_card_template"))
+    try:
+        from services.card_generator import invalidate_template_card_cache
+        invalidate_template_card_cache()
+    except Exception:
+        pass
+    flash(f"✅ Removed the {label} font — it now uses the shared font.", "info")
+    return redirect(url_for("admin_card_template") + f"#card-{variant}")
 
 
 @app.route("/card-template/font/remove", methods=["POST"])

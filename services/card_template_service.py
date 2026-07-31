@@ -91,18 +91,20 @@ DEFAULT_COLOR_SETTINGS = {
     "bowl_style_color": "#005632",
     "line_color": "#7cb291",
 }
-# Career faces ship on dark artwork, so light text reads correctly out of the
-# box. Admins can still recolour any of it per face on the website.
+# Career faces ship on dark artwork, so the palette is sampled straight off the
+# reference card design: near-white names and country, teal category line, and
+# cyan for the OVR and the two rating numbers. Admins can still recolour any of
+# it per face on the website.
 CAREER_COLOR_SETTINGS = {
-    "name_color": "#ffffff",
-    "cat_color": "#4fc3f7",
-    "ovr_color": "#4fc3f7",
-    "bat_color": "#4fc3f7",
-    "bowl_color": "#4fc3f7",
-    "country_color": "#ffffff",
-    "bat_style_color": "#ffffff",
-    "bowl_style_color": "#ffffff",
-    "line_color": "#4fc3f7",
+    "name_color": "#f5f6f7",
+    "cat_color": "#00aeb5",
+    "ovr_color": "#00e7fe",
+    "bat_color": "#00d9f5",
+    "bowl_color": "#00d9f5",
+    "country_color": "#e7ebf0",
+    "bat_style_color": "#e8eef5",
+    "bowl_style_color": "#e8eef5",
+    "line_color": "#1c6b7d",
 }
 COLOR_SETTING_KEYS = tuple(DEFAULT_COLOR_SETTINGS)
 
@@ -246,8 +248,24 @@ def remove_template_image(variant="base"):
     return removed
 
 
-def save_template_font(file_bytes, original_filename):
-    """Validate and store the optional global card font (TTF or OTF)."""
+def font_stem(variant=None):
+    """Filename stem for a font: the shared one, or one variant's own.
+
+    ``None`` (or "shared") is the font every card falls back to; a variant key
+    gives that card its own typeface, so a Career face can match its artwork
+    without changing how the rarity cards look.
+    """
+    if not variant or variant == "shared":
+        return "font"
+    return f"font_{normalise_template_variant(variant)}"
+
+
+def save_template_font(file_bytes, original_filename, variant=None):
+    """Validate and store a card font (TTF or OTF).
+
+    Without ``variant`` this is the shared font every card falls back to; with
+    one it is that card's own font.
+    """
     ext = _ext_from_filename(original_filename)
     if ext not in ALLOWED_FONT_EXT:
         return False, "Unsupported font type. Allowed: otf, ttf", None
@@ -256,14 +274,15 @@ def save_template_font(file_bytes, original_filename):
     if len(file_bytes) > MAX_BYTES:
         return False, f"Font too large. Max is {MAX_BYTES / 1024 / 1024:.0f} MB.", None
     _ensure_dir()
+    stem = font_stem(variant)
     for old in ALLOWED_FONT_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"font.{old}")
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{old}")
         if os.path.isfile(path):
             try:
                 os.remove(path)
             except OSError:
                 pass
-    path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+    path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
     try:
         with open(path, "wb") as handle:
             handle.write(file_bytes)
@@ -278,11 +297,12 @@ def save_template_font(file_bytes, original_filename):
     return True, "Font file saved.", path
 
 
-def remove_template_font():
-    """Remove the optional shared font file and restore the renderer fallback."""
+def remove_template_font(variant=None):
+    """Remove a font file and fall back to the next one down the chain."""
+    stem = font_stem(variant)
     removed = False
     for ext in ALLOWED_FONT_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             try:
                 os.remove(path)
@@ -290,6 +310,41 @@ def remove_template_font():
             except OSError:
                 logger.exception("Failed to remove template font %s", path)
     return removed
+
+
+def font_file_path(variant=None):
+    """This variant's OWN uploaded font file, or ``None``. No fallback."""
+    stem = font_stem(variant)
+    for ext in ALLOWED_FONT_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def resolve_font_path(variant=None, session=None, cfg=None):
+    """The font to render this variant with.
+
+    Order: the variant's own upload, then the shared upload, then the legacy
+    ``GameConfig`` path. ``None`` means the renderer uses its built-in
+    condensed fallback.
+    """
+    own = font_file_path(variant) if variant else None
+    if own:
+        return own
+    shared = font_file_path(None)
+    if shared:
+        return shared
+    if cfg is None:
+        from services.config_service import get_config
+        cfg = get_config(session)
+    return template_asset_path(cfg.get("card_template_font_path"))
+
+
+def list_template_fonts(session=None):
+    """``{variant: True}`` for every variant with a font of its own."""
+    return {variant: bool(font_file_path(variant))
+            for variant in all_template_variants(session)}
 
 
 def normalise_template_settings(raw=None, defaults=None):
@@ -683,14 +738,10 @@ def get_template_config(session=None, variant="base"):
                                         variants=all_template_variants(session) + [variant])
     settings = all_settings.get(variant) or all_settings["base"]
     show_portrait = settings.get("show_portrait", True)
-    font_path = None
-    for ext in ALLOWED_FONT_EXT:
-        candidate = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
-        if os.path.isfile(candidate):
-            font_path = candidate
-            break
-    if not font_path:
-        font_path = template_asset_path(cfg.get("card_template_font_path"))
+    # This card's own font if one was uploaded for it, else the shared font.
+    # ``cfg`` is passed through as-is (it is {} whenever runtime state exists),
+    # so the legacy GameConfig path is consulted exactly when it was before.
+    font_path = resolve_font_path(variant, session=session, cfg=cfg)
     return {
         "style": str(style or "tier").lower(),
         "variant": variant,

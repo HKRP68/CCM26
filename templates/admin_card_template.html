@@ -57,7 +57,7 @@
   <div style="margin:0 0 1.5rem;">
     <label style="display:block;margin-bottom:.35rem;font-weight:600;">🔤 Optional Shared Font File</label>
     <input type="file" name="font_file" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
-    <small style="color:var(--muted);">TTF/OTF, max 5 MB — shared by all three rarities. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
+    <small style="color:var(--muted);">TTF/OTF, max 5 MB — the fallback for every card. Any card that needs a different typeface can upload its own on its own tab below. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
     {% if has_font %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_font') }}" formmethod="post">Remove shared font file</button></div>{% endif %}
     <label style="display:block;margin-top:.8rem;"><input type="checkbox" name="show_portrait" {{ 'checked' if cfg.card_template_show_portrait else '' }}> Draw player-page cutout on website cards</label>
   </div>
@@ -146,6 +146,14 @@
         {{ vcheck(variant, 'trim_transparent', 'Auto-trim transparent padding') }}
         {{ vcheck(variant, 'protect_bottom_box', 'Redraw bottom-right box above player') }}
       </div>
+    </div>
+
+    <div class="layout-block">
+      <h4>🔤 Font for this card</h4>
+      <p class="hint">TTF/OTF, max 5 MB. Optional — leave empty and this card uses the shared font above.
+        {% if variant_fonts.get(variant) %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} has its own font</span>{% else %}Upload one to match this card's artwork without changing any other card.{% endif %}</p>
+      <input type="file" name="font_file_{{ variant }}" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
+      {% if variant_fonts.get(variant) %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_variant_font') }}" formmethod="post" name="variant" value="{{ variant }}">Use the shared font instead</button></div>{% endif %}
     </div>
 
     <div class="layout-block">

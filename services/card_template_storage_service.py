@@ -181,11 +181,19 @@ def _asset_paths():
             if os.path.isfile(path):
                 assets[key] = {"path": path, "filename": f"{stem}.{ext}"}
                 break
-    for ext in ALLOWED_FONT_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
-        if os.path.isfile(path):
-            assets["font"] = {"path": path, "filename": f"font.{ext}"}
-            break
+    # The shared font, plus any per-variant font uploaded for one card design.
+    font_stems = [("font", "font")]
+    try:
+        for variant in ("base", "star", "legend", *career_variants()):
+            font_stems.append((f"font_{variant}", f"font_{variant}"))
+    except Exception:
+        logger.debug("per-variant fonts unavailable for mirroring", exc_info=True)
+    for key, stem in font_stems:
+        for ext in ALLOWED_FONT_EXT:
+            path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+            if os.path.isfile(path):
+                assets[key] = {"path": path, "filename": f"{stem}.{ext}"}
+                break
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cmu_assets = {
         "cmu_text_font": os.path.join(root, "assets", "fonts", "BricolageGrotesque-Regular.ttf"),

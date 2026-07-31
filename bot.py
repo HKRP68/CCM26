@@ -15,7 +15,13 @@ from telegram.ext import (
     TypeHandler,
     filters,
 )
-from telegram import BotCommand, Update as _TGUpdate
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
+    Update as _TGUpdate,
+)
 
 from config import BOT_TOKEN
 from database import init_db
@@ -299,21 +305,50 @@ logger = logging.getLogger(__name__)
 # Keep this list aligned with the canonical command names registered in main().
 # Aliases remain supported by CommandHandler, but publishing only canonical names
 # keeps Telegram's slash-command menu complete without filling it with duplicates.
-# Every player-facing command registered in main() must appear here, EXCEPT:
-#   • admin/owner-gated ones (/grant, /setcardid, /clearmatches, /removematch,
-#     /frwd_grp, /frwd_prvt, /tourallow, /tourblock, /tourallowlist) and the
-#     /testwpm diagnostic — these must not show up in everyone's slash menu;
-#   • /eu and /cu, which the Unscramble lobby message already spells out for the
-#     players in it;
-#   • /tradetrait, which is at the mercy of the 100-command ceiling below — it is
-#     spelled out in /traits, /help and /howto instead, and adding it here means
-#     dropping something else.
-# All of those still work as commands — they are simply not advertised.
 #
-# HARD LIMIT: Telegram's setMyCommands accepts at most 100 commands. Going over
-# fails the whole call (leaving the menu stale), so MENU_LIMIT is enforced below
-# and this tuple must stay at or under it.
-MENU_LIMIT = 100   # Telegram's setMyCommands ceiling
+# EVERY registered command is published. Telegram's 100-command ceiling applies
+# per *scope*, not per bot, so the menu is split across scopes rather than
+# trimmed:
+#
+#   • all private chats  — every player command except the group-only ones,
+#                          which simply refuse to run in a DM
+#   • all group chats    — every player command except the private-only ones
+#   • each admin's DM    — the player list plus the admin/owner commands, so
+#                          those stay out of everyone else's menu
+#
+# That gives ~100 slots per bucket instead of 100 in total, which is what makes
+# publishing all of them possible.
+MENU_LIMIT = 100   # Telegram's setMyCommands ceiling, per scope
+
+# Commands whose handler refuses to run outside a group, so listing them in a
+# private chat would only advertise an error message.
+GROUP_ONLY_COMMANDS = frozenset({
+    "bluff", "cartel", "mole", "wordchase", "endchase", "cltour",
+    "unscramble", "ju", "eu", "su", "cu", "ewm", "dwm",
+})
+
+# Commands that only make sense one-to-one with the bot: deep-link entry
+# points, the ones that wait on a typed reply (hopeless in a busy group), and
+# personal toggles.
+PRIVATE_ONLY_COMMANDS = frozenset({
+    "start", "debut", "redeem", "feedback", "notifications", "invite",
+})
+
+# Admin/owner-gated commands. Published only into the DMs of the ids in
+# config.ADMIN_IDS, so they are usable from the slash menu by the people who
+# own them without ever appearing in a player's list.
+ADMIN_MENU_COMMANDS = (
+    ("grant", "Owner: grant a subscription tier to a user"),
+    ("setcardid", "Admin: pin a Telegram photo as a player's card"),
+    ("clearmatches", "Admin: clear stuck matches in this chat"),
+    ("removematch", "Admin: remove one stuck match by id"),
+    ("frwd_grp", "Admin: forward a replied message to all groups"),
+    ("frwd_prvt", "Admin: forward a replied message to all users"),
+    ("tourallow", "Admin: allow a user to create tours"),
+    ("tourblock", "Admin: block a user from creating tours"),
+    ("tourallowlist", "Admin: list users allowed to create tours"),
+    ("testwpm", "Admin: Mini App match diagnostic"),
+)
 
 BOT_MENU_COMMANDS = (
     ("start", "Show the welcome message and command overview"),
@@ -329,6 +364,7 @@ BOT_MENU_COMMANDS = (
     ("releasepl", "Release one player from your roster"),
     ("releasemultiple", "Release multiple roster players"),
     ("trade", "Trade players with another user"),
+    ("cmucareer", "Create and train your own Career Player 🎖"),
     ("playingxi", "View or manage your playing XI"),
     ("ximage", "View your Playing XI as an image"),
     ("cmuchem", "Check your Playing XI's Team Chemistry 🧪"),
@@ -381,11 +417,14 @@ BOT_MENU_COMMANDS = (
     ("unscramble", "Create an Unscramble Player lobby"),
     ("ju", "Join the Unscramble lobby"),
     ("su", "Start the Unscramble game (host only)"),
+    ("eu", "Leave the Unscramble lobby"),
+    ("cu", "Cancel the Unscramble lobby (host only)"),
     ("traits", "View your traits and inventory"),
     ("traitshop", "Browse the daily trait shop"),
     ("traitapply", "Apply a trait to a player"),
     ("traitupgrade", "Upgrade a player trait"),
     ("traitreplace", "Replace a player trait"),
+    ("tradetrait", "Trade a trait with another user"),
     ("removetrait", "Remove a trait from a player (back to inventory)"),
     ("selltrait", "Sell a trait from your inventory for gems"),
     ("playermarket", "Browse the player market"),
@@ -422,8 +461,50 @@ BOT_MENU_COMMANDS = (
 )
 
 
+def _menu_for_scope(scope):
+    """The published command list for one Telegram scope.
+
+    ``scope`` is 'private', 'group' or 'admin'. Group-only commands are left out
+    of private menus (and vice versa) because their handlers refuse to run
+    there, so advertising them would only promise an error.
+    """
+    if scope == "group":
+        return [(c, d) for c, d in BOT_MENU_COMMANDS
+                if c not in PRIVATE_ONLY_COMMANDS]
+    commands = [(c, d) for c, d in BOT_MENU_COMMANDS
+                if c not in GROUP_ONLY_COMMANDS]
+    if scope == "admin":
+        # An admin's DM list is the player list plus the admin commands, which
+        # can run past the ceiling. Admin commands go first so that if the clamp
+        # bites it drops the tail of the player list — which those admins still
+        # have in every other chat — rather than the commands only they can use.
+        return list(ADMIN_MENU_COMMANDS) + commands
+    return commands
+
+
+def _clamped(commands, label):
+    """Trim to Telegram's per-scope ceiling, complaining loudly if it bites.
+
+    Going over makes setMyCommands reject the whole call, which would freeze
+    that menu on whatever was published last — far worse than dropping the tail.
+    """
+    if len(commands) <= MENU_LIMIT:
+        return commands
+    dropped = [c for c, _d in commands[MENU_LIMIT:]]
+    logger.error(
+        "%s menu has %s entries but Telegram allows %s per scope — "
+        "not publishing: %s", label, len(commands), MENU_LIMIT,
+        ", ".join(dropped))
+    return commands[:MENU_LIMIT]
+
+
 async def register_bot_menu(application):
-    """Publish every canonical bot command to Telegram's slash-command menu."""
+    """Publish every registered command, split across Telegram command scopes.
+
+    The 100-command ceiling is per scope, so private chats, group chats and
+    admin DMs each get their own list. Nothing a user can actually run is left
+    unadvertised.
+    """
     # Start the event-loop lag sampler here: post_init runs on the same loop
     # that will serve every update, which is exactly what we want to measure.
     try:
@@ -432,22 +513,49 @@ async def register_bot_menu(application):
     except Exception:
         logger.exception("Could not start the event-loop lag monitor")
 
-    published = BOT_MENU_COMMANDS
-    if len(published) > MENU_LIMIT:
-        # Telegram rejects the whole call over the limit, which would leave the
-        # menu frozen on an old build. Publish what fits and shout about the
-        # rest so the overflow gets pruned deliberately rather than silently.
-        dropped = [c for c, _d in published[MENU_LIMIT:]]
-        logger.error(
-            "BOT_MENU_COMMANDS has %s entries but Telegram allows %s — "
-            "not publishing: %s", len(published), MENU_LIMIT, ", ".join(dropped))
-        published = published[:MENU_LIMIT]
+    def _as_commands(pairs):
+        return [BotCommand(name, description) for name, description in pairs]
 
-    await application.bot.set_my_commands([
-        BotCommand(command, description)
-        for command, description in published
-    ])
-    logger.info("Registered %s Telegram bot-menu commands", len(published))
+    private = _clamped(_menu_for_scope("private"), "Private-chat")
+    group = _clamped(_menu_for_scope("group"), "Group-chat")
+
+    # The default scope backs every chat Telegram has no more specific list for.
+    await application.bot.set_my_commands(_as_commands(private))
+    await application.bot.set_my_commands(
+        _as_commands(private), scope=BotCommandScopeAllPrivateChats())
+    await application.bot.set_my_commands(
+        _as_commands(group), scope=BotCommandScopeAllGroupChats())
+    logger.info("Registered bot-menu commands: %s private, %s group",
+                len(private), len(group))
+
+    # Admin commands go only into the admins' own DMs, so they are reachable
+    # from the slash menu without ever showing up in a player's list. A failure
+    # here (admin never started the bot, id mistyped) must not stop startup.
+    admin_menu = _clamped(_menu_for_scope("admin"), "Admin")
+    published_for = 0
+    for admin_id in _admin_menu_ids():
+        try:
+            await application.bot.set_my_commands(
+                _as_commands(admin_menu),
+                scope=BotCommandScopeChat(chat_id=admin_id))
+            published_for += 1
+        except Exception:
+            logger.warning("Could not publish the admin menu to %s", admin_id,
+                           exc_info=True)
+    if published_for:
+        logger.info("Registered %s admin commands for %s admin chat(s)",
+                    len(ADMIN_MENU_COMMANDS), published_for)
+
+
+def _admin_menu_ids():
+    """Telegram ids that should see the admin commands in their slash menu."""
+    try:
+        from services.admin_ids import configured_admin_ids, configured_owner_ids
+        return sorted({int(i) for i in
+                       (configured_admin_ids() | configured_owner_ids()) if i})
+    except Exception:
+        logger.debug("admin id lookup for the menu failed", exc_info=True)
+        return []
 
 
 async def start_handler(update, context):
