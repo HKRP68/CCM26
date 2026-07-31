@@ -4053,6 +4053,78 @@ from utils.idempotency import claim_once, release
 _WEBAPP_PACK_GUARD_TTL = 30.0
 
 
+def _init_data_telegram_id():
+    """Telegram id from the signed initData header, or None.
+
+    Used only to honour the maintenance bypass list before a request reaches
+    its endpoint. Verification is a cheap HMAC and never touches the database;
+    the endpoint still runs its own :func:`_webapp_auth` afterwards.
+    """
+    init_data = request.headers.get("Authorization", "") or ""
+    if init_data.startswith("tma "):
+        init_data = init_data[4:]
+    if not init_data:
+        return None
+    if init_data.startswith("DEV_") and os.getenv("WEBAPP_DEV_MODE") == "1":
+        try:
+            return int(init_data[4:])
+        except ValueError:
+            return None
+    bot_token = os.getenv("BOT_TOKEN", "")
+    if not bot_token:
+        return None
+    try:
+        from services.webapp_auth import verify_init_data, get_user_id
+        return get_user_id(verify_init_data(init_data, bot_token))
+    except Exception:
+        logger.exception("maintenance bypass id lookup failed (non-fatal)")
+        return None
+
+
+@app.before_request
+def _block_miniapp_during_maintenance():
+    """Lock the Mini App while maintenance mode is on.
+
+    The bot's middleware already blocks commands; without this the same user
+    could open the Mini App and keep spinning, buying, and claiming. Gating in
+    a before-request hook covers every Mini App API — including ones added
+    later — instead of relying on each endpoint to remember the check.
+
+    In-flight matches are exempt (see MINIAPP_LIVE_MATCH_PATHS) exactly like
+    the bot lets in-match callback queries through, and bypass-listed admins
+    are unaffected.
+    """
+    try:
+        from services.maintenance_service import (is_maintenance_active,
+                                                  is_miniapp_live_match_path,
+                                                  is_miniapp_path,
+                                                  should_block_miniapp_path,
+                                                  get_maintenance_message)
+        # Cheapest checks first: the common case is maintenance off, and this
+        # hook runs on every request. Only verify initData (an HMAC) once we
+        # know a real lock is in play and the path isn't already exempt.
+        if not is_miniapp_path(request.path) or is_miniapp_live_match_path(request.path):
+            return None
+        from services.config_service import get_config
+        cfg = get_config()
+        if not is_maintenance_active(cfg):
+            return None
+        if not should_block_miniapp_path(request.path,
+                                         _init_data_telegram_id(), cfg):
+            return None
+        until = cfg.get("maintenance_until")
+        return {
+            "ok": False,
+            "error": "maintenance",
+            "message": get_maintenance_message(cfg),
+            "until": until.isoformat() if hasattr(until, "isoformat") else None,
+        }, 503
+    except Exception:
+        # A broken maintenance check must never take the Mini App down.
+        logger.exception("maintenance gate failed (non-fatal)")
+        return None
+
+
 def _webapp_auth(allow_not_debuted=False):
     """Verify Telegram initData from Authorization header.
 
