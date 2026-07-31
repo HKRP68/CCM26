@@ -22,6 +22,38 @@ var state = {
   pendingRolePid: null,
 };
 
+/* ── Maintenance lock ─────────────────────────────────── */
+/* Every /api/fantasy/* endpoint returns 503 {error:"maintenance"} while the
+   game is under maintenance. Show that once instead of an empty picker. */
+var maintenanceShown = false;
+
+function isMaintenance(d) {
+  return !!(d && d.ok === false && d.error === 'maintenance');
+}
+
+function showMaintenance(d) {
+  if (maintenanceShown) return true;
+  maintenanceShown = true;
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;'
+    + 'align-items:center;justify-content:center;padding:1.5rem;text-align:center;'
+    + 'background:#0b0f17;color:#fff;font:inherit;';
+  var icon = document.createElement('div');
+  icon.style.cssText = 'font-size:2.75rem;margin-bottom:.85rem;';
+  icon.textContent = '🛠️';
+  var body = document.createElement('div');
+  body.style.cssText = 'max-width:22rem;line-height:1.65;white-space:pre-line;';
+  // textContent, so an admin-written message can never inject markup here.
+  body.textContent = ((d && d.message) || 'The game is under maintenance.')
+    .replace(/<[^>]+>/g, '');
+  var card = document.createElement('div');
+  card.appendChild(icon);
+  card.appendChild(body);
+  wrap.appendChild(card);
+  document.body.appendChild(wrap);
+  return true;
+}
+
 /* ── Init ─────────────────────────────────────────────── */
 function preloadSquad(squad) {
   (squad || []).forEach(function(pick) {
@@ -46,6 +78,7 @@ function preloadSquad(squad) {
     headers: { 'Authorization': 'tma ' + initData }
   }).then(function(r) { return r.json(); })
     .then(function(d) {
+      if (isMaintenance(d)) return showMaintenance(d);
       if (d.ok && d.league) {
         if (!state.leagueId) state.leagueId = d.league.id;
         document.getElementById('league-title').textContent = '🏏 ' + d.league.name;
@@ -100,6 +133,7 @@ function loadPlayers(reset) {
   fetch(url).then(function(r) { return r.json(); })
     .then(function(d) {
       state.loading = false;
+      if (isMaintenance(d)) return showMaintenance(d);
       if (!d.ok) return;
       state.allPlayers = state.allPlayers.concat(d.players || []);
       updateCountryOptions(d.countries || []);
@@ -390,6 +424,7 @@ function confirmSquad() {
     body: JSON.stringify({ league_id: parseInt(state.leagueId, 10), picks: picks }),
   }).then(function(r) { return r.json(); })
     .then(function(d) {
+      if (isMaintenance(d)) return showMaintenance(d);
       if (d.ok) {
         if (tg && tg.showAlert) {
           tg.showAlert('✅ Squad saved! Good luck.', function() { if (tg.close) tg.close(); });

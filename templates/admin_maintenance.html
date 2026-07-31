@@ -151,7 +151,7 @@
     {% if active %}
       Disabling will let users run commands normally. The custom message and ETA are preserved for next time.
     {% else %}
-      Enabling will block all new commands. <strong>Matches already in progress will continue uninterrupted</strong> — only fresh commands are blocked. Callback buttons inside matches still work.
+      Enabling will block all new commands <strong>and lock the Mini App</strong>. <strong>Matches already in progress will continue uninterrupted</strong> — only fresh commands are blocked. Callback buttons inside matches still work.
     {% endif %}
   </p>
 
@@ -252,7 +252,8 @@
   <h3>How it works</h3>
   <ul style="color:var(--muted);line-height:1.7;padding-left:1.2rem;">
     <li><strong>New commands blocked:</strong> /playmatch, /vsbot, /claim, /daily, etc. all return the maintenance message.</li>
-    <li><strong>Live matches continue:</strong> taps on inline buttons (shot selection, fielding, etc.) bypass the lock so users can finish.</li>
+    <li><strong>Mini App locked:</strong> opening the Mini App shows the same maintenance message instead of the game. Spins, claims, packs, market, quests, XI edits, and fantasy are all blocked server-side.</li>
+    <li><strong>Live matches continue:</strong> taps on inline buttons (shot selection, fielding, etc.) bypass the lock so users can finish — and so do the Mini App's live-match screens, including an in-flight Quick Match. Starting a new match is blocked.</li>
     <li><strong>Auto-expire:</strong> if ETA is set and passes, users are unlocked automatically — but the admin must click "Disable & Resume" to fully turn off maintenance and clear the start time.</li>
     <li><strong>Bypass list:</strong> admins listed there can use any command for testing. Find your telegram_id by messaging <code>@userinfobot</code>.</li>
     <li><strong>Cache:</strong> the bot caches config in memory. Saving here auto-invalidates the cache so changes take effect on the next message.</li>

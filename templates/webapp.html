@@ -2070,6 +2070,25 @@
   .guide-sub { margin-top: 0.12rem; color: var(--muted); font-size: 0.7rem; line-height: 1.35; }
   .guide-btn { border: 1px solid var(--accent); background: transparent; color: var(--accent); border-radius: 8px; padding: 0.4rem 0.52rem; font: inherit; font-size: 0.7rem; font-weight: 800; cursor: pointer; }
 
+  /* Maintenance lock — covers the whole app when the server returns 503 */
+  #maintenance-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    display: grid; place-items: center; padding: 1.5rem;
+    background: var(--bg, #0b0f17);
+  }
+  #maintenance-overlay .maint-card {
+    max-width: 22rem; width: 100%; text-align: center;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 18px; padding: 1.75rem 1.35rem;
+  }
+  #maintenance-overlay .maint-icon { font-size: 2.75rem; line-height: 1; margin-bottom: 0.85rem; }
+  #maintenance-overlay .maint-body { color: var(--text); font-size: 0.92rem; line-height: 1.65; }
+  #maintenance-overlay .maint-retry {
+    margin-top: 1.35rem; border: 1px solid var(--accent); background: transparent;
+    color: var(--accent); border-radius: 10px; padding: 0.6rem 1.1rem;
+    font: inherit; font-weight: 800; cursor: pointer;
+  }
+
 </style>
 </head>
 <body>
@@ -2938,6 +2957,12 @@ async function api(path, body, timeoutMs = 25000) {
       signal: ctrl.signal,
     });
     const data = await resp.json();
+    // Maintenance is server-enforced on every Mini App endpoint, so catching
+    // it here covers every feature instead of each caller toasting its own
+    // error. Live-match endpoints stay open, so a match in progress still ends.
+    if (resp.status === 503 && data && data.error === 'maintenance') {
+      showMaintenanceScreen(data);
+    }
     return { ok: resp.ok && data.ok, status: resp.status, data };
   } catch (e) {
     const aborted = e?.name === 'AbortError';
@@ -2954,6 +2979,39 @@ async function api(path, body, timeoutMs = 25000) {
   }
 }
 
+// ════════════════ Maintenance lock ════════════════
+let maintenanceShown = false;
+
+// The admin writes the maintenance message with Telegram's HTML subset. Render
+// that subset only — everything else is escaped, so an admin-authored message
+// can never inject markup into the Mini App.
+function maintenanceHtml(message) {
+  return escapeHtml(message || '')
+    .replace(/&lt;\/?(b|strong)&gt;/g, m => (m.includes('/') ? '</b>' : '<b>'))
+    .replace(/&lt;\/?(i|em)&gt;/g, m => (m.includes('/') ? '</i>' : '<i>'))
+    .replace(/&lt;br\s*\/?&gt;/g, '<br>')
+    .replace(/\n/g, '<br>');
+}
+
+function showMaintenanceScreen(data = {}) {
+  if (maintenanceShown) return;
+  maintenanceShown = true;
+  try { stopMatchPolling(); } catch (e) {}
+  const overlay = document.createElement('div');
+  overlay.id = 'maintenance-overlay';
+  overlay.innerHTML = `
+    <div class="maint-card">
+      <div class="maint-icon">🛠️</div>
+      <div class="maint-body">${maintenanceHtml(data.message) || 'The game is under maintenance. We will be back shortly!'}</div>
+      <button class="maint-retry" onclick="location.reload()">↻ Try again</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  try {
+    document.getElementById('bottom-nav').style.display = 'none';
+    document.getElementById('balance-pill').style.display = 'none';
+  } catch (e) {}
+}
+
 function playerCardUrl(playerId) {
   return `/webapp/player-card/${encodeURIComponent(playerId)}`;
 }
@@ -2966,6 +3024,9 @@ function cardImg(url, alt, cls = '') {
 
 // ════════════════ Toast ════════════════
 function toast(msg, type = 'info') {
+  // Once the maintenance lock is up it already says what's happening; the
+  // failing requests behind it shouldn't stack error toasts on top of it.
+  if (maintenanceShown) return;
   const c = document.getElementById('toasts');
   const t = document.createElement('div');
   t.className = 'toast ' + type;

@@ -28,7 +28,20 @@ Star/Legend versions; without them those players fall back to `template.*`.
 
 ## Adjust field positions
 
-Field coordinates default to the v7.1 layout (`DEFAULT_TEMPLATE_SETTINGS` in
-`services/card_template_service.py`). Fine-tune them live on the admin card-template
-page — saving there persists to the runtime state (local `state.json` + Telegram-pinned
-state on storage-backed deploys), no redeploy needed.
+Each rarity keeps its **own** layout — cutout box, flag, and every text coordinate — so
+tuning the Star card never moves anything on the Base or Legend card. Fine-tune them
+live on the admin card-template page: pick a rarity tab, edit its numbers, and press
+that tab's own **Save … Card** button (the button at the bottom of the page saves all
+three at once). Saving persists to the runtime state (local `state.json` +
+Telegram-pinned state on storage-backed deploys), no redeploy needed.
+
+Layouts live under `variant_settings` in the state file:
+
+```json
+{"variant_settings": {"base": {...}, "star": {...}, "legend": {...}}}
+```
+
+A rarity with no saved layout of its own falls back to the legacy shared `settings`
+block, which itself defaults to the v7.1 layout (`DEFAULT_TEMPLATE_SETTINGS` in
+`services/card_template_service.py`). State written before layouts were split per rarity
+therefore keeps rendering all three cards exactly as it did.

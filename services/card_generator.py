@@ -342,7 +342,10 @@ def generate_template_card(player, force_global_portrait=False, template_variant
     is_live_preview = preview_settings is not None or preview_show_portrait is not None
     if preview_settings is not None:
         from services.card_template_service import normalise_template_settings
-        tcfg["settings"] = normalise_template_settings(preview_settings)
+        # Unspecified keys keep this variant's saved layout, so a partial
+        # preview payload never silently snaps back to the v7.1 defaults.
+        tcfg["settings"] = normalise_template_settings(preview_settings,
+                                                       defaults=tcfg["settings"])
     if preview_show_portrait is not None:
         tcfg["show_portrait"] = bool(preview_show_portrait)
     cache_key = (player.id, bool(force_global_portrait), tcfg["variant"])

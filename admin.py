@@ -4053,6 +4053,78 @@ from utils.idempotency import claim_once, release
 _WEBAPP_PACK_GUARD_TTL = 30.0
 
 
+def _init_data_telegram_id():
+    """Telegram id from the signed initData header, or None.
+
+    Used only to honour the maintenance bypass list before a request reaches
+    its endpoint. Verification is a cheap HMAC and never touches the database;
+    the endpoint still runs its own :func:`_webapp_auth` afterwards.
+    """
+    init_data = request.headers.get("Authorization", "") or ""
+    if init_data.startswith("tma "):
+        init_data = init_data[4:]
+    if not init_data:
+        return None
+    if init_data.startswith("DEV_") and os.getenv("WEBAPP_DEV_MODE") == "1":
+        try:
+            return int(init_data[4:])
+        except ValueError:
+            return None
+    bot_token = os.getenv("BOT_TOKEN", "")
+    if not bot_token:
+        return None
+    try:
+        from services.webapp_auth import verify_init_data, get_user_id
+        return get_user_id(verify_init_data(init_data, bot_token))
+    except Exception:
+        logger.exception("maintenance bypass id lookup failed (non-fatal)")
+        return None
+
+
+@app.before_request
+def _block_miniapp_during_maintenance():
+    """Lock the Mini App while maintenance mode is on.
+
+    The bot's middleware already blocks commands; without this the same user
+    could open the Mini App and keep spinning, buying, and claiming. Gating in
+    a before-request hook covers every Mini App API — including ones added
+    later — instead of relying on each endpoint to remember the check.
+
+    In-flight matches are exempt (see MINIAPP_LIVE_MATCH_PATHS) exactly like
+    the bot lets in-match callback queries through, and bypass-listed admins
+    are unaffected.
+    """
+    try:
+        from services.maintenance_service import (is_maintenance_active,
+                                                  is_miniapp_live_match_path,
+                                                  is_miniapp_path,
+                                                  should_block_miniapp_path,
+                                                  get_maintenance_message)
+        # Cheapest checks first: the common case is maintenance off, and this
+        # hook runs on every request. Only verify initData (an HMAC) once we
+        # know a real lock is in play and the path isn't already exempt.
+        if not is_miniapp_path(request.path) or is_miniapp_live_match_path(request.path):
+            return None
+        from services.config_service import get_config
+        cfg = get_config()
+        if not is_maintenance_active(cfg):
+            return None
+        if not should_block_miniapp_path(request.path,
+                                         _init_data_telegram_id(), cfg):
+            return None
+        until = cfg.get("maintenance_until")
+        return {
+            "ok": False,
+            "error": "maintenance",
+            "message": get_maintenance_message(cfg),
+            "until": until.isoformat() if hasattr(until, "isoformat") else None,
+        }, 503
+    except Exception:
+        # A broken maintenance check must never take the Mini App down.
+        logger.exception("maintenance gate failed (non-fatal)")
+        return None
+
+
 def _webapp_auth(allow_not_debuted=False):
     """Verify Telegram initData from Authorization header.
 
@@ -16381,6 +16453,105 @@ def admin_branding_save():
 
 # ─── Card Generator (website-managed v7.1 templates + layout) ─────────
 
+# Every rarity tab posts its own copy of the layout controls, namespaced as
+# "<variant>__<key>", so Base, Star, and Legend can be tuned independently.
+_TEMPLATE_LAYOUT_NUMBER_KEYS = (
+    "player_x", "player_y", "player_w", "player_h",
+    "player_scale", "player_opacity", "flag_scale", "flag_y_offset",
+    "name_x", "name_y", "name_font_size", "name_letter_gap",
+    "name_max_width", "name_line_gap",
+    "ovr_x", "ovr_y", "ovr_font_size", "ovr_letter_gap", "ovr_max_width",
+    "bat_x", "bat_y", "bat_font_size", "bat_letter_gap", "bat_max_width",
+    "bowl_x", "bowl_y", "bowl_font_size", "bowl_letter_gap", "bowl_max_width",
+    "cat_x", "cat_y", "cat_font_size", "cat_letter_gap", "cat_max_width",
+    "country_x", "country_y", "country_font_size", "country_letter_gap",
+    "country_max_width",
+    "bat_style_x", "bat_style_y", "bat_style_font_size",
+    "bat_style_letter_gap", "bat_style_max_width",
+    "bowl_style_x", "bowl_style_y", "bowl_style_font_size",
+    "bowl_style_letter_gap", "bowl_style_max_width",
+)
+_TEMPLATE_LAYOUT_FLAG_KEYS = ("trim_transparent", "protect_bottom_box")
+
+
+def _read_template_layout_form(variant):
+    """Collect one rarity's layout fields from the posted form.
+
+    Returns ``None`` when that variant's controls weren't submitted, so a
+    partial post (e.g. one tab's save button) never resets the other rarities.
+    """
+    prefix = f"{variant}__"
+    raw = {}
+    for key in _TEMPLATE_LAYOUT_NUMBER_KEYS:
+        value = request.form.get(prefix + key)
+        if value is not None and str(value).strip() != "":
+            raw[key] = value
+    if not raw:
+        return None
+    for key in _TEMPLATE_LAYOUT_FLAG_KEYS:
+        raw[key] = bool(request.form.get(prefix + key))
+    return raw
+
+
+def _collect_variant_settings(db, only_variant=None):
+    """Merge posted layout fields over the saved per-rarity layouts."""
+    from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
+                                                get_variant_settings,
+                                                normalise_template_settings)
+    current = get_variant_settings(db)
+    for variant in CARD_TEMPLATE_VARIANTS:
+        if only_variant and variant != only_variant:
+            continue
+        raw = _read_template_layout_form(variant)
+        if raw is not None:
+            current[variant] = normalise_template_settings(raw, defaults=current[variant])
+    return current
+
+
+def _persist_card_template_state(payload, audit_text):
+    """Write runtime state, mirror it to Telegram storage, and drop card caches."""
+    from services.card_template_storage_service import (
+        save_local_state, pin_state_sync, upload_assets_sync,
+        is_configured as template_storage_configured,
+    )
+    configured = template_storage_configured()
+    payload = dict(payload)
+    uploaded_assets = upload_assets_sync() if configured else {}
+    payload["assets"] = uploaded_assets or payload.get("assets") or {}
+    state = save_local_state(payload)
+    storage_saved = pin_state_sync(state, audit_text=audit_text) if configured else False
+
+    # Invalidate caches so the change shows immediately everywhere.
+    try:
+        from services import config_service as _cs
+        _cs._CACHE["data"] = None
+    except Exception:
+        pass
+    try:
+        from services.card_generator import (invalidate_card_cache,
+                                              invalidate_template_card_cache)
+        # The render changed → also drops the in-memory generated file_id
+        # cache, so the next send re-uploads the new card. Admin /setcardid
+        # overrides (Player.card_file_id) are left untouched.
+        invalidate_card_cache()
+        invalidate_template_card_cache()
+    except Exception:
+        pass
+    return configured, storage_saved
+
+
+def _flash_card_template_saved(configured, storage_saved, what="Card template"):
+    if configured and storage_saved:
+        flash(f"✅ {what} updated and pinned to Telegram storage. "
+              "Will appear immediately everywhere.", "info")
+    elif configured:
+        flash(f"⚠️ {what} updated locally, but Telegram storage pin failed. "
+              "Check bot channel permissions.", "error")
+    else:
+        flash(f"✅ {what} updated locally. Set CARD_TEMPLATE_STORAGE_CHAT_ID or "
+              "STORAGE_CHAT_ID to mirror it to Telegram storage.", "info")
+
+
 @app.route("/card-template", methods=["GET"])
 @login_required
 def admin_card_template():
@@ -16397,8 +16568,9 @@ def admin_card_template():
                    .filter(Player.parent_player_id.is_(None))
                    .order_by(Player.rating.desc(), Player.name.asc())
                    .limit(200).all())
-        from services.card_template_service import (list_template_variants,
-                                                    normalise_template_settings)
+        from services.card_template_service import (DEFAULT_TEMPLATE_SETTINGS,
+                                                    list_template_variants,
+                                                    get_variant_settings)
         from services.cmu_stats_card_service import normalise_stats_card_settings
         from services.country_flag_service import list_country_flags
         from services.player_portrait_service import has_global_player_portrait
@@ -16407,8 +16579,10 @@ def admin_card_template():
         cfg.card_style = state.get("card_style") or cfg.card_style
         cfg.card_template_show_portrait = state.get(
             "show_portrait", cfg.card_template_show_portrait)
-        settings = normalise_template_settings(
-            state.get("settings", cfg.card_template_settings))
+        # One independent layout per rarity tab; "settings" stays available as
+        # the Base layout for anything still expecting a single dict.
+        variant_settings = get_variant_settings(db, state=state)
+        settings = variant_settings["base"]
         stats_settings = normalise_stats_card_settings(state.get("stats_settings"))
         template_variants = list_template_variants(db)
         has_template = template_variants["base"]["uploaded"]
@@ -16416,7 +16590,9 @@ def admin_card_template():
         has_font = any(os.path.isfile(os.path.join(TEMPLATES_ROOT, f"font.{ext}"))
                        for ext in ALLOWED_FONT_EXT) or bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
-                               settings=settings, has_template=has_template,
+                               settings=settings, variant_settings=variant_settings,
+                               default_settings=DEFAULT_TEMPLATE_SETTINGS,
+                               has_template=has_template,
                                template_variants=template_variants, has_font=has_font, country_flags=list_country_flags(),
                                has_global_portrait=has_global_player_portrait(),
                                stats_settings=stats_settings)
@@ -16455,31 +16631,13 @@ def admin_card_template_save():
                 return redirect(url_for("admin_card_template"))
 
         # Style and concrete v7.1 HTML generator controls.
-        from services.card_template_service import normalise_template_settings
         from services.cmu_stats_card_service import normalise_stats_card_settings
         style = (request.form.get("card_style") or "tier").strip().lower()
         card_style = style if style in ("tier", "template") else "tier"
         show_portrait = bool(request.form.get("show_portrait"))
-        raw_settings = {
-            key: request.form.get(key) for key in (
-                "player_x", "player_y", "player_w", "player_h",
-                "player_scale", "player_opacity", "flag_scale",
-                "flag_y_offset", "name_x", "name_y", "name_font_size",
-                "name_letter_gap", "name_max_width", "name_line_gap",
-                "ovr_x", "ovr_y", "ovr_font_size", "ovr_letter_gap", "ovr_max_width",
-                "bat_x", "bat_y", "bat_font_size", "bat_letter_gap", "bat_max_width",
-                "bowl_x", "bowl_y", "bowl_font_size", "bowl_letter_gap", "bowl_max_width",
-                "cat_x", "cat_y", "cat_font_size", "cat_letter_gap", "cat_max_width",
-                "country_x", "country_y", "country_font_size", "country_letter_gap", "country_max_width",
-                "bat_style_x", "bat_style_y", "bat_style_font_size",
-                "bat_style_letter_gap", "bat_style_max_width",
-                "bowl_style_x", "bowl_style_y", "bowl_style_font_size",
-                "bowl_style_letter_gap", "bowl_style_max_width",
-            )
-        }
-        raw_settings["trim_transparent"] = bool(request.form.get("trim_transparent"))
-        raw_settings["protect_bottom_box"] = bool(request.form.get("protect_bottom_box"))
-        settings = normalise_template_settings(raw_settings)
+        # Each rarity tab carries its own layout; only the tabs actually posted
+        # are replaced, the rest keep whatever they were saved with.
+        variant_settings = _collect_variant_settings(db)
         stats_label_keys = {
             "batting_labels": ("inns", "runs", "hs", "avg", "sr", "hundreds", "fifties", "fours", "sixes", "ducks"),
             "bowling_labels": ("inns", "wickets", "bbf", "avg", "econ", "sr", "hat_tricks", "five_fers", "three_fers"),
@@ -16499,46 +16657,64 @@ def admin_card_template_save():
             }
         raw_stats_settings["stats_enabled"] = True
         stats_settings = normalise_stats_card_settings(raw_stats_settings)
-        from services.card_template_storage_service import (
-            save_local_state, pin_state_sync, upload_assets_sync,
-            is_configured as template_storage_configured,
-        )
-        uploaded_assets = upload_assets_sync() if template_storage_configured() else {}
-        state = save_local_state({
+        configured, storage_saved = _persist_card_template_state({
             "card_style": card_style,
             "show_portrait": show_portrait,
-            "settings": settings,
+            # Base layout is mirrored into "settings" so anything reading the
+            # pre-split single-layout key keeps working.
+            "settings": variant_settings["base"],
+            "variant_settings": variant_settings,
             "stats_settings": stats_settings,
-            "assets": uploaded_assets,
-        })
-        storage_saved = pin_state_sync(state, audit_text=f"style={card_style}")
-
-        # Invalidate caches so the change shows immediately everywhere.
-        try:
-            from services import config_service as _cs
-            _cs._CACHE["data"] = None
-        except Exception:
-            pass
-        try:
-            from services.card_generator import (invalidate_card_cache,
-                                                  invalidate_template_card_cache)
-            # The render changed → also drops the in-memory generated file_id
-            # cache, so the next send re-uploads the new card. Admin /setcardid
-            # overrides (Player.card_file_id) are left untouched.
-            invalidate_card_cache()
-            invalidate_template_card_cache()
-        except Exception:
-            pass
-
-        if template_storage_configured() and storage_saved:
-            flash("✅ Card template updated and pinned to Telegram storage. Will appear immediately everywhere.", "info")
-        elif template_storage_configured():
-            flash("⚠️ Card template updated locally, but Telegram storage pin failed. Check bot channel permissions.", "error")
-        else:
-            flash("✅ Card template updated locally. Set CARD_TEMPLATE_STORAGE_CHAT_ID or STORAGE_CHAT_ID to mirror it to Telegram storage.", "info")
+        }, audit_text=f"style={card_style}")
+        _flash_card_template_saved(configured, storage_saved)
         return redirect(url_for("admin_card_template"))
     except Exception as e:
         db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_card_template"))
+    finally:
+        db.close()
+
+
+@app.route("/card-template/layout/save", methods=["POST"])
+@login_required
+def admin_card_template_layout_save():
+    """Save one rarity tab only — its blank template and its own layout.
+
+    The other rarities keep their saved layouts untouched, so tuning the Star
+    card can never move text on the Base or Legend card.
+    """
+    db = get_session()
+    try:
+        from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
+                                                    save_template_image)
+        variant = (request.form.get("variant") or "base").strip().lower()
+        if variant not in CARD_TEMPLATE_VARIANTS:
+            flash("❌ Unknown card-template variant.", "error")
+            return redirect(url_for("admin_card_template"))
+        label = f"{variant.title()} Card"
+
+        template_file = request.files.get(f"template_file_{variant}")
+        if template_file and template_file.filename:
+            ok, msg, _path = save_template_image(
+                template_file.read(), template_file.filename, variant=variant)
+            if not ok:
+                flash(f"❌ {label}: {msg}", "error")
+                return redirect(url_for("admin_card_template"))
+
+        from services.card_template_storage_service import get_state
+        state = get_state() or {}
+        variant_settings = _collect_variant_settings(db, only_variant=variant)
+        # Start from the existing state so this button never rewrites the card
+        # style, cutout toggle, or stats-card settings behind the admin's back.
+        payload = dict(state)
+        payload["variant_settings"] = variant_settings
+        payload["settings"] = variant_settings["base"]
+        configured, storage_saved = _persist_card_template_state(
+            payload, audit_text=f"layout={variant}")
+        _flash_card_template_saved(configured, storage_saved, what=f"{label} layout")
+        return redirect(url_for("admin_card_template") + f"#card-{variant}")
+    except Exception as e:
         flash(f"❌ {e}", "error")
         return redirect(url_for("admin_card_template"))
     finally:

@@ -225,8 +225,13 @@ def remove_template_font():
     return removed
 
 
-def normalise_template_settings(raw=None):
-    """Return safe numeric/boolean layout settings merged with HTML defaults."""
+def normalise_template_settings(raw=None, defaults=None):
+    """Return safe numeric/boolean layout settings merged with HTML defaults.
+
+    ``defaults`` lets one variant inherit another's layout (Star/Legend falling
+    back to Base) instead of the built-in v7.1 numbers; any key missing from
+    ``raw`` is taken from there.
+    """
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -244,6 +249,10 @@ def normalise_template_settings(raw=None):
             raw.setdefault("bat_style_max_width", raw["style_max_width"])
             raw.setdefault("bowl_style_max_width", raw["style_max_width"])
     result = dict(DEFAULT_TEMPLATE_SETTINGS)
+    if isinstance(defaults, dict):
+        for key in result:
+            if key in defaults:
+                result[key] = defaults[key]
     for key, (minimum, maximum) in SETTING_LIMITS.items():
         try:
             result[key] = max(minimum, min(maximum, int(float(raw.get(key, result[key])))))
@@ -252,6 +261,29 @@ def normalise_template_settings(raw=None):
     for key in ("trim_transparent", "protect_bottom_box"):
         if key in raw:
             result[key] = bool(raw[key])
+    return result
+
+
+def normalise_variant_settings(raw=None, shared=None):
+    """Return ``{variant: settings}`` covering every rarity tab.
+
+    Each rarity keeps its own independent layout. A variant with no saved
+    layout of its own inherits ``shared`` (the pre-split single layout, or the
+    v7.1 defaults), so upgrading a deployment that only ever had one shared
+    layout leaves all three cards rendering exactly as before.
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    shared_settings = normalise_template_settings(shared)
+    result = {}
+    for variant in CARD_TEMPLATE_VARIANTS:
+        entry = raw.get(variant)
+        result[variant] = (normalise_template_settings(entry, defaults=shared_settings)
+                           if isinstance(entry, (dict, str)) else dict(shared_settings))
     return result
 
 
@@ -401,6 +433,28 @@ def list_template_variants(session=None):
     return result
 
 
+def get_variant_settings(session=None, state=None):
+    """Return every rarity's saved layout as ``{variant: settings}``.
+
+    Reads the runtime state first (per-variant layouts, with the legacy shared
+    layout as the inheritance base) and only falls back to the legacy
+    ``GameConfig`` column when no state file exists at all.
+    """
+    if state is None:
+        try:
+            from services.card_template_storage_service import get_state
+            state = get_state() or {}
+        except Exception:
+            logger.exception("card-template storage state unavailable")
+            state = {}
+    if state:
+        shared = state.get("settings")
+    else:
+        from services.config_service import get_config
+        shared = get_config(session).get("card_template_settings")
+    return normalise_variant_settings(state.get("variant_settings"), shared)
+
+
 def get_template_config(session=None, variant="base"):
     """Return the active template-card configuration without hitting DB first."""
     from services.config_service import get_config
@@ -427,7 +481,8 @@ def get_template_config(session=None, variant="base"):
     else:
         style = cfg.get("card_style") or "tier"
     show_portrait = state.get("show_portrait", cfg.get("card_template_show_portrait", True))
-    settings = state.get("settings", cfg.get("card_template_settings"))
+    variant = normalise_template_variant(variant)
+    settings = get_variant_settings(session, state=state)[variant]
     font_path = None
     for ext in ALLOWED_FONT_EXT:
         candidate = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
@@ -438,11 +493,11 @@ def get_template_config(session=None, variant="base"):
         font_path = template_asset_path(cfg.get("card_template_font_path"))
     return {
         "style": str(style or "tier").lower(),
-        "variant": normalise_template_variant(variant),
+        "variant": variant,
         "image_path": image_path,
         "area_code": cfg.get("card_template_area_code") or "",
         "regions": parse_area_code(cfg.get("card_template_area_code") or ""),
         "show_portrait": bool(show_portrait),
         "font_path": font_path,
-        "settings": normalise_template_settings(settings),
+        "settings": settings,
     }

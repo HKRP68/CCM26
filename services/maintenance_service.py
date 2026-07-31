@@ -12,6 +12,12 @@ Match protection: matches already in progress continue to work. New /playmatch,
 /vsbot etc. are blocked. The middleware checks the update type — callback
 queries (taps on in-match buttons) are allowed through so existing matches
 can finish.
+
+Mini App: the same lock covers the Telegram Mini App. `should_block_miniapp_path`
+is called from a Flask before-request hook in admin.py, so every Mini App API —
+including endpoints added later — is blocked by default. The live-match
+endpoints listed in MINIAPP_LIVE_MATCH_PATHS stay open, mirroring the bot's
+callback-query allowance so a match already in flight can still be finished.
 """
 
 import logging
@@ -172,6 +178,64 @@ def is_command_update(update, bot_username=None):
 def should_reply_with_maintenance(update, bot_username=None):
     """True when a blocked update should receive the maintenance message."""
     return is_command_update(update, bot_username)
+
+
+# ── Mini App lock ───────────────────────────────────────────────────────────
+# Anything the Mini App can call lives under one of these prefixes. Blocking by
+# prefix (rather than by listing endpoints) means a Mini App API added later is
+# locked during maintenance by default instead of quietly staying open.
+MINIAPP_GUARDED_PREFIXES = (
+    "/api/webapp/",
+    "/api/fantasy/",
+    "/api/ipl16/",
+    "/api/adsgram/",
+)
+
+# Endpoints a match already in progress needs to reach the final ball. These
+# stay open during maintenance for the same reason the bot lets callback
+# queries through: locking mid-over would strand a live match, not protect it.
+# None of these can start a new match — the Mini App creates matches through
+# /api/webapp/quickmatch/start and the bot's own commands, which stay blocked.
+MINIAPP_LIVE_MATCH_PATHS = (
+    "/api/webapp/match/",
+    "/api/webapp/quickmatch/phase",
+    "/api/webapp/quickmatch/abandon",
+)
+
+
+def is_miniapp_path(path):
+    """True when this request path belongs to a lockable Mini App API."""
+    path = path or ""
+    return any(path.startswith(prefix) for prefix in MINIAPP_GUARDED_PREFIXES)
+
+
+def is_miniapp_live_match_path(path):
+    """True for the Mini App endpoints an in-flight match still needs."""
+    path = path or ""
+    return any(path == allowed or path.startswith(allowed)
+               for allowed in MINIAPP_LIVE_MATCH_PATHS)
+
+
+def should_block_miniapp_path(path, telegram_id=None, cfg=None):
+    """Decide whether a Mini App request should be blocked.
+
+    Rules mirror :func:`should_block_update`:
+      - Maintenance off → never block
+      - Path is not a Mini App API → not ours to block
+      - User is in the bypass list → never block
+      - Live-match endpoints → allowed through so matches can finish
+      - Everything else → blocked
+    """
+    if not is_miniapp_path(path):
+        return False
+    if cfg is None:
+        from services.config_service import get_config
+        cfg = get_config()
+    if not is_maintenance_active(cfg):
+        return False
+    if telegram_id is not None and is_bypassed(telegram_id, cfg):
+        return False
+    return not is_miniapp_live_match_path(path)
 
 
 def should_block_update(update, cfg=None):
