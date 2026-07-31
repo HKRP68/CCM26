@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Card Generator{% endblock %}
+{% set variant_label_map = {'base': 'Base Card', 'star': 'Star Card', 'legend': 'Legend Card'} %}
+{% set variant_labels = variant_label_map.items() | list %}
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
   <h2>🎴 Website Card Generator</h2>
@@ -7,11 +9,28 @@
 </div>
 <p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;line-height:1.6;">
   This page manages the server-side version of <code>cricket_card_generator_website_v7-1.html</code>.
-  Upload a blank card template for each rarity tab, then tune the shared font, cutout, flag, and text layout.
-  Every card reuses the cutout uploaded on that player's edit page. Base, Star, and Legend templates are independent; if the matching template is missing, the normal card priority continues to the original auto-generated card.
+  Every rarity card is fully independent: its own blank template, its own cutout, flag, and text
+  positions, and its own save button. Editing the Star card can no longer move anything on the
+  Base or Legend card. Every card reuses the cutout uploaded on that player's edit page.
 </p>
 <style>
-.card-tabs{display:flex;gap:.55rem;flex-wrap:wrap;margin:.65rem 0 1rem}.card-tab{border:1px solid var(--border);border-radius:999px;background:var(--input-bg);color:var(--text);padding:.55rem .9rem;cursor:pointer;font-weight:700}.card-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}.template-panel{display:none;border:1px solid var(--border);border-radius:9px;padding:1rem;background:var(--input-bg)}.template-panel.active{display:block}.status-pill{font-size:.72rem;border-radius:999px;padding:.18rem .45rem;margin-left:.3rem;background:rgba(0,201,167,.13);color:var(--ok,#00c9a7)}
+.card-tabs{display:flex;gap:.55rem;flex-wrap:wrap;margin:.65rem 0 1rem}
+.card-tab{border:1px solid var(--border);border-radius:999px;background:var(--input-bg);color:var(--text);padding:.55rem .9rem;cursor:pointer;font-weight:700;display:inline-flex;align-items:center;gap:.35rem}
+.card-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.template-panel{display:none;border:1px solid var(--border);border-radius:9px;padding:1.1rem;background:var(--input-bg)}
+.template-panel.active{display:block}
+.status-pill{font-size:.72rem;border-radius:999px;padding:.18rem .45rem;background:rgba(0,201,167,.13);color:var(--ok,#00c9a7)}
+.dirty-dot{display:none;width:.5rem;height:.5rem;border-radius:50%;background:#f5a623}
+.is-dirty .dirty-dot{display:inline-block}
+.dirty-note{display:none;color:#f5a623;font-size:.78rem;font-weight:600}
+.panel-dirty .dirty-note{display:inline}
+.layout-block{border-top:1px solid var(--border);margin-top:1.1rem;padding-top:1rem}
+.layout-block h4{margin:0 0 .2rem;font-size:.92rem}
+.layout-block p.hint{color:var(--muted);font-size:.78rem;margin:.15rem 0 .7rem;line-height:1.45}
+.num-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem}
+.field-row{border:1px solid var(--border);border-radius:8px;padding:.6rem .7rem;margin-bottom:.6rem;background:var(--card)}
+.field-row>strong{display:block;font-size:.8rem;margin-bottom:.5rem}
+.panel-actions{position:sticky;bottom:0;display:flex;gap:.55rem;align-items:center;flex-wrap:wrap;margin-top:1.1rem;padding:.75rem;border:1px solid var(--border);border-radius:9px;background:var(--card)}
 </style>
 <form id="cardTemplateForm" method="POST" action="{{ url_for('admin_card_template_save') }}" enctype="multipart/form-data"
       style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;">
@@ -30,74 +49,169 @@
       <small style="display:block;color:var(--muted);margin-top:.35rem;line-height:1.45;">Skips website templates and uses the original tier-based auto card.</small>
     </label>
   </div>
-  <h3 style="margin:0 0 .4rem;font-size:1rem;">🖼️ Blank card templates</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin:0;line-height:1.5;">Choose a rarity tab and upload its blank 1536×1024 template. Each rarity is independent. If its template is not uploaded, cards continue to the original auto-generated card instead of borrowing another rarity's design.</p>
-  <div class="card-tabs" role="tablist" aria-label="Card rarity templates">
-    {% for variant, label in [('base','Base Card'),('star','Star Card'),('legend','Legend Card')] %}
-    <button type="button" class="card-tab {{ 'active' if variant == 'base' else '' }}" data-template-tab="{{ variant }}" onclick="selectTemplateTab('{{ variant }}')">{{ label }}{% if template_variants[variant].uploaded %}<span class="status-pill">✓ Uploaded</span>{% endif %}</button>
-    {% endfor %}
-  </div>
-  {% for variant, label in [('base','Base Card'),('star','Star Card'),('legend','Legend Card')] %}
-  <div id="templatePanel-{{ variant }}" class="template-panel {{ 'active' if variant == 'base' else '' }}">
-    <label style="display:block;margin-bottom:.35rem;font-weight:600;">{{ label }} blank template</label>
-    <input type="file" name="template_file_{{ variant }}" accept=".png,.jpg,.jpeg,.webp" style="width:100%;">
-    <small style="color:var(--muted);">PNG/JPG/WebP, max 5 MB. {% if template_variants[variant].uploaded %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} template uploaded</span>{% else %}Upload a template to enable website-generated {{ label }} cards; until then, normal priority uses the original auto-generated card.{% endif %}</small>
-    {% if template_variants[variant].uploaded %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_image') }}" formmethod="post" name="variant" value="{{ variant }}">Remove {{ label }} template</button></div>{% endif %}
-  </div>
-  {% endfor %}
-  <div style="margin:1rem 0 1.5rem;">
+  <div style="margin:0 0 1.5rem;">
     <label style="display:block;margin-bottom:.35rem;font-weight:600;">🔤 Optional Shared Font File</label>
     <input type="file" name="font_file" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
-    <small style="color:var(--muted);">TTF/OTF, max 5 MB. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
+    <small style="color:var(--muted);">TTF/OTF, max 5 MB — shared by all three rarities. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
     {% if has_font %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_font') }}" formmethod="post">Remove shared font file</button></div>{% endif %}
+    <label style="display:block;margin-top:.8rem;"><input type="checkbox" name="show_portrait" {{ 'checked' if cfg.card_template_show_portrait else '' }}> Draw player-page cutout on website cards</label>
   </div>
-  {% macro number_input(name, label) -%}
-  <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="number" name="{{ name }}" value="{{ settings[name] }}" style="width:100%;"></div>
+
+  <h3 style="margin:1.4rem 0 .4rem;font-size:1rem;">🖼️ Per-rarity cards</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0;line-height:1.5;">Pick a rarity tab to edit that card only. Each tab holds its own blank 1536×1024 template <em>and</em> its own layout numbers, saved with its own button. If a rarity has no template uploaded, those players continue to the original auto-generated card instead of borrowing another rarity's design.</p>
+  <div class="card-tabs" role="tablist" aria-label="Card rarity templates">
+    {% for variant, label in variant_labels %}
+    <button type="button" class="card-tab {{ 'active' if variant == 'base' else '' }}" data-template-tab="{{ variant }}" onclick="selectTemplateTab('{{ variant }}')">{{ label }}{% if template_variants[variant].uploaded %}<span class="status-pill">✓ Uploaded</span>{% endif %}<span class="dirty-dot" title="Unsaved changes"></span></button>
+    {% endfor %}
+  </div>
+
+  <div style="border:1px solid var(--border);border-radius:9px;padding:1rem;background:var(--input-bg);margin-bottom:1rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem;">
+      <strong style="font-size:.95rem;">🔍 Live preview — <span id="previewVariantLabel">Base Card</span></strong>
+      <span style="color:var(--muted);font-size:.78rem;">Refreshes as you type. Unsaved values are previewed, not applied.</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.8rem;">
+      <select id="previewPlayer" style="padding:.5rem;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);min-width:220px;">
+        {% for p in players %}<option value="{{ p.id }}">{{ p.name }} ({{ p.rating }})</option>{% endfor %}
+      </select>
+      <label style="font-size:.82rem;"><input type="checkbox" id="previewGlobalPlayer" {{ 'checked' if has_global_portrait else 'disabled' }}> Show global player PNG</label>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="refreshPreview()">↻ Refresh preview</button>
+    </div>
+    <div style="text-align:center;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem;min-height:180px;">
+      <img id="previewImage" alt="Card preview" style="max-width:100%;max-height:520px;display:none;margin:auto;">
+      <span id="previewHint" style="color:var(--muted);font-size:.85rem;">Choose a player and refresh preview.</span>
+    </div>
+  </div>
+
+  {% macro vnum(variant, name, label) -%}
+  <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="number" name="{{ variant }}__{{ name }}" value="{{ variant_settings[variant][name] }}" data-layout-variant="{{ variant }}" data-setting="{{ name }}" style="width:100%;"></div>
   {%- endmacro %}
-  <h3 style="margin:1rem 0 .65rem;font-size:1rem;">🏏 Player image / cutout position</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin-top:0;">Uses the image uploaded from Players → Edit Player → Player Image. Transparent PNG or WebP gives the best result.</p>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;">
-    {{ number_input('player_x', 'Player X') }}{{ number_input('player_y', 'Player Y') }}
-    {{ number_input('player_w', 'Player Box Width') }}{{ number_input('player_h', 'Player Box Height') }}
-    {{ number_input('player_scale', 'Player Scale %') }}{{ number_input('player_opacity', 'Player Opacity %') }}
+  {% macro vcheck(variant, name, label) -%}
+  <label><input type="checkbox" name="{{ variant }}__{{ name }}" data-layout-variant="{{ variant }}" data-setting="{{ name }}" {{ 'checked' if variant_settings[variant][name] else '' }}> {{ label }}</label>
+  {%- endmacro %}
+
+  {% for variant, label in variant_labels %}
+  <div id="card-{{ variant }}" class="template-panel {{ 'active' if variant == 'base' else '' }}" data-variant="{{ variant }}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;">
+      <h4 style="margin:0;font-size:1rem;">{{ label }}</h4>
+      <span class="dirty-note">● Unsaved changes on this card</span>
+    </div>
+
+    <div class="layout-block" style="border-top:none;margin-top:.8rem;padding-top:.6rem;">
+      <h4>🖼️ Blank template</h4>
+      <p class="hint">PNG/JPG/WebP at 1536×1024, max 5 MB. {% if template_variants[variant].uploaded %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} template uploaded</span>{% else %}Upload a template to enable website-generated {{ label }}s.{% endif %}</p>
+      <input type="file" name="template_file_{{ variant }}" accept=".png,.jpg,.jpeg,.webp" style="width:100%;">
+      {% if template_variants[variant].uploaded %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_image') }}" formmethod="post" name="variant" value="{{ variant }}">Remove {{ label }} template</button></div>{% endif %}
+    </div>
+
+    <div class="layout-block">
+      <h4>🏏 Player image / cutout position</h4>
+      <p class="hint">Uses the image uploaded from Players → Edit Player → Player Image. Transparent PNG or WebP gives the best result.</p>
+      <div class="num-grid">
+        {{ vnum(variant, 'player_x', 'Player X') }}{{ vnum(variant, 'player_y', 'Player Y') }}
+        {{ vnum(variant, 'player_w', 'Player Box Width') }}{{ vnum(variant, 'player_h', 'Player Box Height') }}
+        {{ vnum(variant, 'player_scale', 'Player Scale %') }}{{ vnum(variant, 'player_opacity', 'Player Opacity %') }}
+      </div>
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.8rem;">
+        {{ vcheck(variant, 'trim_transparent', 'Auto-trim transparent padding') }}
+        {{ vcheck(variant, 'protect_bottom_box', 'Redraw bottom-right box above player') }}
+      </div>
+    </div>
+
+    <div class="layout-block">
+      <h4>🏳️ Flag controls</h4>
+      <p class="hint">Uploaded country PNGs are drawn inside the v7.1 flag box using this exact scale and offset.</p>
+      <div class="num-grid">
+        {{ vnum(variant, 'flag_scale', 'Flag Scale %') }}{{ vnum(variant, 'flag_y_offset', 'Flag Y Offset') }}
+      </div>
+    </div>
+
+    <div class="layout-block">
+      <h4>✍️ Text position fine-tuning</h4>
+      <p class="hint">These coordinates belong to the {{ label }} only.</p>
+      <div class="field-row">
+        <strong>Player name</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'name_x', 'X') }}{{ vnum(variant, 'name_y', 'Y') }}
+          {{ vnum(variant, 'name_font_size', 'Font Size') }}{{ vnum(variant, 'name_letter_gap', 'Letter Gap') }}
+          {{ vnum(variant, 'name_max_width', 'Max Width') }}{{ vnum(variant, 'name_line_gap', 'Line Gap') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>Category</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'cat_x', 'X') }}{{ vnum(variant, 'cat_y', 'Y') }}
+          {{ vnum(variant, 'cat_font_size', 'Font Size') }}{{ vnum(variant, 'cat_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'cat_max_width', 'Max Width') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>OVR</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'ovr_x', 'X') }}{{ vnum(variant, 'ovr_y', 'Y') }}
+          {{ vnum(variant, 'ovr_font_size', 'Font Size') }}{{ vnum(variant, 'ovr_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'ovr_max_width', 'Max Width') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>Batting rating</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'bat_x', 'X') }}{{ vnum(variant, 'bat_y', 'Y') }}
+          {{ vnum(variant, 'bat_font_size', 'Font Size') }}{{ vnum(variant, 'bat_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'bat_max_width', 'Max Width') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>Bowling rating</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'bowl_x', 'X') }}{{ vnum(variant, 'bowl_y', 'Y') }}
+          {{ vnum(variant, 'bowl_font_size', 'Font Size') }}{{ vnum(variant, 'bowl_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'bowl_max_width', 'Max Width') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>Country</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'country_x', 'X') }}{{ vnum(variant, 'country_y', 'Y') }}
+          {{ vnum(variant, 'country_font_size', 'Font Size') }}{{ vnum(variant, 'country_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'country_max_width', 'Max Width') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>Batting style</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'bat_style_x', 'X') }}{{ vnum(variant, 'bat_style_y', 'Y') }}
+          {{ vnum(variant, 'bat_style_font_size', 'Font Size') }}{{ vnum(variant, 'bat_style_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'bat_style_max_width', 'Max Width') }}
+        </div>
+      </div>
+      <div class="field-row">
+        <strong>Bowling style</strong>
+        <div class="num-grid">
+          {{ vnum(variant, 'bowl_style_x', 'X') }}{{ vnum(variant, 'bowl_style_y', 'Y') }}
+          {{ vnum(variant, 'bowl_style_font_size', 'Font Size') }}{{ vnum(variant, 'bowl_style_letter_gap', 'Letter Gap') }}{{ vnum(variant, 'bowl_style_max_width', 'Max Width') }}
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-actions">
+      <button type="submit" class="btn btn-primary"
+              formaction="{{ url_for('admin_card_template_layout_save') }}" formmethod="post"
+              name="variant" value="{{ variant }}">💾 Save {{ label }}</button>
+      <span class="dirty-note">● Unsaved</span>
+      <span style="flex:1 1 auto;"></span>
+      <label style="color:var(--muted);font-size:.78rem;">Copy layout from
+        <select id="copyFrom-{{ variant }}" style="padding:.35rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          {% for other, other_label in variant_labels %}{% if other != variant %}<option value="{{ other }}">{{ other_label }}</option>{% endif %}{% endfor %}
+        </select>
+      </label>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="copyLayoutInto('{{ variant }}')">⧉ Copy</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="resetLayout('{{ variant }}')">↺ Reset to defaults</button>
+    </div>
   </div>
-  <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin:1rem 0 1.5rem;">
-    <label><input type="checkbox" name="show_portrait" {{ 'checked' if cfg.card_template_show_portrait else '' }}> Draw player-page cutout</label>
-    <label><input type="checkbox" name="trim_transparent" {{ 'checked' if settings.trim_transparent else '' }}> Auto-trim transparent padding</label>
-    <label><input type="checkbox" name="protect_bottom_box" {{ 'checked' if settings.protect_bottom_box else '' }}> Redraw bottom-right box above player</label>
-  </div>
-  <h3 style="margin:1rem 0 .65rem;font-size:1rem;">🏳️ Flag controls</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin-top:0;">Uploaded country PNGs are drawn inside the v7.1 flag box using this exact scale and offset.</p>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;margin-bottom:1.5rem;">
-    {{ number_input('flag_scale', 'Flag Scale %') }}{{ number_input('flag_y_offset', 'Flag Y Offset') }}
-  </div>
-  <h3 style="margin:1rem 0 .65rem;font-size:1rem;">✍️ Text position fine-tuning</h3>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;margin-bottom:1.5rem;">
-    {{ number_input('name_x', 'Player Name X') }}{{ number_input('name_y', 'Player Name Y') }}
-    {{ number_input('name_font_size', 'Player Name Font Size') }}{{ number_input('name_letter_gap', 'Player Name Letter Gap') }}
-    {{ number_input('name_max_width', 'Player Name Max Width') }}{{ number_input('name_line_gap', 'Player Name Line Gap') }}
-    {{ number_input('cat_x', 'Category X') }}{{ number_input('cat_y', 'Category Y') }}
-    {{ number_input('cat_font_size', 'Category Font Size') }}{{ number_input('cat_letter_gap', 'Category Letter Gap') }}{{ number_input('cat_max_width', 'Category Max Width') }}
-    {{ number_input('ovr_x', 'OVR X') }}{{ number_input('ovr_y', 'OVR Y') }}
-    {{ number_input('ovr_font_size', 'OVR Font Size') }}{{ number_input('ovr_letter_gap', 'OVR Letter Gap') }}{{ number_input('ovr_max_width', 'OVR Max Width') }}
-    {{ number_input('bat_x', 'Batting Rating X') }}{{ number_input('bat_y', 'Batting Rating Y') }}
-    {{ number_input('bat_font_size', 'Batting Rating Font Size') }}{{ number_input('bat_letter_gap', 'Batting Rating Letter Gap') }}{{ number_input('bat_max_width', 'Batting Max Width') }}
-    {{ number_input('bowl_x', 'Bowling Rating X') }}{{ number_input('bowl_y', 'Bowling Rating Y') }}
-    {{ number_input('bowl_font_size', 'Bowling Rating Font Size') }}{{ number_input('bowl_letter_gap', 'Bowling Rating Letter Gap') }}{{ number_input('bowl_max_width', 'Bowling Max Width') }}
-    {{ number_input('country_x', 'Country X') }}{{ number_input('country_y', 'Country Y') }}
-    {{ number_input('country_font_size', 'Country Font Size') }}{{ number_input('country_letter_gap', 'Country Letter Gap') }}{{ number_input('country_max_width', 'Country Max Width') }}
-    {{ number_input('bat_style_x', 'Batting Style X') }}{{ number_input('bat_style_y', 'Batting Style Y') }}
-    {{ number_input('bat_style_font_size', 'Batting Style Font Size') }}{{ number_input('bat_style_letter_gap', 'Batting Style Letter Gap') }}{{ number_input('bat_style_max_width', 'Batting Style Max Width') }}
-    {{ number_input('bowl_style_x', 'Bowling Style X') }}{{ number_input('bowl_style_y', 'Bowling Style Y') }}
-    {{ number_input('bowl_style_font_size', 'Bowling Style Font Size') }}{{ number_input('bowl_style_letter_gap', 'Bowling Style Letter Gap') }}{{ number_input('bowl_style_max_width', 'Bowling Style Max Width') }}
-  </div>
+  {% endfor %}
+
   {% macro stats_number_input(name, label) -%}
   <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="number" name="stats_{{ name }}" value="{{ stats_settings[name] }}" style="width:100%;"></div>
   {%- endmacro %}
   {% macro stats_text_input(name, label) -%}
   <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="text" name="stats_{{ name }}" value="{{ stats_settings[name] }}" style="width:100%;"></div>
   {%- endmacro %}
-  <h3 style="margin:1rem 0 .65rem;font-size:1rem;">📊 In-match batting & bowling stats cards</h3>
+  <h3 style="margin:1.6rem 0 .65rem;font-size:1rem;">📊 In-match batting & bowling stats cards</h3>
   <p style="color:var(--muted);font-size:.8rem;margin-top:0;line-height:1.5;">These CMU S1 cards are sent automatically when openers/new batsmen come to the crease and when a new bowler comes in. The renderer uses <code>assets/fonts/BricolageGrotesque-Regular.ttf</code> for labels/text and <code>assets/fonts/RussoOne-Regular.ttf</code> for names/numbers. Saved values are included in the Telegram storage-channel state.</p>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem;margin-bottom:1rem;">
     {{ stats_text_input('title_batting', 'Batting Title') }}{{ stats_text_input('title_bowling', 'Bowling Title') }}
@@ -128,7 +242,7 @@
       </div>
     </div>
   </div>
-  <button type="submit" class="btn btn-primary">💾 Save card generator settings</button>
+  <button type="submit" class="btn btn-primary">💾 Save everything (all three cards + stats cards)</button>
 </form>
 
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
@@ -168,31 +282,58 @@
   </div>
   {% else %}<p style="color:var(--muted);font-size:.8rem;margin:1rem 0 0;">No country PNGs uploaded yet. India keeps the built-in fallback until you upload one.</p>{% endif %}
 </div>
-
-<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
-  <h3 style="margin:0 0 .8rem;font-size:1rem;">🔍 Live preview</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin:0 0 .8rem;">The preview refreshes automatically when you change a player, rarity, cutout option, or layout setting. Save when you want those settings to apply everywhere.</p>
-  <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem;">
-    <select id="previewPlayer" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);min-width:220px;">
-      {% for p in players %}<option value="{{ p.id }}">{{ p.name }} ({{ p.rating }})</option>{% endfor %}
-    </select>
-    <select id="previewVariant" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
-      <option value="base">Base Card</option><option value="star">Star Card</option><option value="legend">Legend Card</option>
-    </select>
-    <label style="font-size:.82rem;"><input type="checkbox" id="previewGlobalPlayer" {{ 'checked' if has_global_portrait else 'disabled' }}> Show global player PNG</label>
-    <button type="button" class="btn btn-ghost btn-sm" onclick="refreshPreview()">↻ Refresh preview</button>
-  </div>
-  <div style="text-align:center;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:1rem;min-height:180px;">
-    <img id="previewImage" alt="Card preview" style="max-width:100%;max-height:540px;display:none;margin:auto;">
-    <span id="previewHint" style="color:var(--muted);font-size:.85rem;">Choose a player and refresh preview.</span>
-  </div>
-</div>
 <script>
+const CARD_VARIANT_LABELS = {{ variant_label_map | tojson }};
+const CARD_VARIANTS = Object.keys(CARD_VARIANT_LABELS);
+const DEFAULT_LAYOUT = {{ default_settings | tojson }};
+let activeVariant = 'base';
+const savedLayout = {};
+
+function panelInputs(variant) {
+  return document.querySelectorAll(`[data-layout-variant="${variant}"]`);
+}
+function readLayout(variant) {
+  const values = {};
+  panelInputs(variant).forEach(input => {
+    values[input.dataset.setting] = input.type === 'checkbox' ? input.checked : input.value;
+  });
+  return values;
+}
+function writeLayout(variant, values) {
+  panelInputs(variant).forEach(input => {
+    const value = values[input.dataset.setting];
+    if (value === undefined) return;
+    if (input.type === 'checkbox') input.checked = Boolean(value);
+    else input.value = value;
+  });
+}
+function markDirty() {
+  CARD_VARIANTS.forEach(variant => {
+    const current = readLayout(variant);
+    const saved = savedLayout[variant] || {};
+    const dirty = Object.keys(current).some(key => String(current[key]) !== String(saved[key]));
+    document.querySelector(`[data-template-tab="${variant}"]`)?.classList.toggle('is-dirty', dirty);
+    document.getElementById(`card-${variant}`)?.classList.toggle('panel-dirty', dirty);
+  });
+}
 function selectTemplateTab(variant) {
+  activeVariant = variant;
   document.querySelectorAll('[data-template-tab]').forEach(el => el.classList.toggle('active', el.dataset.templateTab === variant));
-  document.querySelectorAll('.template-panel').forEach(el => el.classList.toggle('active', el.id === `templatePanel-${variant}`));
-  const preview = document.getElementById('previewVariant');
-  if (preview) preview.value = variant;
+  document.querySelectorAll('.template-panel').forEach(el => el.classList.toggle('active', el.id === `card-${variant}`));
+  const label = document.getElementById('previewVariantLabel');
+  if (label) label.textContent = CARD_VARIANT_LABELS[variant] || variant;
+  schedulePreview();
+}
+function copyLayoutInto(variant) {
+  const source = document.getElementById(`copyFrom-${variant}`)?.value;
+  if (!source || source === variant) return;
+  writeLayout(variant, readLayout(source));
+  markDirty();
+  schedulePreview();
+}
+function resetLayout(variant) {
+  writeLayout(variant, DEFAULT_LAYOUT);
+  markDirty();
   schedulePreview();
 }
 let previewTimer;
@@ -207,29 +348,39 @@ function refreshPreview() {
   if (!id) return;
   hint.textContent = 'Rendering…'; image.style.display = 'none';
   image.onload = () => { image.style.display = 'block'; hint.textContent = ''; };
-  image.onerror = () => { hint.textContent = 'Preview unavailable. Upload and save a blank card template first.'; };
+  image.onerror = () => { hint.textContent = `Preview unavailable. Upload and save a blank ${CARD_VARIANT_LABELS[activeVariant]} template first.`; };
   const params = new URLSearchParams({
-    variant: document.getElementById('previewVariant').value,
+    variant: activeVariant,
     global_player: document.getElementById('previewGlobalPlayer').checked ? '1' : '0',
     t: Date.now().toString(),
   });
-  const form = document.getElementById('cardTemplateForm');
-  form.querySelectorAll('input[type="number"]').forEach(input => params.set(input.name, input.value));
-  ['show_portrait', 'trim_transparent', 'protect_bottom_box'].forEach(name => {
-    const input = form.querySelector(`[name="${name}"]`);
-    if (input) params.set(name, input.checked ? '1' : '0');
+  // Only the active rarity's controls are previewed, un-prefixed for the renderer.
+  panelInputs(activeVariant).forEach(input => {
+    params.set(input.dataset.setting, input.type === 'checkbox' ? (input.checked ? '1' : '0') : input.value);
   });
+  const showPortrait = document.querySelector('[name="show_portrait"]');
+  if (showPortrait) params.set('show_portrait', showPortrait.checked ? '1' : '0');
   image.src = `/card-template/preview/${id}?${params.toString()}`;
 }
 document.addEventListener('DOMContentLoaded', () => {
-  ['previewPlayer', 'previewVariant', 'previewGlobalPlayer'].forEach(id => {
+  CARD_VARIANTS.forEach(variant => { savedLayout[variant] = readLayout(variant); });
+  ['previewPlayer', 'previewGlobalPlayer'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', schedulePreview);
   });
-  document.querySelectorAll('#cardTemplateForm input[type="number"], #cardTemplateForm input[type="checkbox"]').forEach(input => {
-    input.addEventListener('input', schedulePreview);
-    input.addEventListener('change', schedulePreview);
+  document.querySelectorAll('#cardTemplateForm input[data-layout-variant], #cardTemplateForm [name="show_portrait"]').forEach(input => {
+    input.addEventListener('input', () => { markDirty(); schedulePreview(); });
+    input.addEventListener('change', () => { markDirty(); schedulePreview(); });
   });
-  schedulePreview();
+  const hash = (window.location.hash || '').replace('#card-', '');
+  selectTemplateTab(CARD_VARIANTS.includes(hash) ? hash : 'base');
+  document.getElementById('cardTemplateForm')?.addEventListener('submit', () => { isSaving = true; });
+});
+// Guard against losing tuned coordinates by navigating away without saving.
+let isSaving = false;
+window.addEventListener('beforeunload', event => {
+  if (isSaving || !document.querySelector('.card-tab.is-dirty')) return;
+  event.preventDefault();
+  event.returnValue = '';
 });
 </script>
 {% endblock %}
