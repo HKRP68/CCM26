@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from models import User, Player, UserRoster, PlayerMarket
 from config import get_buy_value
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -47,7 +49,7 @@ def get_or_refresh_market(session, user_id, force=False):
     if needs_refresh:
         _clear_old_market(session, user_id)
         # Pick 5 random 87+ active players
-        candidates = (session.query(Player)
+        candidates = (not_career(session.query(Player))
                       .filter(Player.rating >= PLAYER_MARKET_MIN_RATING,
                               Player.is_active == True)
                       .all())

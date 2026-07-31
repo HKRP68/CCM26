@@ -27,6 +27,8 @@ from models import (
     Player, Trait, User, UserRoster, TraitInventory,
 )
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 # ════════════════════════════════════════════════════════════════════
@@ -45,7 +47,7 @@ PLAYER_RATING_BUCKETS = [           # (weight, low, high)
 
 def _pick_player_for_slot(session, min_rating=None):
     """Pick a random player at or above min_rating. Excludes inactive + variants."""
-    q = (session.query(Player)
+    q = (not_career(session.query(Player))
          .filter(Player.is_active == True,
                  Player.parent_player_id.is_(None)))
     if min_rating is not None:
@@ -53,7 +55,7 @@ def _pick_player_for_slot(session, min_rating=None):
     pool = q.all()
     if not pool:
         # Drop the rating filter as a fallback
-        pool = (session.query(Player)
+        pool = (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         Player.parent_player_id.is_(None))
                 .all())

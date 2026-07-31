@@ -156,6 +156,14 @@ def resolve_replace(session, user, claim_id, old_roster_id):
         return {"ok": False, "error": "is_captain",
                 "message": "Can't replace your captain. Set a new captain first."}
 
+    # A Career Player is permanent — it can never be the card dropped to make
+    # room for an incoming reward.
+    dropped = session.query(Player).get(old_entry.player_id)
+    if dropped is not None and getattr(dropped, "is_career", False):
+        from services.career_service import CAREER_LOCKED_MESSAGE
+        return {"ok": False, "error": "career_player",
+                "message": f"{CAREER_LOCKED_MESSAGE} Choose another player to drop."}
+
     # Prevent ending up with two copies of the same cricketer.
     from services.version_service import user_owns_any_version
     if user_owns_any_version(session, user.id, new_player.id):

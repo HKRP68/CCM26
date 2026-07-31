@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
 
 from models import BotTeam, BotTeamPlayer, Player
+from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,8 @@ def add_player_to_team(session, team_id, player_id):
     player = session.query(Player).get(player_id)
     if not player:
         return None, "Player not found"
+    if getattr(player, "is_career", False):
+        return None, "Career Players belong to one user and can't join a bot team"
 
     existing = (session.query(BotTeamPlayer)
                 .filter(BotTeamPlayer.bot_team_id == team_id,
@@ -221,10 +224,10 @@ def bulk_add_players(session, team_id, player_names_or_ids):
         if name.isdigit():
             player = session.query(Player).get(int(name))
         if not player:
-            player = (session.query(Player)
+            player = (not_career(session.query(Player))
                       .filter(Player.name.ilike(name)).first())
         if not player:
-            player = (session.query(Player)
+            player = (not_career(session.query(Player))
                       .filter(Player.name.ilike(f"%{name}%")).first())
         if not player:
             skipped.append(f"{name} (not found)")

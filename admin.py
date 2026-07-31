@@ -25,6 +25,7 @@ load_dotenv()
 from database import get_session, init_db
 from services.perf_log import perf_span as _perf_span, perf_timed as _perf_timed
 from services.telegram_user_service import user_lookup_filter
+from services.player_service import not_career
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog, Match, UserAchievement,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
@@ -3509,7 +3510,7 @@ def user_add_player(user_id):
             flash("User not found", "error")
             return redirect(url_for("users_list"))
 
-        query = db.query(Player).filter(Player.is_active == True)
+        query = not_career(db.query(Player).filter(Player.is_active == True))
         filters = []
         if player_name:
             query = query.filter(Player.name.ilike(f"%{player_name}%"))
@@ -4515,7 +4516,7 @@ def webapp_search():
         category = (data.get("category") or "").strip()
         limit = min(50, int(data.get("limit") or 20))
 
-        query = db.query(Player).filter(Player.is_active == True)
+        query = not_career(db.query(Player).filter(Player.is_active == True))
         if q:
             like = f"%{q}%"
             query = query.filter(Player.name.ilike(like))
@@ -4747,6 +4748,12 @@ def webapp_release(roster_id):
         if not player:
             return {"ok": False, "error": "player_missing"}, 404
 
+        # Career Players are personal and permanent — never sellable.
+        if getattr(player, "is_career", False):
+            from services.career_service import CAREER_LOCKED_MESSAGE
+            return {"ok": False, "error": "career_player",
+                    "message": CAREER_LOCKED_MESSAGE}, 400
+
         # Prevent releasing the captain
         if user.captain_roster_id == row.id:
             return {"ok": False, "error": "is_captain",
@@ -4854,6 +4861,16 @@ def webapp_release_multi():
         players = {p.id: p for p in
                    db.query(Player).filter(Player.id.in_(player_ids)).all()}
 
+        # Career Players can't be sold. Refuse the whole selection rather than
+        # silently selling everything else the user ticked.
+        career = next((p for p in players.values()
+                       if getattr(p, "is_career", False)), None)
+        if career is not None:
+            from services.career_service import CAREER_LOCKED_MESSAGE
+            return {"ok": False, "error": "career_player",
+                    "message": f"{CAREER_LOCKED_MESSAGE} Deselect "
+                               f"{career.name} and try again."}, 400
+
         # Traits equipped on any of the sold players return to the user's
         # inventory at their current level before the rows are deleted.
         from services.trait_service import return_traits_to_inventory
@@ -4939,6 +4956,9 @@ def webapp_roster():
                 "country": p.country,
                 "version": p.version or "Base",
                 "is_captain": bool(user.captain_roster_id == r.id),
+                # Career Players stay visible in the squad but can never be
+                # sold — the UI uses this to badge the card and hide Sell.
+                "is_career": bool(getattr(p, "is_career", False)),
                 "sell_value": get_sell_value(p.rating),
             } for r, p in rows],
             "captain_roster_id": user.captain_roster_id,
@@ -5393,7 +5413,7 @@ def webapp_players():
         per_page = None if show_all else min(50, max(1, int(raw_per_page or 20)))
         only_unowned = bool(data.get("only_unowned"))
 
-        query = db.query(Player).filter(Player.is_active == True)
+        query = not_career(db.query(Player).filter(Player.is_active == True))
         # NB: include ALL versions (Base, Legend, Star, etc).
         # Version is shown as a badge in the row.
 
@@ -5482,10 +5502,10 @@ def webapp_countries():
         return err
     db, user, tg_id = auth
     try:
-        rows = (db.query(Player.country)
-                .filter(Player.is_active == True,
-                        Player.country.isnot(None),
-                        Player.country != "")
+        rows = (not_career(db.query(Player.country)
+                           .filter(Player.is_active == True,
+                                   Player.country.isnot(None),
+                                   Player.country != ""))
                 .distinct().order_by(Player.country.asc()).all())
         countries = [r[0] for r in rows if r[0]]
         return {"ok": True, "countries": countries}
@@ -6987,6 +7007,138 @@ def webapp_upgrade_options():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_upgrade_options failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+def _career_payload(db, user, player):
+    """Everything the Mini App career screen renders, in one shape."""
+    from services.career_service import (BAT_ATTRS, BOWL_ATTRS, CAREER_MAX,
+                                         attribute_rows, career_stats,
+                                         cost_to_max, projected_ratings,
+                                         total_invested)
+    from services.config_service import get_config
+
+    rows = []
+    for row in attribute_rows(player):
+        # What the ratings would become after one more point, so the screen can
+        # show "next OVR at …" without a round trip per button.
+        after = projected_ratings(player, row["key"], 1)
+        rows.append({**row,
+                     "next_rating": after["rating"],
+                     "next_bat_rating": after["bat_rating"],
+                     "next_bowl_rating": after["bowl_rating"]})
+
+    cfg = get_config(db)
+    weeks = int(cfg.get("career_streak_weeks") or 4)
+    streak = user.career_weekly_streak or 0
+
+    return {
+        "player": {
+            "id": player.id,
+            "name": player.name,
+            "country": player.country,
+            "category": player.category,
+            "rating": player.rating,
+            "bat_rating": player.bat_rating,
+            "bowl_rating": player.bowl_rating,
+            "bat_hand": player.bat_hand,
+            "bowl_hand": player.bowl_hand,
+            "bowl_style": player.bowl_style,
+            "face": player.career_face,
+            "card_url": _player_card_url(player.id),
+        },
+        "attributes": rows,
+        "bat_attrs": list(BAT_ATTRS),
+        "bowl_attrs": list(BOWL_ATTRS),
+        "max_value": CAREER_MAX,
+        "invested": total_invested(player),
+        "cost_to_max": cost_to_max(player),
+        "gems": user.total_gems or 0,
+        "stats": career_stats(db, user.id, player),
+        "streak": {
+            "current": streak,
+            "best": user.career_weekly_best_streak or 0,
+            "weeks": weeks,
+            "to_jackpot": (weeks - (streak % weeks)) if weeks else 0,
+            "bonus_gems": int(cfg.get("career_streak_bonus_gems") or 100),
+        },
+    }
+
+
+@app.route("/api/webapp/career", methods=["POST"])
+@csrf_exempt
+def webapp_career():
+    """The user's Career Player, its attributes, costs and weekly quests."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.career_service import get_career_player
+        player = get_career_player(db, user.id)
+        if not player:
+            return {"ok": True, "has_career": False,
+                    "gems": user.total_gems or 0,
+                    "message": "Create your Career Player in chat with /cmucareer."}
+        payload = _career_payload(db, user, player)
+        # The weekly quest list, so the screen shows progress towards the
+        # streak. get_user_quests returns the Quest ORM row inside each item,
+        # so flatten to plain fields before this goes out as JSON.
+        try:
+            from services.quest_service import get_user_quests
+            payload["quests"] = [{
+                "id": item["quest"].id,
+                "name": item["quest"].name,
+                "description": item["quest"].description,
+                "emoji": item["quest"].emoji,
+                "career_only": bool(getattr(item["quest"], "career_only", False)),
+                "reward_gems": item["quest"].reward_gems or 0,
+                "reward_points": item["quest"].reward_points or 0,
+                "progress": item["progress"],
+                "target": item["target"],
+                "percent": item["percent"],
+                "completed": bool(item["completed"]),
+                "claimed": bool(item["claimed"]),
+            } for item in get_user_quests(db, user.id, "weekly")]
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("career weekly quest load failed")
+            payload["quests"] = []
+        return {"ok": True, "has_career": True, **payload}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_career failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/career/upgrade", methods=["POST"])
+@csrf_exempt
+def webapp_career_upgrade():
+    """Spend gems to raise one Career Player attribute. Body: {attr, steps}."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.career_service import get_career_player, upgrade_attribute
+        data = request.get_json(silent=True) or {}
+        result = upgrade_attribute(db, user, data.get("attr"),
+                                   data.get("steps") or 1)
+        if not result["ok"]:
+            db.rollback()
+            return {"ok": False, "error": result["error"],
+                    "message": result["message"]}, 400
+        db.commit()
+        player = get_career_player(db, user.id)
+        return {"ok": True, "upgrade": result, **_career_payload(db, user, player)}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_career_upgrade failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -10784,6 +10936,14 @@ EVENT_KEYS = [
     ("market_buy", "Buy from /playermarket"),
     ("vsbot_played", "Play a /vsbot match"),
     ("vsbot_won", "Win a /vsbot match"),
+    # Career Player events — fire only for the user's own /cmucareer card.
+    # Pair these with the "Career Player quest" checkbox.
+    ("career_match_played", "🎖 Career Player featured in a match"),
+    ("career_runs_scored", "🎖 Runs scored by your Career Player (cumulative)"),
+    ("career_wickets_taken", "🎖 Wickets taken by your Career Player (cumulative)"),
+    ("career_fifty", "🎖 Career Player scored 50+ in a match"),
+    ("career_hundred", "🎖 Career Player scored 100+ in a match"),
+    ("career_sixes_hit", "🎖 Sixes hit by your Career Player (cumulative)"),
     ("manual", "Manual — admin bumps progress directly"),
 ]
 
@@ -11255,6 +11415,7 @@ def admin_quest_new():
                     reward_coins=int(request.form.get("reward_coins", "0") or 0),
                     reward_gems=int(request.form.get("reward_gems", "0") or 0),
                     is_active=bool(request.form.get("is_active")),
+                    career_only=bool(request.form.get("career_only")),
                     emoji=request.form.get("emoji", "🎯") or "🎯",
                     sort_order=int(request.form.get("sort_order", "0") or 0),
                 )
@@ -11298,6 +11459,7 @@ def admin_quest_edit(quest_id):
                 q.reward_coins = int(request.form.get("reward_coins") or 0)
                 q.reward_gems = int(request.form.get("reward_gems") or 0)
                 q.is_active = bool(request.form.get("is_active"))
+                q.career_only = bool(request.form.get("career_only"))
                 q.emoji = request.form.get("emoji", q.emoji) or "🎯"
                 q.sort_order = int(request.form.get("sort_order") or 0)
                 db.commit()
@@ -13182,7 +13344,7 @@ def _challenge_filters():
 
 def _filtered_master_players(db):
     filters = _challenge_filters()
-    query = db.query(Player).filter(Player.is_active == True)
+    query = not_career(db.query(Player).filter(Player.is_active == True))
     if filters["q"]:
         like = f"%{filters['q']}%"
         query = query.filter(Player.name.ilike(like))
@@ -16471,18 +16633,24 @@ _TEMPLATE_LAYOUT_NUMBER_KEYS = (
     "bowl_style_x", "bowl_style_y", "bowl_style_font_size",
     "bowl_style_letter_gap", "bowl_style_max_width",
 )
-_TEMPLATE_LAYOUT_FLAG_KEYS = ("trim_transparent", "protect_bottom_box")
+_TEMPLATE_LAYOUT_FLAG_KEYS = ("trim_transparent", "protect_bottom_box",
+                              "show_portrait")
 
 
 def _read_template_layout_form(variant):
-    """Collect one rarity's layout fields from the posted form.
+    """Collect one variant's layout fields from the posted form.
 
     Returns ``None`` when that variant's controls weren't submitted, so a
-    partial post (e.g. one tab's save button) never resets the other rarities.
+    partial post (e.g. one tab's save button) never resets the other tabs.
     """
+    from services.card_template_service import COLOR_SETTING_KEYS
     prefix = f"{variant}__"
     raw = {}
     for key in _TEMPLATE_LAYOUT_NUMBER_KEYS:
+        value = request.form.get(prefix + key)
+        if value is not None and str(value).strip() != "":
+            raw[key] = value
+    for key in COLOR_SETTING_KEYS:
         value = request.form.get(prefix + key)
         if value is not None and str(value).strip() != "":
             raw[key] = value
@@ -16494,18 +16662,71 @@ def _read_template_layout_form(variant):
 
 
 def _collect_variant_settings(db, only_variant=None):
-    """Merge posted layout fields over the saved per-rarity layouts."""
-    from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
+    """Merge posted layout fields over the saved per-variant layouts.
+
+    Covers the three rarity tabs plus every Career Player face tab, so each has
+    its own independent layout and its own save button.
+    """
+    from services.card_template_service import (all_template_variants,
                                                 get_variant_settings,
                                                 normalise_template_settings)
-    current = get_variant_settings(db)
-    for variant in CARD_TEMPLATE_VARIANTS:
+    variants = all_template_variants(db)
+    if only_variant and only_variant not in variants:
+        variants = variants + [only_variant]
+    current = get_variant_settings(db, variants=variants)
+    for variant in variants:
         if only_variant and variant != only_variant:
             continue
         raw = _read_template_layout_form(variant)
         if raw is not None:
             current[variant] = normalise_template_settings(raw, defaults=current[variant])
     return current
+
+
+def _career_face_usage(db, slot):
+    """How many career players currently wear a face (0 when unavailable)."""
+    try:
+        from services.career_face_service import face_in_use_count
+        return face_in_use_count(db, slot)
+    except Exception:
+        logger.debug("career face usage lookup failed", exc_info=True)
+        return 0
+
+
+def _template_variant_label(variant, db=None):
+    """Human label for a template tab — "Star Card", "Career Face 2", …"""
+    from services.card_template_service import career_variant_slot
+    slot = career_variant_slot(variant)
+    if slot is None:
+        return f"{str(variant).title()} Card"
+    label = None
+    try:
+        from models import CareerFace
+        own = db is None
+        session = db or get_session()
+        try:
+            row = session.query(CareerFace).filter(CareerFace.slot == slot).first()
+            label = (row.label or "").strip() if row else None
+        finally:
+            if own:
+                session.close()
+    except Exception:
+        logger.debug("career face label lookup failed", exc_info=True)
+    return f"Career Player Card — {label or f'Face {slot}'}"
+
+
+def _known_template_variant(variant, db=None):
+    """Return a valid template tab key, or ``None`` when it isn't one.
+
+    Career faces are validated against the ``career_faces`` table so a stale
+    form can't create layout entries for a face that was deleted.
+    """
+    from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
+                                                all_template_variants)
+    value = (variant or "base").strip().lower()
+    if value in CARD_TEMPLATE_VARIANTS:
+        return value
+    return value if value in all_template_variants(db) else None
 
 
 def _persist_card_template_state(payload, audit_text):
@@ -16569,8 +16790,14 @@ def admin_card_template():
                    .order_by(Player.rating.desc(), Player.name.asc())
                    .limit(200).all())
         from services.card_template_service import (DEFAULT_TEMPLATE_SETTINGS,
+                                                    DEFAULT_COLOR_SETTINGS,
+                                                    CAREER_COLOR_SETTINGS,
+                                                    CAREER_LAYOUT_SETTINGS,
+                                                    COLOR_SETTING_KEYS,
+                                                    all_template_variants,
                                                     list_template_variants,
                                                     get_variant_settings)
+        from services.career_face_service import list_faces
         from services.cmu_stats_card_service import normalise_stats_card_settings
         from services.country_flag_service import list_country_flags
         from services.player_portrait_service import has_global_player_portrait
@@ -16579,19 +16806,34 @@ def admin_card_template():
         cfg.card_style = state.get("card_style") or cfg.card_style
         cfg.card_template_show_portrait = state.get(
             "show_portrait", cfg.card_template_show_portrait)
-        # One independent layout per rarity tab; "settings" stays available as
-        # the Base layout for anything still expecting a single dict.
-        variant_settings = get_variant_settings(db, state=state)
+        # One independent layout per tab — the three rarities plus every Career
+        # Player face; "settings" stays available as the Base layout for
+        # anything still expecting a single dict.
+        variants = all_template_variants(db)
+        variant_settings = get_variant_settings(db, state=state, variants=variants)
         settings = variant_settings["base"]
         stats_settings = normalise_stats_card_settings(state.get("stats_settings"))
         template_variants = list_template_variants(db)
         has_template = template_variants["base"]["uploaded"]
+        career_faces = [{
+            "slot": face.slot,
+            "variant": f"career_{face.slot}",
+            "label": face.label or f"Face {face.slot}",
+            "is_active": bool(face.is_active),
+            "sort_order": face.sort_order,
+            "in_use": _career_face_usage(db, face.slot),
+        } for face in list_faces(db)]
         from services.card_template_service import TEMPLATES_ROOT, ALLOWED_FONT_EXT
         has_font = any(os.path.isfile(os.path.join(TEMPLATES_ROOT, f"font.{ext}"))
                        for ext in ALLOWED_FONT_EXT) or bool(cfg.card_template_font_path)
         return render_template("admin_card_template.html", cfg=cfg, players=players,
                                settings=settings, variant_settings=variant_settings,
                                default_settings=DEFAULT_TEMPLATE_SETTINGS,
+                               default_colors=DEFAULT_COLOR_SETTINGS,
+                               career_colors=CAREER_COLOR_SETTINGS,
+                               career_layout=CAREER_LAYOUT_SETTINGS,
+                               color_keys=COLOR_SETTING_KEYS,
+                               variants=variants, career_faces=career_faces,
                                has_template=has_template,
                                template_variants=template_variants, has_font=has_font, country_flags=list_country_flags(),
                                has_global_portrait=has_global_player_portrait(),
@@ -16609,15 +16851,16 @@ def admin_card_template_save():
         # deterministic files under data/card_templates and mirrored to the
         # Telegram storage channel; card-template values are no longer saved in
         # GameConfig.
-        from services.card_template_service import save_template_image
-        for variant in ("base", "star", "legend"):
+        from services.card_template_service import (save_template_image,
+                                                    all_template_variants)
+        for variant in all_template_variants(db):
             template_file = request.files.get(f"template_file_{variant}")
             if template_file and template_file.filename:
                 ok, msg, path = save_template_image(
                     template_file.read(), template_file.filename, variant=variant)
                 if not ok:
                     db.rollback()
-                    flash(f"❌ {variant.title()} template: {msg}", "error")
+                    flash(f"❌ {_template_variant_label(variant, db)}: {msg}", "error")
                     return redirect(url_for("admin_card_template"))
 
         # Optional font upload. This is the font used for every generated card.
@@ -16679,20 +16922,20 @@ def admin_card_template_save():
 @app.route("/card-template/layout/save", methods=["POST"])
 @login_required
 def admin_card_template_layout_save():
-    """Save one rarity tab only — its blank template and its own layout.
+    """Save one card tab only — its blank template and its own layout.
 
-    The other rarities keep their saved layouts untouched, so tuning the Star
-    card can never move text on the Base or Legend card.
+    Covers the three rarities and every Career Player face. The other tabs keep
+    their saved layouts untouched, so tuning the Star card (or Face 2) can never
+    move text on any other card.
     """
     db = get_session()
     try:
-        from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
-                                                    save_template_image)
-        variant = (request.form.get("variant") or "base").strip().lower()
-        if variant not in CARD_TEMPLATE_VARIANTS:
+        from services.card_template_service import save_template_image
+        variant = _known_template_variant(request.form.get("variant"), db)
+        if not variant:
             flash("❌ Unknown card-template variant.", "error")
             return redirect(url_for("admin_card_template"))
-        label = f"{variant.title()} Card"
+        label = _template_variant_label(variant, db)
 
         template_file = request.files.get(f"template_file_{variant}")
         if template_file and template_file.filename:
@@ -16724,15 +16967,15 @@ def admin_card_template_layout_save():
 @app.route("/card-template/template/remove", methods=["POST"])
 @login_required
 def admin_card_template_remove_image():
-    """Remove one rarity's blank template without affecting other variants."""
-    variant = (request.form.get("variant") or "base").strip().lower()
-    from services.card_template_service import (CARD_TEMPLATE_VARIANTS,
-                                                 remove_template_image)
-    if variant not in CARD_TEMPLATE_VARIANTS:
+    """Remove one tab's blank template without affecting other variants."""
+    from services.card_template_service import remove_template_image
+    variant = _known_template_variant(request.form.get("variant"))
+    if not variant:
         flash("❌ Unknown card-template variant.", "error")
         return redirect(url_for("admin_card_template"))
+    label = _template_variant_label(variant)
     if not remove_template_image(variant):
-        flash(f"❌ No {variant.title()} Card template is uploaded.", "error")
+        flash(f"❌ No {label} template is uploaded.", "error")
         return redirect(url_for("admin_card_template"))
     if variant == "base":
         db = get_session()
@@ -16753,7 +16996,7 @@ def admin_card_template_remove_image():
         invalidate_template_card_cache()
     except Exception:
         pass
-    flash(f"✅ Removed the {variant.title()} Card template.", "info")
+    flash(f"✅ Removed the {label} template.", "info")
     return redirect(url_for("admin_card_template"))
 
 
@@ -16865,6 +17108,369 @@ def admin_card_template_flag_remove():
     else:
         flash(f"❌ No uploaded flag found for {country or 'that country'}.", "error")
     return redirect(url_for("admin_card_template"))
+
+
+# ─── Career Player faces (card-template variants created on the website) ───
+
+@app.route("/card-template/career-face/add", methods=["POST"])
+@login_required
+def admin_career_face_add():
+    """Create a new Career Player face tab, ready for its artwork."""
+    db = get_session()
+    try:
+        from services.career_face_service import add_face
+        face, error = add_face(db, request.form.get("label"))
+        if error:
+            flash(f"❌ {error}", "error")
+            return redirect(url_for("admin_card_template"))
+        artwork = request.files.get("template_file")
+        if artwork and artwork.filename:
+            from services.career_face_service import save_face_artwork
+            ok, msg = save_face_artwork(db, face.slot, artwork.read(),
+                                        artwork.filename)
+            if not ok:
+                db.rollback()
+                flash(f"❌ {msg}", "error")
+                return redirect(url_for("admin_card_template"))
+        db.commit()
+        slot = face.slot
+        _persist_card_template_state(get_card_template_state(),
+                                     audit_text=f"career-face-add={slot}")
+        flash(f"✅ Added Career Player Card — Face {slot}. "
+              f"Upload its blank card and tune the text positions below.", "info")
+        return redirect(url_for("admin_card_template") + f"#card-career_{slot}")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_card_template"))
+    finally:
+        db.close()
+
+
+@app.route("/card-template/career-face/update", methods=["POST"])
+@login_required
+def admin_career_face_update():
+    """Rename, reorder or (de)activate one Career Player face."""
+    db = get_session()
+    try:
+        from services.career_face_service import set_face_fields
+        slot = int(request.form.get("slot") or 0)
+        ok, msg = set_face_fields(
+            db, slot,
+            label=request.form.get("label"),
+            is_active=bool(request.form.get("is_active")),
+            sort_order=request.form.get("sort_order"))
+        if not ok:
+            flash(f"❌ {msg}", "error")
+            return redirect(url_for("admin_card_template"))
+        db.commit()
+        flash(f"✅ {msg}", "info")
+        return redirect(url_for("admin_card_template") + f"#card-career_{slot}")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_card_template"))
+    finally:
+        db.close()
+
+
+@app.route("/card-template/career-face/remove", methods=["POST"])
+@login_required
+def admin_career_face_remove():
+    """Delete a Career Player face and its artwork.
+
+    Career players already wearing it keep rendering — their variant falls back
+    to face 1 and then the base card — but they lose that design, so the page
+    warns when a face is still in use.
+    """
+    db = get_session()
+    try:
+        from services.career_face_service import remove_face
+        slot = int(request.form.get("slot") or 0)
+        ok, msg = remove_face(db, slot)
+        if not ok:
+            flash(f"❌ {msg}", "error")
+            return redirect(url_for("admin_card_template"))
+        db.commit()
+        _persist_card_template_state(get_card_template_state(),
+                                     audit_text=f"career-face-remove={slot}")
+        flash(f"✅ {msg}", "info")
+        return redirect(url_for("admin_card_template"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_card_template"))
+    finally:
+        db.close()
+
+
+# ─── Career Players: dashboard, name pool and wizard step images ───────────
+
+@app.route("/career")
+@login_required
+def admin_career():
+    """Every Career Player, with what its owner has invested in it."""
+    db = get_session()
+    try:
+        from models import User
+        from services.career_service import (ALL_ATTRS, ATTR_LABELS,
+                                             attr_column, total_invested,
+                                             cost_to_max)
+        country = (request.args.get("country") or "").strip()
+        sort = (request.args.get("sort") or "rating").strip()
+
+        query = (db.query(Player, User)
+                 .outerjoin(User, Player.career_owner_user_id == User.id)
+                 .filter(Player.is_career.is_(True)))
+        if country:
+            query = query.filter(Player.country == country)
+        rows = query.all()
+
+        players = []
+        for player, owner in rows:
+            players.append({
+                "id": player.id,
+                "name": player.name,
+                "country": player.country,
+                "face": player.career_face or "-",
+                "rating": player.rating,
+                "bat_rating": player.bat_rating,
+                "bowl_rating": player.bowl_rating,
+                "bat_hand": player.bat_hand,
+                "bowl_hand": player.bowl_hand,
+                "bowl_style": player.bowl_style,
+                "attrs": {a: getattr(player, attr_column(a), 78) for a in ALL_ATTRS},
+                "invested": total_invested(player),
+                "to_max": cost_to_max(player),
+                "created_at": player.created_at,
+                "owner_id": owner.id if owner else None,
+                "owner": ((owner.username and f"@{owner.username}")
+                          or (owner.first_name if owner else None)
+                          or (f"id {owner.telegram_id}" if owner else "—")),
+                "streak": (owner.career_weekly_streak or 0) if owner else 0,
+                "best_streak": (owner.career_weekly_best_streak or 0) if owner else 0,
+            })
+
+        sort_keys = {
+            "rating": lambda r: -r["rating"],
+            "invested": lambda r: -r["invested"],
+            "name": lambda r: r["name"].lower(),
+            "newest": lambda r: -(r["created_at"].timestamp() if r["created_at"] else 0),
+        }
+        players.sort(key=sort_keys.get(sort, sort_keys["rating"]))
+
+        countries = sorted({p["country"] for p in players if p["country"]})
+        return render_template(
+            "admin_career.html", players=players, countries=countries,
+            country=country, sort=sort, attr_labels=ATTR_LABELS,
+            all_attrs=ALL_ATTRS,
+            total_invested_all=sum(p["invested"] for p in players))
+    finally:
+        db.close()
+
+
+@app.route("/career/<int:player_id>/reset", methods=["POST"])
+@login_required
+def admin_career_reset(player_id):
+    """Support action: put every attribute back to 78 and refund nothing.
+
+    Deleting a career player is deliberately not offered — it would orphan the
+    owner's roster row, match stats and quest progress.
+    """
+    db = get_session()
+    try:
+        from services.career_service import (ALL_ATTRS, CAREER_START,
+                                             attr_column, recompute_ratings,
+                                             total_invested)
+        player = db.query(Player).get(player_id)
+        if not player or not player.is_career:
+            flash("❌ That isn't a Career Player.", "error")
+            return redirect(url_for("admin_career"))
+        spent = total_invested(player)
+        for attr in ALL_ATTRS:
+            setattr(player, attr_column(attr), CAREER_START)
+        recompute_ratings(player)
+        player.gen_card_file_id = None
+        db.commit()
+        try:
+            from services.card_generator import (invalidate_card_cache,
+                                                 invalidate_template_card_cache)
+            invalidate_card_cache(player.id)
+            invalidate_template_card_cache(player.id)
+        except Exception:
+            pass
+        flash(f"✅ Reset {player.name} to {CAREER_START} across the board "
+              f"({spent:,} 💎 of upgrades cleared).", "info")
+        return redirect(url_for("admin_career"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career"))
+    finally:
+        db.close()
+
+
+@app.route("/career/names", methods=["GET"])
+@login_required
+def admin_career_names():
+    """Edit the per-country first-name and surname pools /cmucareer draws from."""
+    db = get_session()
+    try:
+        from models import CareerNamePool
+        from services.career_name_service import FIRST, SURNAME, pool_summary
+        country = (request.args.get("country") or "").strip()
+        firsts = surnames = []
+        if country:
+            rows = (db.query(CareerNamePool)
+                    .filter(CareerNamePool.country == country)
+                    .order_by(CareerNamePool.value).all())
+            firsts = [r for r in rows if r.name_kind == FIRST]
+            surnames = [r for r in rows if r.name_kind == SURNAME]
+        return render_template("admin_career_names.html",
+                               summary=pool_summary(db), country=country,
+                               firsts=firsts, surnames=surnames)
+    finally:
+        db.close()
+
+
+@app.route("/career/names/add", methods=["POST"])
+@login_required
+def admin_career_names_add():
+    """Bulk-add names. Accepts newline or comma separated input."""
+    db = get_session()
+    try:
+        from services.career_name_service import FIRST, SURNAME, add_names
+        country = (request.form.get("country") or "").strip()
+        kind = (request.form.get("kind") or "").strip()
+        raw = request.form.get("values") or ""
+        values = [v for chunk in raw.splitlines() for v in chunk.split(",")]
+        if kind not in (FIRST, SURNAME):
+            flash("❌ Choose first names or surnames.", "error")
+            return redirect(url_for("admin_career_names", country=country))
+        added, skipped = add_names(db, country, kind, values)
+        db.commit()
+        flash(f"✅ Added {added} name(s); skipped {skipped} blank or duplicate.",
+              "info")
+        return redirect(url_for("admin_career_names", country=country))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career_names"))
+    finally:
+        db.close()
+
+
+@app.route("/career/names/<int:row_id>/delete", methods=["POST"])
+@login_required
+def admin_career_names_delete(row_id):
+    db = get_session()
+    try:
+        from services.career_name_service import remove_name
+        country = (request.form.get("country") or "").strip()
+        if remove_name(db, row_id):
+            db.commit()
+            flash("✅ Name removed.", "info")
+        else:
+            flash("❌ That name is already gone.", "error")
+        return redirect(url_for("admin_career_names", country=country))
+    finally:
+        db.close()
+
+
+@app.route("/career/names/seed", methods=["POST"])
+@login_required
+def admin_career_names_seed():
+    """Re-mine the name pool from data/players.json without losing edits."""
+    db = get_session()
+    try:
+        from seed_career_names import collect, DATA_PATH
+        from services.career_name_service import FIRST, SURNAME, add_names
+        with open(DATA_PATH, encoding="utf-8") as handle:
+            pools = collect(json.load(handle))
+        added = skipped = 0
+        for country in sorted(pools):
+            for kind in (FIRST, SURNAME):
+                a, s = add_names(db, country, kind, sorted(pools[country][kind]))
+                added += a
+                skipped += s
+        db.commit()
+        flash(f"✅ Seeded {len(pools)} countries — added {added} new name(s), "
+              f"kept {skipped} already present.", "info")
+        return redirect(url_for("admin_career_names"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career_names"))
+    finally:
+        db.close()
+
+
+@app.route("/career/steps", methods=["GET"])
+@login_required
+def admin_career_steps():
+    """Upload the photo shown on each step of the /cmucareer wizard."""
+    db = get_session()
+    try:
+        from models import CareerStepImage
+        from services.career_step_service import STEP_KEYS, STEP_LABELS
+        rows = {r.step_key: r for r in db.query(CareerStepImage).all()}
+        steps = [{
+            "key": key,
+            "label": STEP_LABELS[key],
+            "uploaded": bool(rows.get(key) and rows[key].image_path),
+            "is_active": bool(rows[key].is_active) if rows.get(key) else True,
+        } for key in STEP_KEYS]
+        return render_template("admin_career_steps.html", steps=steps)
+    finally:
+        db.close()
+
+
+@app.route("/career/steps/upload", methods=["POST"])
+@login_required
+def admin_career_steps_upload():
+    db = get_session()
+    try:
+        from services.career_step_service import save_step_image
+        key = (request.form.get("step_key") or "").strip()
+        file = request.files.get("image")
+        if not file or not file.filename:
+            flash("❌ Choose an image to upload.", "error")
+            return redirect(url_for("admin_career_steps"))
+        ok, msg = save_step_image(db, key, file.read(), file.filename,
+                                  uploaded_by=session.get("admin_user") or "admin")
+        db.commit() if ok else db.rollback()
+        flash(("✅ " if ok else "❌ ") + msg, "info" if ok else "error")
+        return redirect(url_for("admin_career_steps"))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career_steps"))
+    finally:
+        db.close()
+
+
+@app.route("/career/steps/remove", methods=["POST"])
+@login_required
+def admin_career_steps_remove():
+    db = get_session()
+    try:
+        from services.career_step_service import remove_step_image
+        ok, msg = remove_step_image(db, (request.form.get("step_key") or "").strip())
+        db.commit() if ok else db.rollback()
+        flash(("✅ " if ok else "❌ ") + msg, "info" if ok else "error")
+        return redirect(url_for("admin_career_steps"))
+    finally:
+        db.close()
+
+
+def get_card_template_state():
+    """Current card-template runtime state, or an empty dict."""
+    try:
+        from services.card_template_storage_service import get_state
+        return dict(get_state() or {})
+    except Exception:
+        logger.exception("card-template storage state unavailable")
+        return {}
 
 
 @app.route("/card-template/preview/<int:player_id>")

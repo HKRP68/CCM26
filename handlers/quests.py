@@ -33,9 +33,10 @@ def _render_quest_list(quests_data, quest_type, user, owner_tg, *,
       filter_mode: 'all' | 'ready' | 'progress' (in-progress, not ready)
       page: 0-indexed page
     """
-    type_label = "DAILY" if quest_type == "daily" else "MONTHLY"
-    type_icon = "📅" if quest_type == "daily" else "🗓️"
-    reset_label = "every 24 hours" if quest_type == "daily" else "every 30 days"
+    type_label = {"daily": "DAILY", "weekly": "WEEKLY"}.get(quest_type, "MONTHLY")
+    type_icon = {"daily": "📅", "weekly": "🗓"}.get(quest_type, "🗓️")
+    reset_label = {"daily": "every 24 hours",
+                   "weekly": "every Monday"}.get(quest_type, "every 30 days")
 
     # Apply filter
     if filter_mode == "ready":
@@ -102,12 +103,15 @@ def _render_quest_list(quests_data, quest_type, user, owner_tg, *,
     # ── Build keyboard
     btns = []
 
-    # Tab row: Daily / Monthly
-    daily_lbl = ("• 📅 Daily •" if quest_type == "daily" else "📅 Daily")
-    monthly_lbl = ("• 🗓️ Monthly •" if quest_type == "monthly" else "🗓️ Monthly")
+    # Tab row: Daily / Weekly / Monthly. Weekly holds the Career Player quests.
+    def _tab(label, code):
+        return InlineKeyboardButton(
+            f"• {label} •" if quest_type == code else label,
+            callback_data=f"qst_tab_{owner_tg}_{code}")
     btns.append([
-        InlineKeyboardButton(daily_lbl, callback_data=f"qst_tab_{owner_tg}_daily"),
-        InlineKeyboardButton(monthly_lbl, callback_data=f"qst_tab_{owner_tg}_monthly"),
+        _tab("📅 Daily", "daily"),
+        _tab("🗓 Weekly", "weekly"),
+        _tab("🗓️ Monthly", "monthly"),
     ])
 
     # Filter row: All / Ready / In Progress
@@ -182,7 +186,7 @@ async def myquest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # auto-claim totals before the message is rendered.
         from services.quest_service import consume_pending_auto_claims
         auto_claimed = []
-        for qt in ("daily", "monthly"):
+        for qt in ("daily", "weekly", "monthly"):
             auto_claimed.extend(consume_pending_auto_claims(session, user.id, qt))
         session.commit()
 
@@ -245,7 +249,7 @@ async def quest_filter_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if tg.id != owner_tg:
         await q.answer("Not yours!", show_alert=True)
         return
-    if quest_type not in ("daily", "monthly") or filter_mode not in ("all", "ready", "progress"):
+    if quest_type not in ("daily", "weekly", "monthly") or filter_mode not in ("all", "ready", "progress"):
         await q.answer("Unknown")
         return
 
@@ -331,7 +335,7 @@ async def quest_tab_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.answer("Not yours!", show_alert=True)
         return
 
-    if quest_type not in ("daily", "monthly"):
+    if quest_type not in ("daily", "weekly", "monthly"):
         await q.answer("Unknown tab")
         return
 
@@ -441,7 +445,7 @@ async def quest_claimall_callback(update: Update, context: ContextTypes.DEFAULT_
         await q.answer("Not yours!", show_alert=True)
         return
 
-    if quest_type not in ("daily", "monthly"):
+    if quest_type not in ("daily", "weekly", "monthly"):
         await q.answer("Unknown")
         return
 

@@ -490,7 +490,8 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <div class="section-label">Game Settings</div>
     <a href="{{ url_for('admin_match_settings') }}" class="{{ 'active' if request.endpoint == 'admin_match_settings' }}">🏏 Match Gameplay</a>
     <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint == 'admin_scorecard_settings' }}">📊 Scorecard</a>
-    <a href="{{ url_for('admin_card_template') }}" class="{{ 'active' if 'card_template' in (request.endpoint or '') }}">🎴 Card Template</a>
+    <a href="{{ url_for('admin_card_template') }}" class="{{ 'active' if 'card_template' in (request.endpoint or '') or 'career_face' in (request.endpoint or '') }}">🎴 Card Template</a>
+    <a href="{{ url_for('admin_career') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_career') and 'face' not in (request.endpoint or '') }}">🎖 Career Players</a>
     <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">🎲 Simulation</a>
     <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">🎬 Media</a>
     <a href="{{ url_for('admin_sounds') }}" class="{{ 'active' if request.endpoint == 'admin_sounds' }}">🔊 Sounds</a>

@@ -346,6 +346,10 @@ def generate_template_card(player, force_global_portrait=False, template_variant
         # preview payload never silently snaps back to the v7.1 defaults.
         tcfg["settings"] = normalise_template_settings(preview_settings,
                                                        defaults=tcfg["settings"])
+        # show_portrait lives in the per-variant settings now, so a preview that
+        # toggles it has to move the top-level copy the renderer reads too.
+        tcfg["show_portrait"] = tcfg["settings"].get("show_portrait",
+                                                     tcfg.get("show_portrait", True))
     if preview_show_portrait is not None:
         tcfg["show_portrait"] = bool(preview_show_portrait)
     cache_key = (player.id, bool(force_global_portrait), tcfg["variant"])
@@ -363,40 +367,51 @@ def generate_template_card(player, force_global_portrait=False, template_variant
             _restore_bottom_box(base, clean_template)
 
         draw = ImageDraw.Draw(base)
+        # Text colours are per-variant, so a dark Career face template can use
+        # light text while the rarity cards keep the original v7.1 palette.
+        from services.card_template_service import color_to_rgba, DEFAULT_COLOR_SETTINGS
+
+        def _color(key):
+            return color_to_rgba(settings.get(key), DEFAULT_COLOR_SETTINGS[key])
+
         first_name, last_name = _split_template_name(player.name)
+        name_color = _color("name_color")
         _draw_fit(draw, tcfg, first_name, (settings["name_x"], settings["name_y"] + 110),
-                  settings["name_max_width"], settings["name_font_size"], 20, _DARK_GREEN,
+                  settings["name_max_width"], settings["name_font_size"], 20, name_color,
                   letter_gap=settings["name_letter_gap"])
         if last_name:
             _draw_fit(draw, tcfg, last_name, (settings["name_x"], settings["name_y"] + 110 + settings["name_line_gap"]),
-                      settings["name_max_width"], settings["name_font_size"], 20, _DARK_GREEN,
+                      settings["name_max_width"], settings["name_font_size"], 20, name_color,
                       letter_gap=settings["name_letter_gap"])
         _draw_fit(draw, tcfg, str(player.category).upper(),
                   (settings["cat_x"], settings["cat_y"]), settings["cat_max_width"],
-                  settings["cat_font_size"], 18, _LIGHT_GREEN,
+                  settings["cat_font_size"], 18, _color("cat_color"),
                   letter_gap=settings["cat_letter_gap"])
         _draw_fit(draw, tcfg, int(player.rating), (settings["ovr_x"], settings["ovr_y"]),
-                  settings["ovr_max_width"], settings["ovr_font_size"], 20, _RED, anchor="mm",
+                  settings["ovr_max_width"], settings["ovr_font_size"], 20,
+                  _color("ovr_color"), anchor="mm",
                   letter_gap=settings["ovr_letter_gap"])
         _draw_fit(draw, tcfg, int(player.bat_rating), (settings["bat_x"], settings["bat_y"]),
-                  settings["bat_max_width"], settings["bat_font_size"], 20, _RED, anchor="mm",
+                  settings["bat_max_width"], settings["bat_font_size"], 20,
+                  _color("bat_color"), anchor="mm",
                   letter_gap=settings["bat_letter_gap"])
         _draw_fit(draw, tcfg, int(player.bowl_rating), (settings["bowl_x"], settings["bowl_y"]),
-                  settings["bowl_max_width"], settings["bowl_font_size"], 20, _RED, anchor="mm",
+                  settings["bowl_max_width"], settings["bowl_font_size"], 20,
+                  _color("bowl_color"), anchor="mm",
                   letter_gap=settings["bowl_letter_gap"])
         _draw_template_flag(base, draw, tcfg, player.country, settings)
         _draw_fit(draw, tcfg, str(player.country).upper(), (settings["country_x"], settings["country_y"]), settings["country_max_width"],
-                  settings["country_font_size"], 20, _DARK_GREEN,
+                  settings["country_font_size"], 20, _color("country_color"),
                   letter_gap=settings["country_letter_gap"])
         _draw_fit(draw, tcfg, _template_batting_style(player),
                   (settings["bat_style_x"], settings["bat_style_y"]),
                   settings["bat_style_max_width"], settings["bat_style_font_size"], 20,
-                  _DARK_GREEN, letter_gap=settings["bat_style_letter_gap"])
+                  _color("bat_style_color"), letter_gap=settings["bat_style_letter_gap"])
         _draw_fit(draw, tcfg, _template_bowling_style(player),
                   (settings["bowl_style_x"], settings["bowl_style_y"]),
                   settings["bowl_style_max_width"], settings["bowl_style_font_size"], 20,
-                  _DARK_GREEN, letter_gap=settings["bowl_style_letter_gap"])
-        draw.line((1030, 939, 1442, 939), fill=_LINE_GREEN, width=2)
+                  _color("bowl_style_color"), letter_gap=settings["bowl_style_letter_gap"])
+        draw.line((1030, 939, 1442, 939), fill=_color("line_color"), width=2)
 
         buf = io.BytesIO()
         base.convert("RGB").save(buf, format="JPEG", quality=90, optimize=True)
@@ -746,6 +761,24 @@ async def send_generated_card(reply_photo, player, **photo_kwargs):
         return None
     cache_sent_card_file_id(pid, sent)
     return sent
+
+
+def drop_cached_cards(player_id):
+    """Drop this player's cached cards from memory ONLY — no database write.
+
+    ``invalidate_card_cache`` also nulls ``players.gen_card_file_id`` through a
+    second, short-lived session. That is right for a caller that has nothing
+    open, but a caller already inside its own transaction on that same row (for
+    example ``career_service.upgrade_attribute``) would be waiting on a lock it
+    itself holds — an 8-second stall on SQLite and a block-until-commit on
+    Postgres. Such callers clear the column on their own ORM object and use this
+    instead.
+    """
+    _CARD_CACHE.pop(player_id, None)
+    _GENERATED_FILE_ID_CACHE.pop(player_id, None)
+    for key in tuple(_TEMPLATE_CARD_CACHE):
+        if key[0] == player_id:
+            _TEMPLATE_CARD_CACHE.pop(key, None)
 
 
 def invalidate_card_cache(player_id=None):

@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 
 from models import Player, UserRoster
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,12 +107,12 @@ def user_owns_any_version(session: Session, user_id, player_id):
 def list_base_players_only_query(session: Session):
     """Returns a query that filters to base cards only.
     Use this for /search, /myroster suggestions, etc."""
-    return session.query(Player).filter(Player.parent_player_id.is_(None))
+    return not_career(session.query(Player)).filter(Player.parent_player_id.is_(None))
 
 
 def get_default_for_search(session: Session, name_query):
     """Search returns base players matching the name (variants hidden by default)."""
-    q = (session.query(Player)
+    q = (not_career(session.query(Player))
          .filter(Player.parent_player_id.is_(None),
                  Player.is_active == True,
                  Player.name.ilike(f"%{name_query}%")))

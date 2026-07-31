@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Career Wizard Images{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🖼️ /cmucareer wizard images</h2>
+  <a href="{{ url_for('admin_career') }}" class="btn btn-ghost btn-sm">← Career Players</a>
+</div>
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;line-height:1.6;">
+  Every step of the creation wizard is a photo with buttons underneath. Upload the artwork for each step here — the bot swaps the picture as the player moves through the flow. A step with no image still works; it just sends the buttons as a text message instead.
+</p>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;">
+  {% for step in steps %}
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.1rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-bottom:.5rem;">
+      <strong style="font-size:.92rem;">{{ step.label }}</strong>
+      {% if step.uploaded %}<span style="font-size:.72rem;border-radius:999px;padding:.18rem .45rem;background:rgba(0,201,167,.13);color:var(--ok,#00c9a7);">✓ Uploaded</span>{% endif %}
+    </div>
+    <p style="color:var(--muted);font-size:.76rem;margin:0 0 .7rem;">Step key: <code>{{ step.key }}</code></p>
+    <form method="POST" action="{{ url_for('admin_career_steps_upload') }}" enctype="multipart/form-data" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="step_key" value="{{ step.key }}">
+      <input type="file" name="image" accept=".png,.jpg,.jpeg,.webp" required style="flex:1 1 160px;">
+      <button type="submit" class="btn btn-primary btn-sm">Upload</button>
+    </form>
+    {% if step.uploaded %}
+    <form method="POST" action="{{ url_for('admin_career_steps_remove') }}" style="margin-top:.6rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="step_key" value="{{ step.key }}">
+      <button type="submit" class="btn btn-ghost btn-sm">Remove image</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<p style="color:var(--muted);font-size:.78rem;margin-top:1.25rem;line-height:1.5;">
+  The <strong>face</strong> step normally shows each face's own card as the player flips through them, so its image here is only the fallback used before any face artwork is uploaded. Face designs live on the <a href="{{ url_for('admin_card_template') }}">Card Template</a> page.
+</p>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Career Name Pool{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🔤 Career Player name pool</h2>
+  <a href="{{ url_for('admin_career') }}" class="btn btn-ghost btn-sm">← Career Players</a>
+</div>
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;line-height:1.6;">
+  <code>/cmucareer</code> asks the player for a country, a first-name initial and a surname initial, then builds a name by combining one first name and one surname from this pool. <strong>Every generated name is checked against every existing player</strong>, so a career player never shares a name with a real card or with someone else's career player. Only letters that actually have names behind them are offered, so the wizard can't dead-end.
+</p>
+
+<form method="POST" action="{{ url_for('admin_career_names_seed') }}" style="margin-bottom:1.5rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn btn-ghost btn-sm">🌱 Re-seed from data/players.json</button>
+  <span style="color:var(--muted);font-size:.8rem;margin-left:.5rem;">Adds any missing real-player names. Never removes names you added by hand.</span>
+</form>
+
+<h3 style="font-size:1rem;margin:0 0 .6rem;">Countries</h3>
+{% if not summary %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;color:var(--muted);">
+  The pool is empty. Use <strong>Re-seed from data/players.json</strong> above to fill it, or add names by hand below.
+</div>
+{% else %}
+<div style="overflow-x:auto;margin-bottom:1.5rem;">
+<table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+  <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border);"><th style="padding:.5rem .4rem;">Country</th><th>First names</th><th>Surnames</th><th>Offered in /cmucareer</th><th></th></tr></thead>
+  <tbody>
+    {% for row in summary %}
+    <tr style="border-bottom:1px solid var(--border);{{ 'background:rgba(245,166,35,.06);' if not row.usable }}">
+      <td style="padding:.5rem .4rem;"><strong>{{ row.country }}</strong></td>
+      <td>{{ row.firsts }}</td>
+      <td>{{ row.surnames }}</td>
+      <td>{% if row.usable %}✅{% else %}<span style="color:#f5a623;">needs both</span>{% endif %}</td>
+      <td style="text-align:right;"><a href="{{ url_for('admin_career_names', country=row.country) }}" class="btn btn-ghost btn-sm">Edit</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p style="color:var(--muted);font-size:.78rem;margin:-1rem 0 1.5rem;line-height:1.5;">A country needs at least one first name <em>and</em> one surname to be offered — and it also needs a flag PNG uploaded on the <a href="{{ url_for('admin_card_template') }}">Card Template</a> page.</p>
+{% endif %}
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1.5rem;">
+  <h3 style="margin:0 0 .6rem;font-size:1rem;">➕ Add names</h3>
+  <form method="POST" action="{{ url_for('admin_career_names_add') }}" style="display:grid;gap:.7rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:flex;gap:.7rem;flex-wrap:wrap;">
+      <div>
+        <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Country</label>
+        <input type="text" name="country" value="{{ country }}" list="countryList" required style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <datalist id="countryList">{% for row in summary %}<option value="{{ row.country }}">{% endfor %}</datalist>
+      </div>
+      <div>
+        <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Kind</label>
+        <select name="kind" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          <option value="first">First names</option>
+          <option value="surname">Surnames</option>
+        </select>
+      </div>
+    </div>
+    <div>
+      <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Names — one per line, or comma separated</label>
+      <textarea name="values" rows="5" placeholder="Arjun&#10;Kabir&#10;Rohan" style="width:100%;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:.6rem;font-size:.9rem;"></textarea>
+    </div>
+    <div><button type="submit" class="btn btn-primary">Add names</button></div>
+  </form>
+</div>
+
+{% if country %}
+<h3 style="font-size:1rem;margin:0 0 .6rem;">{{ country }} — {{ firsts | length }} first names, {{ surnames | length }} surnames</h3>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;">
+  {% for title, rows in [('First names', firsts), ('Surnames', surnames)] %}
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;">
+    <strong style="display:block;margin-bottom:.6rem;">{{ title }}</strong>
+    {% if not rows %}<span style="color:var(--muted);font-size:.85rem;">None yet.</span>{% endif %}
+    <div style="display:flex;flex-wrap:wrap;gap:.4rem;">
+      {% for row in rows %}
+      <form method="POST" action="{{ url_for('admin_career_names_delete', row_id=row.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="country" value="{{ country }}">
+        <button type="submit" title="Remove {{ row.value }}"
+                style="border:1px solid var(--border);border-radius:999px;background:var(--input-bg);color:var(--text);padding:.25rem .6rem;font-size:.8rem;cursor:pointer;">
+          {{ row.value }} ✕
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

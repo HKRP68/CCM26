@@ -94,6 +94,7 @@ from handlers.coins2gems import coins2gems_handler, coins2gems_callback
 from handlers.grant import grant_handler
 from handlers.giveaway import giveaway_join_callback
 from handlers.cmushop import cmushop_handler, cmushop_callback
+from handlers.cmucareer import cmucareer_handler, cmucareer_callback
 from handlers.undo import cmuundo_handler
 from handlers.app import app_handler
 from handlers.ipl16 import ipl160_handler
@@ -1040,6 +1041,13 @@ def main():
         # before matching, so "cmushop" also handles a user typing /CMUshop.
         app.add_handler(CommandHandler("cmushop", cmushop_handler))
         app.add_handler(CallbackQueryHandler(cmushop_callback, pattern=r"^cmushop:"))
+
+        # ── Career Player creation + management ──────────────────────
+        # One owner drives the whole wizard, so the callbacks deliberately stay
+        # OUT of services.button_access.SHARED_CALLBACK_PREFIXES.
+        app.add_handler(CommandHandler(["cmucareer", "career"], cmucareer_handler))
+        app.add_handler(CallbackQueryHandler(cmucareer_callback,
+                                             pattern=r"^cmucareer:"))
 
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))

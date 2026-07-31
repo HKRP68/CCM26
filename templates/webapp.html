@@ -835,6 +835,63 @@
   .quest-tab.active {
     background: var(--accent); color: #0a0f1a; font-weight: 800;
   }
+  /* ── Career Player ── */
+  .career-hero {
+    display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.8rem; margin-bottom: 0.6rem;
+  }
+  .career-card-img {
+    width: 100%; max-width: 320px; border-radius: 10px; display: block;
+  }
+  .career-hero-meta { flex: 1 1 180px; min-width: 0; }
+  .career-name { font-size: 1.1rem; font-weight: 800; }
+  .career-ovr { font-size: 1.5rem; font-weight: 800; margin: 0.2rem 0; }
+  .career-sub { font-size: 0.8rem; opacity: 0.75; line-height: 1.5; }
+  .career-stat-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
+  .career-stat {
+    flex: 1; background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.6rem; text-align: center;
+  }
+  .career-stat-v { font-size: 1.1rem; font-weight: 800; }
+  .career-stat-l { font-size: 0.72rem; opacity: 0.7; }
+  .career-note {
+    font-size: 0.78rem; line-height: 1.55; opacity: 0.8;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.6rem 0.7rem; margin-bottom: 0.6rem;
+  }
+  .career-group {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.75rem; margin-bottom: 0.6rem;
+  }
+  .career-group-title { font-weight: 800; font-size: 0.92rem; margin-bottom: 0.55rem; }
+  .career-attr { padding: 0.45rem 0; border-top: 1px solid var(--border); }
+  .career-attr:first-of-type { border-top: none; }
+  .career-attr-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+  .career-attr-name { font-size: 0.86rem; }
+  .career-attr-val { font-size: 0.95rem; font-weight: 800; }
+  .career-lift { font-size: 0.7rem; font-weight: 600; color: var(--green); }
+  .career-bar {
+    height: 5px; border-radius: 999px; background: rgba(127,127,127,0.22);
+    margin: 0.35rem 0 0.4rem; overflow: hidden;
+  }
+  .career-bar-fill { height: 100%; background: var(--green); border-radius: 999px; }
+  .career-attr-actions { display: flex; gap: 0.35rem; align-items: center; }
+  .career-cost { font-size: 0.76rem; opacity: 0.75; margin-right: auto; }
+  .career-btn {
+    border: 1px solid var(--border); background: var(--green); color: #04160f;
+    border-radius: 8px; padding: 0.28rem 0.62rem; font-size: 0.78rem;
+    font-weight: 700; cursor: pointer;
+  }
+  .career-btn.ghost { background: transparent; color: inherit; }
+  .career-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .career-quest {
+    display: flex; justify-content: space-between; gap: 0.5rem;
+    font-size: 0.82rem; padding: 0.4rem 0; border-top: 1px solid var(--border);
+  }
+  .career-quest:first-of-type { border-top: none; }
+  .career-quest.done { color: var(--green); }
+
   .quest-row {
     padding: 0.75rem;
     background: var(--card); border: 1px solid var(--border);
@@ -2252,6 +2309,11 @@
       <div class="tile-label">Quests</div>
       <div class="tile-sub" id="quests-tile-sub">Daily challenges</div>
     </button>
+    <button class="tile career" onclick="navigate('career')">
+      <div class="tile-icon">🎖</div>
+      <div class="tile-label">Career Player</div>
+      <div class="tile-sub" id="career-tile-sub">Train your own card</div>
+    </button>
     <button class="tile freepack" id="home-freepack-tile" onclick="navigate('freepack')">
       <span class="tile-badge" id="freepack-ready-badge" style="display:none;">READY</span>
       <div class="tile-icon">📦</div>
@@ -2641,6 +2703,17 @@
     <button class="quest-tab" data-qtab="monthly" onclick="switchQuestTab('monthly')">Monthly</button>
   </div>
   <div id="quest-content">
+    <div class="empty"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<!-- ════ Career Player screen ════ -->
+<div class="screen" id="screen-career">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+    <h2 style="margin:0;font-size:1.25rem;">🎖 Career Player</h2>
+    <button class="link-btn" onclick="loadCareer()">↻ Refresh</button>
+  </div>
+  <div id="career-content">
     <div class="empty"><div class="spinner"></div></div>
   </div>
 </div>
@@ -3139,6 +3212,7 @@ function navigate(screen) {
   if (screen === 'xi') loadXi();
   if (screen === 'invite') loadInvite();
   if (screen === 'quests') loadQuests();
+  if (screen === 'career') loadCareer();
   if (screen === 'freepack') loadFreePack();
   if (screen === 'packs') loadPacks();
   if (screen === 'achievements') loadAchievements();
@@ -5686,6 +5760,170 @@ async function loadQuests() {
   }
   renderQuestList();
   renderHomeQuests();
+}
+
+// ════════════════ Career Player ════════════════
+// The one card that belongs to this user: created in chat with /cmucareer,
+// grown here by spending gems on its ten attributes.
+let cachedCareer = null;
+let careerBusy = false;
+
+async function loadCareer() {
+  const el = document.getElementById('career-content');
+  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/career', {});
+  if (!ok) {
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Career Player unavailable')}</div>`;
+    return;
+  }
+  if (!data.has_career) {
+    cachedCareer = null;
+    el.innerHTML = `
+      <div class="empty">
+        <div class="icon">🎖</div>
+        <div style="font-weight:700;margin-bottom:.4rem;">You don't have a Career Player yet</div>
+        <div style="font-size:.85rem;line-height:1.55;opacity:.85;">
+          Send <b>/cmucareer</b> in chat to create the one card that is you —
+          pick your country, initials, batting and bowling style and your face.
+          It starts at 78 across the board, can never be sold or traded, and
+          grows only with gems and its own weekly quests.
+        </div>
+      </div>`;
+    return;
+  }
+  cachedCareer = data;
+  renderCareer();
+}
+
+function careerAttrRow(a) {
+  const cost = a.maxed ? 'MAX' : `${a.next_cost} 💎`;
+  const afford = !a.maxed && cachedCareer.gems >= a.next_cost;
+  const pct = Math.round(((a.value - 78) / (cachedCareer.max_value - 78)) * 100);
+  const lifts = !a.maxed && a.next_rating > cachedCareer.player.rating;
+  return `
+    <div class="career-attr">
+      <div class="career-attr-head">
+        <span class="career-attr-name">${escapeHtml(a.label)}</span>
+        <span class="career-attr-val">${a.value}${lifts ? ` <span class="career-lift">→ ${a.next_rating} OVR</span>` : ''}</span>
+      </div>
+      <div class="career-bar"><div class="career-bar-fill" style="width:${Math.max(0, Math.min(100, pct))}%"></div></div>
+      <div class="career-attr-actions">
+        <span class="career-cost">${cost}</span>
+        ${a.maxed ? '' : `
+          <button class="career-btn" ${afford ? '' : 'disabled'} onclick="upgradeCareer('${a.key}',1)">+1</button>
+          <button class="career-btn" ${afford ? '' : 'disabled'} onclick="upgradeCareer('${a.key}',5)">+5</button>
+          <button class="career-btn ghost" ${afford ? '' : 'disabled'} onclick="upgradeCareer('${a.key}','max')">Max</button>`}
+      </div>
+    </div>`;
+}
+
+function renderCareer() {
+  const el = document.getElementById('career-content');
+  const d = cachedCareer;
+  if (!d) return;
+  const p = d.player;
+  const byKey = {};
+  d.attributes.forEach(a => { byKey[a.key] = a; });
+  const group = (keys, title, icon) => `
+    <div class="career-group">
+      <div class="career-group-title">${icon} ${title}</div>
+      ${keys.map(k => careerAttrRow(byKey[k])).join('')}
+    </div>`;
+
+  const s = d.stats || {};
+  const st = d.streak || {};
+  const questsDone = (d.quests || []).filter(q => q.completed).length;
+
+  el.innerHTML = `
+    <div class="career-hero">
+      <img src="${p.card_url}" alt="${escapeHtmlAttr(p.name)}" class="career-card-img"
+           onerror="this.style.display='none'">
+      <div class="career-hero-meta">
+        <div class="career-name">${escapeHtml(p.name)}</div>
+        <div class="career-sub">${escapeHtml(p.country)} · ${escapeHtml(p.category)}</div>
+        <div class="career-ovr"><b>${p.rating}</b> OVR</div>
+        <div class="career-sub">🏏 ${p.bat_rating} Batting · 🎳 ${p.bowl_rating} Bowling</div>
+        <div class="career-sub">${escapeHtml(p.bat_hand)}-hand bat · ${escapeHtml(p.bowl_hand)}-arm ${escapeHtml(p.bowl_style)}</div>
+      </div>
+    </div>
+
+    <div class="career-stat-row">
+      <div class="career-stat"><div class="career-stat-v">${d.gems.toLocaleString()}</div><div class="career-stat-l">💎 Balance</div></div>
+      <div class="career-stat"><div class="career-stat-v">${d.invested.toLocaleString()}</div><div class="career-stat-l">Invested</div></div>
+      <div class="career-stat"><div class="career-stat-v">${st.current || 0}</div><div class="career-stat-l">🔥 Streak</div></div>
+    </div>
+
+    <div class="career-note">
+      Each point costs its own new value — 78 → 79 is <b>79 💎</b> — and caps at
+      <b>${d.max_value}</b>. Batting is the average of the five batting attributes,
+      Bowling the average of the five bowling ones, and OVR the average of those two,
+      so every upgrade counts in real matches.
+    </div>
+
+    ${group(d.bat_attrs, 'Batting', '🏏')}
+    ${group(d.bowl_attrs, 'Bowling', '🎳')}
+
+    <div class="career-group">
+      <div class="career-group-title">🗓 Weekly quests</div>
+      <div class="career-note" style="margin-top:0;">
+        ${questsDone}/${(d.quests || []).length} cleared this week.
+        Clear them all for <b>${st.weeks || 4}</b> weeks running to bank the
+        <b>${st.bonus_gems || 100} 💎</b> jackpot — ${st.to_jackpot || 0} to go.
+      </div>
+      ${(d.quests || []).length
+        ? d.quests.map(q => `
+          <div class="career-quest ${q.completed ? 'done' : ''}">
+            <span>${q.completed ? '✅' : '⏳'} ${escapeHtml(q.name)}</span>
+            <span class="career-cost">${q.progress}/${q.target} · ${q.reward_gems} 💎</span>
+          </div>`).join('')
+        : `<div class="career-quest"><span>No weekly quests assigned yet.</span></div>`}
+      <button class="career-btn ghost" style="margin-top:.5rem;" onclick="navigate('quests')">Open Quests →</button>
+    </div>
+
+    <div class="career-group">
+      <div class="career-group-title">📊 Career record</div>
+      <div class="career-quest"><span>🏏 Batting</span><span class="career-cost">${s.bat_inns || 0} inns · ${s.runs || 0} runs · HS ${s.hs_str || '-'} · avg ${s.bat_avg || 0}</span></div>
+      <div class="career-quest"><span>🎳 Bowling</span><span class="career-cost">${s.bowl_inns || 0} inns · ${s.wickets_taken || 0} wkts · BBF ${s.bbf_str || '-'} · econ ${s.bowl_economy || 0}</span></div>
+      <div class="career-quest"><span>🏅 Player of the Match</span><span class="career-cost">${s.potm || 0}</span></div>
+    </div>
+
+    <div class="career-note">🔒 Your Career Player can never be sold or traded.</div>
+  `;
+}
+
+async function upgradeCareer(attr, steps) {
+  if (careerBusy || !cachedCareer) return;
+  const row = cachedCareer.attributes.find(a => a.key === attr);
+  if (!row || row.maxed) return;
+
+  // "Max" spends whatever the balance covers, worked out client-side so the
+  // button can show a confirm before committing a large amount.
+  let count = steps;
+  if (steps === 'max') {
+    let gems = cachedCareer.gems, value = row.value, n = 0;
+    while (value < cachedCareer.max_value && gems >= value + 1) {
+      value += 1; gems -= value; n += 1;
+    }
+    if (!n) { toast('Not enough gems for even one point', 'error'); return; }
+    let spend = 0, v = row.value;
+    for (let i = 0; i < n; i++) { v += 1; spend += v; }
+    if (!confirm(`Raise ${row.label} from ${row.value} to ${v} for ${spend.toLocaleString()} 💎?`)) return;
+    count = n;
+  }
+
+  careerBusy = true;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/career/upgrade', { attr, steps: count });
+  careerBusy = false;
+  if (!ok) {
+    toast(data.message || 'Upgrade failed', 'error');
+    return;
+  }
+  const u = data.upgrade;
+  toast(`${u.label} ${u.from} → ${u.to} for ${u.cost.toLocaleString()} 💎${u.rating_changed ? ` · now ${u.rating} OVR` : ''}`, 'success');
+  cachedCareer = data;
+  renderCareer();
+  refreshDashboard();
 }
 
 function renderQuestList() {

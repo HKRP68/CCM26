@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 from models import User, UserStats, UserRoster, Player
 from services.pack_service import _pick_base_at_rating
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 MAX_ROSTER = 25
@@ -178,7 +180,7 @@ def open_free_pack(session, user, hold_overflow=False):
 
     if not player:
         # Last resort — any active base player in the whole band range
-        pool = (session.query(Player)
+        pool = (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         Player.parent_player_id.is_(None),
                         Player.rating.between(int(band["min"]), int(band["max"])))

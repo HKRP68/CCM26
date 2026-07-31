@@ -16,6 +16,7 @@ want a 60-second match.
 
 import random
 from datetime import datetime
+from services.player_service import not_career
 
 
 # Base balls per phase (20-over T20 split: 6/9/5 overs)
@@ -309,7 +310,7 @@ def _generate_bot_xi(session, target_rating, opponent_country=None):
     for cat, want in target_counts.items():
         # Window of ratings around target — wider if pool is small
         for window in (5, 10, 15, 20, 100):
-            cands = (session.query(Player)
+            cands = (not_career(session.query(Player))
                      .filter(Player.is_active == True,
                              Player.category == cat,
                              Player.rating >= max(50, target_rating - window),
@@ -332,7 +333,7 @@ def _generate_bot_xi(session, target_rating, opponent_country=None):
                 break
         else:
             # Couldn't find enough — fill from anywhere
-            cands = (session.query(Player)
+            cands = (not_career(session.query(Player))
                      .filter(Player.is_active == True, Player.category == cat,
                              ~Player.id.in_(used_ids) if used_ids else True)
                      .all())
@@ -912,6 +913,7 @@ def play_quick_match_xi(session, user, user_choices, opponent_difficulty="medium
 import threading
 import uuid as _uuid
 import time
+
 
 _PHASE_MATCH_STORE = {}  # tg_id -> state dict
 _PHASE_MATCH_LOCK = threading.Lock()
