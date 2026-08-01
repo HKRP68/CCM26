@@ -106,7 +106,7 @@
       </td>
       <td><strong>{{ '{:,}'.format(p.invested) }}</strong> 💎<br><span style="color:var(--muted);font-size:.74rem;">{{ '{:,}'.format(p.to_max) }} to max</span></td>
       <td>{{ p.streak }}{% if p.best_streak > p.streak %} <span style="color:var(--muted);font-size:.74rem;">(best {{ p.best_streak }})</span>{% endif %}</td>
-      <td style="text-align:right;white-space:nowrap;">
+      <td style="text-align:right;white-space:nowrap;vertical-align:top;">
         <a href="{{ url_for('admin_player_card_preview', player_id=p.id) }}" target="_blank" class="btn btn-ghost btn-sm">Card</a>
         <form method="POST" action="{{ url_for('admin_career_reset', player_id=p.id) }}" style="display:inline;"
               onsubmit="return confirm('Reset {{ p.name }} to 78 across the board? This clears {{ '{:,}'.format(p.invested) }} gems of upgrades and refunds nothing.');">
@@ -115,12 +115,67 @@
         </form>
       </td>
     </tr>
+    <tr>
+      <td colspan="10" style="padding:0;border-bottom:1px solid var(--border);">
+        <details id="manage-{{ p.id }}">
+          <summary style="cursor:pointer;padding:.5rem .4rem;color:var(--muted);font-size:.8rem;">⚙️ Manage {{ p.name }}</summary>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;padding:.4rem .4rem 1rem;">
+
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.9rem;">
+              <div style="font-weight:700;margin-bottom:.5rem;">✏️ Rename</div>
+              <p style="color:var(--muted);font-size:.78rem;line-height:1.5;margin:0 0 .6rem;">
+                Changes the name on the card and nothing else — attributes, face,
+                stats and roster slot stay put. Letters, spaces, apostrophes,
+                hyphens and full stops only, and it must not match any other player.
+              </p>
+              <form method="POST" action="{{ url_for('admin_career_rename', player_id=p.id) }}"
+                    style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="name" value="{{ p.name }}" required
+                       maxlength="{{ name_max }}" minlength="{{ name_min }}"
+                       style="flex:1 1 180px;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+                <label style="color:var(--muted);font-size:.78rem;display:flex;align-items:center;gap:.3rem;">
+                  <input type="checkbox" name="notify" checked{{ ' disabled' if not p.owner_id }} style="width:auto;margin:0;"> DM the owner
+                </label>
+                <button type="submit" class="btn btn-primary btn-sm">Save name</button>
+              </form>
+            </div>
+
+            <div style="background:var(--card);border:1px solid #a33;border-radius:10px;padding:.9rem;">
+              <div style="font-weight:700;margin-bottom:.5rem;">🗑 Delete</div>
+              <p style="color:var(--muted);font-size:.78rem;line-height:1.5;margin:0 0 .6rem;">
+                Removes the card, its roster slot and its match record for good, and
+                frees {{ p.owner }} to build a new one from the <code>/cmucareer</code>
+                wizard. Their coins, packs, other players and weekly-quest streak are
+                untouched. Type <strong>{{ p.name }}</strong> to confirm.
+              </p>
+              <form method="POST" action="{{ url_for('admin_career_delete', player_id=p.id) }}"
+                    style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;"
+                    onsubmit="return confirm('Delete {{ p.name }}? This cannot be undone.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="confirm" required autocomplete="off"
+                       placeholder="Type {{ p.name }}"
+                       style="flex:1 1 180px;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+                <label style="color:var(--muted);font-size:.78rem;display:flex;align-items:center;gap:.3rem;">
+                  <input type="checkbox" name="refund" checked style="width:auto;margin:0;"> Refund {{ '{:,}'.format(p.invested) }} 💎
+                </label>
+                <label style="color:var(--muted);font-size:.78rem;display:flex;align-items:center;gap:.3rem;">
+                  <input type="checkbox" name="notify" checked{{ ' disabled' if not p.owner_id }} style="width:auto;margin:0;"> DM the owner
+                </label>
+                <button type="submit" class="btn btn-red btn-sm">Delete for good</button>
+              </form>
+            </div>
+
+          </div>
+        </details>
+      </td>
+    </tr>
     {% endfor %}
   </tbody>
 </table>
 </div>
 <p style="color:var(--muted);font-size:.78rem;margin-top:1rem;line-height:1.5;">
-  <strong>Invested</strong> is derived from the attributes, not stored: every attribute starts at 78 and each point costs its own new value, so the figure is exact — unless an attribute has been edited directly in the database, which would make it notional. Deleting a career player isn't offered here because it would orphan the owner's roster row, match stats and quest progress.
+  <strong>Invested</strong> is derived from the attributes, not stored: every attribute starts at 78 and each point costs its own new value, so the figure is exact — unless an attribute has been edited directly in the database, which would make it notional. <strong>Reset</strong> keeps the card and puts its attributes back to 78; <strong>Manage</strong> renames it, or deletes it outright so the owner starts a fresh one from the wizard.
 </p>
 {% endif %}
 {% endblock %}
