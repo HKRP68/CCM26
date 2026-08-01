@@ -4155,6 +4155,41 @@ def _player_card_url(player_id):
 # Admin uploads become visible after at most this long.
 CARD_CACHE_SECONDS = int(os.getenv("CARD_CACHE_SECONDS", "300"))
 
+# Opening a squad in the Mini App asks for every card at once, and the browser
+# will happily run 20+ of those requests in parallel. Flask serves each on its
+# own thread, so without a cap they all reach for a database connection at the
+# same moment — and the pool they drain is shared with the Telegram bot and the
+# scheduler running in this same process. That is how a single squad view used
+# to stall the bot: every handler, heartbeat and match tick blocked on
+# ``QueuePool limit ... connection timed out`` until the burst cleared.
+#
+# Cards are pure render work backed by an in-process cache, so serialising them
+# a few at a time costs the Mini App very little and leaves the pool free for
+# everything that is actually interactive.
+#
+# Both knobs are read defensively: these are host environment variables, and a
+# typo in one must not take the whole bot down at import with a ValueError
+# nobody sees. A bad value falls back to the default instead.
+def _tuning_value(name, default, cast, floor):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(floor, cast(raw))
+    except (TypeError, ValueError):
+        logger.warning("ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+
+
+CARD_RENDER_CONCURRENCY = _tuning_value("CARD_RENDER_CONCURRENCY", 4, int, 1)
+# Long enough that a real queue drains rather than erroring; short enough that a
+# wedged render sheds load instead of parking Flask threads indefinitely. Zero
+# is a legitimate setting — it sheds every queued request immediately — so the
+# floor is 0 rather than 1.
+CARD_RENDER_WAIT_SECONDS = _tuning_value("CARD_RENDER_WAIT_SECONDS", 20.0,
+                                         float, 0.0)
+_card_render_slots = threading.BoundedSemaphore(CARD_RENDER_CONCURRENCY)
+
 
 def _image_mimetype(data):
     """Best-effort MIME sniffing for generated or admin-uploaded card bytes."""
@@ -4183,7 +4218,23 @@ def webapp_player_card(player_id):
 
     Uses the same card generation path as the bot, so active admin-uploaded
     custom cards automatically override template/procedural cards.
+
+    Renders are capped at CARD_RENDER_CONCURRENCY at a time — see the constant
+    for why. Threads waiting for a slot hold no database connection, so a burst
+    queues here instead of starving the bot.
     """
+    if not _card_render_slots.acquire(timeout=CARD_RENDER_WAIT_SECONDS):
+        logger.warning("player-card render queue full; shedding player %s", player_id)
+        return Response("Card renderer busy", status=503,
+                        headers={"Retry-After": "2"})
+    try:
+        return _render_player_card(player_id)
+    finally:
+        _card_render_slots.release()
+
+
+def _render_player_card(player_id):
+    """Load + render one player card. Caller holds a render slot."""
     db = get_session()
     try:
         player = db.query(Player).get(player_id)
