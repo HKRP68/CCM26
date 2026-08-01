@@ -34,7 +34,100 @@ _is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_
 # load connections are reused constantly, so this is almost always a no-op.
 IDLE_PING_AFTER_SECONDS = float(os.getenv("DB_IDLE_PING_AFTER", "30"))
 
+
+def _timeout_setting(name, default, floor=0):
+    """Read one integer socket-timeout knob from the environment.
+
+    These are host environment variables parsed at import, so a typo must not
+    stop the bot booting with a ValueError nobody sees — bad values fall back to
+    the default and say so, matching how the card-render knobs are read.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(floor, int(raw))
+    except (TypeError, ValueError):
+        import logging
+        logging.getLogger(__name__).warning(
+            "ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+
+
+def _apply_socket_timeouts(args):
+    """Bound how long a dead Postgres socket can block the caller.
+
+    When the peer disappears without a clean close — Neon's idle-kill, a
+    failover, a network blip — a connection that is mid-statement leaves us
+    parked inside ``recv()``. libpq's default is to ride the kernel's TCP
+    retransmit schedule, which is minutes long. That matters far more here than
+    in a normal web app: most of this codebase opens sessions *synchronously
+    from async Telegram handlers*, so those minutes are not one slow command,
+    they are the whole bot. On 2026-08-01 a single such socket froze the event
+    loop from 13:46 to 13:51 UTC — five minutes of no commands, no callbacks and
+    no scheduler ticks — before the commit finally raised "SSL connection has
+    been closed unexpectedly" and five minutes of queued updates landed at once.
+
+    The two options cover different halves of "the peer is gone", and neither
+    is a query timeout:
+
+    * ``tcp_user_timeout`` aborts the connection once *transmitted data has
+      gone unacknowledged* for that long. That is the case above — we sent a
+      commit and the peer stopped answering at the TCP level — and it is the
+      one that turns five minutes into ~30 seconds.
+    * ``keepalives_*`` cover the other shape, where the peer acknowledged
+      everything and then vanished while we waited. Nothing is unacknowledged
+      there, so ``tcp_user_timeout`` never fires; the keepalive probes are what
+      notice, in roughly ``idle + interval × count`` (~60s by default).
+
+    What neither gives us is a bound on a server that is merely *slow*: an
+    acknowledged query that takes a long time to answer is not covered by
+    either option. That would need ``statement_timeout``, which is deliberately
+    not set here because boot does schema creation and seeding, where a blanket
+    statement cap would do more harm than good. The defence against a slow
+    query is the same as the defence against everything else in this file —
+    keep the blocking call off the asyncio event loop.
+
+    And to be clear about what this does not buy: the statement in flight still
+    *fails*, and its transaction with it — nothing here retries a query.
+    SQLAlchemy marks the connection invalid and discards the rest of the pool
+    generation, so the *next* checkout gets a healthy connection instead of
+    another dead one. The win is bounding the failure, so one bad socket costs
+    a command rather than the whole bot.
+    """
+    args.setdefault("connect_timeout", _timeout_setting("DB_CONNECT_TIMEOUT", 10, 1))
+    args.setdefault("keepalives", 1)
+    args.setdefault("keepalives_idle", _timeout_setting("DB_KEEPALIVES_IDLE", 30, 1))
+    args.setdefault("keepalives_interval",
+                    _timeout_setting("DB_KEEPALIVES_INTERVAL", 10, 1))
+    args.setdefault("keepalives_count", _timeout_setting("DB_KEEPALIVES_COUNT", 3, 1))
+
+    # tcp_user_timeout needs libpq >= 12. Passing it to an older libpq is a hard
+    # connection error, so ask before setting it rather than trading one outage
+    # for another. 0 disables it.
+    timeout_ms = _timeout_setting("DB_TCP_USER_TIMEOUT_MS", 30000)
+    if timeout_ms <= 0:
+        return args
+    try:
+        import psycopg2
+        supported = psycopg2.extensions.libpq_version() >= 120000
+    except Exception as exc:
+        # Deliberately broad: if we cannot establish that libpq is new enough,
+        # the safe move is to leave the option off rather than risk every
+        # connection failing. Log it, though — silently dropping this setting
+        # quietly restores the unbounded wait it exists to prevent.
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not determine libpq version (%s); leaving tcp_user_timeout "
+            "unset, so a dead socket falls back to the kernel's TCP timeout", exc)
+        supported = False
+    if supported:
+        args.setdefault("tcp_user_timeout", timeout_ms)
+    return args
+
+
 if _is_postgres:
+    _apply_socket_timeouts(connect_args)
     # The Telegram application handles multiple updates concurrently, so keep
     # enough database connections available that fast commands do not queue
     # behind one slow DB/image-heavy command. Values can still be tuned from

@@ -27,6 +27,34 @@ from telegram import Bot, InputFile
 
 logger = logging.getLogger(__name__)
 
+def _seconds_setting(name, default):
+    """Read a positive float timeout from the environment, or fall back.
+
+    Parsed at import, so a typo must not stop the bot booting — and a negative
+    grace would put the outer limit *before* the inner one, quietly disabling
+    the cancellable path. Anything not a finite positive number is refused.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float("nan")
+    if not (value > 0) or value == float("inf"):
+        logger.warning("ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+    return value
+
+
+# Ceiling on one restore-from-Telegram. Generous enough for a slow CDN fetch,
+# short enough that a card render stays a card render.
+DOWNLOAD_TIMEOUT = _seconds_setting("TG_DOWNLOAD_TIMEOUT_SECONDS", 20.0)
+# Extra grace for the outer, uncancellable belt. The inner timeout should
+# always be the one that fires; this only covers a worker wedged somewhere
+# asyncio cannot interrupt, so it sits just past the inner one.
+DOWNLOAD_TIMEOUT_GRACE = _seconds_setting("TG_DOWNLOAD_GRACE_SECONDS", 5.0)
+
 
 def is_configured() -> bool:
     return bool(os.getenv("STORAGE_CHAT_ID", "").strip()
@@ -74,28 +102,60 @@ async def download_file_bytes_async(file_id: str) -> bytes | None:
 def download_file_bytes_sync(file_id: str) -> bytes | None:
     """Sync wrapper for restoring Telegram files from Flask/card render paths.
 
-    Card renderers can be invoked by async bot handlers. If this function is
-    called while their event loop is running, perform the download in a short-
-    lived worker thread rather than attempting to nest asyncio event loops.
+    Always runs the download in a short-lived worker thread, and always with a
+    ceiling on the wait. Both of those matter:
+
+    * a worker thread means ``asyncio.run`` is safe to call no matter who the
+      caller is — an async bot handler, a Flask request, or (the common case)
+      a card render that is *already* on a worker thread;
+    * the ceiling is what keeps a render a render. Restoring a squad walks
+      eleven cards through here one at a time, and this used to wait forever.
+      One wedged download was enough to stretch ``/ximage`` past the point
+      where the database closed the connection its caller was still holding,
+      and the commit that followed froze the bot for five minutes.
+
+    Returns None on timeout so the caller falls back rather than breaking.
     """
     if not file_id or not _has_bot_token():
         return None
     import asyncio
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
+
+    async def _bounded():
+        # The timeout lives *inside* the worker's loop so it actually cancels
+        # the HTTP request. Enforcing it only on the outer Future would stop us
+        # waiting without stopping the work: the download would keep its thread
+        # long after the caller gave up and fell back.
+        try:
+            return await asyncio.wait_for(download_file_bytes_async(file_id),
+                                          timeout=DOWNLOAD_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("Telegram download for file_id %s exceeded %ss — "
+                           "cancelled, falling back", file_id, DOWNLOAD_TIMEOUT)
+            return None
 
     def _download():
-        return asyncio.run(download_file_bytes_async(file_id))
+        return asyncio.run(_bounded())
 
+    # Never `with ThreadPoolExecutor(...)`: its __exit__ joins the worker, which
+    # would hand back exactly the unbounded block the timeouts exist to prevent.
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tg-download")
+    hard_limit = DOWNLOAD_TIMEOUT + DOWNLOAD_TIMEOUT_GRACE
     try:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return _download()
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            return executor.submit(_download).result()
+        # Outer belt to the inner braces, and slightly longer so the cancellable
+        # path is the one that normally fires. This one only matters if the
+        # worker wedges somewhere asyncio cannot interrupt.
+        return executor.submit(_download).result(timeout=hard_limit)
+    except _Timeout:
+        logger.warning("download_file_bytes_sync gave up on file_id %s after "
+                       "%ss — the worker did not respond to cancellation",
+                       file_id, hard_limit)
+        return None
     except Exception:
         logger.exception("download_file_bytes_sync failed")
         return None
+    finally:
+        executor.shutdown(wait=False)
 
 
 async def upload_photo_async(image_path: str, caption: str = None) -> str | None:
