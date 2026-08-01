@@ -98,6 +98,13 @@ def save_step_image(session, step_key, file_bytes, filename, uploaded_by=None):
     row.uploaded_by = uploaded_by
     # A new picture means the cached Telegram file_id points at the old one.
     row.tg_file_id = None
+    # Keep the bytes in the database too: the host wipes data/ on deploy, and
+    # the Telegram mirror only exists where STORAGE_CHAT_ID is configured.
+    try:
+        from services.asset_store import put
+        put(path, file_bytes, uploaded_by=uploaded_by)
+    except Exception:
+        logger.exception("could not persist the %s step image", step_key)
     _mirror_to_storage(row, path)
     return True, f"Saved the image for “{STEP_LABELS[step_key]}”."
 
@@ -125,6 +132,11 @@ def remove_step_image(session, step_key):
         if os.path.isfile(path):
             try:
                 os.remove(path)
+                try:
+                    from services.asset_store import drop
+                    drop(path)
+                except Exception:
+                    logger.exception("could not drop the %s step image", step_key)
                 removed = True
             except OSError:
                 logger.exception("career step image delete failed")
@@ -157,6 +169,13 @@ def step_photo(session, step_key):
     if path and not os.path.isabs(path):
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), path)
+    if path and not os.path.isfile(path):
+        # Wiped by a redeploy — pull it back out of the database.
+        try:
+            from services.asset_store import ensure
+            ensure(path)
+        except Exception:
+            logger.exception("could not restore the %s step image", step_key)
     if path and os.path.isfile(path):
         try:
             with open(path, "rb") as handle:

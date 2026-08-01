@@ -110,6 +110,7 @@ def init_db():
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
         FantasyRoleRule, EventMedia,
         Giveaway, GiveawayEntry,
+        StoredAsset,
     )
     import logging
     import time as _time
@@ -123,12 +124,39 @@ def init_db():
     _seed_traits()
     _seed_competition_templates()
     t3 = _time.perf_counter()
+    _restore_uploaded_assets()
+    t4 = _time.perf_counter()
     # Boot time is the bot's whole downtime on every restart/redeploy, so keep
     # it visible in the logs — a regression here is a regression in uptime.
     log.info(
-        "init_db timings: create_all %.1fs | migrate %.1fs | seed %.1fs | total %.1fs",
-        t1 - t0, t2 - t1, t3 - t2, t3 - t0,
+        "init_db timings: create_all %.1fs | migrate %.1fs | seed %.1fs | "
+        "assets %.1fs | total %.1fs",
+        t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - t0,
     )
+
+
+def _restore_uploaded_assets():
+    """Put the admin's uploaded files back on disk after a redeploy.
+
+    The host rebuilds the container on every deploy, wiping ``data/`` — which
+    used to mean re-uploading every card template, font, flag and wizard image
+    by hand. They are kept in ``stored_assets`` now, so this refills the disk
+    before anything serves a request. Anything already on disk but not yet in
+    the database is adopted at the same time, which makes existing deployments
+    durable without a single re-upload.
+
+    Best-effort: an asset problem must never stop the bot from booting.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        from services.asset_store import sync_on_boot
+        result = sync_on_boot()
+        if result["adopted"] or result["restored"]:
+            log.info("uploaded assets: adopted %s, restored %s",
+                     result["adopted"], result["restored"])
+    except Exception:
+        log.exception("could not restore uploaded assets")
 
 
 def _seed_competition_templates():

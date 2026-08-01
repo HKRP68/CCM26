@@ -42,6 +42,7 @@ def _remove_files(player_id):
         if os.path.isfile(path):
             try:
                 os.remove(path)
+                _forget(path)
             except OSError:
                 logger.exception("Failed to remove portrait %s", path)
 
@@ -68,6 +69,24 @@ def _validate_image(file_bytes, original_filename, *, png_only=False):
     return True, "", ext
 
 
+def _remember(path, data=None):
+    """Keep an uploaded portrait in the database so a redeploy can restore it."""
+    try:
+        from services.asset_store import put
+        put(path, data)
+    except Exception:
+        logger.exception("could not persist portrait %s to the asset store", path)
+
+
+def _forget(path):
+    """Drop a deleted portrait, so a restore can't bring it back."""
+    try:
+        from services.asset_store import drop
+        drop(path)
+    except Exception:
+        logger.exception("could not drop portrait %s from the asset store", path)
+
+
 def save_player_portrait(player, file_bytes, original_filename):
     """Validate and store an uploaded portrait, then update ``player.image_url``."""
     ok, message, ext = _validate_image(file_bytes, original_filename)
@@ -82,6 +101,7 @@ def save_player_portrait(player, file_bytes, original_filename):
         logger.exception("save_player_portrait disk write failed")
         return False, f"Disk write failed: {exc}"
     player.image_url = path
+    _remember(path, file_bytes)
     return True, "Player image saved."
 
 
@@ -108,6 +128,15 @@ def _load_portrait(path):
             except Exception:
                 logger.exception("Could not read player portrait %s", candidate)
                 return None
+    # Not on disk: a redeploy may have wiped data/, so try the database copy.
+    for candidate in candidates:
+        try:
+            from services.asset_store import ensure
+            if ensure(candidate):
+                with Image.open(candidate) as image:
+                    return image.convert("RGBA")
+        except Exception:
+            logger.exception("Could not restore player portrait %s", candidate)
     return None
 
 
@@ -141,6 +170,7 @@ def save_global_player_portrait(file_bytes, original_filename):
     except OSError as exc:
         logger.exception("save_global_player_portrait disk write failed")
         return False, f"Disk write failed: {exc}"
+    _remember(GLOBAL_PORTRAIT_PATH, file_bytes)
     return True, "Global player fallback PNG saved."
 
 
@@ -150,6 +180,7 @@ def remove_global_player_portrait():
         return False
     try:
         os.remove(GLOBAL_PORTRAIT_PATH)
+        _forget(GLOBAL_PORTRAIT_PATH)
         return True
     except OSError:
         logger.exception("Failed to remove global portrait %s", GLOBAL_PORTRAIT_PATH)

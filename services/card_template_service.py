@@ -168,6 +168,59 @@ FIELD_ALIASES = {
 }
 
 
+def _remember(path, data=None):
+    """Keep an uploaded file in the database so a redeploy can restore it.
+
+    Best-effort: the file is already safely on disk, so a storage hiccup must
+    never fail the upload the admin just made.
+    """
+    global _RESTORE_ATTEMPTED
+    # A fresh upload means the once-per-process restore guard should let a later
+    # miss look again, rather than reporting "nothing there" from a stale check.
+    _RESTORE_ATTEMPTED = False
+    try:
+        from services.asset_store import put
+        put(path, data)
+    except Exception:
+        logger.exception("could not persist %s to the asset store", path)
+
+
+def _forget(path):
+    """Drop a deleted file from the store, so a restore can't resurrect it."""
+    try:
+        from services.asset_store import drop
+        drop(path)
+    except Exception:
+        logger.exception("could not drop %s from the asset store", path)
+
+
+# A miss is the common case (Star/Legend often have no template of their own),
+# and card rendering is latency-sensitive, so the database is consulted at most
+# once per process rather than on every lookup. An upload resets this, so a file
+# added after start-up is still picked up straight away.
+_RESTORE_ATTEMPTED = False
+
+
+def _restore_root(force=False):
+    """Refill this directory from the database when the disk copy is gone.
+
+    Hosts wipe ``data/`` on deploy, so a container can come up with the tables
+    listing templates that are not on disk. Re-materialising here means the
+    first card render heals it rather than silently falling back to another
+    variant's design.
+    """
+    global _RESTORE_ATTEMPTED
+    if _RESTORE_ATTEMPTED and not force:
+        return 0
+    _RESTORE_ATTEMPTED = True
+    try:
+        from services.asset_store import ensure_dir
+        return ensure_dir("data/card_templates")
+    except Exception:
+        logger.exception("could not restore card templates from the asset store")
+        return 0
+
+
 def _ensure_dir():
     if not os.path.exists(TEMPLATES_ROOT):
         try:
@@ -229,6 +282,7 @@ def save_template_image(file_bytes, original_filename, variant="base"):
         logger.exception("save_template_image disk write failed")
         return False, f"Disk write failed: {e}", None
 
+    _remember(path, file_bytes)
     return True, "Template image saved.", path
 
 
@@ -242,6 +296,7 @@ def remove_template_image(variant="base"):
         if os.path.isfile(path):
             try:
                 os.remove(path)
+                _forget(path)
                 removed = True
             except OSError:
                 logger.exception("Failed to remove template image %s", path)
@@ -294,6 +349,7 @@ def save_template_font(file_bytes, original_filename, variant=None):
         except OSError:
             pass
         return False, f"Not a valid font file: {exc}", None
+    _remember(path, file_bytes)
     return True, "Font file saved.", path
 
 
@@ -306,6 +362,7 @@ def remove_template_font(variant=None):
         if os.path.isfile(path):
             try:
                 os.remove(path)
+                _forget(path)
                 removed = True
             except OSError:
                 logger.exception("Failed to remove template font %s", path)
@@ -319,6 +376,13 @@ def font_file_path(variant=None):
         path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             return path
+    # Nothing on disk: this container may have been rebuilt since the upload,
+    # so refill from the database and look once more.
+    if _restore_root():
+        for ext in ALLOWED_FONT_EXT:
+            path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+            if os.path.isfile(path):
+                return path
     return None
 
 
@@ -635,6 +699,13 @@ def template_image_path(session=None, variant="base", fallback_to_base=True):
         path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             return path
+    # Nothing on disk for this variant: the container may have been rebuilt
+    # since the upload, so refill from the database and look once more.
+    if _restore_root():
+        for ext in ALLOWED_EXT:
+            path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+            if os.path.isfile(path):
+                return path
     if variant == "base":
         # Legacy fallback for deployments that still have the old DB path.
         from services.config_service import get_config
@@ -660,6 +731,11 @@ def template_file_path(variant="base"):
         path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             return path
+    if _restore_root():
+        for ext in ALLOWED_EXT:
+            path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+            if os.path.isfile(path):
+                return path
     fallback = _variant_fallback(variant)
     return template_file_path(fallback) if fallback else None
 
