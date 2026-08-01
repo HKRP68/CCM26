@@ -206,6 +206,108 @@ class NamePoolTests(unittest.TestCase):
         self.assertEqual(summary[self.COUNTRY]["surnames"], 2)
 
 
+class CapitalisationTests(unittest.TestCase):
+    """The pool is mined from real players, so real capitalisation must survive.
+
+    ``str.title()`` lower-cases everything after the first letter of each word,
+    which mangles a whole class of cricketing surnames — and the result is
+    stamped permanently on somebody's career card.
+    """
+
+    def test_internal_capitals_survive(self):
+        from services.career_name_service import normalise_value
+        for name in ("McCullum", "MacKenzie", "O'Brien", "DeGrandhomme"):
+            self.assertEqual(normalise_value(name), name)
+
+    def test_particles_keep_their_own_case(self):
+        from services.career_name_service import normalise_value
+        self.assertEqual(normalise_value("de Villiers"), "De Villiers")
+        self.assertEqual(normalise_value("van der Dussen"), "Van der Dussen")
+
+    def test_a_lower_case_entry_still_gets_a_capital(self):
+        from services.career_name_service import normalise_value
+        self.assertEqual(normalise_value("  rohit   sharma "), "Rohit sharma")
+
+    def test_blank_and_none_stay_empty(self):
+        from services.career_name_service import normalise_value
+        self.assertEqual(normalise_value(""), "")
+        self.assertEqual(normalise_value(None), "")
+        self.assertEqual(normalise_value("   "), "")
+
+    def test_the_length_cap_still_holds(self):
+        from services.career_name_service import normalise_value
+        self.assertEqual(len(normalise_value("x" * 200)), 60)
+
+    def test_a_mixed_case_name_is_still_filed_under_its_letter(self):
+        from services.career_name_service import letter_of
+        self.assertEqual(letter_of("de Villiers"), "D")
+        self.assertEqual(letter_of("McCullum"), "M")
+
+
+class GenerationCostTests(unittest.TestCase):
+    """Uniqueness is resolved in one batched lookup, not one query per name."""
+
+    COUNTRY = "Batchland"
+
+    def setUp(self):
+        from database import get_session
+        from models import CareerNamePool, Player
+        from services.career_name_service import FIRST, SURNAME, add_names
+
+        self.session = get_session()
+        self.session.query(CareerNamePool).delete()
+        self.session.query(Player).delete()
+        add_names(self.session, self.COUNTRY, FIRST, ["Ajay", "Amit", "Anand"])
+        add_names(self.session, self.COUNTRY, SURNAME, ["Bose", "Bhat"])
+        self.session.commit()
+
+    def tearDown(self):
+        self.session.rollback()
+        self.session.close()
+
+    def _take(self, name):
+        from models import Player
+        self.session.add(Player(name=name, version="Base card", rating=80,
+                                category="Batsman", country=self.COUNTRY,
+                                bat_hand="Right", bowl_hand="Right",
+                                bowl_style="Fast"))
+        self.session.flush()
+
+    def test_the_last_free_combination_is_still_found(self):
+        from services.career_name_service import generate_name
+        free = "Anand Bhat"
+        for first in ("Ajay", "Amit", "Anand"):
+            for surname in ("Bose", "Bhat"):
+                if f"{first} {surname}" != free:
+                    self._take(f"{first} {surname}")
+        self.assertEqual(generate_name(self.session, self.COUNTRY, "A", "B"),
+                         free)
+
+    def test_an_exhausted_letter_pair_returns_none(self):
+        from services.career_name_service import generate_name
+        for first in ("Ajay", "Amit", "Anand"):
+            for surname in ("Bose", "Bhat"):
+                self._take(f"{first} {surname}")
+        self.assertIsNone(generate_name(self.session, self.COUNTRY, "A", "B"))
+
+    def test_the_whole_candidate_set_costs_one_round_trip(self):
+        from services import career_name_service as cns
+
+        calls = []
+        real = cns._taken_among
+
+        def counted(session, candidates):
+            calls.append(len(candidates))
+            return real(session, candidates)
+
+        cns._taken_among = counted
+        try:
+            cns.generate_name(self.session, self.COUNTRY, "A", "B")
+        finally:
+            cns._taken_among = real
+        self.assertEqual(calls, [6], "one call covering all 3x2 candidates")
+
+
 class SeedSplitTests(unittest.TestCase):
     """The mining step that turns real player names into pool entries."""
 

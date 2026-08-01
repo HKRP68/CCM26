@@ -24,7 +24,7 @@
   </div>
   <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.9rem;">
     <div style="color:var(--muted);font-size:.78rem;">Highest OVR</div>
-    <div style="font-size:1.6rem;font-weight:800;">{{ players[0].rating if players else '—' }}</div>
+    <div style="font-size:1.6rem;font-weight:800;">{{ players | map(attribute='rating') | max if players else '—' }}</div>
   </div>
 </div>
 

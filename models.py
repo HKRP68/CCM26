@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index,
-    LargeBinary, Text, UniqueConstraint
+    LargeBinary, Text, UniqueConstraint, text
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -167,6 +167,14 @@ class Player(Base):
     __table_args__ = (
         Index("ix_players_rating", "rating"),
         Index("ix_players_parent", "parent_player_id"),
+        # One career card per user, enforced by the database. The service layer
+        # checks first, but two concurrent /cmucareer taps can both pass that
+        # check and both commit; this partial index is what actually stops the
+        # second one. Partial so the millions of catalogue rows — all
+        # is_career=False with a NULL owner — are not indexed at all.
+        Index("uq_players_career_owner", "career_owner_user_id", unique=True,
+              sqlite_where=text("is_career = 1"),
+              postgresql_where=text("is_career")),
     )
 
 

@@ -104,8 +104,13 @@ SECTIONS = {
             "• Batting Power is the average of your five batting attributes, "
             "Bowling Specs the average of your five bowling ones, and OVR the "
             "average of those two — so every upgrade counts in real matches\n"
-            "• It has its own <b>weekly quests</b> paying gems, plus a streak "
-            "jackpot for clearing them week after week\n"
+            "• It has its own <b>weekly quests</b> — <b>5 fresh ones every "
+            "Monday</b>, dealt 2 batting, 2 bowling and 1 all-round from a pool "
+            "of nearly 70, so your card is never the same two weeks running and "
+            "rarely the same as anybody else's. Each pays quest points and "
+            "gems, with the tougher ones paying more\n"
+            "• Clear <b>all five</b> in a week to build your streak; keep it up "
+            "week after week for the <b>gem jackpot</b>\n"
             "• <b>It can never be sold or traded.</b> One per account, free"
         ),
     },

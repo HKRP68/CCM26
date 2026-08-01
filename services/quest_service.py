@@ -34,14 +34,46 @@ Per-match event_keys (added for the v2 quest list):
   'hattrick'              — fired once if at least one bowler took a hat-trick
 
 Career Player event_keys (fired only for the user's own /cmucareer card, and
-only ever consumed by quests flagged career_only):
+only ever consumed by quests flagged career_only). Every one is derived from
+the same per-player match stats the scorecards read, so nothing here depends on
+the engine recording anything new:
+
+  Appearance
   'career_match_played'   — the career player featured in a completed match
-  'career_runs_scored'    — runs the career player made (cumulative)
-  'career_wickets_taken'  — wickets the career player took (cumulative)
-  'career_fifty'          — career player passed 50 in a match
-  'career_hundred'        — career player passed 100 in a match
-  'career_sixes_hit'      — sixes the career player hit (cumulative)
+  'career_match_won'      — …and that match was won
   'career_potm'           — career player was Player of the Match
+
+  Batting (cumulative)
+  'career_runs_scored'    — runs the career player made
+  'career_chase_runs'     — runs made batting second
+  'career_boundary_runs'  — runs that came in fours and sixes (4x4 + 6x6)
+  'career_quickfire_runs' — runs from innings of 10+ balls at a strike rate
+                            of 150 or better; slower innings contribute none
+  'career_fours_hit'      — fours hit
+  'career_sixes_hit'      — sixes hit
+  'career_balls_faced'    — legal balls faced
+
+  Batting (once per qualifying innings)
+  'career_fifty'          — passed 50
+  'career_hundred'        — passed 100
+  'career_score_25_plus'  — reached 25, the "did the job" threshold
+  'career_score_75_plus'  — reached 75
+  'career_not_out'        — faced a ball and finished unbeaten
+
+  Bowling (cumulative)
+  'career_wickets_taken'  — wickets taken
+  'career_dot_balls'      — dot balls bowled
+  'career_maiden_overs'   — maiden overs bowled
+  'career_balls_bowled'   — legal balls bowled
+
+  Bowling (once per qualifying match/spell)
+  'career_three_fer'      — 3+ wickets in a match
+  'career_five_fer'       — 5+ wickets in a match
+  'career_hattrick'       — took a hat-trick
+  'career_economy_spell'  — 4+ overs at an economy under 6
+
+  All-round
+  'career_allrounder_match' — 25+ runs AND 2+ wickets in the same match
 
 Manual event_key:
   'manual' — quest is admin-only progressed (e.g. yorker counts, super overs).
@@ -50,6 +82,7 @@ Manual event_key:
 import logging
 import random
 from datetime import datetime, timedelta
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from models import Quest, UserQuestProgress, User
@@ -75,6 +108,39 @@ QUESTS_PER_USER = {
     "weekly": WEEKLY_QUESTS_PER_USER,
     "monthly": MONTHLY_QUESTS_PER_USER,
 }
+
+# Career weekly quests are drawn on top of the ordinary weekly ones, not out of
+# the same slots. Sharing them meant a career owner could go a whole week
+# without a single career quest — which also stalls the streak, since a week
+# with no career quests assigned is a week that cannot be judged.
+CAREER_QUESTS_PER_USER = 5
+
+# …and the five are drawn one bucket at a time rather than five at random, so
+# nobody spends a week on five bowling quests. Buckets are read off the event
+# key, so a new quest lands in the right one with no extra admin field to set.
+CAREER_BAT_EVENTS = frozenset({
+    "career_runs_scored", "career_chase_runs", "career_boundary_runs",
+    "career_quickfire_runs", "career_fours_hit", "career_sixes_hit",
+    "career_balls_faced", "career_fifty", "career_hundred",
+    "career_score_25_plus", "career_score_75_plus", "career_not_out",
+})
+CAREER_BOWL_EVENTS = frozenset({
+    "career_wickets_taken", "career_dot_balls", "career_maiden_overs",
+    "career_balls_bowled", "career_three_fer", "career_five_fer",
+    "career_hattrick", "career_economy_spell",
+})
+CAREER_ALL_EVENTS = frozenset({
+    "career_match_played", "career_match_won", "career_potm",
+    "career_allrounder_match",
+})
+
+# (bucket, how many of the five come from it). Two batting, two bowling and one
+# all-round mirrors what a Career Player actually is — always an All-rounder.
+CAREER_QUEST_MIX = (
+    (CAREER_BAT_EVENTS, 2),
+    (CAREER_BOWL_EVENTS, 2),
+    (CAREER_ALL_EVENTS, 1),
+)
 
 
 def _claim_silently(session, user, uqp, q):
@@ -105,28 +171,58 @@ def _user_has_career(session, user_id):
         return False
 
 
-def _evaluate_career_streak(session, user, current_period, now=None):
-    """Judge the week that just closed and update the user's career streak.
+# How far back a returning user's unjudged weeks are caught up. Weeks with no
+# assigned career quests cost one cheap query each and change nothing, so this
+# only has to be generous enough to cover a realistic absence.
+_MAX_CATCHUP_WEEKS = 60
+
+
+def _unjudged_weeks(last_judged, now):
+    """Week keys still to be judged, oldest first.
+
+    A week is judged lazily, on the owner's first quest read after it closes.
+    Somebody who does not open /mq for a month leaves three weeks unjudged in
+    between, and one of those may be a week they were assigned career quests and
+    failed them — so the marker cannot simply jump to the week that just closed
+    or the streak would survive a week it should not have.
+
+    With no marker at all there is no history to catch up on (the marker is set
+    the first time a week is judged), so only the week that just closed is
+    returned.
+    """
+    keys = []
+    cursor = now - timedelta(days=7)
+    limit = _MAX_CATCHUP_WEEKS if last_judged else 1
+    for _ in range(limit):
+        key = weekly_period_key(cursor)
+        if last_judged and key <= last_judged:
+            break
+        keys.append(key)
+        cursor -= timedelta(days=7)
+    keys.reverse()
+    return keys
+
+
+def _judge_career_week(session, user, period, weeks, bonus_gems):
+    """Judge one closed week against the user's career streak, or ``None``.
 
     A week counts only if the user was assigned at least one career quest and
-    completed *every* one of them. Miss one and the streak resets to zero.
-    Every ``career_streak_weeks`` consecutive weeks pays a gem jackpot.
+    completed *every* one of them. Miss one and the streak resets to zero. Every
+    ``weeks`` consecutive cleared weeks pays a ``bonus_gems`` jackpot.
 
-    Idempotent: ``career_weekly_last_period`` records the last week already
-    judged, so repeated calls in the same week change nothing.
+    Deactivated quests are ignored. A quest retired mid-week — by the seeder
+    after a rebalance, or by an admin — vanishes from ``get_user_quests`` and
+    stops taking progress in ``track_event``, both of which filter on
+    ``is_active``. Judging it here too would fail the owner on a quest they
+    could no longer see, let alone finish.
     """
-    now = now or datetime.utcnow()
-    previous_period = weekly_period_key(now - timedelta(days=7))
-    if (user.career_weekly_last_period or "") >= previous_period:
-        return None
-    user.career_weekly_last_period = previous_period
-
     rows = (session.query(UserQuestProgress, Quest)
             .join(Quest, Quest.id == UserQuestProgress.quest_id)
             .filter(UserQuestProgress.user_id == user.id,
                     UserQuestProgress.assigned == True,
-                    UserQuestProgress.period_key == previous_period,
+                    UserQuestProgress.period_key == period,
                     Quest.quest_type == "weekly",
+                    Quest.is_active == True,
                     Quest.career_only == True)
             .all())
     if not rows:
@@ -134,29 +230,26 @@ def _evaluate_career_streak(session, user, current_period, now=None):
         # career player yet, say) neither builds nor loses a streak.
         return None
 
-    cleared = all(uqp.completed for uqp, _ in rows)
-    if not cleared:
+    if not all(uqp.completed for uqp, _ in rows):
         had = user.career_weekly_streak or 0
         user.career_weekly_streak = 0
-        return {"cleared": False, "streak": 0, "lost": had, "bonus": 0}
+        return {"cleared": False, "streak": 0, "lost": had, "bonus": 0,
+                "weeks": weeks}
 
     streak = (user.career_weekly_streak or 0) + 1
     user.career_weekly_streak = streak
-    user.career_weekly_best_streak = max(user.career_weekly_best_streak or 0, streak)
-
-    try:
-        from services.config_service import get_config
-        cfg = get_config(session)
-        weeks = int(cfg.get("career_streak_weeks") or 4)
-        bonus_gems = int(cfg.get("career_streak_bonus_gems") or 100)
-    except Exception:
-        logger.exception("career streak config unavailable; using defaults")
-        weeks, bonus_gems = 4, 100
+    user.career_weekly_best_streak = max(user.career_weekly_best_streak or 0,
+                                         streak)
 
     bonus = 0
     if weeks > 0 and streak % weeks == 0 and bonus_gems > 0:
         bonus = bonus_gems
-        user.total_gems = (user.total_gems or 0) + bonus
+        # Credit in SQL rather than read-modify-write on the ORM object, so a
+        # concurrent gem change elsewhere in the app cannot swallow the payout.
+        session.query(User).filter(User.id == user.id).update(
+            {User.total_gems: func.coalesce(User.total_gems, 0) + bonus},
+            synchronize_session=False)
+        session.expire(user, ["total_gems"])
         try:
             from services.activity_service import log_activity
             log_activity(session, user.id, "career_streak",
@@ -167,6 +260,221 @@ def _evaluate_career_streak(session, user, current_period, now=None):
 
     return {"cleared": True, "streak": streak, "lost": 0, "bonus": bonus,
             "weeks": weeks}
+
+
+def _evaluate_career_streak(session, user, current_period, now=None):
+    """Judge every closed-but-unjudged week and update the career streak.
+
+    ``career_weekly_last_period`` records the most recent week already judged.
+    It is claimed with a conditional UPDATE rather than an ORM assignment: two
+    quest reads racing each other — the bot's /mq and the Mini App, say — would
+    otherwise both read the old marker, both pass, and both pay the jackpot. The
+    ``WHERE`` makes exactly one of them win, and the loser returns ``None``.
+    """
+    now = now or datetime.utcnow()
+    previous_period = weekly_period_key(now - timedelta(days=7))
+    last_judged = user.career_weekly_last_period or ""
+    if last_judged >= previous_period:
+        return None
+
+    claimed = (session.query(User)
+               .filter(User.id == user.id,
+                       func.coalesce(User.career_weekly_last_period, "")
+                       < previous_period)
+               .update({User.career_weekly_last_period: previous_period},
+                       synchronize_session=False))
+    if not claimed:
+        # Another session judged these weeks between our read and this UPDATE.
+        session.expire(user, ["career_weekly_last_period"])
+        return None
+    session.expire(user, ["career_weekly_last_period"])
+
+    try:
+        from services.config_service import get_config
+        cfg = get_config(session)
+        weeks = int(cfg.get("career_streak_weeks") or 4)
+        bonus_gems = int(cfg.get("career_streak_bonus_gems") or 100)
+    except Exception:
+        logger.exception("career streak config unavailable; using defaults")
+        weeks, bonus_gems = 4, 100
+
+    # Oldest first, so a failed week resets the streak before a later cleared
+    # week starts building it again.
+    result = None
+    for period in _unjudged_weeks(last_judged, now):
+        judged = _judge_career_week(session, user, period, weeks, bonus_gems)
+        if judged is None:
+            continue
+        if result is not None:
+            # Only the newest week is reported, but a jackpot from a skipped
+            # week was still paid and must not vanish from the message.
+            judged["bonus"] += result.get("bonus", 0)
+            judged["lost"] = max(judged.get("lost", 0), result.get("lost", 0))
+        result = judged
+    return result
+
+
+def _quests_assigned_in(session, user_id, period):
+    """Quest ids the user was assigned in one past period."""
+    rows = (session.query(UserQuestProgress.quest_id)
+            .filter(UserQuestProgress.user_id == user_id,
+                    UserQuestProgress.period_key == period,
+                    UserQuestProgress.assigned == True)
+            .all())
+    return {row[0] for row in rows}
+
+
+def _draw(candidates, count, seen):
+    """Take ``count`` at random, preferring ones not already ``seen``.
+
+    ``seen`` carries both last week's set and whatever this draw has already
+    taken, so the buckets cannot hand out the same quest twice.
+    """
+    fresh = [q for q in candidates if q.id not in seen]
+    stale = [q for q in candidates if q.id in seen]
+    random.shuffle(fresh)
+    random.shuffle(stale)
+    picked = (fresh + stale)[:count]
+    seen.update(q.id for q in picked)
+    return picked
+
+
+def _by_effort(quests):
+    """Split a bucket into its lighter and heavier halves.
+
+    ``reward_gems`` is the difficulty grade: the seeder prices a quest at the
+    configured base times its tier, so what a quest pays *is* how much work it
+    is. Target count breaks ties between quests on the same tier.
+    """
+    ordered = sorted(quests, key=lambda q: (q.reward_gems or 0,
+                                            q.target_count or 0, q.id))
+    mid = len(ordered) // 2
+    return ordered[:mid], ordered[mid:]
+
+
+def _draw_spread(candidates, count, seen):
+    """Draw ``count`` from one bucket, spread across the difficulty range.
+
+    A purely random draw regularly produced a week of five marathon quests —
+    "win 8 matches", "take 5 in an innings", "bowl 60 overs" — which is not a
+    hard week so much as a written-off one, and because the streak needs every
+    quest cleared it also wrote off the jackpot. Taking half of each multi-slot
+    bucket from the lighter end guarantees every week contains something
+    achievable alongside the stretch goals.
+    """
+    lighter, heavier = _by_effort(candidates)
+    if count < 2 or not lighter or not heavier:
+        return _draw(candidates, count, seen)
+    from_lighter = count // 2
+    picked = _draw(lighter, from_lighter, seen)
+    picked += _draw(heavier, count - len(picked), seen)
+    # A half that ran dry (everything in it was already taken) must not cost a
+    # slot — top up from whatever is left in the bucket as a whole.
+    if len(picked) < count:
+        rest = [q for q in candidates if q.id not in {p.id for p in picked}]
+        picked += _draw(rest, count - len(picked), seen)
+    return picked
+
+
+def _pick_career_weeklies(session, user_id, career_pool, now, *, slots=None,
+                          exclude=()):
+    """Choose this week's Career Player quests: five, balanced, and new.
+
+    ``slots`` overrides how many to draw, for the callers that have already
+    filled part of the five — a pinned career quest, or a top-up part-way
+    through a week. ``exclude`` holds quest ids the owner already has, so a
+    top-up cannot deal the same quest twice.
+
+    Three things shape the pick, in order:
+
+    * **Balance.** Two batting, two bowling and one all-round, per
+      :data:`CAREER_QUEST_MIX`. Five uniform draws from one catalogue regularly
+      produced a week of nothing but bowling, which is a poor week for a card
+      that is always an All-rounder.
+    * **Range.** Each two-slot bucket takes one from its lighter half and one
+      from its heavier half, so a week is never five marathons — see
+      :func:`_draw_spread`.
+    * **Freshness.** Quests the user was assigned last week go to the back of
+      the queue, so the same five rarely land twice running.
+    * **Never short.** A bucket with too few quests (or an admin who has
+      deactivated most of a category) tops up from whatever is left, so the
+      user still gets five whenever the catalogue holds five.
+    """
+    want = CAREER_QUESTS_PER_USER if slots is None else max(0, int(slots))
+    if not want:
+        return []
+
+    exclude = set(exclude)
+    career_pool = [q for q in career_pool if q.id not in exclude]
+    last_week = _quests_assigned_in(
+        session, user_id, weekly_period_key(now - timedelta(days=7)))
+
+    seen = set(last_week)
+    chosen = []
+    # Scale the bucket mix to the slots actually going out, so a partly-filled
+    # week still comes out as balanced as the room allows.
+    for events, count in CAREER_QUEST_MIX:
+        if len(chosen) >= want:
+            break
+        count = min(count, want - len(chosen))
+        bucket = [q for q in career_pool if q.event_key in events]
+        chosen += _draw_spread(bucket, count, seen)
+
+    # Top up from anything not already taken — a short bucket must not cost the
+    # user a slot, and a quest whose event key predates the buckets (or was
+    # typed in by hand on the website) is still eligible here.
+    taken = {q.id for q in chosen}
+    if len(chosen) < want:
+        rest = [q for q in career_pool if q.id not in taken]
+        chosen += _draw(rest, want - len(chosen), set(last_week) | taken)
+    return chosen[:want]
+
+
+def _top_up_career_weeklies(session, user_id, quest_type, current_period, now,
+                            has_career, *, already_pinned=()):
+    """Deal any career quests a mid-week career owner is still short of.
+
+    The weekly deal happens once, on the owner's first quest read of the week.
+    Create a Career Player *after* that read and the week's five never arrive —
+    so this fills the gap the moment they next open their quests, rather than
+    leaving the new card with nothing to do until Monday.
+
+    Returns the quests newly assigned (empty for everyone already up to date).
+    """
+    if quest_type != "weekly" or not has_career:
+        return []
+
+    held = (session.query(Quest)
+            .join(UserQuestProgress, Quest.id == UserQuestProgress.quest_id)
+            .filter(UserQuestProgress.user_id == user_id,
+                    UserQuestProgress.period_key == current_period,
+                    UserQuestProgress.assigned == True,
+                    Quest.quest_type == "weekly",
+                    Quest.career_only == True)
+            .all())
+    held_ids = {q.id for q in held} | {q.id for q in already_pinned
+                                       if getattr(q, "career_only", False)}
+    missing = CAREER_QUESTS_PER_USER - len(held_ids)
+    if missing <= 0:
+        return []
+
+    pool = (session.query(Quest)
+            .filter(Quest.quest_type == "weekly",
+                    Quest.is_active == True,
+                    Quest.career_only == True,
+                    Quest.always_assign == False)
+            .all())
+    dealt = _pick_career_weeklies(session, user_id, pool, now, slots=missing,
+                                  exclude=held_ids)
+    for quest in dealt:
+        session.add(UserQuestProgress(
+            user_id=user_id, quest_id=quest.id, period_key=current_period,
+            progress=0, completed=False, claimed=False, assigned=True,
+            last_updated=now))
+    if dealt:
+        logger.info("topped up %s career weekly quest(s) for user %s",
+                    len(dealt), user_id)
+    return dealt
 
 
 def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
@@ -232,6 +540,16 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
                 )
                 session.add(uqp)
                 newly_pinned.append(q)
+
+        # Somebody who opened their quests on Monday and created a Career
+        # Player on Tuesday had no career quests at all until the next Monday,
+        # because the week's deal happened before they had a card. Top them up
+        # now instead — the streak treats a week with no career quests as
+        # unjudged, so this costs them nothing retroactively.
+        newly_pinned += _top_up_career_weeklies(
+            session, user_id, quest_type, current_period, now, has_career,
+            already_pinned=newly_pinned)
+
         if newly_pinned:
             session.flush()
         return {"assigned": newly_pinned, "auto_claimed": []}
@@ -276,9 +594,30 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     pinned = [q for q in pool if getattr(q, "always_assign", False)]
     random_pool = [q for q in pool if not getattr(q, "always_assign", False)]
 
+    # Career weekly quests get their own five slots rather than competing with
+    # the ordinary weekly ones, so a Career Player owner always has a full
+    # career card to work through — and always has a week that can be judged.
+    career_pool = []
+    career_slots = 0
+    if quest_type == "weekly" and has_career:
+        career_pool = [q for q in random_pool
+                       if getattr(q, "career_only", False)]
+        random_pool = [q for q in random_pool
+                       if not getattr(q, "career_only", False)]
+        # A career quest an admin has pinned already occupies one of the five.
+        # The streak judge counts every assigned career_only row, so letting a
+        # pinned one arrive *on top* would quietly make the week a six-quest
+        # week for those owners — harder than the deal advertises, and harder
+        # than it is for everybody else.
+        career_slots = CAREER_QUESTS_PER_USER - sum(
+            1 for q in pinned if getattr(q, "career_only", False))
+
     chosen = list(pinned)  # start with all pinned
     if random_pool:
         chosen += random.sample(random_pool, min(max_count, len(random_pool)))
+    if career_pool and career_slots > 0:
+        chosen += _pick_career_weeklies(session, user_id, career_pool, now,
+                                        slots=career_slots)
 
     assigned_quests = []
     for q in chosen:
@@ -549,6 +888,10 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     shape (``inn1_*`` snapshots plus the live 2nd-innings stats). The bot user
     (telegram_id == -1) is a no-op. Each event is best-effort via ``safe_track``;
     callers still wrap this in their own try/except.
+
+    Player of the Match is worked out by the caller, not here, so a caller that
+    wants ``career_potm`` to fire puts ``potm_player_id`` and
+    ``potm_owner_user_id`` on ``state`` before calling. Both finalizes do.
     """
     from models import UserRoster
 
@@ -590,8 +933,13 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
         career_player_id = career.id if career else None
     except Exception:
         logger.exception("career player lookup failed for quest tracking")
-    career_runs = career_wickets = career_sixes = 0
+    career_runs = career_wickets = career_sixes = career_fours = 0
     career_fifties = career_hundreds = 0
+    career_balls_faced = career_boundary_runs = career_chase_runs = 0
+    career_quickfire_runs = career_not_outs = 0
+    career_scores_25 = career_scores_75 = 0
+    career_dots = career_maidens = career_balls_bowled = 0
+    career_hattricks = career_clean_spells = 0
     career_played = False
 
     for xi_key, stats_key, is_bat in [
@@ -600,6 +948,9 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
         ("bat_xi", "bat_stats", True),
         ("bowl_xi", "bowl_stats", False),
     ]:
+        # "bat_xi"/"bowl_xi" are the second-innings line-ups, so batting there
+        # is batting in a chase — the only innings split the state gives us.
+        is_chase = is_bat and xi_key == "bat_xi"
         xi = state.get(xi_key, [])
         stats = state.get(stats_key, {}) or {}
         for p in xi:
@@ -622,14 +973,45 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
                 career_played = True
                 if is_bat:
                     runs_here = pst.get("runs", 0)
+                    balls_here = pst.get("balls", 0)
+                    fours_here = pst.get("fours", 0)
+                    sixes_here = pst.get("sixes", 0)
                     career_runs += runs_here
-                    career_sixes += pst.get("sixes", 0)
+                    career_sixes += sixes_here
+                    career_fours += fours_here
+                    career_balls_faced += balls_here
+                    career_boundary_runs += fours_here * 4 + sixes_here * 6
+                    if is_chase:
+                        career_chase_runs += runs_here
                     if runs_here >= 100:
                         career_hundreds += 1
                     elif runs_here >= 50:
                         career_fifties += 1
+                    if runs_here >= 75:
+                        career_scores_75 += 1
+                    if runs_here >= 25:
+                        career_scores_25 += 1
+                    if balls_here > 0 and not pst.get("out"):
+                        career_not_outs += 1
+                    # Only the innings that were actually played at pace count
+                    # toward a strike-rate quest — a 10-ball cameo says nothing.
+                    if balls_here >= 10 and runs_here * 100 >= balls_here * 150:
+                        career_quickfire_runs += runs_here
                 else:
-                    career_wickets += pst.get("wickets", 0)
+                    wkts_here = pst.get("wickets", 0)
+                    balls_bowled_here = pst.get("balls", 0)
+                    career_wickets += wkts_here
+                    career_dots += pst.get("dots", 0)
+                    career_maidens += pst.get("maidens", 0)
+                    career_balls_bowled += balls_bowled_here
+                    if pst.get("hattrick"):
+                        career_hattricks += 1
+                    # A "spell" needs enough overs for the economy to mean
+                    # something, matching the squad-wide 4-over threshold. Under
+                    # six an over is exactly "fewer runs than balls".
+                    if (balls_bowled_here >= 24
+                            and pst.get("runs", 0) < balls_bowled_here):
+                        career_clean_spells += 1
             if is_bat:
                 r = pst.get("runs", 0)
                 balls = pst.get("balls", 0)
@@ -690,16 +1072,57 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     # actually featured, and only ever consumed by career_only quests.
     if career_played:
         safe_track(session, uid, "career_match_played", 1)
-        if career_runs > 0:
-            safe_track(session, uid, "career_runs_scored", career_runs)
-        if career_wickets > 0:
-            safe_track(session, uid, "career_wickets_taken", career_wickets)
-        if career_sixes > 0:
-            safe_track(session, uid, "career_sixes_hit", career_sixes)
-        for _ in range(career_fifties):
-            safe_track(session, uid, "career_fifty", 1)
-        for _ in range(career_hundreds):
-            safe_track(session, uid, "career_hundred", 1)
+        if is_winner:
+            safe_track(session, uid, "career_match_won", 1)
+
+        # Cumulative totals — one call each, skipped when the figure is zero so
+        # a quiet match does not churn through every quest in the catalogue.
+        for event_key, amount in (
+            ("career_runs_scored", career_runs),
+            ("career_wickets_taken", career_wickets),
+            ("career_sixes_hit", career_sixes),
+            ("career_fours_hit", career_fours),
+            ("career_boundary_runs", career_boundary_runs),
+            ("career_balls_faced", career_balls_faced),
+            ("career_chase_runs", career_chase_runs),
+            ("career_quickfire_runs", career_quickfire_runs),
+            ("career_dot_balls", career_dots),
+            ("career_maiden_overs", career_maidens),
+            ("career_balls_bowled", career_balls_bowled),
+        ):
+            if amount > 0:
+                safe_track(session, uid, event_key, amount)
+
+        # Counted occurrences — each innings that qualified fires once, so a
+        # "three times this week" quest counts weeks, not matches.
+        for event_key, times in (
+            ("career_fifty", career_fifties),
+            ("career_hundred", career_hundreds),
+            ("career_score_25_plus", career_scores_25),
+            ("career_score_75_plus", career_scores_75),
+            ("career_not_out", career_not_outs),
+            ("career_hattrick", career_hattricks),
+            ("career_economy_spell", career_clean_spells),
+        ):
+            for _ in range(times):
+                safe_track(session, uid, event_key, 1)
+
+        # Once-per-match milestones, judged on the match total.
+        if career_wickets >= 3:
+            safe_track(session, uid, "career_three_fer", 1)
+        if career_wickets >= 5:
+            safe_track(session, uid, "career_five_fer", 1)
+        if career_runs >= 25 and career_wickets >= 2:
+            safe_track(session, uid, "career_allrounder_match", 1)
+
+        # Player of the Match is decided by the finalize that calls us, which
+        # stashes the winner on the state before doing so. Without it a
+        # 'career_potm' quest could never progress, and because the weekly
+        # streak needs *every* assigned career quest cleared, one such quest
+        # would put the streak and its jackpot permanently out of reach.
+        if (state.get("potm_player_id") == career_player_id
+                and state.get("potm_owner_user_id") == uid):
+            safe_track(session, uid, "career_potm", 1)
 
     # Single-match max events
     if max_runs_in_innings > 0:

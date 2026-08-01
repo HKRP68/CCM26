@@ -42,6 +42,20 @@ def setUpModule():
     _ENGINE = engine
     Base.metadata.create_all(bind=engine)
 
+    # The wizard only ever offers faces that exist and are active, and
+    # create_career_player now rejects anything else — so the tests need a few
+    # real CareerFace rows before they can create a career player.
+    from database import get_session
+    from models import CareerFace
+    session = get_session()
+    try:
+        for slot in (1, 2, 3):
+            session.add(CareerFace(slot=slot, label=f"Face {slot}",
+                                   sort_order=slot, is_active=True))
+        session.commit()
+    finally:
+        session.close()
+
 
 def tearDownModule():
     try:
@@ -178,6 +192,101 @@ class CareerQuestAssignmentTests(unittest.TestCase):
             self.assertEqual(quest.reward_gems, 15)
 
 
+class CareerPotmEventTests(unittest.TestCase):
+    """'career_potm' has to actually fire, or a quest using it is unclearable.
+
+    The weekly streak needs *every* assigned career quest cleared, so a single
+    quest whose event never fires would put the streak and its jackpot
+    permanently out of reach for everyone who was given it.
+    """
+
+    def setUp(self):
+        from database import get_session
+        from models import Quest, UserQuestProgress, UserRoster
+        from services import career_service as cs
+        from services.quest_service import weekly_period_key
+
+        self.session = get_session()
+        self.session.query(UserQuestProgress).delete()
+        self.session.query(Quest).delete()
+
+        self.quest = Quest(name="POTM Career", description="Win POTM",
+                           quest_type="weekly", event_key="career_potm",
+                           target_count=1, reward_points=8, reward_coins=0,
+                           reward_gems=15, is_active=True, career_only=True,
+                           emoji="🎖", sort_order=0)
+        self.session.add(self.quest)
+
+        self.user = _make_user(self.session, next(_TG_IDS))
+        created = cs.create_career_player(
+            self.session, self.user, name=f"Potmy {self.user.id}",
+            country="India", bat_hand="Right", bowl_hand="Right",
+            bowl_style="Fast", face_slot=1)
+        self.assertTrue(created["ok"], created.get("message"))
+        self.player = created["player"]
+        self.session.flush()
+
+        self.roster_id = (self.session.query(UserRoster)
+                          .filter(UserRoster.user_id == self.user.id,
+                                  UserRoster.player_id == self.player.id)
+                          .first().id)
+        self.session.add(UserQuestProgress(
+            user_id=self.user.id, quest_id=self.quest.id,
+            period_key=weekly_period_key(), progress=0, completed=False,
+            claimed=False, assigned=True))
+        self.session.commit()
+
+    def tearDown(self):
+        self.session.rollback()
+        self.session.close()
+
+    def _state(self, **extra):
+        state = {
+            "inn1_bat_xi": [{"roster_id": self.roster_id,
+                             "name": self.player.name,
+                             "player_id": self.player.id}],
+            "inn1_bat_stats": {self.roster_id: {"runs": 40, "balls": 30,
+                                                "sixes": 2, "fours": 3,
+                                                "out": True}},
+        }
+        state.update(extra)
+        return state
+
+    def _progress(self):
+        from models import UserQuestProgress
+        return (self.session.query(UserQuestProgress)
+                .filter(UserQuestProgress.user_id == self.user.id,
+                        UserQuestProgress.quest_id == self.quest.id)
+                .first())
+
+    def test_the_career_card_winning_potm_progresses_the_quest(self):
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(
+            self.session,
+            self._state(potm_player_id=self.player.id,
+                        potm_owner_user_id=self.user.id),
+            self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertTrue(self._progress().completed)
+
+    def test_somebody_else_winning_potm_does_not(self):
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(
+            self.session,
+            self._state(potm_player_id=self.player.id + 9_999,
+                        potm_owner_user_id=self.user.id),
+            self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress().progress, 0)
+
+    def test_a_state_with_no_potm_at_all_is_harmless(self):
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session, self._state(), self.user,
+                                True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress().progress, 0)
+
+
 class CareerStreakTests(unittest.TestCase):
     def setUp(self):
         from database import get_session
@@ -279,6 +388,49 @@ class CareerStreakTests(unittest.TestCase):
         # No UserQuestProgress rows logged for the closing week at all.
         self.assertIsNone(self._rollover(1))
         self.assertEqual(self.user.career_weekly_streak, 3)
+
+    def test_a_failed_week_that_was_skipped_over_still_breaks_the_streak(self):
+        """The whole point of judging every unjudged week, not just the last.
+
+        Somebody who clears week 0, fails week 1 and then does not open their
+        quests until week 3 must not keep the streak they lost in week 1.
+        """
+        self._log_week(0, cleared=True)
+        self._rollover(1)
+        self.assertEqual(self.user.career_weekly_streak, 1)
+
+        self._log_week(1, cleared=False)
+        self._log_week(2, cleared=True)
+        # First read in three weeks: weeks 1 and 2 are both still unjudged.
+        result = self._rollover(3)
+        self.assertTrue(result["cleared"], "week 2 was cleared")
+        self.assertEqual(self.user.career_weekly_streak, 1,
+                         "the failed week 1 must have reset it first")
+
+    def test_a_jackpot_from_a_skipped_week_is_still_paid(self):
+        gems_before = self.user.total_gems or 0
+        for week in range(3):
+            self._log_week(week, cleared=True)
+            self._rollover(week + 1)
+        self.assertEqual(self.user.career_weekly_streak, 3)
+
+        # Weeks 3 and 4 both cleared, but not read until week 5. The fourth
+        # week pays the jackpot even though it is not the week being reported.
+        self._log_week(3, cleared=True)
+        self._log_week(4, cleared=True)
+        result = self._rollover(5)
+        self.assertEqual(self.user.career_weekly_streak, 5)
+        self.assertEqual(result["bonus"], 100)
+        self.assertEqual(self.user.total_gems, gems_before + 100)
+
+    def test_the_marker_is_claimed_before_any_week_is_judged(self):
+        """A second reader in the same week must find nothing left to do."""
+        from services.quest_service import weekly_period_key
+        self._log_week(0, cleared=True)
+        self._rollover(1)
+        self.session.refresh(self.user)
+        expected = weekly_period_key(datetime.utcnow())
+        self.assertEqual(self.user.career_weekly_last_period, expected)
 
 
 if __name__ == "__main__":

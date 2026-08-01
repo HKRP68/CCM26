@@ -693,6 +693,14 @@ def _migrate_add_columns():
         # index here; existing rows with NULL are OK — NULLs don't conflict)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code "
         "ON users (referral_code)",
+        # One career card per user. services.career_service.create_career_player
+        # checks for an existing card first, but two concurrent /cmucareer taps
+        # can both pass that check and both commit — this partial index is what
+        # actually stops the second one, and the IntegrityError it raises is
+        # converted back into the ordinary "you already have one" reply.
+        # Partial so the catalogue rows (is_career FALSE, owner NULL) stay out.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_players_career_owner "
+        "ON players (career_owner_user_id) WHERE is_career",
     ]
     done, sig = _migration_signature_matches("player_name_indexes", migration_sql)
     if not done:

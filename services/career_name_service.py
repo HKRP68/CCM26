@@ -31,9 +31,16 @@ LETTERS = tuple(string.ascii_uppercase)
 
 
 def normalise_value(value):
-    """Trim and title-case a pool entry so duplicates collapse."""
-    cleaned = " ".join((value or "").split())
-    return cleaned[:60].title() if cleaned else ""
+    """Trim a pool entry and capitalise its first letter.
+
+    The source capitalisation is otherwise kept intact. ``str.title()`` would
+    lower-case every letter after the first of each word, flattening the real
+    surnames this pool is mined from — "McCullum" to "Mccullum", "MacKenzie" to
+    "Mackenzie", "de Villiers" to "De Villiers" — and the result is stamped
+    permanently on somebody's career card.
+    """
+    cleaned = " ".join((value or "").split())[:60]
+    return cleaned[:1].upper() + cleaned[1:] if cleaned else ""
 
 
 def letter_of(value):
@@ -122,9 +129,28 @@ def _values(session, country, kind, letter):
 
 # ── Generation ──────────────────────────────────────────────────────────────
 
-# Cap the random search before falling back to an exhaustive sweep, so a country
-# whose combinations are nearly exhausted still resolves quickly.
-_RANDOM_TRIES = 40
+# How many candidates go into one ``IN (…)`` lookup. Big enough that a normal
+# letter pair resolves in a single round trip, small enough to stay inside the
+# parameter limits of every backend we run on.
+_NAME_LOOKUP_CHUNK = 500
+
+
+def _taken_among(session, candidates):
+    """The lower-cased subset of ``candidates`` some player already carries.
+
+    One ``IN`` query per chunk rather than one query per candidate: the
+    per-candidate form ran ``lower(name) = …``, which cannot use
+    ``ix_players_name`` and so scanned the whole ``players`` table every time —
+    up to ``len(firsts) * len(surnames)`` scans on a single wizard tap.
+    """
+    taken = set()
+    lowered = sorted({c.lower() for c in candidates})
+    for start in range(0, len(lowered), _NAME_LOOKUP_CHUNK):
+        chunk = lowered[start:start + _NAME_LOOKUP_CHUNK]
+        rows = (session.query(Player.name)
+                .filter(func.lower(Player.name).in_(chunk)).all())
+        taken.update((r[0] or "").lower() for r in rows)
+    return taken
 
 
 def generate_name(session, country, initial, surname_letter):
@@ -139,24 +165,15 @@ def generate_name(session, country, initial, surname_letter):
     if not firsts or not surnames:
         return None
 
-    seen = set()
-    for _ in range(_RANDOM_TRIES):
-        candidate = f"{random.choice(firsts)} {random.choice(surnames)}"
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        if not name_is_taken(session, candidate):
-            return candidate
-
-    # Exhaustive sweep in random order — only reached when the pair of letters
-    # is heavily used up.
+    # Every combination in random order, so the first free one is a random one
+    # and an exhausted letter pair still resolves without a second pass.
     pairs = [(f, s) for f in firsts for s in surnames]
     random.shuffle(pairs)
-    for first, surname in pairs:
-        candidate = f"{first} {surname}"
-        if candidate in seen:
-            continue
-        if not name_is_taken(session, candidate):
+    candidates = [f"{first} {surname}" for first, surname in pairs]
+
+    taken = _taken_among(session, candidates)
+    for candidate in candidates:
+        if candidate.lower() not in taken:
             return candidate
     return None
 

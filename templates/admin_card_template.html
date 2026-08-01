@@ -119,7 +119,7 @@
       <div style="margin-top:.7rem;display:flex;gap:.5rem;flex-wrap:wrap;">
         <button type="submit" class="btn btn-ghost btn-sm" form="faceForm{{ face.slot }}">💾 Save face settings</button>
         <button type="submit" class="btn btn-ghost btn-sm" form="faceDeleteForm{{ face.slot }}"
-                onclick="return confirm('Delete {{ face.label }}? Career players wearing it fall back to the first face.');">🗑 Delete this face</button>
+                onclick='return confirm("Delete " + {{ face.label | tojson }} + "? Career players wearing it fall back to the first face.");'>🗑 Delete this face</button>
       </div>
     </div>
     {% endif %}

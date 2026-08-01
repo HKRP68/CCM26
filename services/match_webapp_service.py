@@ -1912,6 +1912,12 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         state["total_runs"] += runs; state["total_wickets"] += 1
         bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
         bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
+        if runs == 0:
+            # A wicket off a no-run delivery is a dot for both, same as the
+            # in-chat loop in handlers.match — the two have to agree or a
+            # dot-ball quest would only progress in some match modes.
+            bws["dots"] = bws.get("dots", 0) + 1
+            bs["dots"] = bs.get("dots", 0) + 1
         bs["how_out"] = oc.get("how", "Bowled"); bs["bowled_by"] = bowler["name"]
         add_to_timeline(state, SYM["W"])
         # Record partnership before resetting
@@ -1942,6 +1948,10 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
         if runs == 4: bs["fours"] += 1
         elif runs == 6: bs["sixes"] += 1
+        if runs == 0:
+            # Genuine dot ball off the bat — credit batsman and bowler.
+            bs["dots"] = bs.get("dots", 0) + 1
+            bws["dots"] = bws.get("dots", 0) + 1
         add_to_timeline(state, SYM.get(runs, str(runs)))
         rtxt = {0: "DOT", 4: "FOUR! 🔥", 6: "SIX! 💥"}.get(runs, f"{runs} run" + ("s" if runs != 1 else ""))
         if runs % 2 == 1:
@@ -3039,6 +3049,11 @@ def finalize_webapp_match(session, match_id):
                 else:
                     session.add(PlayerGameStats(
                         user_id=owner_uid, player_id=pom_pid, potm=1))
+                # Hand the result to the quest tracker below, which fires
+                # 'career_potm' when the winner is somebody's own career card.
+                if state is not None:
+                    state["potm_player_id"] = pom_pid
+                    state["potm_owner_user_id"] = owner_uid
     except Exception:
         logger.exception("webapp POTM career credit failed (non-fatal)")
 

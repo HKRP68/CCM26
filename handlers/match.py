@@ -6022,6 +6022,11 @@ async def _end_innings(ctx, mid):
                 if potm_pid:
                     break
 
+        # Hand the result to the quest tracker below, which fires the career
+        # player's 'career_potm' event when the winner is somebody's own card.
+        s["potm_player_id"] = potm_pid
+        s["potm_owner_user_id"] = potm_owner_uid
+
         # Increment PlayerGameStats.potm
         if potm_pid and potm_owner_uid:
             _ses2 = get_session()

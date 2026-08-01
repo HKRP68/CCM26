@@ -45,6 +45,20 @@ def setUpModule():
     _ENGINE = engine
     Base.metadata.create_all(bind=engine)
 
+    # The wizard only ever offers faces that exist and are active, and
+    # create_career_player now rejects anything else — so the tests need a few
+    # real CareerFace rows before they can create a career player.
+    from database import get_session
+    from models import CareerFace
+    session = get_session()
+    try:
+        for slot in (1, 2, 3):
+            session.add(CareerFace(slot=slot, label=f"Face {slot}",
+                                   sort_order=slot, is_active=True))
+        session.commit()
+    finally:
+        session.close()
+
 
 def tearDownModule():
     try:
@@ -364,6 +378,109 @@ class CreationTests(unittest.TestCase):
             bat_hand="Right", bowl_hand="Right", bowl_style="Fast", face_slot=1)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "name_taken")
+
+    def test_a_face_slot_that_is_not_a_real_face_is_refused(self):
+        """An unknown slot would be stored and then render on face 1 silently."""
+        from services import career_service as cs
+        for slot in (99, 0, -1, None, "banana"):
+            result = cs.create_career_player(
+                self.session, self.user, name=f"Bad Face {slot}",
+                country="India", bat_hand="Right", bowl_hand="Right",
+                bowl_style="Fast", face_slot=slot)
+            self.assertFalse(result["ok"], f"slot={slot!r} should be refused")
+            self.assertEqual(result["error"], "bad_face")
+
+    def test_a_face_deactivated_mid_wizard_is_refused(self):
+        from services import career_service as cs
+        from services.career_face_service import set_face_fields
+
+        set_face_fields(self.session, 2, is_active=False)
+        self.session.flush()
+        try:
+            result = cs.create_career_player(
+                self.session, self.user, name=f"Gone Face {self.user.id}",
+                country="India", bat_hand="Right", bowl_hand="Right",
+                bowl_style="Fast", face_slot=2)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"], "bad_face")
+        finally:
+            set_face_fields(self.session, 2, is_active=True)
+            self.session.commit()
+
+    def test_a_full_roster_is_refused(self):
+        from config import MAX_ROSTER
+        from models import Player, UserRoster
+        from services import career_service as cs
+
+        for index in range(MAX_ROSTER):
+            player = Player(name=f"Filler {self.user.id}-{index}",
+                            version="Base card", rating=70, category="Batsman",
+                            country="India", bat_hand="Right",
+                            bowl_hand="Right", bowl_style="Fast")
+            self.session.add(player)
+            self.session.flush()
+            self.session.add(UserRoster(user_id=self.user.id,
+                                        player_id=player.id,
+                                        order_position=index + 1))
+        self.session.flush()
+
+        result = cs.create_career_player(
+            self.session, self.user, name=f"No Room {self.user.id}",
+            country="India", bat_hand="Right", bowl_hand="Right",
+            bowl_style="Fast", face_slot=1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "roster_full")
+
+    def test_the_roster_counter_is_derived_from_the_rows(self):
+        """A drifted counter must not be compounded by the new card."""
+        from models import Player, UserRoster
+        from services import career_service as cs
+
+        player = Player(name=f"Existing {self.user.id}", version="Base card",
+                        rating=70, category="Batsman", country="India",
+                        bat_hand="Right", bowl_hand="Right", bowl_style="Fast")
+        self.session.add(player)
+        self.session.flush()
+        self.session.add(UserRoster(user_id=self.user.id, player_id=player.id,
+                                    order_position=1))
+        self.user.roster_count = 17   # drifted
+        self.session.flush()
+
+        result = cs.create_career_player(
+            self.session, self.user, name=f"Counted {self.user.id}",
+            country="India", bat_hand="Right", bowl_hand="Right",
+            bowl_style="Fast", face_slot=1)
+        self.session.commit()
+        self.assertTrue(result["ok"], result.get("message"))
+        self.assertEqual(self.user.roster_count, 2)
+
+    def test_the_database_refuses_a_second_card_even_without_the_check(self):
+        """The partial unique index, not the pre-check, is the real guarantee.
+
+        Two concurrent /cmucareer taps can both pass ``get_career_player`` and
+        both reach the insert, so the index has to be what stops the second.
+        """
+        from sqlalchemy.exc import IntegrityError
+        from models import Player
+        from services import career_service as cs
+
+        first = cs.create_career_player(
+            self.session, self.user, name=f"Genuine {self.user.id}",
+            country="India", bat_hand="Right", bowl_hand="Right",
+            bowl_style="Fast", face_slot=1)
+        self.session.commit()
+        self.assertTrue(first["ok"], first.get("message"))
+
+        # Insert straight past the service-level check, as a racing session
+        # that read the roster a moment earlier effectively would.
+        self.session.add(Player(
+            name=f"Sneaky {self.user.id}", version=cs.CAREER_VERSION, rating=78,
+            category=cs.CAREER_CATEGORY, country="India", bat_hand="Right",
+            bowl_hand="Right", bowl_style="Fast", is_career=True,
+            career_owner_user_id=self.user.id, career_face="career_1"))
+        with self.assertRaises(IntegrityError):
+            self.session.flush()
+        self.session.rollback()
 
 
 if __name__ == "__main__":

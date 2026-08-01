@@ -3116,6 +3116,22 @@ function hapticNotif(type = 'success') {
   try { tg?.HapticFeedback?.notificationOccurred(type); } catch (e) {}
 }
 
+// Ask before something irreversible. window.confirm is unreliable inside the
+// Telegram Mini App webview — some clients suppress it outright, which returns
+// false and silently cancels the action — so use the native dialog when the
+// SDK offers it and only fall back to confirm() outside Telegram.
+function askConfirm(message) {
+  return new Promise((resolve) => {
+    try {
+      if (tg?.showConfirm) {
+        tg.showConfirm(message, (agreed) => resolve(!!agreed));
+        return;
+      }
+    } catch (e) {}
+    resolve(window.confirm(message));
+  });
+}
+
 // ════════════════ New-user onboarding ════════════════
 function setNativeSetupButton(show) {
   const btn = tg?.MainButton;
@@ -5824,15 +5840,22 @@ function renderCareer() {
   const p = d.player;
   const byKey = {};
   d.attributes.forEach(a => { byKey[a.key] = a; });
+  // Unknown keys are filtered out rather than passed on: careerAttrRow would
+  // get undefined, throw on a.maxed, and abort the whole render — leaving the
+  // Career screen stuck on its spinner.
   const group = (keys, title, icon) => `
     <div class="career-group">
       <div class="career-group-title">${icon} ${title}</div>
-      ${keys.map(k => careerAttrRow(byKey[k])).join('')}
+      ${(keys || []).filter(k => byKey[k]).map(k => careerAttrRow(byKey[k])).join('')}
     </div>`;
 
   const s = d.stats || {};
   const st = d.streak || {};
-  const questsDone = (d.quests || []).filter(q => q.completed).length;
+  // Only the career quests belong on this screen: the streak below counts
+  // those alone, so mixing in the ordinary weekly ones made "cleared this
+  // week" a number that had nothing to do with the jackpot it sits under.
+  const careerQuests = (d.quests || []).filter(q => q.career_only);
+  const questsDone = careerQuests.filter(q => q.completed).length;
 
   el.innerHTML = `
     <div class="career-hero">
@@ -5864,19 +5887,19 @@ function renderCareer() {
     ${group(d.bowl_attrs, 'Bowling', '🎳')}
 
     <div class="career-group">
-      <div class="career-group-title">🗓 Weekly quests</div>
+      <div class="career-group-title">📆 Career quests this week</div>
       <div class="career-note" style="margin-top:0;">
-        ${questsDone}/${(d.quests || []).length} cleared this week.
+        ${questsDone}/${careerQuests.length} cleared this week.
         Clear them all for <b>${st.weeks || 4}</b> weeks running to bank the
         <b>${st.bonus_gems || 100} 💎</b> jackpot — ${st.to_jackpot || 0} to go.
       </div>
-      ${(d.quests || []).length
-        ? d.quests.map(q => `
+      ${careerQuests.length
+        ? careerQuests.map(q => `
           <div class="career-quest ${q.completed ? 'done' : ''}">
             <span>${q.completed ? '✅' : '⏳'} ${escapeHtml(q.name)}</span>
             <span class="career-cost">${q.progress}/${q.target} · ${q.reward_gems} 💎</span>
           </div>`).join('')
-        : `<div class="career-quest"><span>No weekly quests assigned yet.</span></div>`}
+        : `<div class="career-quest"><span>No career quests assigned yet — open Quests to pick them up.</span></div>`}
       <button class="career-btn ghost" style="margin-top:.5rem;" onclick="navigate('quests')">Open Quests →</button>
     </div>
 
@@ -5907,7 +5930,13 @@ async function upgradeCareer(attr, steps) {
     if (!n) { toast('Not enough gems for even one point', 'error'); return; }
     let spend = 0, v = row.value;
     for (let i = 0; i < n; i++) { v += 1; spend += v; }
-    if (!confirm(`Raise ${row.label} from ${row.value} to ${v} for ${spend.toLocaleString()} 💎?`)) return;
+    // Hold the busy lock across the dialog too — it is asynchronous now, so
+    // without it a second tap could open a second dialog and spend twice.
+    careerBusy = true;
+    const agreed = await askConfirm(
+      `Raise ${row.label} from ${row.value} to ${v} for ${spend.toLocaleString()} 💎?`);
+    careerBusy = false;
+    if (!agreed) return;
     count = n;
   }
 
