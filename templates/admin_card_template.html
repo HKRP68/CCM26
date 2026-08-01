@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Card Generator{% endblock %}
-{% set variant_label_map = {'base': 'Base Card', 'star': 'Star Card', 'legend': 'Legend Card'} %}
-{% set variant_labels = variant_label_map.items() | list %}
+{# Three fixed rarity tabs plus one tab per Career Player face created below. #}
+{% set rarity_label_map = {'base': 'Base Card', 'star': 'Star Card', 'legend': 'Legend Card'} %}
+{% set variant_labels = [] %}
+{% for variant, label in rarity_label_map.items() %}{% set _ = variant_labels.append((variant, label)) %}{% endfor %}
+{% for face in career_faces %}{% set _ = variant_labels.append((face.variant, 'Career: ' ~ face.label)) %}{% endfor %}
+{% set face_by_variant = {} %}
+{% for face in career_faces %}{% set _ = face_by_variant.update({face.variant: face}) %}{% endfor %}
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
   <h2>🎴 Website Card Generator</h2>
@@ -52,16 +57,16 @@
   <div style="margin:0 0 1.5rem;">
     <label style="display:block;margin-bottom:.35rem;font-weight:600;">🔤 Optional Shared Font File</label>
     <input type="file" name="font_file" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
-    <small style="color:var(--muted);">TTF/OTF, max 5 MB — shared by all three rarities. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
+    <small style="color:var(--muted);">TTF/OTF, max 5 MB — the fallback for every card. Any card that needs a different typeface can upload its own on its own tab below. {% if has_font %}<span style="color:var(--ok,#00c9a7);">✓ Current custom font uploaded</span>{% else %}Uses a condensed fallback font until uploaded.{% endif %}</small>
     {% if has_font %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_font') }}" formmethod="post">Remove shared font file</button></div>{% endif %}
     <label style="display:block;margin-top:.8rem;"><input type="checkbox" name="show_portrait" {{ 'checked' if cfg.card_template_show_portrait else '' }}> Draw player-page cutout on website cards</label>
   </div>
 
-  <h3 style="margin:1.4rem 0 .4rem;font-size:1rem;">🖼️ Per-rarity cards</h3>
-  <p style="color:var(--muted);font-size:.8rem;margin:0;line-height:1.5;">Pick a rarity tab to edit that card only. Each tab holds its own blank 1536×1024 template <em>and</em> its own layout numbers, saved with its own button. If a rarity has no template uploaded, those players continue to the original auto-generated card instead of borrowing another rarity's design.</p>
-  <div class="card-tabs" role="tablist" aria-label="Card rarity templates">
+  <h3 style="margin:1.4rem 0 .4rem;font-size:1rem;">🖼️ Card designs</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0;line-height:1.5;">Pick a tab to edit that card only. Each tab holds its own blank 1536×1024 template <em>and</em> its own layout numbers and colours, saved with its own button. If a rarity has no template uploaded, those players continue to the original auto-generated card instead of borrowing another rarity's design. <strong>Career Player Card</strong> tabs are the faces offered by <code>/cmucareer</code> — add as many as you like below.</p>
+  <div class="card-tabs" role="tablist" aria-label="Card templates">
     {% for variant, label in variant_labels %}
-    <button type="button" class="card-tab {{ 'active' if variant == 'base' else '' }}" data-template-tab="{{ variant }}" onclick="selectTemplateTab('{{ variant }}')">{{ label }}{% if template_variants[variant].uploaded %}<span class="status-pill">✓ Uploaded</span>{% endif %}<span class="dirty-dot" title="Unsaved changes"></span></button>
+    <button type="button" class="card-tab {{ 'active' if variant == 'base' else '' }}" data-template-tab="{{ variant }}" onclick="selectTemplateTab('{{ variant }}')">{{ label }}{% if template_variants.get(variant) and template_variants[variant].uploaded %}<span class="status-pill">✓ Uploaded</span>{% endif %}<span class="dirty-dot" title="Unsaved changes"></span></button>
     {% endfor %}
   </div>
 
@@ -89,24 +94,49 @@
   {% macro vcheck(variant, name, label) -%}
   <label><input type="checkbox" name="{{ variant }}__{{ name }}" data-layout-variant="{{ variant }}" data-setting="{{ name }}" {{ 'checked' if variant_settings[variant][name] else '' }}> {{ label }}</label>
   {%- endmacro %}
+  {% macro vcolor(variant, name, label) -%}
+  <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">{{ label }}</label><input type="color" name="{{ variant }}__{{ name }}" value="{{ variant_settings[variant][name] }}" data-layout-variant="{{ variant }}" data-setting="{{ name }}" style="width:100%;height:2.2rem;padding:.15rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;"></div>
+  {%- endmacro %}
 
   {% for variant, label in variant_labels %}
   <div id="card-{{ variant }}" class="template-panel {{ 'active' if variant == 'base' else '' }}" data-variant="{{ variant }}">
+    {% set face = face_by_variant.get(variant) %}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;">
       <h4 style="margin:0;font-size:1rem;">{{ label }}</h4>
       <span class="dirty-note">● Unsaved changes on this card</span>
     </div>
 
+    {% if face %}
     <div class="layout-block" style="border-top:none;margin-top:.8rem;padding-top:.6rem;">
+      <h4>🎭 Face settings</h4>
+      <p class="hint">This blank card already contains the player's face and the “CAREER PLAYER” banner. The bot only fills the empty slots: name, category, OVR, batting power, bowling specs, flag + country, and the two style lines.
+        {% if face.in_use %}<br><strong>{{ face.in_use }}</strong> career player{{ 's' if face.in_use != 1 }} currently use{{ '' if face.in_use != 1 else 's' }} this face.{% endif %}</p>
+      <div class="num-grid">
+        <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Face name (shown on the button)</label><input type="text" name="label" form="faceForm{{ face.slot }}" value="{{ face.label }}" style="width:100%;"></div>
+        <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Order</label><input type="number" name="sort_order" form="faceForm{{ face.slot }}" value="{{ face.sort_order }}" style="width:100%;"></div>
+      </div>
+      <label style="display:block;margin-top:.7rem;"><input type="checkbox" name="is_active" form="faceForm{{ face.slot }}" {{ 'checked' if face.is_active else '' }}> Offer this face in /cmucareer</label>
+      <div style="margin-top:.7rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+        <button type="submit" class="btn btn-ghost btn-sm" form="faceForm{{ face.slot }}">💾 Save face settings</button>
+        <button type="submit" class="btn btn-ghost btn-sm" form="faceDeleteForm{{ face.slot }}"
+                onclick="return confirm('Delete {{ face.label }}? Career players wearing it fall back to the first face.');">🗑 Delete this face</button>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="layout-block" {% if not face %}style="border-top:none;margin-top:.8rem;padding-top:.6rem;"{% endif %}>
       <h4>🖼️ Blank template</h4>
-      <p class="hint">PNG/JPG/WebP at 1536×1024, max 5 MB. {% if template_variants[variant].uploaded %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} template uploaded</span>{% else %}Upload a template to enable website-generated {{ label }}s.{% endif %}</p>
+      <p class="hint">PNG/JPG/WebP at 1536×1024, max 5 MB. {% if template_variants.get(variant) and template_variants[variant].uploaded %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} template uploaded</span>{% else %}Upload a template to enable website-generated {{ label }}s.{% endif %}</p>
       <input type="file" name="template_file_{{ variant }}" accept=".png,.jpg,.jpeg,.webp" style="width:100%;">
-      {% if template_variants[variant].uploaded %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_image') }}" formmethod="post" name="variant" value="{{ variant }}">Remove {{ label }} template</button></div>{% endif %}
+      {% if template_variants.get(variant) and template_variants[variant].uploaded %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_image') }}" formmethod="post" name="variant" value="{{ variant }}">Remove {{ label }} template</button></div>{% endif %}
     </div>
 
     <div class="layout-block">
       <h4>🏏 Player image / cutout position</h4>
-      <p class="hint">Uses the image uploaded from Players → Edit Player → Player Image. Transparent PNG or WebP gives the best result.</p>
+      <p class="hint">{% if face %}Career faces have the portrait baked into the artwork, so the cutout is switched off — turn it on only if this face's blank card is empty where the player should be.{% else %}Uses the image uploaded from Players → Edit Player → Player Image. Transparent PNG or WebP gives the best result.{% endif %}</p>
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:.8rem;">
+        {{ vcheck(variant, 'show_portrait', 'Draw the player cutout on this card') }}
+      </div>
       <div class="num-grid">
         {{ vnum(variant, 'player_x', 'Player X') }}{{ vnum(variant, 'player_y', 'Player Y') }}
         {{ vnum(variant, 'player_w', 'Player Box Width') }}{{ vnum(variant, 'player_h', 'Player Box Height') }}
@@ -115,6 +145,26 @@
       <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.8rem;">
         {{ vcheck(variant, 'trim_transparent', 'Auto-trim transparent padding') }}
         {{ vcheck(variant, 'protect_bottom_box', 'Redraw bottom-right box above player') }}
+      </div>
+    </div>
+
+    <div class="layout-block">
+      <h4>🔤 Font for this card</h4>
+      <p class="hint">TTF/OTF, max 5 MB. Optional — leave empty and this card uses the shared font above.
+        {% if variant_fonts.get(variant) %}<span style="color:var(--ok,#00c9a7);">✓ {{ label }} has its own font</span>{% else %}Upload one to match this card's artwork without changing any other card.{% endif %}</p>
+      <input type="file" name="font_file_{{ variant }}" accept=".ttf,.otf,font/ttf,font/otf" style="width:100%;">
+      {% if variant_fonts.get(variant) %}<div style="margin-top:.65rem;"><button type="submit" class="btn btn-ghost btn-sm" formaction="{{ url_for('admin_card_template_remove_variant_font') }}" formmethod="post" name="variant" value="{{ variant }}">Use the shared font instead</button></div>{% endif %}
+    </div>
+
+    <div class="layout-block">
+      <h4>🎨 Text colours</h4>
+      <p class="hint">Each card picks its own colours, so dark artwork can use light text. These belong to the {{ label }} only.</p>
+      <div class="num-grid">
+        {{ vcolor(variant, 'name_color', 'Player name') }}{{ vcolor(variant, 'cat_color', 'Category') }}
+        {{ vcolor(variant, 'ovr_color', 'OVR') }}{{ vcolor(variant, 'bat_color', 'Batting power') }}
+        {{ vcolor(variant, 'bowl_color', 'Bowling specs') }}{{ vcolor(variant, 'country_color', 'Country') }}
+        {{ vcolor(variant, 'bat_style_color', 'Batting style') }}{{ vcolor(variant, 'bowl_style_color', 'Bowling style') }}
+        {{ vcolor(variant, 'line_color', 'Divider line') }}
       </div>
     </div>
 
@@ -242,8 +292,52 @@
       </div>
     </div>
   </div>
-  <button type="submit" class="btn btn-primary">💾 Save everything (all three cards + stats cards)</button>
+  <button type="submit" class="btn btn-primary">💾 Save everything (every card + stats cards)</button>
 </form>
+
+{# Face management posts to its own routes. These sit outside the big form —
+   HTML forms cannot nest — and the inputs above bind to them via form="…". #}
+{% for face in career_faces %}
+<form id="faceForm{{ face.slot }}" method="POST" action="{{ url_for('admin_career_face_update') }}" style="display:none;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="slot" value="{{ face.slot }}">
+</form>
+<form id="faceDeleteForm{{ face.slot }}" method="POST" action="{{ url_for('admin_career_face_remove') }}" style="display:none;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="slot" value="{{ face.slot }}">
+</form>
+{% endfor %}
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
+  <h3 style="margin:0 0 .5rem;font-size:1rem;">🎭 Career Player Card — faces</h3>
+  <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">
+    Upload one <strong>complete card with the face already on it</strong> per design — the same 1536×1024 layout as the other cards, with the name, OVR, batting power, bowling specs, flag/country and style slots left empty. Each face becomes its own tab above with independent text positions, colours and a save button. Players choose between them in <code>/cmucareer</code>.
+    {% if not career_faces %}<br><strong>No faces yet</strong> — add one below before players can create a Career Player.{% endif %}
+  </p>
+  <form method="POST" action="{{ url_for('admin_career_face_add') }}" enctype="multipart/form-data" style="display:flex;gap:.65rem;align-items:end;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Face name</label><input type="text" name="label" placeholder="Face {{ career_faces|length + 1 }}" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);"></div>
+    <div><label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Blank card with the face</label><input type="file" name="template_file" accept=".png,.jpg,.jpeg,.webp"></div>
+    <button type="submit" class="btn btn-primary">➕ Add face</button>
+  </form>
+  {% if career_faces %}
+  <table style="width:100%;margin-top:1rem;border-collapse:collapse;font-size:.85rem;">
+    <thead><tr style="text-align:left;color:var(--muted);"><th style="padding:.4rem 0;">Face</th><th>Artwork</th><th>Offered</th><th>In use</th><th></th></tr></thead>
+    <tbody>
+      {% for face in career_faces %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:.5rem 0;"><strong>{{ face.label }}</strong> <span style="color:var(--muted);">(slot {{ face.slot }})</span></td>
+        <td>{% if template_variants.get(face.variant) and template_variants[face.variant].uploaded %}<span style="color:var(--ok,#00c9a7);">✓ uploaded</span>{% else %}<span style="color:#f5a623;">missing</span>{% endif %}</td>
+        <td>{{ '✅' if face.is_active else '—' }}</td>
+        <td>{{ face.in_use }}</td>
+        <td style="text-align:right;"><a href="#card-{{ face.variant }}" onclick="selectTemplateTab('{{ face.variant }}')" class="btn btn-ghost btn-sm">Edit layout</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p style="color:var(--muted);font-size:.78rem;margin:.8rem 0 0;line-height:1.5;">A face is only offered in <code>/cmucareer</code> once it is marked <em>Offered</em> <strong>and</strong> has its artwork uploaded — so a half-finished design never reaches players.</p>
+  {% endif %}
+</div>
 
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .5rem;font-size:1rem;">🏏 Global player fallback PNG</h3>
@@ -283,9 +377,16 @@
   {% else %}<p style="color:var(--muted);font-size:.8rem;margin:1rem 0 0;">No country PNGs uploaded yet. India keeps the built-in fallback until you upload one.</p>{% endif %}
 </div>
 <script>
-const CARD_VARIANT_LABELS = {{ variant_label_map | tojson }};
+// Built from the three rarities plus every Career Player face, so a face added
+// on this page is a first-class tab with its own dirty state and preview.
+const CARD_VARIANT_LABELS = {{ dict(variant_labels) | tojson }};
 const CARD_VARIANTS = Object.keys(CARD_VARIANT_LABELS);
-const DEFAULT_LAYOUT = {{ default_settings | tojson }};
+const CAREER_VARIANTS = {{ (career_faces | map(attribute='variant') | list) | tojson }};
+const DEFAULT_LAYOUT = Object.assign({}, {{ default_settings | tojson }},
+                                     {{ default_colors | tojson }});
+const CAREER_DEFAULT_LAYOUT = Object.assign({}, {{ career_colors | tojson }},
+                                            {{ career_layout | tojson }},
+                                            { show_portrait: false });
 let activeVariant = 'base';
 const savedLayout = {};
 
@@ -332,7 +433,12 @@ function copyLayoutInto(variant) {
   schedulePreview();
 }
 function resetLayout(variant) {
-  writeLayout(variant, DEFAULT_LAYOUT);
+  // A Career face resets to the career defaults (light text, cutout off, flag
+  // clear of the stat boxes) rather than the base card's dark-on-light palette.
+  const defaults = CAREER_VARIANTS.includes(variant)
+    ? Object.assign({}, DEFAULT_LAYOUT, CAREER_DEFAULT_LAYOUT)
+    : DEFAULT_LAYOUT;
+  writeLayout(variant, defaults);
   markDirty();
   schedulePreview();
 }
@@ -354,12 +460,14 @@ function refreshPreview() {
     global_player: document.getElementById('previewGlobalPlayer').checked ? '1' : '0',
     t: Date.now().toString(),
   });
-  // Only the active rarity's controls are previewed, un-prefixed for the renderer.
+  // The global cutout toggle is the fallback; the active card's own checkbox
+  // wins, so a Career face previews without a cutout over its baked-in art.
+  const globalPortrait = document.querySelector('#cardTemplateForm [name="show_portrait"]');
+  if (globalPortrait) params.set('show_portrait', globalPortrait.checked ? '1' : '0');
+  // Only the active card's controls are previewed, un-prefixed for the renderer.
   panelInputs(activeVariant).forEach(input => {
     params.set(input.dataset.setting, input.type === 'checkbox' ? (input.checked ? '1' : '0') : input.value);
   });
-  const showPortrait = document.querySelector('[name="show_portrait"]');
-  if (showPortrait) params.set('show_portrait', showPortrait.checked ? '1' : '0');
   image.src = `/card-template/preview/${id}?${params.toString()}`;
 }
 document.addEventListener('DOMContentLoaded', () => {

@@ -33,13 +33,23 @@ Per-match event_keys (added for the v2 quest list):
   'runs_in_innings'       — fired with N once at match end (single-match)
   'hattrick'              — fired once if at least one bowler took a hat-trick
 
+Career Player event_keys (fired only for the user's own /cmucareer card, and
+only ever consumed by quests flagged career_only):
+  'career_match_played'   — the career player featured in a completed match
+  'career_runs_scored'    — runs the career player made (cumulative)
+  'career_wickets_taken'  — wickets the career player took (cumulative)
+  'career_fifty'          — career player passed 50 in a match
+  'career_hundred'        — career player passed 100 in a match
+  'career_sixes_hit'      — sixes the career player hit (cumulative)
+  'career_potm'           — career player was Player of the Match
+
 Manual event_key:
   'manual' — quest is admin-only progressed (e.g. yorker counts, super overs).
              Admin can bump UserQuestProgress.progress directly via the website."""
 
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 
 from models import Quest, UserQuestProgress, User
@@ -48,13 +58,23 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DAILY_DEFAULT_REWARD_POINTS = 5
+WEEKLY_DEFAULT_REWARD_POINTS = 8
 MONTHLY_DEFAULT_REWARD_POINTS = 10
 
+# Every quest cadence the system understands.
+QUEST_TYPES = ("daily", "weekly", "monthly")
 
 # How many quests are randomly assigned per period per user.
 # These are the only quests that count for tracking + appear in /mq.
 DAILY_QUESTS_PER_USER = 3
+WEEKLY_QUESTS_PER_USER = 3
 MONTHLY_QUESTS_PER_USER = 5
+
+QUESTS_PER_USER = {
+    "daily": DAILY_QUESTS_PER_USER,
+    "weekly": WEEKLY_QUESTS_PER_USER,
+    "monthly": MONTHLY_QUESTS_PER_USER,
+}
 
 
 def _claim_silently(session, user, uqp, q):
@@ -75,6 +95,80 @@ def _claim_silently(session, user, uqp, q):
     }
 
 
+def _user_has_career(session, user_id):
+    """True when the user owns a Career Player (/cmucareer)."""
+    try:
+        from services.career_service import get_career_player
+        return get_career_player(session, user_id) is not None
+    except Exception:
+        logger.exception("career player lookup failed")
+        return False
+
+
+def _evaluate_career_streak(session, user, current_period, now=None):
+    """Judge the week that just closed and update the user's career streak.
+
+    A week counts only if the user was assigned at least one career quest and
+    completed *every* one of them. Miss one and the streak resets to zero.
+    Every ``career_streak_weeks`` consecutive weeks pays a gem jackpot.
+
+    Idempotent: ``career_weekly_last_period`` records the last week already
+    judged, so repeated calls in the same week change nothing.
+    """
+    now = now or datetime.utcnow()
+    previous_period = weekly_period_key(now - timedelta(days=7))
+    if (user.career_weekly_last_period or "") >= previous_period:
+        return None
+    user.career_weekly_last_period = previous_period
+
+    rows = (session.query(UserQuestProgress, Quest)
+            .join(Quest, Quest.id == UserQuestProgress.quest_id)
+            .filter(UserQuestProgress.user_id == user.id,
+                    UserQuestProgress.assigned == True,
+                    UserQuestProgress.period_key == previous_period,
+                    Quest.quest_type == "weekly",
+                    Quest.career_only == True)
+            .all())
+    if not rows:
+        # Nothing to judge — a user who had no career quests that week (no
+        # career player yet, say) neither builds nor loses a streak.
+        return None
+
+    cleared = all(uqp.completed for uqp, _ in rows)
+    if not cleared:
+        had = user.career_weekly_streak or 0
+        user.career_weekly_streak = 0
+        return {"cleared": False, "streak": 0, "lost": had, "bonus": 0}
+
+    streak = (user.career_weekly_streak or 0) + 1
+    user.career_weekly_streak = streak
+    user.career_weekly_best_streak = max(user.career_weekly_best_streak or 0, streak)
+
+    try:
+        from services.config_service import get_config
+        cfg = get_config(session)
+        weeks = int(cfg.get("career_streak_weeks") or 4)
+        bonus_gems = int(cfg.get("career_streak_bonus_gems") or 100)
+    except Exception:
+        logger.exception("career streak config unavailable; using defaults")
+        weeks, bonus_gems = 4, 100
+
+    bonus = 0
+    if weeks > 0 and streak % weeks == 0 and bonus_gems > 0:
+        bonus = bonus_gems
+        user.total_gems = (user.total_gems or 0) + bonus
+        try:
+            from services.activity_service import log_activity
+            log_activity(session, user.id, "career_streak",
+                         f"{streak}-week Career quest streak — {bonus} gem jackpot",
+                         gems_change=bonus)
+        except Exception:
+            logger.exception("career streak activity log failed")
+
+    return {"cleared": True, "streak": streak, "lost": 0, "bonus": bonus,
+            "weeks": weeks}
+
+
 def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     """Make sure the user has a randomly-assigned set of quests for the current period.
 
@@ -91,8 +185,7 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     Returns: dict {assigned: list of Quest, auto_claimed: list of reward dicts}
     """
     if max_count is None:
-        max_count = (DAILY_QUESTS_PER_USER if quest_type == "daily"
-                     else MONTHLY_QUESTS_PER_USER)
+        max_count = QUESTS_PER_USER.get(quest_type, MONTHLY_QUESTS_PER_USER)
 
     now = datetime.utcnow()
     current_period = period_key_for(quest_type, now)
@@ -100,6 +193,9 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     user = session.query(User).get(user_id)
     if not user:
         return {"assigned": [], "auto_claimed": []}
+
+    # Career quests only make sense for users who have a Career Player.
+    has_career = _user_has_career(session, user_id)
 
     # Have we already assigned for the current period?
     already_assigned = (session.query(UserQuestProgress)
@@ -118,6 +214,8 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
                               Quest.is_active == True,
                               Quest.always_assign == True)
                       .all())
+        pinned_now = [q for q in pinned_now
+                      if has_career or not getattr(q, "career_only", False)]
         newly_pinned = []
         for q in pinned_now:
             exists = (session.query(UserQuestProgress)
@@ -154,13 +252,24 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
         if rewards:
             auto_claimed.append(rewards)
 
+    # ── Career weekly streak ──
+    # The week that just closed is now final, so judge it before handing out a
+    # new set. Doing it here means no cron, and career_weekly_last_period keeps
+    # it to exactly once per user per week.
+    streak = None
+    if quest_type == "weekly":
+        streak = _evaluate_career_streak(session, user, current_period, now)
+
     # ── Pick the new random set ──
     pool = (session.query(Quest)
             .filter(Quest.quest_type == quest_type,
                     Quest.is_active == True)
             .all())
+    pool = [q for q in pool
+            if has_career or not getattr(q, "career_only", False)]
     if not pool:
-        return {"assigned": [], "auto_claimed": auto_claimed}
+        return {"assigned": [], "auto_claimed": auto_claimed,
+                "career_streak": streak}
 
     # Pinned quests (always_assign=True) are ALWAYS included for every user.
     # They don't consume a random slot — they're added on top.
@@ -191,7 +300,18 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
         assigned_quests.append(q)
 
     session.flush()
-    return {"assigned": assigned_quests, "auto_claimed": auto_claimed}
+    return {"assigned": assigned_quests, "auto_claimed": auto_claimed,
+            "career_streak": streak}
+
+
+def weekly_period_key(now=None):
+    """ISO week key ('YYYY-Wnn') for the current week in UTC.
+
+    ISO weeks start on Monday, so weekly quests roll over at Monday 00:00 UTC.
+    Like every other period key this is evaluated lazily on read — there is no
+    cron; a user's first quest read in a new week rolls them over.
+    """
+    return (now or datetime.utcnow()).strftime("%G-W%V")
 
 
 def daily_period_key(now=None):
@@ -207,6 +327,8 @@ def monthly_period_key(now=None):
 def period_key_for(quest_type, now=None):
     if quest_type == "daily":
         return daily_period_key(now)
+    if quest_type == "weekly":
+        return weekly_period_key(now)
     return monthly_period_key(now)
 
 
@@ -458,6 +580,19 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     user_match_not_outs = 0
     cleanest_econ = None
     had_clean_spell = False
+    # Career Player totals, accumulated alongside the squad-wide ones in the
+    # same pass — the loop already resolves each XI slot to a UserRoster row,
+    # so recognising the career card costs one extra id lookup, not a query.
+    career_player_id = None
+    try:
+        from services.career_service import get_career_player
+        career = get_career_player(session, uid)
+        career_player_id = career.id if career else None
+    except Exception:
+        logger.exception("career player lookup failed for quest tracking")
+    career_runs = career_wickets = career_sixes = 0
+    career_fifties = career_hundreds = 0
+    career_played = False
 
     for xi_key, stats_key, is_bat in [
         ("inn1_bat_xi", "inn1_bat_stats", True),
@@ -481,6 +616,20 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
             ur = session.query(UserRoster).get(rid)
             if not ur or ur.user_id != uid:
                 continue
+            is_career_slot = (career_player_id is not None
+                              and ur.player_id == career_player_id)
+            if is_career_slot:
+                career_played = True
+                if is_bat:
+                    runs_here = pst.get("runs", 0)
+                    career_runs += runs_here
+                    career_sixes += pst.get("sixes", 0)
+                    if runs_here >= 100:
+                        career_hundreds += 1
+                    elif runs_here >= 50:
+                        career_fifties += 1
+                else:
+                    career_wickets += pst.get("wickets", 0)
             if is_bat:
                 r = pst.get("runs", 0)
                 balls = pst.get("balls", 0)
@@ -536,6 +685,21 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
         safe_track(session, uid, "maiden_over", maidens_total)
     for _ in range(user_match_not_outs):
         safe_track(session, uid, "not_out_innings", 1)
+
+    # Career Player events — only fired when the user's own career card
+    # actually featured, and only ever consumed by career_only quests.
+    if career_played:
+        safe_track(session, uid, "career_match_played", 1)
+        if career_runs > 0:
+            safe_track(session, uid, "career_runs_scored", career_runs)
+        if career_wickets > 0:
+            safe_track(session, uid, "career_wickets_taken", career_wickets)
+        if career_sixes > 0:
+            safe_track(session, uid, "career_sixes_hit", career_sixes)
+        for _ in range(career_fifties):
+            safe_track(session, uid, "career_fifty", 1)
+        for _ in range(career_hundreds):
+            safe_track(session, uid, "career_hundred", 1)
 
     # Single-match max events
     if max_runs_in_innings > 0:

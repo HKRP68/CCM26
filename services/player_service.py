@@ -5,11 +5,26 @@ fetches the single chosen ORM row by ID. Result: massive egress reduction.
 """
 
 import random
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from models import Player
 from config import CLAIM_RARITY, get_buy_value, get_sell_value
+
+
+def not_career(query):
+    """Exclude Career Player cards from a shared-pool or browse query.
+
+    A career card (/cmucareer) is a normal ``players`` row owned by exactly one
+    user, so without this filter it could be claimed, packed, marketed or picked
+    for a bot XI and end up in somebody else's squad. Apply it anywhere players
+    are drawn at random or listed for everyone.
+
+    ``is_career`` is NULL on rows written before the column existed, so match
+    those too rather than relying on the backfill alone.
+    """
+    return query.filter(or_(Player.is_career.is_(False),
+                            Player.is_career.is_(None)))
 
 
 def get_random_player_by_rating_range(session: Session, low: int, high: int) -> Player | None:
@@ -142,10 +157,10 @@ def get_players_for_debut(session: Session) -> list[Player]:
     seen_ids: set[int] = set()
 
     def pick_one(low: int, high: int, category: str | None = None) -> Player | None:
-        query = session.query(Player).filter(
+        query = not_career(session.query(Player).filter(
             and_(Player.rating >= low, Player.rating <= high,
                  Player.is_active == True, ~Player.id.in_(seen_ids))
-        )
+        ))
         if category:
             query = query.filter(Player.category == category)
         pool = query.all()

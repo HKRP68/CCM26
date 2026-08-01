@@ -40,6 +40,7 @@
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Type *</label>
       <select name="quest_type" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
         <option value="daily" {% if quest and quest.quest_type == 'daily' %}selected{% endif %}>📅 Daily (resets every 24h)</option>
+        <option value="weekly" {% if quest and quest.quest_type == 'weekly' %}selected{% endif %}>🗓 Weekly (resets Monday)</option>
         <option value="monthly" {% if quest and quest.quest_type == 'monthly' %}selected{% endif %}>🗓️ Monthly (resets every 30d)</option>
       </select>
     </div>
@@ -94,13 +95,25 @@
              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
     </div>
   </div>
-  <small style="color:var(--muted);">Recommended: <strong>5 points</strong> for daily quests, <strong>10 points</strong> for monthly.</small>
+  <small style="color:var(--muted);">Recommended: <strong>5 points</strong> for daily quests, <strong>8</strong> for weekly, <strong>10 points</strong> for monthly.</small>
 
   <div style="margin:1.5rem 0 1rem; padding:.6rem; background:var(--bg); border-radius:6px;">
-    <label style="font-size:.95rem;">
+    <label style="font-size:.95rem;display:block;">
       <input type="checkbox" name="is_active" {% if not quest or quest.is_active %}checked{% endif %}>
       Active (users will see this quest)
     </label>
+    <label style="font-size:.95rem;display:block;margin-top:.5rem;">
+      <input type="checkbox" name="career_only" {% if quest and quest.career_only %}checked{% endif %}>
+      Career Player quest — only assigned to users who have a Career Player
+    </label>
+    <small style="color:var(--muted);display:block;margin-top:.4rem;line-height:1.5;">
+      Career quests use the <code>career_*</code> event keys
+      (<code>career_match_played</code>, <code>career_runs_scored</code>,
+      <code>career_wickets_taken</code>, <code>career_fifty</code>,
+      <code>career_hundred</code>, <code>career_sixes_hit</code>), which only
+      fire for the player's own <code>/cmucareer</code> card. Clearing every
+      career weekly quest builds the streak that pays the gem jackpot.
+    </small>
   </div>
 
   <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">

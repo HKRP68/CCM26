@@ -24,6 +24,8 @@ from sqlalchemy import func
 
 from models import Pack, PackPurchase, UnopenedPack, Player, User, UserRoster
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 
@@ -186,7 +188,7 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
         # Case-insensitive match
         from sqlalchemy import func as _func
         lowered = [v.lower() for v in versions]
-        pool = (session.query(Player)
+        pool = (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         _func.lower(Player.version).in_(lowered))
                 .all())
@@ -211,14 +213,14 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
             pack.main_min_rating, pack.main_max_rating, pack.main_weights_json,
         )
         # Try exact rating first
-        pool = (session.query(Player)
+        pool = (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         Player.rating == rating,
                         _func.lower(Player.version).in_(lowered))
                 .all())
         if not pool:
             # Widen to full band
-            pool = (session.query(Player)
+            pool = (not_career(session.query(Player))
                     .filter(Player.is_active == True,
                             Player.rating.between(pack.main_min_rating, pack.main_max_rating),
                             _func.lower(Player.version).in_(lowered))
@@ -253,13 +255,13 @@ def _pick_base_at_rating(session, rating, *, exclude_player_ids=None,
     exclude = set(exclude_player_ids or [])
     owned = set(user_owned_base_ids or [])
 
-    base_q = (session.query(Player)
+    base_q = (not_career(session.query(Player))
               .filter(Player.is_active == True,
                       Player.parent_player_id.is_(None),
                       Player.rating == rating))
     pool = [p for p in base_q.all() if p.id not in exclude]
     if not pool:
-        widened = (session.query(Player)
+        widened = (not_career(session.query(Player))
                    .filter(Player.is_active == True,
                            Player.parent_player_id.is_(None),
                            Player.rating.between(rating - 1, rating + 1))
@@ -578,7 +580,7 @@ def count_main_pool(session, pack):
             pass
 
     if mode == "rating":
-        return (session.query(Player)
+        return (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         Player.parent_player_id.is_(None),
                         Player.rating.between(pack.main_min_rating, pack.main_max_rating))
@@ -586,14 +588,14 @@ def count_main_pool(session, pack):
     if mode == "version":
         if not versions: return 0
         from sqlalchemy import func as _func
-        return (session.query(Player)
+        return (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         _func.lower(Player.version).in_(versions))
                 .count())
     if mode == "both":
         if not versions: return 0
         from sqlalchemy import func as _func
-        return (session.query(Player)
+        return (not_career(session.query(Player))
                 .filter(Player.is_active == True,
                         Player.rating.between(pack.main_min_rating, pack.main_max_rating),
                         _func.lower(Player.version).in_(versions))
@@ -603,7 +605,7 @@ def count_main_pool(session, pack):
 
 def count_bonus_pool(session, pack):
     """Players matching the bonus rating range (base cards only)."""
-    return (session.query(Player)
+    return (not_career(session.query(Player))
             .filter(Player.is_active == True,
                     Player.parent_player_id.is_(None),
                     Player.rating.between(pack.bonus_min_rating, pack.bonus_max_rating))

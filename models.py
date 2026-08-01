@@ -80,6 +80,14 @@ class User(Base):
     subscription_tier = Column(String(20), default="none", nullable=False)
     subscription_expires_at = Column(DateTime, nullable=True)
     subscription_activated_at = Column(DateTime, nullable=True)
+    # ── Career Player weekly-quest streak (see services/career_service.py) ──
+    # Consecutive ISO weeks in which the user completed EVERY career weekly quest
+    # assigned to them. Evaluated lazily once per week at quest rollover;
+    # career_weekly_last_period is the last week already judged, which is what
+    # makes that evaluation idempotent.
+    career_weekly_streak = Column(Integer, default=0, nullable=False)
+    career_weekly_best_streak = Column(Integer, default=0, nullable=False)
+    career_weekly_last_period = Column(String(10), nullable=True)  # 'YYYY-Wnn'
     # Ban / disable — banned users are refused by the bot's middleware
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)
@@ -129,6 +137,31 @@ class Player(Base):
     # the Pillow re-render + photo re-upload. Distinct from card_file_id above;
     # cleared whenever the player or the card template changes.
     gen_card_file_id = Column(String(200), nullable=True)
+    # ── Career Player ──────────────────────────────────────────────────
+    # A career card belongs to exactly one user (/cmucareer). It is a normal
+    # players row so it plays, scores and renders like any other card, but it
+    # must never be dealt from a shared pool, sold or traded — see
+    # services/career_service.py and services/player_service.not_career().
+    is_career = Column(Boolean, default=False, nullable=False, index=True)
+    career_owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    career_face = Column(String(30), nullable=True)  # card template variant, e.g. 'career_1'
+    # Honoured dynamically by services/rating_matcher_service.is_player_non_tradable,
+    # which already probes for this attribute — setting it excludes the card from
+    # every rating-matched trade path.
+    non_tradable = Column(Boolean, default=False, nullable=False)
+    # The ten career attributes. All start at CAREER_START (78) so a fresh career
+    # player is exactly 78 Bat / 78 Bowl / 78 OVR; each is upgraded with gems and
+    # the three ratings above are recomputed from them.
+    attr_technique = Column(Integer, default=78, nullable=False)
+    attr_power = Column(Integer, default=78, nullable=False)
+    attr_timing = Column(Integer, default=78, nullable=False)
+    attr_footwork = Column(Integer, default=78, nullable=False)
+    attr_composure = Column(Integer, default=78, nullable=False)
+    attr_pace = Column(Integer, default=78, nullable=False)
+    attr_accuracy = Column(Integer, default=78, nullable=False)
+    attr_swing = Column(Integer, default=78, nullable=False)
+    attr_stamina = Column(Integer, default=78, nullable=False)
+    attr_variation = Column(Integer, default=78, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -575,7 +608,7 @@ class Quest(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), nullable=False)
     description = Column(String(300), nullable=False)
-    quest_type = Column(String(20), nullable=False)   # 'daily' or 'monthly'
+    quest_type = Column(String(20), nullable=False)   # 'daily', 'weekly' or 'monthly'
     event_key = Column(String(50), nullable=False)
     target_count = Column(Integer, default=1, nullable=False)
     reward_points = Column(Integer, default=5, nullable=False)
@@ -587,6 +620,10 @@ class Quest(Base):
     # When True, this quest is assigned to EVERY user each period (in addition
     # to their random picks) — used for pinned quests like "watch N ads daily".
     always_assign = Column(Boolean, default=False, nullable=False)
+    # When True, the quest tracks the user's Career Player (/cmucareer) and is
+    # only assigned to users who have one. Career quests fire the 'career_*'
+    # event keys — see services/quest_service.track_user_match_quests.
+    career_only = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -734,6 +771,86 @@ class CMUShopImage(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(String(100), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CAREER PLAYER — website-managed assets and name pool for /cmucareer
+# ══════════════════════════════════════════════════════════════════════
+
+class CareerFace(Base):
+    """One selectable face in the /cmucareer creation wizard.
+
+    Each face is a COMPLETE blank card: the portrait and the "CAREER PLAYER"
+    banner are baked into the uploaded artwork, and the card generator only
+    fills the empty text slots (name, category, OVR, batting power, bowling
+    specs, flag + country, batting/bowling style).
+
+    A face therefore *is* a card-template variant, keyed ``career_<slot>``, with
+    its own blank image and its own independently tunable text layout on the
+    website — see services/card_template_service.py.
+    """
+    __tablename__ = "career_faces"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # 1-based; maps to the card template variant key f"career_{slot}" and the
+    # template file data/card_templates/template_career_<slot>.<ext>.
+    slot = Column(Integer, unique=True, nullable=False)
+    label = Column(String(60), nullable=True)             # "Face 1"
+    # Path on disk of the blank card template for this face.
+    template_path = Column(String(300), nullable=True)
+    # Telegram file_id of the photo shown while browsing faces in the wizard.
+    # Set after upload to the storage channel, exactly like CMUShopImage.
+    preview_file_id = Column(String(200), nullable=True, index=True)
+    sort_order = Column(Integer, default=0, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by = Column(String(100), nullable=True)
+
+
+class CareerStepImage(Base):
+    """The website-managed photo shown on one step of the /cmucareer wizard.
+
+    Every wizard step is a photo message with buttons underneath; admins upload
+    the artwork per step from the website. Durable across redeploys via the
+    Telegram storage-channel file_id, exactly like CMUShopImage.
+    """
+    __tablename__ = "career_step_images"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # 'intro' | 'country' | 'initial' | 'surname' | 'bat_hand' | 'bowl_hand'
+    # | 'bowl_type' | 'face' | 'confirm'
+    step_key = Column(String(30), unique=True, nullable=False)
+    image_path = Column(String(300), nullable=True)
+    tg_file_id = Column(String(200), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by = Column(String(100), nullable=True)
+
+
+class CareerNamePool(Base):
+    """One first name or surname available to career players of one country.
+
+    Seeded from data/players.json by seed_career_names.py and editable on the
+    website. The wizard combines a first name starting with the chosen initial
+    and a surname starting with the chosen surname letter, and only accepts a
+    combination that no existing player already uses.
+    """
+    __tablename__ = "career_name_pool"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    country = Column(String(60), nullable=False, index=True)
+    name_kind = Column(String(10), nullable=False)        # 'first' | 'surname'
+    value = Column(String(60), nullable=False)
+    # First character upper-cased, stored so the wizard can offer only the
+    # letters that actually have names behind them without scanning every row.
+    letter = Column(String(1), nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_career_name_lookup", "country", "name_kind", "letter"),
+        Index("ix_career_name_unique", "country", "name_kind", "value", unique=True),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -923,6 +1040,13 @@ class GameConfig(Base):
     card_template_settings = Column(Text, nullable=True)
     # Shared caption shown under every /CMUshop image (same for all images).
     cmushop_caption = Column(Text, nullable=True)
+    # ── Career Player (/cmucareer) ──
+    # Gems paid for each career weekly quest, and the streak jackpot: clearing
+    # every career weekly quest for career_streak_weeks consecutive weeks pays
+    # career_streak_bonus_gems.
+    career_quest_gems = Column(Integer, default=15, nullable=False)
+    career_streak_weeks = Column(Integer, default=4, nullable=False)
+    career_streak_bonus_gems = Column(Integer, default=100, nullable=False)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

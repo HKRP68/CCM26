@@ -132,6 +132,18 @@ def _do_release(session, user, entries):
     from models import Trade
     from services.trait_service import return_traits_to_inventory
 
+    # Career Players are personal and permanent. This is the one choke point
+    # every release path funnels through (chat, callbacks, multi-release and the
+    # Mini App), so refusing here means no route can sell one by accident.
+    if any(getattr(p, "is_career", False) for _, p in entries):
+        from services.career_service import CAREER_LOCKED_MESSAGE
+        return {
+            "success": False, "error": "career_player",
+            "message": CAREER_LOCKED_MESSAGE, "released": [],
+            "total_coins": 0, "new_balance": user.total_coins,
+            "new_count": user.roster_count,
+        }
+
     total_coins = 0
     released = []
     captain_released = False
@@ -329,6 +341,17 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ No match for '<code>{arg}</code>'", parse_mode="HTML")
             return
 
+        # Drop any Career Player from the candidates and say so, rather than
+        # offering a confirm button that would be refused. Positions are NOT
+        # renumbered here — /pxi numbering has to keep matching what the user
+        # typed, so only the career card itself is filtered out.
+        career_hit = any(getattr(p, "is_career", False) for _, p in matches)
+        matches = [(e, p) for e, p in matches if not getattr(p, "is_career", False)]
+        if career_hit and not matches:
+            from services.career_service import CAREER_LOCKED_MESSAGE
+            await update.message.reply_text(CAREER_LOCKED_MESSAGE, parse_mode="HTML")
+            return
+
         # Multiple matches — let user pick
         if len(matches) > 1:
             # Show up to 10 choices
@@ -432,6 +455,14 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         result = _do_release(session, user, [(entry, player)])
+        if not result.get("success"):
+            session.rollback()
+            release(key)  # nothing was sold — let the user act again
+            try:
+                await query.edit_message_text(result["message"], parse_mode="HTML")
+            except Exception:
+                pass
+            return
         session.commit()
 
         r = result["released"][0]
@@ -545,6 +576,18 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("❌ Nothing to release in that range.")
             return
 
+        # Refuse the whole range rather than quietly selling everything around a
+        # Career Player: the user asked for positions N→M and should re-pick.
+        career_hit = next((p for _, p in to_release
+                           if getattr(p, "is_career", False)), None)
+        if career_hit is not None:
+            from services.career_service import CAREER_LOCKED_MESSAGE
+            await update.message.reply_text(
+                f"{CAREER_LOCKED_MESSAGE}\n\n<b>{career_hit.name}</b> is in "
+                f"positions {pos_from}→{pos_to}. Choose a range that skips it.",
+                parse_mode="HTML")
+            return
+
         total_sell = 0
         lines = []
         captain_in_range = False
@@ -656,6 +699,16 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
             return
 
         result = _do_release(session, user, to_release)
+        if not result.get("success"):
+            session.rollback()
+            release(key)
+            try:
+                await query.edit_message_text(
+                    result["message"] + "\n\nPick a range that skips it.",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            return
         session.commit()
 
         released = result["released"]

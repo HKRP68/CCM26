@@ -582,6 +582,27 @@ def _migrate_add_columns():
     # has never arranged one, so auto-built line-ups sort by batting rating.
     _try_add("users", "batting_order_set_at", "TIMESTAMP")
 
+    # ── Career Player (/cmucareer) ──
+    # A career card is a normal players row owned by exactly one user. is_career
+    # keeps it out of every shared pool; non_tradable is read dynamically by
+    # services/rating_matcher_service to bar it from trades.
+    _try_add("players", "is_career", "BOOLEAN DEFAULT FALSE")
+    _try_add("players", "career_owner_user_id", "INTEGER")
+    _try_add("players", "career_face", "VARCHAR(30)")
+    _try_add("players", "non_tradable", "BOOLEAN DEFAULT FALSE")
+    for _attr in ("technique", "power", "timing", "footwork", "composure",
+                  "pace", "accuracy", "swing", "stamina", "variation"):
+        _try_add("players", f"attr_{_attr}", "INTEGER DEFAULT 78")
+    # Career weekly-quest streak, judged once per ISO week at quest rollover.
+    _try_add("users", "career_weekly_streak", "INTEGER DEFAULT 0")
+    _try_add("users", "career_weekly_best_streak", "INTEGER DEFAULT 0")
+    _try_add("users", "career_weekly_last_period", "VARCHAR(10)")
+    # Career-only quests are assigned solely to users who have a career player.
+    _try_add("quests", "career_only", "BOOLEAN DEFAULT FALSE")
+    _try_add("game_config", "career_quest_gems", "INTEGER DEFAULT 15")
+    _try_add("game_config", "career_streak_weeks", "INTEGER DEFAULT 4")
+    _try_add("game_config", "career_streak_bonus_gems", "INTEGER DEFAULT 100")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.
@@ -599,6 +620,16 @@ def _migrate_add_columns():
         # Telegram ids outgrew INTEGER — widen the legacy column so adsgram
         # postbacks stop failing with "integer out of range".
         "ALTER TABLE adsgram_rewards ALTER COLUMN telegram_id TYPE BIGINT",
+        # Career Player flags are non-nullable in the model. ADD COLUMN with a
+        # DEFAULT already backfills existing rows, but a database migrated by an
+        # earlier build may still hold NULLs — normalise them so the "is this a
+        # career card?" checks never see NULL.
+        "UPDATE players SET is_career = FALSE WHERE is_career IS NULL",
+        "UPDATE players SET non_tradable = FALSE WHERE non_tradable IS NULL",
+        "UPDATE quests SET career_only = FALSE WHERE career_only IS NULL",
+        "UPDATE users SET career_weekly_streak = 0 WHERE career_weekly_streak IS NULL",
+        "UPDATE users SET career_weekly_best_streak = 0 "
+        "WHERE career_weekly_best_streak IS NULL",
     ]
     done, sig = _migration_signature_matches("backfill", backfill_sql)
     if not done:

@@ -161,22 +161,39 @@ def get_state(allow_restore=True):
 
 def _asset_paths():
     try:
-        from services.card_template_service import TEMPLATES_ROOT, ALLOWED_EXT, ALLOWED_FONT_EXT
+        from services.card_template_service import (TEMPLATES_ROOT, ALLOWED_EXT,
+                                                    ALLOWED_FONT_EXT, career_variants)
     except Exception:
         return {}
     assets = {}
-    for key, stem in (("template_base", "template"), ("template_star", "template_star"),
-                      ("template_legend", "template_legend")):
+    stems = [("template_base", "template"), ("template_star", "template_star"),
+             ("template_legend", "template_legend")]
+    # Career Player face templates are created on the website, so the set is
+    # dynamic — enumerate them too or a redeploy loses every uploaded face.
+    try:
+        for variant in career_variants():
+            stems.append((f"template_{variant}", f"template_{variant}"))
+    except Exception:
+        logger.debug("career face templates unavailable for mirroring", exc_info=True)
+    for key, stem in stems:
         for ext in ALLOWED_EXT:
             path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
             if os.path.isfile(path):
                 assets[key] = {"path": path, "filename": f"{stem}.{ext}"}
                 break
-    for ext in ALLOWED_FONT_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
-        if os.path.isfile(path):
-            assets["font"] = {"path": path, "filename": f"font.{ext}"}
-            break
+    # The shared font, plus any per-variant font uploaded for one card design.
+    font_stems = [("font", "font")]
+    try:
+        for variant in ("base", "star", "legend", *career_variants()):
+            font_stems.append((f"font_{variant}", f"font_{variant}"))
+    except Exception:
+        logger.debug("per-variant fonts unavailable for mirroring", exc_info=True)
+    for key, stem in font_stems:
+        for ext in ALLOWED_FONT_EXT:
+            path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+            if os.path.isfile(path):
+                assets[key] = {"path": path, "filename": f"{stem}.{ext}"}
+                break
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cmu_assets = {
         "cmu_text_font": os.path.join(root, "assets", "fonts", "BricolageGrotesque-Regular.ttf"),

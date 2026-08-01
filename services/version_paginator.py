@@ -18,6 +18,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from models import Player, User, UserRoster
 from config import get_buy_value
+from services.player_service import not_career
+
 
 
 def get_versions_ordered(session, base_id: int) -> List[Player]:
@@ -155,14 +157,14 @@ def find_player_for_search(session, search_term: str) -> Optional[Player]:
     Returns the player object the bot should display first.
     """
     # Default to base card matches first
-    base = (session.query(Player)
+    base = (not_career(session.query(Player))
             .filter(Player.name.ilike(f"%{search_term}%"),
                     Player.parent_player_id.is_(None),
                     Player.is_active == True).first())
     if base:
         return base
     # Fall back to any variant
-    return (session.query(Player)
+    return (not_career(session.query(Player))
             .filter(Player.name.ilike(f"%{search_term}%"),
                     Player.is_active == True).first())
 
@@ -190,7 +192,7 @@ def find_players_for_search(session, search_term: str,
 
     # Exact full-name match wins outright (ilike with no % = case-insensitive
     # equality). Prefer the base card of that player.
-    exact = (session.query(Player)
+    exact = (not_career(session.query(Player))
              .filter(Player.name.ilike(escaped, escape="\\"),
                      Player.is_active == True)
              .order_by(Player.parent_player_id.isnot(None), Player.id)
@@ -200,7 +202,7 @@ def find_players_for_search(session, search_term: str,
         base = session.query(Player).get(base_id)
         return [base or exact]
 
-    rows = (session.query(Player)
+    rows = (not_career(session.query(Player))
             .filter(Player.name.ilike(f"%{escaped}%", escape="\\"),
                     Player.is_active == True)
             .order_by(Player.rating.desc(), Player.name)

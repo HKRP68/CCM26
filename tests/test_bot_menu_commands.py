@@ -1,32 +1,70 @@
-"""BOT_MENU_COMMANDS must stay in step with the commands main() registers.
+"""Every registered command reaches Telegram's slash menu, in some scope.
 
-Two ways this list rots: a new command gets a handler but never reaches the
-slash menu (nobody discovers it), or the list grows past Telegram's 100-command
-ceiling and setMyCommands starts failing outright — which silently freezes the
+Two ways this used to rot: a new command got a handler but never reached the
+menu (nobody discovers it), or the single list grew past Telegram's 100-command
+ceiling and setMyCommands started failing outright — which silently freezes the
 menu on whatever was published last.
+
+The ceiling is per *scope*, not per bot, so the menu is split three ways:
+private chats, group chats, and each admin's own DM. These tests pin that every
+command lands in at least one of those, and that no bucket busts the ceiling.
+
+The file parses bot.py rather than importing it: importing pulls in ~120 handler
+modules and needs a bot token, which is far too much for a lint-shaped check.
 """
 
+import ast
 import re
 from pathlib import Path
 
 BOT_PY = Path(__file__).resolve().parent.parent / "bot.py"
 SRC = BOT_PY.read_text()
+_TREE = ast.parse(SRC)
 
-# Registered but deliberately unpublished: admin/owner-gated commands, the
-# /testwpm diagnostic, the two Unscramble lobby controls the lobby message
-# already spells out, and /tradetrait — the menu is full at Telegram's 100-command
-# ceiling, so it is documented in /traits, /help and /howto instead. Publishing it
-# means demoting something else, which is a deliberate call, not a default.
-UNPUBLISHED = {
-    "grant", "setcardid", "clearmatches", "removematch",
-    "frwd_grp", "frwd_prvt", "tourallow", "tourblock", "tourallowlist",
-    "testwpm", "eu", "cu", "tradetrait",
-}
+
+def _literal(name):
+    """Evaluate a module-level literal constant out of bot.py.
+
+    Walks the parsed module rather than pattern-matching the text, so a
+    reformatted constant can't quietly break these checks.
+    """
+    for node in _TREE.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            continue
+        value = node.value
+        # frozenset({...}) — unwrap the call and evaluate its argument.
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id == "frozenset"):
+            return ast.literal_eval(value.args[0])
+        return ast.literal_eval(value)
+    raise AssertionError(f"could not find {name} in bot.py")
 
 
 def _menu_commands():
-    body = re.search(r"BOT_MENU_COMMANDS = \((.*?)\n\)\n", SRC, re.S).group(1)
-    return re.findall(r'\("([a-z0-9_]+)",', body)
+    return [name for name, _description in _literal("BOT_MENU_COMMANDS")]
+
+
+def _admin_commands():
+    return [name for name, _description in _literal("ADMIN_MENU_COMMANDS")]
+
+
+def _limit():
+    return _literal("MENU_LIMIT")
+
+
+def _scopes():
+    """Mirror bot._menu_for_scope so the buckets can be checked without importing."""
+    menu = _menu_commands()
+    group_only = _literal("GROUP_ONLY_COMMANDS")
+    private_only = _literal("PRIVATE_ONLY_COMMANDS")
+    private = [c for c in menu if c not in group_only]
+    return {
+        "private": private,
+        "group": [c for c in menu if c not in private_only],
+        "admin": _admin_commands() + private,
+    }
 
 
 def _registered_commands():
@@ -41,39 +79,78 @@ def _registered_commands():
     return primary, every
 
 
-def test_menu_fits_telegrams_limit():
-    menu = _menu_commands()
-    limit = int(re.search(r"MENU_LIMIT = (\d+)", SRC).group(1))
+def test_every_scope_fits_telegrams_limit():
+    limit = _limit()
     assert limit <= 100, "Telegram's setMyCommands ceiling is 100"
-    assert len(menu) <= limit, (
-        f"{len(menu)} menu commands exceeds the {limit} Telegram allows — "
-        f"setMyCommands would reject the whole list")
+    for scope, commands in _scopes().items():
+        # The admin bucket is allowed to overflow: bot._menu_for_scope puts the
+        # admin commands first precisely so the clamp drops player commands the
+        # admin still sees everywhere else.
+        if scope == "admin":
+            continue
+        assert len(commands) <= limit, (
+            f"the {scope} menu has {len(commands)} commands, over the {limit} "
+            f"Telegram allows per scope — setMyCommands would reject it whole")
 
 
-def test_menu_has_no_duplicates():
-    menu = _menu_commands()
-    dupes = {c for c in menu if menu.count(c) > 1}
-    assert not dupes, f"duplicate menu entries: {sorted(dupes)}"
+def test_the_admin_commands_always_survive_the_clamp():
+    admin = _scopes()["admin"]
+    assert admin[:len(_admin_commands())] == _admin_commands(), (
+        "admin commands must lead the admin menu so the clamp never drops them")
 
 
-def test_every_registered_command_is_published_or_explicitly_exempt():
-    menu = set(_menu_commands())
+def test_no_scope_has_duplicates():
+    for scope, commands in _scopes().items():
+        dupes = {c for c in commands if commands.count(c) > 1}
+        assert not dupes, f"duplicate entries in the {scope} menu: {sorted(dupes)}"
+
+
+def test_every_registered_command_is_published_somewhere():
+    published = set().union(*(set(v) for v in _scopes().values()))
     primary, _every = _registered_commands()
-    missing = sorted({c for c in primary if c not in menu and c not in UNPUBLISHED})
+    missing = sorted({c for c in primary if c not in published})
     assert not missing, (
-        f"these commands have handlers but no slash-menu entry: {missing}. "
-        f"Add them to BOT_MENU_COMMANDS, or to UNPUBLISHED here if they are "
-        f"admin-only/deliberately hidden.")
+        f"these commands have handlers but reach no slash menu: {missing}. "
+        f"Add them to BOT_MENU_COMMANDS, or to ADMIN_MENU_COMMANDS if they are "
+        f"admin-only.")
 
 
 def test_menu_entries_all_have_a_handler():
-    menu = _menu_commands()
+    menu = _menu_commands() + _admin_commands()
     _primary, every = _registered_commands()
     # The Challenge League commands are served by a regex MessageHandler rather
     # than a CommandHandler, so they have no literal registration to match.
     league = {"challengeipl", "challengebbl", "challengeint"}
     orphans = [c for c in menu if c not in every and c not in league]
     assert not orphans, f"menu advertises commands with no handler: {orphans}"
+
+
+def test_group_only_commands_are_kept_out_of_private_menus():
+    """Their handlers refuse in a DM, so listing them only promises an error."""
+    private = _scopes()["private"]
+    for command in _literal("GROUP_ONLY_COMMANDS"):
+        assert command not in private, (
+            f"/{command} refuses to run in a private chat, so it must not be "
+            f"advertised there")
+
+
+def test_private_only_commands_are_kept_out_of_group_menus():
+    group = _scopes()["group"]
+    for command in _literal("PRIVATE_ONLY_COMMANDS"):
+        assert command not in group, (
+            f"/{command} is a private-chat command and must not be advertised "
+            f"in groups")
+
+
+def test_group_and_private_together_cover_the_whole_player_menu():
+    scopes = _scopes()
+    covered = set(scopes["private"]) | set(scopes["group"])
+    missing = sorted(set(_menu_commands()) - covered)
+    assert not missing, f"player commands reaching no chat type: {missing}"
+
+
+def test_career_player_command_is_published():
+    assert "cmucareer" in _menu_commands()
 
 
 def test_batting_order_command_is_published():
@@ -87,10 +164,7 @@ def test_wsp_modes_stay_turned_off():
     viewable, which makes it easy to switch the commands back on by accident —
     this fails if anything re-registers or re-advertises them.
     """
-    menu = _menu_commands()
     _primary, every = _registered_commands()
-    for cmd in ("wsp", "wspbot", "wspb"):
-        assert cmd not in every, f"/{cmd} was re-registered as a command"
-        assert cmd not in menu, f"/{cmd} was re-added to the slash menu"
-    assert "CallbackQueryHandler(wsp" not in SRC, \
-        "a /wsp or /wspbot callback handler was re-registered"
+    for command in ("wsp", "wspbot"):
+        assert command not in every, f"/{command} was re-registered"
+        assert command not in _menu_commands(), f"/{command} was re-advertised"

@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import Player, User
+from services.player_service import not_career
 from config import get_buy_value
 from services.button_timeout import schedule_button_timeout
 
@@ -69,7 +70,7 @@ async def searchpl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        total = (session.query(Player)
+        total = (not_career(session.query(Player))
                  .filter(Player.name.ilike(f"%{search}%"), Player.is_active == True)
                  .count())
         if total == 0:
@@ -79,7 +80,7 @@ async def searchpl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Save the query in bot_data for pagination callbacks
         context.bot_data[f"spl_q_{tg_user.id}"] = search
 
-        players = (session.query(Player)
+        players = (not_career(session.query(Player))
                    .filter(Player.name.ilike(f"%{search}%"), Player.is_active == True)
                    .order_by(Player.rating.desc(), Player.name)
                    .limit(PAGE_SIZE).all())
@@ -124,14 +125,14 @@ async def searchpl_page_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     session = get_session()
     try:
-        total = (session.query(Player)
+        total = (not_career(session.query(Player))
                  .filter(Player.name.ilike(f"%{search}%"), Player.is_active == True)
                  .count())
         if total == 0:
             await q.edit_message_text(f"❌ No players found.")
             return
         offset = (page - 1) * PAGE_SIZE
-        players = (session.query(Player)
+        players = (not_career(session.query(Player))
                    .filter(Player.name.ilike(f"%{search}%"), Player.is_active == True)
                    .order_by(Player.rating.desc(), Player.name)
                    .offset(offset).limit(PAGE_SIZE).all())
@@ -182,7 +183,8 @@ def _parse_searchovr_args(args):
 
 
 def _build_overquery(session, rating, category, country):
-    q = session.query(Player).filter(Player.rating == rating, Player.is_active == True)
+    q = not_career(session.query(Player)).filter(Player.rating == rating,
+                                                 Player.is_active == True)
     if category:
         q = q.filter(Player.category == category)
     if country:

@@ -67,7 +67,11 @@ def _refresh(session=None):
         own = True
     try:
         from models import Player
-        rows = session.query(Player).filter(Player.is_active == True).all()
+        from services.player_service import not_career
+        # Career cards belong to one user, so they must never reach this cache —
+        # it backs the random picks behind /claim, /gspin, packs and name search.
+        rows = not_career(
+            session.query(Player).filter(Player.is_active == True)).all()
         by_id = {}
         all_active = []
         by_rating = {}

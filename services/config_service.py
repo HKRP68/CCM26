@@ -69,6 +69,10 @@ DEFAULTS = {
     "card_template_settings": None,
     # Shared caption under every /CMUshop image
     "cmushop_caption": "",
+    # Career Player weekly quests and streak jackpot
+    "career_quest_gems": 15,
+    "career_streak_weeks": 4,
+    "career_streak_bonus_gems": 100,
 }
 
 

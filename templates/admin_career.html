@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Career Players{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🎖 Career Players</h2>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <a href="{{ url_for('admin_career_names') }}" class="btn btn-ghost btn-sm">🔤 Name pool</a>
+    <a href="{{ url_for('admin_career_steps') }}" class="btn btn-ghost btn-sm">🖼️ Wizard images</a>
+    <a href="{{ url_for('admin_card_template') }}" class="btn btn-ghost btn-sm">🎭 Faces</a>
+  </div>
+</div>
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;line-height:1.6;">
+  Every player created with <code>/cmucareer</code>. A career card belongs to one user for good — it can't be sold, traded, packed or dealt to anyone else — and grows only by spending gems on its ten attributes.
+</p>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.85rem;margin-bottom:1.25rem;">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.9rem;">
+    <div style="color:var(--muted);font-size:.78rem;">Career players</div>
+    <div style="font-size:1.6rem;font-weight:800;">{{ players | length }}</div>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.9rem;">
+    <div style="color:var(--muted);font-size:.78rem;">Gems invested (all)</div>
+    <div style="font-size:1.6rem;font-weight:800;">{{ '{:,}'.format(total_invested_all) }} 💎</div>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.9rem;">
+    <div style="color:var(--muted);font-size:.78rem;">Highest OVR</div>
+    <div style="font-size:1.6rem;font-weight:800;">{{ players[0].rating if players else '—' }}</div>
+  </div>
+</div>
+
+<form method="GET" style="display:flex;gap:.6rem;align-items:end;flex-wrap:wrap;margin-bottom:1rem;">
+  <div>
+    <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Country</label>
+    <select name="country" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <option value="">All countries</option>
+      {% for c in countries %}<option value="{{ c }}" {{ 'selected' if c == country else '' }}>{{ c }}</option>{% endfor %}
+    </select>
+  </div>
+  <div>
+    <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Sort by</label>
+    <select name="sort" style="padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <option value="rating" {{ 'selected' if sort == 'rating' else '' }}>Highest OVR</option>
+      <option value="invested" {{ 'selected' if sort == 'invested' else '' }}>Most gems invested</option>
+      <option value="newest" {{ 'selected' if sort == 'newest' else '' }}>Newest first</option>
+      <option value="name" {{ 'selected' if sort == 'name' else '' }}>Name A→Z</option>
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+</form>
+
+{% if not players %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2rem;text-align:center;color:var(--muted);">
+  No career players yet. Players create one with <code>/cmucareer</code> — make sure at least one
+  <a href="{{ url_for('admin_card_template') }}">face</a> is uploaded and the
+  <a href="{{ url_for('admin_career_names') }}">name pool</a> is seeded first.
+</div>
+{% else %}
+<div style="overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:.85rem;min-width:900px;">
+  <thead>
+    <tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border);">
+      <th style="padding:.5rem .4rem;">Player</th>
+      <th>Owner</th>
+      <th>Face</th>
+      <th>OVR</th>
+      <th>Bat</th>
+      <th>Bowl</th>
+      <th>Attributes</th>
+      <th>Invested</th>
+      <th>Streak</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in players %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:.6rem .4rem;">
+        <strong>{{ p.name }}</strong><br>
+        <span style="color:var(--muted);font-size:.78rem;">{{ p.country }} · {{ p.bat_hand }}-hand · {{ p.bowl_style }}</span>
+      </td>
+      <td>{% if p.owner_id %}<a href="{{ url_for('user_detail', user_id=p.owner_id) }}">{{ p.owner }}</a>{% else %}{{ p.owner }}{% endif %}</td>
+      <td style="color:var(--muted);">{{ p.face }}</td>
+      <td><strong>{{ p.rating }}</strong></td>
+      <td>{{ p.bat_rating }}</td>
+      <td>{{ p.bowl_rating }}</td>
+      <td style="font-size:.74rem;color:var(--muted);line-height:1.5;">
+        {% for key in all_attrs %}{{ attr_labels[key][:4] }} {{ p.attrs[key] }}{{ ' · ' if not loop.last }}{% endfor %}
+      </td>
+      <td><strong>{{ '{:,}'.format(p.invested) }}</strong> 💎<br><span style="color:var(--muted);font-size:.74rem;">{{ '{:,}'.format(p.to_max) }} to max</span></td>
+      <td>{{ p.streak }}{% if p.best_streak > p.streak %} <span style="color:var(--muted);font-size:.74rem;">(best {{ p.best_streak }})</span>{% endif %}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        <a href="{{ url_for('admin_player_card_preview', player_id=p.id) }}" target="_blank" class="btn btn-ghost btn-sm">Card</a>
+        <form method="POST" action="{{ url_for('admin_career_reset', player_id=p.id) }}" style="display:inline;"
+              onsubmit="return confirm('Reset {{ p.name }} to 78 across the board? This clears {{ '{:,}'.format(p.invested) }} gems of upgrades and refunds nothing.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-ghost btn-sm">Reset</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p style="color:var(--muted);font-size:.78rem;margin-top:1rem;line-height:1.5;">
+  <strong>Invested</strong> is derived from the attributes, not stored: every attribute starts at 78 and each point costs its own new value, so the figure is exact — unless an attribute has been edited directly in the database, which would make it notional. Deleting a career player isn't offered here because it would orphan the owner's roster row, match stats and quest progress.
+</p>
+{% endif %}
+{% endblock %}

@@ -26,6 +26,8 @@ import random
 
 from services import xi_rules
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 
@@ -117,7 +119,7 @@ def _pick_category(session, category, need, seen, lo, hi):
     for banded in (True, False):
         if len(out) >= need:
             break
-        q = (session.query(Player)
+        q = (not_career(session.query(Player))
              .filter(Player.category == category, Player.is_active == True))  # noqa: E712
         if banded:
             q = q.filter(Player.rating.between(lo, hi))
@@ -239,13 +241,13 @@ def build_letsplay_bot_xi(session, user_id):
     # The pool was thin in some role — top up with the best players left so the
     # bot always fields eleven, even if the composition drifts off the ideal shape.
     if len(rows) < 11:
-        near = (session.query(Player)
+        near = (not_career(session.query(Player))
                 .filter(Player.is_active == True,  # noqa: E712
                         Player.rating.between(lo, hi))
                 .order_by(Player.rating.desc()).limit(64).all())
         append_distinct_base_players(rows, near)
     if len(rows) < 11:
-        full = (session.query(Player)
+        full = (not_career(session.query(Player))
                 .filter(Player.is_active == True)  # noqa: E712
                 .order_by(Player.rating.desc()).limit(128).all())
         append_distinct_base_players(rows, full)

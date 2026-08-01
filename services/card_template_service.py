@@ -26,6 +26,10 @@ MIN_DIM = 200                    # min width/height in pixels
 # Defaults mirror cricket_card_generator_website_v7-1.html so the website
 # produces the same layout while allowing admins to tune each value.
 DEFAULT_TEMPLATE_SETTINGS = {
+    # Whether to composite the player cutout onto this variant. Per-variant so a
+    # Career face — whose artwork already contains the face — can turn it off
+    # while the rarity cards keep drawing one.
+    "show_portrait": True,
     "player_x": 675, "player_y": 25, "player_w": 780, "player_h": 1000,
     "player_scale": 100, "player_opacity": 100, "trim_transparent": True,
     "protect_bottom_box": True, "flag_scale": 100, "flag_y_offset": 0,
@@ -69,6 +73,71 @@ SETTING_LIMITS = {
     "bowl_style_x": (-1536, 3072), "bowl_style_y": (-1024, 2048),
     "bowl_style_font_size": (8, 200), "bowl_style_letter_gap": (0, 200), "bowl_style_max_width": (1, 1536),
 }
+
+# Layout settings that are checkboxes rather than numbers.
+BOOL_SETTING_KEYS = ("trim_transparent", "protect_bottom_box", "show_portrait")
+
+# Text colours, per variant. The defaults reproduce the hardcoded v7.1 palette
+# exactly, so Base/Star/Legend are untouched; a Career face template is dark
+# artwork, so its own defaults (below) are light instead of dark green.
+DEFAULT_COLOR_SETTINGS = {
+    "name_color": "#005632",
+    "cat_color": "#5cae58",
+    "ovr_color": "#ed2543",
+    "bat_color": "#ed2543",
+    "bowl_color": "#ed2543",
+    "country_color": "#005632",
+    "bat_style_color": "#005632",
+    "bowl_style_color": "#005632",
+    "line_color": "#7cb291",
+}
+# Career faces ship on dark artwork, so the palette is sampled straight off the
+# reference card design: near-white names and country, teal category line, and
+# cyan for the OVR and the two rating numbers. Admins can still recolour any of
+# it per face on the website.
+CAREER_COLOR_SETTINGS = {
+    "name_color": "#f5f6f7",
+    "cat_color": "#00aeb5",
+    "ovr_color": "#00e7fe",
+    "bat_color": "#00d9f5",
+    "bowl_color": "#00d9f5",
+    "country_color": "#e7ebf0",
+    "bat_style_color": "#e8eef5",
+    "bowl_style_color": "#e8eef5",
+    "line_color": "#1c6b7d",
+}
+COLOR_SETTING_KEYS = tuple(DEFAULT_COLOR_SETTINGS)
+
+# Starting layout nudges for a Career face, applied on top of the base layout.
+# The career artwork puts its Batting Power / Bowling Specs boxes where the base
+# card puts the flag, so the flag and country drop below them. These are only
+# defaults — every face is tuned independently on the website.
+CAREER_LAYOUT_SETTINGS = {
+    "flag_y_offset": 18,
+    "country_y": 928,
+    "bat_style_y": 880,
+    "bowl_style_y": 958,
+}
+
+_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def normalise_color(value, fallback="#000000"):
+    """Return a ``#rrggbb`` string, falling back when the input isn't a hex colour."""
+    text = str(value or "").strip()
+    if not text.startswith("#"):
+        text = f"#{text}"
+    if not _HEX_RE.match(text):
+        return fallback
+    if len(text) == 4:  # expand #abc → #aabbcc
+        text = "#" + "".join(ch * 2 for ch in text[1:])
+    return text.lower()
+
+
+def color_to_rgba(value, fallback="#000000"):
+    """Convert a settings hex colour to the RGBA tuple Pillow wants."""
+    text = normalise_color(value, fallback)
+    return (int(text[1:3], 16), int(text[3:5], 16), int(text[5:7], 16), 255)
 
 
 # ── Field aliases ───────────────────────────────────────────────────────────
@@ -179,8 +248,24 @@ def remove_template_image(variant="base"):
     return removed
 
 
-def save_template_font(file_bytes, original_filename):
-    """Validate and store the optional global card font (TTF or OTF)."""
+def font_stem(variant=None):
+    """Filename stem for a font: the shared one, or one variant's own.
+
+    ``None`` (or "shared") is the font every card falls back to; a variant key
+    gives that card its own typeface, so a Career face can match its artwork
+    without changing how the rarity cards look.
+    """
+    if not variant or variant == "shared":
+        return "font"
+    return f"font_{normalise_template_variant(variant)}"
+
+
+def save_template_font(file_bytes, original_filename, variant=None):
+    """Validate and store a card font (TTF or OTF).
+
+    Without ``variant`` this is the shared font every card falls back to; with
+    one it is that card's own font.
+    """
     ext = _ext_from_filename(original_filename)
     if ext not in ALLOWED_FONT_EXT:
         return False, "Unsupported font type. Allowed: otf, ttf", None
@@ -189,14 +274,15 @@ def save_template_font(file_bytes, original_filename):
     if len(file_bytes) > MAX_BYTES:
         return False, f"Font too large. Max is {MAX_BYTES / 1024 / 1024:.0f} MB.", None
     _ensure_dir()
+    stem = font_stem(variant)
     for old in ALLOWED_FONT_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"font.{old}")
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{old}")
         if os.path.isfile(path):
             try:
                 os.remove(path)
             except OSError:
                 pass
-    path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+    path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
     try:
         with open(path, "wb") as handle:
             handle.write(file_bytes)
@@ -211,11 +297,12 @@ def save_template_font(file_bytes, original_filename):
     return True, "Font file saved.", path
 
 
-def remove_template_font():
-    """Remove the optional shared font file and restore the renderer fallback."""
+def remove_template_font(variant=None):
+    """Remove a font file and fall back to the next one down the chain."""
+    stem = font_stem(variant)
     removed = False
     for ext in ALLOWED_FONT_EXT:
-        path = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             try:
                 os.remove(path)
@@ -223,6 +310,41 @@ def remove_template_font():
             except OSError:
                 logger.exception("Failed to remove template font %s", path)
     return removed
+
+
+def font_file_path(variant=None):
+    """This variant's OWN uploaded font file, or ``None``. No fallback."""
+    stem = font_stem(variant)
+    for ext in ALLOWED_FONT_EXT:
+        path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def resolve_font_path(variant=None, session=None, cfg=None):
+    """The font to render this variant with.
+
+    Order: the variant's own upload, then the shared upload, then the legacy
+    ``GameConfig`` path. ``None`` means the renderer uses its built-in
+    condensed fallback.
+    """
+    own = font_file_path(variant) if variant else None
+    if own:
+        return own
+    shared = font_file_path(None)
+    if shared:
+        return shared
+    if cfg is None:
+        from services.config_service import get_config
+        cfg = get_config(session)
+    return template_asset_path(cfg.get("card_template_font_path"))
+
+
+def list_template_fonts(session=None):
+    """``{variant: True}`` for every variant with a font of its own."""
+    return {variant: bool(font_file_path(variant))
+            for variant in all_template_variants(session)}
 
 
 def normalise_template_settings(raw=None, defaults=None):
@@ -249,6 +371,7 @@ def normalise_template_settings(raw=None, defaults=None):
             raw.setdefault("bat_style_max_width", raw["style_max_width"])
             raw.setdefault("bowl_style_max_width", raw["style_max_width"])
     result = dict(DEFAULT_TEMPLATE_SETTINGS)
+    result.update(DEFAULT_COLOR_SETTINGS)
     if isinstance(defaults, dict):
         for key in result:
             if key in defaults:
@@ -258,19 +381,35 @@ def normalise_template_settings(raw=None, defaults=None):
             result[key] = max(minimum, min(maximum, int(float(raw.get(key, result[key])))))
         except (TypeError, ValueError):
             pass
-    for key in ("trim_transparent", "protect_bottom_box"):
+    for key in BOOL_SETTING_KEYS:
         if key in raw:
             result[key] = bool(raw[key])
+    for key in COLOR_SETTING_KEYS:
+        result[key] = normalise_color(raw.get(key, result[key]),
+                                      DEFAULT_COLOR_SETTINGS[key])
     return result
 
 
-def normalise_variant_settings(raw=None, shared=None):
-    """Return ``{variant: settings}`` covering every rarity tab.
+def default_show_portrait(variant):
+    """Whether this variant should composite the player cutout by default.
 
-    Each rarity keeps its own independent layout. A variant with no saved
-    layout of its own inherits ``shared`` (the pre-split single layout, or the
-    v7.1 defaults), so upgrading a deployment that only ever had one shared
-    layout leaves all three cards rendering exactly as before.
+    Career face templates already contain the player's face in the artwork, so
+    drawing a cutout on top would cover it. Every other variant keeps the
+    historical behaviour of drawing one.
+    """
+    return not is_career_variant(variant)
+
+
+def normalise_variant_settings(raw=None, shared=None, variants=None,
+                               shared_show_portrait=True):
+    """Return ``{variant: settings}`` covering every template tab.
+
+    Each variant keeps its own independent layout. One with no saved layout of
+    its own inherits its fallback (Star/Legend → the pre-split ``shared``
+    layout; Career face N → face 1's layout), so upgrading a deployment that
+    only ever had one shared layout leaves all three rarity cards rendering
+    exactly as before, and adding a new face starts from a tuned layout rather
+    than the raw v7.1 defaults.
     """
     if isinstance(raw, str):
         try:
@@ -279,11 +418,35 @@ def normalise_variant_settings(raw=None, shared=None):
             raw = {}
     raw = raw if isinstance(raw, dict) else {}
     shared_settings = normalise_template_settings(shared)
+    shared_settings["show_portrait"] = bool(shared_show_portrait)
+    if variants is None:
+        variants = all_template_variants()
+
     result = {}
-    for variant in CARD_TEMPLATE_VARIANTS:
+    # Rarities first, then faces in order, so a face can inherit from face 1
+    # (and face 1 from base) within this single pass. Faces are sorted by slot
+    # so face 1 is always resolved before the faces that inherit from it.
+    ordered = list(CARD_TEMPLATE_VARIANTS)
+    faces = sorted({v for v in variants if is_career_variant(v)},
+                   key=career_variant_slot)
+    ordered += faces + [v for v in variants
+                        if v not in ordered and v not in faces]
+    for variant in ordered:
+        fallback = _variant_fallback(variant)
+        defaults = dict(result.get(fallback) or shared_settings)
+        if is_career_variant(variant):
+            # A face with no layout of its own must not inherit "draw the
+            # cutout" from the base card — its artwork already has the face on
+            # it — nor the base card's dark text, which would be unreadable on
+            # the dark career artwork. Face 2+ still inherits face 1's own
+            # tuning, which is the point of the fallback chain.
+            defaults["show_portrait"] = False
+            if not is_career_variant(fallback):
+                defaults.update(CAREER_COLOR_SETTINGS)
+                defaults.update(CAREER_LAYOUT_SETTINGS)
         entry = raw.get(variant)
-        result[variant] = (normalise_template_settings(entry, defaults=shared_settings)
-                           if isinstance(entry, (dict, str)) else dict(shared_settings))
+        result[variant] = (normalise_template_settings(entry, defaults=defaults)
+                           if isinstance(entry, (dict, str)) else dict(defaults))
     return result
 
 
@@ -359,15 +522,79 @@ def template_asset_path(stored):
 
 CARD_TEMPLATE_VARIANTS = ("base", "star", "legend")
 
+# Career Player faces are template variants too, but unlike the three rarities
+# they are created on the website, so the set is dynamic: one variant per active
+# CareerFace row, keyed "career_<slot>".
+CAREER_VARIANT_PREFIX = "career_"
+_CAREER_VARIANT_RE = re.compile(r"^career_(\d+)$")
 
-def normalise_template_variant(variant):
-    """Return one of the three website-managed blank-card template tabs."""
+
+def is_career_variant(variant):
+    """True for a Career Player face variant such as ``career_3``."""
+    return bool(_CAREER_VARIANT_RE.match(str(variant or "").strip().lower()))
+
+
+def career_variant_slot(variant):
+    """The face slot number behind a career variant key, or ``None``."""
+    match = _CAREER_VARIANT_RE.match(str(variant or "").strip().lower())
+    return int(match.group(1)) if match else None
+
+
+def career_variants(session=None):
+    """Active Career Player face variants, in display order.
+
+    Reads the ``career_faces`` table the website manages. Returns an empty list
+    (never raises) when the table does not exist yet, so a deployment that has
+    not migrated still renders the three rarity cards normally.
+    """
+    own = False
+    try:
+        from models import CareerFace
+        if session is None:
+            from database import get_session
+            session = get_session()
+            own = True
+        rows = (session.query(CareerFace)
+                .filter(CareerFace.is_active.is_(True))
+                .order_by(CareerFace.sort_order, CareerFace.slot).all())
+        return [f"{CAREER_VARIANT_PREFIX}{row.slot}" for row in rows]
+    except Exception:
+        logger.debug("career face variants unavailable", exc_info=True)
+        return []
+    finally:
+        if own and session is not None:
+            session.close()
+
+
+def all_template_variants(session=None):
+    """Every editable card template tab: the three rarities, then each face."""
+    return list(CARD_TEMPLATE_VARIANTS) + career_variants(session)
+
+
+def normalise_template_variant(variant, session=None):
+    """Return a known template variant key, falling back to ``base``.
+
+    Accepts the three rarity tabs plus any ``career_<n>`` face. Career keys are
+    accepted on shape alone rather than by re-reading ``career_faces`` on every
+    render — the callers that need to know whether a face really exists check
+    for its uploaded template instead.
+    """
     value = str(variant or "base").strip().lower()
-    return value if value in CARD_TEMPLATE_VARIANTS else "base"
+    if value in CARD_TEMPLATE_VARIANTS or is_career_variant(value):
+        return value
+    return "base"
 
 
 def player_template_variant(player):
-    """Select a blank template from the player's version label."""
+    """Select a blank template for this player.
+
+    A Career Player always renders on its own chosen face — that artwork already
+    contains the player's portrait — so it is checked before the rarity labels.
+    """
+    if getattr(player, "is_career", False):
+        face = str(getattr(player, "career_face", "") or "").strip().lower()
+        if is_career_variant(face):
+            return face
     version = str(getattr(player, "version", "") or "").lower()
     if "legend" in version:
         return "legend"
@@ -376,16 +603,34 @@ def player_template_variant(player):
     return "base"
 
 
-def template_image_path(session=None, variant="base", fallback_to_base=True):
-    """Return the template image to render for one rarity variant, if present.
+def template_stem(variant):
+    """Filename stem holding this variant's blank card under TEMPLATES_ROOT."""
+    variant = normalise_template_variant(variant)
+    return "template" if variant == "base" else f"template_{variant}"
 
-    By default Star/Legend variants without their own upload fall back to the
-    base template so a single committed blank covers every rarity at render time.
-    Callers that need to know whether *this* variant has its own asset (upload
-    state, not render source) pass ``fallback_to_base=False`` for an exact lookup.
+
+def _variant_fallback(variant):
+    """The variant to borrow a template/layout from when this one has none.
+
+    A Career face falls back to the first face (so adding Face 5 starts from the
+    layout already tuned on Face 1) and only then to the base card. Star/Legend
+    fall straight back to base, exactly as before.
+    """
+    if is_career_variant(variant) and career_variant_slot(variant) != 1:
+        return f"{CAREER_VARIANT_PREFIX}1"
+    return "base" if variant != "base" else None
+
+
+def template_image_path(session=None, variant="base", fallback_to_base=True):
+    """Return the template image to render for one variant, if present.
+
+    By default a variant without its own upload falls back (Star/Legend → base,
+    Career face N → face 1 → base) so a single committed blank covers everything
+    at render time. Callers that need to know whether *this* variant has its own
+    asset (upload state, not render source) pass ``fallback_to_base=False``.
     """
     variant = normalise_template_variant(variant)
-    stem = "template" if variant == "base" else f"template_{variant}"
+    stem = template_stem(variant)
     for ext in ALLOWED_EXT:
         path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
@@ -396,36 +641,34 @@ def template_image_path(session=None, variant="base", fallback_to_base=True):
         return template_asset_path(get_config(session).get("card_template_image_path"))
     if not fallback_to_base:
         return None
-    # Star/Legend with no variant-specific upload fall back to the base template
-    # so a single committed blank covers every rarity.
-    return template_image_path(session, variant="base")
+    return template_image_path(session, variant=_variant_fallback(variant))
 
 
 def template_file_path(variant="base"):
     """Path to a committed/admin-uploaded template *file* for this variant.
 
-    Checks only the on-disk template files in ``TEMPLATES_ROOT`` (with the base
-    fallback for Star/Legend), excluding the legacy ``GameConfig`` image path.
-    Used to decide whether to auto-activate the template style: an actual template
-    file is a clear "use this" signal, whereas a legacy DB image path is not — for
-    the latter we keep respecting the saved ``card_style``.
+    Checks only the on-disk template files in ``TEMPLATES_ROOT`` (following the
+    same fallback chain as ``template_image_path``), excluding the legacy
+    ``GameConfig`` image path. Used to decide whether to auto-activate the
+    template style: an actual template file is a clear "use this" signal,
+    whereas a legacy DB image path is not — for the latter we keep respecting
+    the saved ``card_style``.
     """
     variant = normalise_template_variant(variant)
-    stem = "template" if variant == "base" else f"template_{variant}"
+    stem = template_stem(variant)
     for ext in ALLOWED_EXT:
         path = os.path.join(TEMPLATES_ROOT, f"{stem}.{ext}")
         if os.path.isfile(path):
             return path
-    if variant != "base":
-        return template_file_path("base")
-    return None
+    fallback = _variant_fallback(variant)
+    return template_file_path(fallback) if fallback else None
 
 
 def list_template_variants(session=None):
-    """Describe each selectable rarity tab and whether it has its own upload."""
+    """Describe each selectable template tab and whether it has its own upload."""
     result = {}
-    for variant in CARD_TEMPLATE_VARIANTS:
-        # Report each variant's own upload state — not the render-time base
+    for variant in all_template_variants(session):
+        # Report each variant's own upload state — not the render-time
         # fallback — so the admin page shows accurate per-variant status.
         result[variant] = {
             "uploaded": bool(template_image_path(session, variant, fallback_to_base=False))
@@ -433,8 +676,8 @@ def list_template_variants(session=None):
     return result
 
 
-def get_variant_settings(session=None, state=None):
-    """Return every rarity's saved layout as ``{variant: settings}``.
+def get_variant_settings(session=None, state=None, variants=None):
+    """Return every variant's saved layout as ``{variant: settings}``.
 
     Reads the runtime state first (per-variant layouts, with the legacy shared
     layout as the inheritance base) and only falls back to the legacy
@@ -449,10 +692,17 @@ def get_variant_settings(session=None, state=None):
             state = {}
     if state:
         shared = state.get("settings")
+        shared_portrait = state.get("show_portrait", True)
     else:
         from services.config_service import get_config
-        shared = get_config(session).get("card_template_settings")
-    return normalise_variant_settings(state.get("variant_settings"), shared)
+        cfg = get_config(session)
+        shared = cfg.get("card_template_settings")
+        shared_portrait = cfg.get("card_template_show_portrait", True)
+    if variants is None:
+        variants = all_template_variants(session)
+    return normalise_variant_settings(state.get("variant_settings"), shared,
+                                      variants=variants,
+                                      shared_show_portrait=shared_portrait)
 
 
 def get_template_config(session=None, variant="base"):
@@ -480,17 +730,18 @@ def get_template_config(session=None, variant="base"):
         style = "template"
     else:
         style = cfg.get("card_style") or "tier"
-    show_portrait = state.get("show_portrait", cfg.get("card_template_show_portrait", True))
     variant = normalise_template_variant(variant)
-    settings = get_variant_settings(session, state=state)[variant]
-    font_path = None
-    for ext in ALLOWED_FONT_EXT:
-        candidate = os.path.join(TEMPLATES_ROOT, f"font.{ext}")
-        if os.path.isfile(candidate):
-            font_path = candidate
-            break
-    if not font_path:
-        font_path = template_asset_path(cfg.get("card_template_font_path"))
+    # Every variant carries its own show_portrait, seeded from the old global
+    # flag — so Base/Star/Legend behave exactly as before, while a Career face
+    # defaults to off because its artwork already contains the player's face.
+    all_settings = get_variant_settings(session, state=state,
+                                        variants=all_template_variants(session) + [variant])
+    settings = all_settings.get(variant) or all_settings["base"]
+    show_portrait = settings.get("show_portrait", True)
+    # This card's own font if one was uploaded for it, else the shared font.
+    # ``cfg`` is passed through as-is (it is {} whenever runtime state exists),
+    # so the legacy GameConfig path is consulted exactly when it was before.
+    font_path = resolve_font_path(variant, session=session, cfg=cfg)
     return {
         "style": str(style or "tier").lower(),
         "variant": variant,

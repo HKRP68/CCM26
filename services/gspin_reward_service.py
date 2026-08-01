@@ -8,6 +8,8 @@ returns None so the handler can fall back to the legacy config-based outcomes.
 import random
 import logging
 
+from services.player_service import not_career
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,7 +101,7 @@ def apply_reward(session, user, reward, hold_overflow=False):
         lo = reward.player_rating_min or 50
         hi = reward.player_rating_max or 100
         if hi < lo: hi = lo
-        candidates = (session.query(Player)
+        candidates = (not_career(session.query(Player))
                       .filter(Player.is_active == True,
                               Player.rating >= lo,
                               Player.rating <= hi)
