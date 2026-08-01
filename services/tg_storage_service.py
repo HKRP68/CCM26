@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 # Ceiling on one blocking restore-from-Telegram. Generous enough for a slow CDN
 # fetch, short enough that a card render stays a card render.
 DOWNLOAD_TIMEOUT = float(os.getenv("TG_DOWNLOAD_TIMEOUT_SECONDS", "20"))
+# Extra grace for the outer, uncancellable belt. The inner timeout should
+# always be the one that fires; this only covers a worker wedged somewhere
+# asyncio cannot interrupt, so it sits just past the inner one.
+DOWNLOAD_TIMEOUT_GRACE = float(os.getenv("TG_DOWNLOAD_GRACE_SECONDS", "5"))
 
 
 def is_configured() -> bool:
@@ -97,17 +101,35 @@ def download_file_bytes_sync(file_id: str) -> bytes | None:
     import asyncio
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
 
+    async def _bounded():
+        # The timeout lives *inside* the worker's loop so it actually cancels
+        # the HTTP request. Enforcing it only on the outer Future would stop us
+        # waiting without stopping the work: the download would keep its thread
+        # long after the caller gave up and fell back.
+        try:
+            return await asyncio.wait_for(download_file_bytes_async(file_id),
+                                          timeout=DOWNLOAD_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("Telegram download for file_id %s exceeded %ss — "
+                           "cancelled, falling back", file_id, DOWNLOAD_TIMEOUT)
+            return None
+
     def _download():
-        return asyncio.run(download_file_bytes_async(file_id))
+        return asyncio.run(_bounded())
 
     # Never `with ThreadPoolExecutor(...)`: its __exit__ joins the worker, which
-    # would hand back exactly the unbounded block the timeout exists to prevent.
+    # would hand back exactly the unbounded block the timeouts exist to prevent.
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tg-download")
+    hard_limit = DOWNLOAD_TIMEOUT + DOWNLOAD_TIMEOUT_GRACE
     try:
-        return executor.submit(_download).result(timeout=DOWNLOAD_TIMEOUT)
+        # Outer belt to the inner braces, and slightly longer so the cancellable
+        # path is the one that normally fires. This one only matters if the
+        # worker wedges somewhere asyncio cannot interrupt.
+        return executor.submit(_download).result(timeout=hard_limit)
     except _Timeout:
-        logger.warning("download_file_bytes_sync timed out after %ss for "
-                       "file_id %s — falling back", DOWNLOAD_TIMEOUT, file_id)
+        logger.warning("download_file_bytes_sync gave up on file_id %s after "
+                       "%ss — the worker did not respond to cancellation",
+                       file_id, hard_limit)
         return None
     except Exception:
         logger.exception("download_file_bytes_sync failed")

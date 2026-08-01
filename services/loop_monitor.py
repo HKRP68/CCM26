@@ -195,4 +195,9 @@ def stop():
     # mid-test can't read as a permanent stall on the way out.
     _last_tick = None
     _watchdog_stop.set()
+    # Join before releasing the reference, so start() cannot raise a second
+    # watchdog while the old one is still unwinding. Tests cycle start/stop
+    # against this module state, and two live watchdogs would race it.
+    if _watchdog is not None and _watchdog is not threading.current_thread():
+        _watchdog.join(timeout=2.0)
     _watchdog = None

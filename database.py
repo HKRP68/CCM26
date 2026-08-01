@@ -35,6 +35,25 @@ _is_postgres = ("postgres" in DATABASE_URL.lower() and "sqlite" not in DATABASE_
 IDLE_PING_AFTER_SECONDS = float(os.getenv("DB_IDLE_PING_AFTER", "30"))
 
 
+def _timeout_setting(name, default, floor=0):
+    """Read one integer socket-timeout knob from the environment.
+
+    These are host environment variables parsed at import, so a typo must not
+    stop the bot booting with a ValueError nobody sees — bad values fall back to
+    the default and say so, matching how the card-render knobs are read.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(floor, int(raw))
+    except (TypeError, ValueError):
+        import logging
+        logging.getLogger(__name__).warning(
+            "ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+
+
 def _apply_socket_timeouts(args):
     """Bound how long a dead Postgres socket can block the caller.
 
@@ -52,25 +71,41 @@ def _apply_socket_timeouts(args):
     ``keepalives_*`` catch a peer that vanished while the connection sat idle in
     the pool; ``tcp_user_timeout`` is the one that matters for the case above,
     where we have already sent bytes and are waiting for a reply that will never
-    come. Together they turn "the bot is gone for five minutes" into one failed
-    query that SQLAlchemy's disconnect handling retries on a fresh connection.
+    come.
+
+    To be clear about what this does and does not buy: the statement in flight
+    still *fails*, and its transaction with it — nothing here retries a query.
+    SQLAlchemy marks the connection invalid and discards the rest of the pool
+    generation, so the *next* checkout gets a healthy connection instead of
+    another dead one. The win is bounding the failure to ~30 seconds rather than
+    the length of a TCP retransmit, so one bad socket costs a command rather
+    than the whole bot.
     """
-    args.setdefault("connect_timeout", int(os.getenv("DB_CONNECT_TIMEOUT", "10")))
+    args.setdefault("connect_timeout", _timeout_setting("DB_CONNECT_TIMEOUT", 10, 1))
     args.setdefault("keepalives", 1)
-    args.setdefault("keepalives_idle", int(os.getenv("DB_KEEPALIVES_IDLE", "30")))
-    args.setdefault("keepalives_interval", int(os.getenv("DB_KEEPALIVES_INTERVAL", "10")))
-    args.setdefault("keepalives_count", int(os.getenv("DB_KEEPALIVES_COUNT", "3")))
+    args.setdefault("keepalives_idle", _timeout_setting("DB_KEEPALIVES_IDLE", 30, 1))
+    args.setdefault("keepalives_interval",
+                    _timeout_setting("DB_KEEPALIVES_INTERVAL", 10, 1))
+    args.setdefault("keepalives_count", _timeout_setting("DB_KEEPALIVES_COUNT", 3, 1))
 
     # tcp_user_timeout needs libpq >= 12. Passing it to an older libpq is a hard
     # connection error, so ask before setting it rather than trading one outage
-    # for another.
-    timeout_ms = int(os.getenv("DB_TCP_USER_TIMEOUT_MS", "30000"))
+    # for another. 0 disables it.
+    timeout_ms = _timeout_setting("DB_TCP_USER_TIMEOUT_MS", 30000)
     if timeout_ms <= 0:
         return args
     try:
         import psycopg2
         supported = psycopg2.extensions.libpq_version() >= 120000
-    except Exception:
+    except Exception as exc:
+        # Deliberately broad: if we cannot establish that libpq is new enough,
+        # the safe move is to leave the option off rather than risk every
+        # connection failing. Log it, though — silently dropping this setting
+        # quietly restores the unbounded wait it exists to prevent.
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not determine libpq version (%s); leaving tcp_user_timeout "
+            "unset, so a dead socket falls back to the kernel's TCP timeout", exc)
         supported = False
     if supported:
         args.setdefault("tcp_user_timeout", timeout_ms)

@@ -48,7 +48,11 @@ class TelegramDownloadTimeoutTests(unittest.TestCase):
         return tg_storage_service
 
     def _assert_gives_up(self, call):
-        """`call` must return None quickly even though the download never ends."""
+        """`call` must return None quickly even though the download never ends.
+
+        The fake blocks in a thread rather than awaiting, so asyncio cannot
+        cancel it — this deliberately exercises the outer, uncancellable belt.
+        """
         svc = self._service()
         release = threading.Event()
         self.addCleanup(release.set)
@@ -60,13 +64,14 @@ class TelegramDownloadTimeoutTests(unittest.TestCase):
 
         with patch.object(svc, "download_file_bytes_async", _never_finishes), \
              patch.object(svc, "DOWNLOAD_TIMEOUT", 0.2), \
+             patch.object(svc, "DOWNLOAD_TIMEOUT_GRACE", 0.3), \
              patch.dict(os.environ, {"BOT_TOKEN": "x:y"}):
             started = time.monotonic()
             result = call(svc)
             elapsed = time.monotonic() - started
 
         self.assertIsNone(result, "a timed-out restore must fall back, not block")
-        self.assertLess(elapsed, 5.0,
+        self.assertLess(elapsed, 3.0,
                         f"download_file_bytes_sync blocked for {elapsed:.1f}s; "
                         "the executor is being joined and the timeout is moot")
 
@@ -86,6 +91,41 @@ class TelegramDownloadTimeoutTests(unittest.TestCase):
     def test_wedged_download_gives_up_when_called_with_no_loop_at_all(self):
         """Flask request threads and scheduler jobs reach it this way."""
         self._assert_gives_up(lambda svc: svc.download_file_bytes_sync("file-123"))
+
+    def test_timed_out_downloads_do_not_leak_worker_threads(self):
+        """The timeout must cancel the work, not just stop waiting for it.
+
+        Enforcing it only on the outer Future would leave each wedged download
+        holding a thread after the caller fell back — restoring a squad would
+        then pile up one stranded worker per card.
+        """
+        svc = self._service()
+        started = threading.Event()
+
+        async def _slow(*_a, **_kw):
+            started.set()
+            await asyncio.sleep(60)     # cancellable, unlike a blocking wait
+            return b"too late"
+
+        def _tg_workers():
+            return sum(1 for t in threading.enumerate()
+                       if t.name.startswith("tg-download"))
+
+        before = _tg_workers()
+        with patch.object(svc, "download_file_bytes_async", _slow), \
+             patch.object(svc, "DOWNLOAD_TIMEOUT", 0.2), \
+             patch.dict(os.environ, {"BOT_TOKEN": "x:y"}):
+            for _ in range(5):
+                self.assertIsNone(svc.download_file_bytes_sync("file-123"))
+
+        self.assertTrue(started.is_set(), "the download never actually started")
+        deadline = time.monotonic() + 5
+        while _tg_workers() > before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertLessEqual(
+            _tg_workers(), before,
+            "timed-out downloads left worker threads behind — the timeout is "
+            "not reaching the coroutine")
 
 
 class XimageConnectionHoldTests(unittest.TestCase):
@@ -321,6 +361,25 @@ class DatabaseSocketTimeoutTests(unittest.TestCase):
         import database
         args = database._apply_socket_timeouts({"connect_timeout": 3})
         self.assertEqual(args["connect_timeout"], 3)
+
+    def test_a_typo_in_a_tuning_knob_does_not_stop_the_bot_booting(self):
+        """These are parsed at import; a ValueError here means no bot at all."""
+        import database
+        with patch.dict(os.environ, {"DB_CONNECT_TIMEOUT": "abc",
+                                     "DB_KEEPALIVES_IDLE": "",
+                                     "DB_TCP_USER_TIMEOUT_MS": "soon"}):
+            args = database._apply_socket_timeouts({})
+        self.assertEqual(args["connect_timeout"], 10)
+        self.assertEqual(args["keepalives_idle"], 30)
+        self.assertIn("tcp_user_timeout", args)   # fell back to the default
+
+    def test_tcp_user_timeout_can_be_disabled(self):
+        import database
+        with patch.dict(os.environ, {"DB_TCP_USER_TIMEOUT_MS": "0"}):
+            args = database._apply_socket_timeouts({})
+        self.assertNotIn("tcp_user_timeout", args)
+        # The keepalives are independent and must survive.
+        self.assertEqual(args["keepalives"], 1)
 
 
 if __name__ == "__main__":
