@@ -42,6 +42,28 @@ _XIMAGE_GUARD_TTL = 60.0
 _XIMAGE_RENDER_LOCK = asyncio.Lock()
 
 
+def _stamp_cooldown(user_id):
+    """Record that ``user_id`` just spent their /ximage render (blocking).
+
+    Deliberately its own short-lived session: the caller has already released
+    the one it used for reads so the render didn't hold a pooled connection.
+    """
+    session = get_session()
+    try:
+        stats = session.query(UserStats).filter(
+            UserStats.user_id == user_id).first()
+        if not stats:
+            stats = UserStats(user_id=user_id)
+            session.add(stats)
+        stats.last_ximage = datetime.utcnow()
+        session.commit()
+    except Exception:
+        logger.exception("ximage cooldown stamp failed for user %s", user_id)
+        session.rollback()
+    finally:
+        session.close()
+
+
 async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Render the caller's (or a targeted user's) Playing XI as an image.
 
@@ -129,22 +151,42 @@ async def ximage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         total_ovr = sum(p.rating for _, p in xi_pairs)
         avg_ovr = round(total_ovr / 11, 1)
+        viewer_id = viewer.id
 
         await update.message.reply_chat_action("upload_photo")
 
-        # Pillow is CPU-bound — render off the event loop. Keep the ORM objects
-        # un-expired during the threaded render (SessionLocal defaults to
-        # expire_on_commit=True), so commit only AFTER rendering finishes.
-        # Serialize the render process-wide (see _XIMAGE_RENDER_LOCK) so two
-        # users' concurrent /ximage calls can't share PIL font state and end up
-        # both receiving the same XI image.
+        # Everything below reads only already-loaded columns, so hand the
+        # pooled connection back BEFORE the slow part. Rendering eleven cards
+        # can take minutes when the host's ephemeral disk has been wiped and
+        # each card has to be restored from Telegram storage first, and this
+        # handler used to hold its session open across all of it — waiting for
+        # the render lock, then the render itself, then committing. A
+        # connection parked mid-transaction for that long gets closed by the
+        # database, and the commit afterwards blocked on the dead socket. That
+        # commit runs on the event loop, so it took the entire bot down with it
+        # (see the 13:46–13:51 UTC freeze on 2026-08-01).
+        #
+        # close() detaches these instances but does not expire them, so the
+        # render still sees every value loaded above. Commit first so the
+        # username sync done by sync_telegram_user is not rolled back, with
+        # expiry off so the commit itself doesn't blank the objects out.
+        session.expire_on_commit = False
+        session.commit()
+        session.close()
+
+        # Pillow is CPU-bound — render off the event loop. Serialize the render
+        # process-wide (see _XIMAGE_RENDER_LOCK) so two users' concurrent
+        # /ximage calls can't share PIL font state and end up both receiving the
+        # same XI image.
         async with _XIMAGE_RENDER_LOCK:
             png = await asyncio.to_thread(
                 build_xi_image, xi_pairs,
                 team_name=handle, captain_roster_id=captain_rid)
-        # Consume the cooldown now that the (expensive) render has run.
-        stats.last_ximage = datetime.utcnow()
-        session.commit()
+        # Consume the cooldown now that the (expensive) render has run. Fresh
+        # short-lived session, and off the event loop: if the database is having
+        # the bad day described above, this stamp is allowed to be slow, but it
+        # is not allowed to stop the bot answering everyone else.
+        await asyncio.to_thread(_stamp_cooldown, viewer_id)
 
         if png:
             caption = (
