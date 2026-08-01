@@ -17339,10 +17339,25 @@ def admin_career():
         players.sort(key=sort_keys.get(sort, sort_keys["rating"]))
 
         countries = sorted({p["country"] for p in players if p["country"]})
+
+        # Surface whether the weekly quest catalogue has been installed. Owners
+        # get no career quests at all until it is, which is invisible from here
+        # otherwise and looks like the feature is simply broken.
+        from seed_career_quests import CAREER_QUESTS
+        from services.quest_service import CAREER_QUESTS_PER_USER
+        from models import Quest
+        quests_live = (db.query(Quest)
+                       .filter(Quest.quest_type == "weekly",
+                               Quest.career_only.is_(True),
+                               Quest.is_active.is_(True)).count())
+
         return render_template(
             "admin_career.html", players=players, countries=countries,
             country=country, sort=sort, attr_labels=ATTR_LABELS,
             all_attrs=ALL_ATTRS,
+            career_quests_live=quests_live,
+            career_quest_count=len(CAREER_QUESTS),
+            career_quests_per_user=CAREER_QUESTS_PER_USER,
             total_invested_all=sum(p["invested"] for p in players))
     finally:
         db.close()
@@ -17410,6 +17425,36 @@ def admin_career_names():
                                firsts=firsts, surnames=surnames)
     finally:
         db.close()
+
+
+@app.route("/career/quests/seed", methods=["POST"])
+@login_required
+def admin_career_quests_seed():
+    """Install (or refresh) the Career Player weekly quest catalogue.
+
+    The same thing ``python seed_career_quests.py`` does, from a button —
+    deployments here run ``web: python bot.py`` in a container, so a shell is
+    not something an admin reliably has. Idempotent and safe to re-run: quests
+    are matched by name and updated in place, and any career weekly quest no
+    longer in the catalogue is deactivated.
+    """
+    db = get_session()
+    try:
+        from seed_career_quests import CAREER_QUESTS, seed
+        created, updated, retired = seed(db)
+        db.commit()
+        log_admin(db, "career_quests_seed", "quest", 0, "catalogue",
+                  f"{created} created, {updated} updated, {retired} retired")
+        db.commit()
+        flash(f"✅ Career weekly quests: {created} created, {updated} updated, "
+              f"{retired} retired — {len(CAREER_QUESTS)} now live.", "info")
+    except Exception as e:
+        db.rollback()
+        logger.exception("career quest seed failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_career"))
 
 
 @app.route("/career/names/add", methods=["POST"])

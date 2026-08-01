@@ -9,6 +9,24 @@
     <a href="{{ url_for('admin_card_template') }}" class="btn btn-ghost btn-sm">🎭 Faces</a>
   </div>
 </div>
+
+<form method="POST" action="{{ url_for('admin_career_quests_seed') }}" style="margin-bottom:1rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn btn-ghost btn-sm">🌱 Install / refresh weekly quests</button>
+  <span style="color:var(--muted);font-size:.8rem;margin-left:.5rem;">
+    Loads the {{ career_quest_count }}-quest catalogue. Each owner is dealt
+    {{ career_quests_per_user }} a week — 2 batting, 2 bowling, 1 all-round.
+    Safe to re-run; quests are matched by name and updated in place.
+  </span>
+</form>
+
+{% if not career_quests_live %}
+<div style="background:var(--card);border:1px solid #b4762d;border-radius:10px;padding:.9rem;margin-bottom:1.25rem;color:var(--muted);font-size:.88rem;line-height:1.6;">
+  ⚠️ <strong>No career weekly quests are installed yet.</strong> Until you press
+  the button above, Career Player owners get no career quests in
+  <code>/mq</code> or the Mini App, and the streak jackpot can never start.
+</div>
+{% endif %}
 <p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;line-height:1.6;">
   Every player created with <code>/cmucareer</code>. A career card belongs to one user for good — it can't be sold, traded, packed or dealt to anyone else — and grows only by spending gems on its ten attributes.
 </p>
