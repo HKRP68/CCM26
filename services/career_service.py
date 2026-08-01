@@ -17,7 +17,9 @@ appears in an XI exactly like any other card. Three things make it different:
 """
 
 import logging
+import re
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from models import Player, UserRoster
@@ -52,6 +54,19 @@ CAREER_CATEGORY = "All-rounder"
 CAREER_LOCKED_MESSAGE = (
     "🎖 Your Career Player is yours for good — it can't be sold or traded."
 )
+
+# Bounds for an admin-typed career name. The generated names are two pool
+# entries joined by a space (60 characters each), but a hand-typed one is a
+# support fix, not a bulk import — 48 keeps it inside every card layout and
+# well under the 150-character column.
+NAME_MIN = 2
+NAME_MAX = 48
+
+# Letters, spaces and the punctuation real cricketers' names actually carry:
+# "M.S. Dhoni", "de Villiers", "O'Keefe", "Jean-Paul Duminy". Digits and emoji
+# are refused — the name is stamped on a rendered card and read back in match
+# commentary, so it has to behave like a name.
+_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z .'\-]*$")
 
 
 def attr_column(attr):
@@ -409,6 +424,151 @@ def upgrade_attribute(session, user, attr, steps=1):
         "rating": player.rating, "rating_changed": player.rating != old_rating,
         "bat_rating": player.bat_rating, "bowl_rating": player.bowl_rating,
     }
+
+
+# ── Renaming ────────────────────────────────────────────────────────────────
+
+def clean_career_name(name):
+    """Trim and collapse whitespace in a typed career name."""
+    return " ".join((name or "").split())
+
+
+def validate_career_name(session, name, *, player=None):
+    """Check a typed career name. Returns ``(clean_name, None)`` or ``(None, msg)``.
+
+    The uniqueness rule is the one creation uses — a career name may not collide
+    with *any* player, real or career — with the player being renamed excluded so
+    re-saving the same name is not a self-collision, and so a capitalisation fix
+    ("mccullum" → "McCullum") is allowed rather than read as a clash with itself.
+    ``uq_players_name_version`` is still the backstop against two admins typing
+    the same name at once.
+
+    The name is otherwise taken literally: an admin typing one is correcting
+    something, so nothing here re-capitalises what they wrote.
+    """
+    name = clean_career_name(name)
+    if not name:
+        return None, "Enter a name."
+    if len(name) < NAME_MIN:
+        return None, f"That name is too short (minimum {NAME_MIN} characters)."
+    if len(name) > NAME_MAX:
+        return None, f"That name is too long (maximum {NAME_MAX} characters)."
+    if not _NAME_RE.match(name):
+        return None, ("Names may use letters, spaces, apostrophes, hyphens and "
+                      "full stops only, and must start with a letter.")
+    if sum(character.isalpha() for character in name) < NAME_MIN:
+        return None, "That name needs at least two letters."
+
+    clash = session.query(Player.id).filter(func.lower(Player.name) == name.lower())
+    if player is not None and player.id:
+        clash = clash.filter(Player.id != player.id)
+    if clash.first() is not None:
+        return None, f"'{name}' is already taken by another player."
+    return name, None
+
+
+def rename_career_player(session, player, new_name):
+    """Rename a career player in place. Caller commits.
+
+    Everything else about the card — attributes, ratings, face, stats, roster
+    slot — is untouched: only the name on it changes. Cached renders are dropped
+    so the next card shows the new name.
+    """
+    if not is_career_player(player):
+        return {"ok": False, "error": "not_career",
+                "message": "That isn't a Career Player."}
+
+    name, error = validate_career_name(session, new_name, player=player)
+    if error:
+        return {"ok": False, "error": "bad_name", "message": error}
+
+    old_name = player.name
+    if name == old_name:
+        return {"ok": False, "error": "unchanged",
+                "message": f"{old_name} already has that name."}
+
+    player.name = name
+    _invalidate_card(player)
+    try:
+        # SAVEPOINT so a lost race against uq_players_name_version undoes this
+        # rename alone, leaving the caller's session usable for the error reply.
+        with session.begin_nested():
+            session.flush()
+    except IntegrityError:
+        logger.info("career rename for player %s hit a unique index", player.id)
+        return {"ok": False, "error": "name_taken",
+                "message": f"'{name}' was just taken by another player."}
+
+    if player.career_owner_user_id:
+        try:
+            from services.activity_service import log_activity
+            log_activity(session, player.career_owner_user_id, "career_rename",
+                         f"Career Player renamed {old_name} → {name}",
+                         player_name=name, player_rating=player.rating)
+        except Exception:
+            logger.exception("career rename activity log failed")
+
+    return {"ok": True, "from": old_name, "to": name, "player": player}
+
+
+# ── Deletion ────────────────────────────────────────────────────────────────
+
+def delete_career_player(session, player, *, refund_gems=True):
+    """Delete a career player outright so its owner can create a new one.
+
+    Caller commits. This is a support action, not something the owner can do:
+    the card, its roster slot and its match record all go, and the owner is free
+    to run /cmucareer again from the first step.
+
+    ``refund_gems`` returns everything the owner spent raising the attributes
+    (:func:`total_invested`) to their gem balance, which is the fair default —
+    the deletion is not their doing. The weekly-quest streak is deliberately
+    left alone: it belongs to the user, not to the card, and a support fix
+    shouldn't cost them a jackpot they earned.
+
+    Returns ``{"ok": True, "name", "owner_id", "refunded", "rating"}``.
+    """
+    from models import User
+    from services.player_service import purge_player_references
+
+    if not is_career_player(player):
+        return {"ok": False, "error": "not_career",
+                "message": "That isn't a Career Player."}
+
+    name = player.name
+    player_id = player.id
+    rating = player.rating
+    owner_id = player.career_owner_user_id
+    invested = total_invested(player)
+
+    owner = session.query(User).get(owner_id) if owner_id else None
+
+    # Roster row, traits, stats and every other pointer at this card — and the
+    # squad renumbering that closes the gap the roster row leaves behind. Never
+    # with a coin refund: a career card was bought with gems, and the sell value
+    # of a card that can't be sold is meaningless.
+    purge_player_references(session, player, refund=False)
+    session.delete(player)
+    session.flush()
+
+    refunded = 0
+    if owner is not None:
+        if refund_gems and invested > 0:
+            refunded = invested
+            owner.total_gems = (owner.total_gems or 0) + refunded
+        try:
+            from services.activity_service import log_activity
+            detail = f"Career Player '{name}' ({rating}) deleted by admin"
+            if refunded:
+                detail += f" · refunded {refunded:,} 💎"
+            log_activity(session, owner.id, "career_delete", detail,
+                         gems_change=refunded, player_name=name,
+                         player_rating=rating)
+        except Exception:
+            logger.exception("career delete activity log failed")
+
+    return {"ok": True, "name": name, "player_id": player_id, "rating": rating,
+            "owner_id": owner_id, "invested": invested, "refunded": refunded}
 
 
 # ── Presentation ────────────────────────────────────────────────────────────

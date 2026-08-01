@@ -2145,83 +2145,14 @@ def admin_player_version_delete(version_id):
 # ── Delete player ────────────────────────────────────────────────────
 
 def _purge_player_references(db, player):
-    """Remove every row that references ``player`` so the player row can be
-    deleted without tripping a ForeignKeyViolation.
+    """Clear every reference to ``player`` and refund its roster owners.
 
-    Roster owners are refunded the player's sell value (mirroring a normal
-    release): equipped traits return to inventory, trade/captain pointers are
-    cleared, coins are credited, and an activity row is logged. CASCADE tables
-    (challenge_players, tournament_player_stats, fantasy_league_players) clean
-    themselves up when the player row is finally deleted — that is how the
-    player leaves Challenge League data. Returns the number of users refunded.
+    A thin wrapper over :func:`services.player_service.purge_player_references`,
+    which is shared with the Career Player delete. Returns the number of owners
+    refunded.
     """
-    from models import (
-        UserRoster, Trade,
-        PlayerGameStats, PlayerMarket, GlobalPlayerMarket, BotTeamPlayer,
-        PlayerFormHistory, PlayerImage, PlayerMatchStats,
-        FantasyPlayerScore, FantasyPick,
-    )
-    from config import get_sell_value
-    from services.activity_service import log_activity
-
-    pid = player.id
-    name = player.name
-    rating = player.rating
-
-    # 1) Roster rows — refund owners, return traits, clear trade/captain refs.
-    roster_rows = db.query(UserRoster).filter(UserRoster.player_id == pid).all()
-    roster_ids = [r.id for r in roster_rows]
-    refunded_users = 0
-    if roster_ids:
-        # Equipped traits go back to the owner's inventory rather than vanishing.
-        from services.trait_service import return_traits_to_inventory
-        return_traits_to_inventory(db, roster_ids)
-        # Null roster pointers held by trades (FK is NO ACTION → would block).
-        for t in (db.query(Trade)
-                    .filter((Trade.initiator_roster_id.in_(roster_ids)) |
-                            (Trade.receiver_roster_id.in_(roster_ids))).all()):
-            if t.initiator_roster_id in roster_ids:
-                t.initiator_roster_id = None
-            if t.receiver_roster_id in roster_ids:
-                t.receiver_roster_id = None
-        db.flush()
-        for row in roster_rows:
-            user = db.query(User).get(row.user_id)
-            if user:
-                sv = get_sell_value(rating)
-                user.total_coins = (user.total_coins or 0) + sv
-                user.roster_count = max(0, (user.roster_count or 0) - 1)
-                if user.captain_roster_id == row.id:
-                    user.captain_roster_id = None
-                try:
-                    log_activity(db, user.id, "release",
-                                 f"Player '{name}' ({rating}) removed by admin · refunded {sv:,}",
-                                 coins_change=sv, player_name=name, player_rating=rating)
-                except Exception:
-                    pass
-                refunded_users += 1
-            db.delete(row)
-        db.flush()
-
-    # 2) Trades that reference the player directly (player_id is NOT NULL, so it
-    #    can't be nulled — drop the historical trade rows instead).
-    (db.query(Trade)
-       .filter((Trade.initiator_player_id == pid) | (Trade.receiver_player_id == pid))
-       .delete(synchronize_session=False))
-
-    # 3) Remaining blocking references (no CASCADE in the model).
-    for Model in (PlayerGameStats, PlayerMarket, GlobalPlayerMarket, BotTeamPlayer,
-                  PlayerFormHistory, PlayerImage, PlayerMatchStats,
-                  FantasyPlayerScore, FantasyPick):
-        db.query(Model).filter(Model.player_id == pid).delete(synchronize_session=False)
-
-    # 4) Detach child variants (self-FK parent_player_id, no CASCADE).
-    (db.query(Player)
-       .filter(Player.parent_player_id == pid)
-       .update({Player.parent_player_id: None}, synchronize_session=False))
-
-    db.flush()
-    return refunded_users
+    from services.player_service import purge_player_references
+    return purge_player_references(db, player, refund=True)
 
 
 @app.route("/players/<int:player_id>/delete", methods=["POST"])
@@ -17292,9 +17223,9 @@ def admin_career():
     db = get_session()
     try:
         from models import User
-        from services.career_service import (ALL_ATTRS, ATTR_LABELS,
-                                             attr_column, total_invested,
-                                             cost_to_max)
+        from services.career_service import (ALL_ATTRS, ATTR_LABELS, NAME_MAX,
+                                             NAME_MIN, attr_column,
+                                             total_invested, cost_to_max)
         country = (request.args.get("country") or "").strip()
         sort = (request.args.get("sort") or "rating").strip()
 
@@ -17354,7 +17285,7 @@ def admin_career():
         return render_template(
             "admin_career.html", players=players, countries=countries,
             country=country, sort=sort, attr_labels=ATTR_LABELS,
-            all_attrs=ALL_ATTRS,
+            all_attrs=ALL_ATTRS, name_min=NAME_MIN, name_max=NAME_MAX,
             career_quests_live=quests_live,
             career_quest_count=len(CAREER_QUESTS),
             career_quests_per_user=CAREER_QUESTS_PER_USER,
@@ -17363,13 +17294,56 @@ def admin_career():
         db.close()
 
 
+def _career_card_invalidate(player_id):
+    """Drop every cached render of a career card after it changes."""
+    try:
+        from services.card_generator import (invalidate_card_cache,
+                                             invalidate_template_card_cache)
+        invalidate_card_cache(player_id)
+        invalidate_template_card_cache(player_id)
+    except Exception:
+        logger.exception("career card cache invalidation failed")
+    try:
+        from services.player_cache import invalidate as invalidate_player_cache
+        invalidate_player_cache()
+    except Exception:
+        logger.exception("player cache invalidation failed")
+
+
+def _career_owner_dm(owner, text):
+    """Best-effort Telegram DM to a career player's owner.
+
+    Returns True only when the message actually landed, so the caller can say so
+    in its flash rather than promising a notification that never arrived. Never
+    raises: the database change is already committed by this point and must not
+    be reported as failed because Telegram was unreachable.
+    """
+    telegram_id = getattr(owner, "telegram_id", None)
+    if not telegram_id:
+        return False
+    try:
+        from bot import _send_bot_dm_blocking
+        return bool(_send_bot_dm_blocking(telegram_id, text))
+    except Exception:
+        logger.exception("career owner DM failed")
+        return False
+
+
+def _career_owner_label(owner):
+    if owner is None:
+        return "—"
+    return ((owner.username and f"@{owner.username}")
+            or owner.first_name or f"id {owner.telegram_id}")
+
+
 @app.route("/career/<int:player_id>/reset", methods=["POST"])
 @login_required
 def admin_career_reset(player_id):
     """Support action: put every attribute back to 78 and refund nothing.
 
-    Deleting a career player is deliberately not offered — it would orphan the
-    owner's roster row, match stats and quest progress.
+    The card itself survives — same name, same face, same owner, same match
+    record. To take the card away entirely so its owner starts again from the
+    /cmucareer wizard, use :func:`admin_career_delete`.
     """
     db = get_session()
     try:
@@ -17385,19 +17359,151 @@ def admin_career_reset(player_id):
             setattr(player, attr_column(attr), CAREER_START)
         recompute_ratings(player)
         player.gen_card_file_id = None
+        log_admin(db, "career_reset", target_type="player", target_id=player.id,
+                  target_name=player.name,
+                  detail=f"Reset to {CAREER_START}; {spent} gems of upgrades cleared")
         db.commit()
-        try:
-            from services.card_generator import (invalidate_card_cache,
-                                                 invalidate_template_card_cache)
-            invalidate_card_cache(player.id)
-            invalidate_template_card_cache(player.id)
-        except Exception:
-            pass
+        _career_card_invalidate(player.id)
         flash(f"✅ Reset {player.name} to {CAREER_START} across the board "
               f"({spent:,} 💎 of upgrades cleared).", "info")
         return redirect(url_for("admin_career"))
     except Exception as e:
         db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career"))
+    finally:
+        db.close()
+
+
+@app.route("/career/<int:player_id>/rename", methods=["POST"])
+@login_required
+def admin_career_rename(player_id):
+    """Support action: change the name on a career card, nothing else.
+
+    The name is the one part of a career player the owner cannot pick — the
+    wizard generates it from the pool — so a bad or unwanted one can only be
+    fixed from here. Attributes, face, stats and roster slot are untouched, and
+    the same uniqueness rule creation uses applies, so the new name can never
+    collide with another card.
+    """
+    db = get_session()
+    try:
+        from models import User
+        from services.career_service import rename_career_player
+
+        player = db.query(Player).get(player_id)
+        if not player or not player.is_career:
+            flash("❌ That isn't a Career Player.", "error")
+            return redirect(url_for("admin_career"))
+
+        owner = (db.query(User).get(player.career_owner_user_id)
+                 if player.career_owner_user_id else None)
+        result = rename_career_player(db, player, request.form.get("name"))
+        if not result["ok"]:
+            db.rollback()
+            flash(f"❌ {result['message']}", "error")
+            return redirect(url_for("admin_career"))
+
+        old_name, new_name = result["from"], result["to"]
+        log_admin(db, "career_rename", target_type="player", target_id=player.id,
+                  target_name=new_name,
+                  detail=f"Renamed '{old_name}' → '{new_name}' "
+                         f"(owner {_career_owner_label(owner)})")
+        db.commit()
+        _career_card_invalidate(player_id)
+
+        message = f"✅ Renamed {old_name} → {new_name}."
+        if request.form.get("notify") and owner is not None:
+            if _career_owner_dm(
+                    owner,
+                    f"🎖 <b>Your Career Player has been renamed.</b>\n\n"
+                    f"{html_lib.escape(old_name)} → <b>{html_lib.escape(new_name)}</b>\n\n"
+                    f"Everything else is exactly as it was — same attributes, "
+                    f"same face, same record. Run /cmucareer to see the card."):
+                message += " Owner notified."
+            else:
+                message += " Owner could not be notified."
+        flash(message, "success")
+        return redirect(url_for("admin_career"))
+    except Exception as e:
+        db.rollback()
+        logger.exception("career rename failed")
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career"))
+    finally:
+        db.close()
+
+
+@app.route("/career/<int:player_id>/delete", methods=["POST"])
+@login_required
+def admin_career_delete(player_id):
+    """Support action: delete a career player so its owner can create a new one.
+
+    Irreversible, so the form makes the admin type the player's name back. The
+    card, its roster slot and its match record go; the gems the owner spent
+    raising it come back unless ``refund`` is cleared. Everything that isn't the
+    card — coins, packs, the rest of the squad, the weekly-quest streak — is
+    untouched, and /cmucareer starts from the first step again.
+    """
+    db = get_session()
+    try:
+        from models import User
+        from services.career_service import delete_career_player, clean_career_name
+
+        player = db.query(Player).get(player_id)
+        if not player or not player.is_career:
+            flash("❌ That isn't a Career Player.", "error")
+            return redirect(url_for("admin_career"))
+
+        typed = clean_career_name(request.form.get("confirm"))
+        if typed.lower() != (player.name or "").lower():
+            flash(f"❌ Type the player's name ({player.name}) to confirm the "
+                  f"deletion.", "error")
+            return redirect(url_for("admin_career"))
+
+        owner = (db.query(User).get(player.career_owner_user_id)
+                 if player.career_owner_user_id else None)
+        refund = bool(request.form.get("refund"))
+        notify = bool(request.form.get("notify"))
+
+        result = delete_career_player(db, player, refund_gems=refund)
+        if not result["ok"]:
+            db.rollback()
+            flash(f"❌ {result['message']}", "error")
+            return redirect(url_for("admin_career"))
+
+        name = result["name"]
+        refunded = result["refunded"]
+        log_admin(db, "career_delete", target_type="player", target_id=player_id,
+                  target_name=name,
+                  detail=f"Deleted career player ({result['rating']} OVR, "
+                         f"{result['invested']} gems invested); owner "
+                         f"{_career_owner_label(owner)}; refunded {refunded} gems")
+        db.commit()
+        _career_card_invalidate(player_id)
+
+        message = f"🗑 Deleted {name}."
+        if refunded:
+            message += f" Refunded {refunded:,} 💎 to {_career_owner_label(owner)}."
+        if notify and owner is not None:
+            refund_line = (f"The <b>{refunded:,} 💎</b> you invested in them has "
+                           f"been returned to your balance.\n\n"
+                           if refunded else "")
+            if _career_owner_dm(
+                    owner,
+                    f"🎖 <b>Your Career Player has been retired.</b>\n\n"
+                    f"{html_lib.escape(name)} is no longer on your roster.\n\n"
+                    f"{refund_line}"
+                    f"Run /cmucareer whenever you're ready to create a new one — "
+                    f"country, name, style and face all from scratch."):
+                message += " Owner notified."
+            else:
+                message += " Owner could not be notified."
+        flash(message, "success")
+        return redirect(url_for("admin_career"))
+    except Exception as e:
+        db.rollback()
+        logger.exception("career delete failed")
         flash(f"❌ {e}", "error")
         return redirect(url_for("admin_career"))
     finally:

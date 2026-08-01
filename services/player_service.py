@@ -2,14 +2,22 @@
 
 Uses player_cache for random picks (zero egress for selection logic), then
 fetches the single chosen ORM row by ID. Result: massive egress reduction.
+
+Also home to :func:`purge_player_references`, the one place that knows every
+table pointing at a ``players`` row — shared by the website's player delete and
+by the Career Player delete so a new referencing table only has to be handled
+once.
 """
 
+import logging
 import random
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from models import Player
 from config import CLAIM_RARITY, get_buy_value, get_sell_value
+
+logger = logging.getLogger(__name__)
 
 
 def not_career(query):
@@ -180,3 +188,108 @@ def get_players_for_debut(session: Session) -> list[Player]:
         result.append(player)
 
     return result
+
+
+# ── Deletion ────────────────────────────────────────────────────────────────
+
+def renumber_roster(session, user_id):
+    """Close any gaps in a user's ``order_position`` after rows are removed."""
+    from sqlalchemy import asc
+    from models import UserRoster
+
+    remaining = (session.query(UserRoster)
+                 .filter(UserRoster.user_id == user_id)
+                 .order_by(asc(UserRoster.order_position).nullslast(),
+                           UserRoster.acquired_date, UserRoster.id).all())
+    for position, entry in enumerate(remaining, 1):
+        if entry.order_position != position:
+            entry.order_position = position
+
+
+def purge_player_references(session, player, *, refund=True):
+    """Remove every row that references ``player`` so the player row can be
+    deleted without tripping a ForeignKeyViolation. Caller commits.
+
+    Roster rows go either way — equipped traits return to their owner's
+    inventory, and trade/captain pointers are cleared — because those are what
+    actually block the delete. ``refund`` decides whether the owner is also paid
+    the player's sell value and given a release activity row, which is right for
+    a catalogue card pulled from under its owners but wrong for a Career Player
+    (bought with gems, never with coins — see
+    :func:`services.career_service.delete_career_player`, which refunds the gems
+    itself). CASCADE tables (challenge_players, tournament_player_stats,
+    fantasy_league_players, roster_overflow_claims) clean themselves up when the
+    player row is finally deleted. Returns the number of owners refunded.
+    """
+    from models import (User, UserRoster, Trade,
+                        PlayerGameStats, PlayerMarket, GlobalPlayerMarket,
+                        BotTeamPlayer, PlayerFormHistory, PlayerImage,
+                        PlayerMatchStats, FantasyPlayerScore, FantasyPick)
+    from services.activity_service import log_activity
+
+    pid = player.id
+    name = player.name
+    rating = player.rating
+
+    # 1) Roster rows — refund owners, return traits, clear trade/captain refs.
+    roster_rows = session.query(UserRoster).filter(UserRoster.player_id == pid).all()
+    roster_ids = [r.id for r in roster_rows]
+    refunded_users = 0
+    touched_users = set()
+    if roster_ids:
+        # Equipped traits go back to the owner's inventory rather than vanishing.
+        from services.trait_service import return_traits_to_inventory
+        return_traits_to_inventory(session, roster_ids)
+        # Null roster pointers held by trades (FK is NO ACTION → would block).
+        for t in (session.query(Trade)
+                    .filter((Trade.initiator_roster_id.in_(roster_ids)) |
+                            (Trade.receiver_roster_id.in_(roster_ids))).all()):
+            if t.initiator_roster_id in roster_ids:
+                t.initiator_roster_id = None
+            if t.receiver_roster_id in roster_ids:
+                t.receiver_roster_id = None
+        session.flush()
+        for row in roster_rows:
+            user = session.query(User).get(row.user_id)
+            if user:
+                touched_users.add(user.id)
+                user.roster_count = max(0, (user.roster_count or 0) - 1)
+                if user.captain_roster_id == row.id:
+                    user.captain_roster_id = None
+                if refund:
+                    sv = get_sell_value(rating)
+                    user.total_coins = (user.total_coins or 0) + sv
+                    try:
+                        log_activity(session, user.id, "release",
+                                     f"Player '{name}' ({rating}) removed by admin "
+                                     f"· refunded {sv:,}",
+                                     coins_change=sv, player_name=name,
+                                     player_rating=rating)
+                    except Exception:
+                        logger.exception("player purge activity log failed")
+                    refunded_users += 1
+            session.delete(row)
+        session.flush()
+
+    # 2) Trades that reference the player directly (player_id is NOT NULL, so it
+    #    can't be nulled — drop the historical trade rows instead).
+    (session.query(Trade)
+       .filter((Trade.initiator_player_id == pid) | (Trade.receiver_player_id == pid))
+       .delete(synchronize_session=False))
+
+    # 3) Remaining blocking references (no CASCADE in the model).
+    for Model in (PlayerGameStats, PlayerMarket, GlobalPlayerMarket, BotTeamPlayer,
+                  PlayerFormHistory, PlayerImage, PlayerMatchStats,
+                  FantasyPlayerScore, FantasyPick):
+        session.query(Model).filter(Model.player_id == pid).delete(synchronize_session=False)
+
+    # 4) Detach child variants (self-FK parent_player_id, no CASCADE).
+    (session.query(Player)
+       .filter(Player.parent_player_id == pid)
+       .update({Player.parent_player_id: None}, synchronize_session=False))
+
+    session.flush()
+    for user_id in touched_users:
+        renumber_roster(session, user_id)
+    session.flush()
+    return refunded_users
