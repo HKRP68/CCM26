@@ -5851,7 +5851,11 @@ function renderCareer() {
 
   const s = d.stats || {};
   const st = d.streak || {};
-  const questsDone = (d.quests || []).filter(q => q.completed).length;
+  // Only the career quests belong on this screen: the streak below counts
+  // those alone, so mixing in the ordinary weekly ones made "cleared this
+  // week" a number that had nothing to do with the jackpot it sits under.
+  const careerQuests = (d.quests || []).filter(q => q.career_only);
+  const questsDone = careerQuests.filter(q => q.completed).length;
 
   el.innerHTML = `
     <div class="career-hero">
@@ -5883,19 +5887,19 @@ function renderCareer() {
     ${group(d.bowl_attrs, 'Bowling', '🎳')}
 
     <div class="career-group">
-      <div class="career-group-title">📆 Weekly quests</div>
+      <div class="career-group-title">📆 Career quests this week</div>
       <div class="career-note" style="margin-top:0;">
-        ${questsDone}/${(d.quests || []).length} cleared this week.
+        ${questsDone}/${careerQuests.length} cleared this week.
         Clear them all for <b>${st.weeks || 4}</b> weeks running to bank the
         <b>${st.bonus_gems || 100} 💎</b> jackpot — ${st.to_jackpot || 0} to go.
       </div>
-      ${(d.quests || []).length
-        ? d.quests.map(q => `
+      ${careerQuests.length
+        ? careerQuests.map(q => `
           <div class="career-quest ${q.completed ? 'done' : ''}">
             <span>${q.completed ? '✅' : '⏳'} ${escapeHtml(q.name)}</span>
             <span class="career-cost">${q.progress}/${q.target} · ${q.reward_gems} 💎</span>
           </div>`).join('')
-        : `<div class="career-quest"><span>No weekly quests assigned yet.</span></div>`}
+        : `<div class="career-quest"><span>No career quests assigned yet — open Quests to pick them up.</span></div>`}
       <button class="career-btn ghost" style="margin-top:.5rem;" onclick="navigate('quests')">Open Quests →</button>
     </div>
 

@@ -34,14 +34,46 @@ Per-match event_keys (added for the v2 quest list):
   'hattrick'              — fired once if at least one bowler took a hat-trick
 
 Career Player event_keys (fired only for the user's own /cmucareer card, and
-only ever consumed by quests flagged career_only):
+only ever consumed by quests flagged career_only). Every one is derived from
+the same per-player match stats the scorecards read, so nothing here depends on
+the engine recording anything new:
+
+  Appearance
   'career_match_played'   — the career player featured in a completed match
-  'career_runs_scored'    — runs the career player made (cumulative)
-  'career_wickets_taken'  — wickets the career player took (cumulative)
-  'career_fifty'          — career player passed 50 in a match
-  'career_hundred'        — career player passed 100 in a match
-  'career_sixes_hit'      — sixes the career player hit (cumulative)
+  'career_match_won'      — …and that match was won
   'career_potm'           — career player was Player of the Match
+
+  Batting (cumulative)
+  'career_runs_scored'    — runs the career player made
+  'career_chase_runs'     — runs made batting second
+  'career_boundary_runs'  — runs that came in fours and sixes (4x4 + 6x6)
+  'career_quickfire_runs' — runs from innings of 10+ balls at a strike rate
+                            of 150 or better; slower innings contribute none
+  'career_fours_hit'      — fours hit
+  'career_sixes_hit'      — sixes hit
+  'career_balls_faced'    — legal balls faced
+
+  Batting (once per qualifying innings)
+  'career_fifty'          — passed 50
+  'career_hundred'        — passed 100
+  'career_score_25_plus'  — reached 25, the "did the job" threshold
+  'career_score_75_plus'  — reached 75
+  'career_not_out'        — faced a ball and finished unbeaten
+
+  Bowling (cumulative)
+  'career_wickets_taken'  — wickets taken
+  'career_dot_balls'      — dot balls bowled
+  'career_maiden_overs'   — maiden overs bowled
+  'career_balls_bowled'   — legal balls bowled
+
+  Bowling (once per qualifying match/spell)
+  'career_three_fer'      — 3+ wickets in a match
+  'career_five_fer'       — 5+ wickets in a match
+  'career_hattrick'       — took a hat-trick
+  'career_economy_spell'  — 4+ overs at an economy under 6
+
+  All-round
+  'career_allrounder_match' — 25+ runs AND 2+ wickets in the same match
 
 Manual event_key:
   'manual' — quest is admin-only progressed (e.g. yorker counts, super overs).
@@ -76,6 +108,39 @@ QUESTS_PER_USER = {
     "weekly": WEEKLY_QUESTS_PER_USER,
     "monthly": MONTHLY_QUESTS_PER_USER,
 }
+
+# Career weekly quests are drawn on top of the ordinary weekly ones, not out of
+# the same slots. Sharing them meant a career owner could go a whole week
+# without a single career quest — which also stalls the streak, since a week
+# with no career quests assigned is a week that cannot be judged.
+CAREER_QUESTS_PER_USER = 5
+
+# …and the five are drawn one bucket at a time rather than five at random, so
+# nobody spends a week on five bowling quests. Buckets are read off the event
+# key, so a new quest lands in the right one with no extra admin field to set.
+CAREER_BAT_EVENTS = frozenset({
+    "career_runs_scored", "career_chase_runs", "career_boundary_runs",
+    "career_quickfire_runs", "career_fours_hit", "career_sixes_hit",
+    "career_balls_faced", "career_fifty", "career_hundred",
+    "career_score_25_plus", "career_score_75_plus", "career_not_out",
+})
+CAREER_BOWL_EVENTS = frozenset({
+    "career_wickets_taken", "career_dot_balls", "career_maiden_overs",
+    "career_balls_bowled", "career_three_fer", "career_five_fer",
+    "career_hattrick", "career_economy_spell",
+})
+CAREER_ALL_EVENTS = frozenset({
+    "career_match_played", "career_match_won", "career_potm",
+    "career_allrounder_match",
+})
+
+# (bucket, how many of the five come from it). Two batting, two bowling and one
+# all-round mirrors what a Career Player actually is — always an All-rounder.
+CAREER_QUEST_MIX = (
+    (CAREER_BAT_EVENTS, 2),
+    (CAREER_BOWL_EVENTS, 2),
+    (CAREER_ALL_EVENTS, 1),
+)
 
 
 def _claim_silently(session, user, uqp, q):
@@ -242,6 +307,107 @@ def _evaluate_career_streak(session, user, current_period, now=None):
     return result
 
 
+def _quests_assigned_in(session, user_id, period):
+    """Quest ids the user was assigned in one past period."""
+    rows = (session.query(UserQuestProgress.quest_id)
+            .filter(UserQuestProgress.user_id == user_id,
+                    UserQuestProgress.period_key == period,
+                    UserQuestProgress.assigned == True)
+            .all())
+    return {row[0] for row in rows}
+
+
+def _draw(candidates, count, seen):
+    """Take ``count`` at random, preferring ones not already ``seen``.
+
+    ``seen`` carries both last week's set and whatever this draw has already
+    taken, so the buckets cannot hand out the same quest twice.
+    """
+    fresh = [q for q in candidates if q.id not in seen]
+    stale = [q for q in candidates if q.id in seen]
+    random.shuffle(fresh)
+    random.shuffle(stale)
+    picked = (fresh + stale)[:count]
+    seen.update(q.id for q in picked)
+    return picked
+
+
+def _by_effort(quests):
+    """Split a bucket into its lighter and heavier halves.
+
+    ``reward_gems`` is the difficulty grade: the seeder prices a quest at the
+    configured base times its tier, so what a quest pays *is* how much work it
+    is. Target count breaks ties between quests on the same tier.
+    """
+    ordered = sorted(quests, key=lambda q: (q.reward_gems or 0,
+                                            q.target_count or 0, q.id))
+    mid = len(ordered) // 2
+    return ordered[:mid], ordered[mid:]
+
+
+def _draw_spread(candidates, count, seen):
+    """Draw ``count`` from one bucket, spread across the difficulty range.
+
+    A purely random draw regularly produced a week of five marathon quests —
+    "win 8 matches", "take 5 in an innings", "bowl 60 overs" — which is not a
+    hard week so much as a written-off one, and because the streak needs every
+    quest cleared it also wrote off the jackpot. Taking half of each multi-slot
+    bucket from the lighter end guarantees every week contains something
+    achievable alongside the stretch goals.
+    """
+    lighter, heavier = _by_effort(candidates)
+    if count < 2 or not lighter or not heavier:
+        return _draw(candidates, count, seen)
+    from_lighter = count // 2
+    picked = _draw(lighter, from_lighter, seen)
+    picked += _draw(heavier, count - len(picked), seen)
+    # A half that ran dry (everything in it was already taken) must not cost a
+    # slot — top up from whatever is left in the bucket as a whole.
+    if len(picked) < count:
+        rest = [q for q in candidates if q.id not in {p.id for p in picked}]
+        picked += _draw(rest, count - len(picked), seen)
+    return picked
+
+
+def _pick_career_weeklies(session, user_id, career_pool, now):
+    """Choose this week's Career Player quests: five, balanced, and new.
+
+    Three things shape the pick, in order:
+
+    * **Balance.** Two batting, two bowling and one all-round, per
+      :data:`CAREER_QUEST_MIX`. Five uniform draws from one catalogue regularly
+      produced a week of nothing but bowling, which is a poor week for a card
+      that is always an All-rounder.
+    * **Range.** Each two-slot bucket takes one from its lighter half and one
+      from its heavier half, so a week is never five marathons — see
+      :func:`_draw_spread`.
+    * **Freshness.** Quests the user was assigned last week go to the back of
+      the queue, so the same five rarely land twice running.
+    * **Never short.** A bucket with too few quests (or an admin who has
+      deactivated most of a category) tops up from whatever is left, so the
+      user still gets five whenever the catalogue holds five.
+    """
+    last_week = _quests_assigned_in(
+        session, user_id, weekly_period_key(now - timedelta(days=7)))
+
+    by_id = {q.id: q for q in career_pool}
+    seen = set(last_week)
+    chosen = []
+    for events, count in CAREER_QUEST_MIX:
+        bucket = [q for q in career_pool if q.event_key in events]
+        chosen += _draw_spread(bucket, count, seen)
+
+    # Top up to five from anything not already taken — a short bucket must not
+    # cost the user a slot, and a quest whose event key predates the buckets
+    # (or was typed in by hand on the website) is still eligible here.
+    taken = {q.id for q in chosen}
+    if len(chosen) < CAREER_QUESTS_PER_USER:
+        rest = [q for q in by_id.values() if q.id not in taken]
+        chosen += _draw(rest, CAREER_QUESTS_PER_USER - len(chosen),
+                        set(last_week) | taken)
+    return chosen[:CAREER_QUESTS_PER_USER]
+
+
 def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     """Make sure the user has a randomly-assigned set of quests for the current period.
 
@@ -349,9 +515,21 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     pinned = [q for q in pool if getattr(q, "always_assign", False)]
     random_pool = [q for q in pool if not getattr(q, "always_assign", False)]
 
+    # Career weekly quests get their own five slots rather than competing with
+    # the ordinary weekly ones, so a Career Player owner always has a full
+    # career card to work through — and always has a week that can be judged.
+    career_pool = []
+    if quest_type == "weekly" and has_career:
+        career_pool = [q for q in random_pool
+                       if getattr(q, "career_only", False)]
+        random_pool = [q for q in random_pool
+                       if not getattr(q, "career_only", False)]
+
     chosen = list(pinned)  # start with all pinned
     if random_pool:
         chosen += random.sample(random_pool, min(max_count, len(random_pool)))
+    if career_pool:
+        chosen += _pick_career_weeklies(session, user_id, career_pool, now)
 
     assigned_quests = []
     for q in chosen:
@@ -667,8 +845,13 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
         career_player_id = career.id if career else None
     except Exception:
         logger.exception("career player lookup failed for quest tracking")
-    career_runs = career_wickets = career_sixes = 0
+    career_runs = career_wickets = career_sixes = career_fours = 0
     career_fifties = career_hundreds = 0
+    career_balls_faced = career_boundary_runs = career_chase_runs = 0
+    career_quickfire_runs = career_not_outs = 0
+    career_scores_25 = career_scores_75 = 0
+    career_dots = career_maidens = career_balls_bowled = 0
+    career_hattricks = career_clean_spells = 0
     career_played = False
 
     for xi_key, stats_key, is_bat in [
@@ -677,6 +860,9 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
         ("bat_xi", "bat_stats", True),
         ("bowl_xi", "bowl_stats", False),
     ]:
+        # "bat_xi"/"bowl_xi" are the second-innings line-ups, so batting there
+        # is batting in a chase — the only innings split the state gives us.
+        is_chase = is_bat and xi_key == "bat_xi"
         xi = state.get(xi_key, [])
         stats = state.get(stats_key, {}) or {}
         for p in xi:
@@ -699,14 +885,45 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
                 career_played = True
                 if is_bat:
                     runs_here = pst.get("runs", 0)
+                    balls_here = pst.get("balls", 0)
+                    fours_here = pst.get("fours", 0)
+                    sixes_here = pst.get("sixes", 0)
                     career_runs += runs_here
-                    career_sixes += pst.get("sixes", 0)
+                    career_sixes += sixes_here
+                    career_fours += fours_here
+                    career_balls_faced += balls_here
+                    career_boundary_runs += fours_here * 4 + sixes_here * 6
+                    if is_chase:
+                        career_chase_runs += runs_here
                     if runs_here >= 100:
                         career_hundreds += 1
                     elif runs_here >= 50:
                         career_fifties += 1
+                    if runs_here >= 75:
+                        career_scores_75 += 1
+                    if runs_here >= 25:
+                        career_scores_25 += 1
+                    if balls_here > 0 and not pst.get("out"):
+                        career_not_outs += 1
+                    # Only the innings that were actually played at pace count
+                    # toward a strike-rate quest — a 10-ball cameo says nothing.
+                    if balls_here >= 10 and runs_here * 100 >= balls_here * 150:
+                        career_quickfire_runs += runs_here
                 else:
-                    career_wickets += pst.get("wickets", 0)
+                    wkts_here = pst.get("wickets", 0)
+                    balls_bowled_here = pst.get("balls", 0)
+                    career_wickets += wkts_here
+                    career_dots += pst.get("dots", 0)
+                    career_maidens += pst.get("maidens", 0)
+                    career_balls_bowled += balls_bowled_here
+                    if pst.get("hattrick"):
+                        career_hattricks += 1
+                    # A "spell" needs enough overs for the economy to mean
+                    # something, matching the squad-wide 4-over threshold. Under
+                    # six an over is exactly "fewer runs than balls".
+                    if (balls_bowled_here >= 24
+                            and pst.get("runs", 0) < balls_bowled_here):
+                        career_clean_spells += 1
             if is_bat:
                 r = pst.get("runs", 0)
                 balls = pst.get("balls", 0)
@@ -767,16 +984,49 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     # actually featured, and only ever consumed by career_only quests.
     if career_played:
         safe_track(session, uid, "career_match_played", 1)
-        if career_runs > 0:
-            safe_track(session, uid, "career_runs_scored", career_runs)
-        if career_wickets > 0:
-            safe_track(session, uid, "career_wickets_taken", career_wickets)
-        if career_sixes > 0:
-            safe_track(session, uid, "career_sixes_hit", career_sixes)
-        for _ in range(career_fifties):
-            safe_track(session, uid, "career_fifty", 1)
-        for _ in range(career_hundreds):
-            safe_track(session, uid, "career_hundred", 1)
+        if is_winner:
+            safe_track(session, uid, "career_match_won", 1)
+
+        # Cumulative totals — one call each, skipped when the figure is zero so
+        # a quiet match does not churn through every quest in the catalogue.
+        for event_key, amount in (
+            ("career_runs_scored", career_runs),
+            ("career_wickets_taken", career_wickets),
+            ("career_sixes_hit", career_sixes),
+            ("career_fours_hit", career_fours),
+            ("career_boundary_runs", career_boundary_runs),
+            ("career_balls_faced", career_balls_faced),
+            ("career_chase_runs", career_chase_runs),
+            ("career_quickfire_runs", career_quickfire_runs),
+            ("career_dot_balls", career_dots),
+            ("career_maiden_overs", career_maidens),
+            ("career_balls_bowled", career_balls_bowled),
+        ):
+            if amount > 0:
+                safe_track(session, uid, event_key, amount)
+
+        # Counted occurrences — each innings that qualified fires once, so a
+        # "three times this week" quest counts weeks, not matches.
+        for event_key, times in (
+            ("career_fifty", career_fifties),
+            ("career_hundred", career_hundreds),
+            ("career_score_25_plus", career_scores_25),
+            ("career_score_75_plus", career_scores_75),
+            ("career_not_out", career_not_outs),
+            ("career_hattrick", career_hattricks),
+            ("career_economy_spell", career_clean_spells),
+        ):
+            for _ in range(times):
+                safe_track(session, uid, event_key, 1)
+
+        # Once-per-match milestones, judged on the match total.
+        if career_wickets >= 3:
+            safe_track(session, uid, "career_three_fer", 1)
+        if career_wickets >= 5:
+            safe_track(session, uid, "career_five_fer", 1)
+        if career_runs >= 25 and career_wickets >= 2:
+            safe_track(session, uid, "career_allrounder_match", 1)
+
         # Player of the Match is decided by the finalize that calls us, which
         # stashes the winner on the state before doing so. Without it a
         # 'career_potm' quest could never progress, and because the weekly
