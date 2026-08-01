@@ -8,6 +8,7 @@ cutout over its baked-in face, and the three rarity cards are untouched.
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -15,13 +16,14 @@ import unittest
 _PREV_DATABASE_URL = None
 _SAVED_MODULES = {}
 _TMP = None
+_TMP_TEMPLATES = None
 _ENGINE = None
 _MODULE_NAMES = ("database", "models", "config",
                  "services.card_template_service")
 
 
 def setUpModule():
-    global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
+    global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _TMP_TEMPLATES, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
     _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
@@ -37,6 +39,13 @@ def setUpModule():
 
     _ENGINE = engine
     Base.metadata.create_all(bind=engine)
+
+    # Resolve templates against an empty directory of our own. Otherwise
+    # "a face with no artwork is not offered" would pass or fail depending on
+    # whatever the developer happens to have uploaded into data/card_templates.
+    import services.card_template_service as cts
+    _TMP_TEMPLATES = tempfile.mkdtemp(prefix="career-templates-")
+    cts.TEMPLATES_ROOT = _TMP_TEMPLATES
 
 
 def tearDownModule():
@@ -57,6 +66,8 @@ def tearDownModule():
         os.unlink(_TMP.name)
     except OSError:
         pass
+    if _TMP_TEMPLATES:
+        shutil.rmtree(_TMP_TEMPLATES, ignore_errors=True)
 
 
 class VariantKeyTests(unittest.TestCase):
@@ -211,9 +222,20 @@ class ColourParsingTests(unittest.TestCase):
 class FaceLifecycleTests(unittest.TestCase):
     def setUp(self):
         from database import get_session
-        from models import CareerFace
+        from models import CareerFace, Player
         self.session = get_session()
         self.session.query(CareerFace).delete()
+        self.session.query(Player).delete()
+        self.session.commit()
+
+    def _wearer(self, slot):
+        """A career player wearing one face, so the slot counts as in use."""
+        from models import Player
+        self.session.add(Player(
+            name=f"Wearer {slot}", version="Career", rating=78,
+            category="All-rounder", country="India", bat_hand="Right",
+            bowl_hand="Right", bowl_style="Fast", is_career=True,
+            career_face=f"career_{slot}"))
         self.session.commit()
 
     def tearDown(self):
@@ -237,6 +259,45 @@ class FaceLifecycleTests(unittest.TestCase):
         self.session.commit()
         self.assertEqual(next_slot(self.session), 1)
 
+    def test_a_slot_somebody_still_wears_is_never_handed_to_a_new_face(self):
+        """Otherwise every player wearing career_2 wakes up in new artwork.
+
+        A career card stores its face as the ``career_<slot>`` variant key, so
+        reissuing a deleted slot silently restyles everyone who chose it.
+        """
+        from services.career_face_service import add_face, next_slot, remove_face
+        add_face(self.session, "One")
+        add_face(self.session, "Two")
+        add_face(self.session, "Three")
+        self.session.commit()
+        self._wearer(2)
+
+        remove_face(self.session, 2)
+        self.session.commit()
+        self.assertEqual(next_slot(self.session), 4,
+                         "slot 2 is free but still worn, so it stays reserved")
+
+    def test_a_freed_slot_nobody_wears_is_reissued(self):
+        from services.career_face_service import add_face, next_slot, remove_face
+        add_face(self.session, "One")
+        add_face(self.session, "Two")
+        self.session.commit()
+        self._wearer(1)
+
+        remove_face(self.session, 2)
+        self.session.commit()
+        self.assertEqual(next_slot(self.session), 2)
+
+    def test_deleting_a_worn_face_says_who_it_affects(self):
+        from services.career_face_service import add_face, remove_face
+        add_face(self.session, "One")
+        self.session.commit()
+        self._wearer(1)
+        ok, message = remove_face(self.session, 1)
+        self.session.commit()
+        self.assertTrue(ok)
+        self.assertIn("1 career player", message)
+
     def test_the_variant_key_follows_the_slot(self):
         from services.career_face_service import variant_for
         self.assertEqual(variant_for(3), "career_3")
@@ -252,6 +313,23 @@ class FaceLifecycleTests(unittest.TestCase):
         set_face_fields(self.session, 2, is_active=False)
         self.session.commit()
         self.assertEqual(career_variants(self.session), ["career_1"])
+
+    def test_the_storage_mirror_sees_deactivated_faces_too(self):
+        """Unticking "offer this face" must not lose its artwork on redeploy.
+
+        The Telegram mirror is what refills data/card_templates after a
+        rebuild, so a face it skips is a face whose blank card is gone while
+        its CareerFace row lives on pointing at nothing.
+        """
+        from services.card_template_service import career_variants
+        from services.career_face_service import add_face, set_face_fields
+        add_face(self.session, "One")
+        add_face(self.session, "Two")
+        self.session.commit()
+        set_face_fields(self.session, 2, is_active=False)
+        self.session.commit()
+        self.assertEqual(career_variants(self.session, active_only=False),
+                         ["career_1", "career_2"])
 
     def test_a_face_with_no_artwork_is_not_offered_to_players(self):
         """A half-finished design must never reach the wizard."""

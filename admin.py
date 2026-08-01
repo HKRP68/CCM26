@@ -10944,6 +10944,7 @@ EVENT_KEYS = [
     ("career_fifty", "🎖 Career Player scored 50+ in a match"),
     ("career_hundred", "🎖 Career Player scored 100+ in a match"),
     ("career_sixes_hit", "🎖 Sixes hit by your Career Player (cumulative)"),
+    ("career_potm", "🎖 Career Player was Player of the Match"),
     ("manual", "Manual — admin bumps progress directly"),
 ]
 

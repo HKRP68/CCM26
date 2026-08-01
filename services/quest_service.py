@@ -50,6 +50,7 @@ Manual event_key:
 import logging
 import random
 from datetime import datetime, timedelta
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from models import Quest, UserQuestProgress, User
@@ -105,27 +106,50 @@ def _user_has_career(session, user_id):
         return False
 
 
-def _evaluate_career_streak(session, user, current_period, now=None):
-    """Judge the week that just closed and update the user's career streak.
+# How far back a returning user's unjudged weeks are caught up. Weeks with no
+# assigned career quests cost one cheap query each and change nothing, so this
+# only has to be generous enough to cover a realistic absence.
+_MAX_CATCHUP_WEEKS = 60
+
+
+def _unjudged_weeks(last_judged, now):
+    """Week keys still to be judged, oldest first.
+
+    A week is judged lazily, on the owner's first quest read after it closes.
+    Somebody who does not open /mq for a month leaves three weeks unjudged in
+    between, and one of those may be a week they were assigned career quests and
+    failed them — so the marker cannot simply jump to the week that just closed
+    or the streak would survive a week it should not have.
+
+    With no marker at all there is no history to catch up on (the marker is set
+    the first time a week is judged), so only the week that just closed is
+    returned.
+    """
+    keys = []
+    cursor = now - timedelta(days=7)
+    limit = _MAX_CATCHUP_WEEKS if last_judged else 1
+    for _ in range(limit):
+        key = weekly_period_key(cursor)
+        if last_judged and key <= last_judged:
+            break
+        keys.append(key)
+        cursor -= timedelta(days=7)
+    keys.reverse()
+    return keys
+
+
+def _judge_career_week(session, user, period, weeks, bonus_gems):
+    """Judge one closed week against the user's career streak, or ``None``.
 
     A week counts only if the user was assigned at least one career quest and
-    completed *every* one of them. Miss one and the streak resets to zero.
-    Every ``career_streak_weeks`` consecutive weeks pays a gem jackpot.
-
-    Idempotent: ``career_weekly_last_period`` records the last week already
-    judged, so repeated calls in the same week change nothing.
+    completed *every* one of them. Miss one and the streak resets to zero. Every
+    ``weeks`` consecutive cleared weeks pays a ``bonus_gems`` jackpot.
     """
-    now = now or datetime.utcnow()
-    previous_period = weekly_period_key(now - timedelta(days=7))
-    if (user.career_weekly_last_period or "") >= previous_period:
-        return None
-    user.career_weekly_last_period = previous_period
-
     rows = (session.query(UserQuestProgress, Quest)
             .join(Quest, Quest.id == UserQuestProgress.quest_id)
             .filter(UserQuestProgress.user_id == user.id,
                     UserQuestProgress.assigned == True,
-                    UserQuestProgress.period_key == previous_period,
+                    UserQuestProgress.period_key == period,
                     Quest.quest_type == "weekly",
                     Quest.career_only == True)
             .all())
@@ -134,29 +158,26 @@ def _evaluate_career_streak(session, user, current_period, now=None):
         # career player yet, say) neither builds nor loses a streak.
         return None
 
-    cleared = all(uqp.completed for uqp, _ in rows)
-    if not cleared:
+    if not all(uqp.completed for uqp, _ in rows):
         had = user.career_weekly_streak or 0
         user.career_weekly_streak = 0
-        return {"cleared": False, "streak": 0, "lost": had, "bonus": 0}
+        return {"cleared": False, "streak": 0, "lost": had, "bonus": 0,
+                "weeks": weeks}
 
     streak = (user.career_weekly_streak or 0) + 1
     user.career_weekly_streak = streak
-    user.career_weekly_best_streak = max(user.career_weekly_best_streak or 0, streak)
-
-    try:
-        from services.config_service import get_config
-        cfg = get_config(session)
-        weeks = int(cfg.get("career_streak_weeks") or 4)
-        bonus_gems = int(cfg.get("career_streak_bonus_gems") or 100)
-    except Exception:
-        logger.exception("career streak config unavailable; using defaults")
-        weeks, bonus_gems = 4, 100
+    user.career_weekly_best_streak = max(user.career_weekly_best_streak or 0,
+                                         streak)
 
     bonus = 0
     if weeks > 0 and streak % weeks == 0 and bonus_gems > 0:
         bonus = bonus_gems
-        user.total_gems = (user.total_gems or 0) + bonus
+        # Credit in SQL rather than read-modify-write on the ORM object, so a
+        # concurrent gem change elsewhere in the app cannot swallow the payout.
+        session.query(User).filter(User.id == user.id).update(
+            {User.total_gems: func.coalesce(User.total_gems, 0) + bonus},
+            synchronize_session=False)
+        session.expire(user, ["total_gems"])
         try:
             from services.activity_service import log_activity
             log_activity(session, user.id, "career_streak",
@@ -167,6 +188,58 @@ def _evaluate_career_streak(session, user, current_period, now=None):
 
     return {"cleared": True, "streak": streak, "lost": 0, "bonus": bonus,
             "weeks": weeks}
+
+
+def _evaluate_career_streak(session, user, current_period, now=None):
+    """Judge every closed-but-unjudged week and update the career streak.
+
+    ``career_weekly_last_period`` records the most recent week already judged.
+    It is claimed with a conditional UPDATE rather than an ORM assignment: two
+    quest reads racing each other — the bot's /mq and the Mini App, say — would
+    otherwise both read the old marker, both pass, and both pay the jackpot. The
+    ``WHERE`` makes exactly one of them win, and the loser returns ``None``.
+    """
+    now = now or datetime.utcnow()
+    previous_period = weekly_period_key(now - timedelta(days=7))
+    last_judged = user.career_weekly_last_period or ""
+    if last_judged >= previous_period:
+        return None
+
+    claimed = (session.query(User)
+               .filter(User.id == user.id,
+                       func.coalesce(User.career_weekly_last_period, "")
+                       < previous_period)
+               .update({User.career_weekly_last_period: previous_period},
+                       synchronize_session=False))
+    if not claimed:
+        # Another session judged these weeks between our read and this UPDATE.
+        session.expire(user, ["career_weekly_last_period"])
+        return None
+    session.expire(user, ["career_weekly_last_period"])
+
+    try:
+        from services.config_service import get_config
+        cfg = get_config(session)
+        weeks = int(cfg.get("career_streak_weeks") or 4)
+        bonus_gems = int(cfg.get("career_streak_bonus_gems") or 100)
+    except Exception:
+        logger.exception("career streak config unavailable; using defaults")
+        weeks, bonus_gems = 4, 100
+
+    # Oldest first, so a failed week resets the streak before a later cleared
+    # week starts building it again.
+    result = None
+    for period in _unjudged_weeks(last_judged, now):
+        judged = _judge_career_week(session, user, period, weeks, bonus_gems)
+        if judged is None:
+            continue
+        if result is not None:
+            # Only the newest week is reported, but a jackpot from a skipped
+            # week was still paid and must not vanish from the message.
+            judged["bonus"] += result.get("bonus", 0)
+            judged["lost"] = max(judged.get("lost", 0), result.get("lost", 0))
+        result = judged
+    return result
 
 
 def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
@@ -549,6 +622,10 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     shape (``inn1_*`` snapshots plus the live 2nd-innings stats). The bot user
     (telegram_id == -1) is a no-op. Each event is best-effort via ``safe_track``;
     callers still wrap this in their own try/except.
+
+    Player of the Match is worked out by the caller, not here, so a caller that
+    wants ``career_potm`` to fire puts ``potm_player_id`` and
+    ``potm_owner_user_id`` on ``state`` before calling. Both finalizes do.
     """
     from models import UserRoster
 
@@ -700,6 +777,14 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
             safe_track(session, uid, "career_fifty", 1)
         for _ in range(career_hundreds):
             safe_track(session, uid, "career_hundred", 1)
+        # Player of the Match is decided by the finalize that calls us, which
+        # stashes the winner on the state before doing so. Without it a
+        # 'career_potm' quest could never progress, and because the weekly
+        # streak needs *every* assigned career quest cleared, one such quest
+        # would put the streak and its jackpot permanently out of reach.
+        if (state.get("potm_player_id") == career_player_id
+                and state.get("potm_owner_user_id") == uid):
+            safe_track(session, uid, "career_potm", 1)
 
     # Single-match max events
     if max_runs_in_innings > 0:

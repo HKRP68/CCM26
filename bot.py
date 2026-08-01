@@ -482,19 +482,33 @@ def _menu_for_scope(scope):
     return commands
 
 
-def _clamped(commands, label):
-    """Trim to Telegram's per-scope ceiling, complaining loudly if it bites.
+def _clamped(commands, label, expected=False):
+    """Trim to Telegram's per-scope ceiling.
 
     Going over makes setMyCommands reject the whole call, which would freeze
     that menu on whatever was published last — far worse than dropping the tail.
+
+    ``expected`` marks a scope where overflow is by design rather than a bug:
+    the admin DM list is the player list *plus* the admin commands, so it is
+    over the ceiling whenever the player list is anywhere near it. The tail that
+    goes is the end of the player list, which those admins still have in every
+    other chat, so that is worth a single line at INFO, not an error on every
+    startup. A private or group scope going over is a real defect and still
+    shouts.
     """
     if len(commands) <= MENU_LIMIT:
         return commands
     dropped = [c for c, _d in commands[MENU_LIMIT:]]
-    logger.error(
-        "%s menu has %s entries but Telegram allows %s per scope — "
-        "not publishing: %s", label, len(commands), MENU_LIMIT,
-        ", ".join(dropped))
+    if expected:
+        logger.info(
+            "%s menu trimmed from %s to Telegram's %s per scope; these stay "
+            "reachable in every other chat: %s", label, len(commands),
+            MENU_LIMIT, ", ".join(dropped))
+    else:
+        logger.error(
+            "%s menu has %s entries but Telegram allows %s per scope — "
+            "not publishing: %s", label, len(commands), MENU_LIMIT,
+            ", ".join(dropped))
     return commands[:MENU_LIMIT]
 
 
@@ -531,7 +545,7 @@ async def register_bot_menu(application):
     # Admin commands go only into the admins' own DMs, so they are reachable
     # from the slash menu without ever showing up in a player's list. A failure
     # here (admin never started the bot, id mistyped) must not stop startup.
-    admin_menu = _clamped(_menu_for_scope("admin"), "Admin")
+    admin_menu = _clamped(_menu_for_scope("admin"), "Admin", expected=True)
     published_for = 0
     for admin_id in _admin_menu_ids():
         try:

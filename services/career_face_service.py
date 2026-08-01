@@ -59,10 +59,16 @@ def selectable_faces(session):
 
 
 def next_slot(session):
-    """Lowest unused slot number, so deleting face 2 frees that slot again."""
+    """Lowest slot no face holds *and* no career player still wears.
+
+    Deleting face 2 frees slot 2 for a new design — but only once nobody is
+    wearing ``career_2``. A career card stores its face as that variant key, so
+    handing the slot to different artwork would silently restyle every player
+    who chose the deleted design.
+    """
     used = {row.slot for row in session.query(CareerFace.slot).all()}
     slot = 1
-    while slot in used:
+    while slot in used or face_in_use_count(session, slot):
         slot += 1
     return slot
 
@@ -110,14 +116,22 @@ def remove_face(session, slot):
 
     Career players already wearing this face keep rendering — their variant
     falls back to face 1 and then to the base card — so removing a design never
-    breaks somebody's existing card.
+    breaks somebody's existing card. The freed slot is not handed to a new face
+    while anybody still wears it (see :func:`next_slot`), so those players can
+    never wake up wearing somebody else's artwork.
     """
     face = get_face(session, slot)
     if not face:
         return False, "That face no longer exists."
     label = face.label or f"Face {slot}"
+    wearers = face_in_use_count(session, slot)
     remove_template_image(variant_for(slot))
     session.delete(face)
+    if wearers:
+        return True, (f"Removed {label}. {wearers} career player"
+                      f"{'' if wearers == 1 else 's'} wearing it now render"
+                      f"{'s' if wearers == 1 else ''} on the first face, and "
+                      f"slot {int(slot)} stays reserved for them.")
     return True, f"Removed {label}."
 
 

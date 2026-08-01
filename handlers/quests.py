@@ -34,7 +34,9 @@ def _render_quest_list(quests_data, quest_type, user, owner_tg, *,
       page: 0-indexed page
     """
     type_label = {"daily": "DAILY", "weekly": "WEEKLY"}.get(quest_type, "MONTHLY")
-    type_icon = {"daily": "📅", "weekly": "🗓"}.get(quest_type, "🗓️")
+    # 📆 for weekly, not 🗓 — 🗓 and the monthly 🗓️ differ only by a variation
+    # selector, so most Telegram clients draw the two tabs identically.
+    type_icon = {"daily": "📅", "weekly": "📆"}.get(quest_type, "🗓️")
     reset_label = {"daily": "every 24 hours",
                    "weekly": "every Monday"}.get(quest_type, "every 30 days")
 
@@ -110,7 +112,7 @@ def _render_quest_list(quests_data, quest_type, user, owner_tg, *,
             callback_data=f"qst_tab_{owner_tg}_{code}")
     btns.append([
         _tab("📅 Daily", "daily"),
-        _tab("🗓 Weekly", "weekly"),
+        _tab("📆 Weekly", "weekly"),
         _tab("🗓️ Monthly", "monthly"),
     ])
 

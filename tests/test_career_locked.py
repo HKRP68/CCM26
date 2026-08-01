@@ -40,6 +40,20 @@ def setUpModule():
     _ENGINE = engine
     Base.metadata.create_all(bind=engine)
 
+    # The wizard only ever offers faces that exist and are active, and
+    # create_career_player now rejects anything else — so the tests need a few
+    # real CareerFace rows before they can create a career player.
+    from database import get_session
+    from models import CareerFace
+    session = get_session()
+    try:
+        for slot in (1, 2, 3):
+            session.add(CareerFace(slot=slot, label=f"Face {slot}",
+                                   sort_order=slot, is_active=True))
+        session.commit()
+    finally:
+        session.close()
+
 
 def tearDownModule():
     try:

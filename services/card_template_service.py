@@ -604,12 +604,18 @@ def career_variant_slot(variant):
     return int(match.group(1)) if match else None
 
 
-def career_variants(session=None):
-    """Active Career Player face variants, in display order.
+def career_variants(session=None, active_only=True):
+    """Career Player face variants, in display order.
 
     Reads the ``career_faces`` table the website manages. Returns an empty list
     (never raises) when the table does not exist yet, so a deployment that has
     not migrated still renders the three rarity cards normally.
+
+    ``active_only`` picks the two different questions this answers. The default
+    is "which faces may be offered and rendered"; pass ``False`` for "which
+    faces own artwork", which is what the Telegram storage mirror needs —
+    deactivating a face must not stop its blank card being backed up, or the
+    next redeploy loses artwork the ``CareerFace`` row still points at.
     """
     own = False
     try:
@@ -618,9 +624,10 @@ def career_variants(session=None):
             from database import get_session
             session = get_session()
             own = True
-        rows = (session.query(CareerFace)
-                .filter(CareerFace.is_active.is_(True))
-                .order_by(CareerFace.sort_order, CareerFace.slot).all())
+        query = session.query(CareerFace)
+        if active_only:
+            query = query.filter(CareerFace.is_active.is_(True))
+        rows = query.order_by(CareerFace.sort_order, CareerFace.slot).all()
         return [f"{CAREER_VARIANT_PREFIX}{row.slot}" for row in rows]
     except Exception:
         logger.debug("career face variants unavailable", exc_info=True)

@@ -170,8 +170,11 @@ def _asset_paths():
              ("template_legend", "template_legend")]
     # Career Player face templates are created on the website, so the set is
     # dynamic — enumerate them too or a redeploy loses every uploaded face.
+    # Inactive faces included: an admin who unticks "offer this face" has not
+    # deleted its artwork, and skipping it here would quietly lose that artwork
+    # on the next redeploy while the CareerFace row lived on to point at it.
     try:
-        for variant in career_variants():
+        for variant in career_variants(active_only=False):
             stems.append((f"template_{variant}", f"template_{variant}"))
     except Exception:
         logger.debug("career face templates unavailable for mirroring", exc_info=True)
@@ -184,7 +187,8 @@ def _asset_paths():
     # The shared font, plus any per-variant font uploaded for one card design.
     font_stems = [("font", "font")]
     try:
-        for variant in ("base", "star", "legend", *career_variants()):
+        for variant in ("base", "star", "legend",
+                        *career_variants(active_only=False)):
             font_stems.append((f"font_{variant}", f"font_{variant}"))
     except Exception:
         logger.debug("per-variant fonts unavailable for mirroring", exc_info=True)

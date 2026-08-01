@@ -18,6 +18,8 @@ appears in an XI exactly like any other card. Three things make it different:
 
 import logging
 
+from sqlalchemy.exc import IntegrityError
+
 from models import Player, UserRoster
 
 logger = logging.getLogger(__name__)
@@ -174,15 +176,45 @@ def career_roster_ids(session, user_id):
 
 # ── Creation ────────────────────────────────────────────────────────────────
 
+def _validated_face_slot(session, face_slot):
+    """The slot as an int when a live face actually wears it, else ``None``.
+
+    The wizard only ever offers faces that exist, are active and have artwork,
+    but its answers are several button presses old by the time they arrive here
+    — and nothing stops a caller passing a slot number that was never a face at
+    all. An unknown slot would be stored happily and then render on face 1 (or
+    the base card) with nothing to explain why, so it is refused instead.
+
+    Deleted artwork is deliberately *not* checked: falling back to face 1 is the
+    documented behaviour when an admin removes a design, and re-checking the
+    filesystem here would fail a creation that renders perfectly well.
+    """
+    try:
+        face_slot = int(face_slot)
+    except (TypeError, ValueError):
+        return None
+    try:
+        from services.career_face_service import list_faces
+        live = {face.slot for face in list_faces(session, active_only=True)}
+    except Exception:
+        logger.exception("career face validation failed")
+        return None
+    return face_slot if face_slot in live else None
+
+
 def create_career_player(session, user, *, name, country, bat_hand, bowl_hand,
                          bowl_style, face_slot):
     """Create the user's career player and add it to their roster.
 
     Caller commits. Returns ``{"ok": True, "player": Player}`` or an error dict.
-    The name is re-checked here, inside the caller's transaction, because the
-    wizard generated it several button presses ago and another user may have
-    taken it since.
+    Everything is re-checked here, inside the caller's transaction, because the
+    wizard collected its answers several button presses ago: the name may have
+    been taken since, the chosen face may have been deleted or deactivated by an
+    admin, and the roster may have filled up. The database's
+    ``uq_players_career_owner`` partial index is the backstop for the one check
+    that a re-read cannot win on its own — two concurrent taps.
     """
+    from config import MAX_ROSTER
     from services.career_name_service import name_is_taken
 
     if get_career_player(session, user.id):
@@ -196,6 +228,22 @@ def create_career_player(session, user, *, name, country, bat_hand, bowl_hand,
     if name_is_taken(session, name):
         return {"ok": False, "error": "name_taken",
                 "message": "That name was just taken — pick a different letter."}
+
+    face_slot = _validated_face_slot(session, face_slot)
+    if face_slot is None:
+        return {"ok": False, "error": "bad_face",
+                "message": ("That face is no longer available. "
+                            "Run /cmucareer again to pick another.")}
+
+    # Count the roster rows rather than trusting ``user.roster_count``: the
+    # counter is what we are about to increment, and a career card that slipped
+    # past the cap could never be released to get back under it.
+    held = (session.query(UserRoster)
+            .filter(UserRoster.user_id == user.id).count())
+    if held >= MAX_ROSTER:
+        return {"ok": False, "error": "roster_full",
+                "message": (f"Your roster is full ({MAX_ROSTER}). Release a "
+                            f"player first, then run /cmucareer again.")}
 
     player = Player(
         name=name,
@@ -211,7 +259,7 @@ def create_career_player(session, user, *, name, country, bat_hand, bowl_hand,
         is_active=True,
         is_career=True,
         career_owner_user_id=user.id,
-        career_face=f"career_{int(face_slot)}",
+        career_face=f"career_{face_slot}",
         # Career cards are personal: never tradable, never buyable by name.
         non_tradable=True,
         restricted_from_buypl=True,
@@ -220,13 +268,26 @@ def create_career_player(session, user, *, name, country, bat_hand, bowl_hand,
         setattr(player, attr_column(attr), CAREER_START)
     recompute_ratings(player)
     session.add(player)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        # A concurrent request beat us between the checks above and this flush.
+        # Two indexes can fire: uq_players_career_owner (they created their own
+        # card) or uq_players_name_version (somebody else took the name). The
+        # rollback makes the session usable again, so ask which it was rather
+        # than guessing — the two need different advice.
+        session.rollback()
+        logger.info("concurrent career creation for user %s hit a unique index",
+                    user.id)
+        if get_career_player(session, user.id):
+            return {"ok": False, "error": "exists",
+                    "message": "You already have a Career Player."}
+        return {"ok": False, "error": "name_taken",
+                "message": "That name was just taken — pick a different letter."}
 
-    position = (session.query(UserRoster)
-                .filter(UserRoster.user_id == user.id).count()) + 1
     session.add(UserRoster(user_id=user.id, player_id=player.id,
-                           order_position=position))
-    user.roster_count = (user.roster_count or 0) + 1
+                           order_position=held + 1))
+    user.roster_count = held + 1
 
     try:
         from services.activity_service import log_activity

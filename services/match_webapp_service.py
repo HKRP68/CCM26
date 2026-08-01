@@ -3039,6 +3039,11 @@ def finalize_webapp_match(session, match_id):
                 else:
                     session.add(PlayerGameStats(
                         user_id=owner_uid, player_id=pom_pid, potm=1))
+                # Hand the result to the quest tracker below, which fires
+                # 'career_potm' when the winner is somebody's own career card.
+                if state is not None:
+                    state["potm_player_id"] = pom_pid
+                    state["potm_owner_user_id"] = owner_uid
     except Exception:
         logger.exception("webapp POTM career credit failed (non-fatal)")
 
