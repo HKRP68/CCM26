@@ -40,6 +40,18 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _fake_psycopg2(libpq_version):
+    """Stand-in psycopg2 reporting a chosen libpq version."""
+
+    class _Stub:
+        class extensions:
+            @staticmethod
+            def libpq_version():
+                return libpq_version
+
+    return _Stub
+
+
 class TelegramDownloadTimeoutTests(unittest.TestCase):
     """Link 2: one wedged download must not become an unbounded render."""
 
@@ -91,6 +103,18 @@ class TelegramDownloadTimeoutTests(unittest.TestCase):
     def test_wedged_download_gives_up_when_called_with_no_loop_at_all(self):
         """Flask request threads and scheduler jobs reach it this way."""
         self._assert_gives_up(lambda svc: svc.download_file_bytes_sync("file-123"))
+
+    def test_bad_timeout_env_values_fall_back_instead_of_breaking_import(self):
+        """Parsed at import, and a negative grace would invert the two limits."""
+        svc = self._service()
+        for bad in ("abc", "", "-5", "nan", "inf"):
+            with patch.dict(os.environ, {"TG_DOWNLOAD_GRACE_SECONDS": bad}):
+                self.assertEqual(svc._seconds_setting("TG_DOWNLOAD_GRACE_SECONDS",
+                                                      5.0), 5.0,
+                                 f"{bad!r} should have fallen back to the default")
+        with patch.dict(os.environ, {"TG_DOWNLOAD_GRACE_SECONDS": "2.5"}):
+            self.assertEqual(
+                svc._seconds_setting("TG_DOWNLOAD_GRACE_SECONDS", 5.0), 2.5)
 
     def test_timed_out_downloads_do_not_leak_worker_threads(self):
         """The timeout must cancel the work, not just stop waiting for it.
@@ -331,27 +355,13 @@ class DatabaseSocketTimeoutTests(unittest.TestCase):
     def test_tcp_user_timeout_is_skipped_on_old_libpq(self):
         """Passing it to libpq < 12 is a hard connection error."""
         import database
-
-        class _OldLibpq:
-            class extensions:
-                @staticmethod
-                def libpq_version():
-                    return 110000
-
-        with patch.dict(sys.modules, {"psycopg2": _OldLibpq}):
+        with patch.dict(sys.modules, {"psycopg2": _fake_psycopg2(110000)}):
             args = database._apply_socket_timeouts({})
         self.assertNotIn("tcp_user_timeout", args)
 
     def test_tcp_user_timeout_is_set_on_modern_libpq(self):
         import database
-
-        class _NewLibpq:
-            class extensions:
-                @staticmethod
-                def libpq_version():
-                    return 160000
-
-        with patch.dict(sys.modules, {"psycopg2": _NewLibpq}):
+        with patch.dict(sys.modules, {"psycopg2": _fake_psycopg2(160000)}):
             args = database._apply_socket_timeouts({})
         self.assertGreater(args["tcp_user_timeout"], 0)
         # Well under the five minutes the kernel's retransmit schedule took.
@@ -365,13 +375,32 @@ class DatabaseSocketTimeoutTests(unittest.TestCase):
     def test_a_typo_in_a_tuning_knob_does_not_stop_the_bot_booting(self):
         """These are parsed at import; a ValueError here means no bot at all."""
         import database
-        with patch.dict(os.environ, {"DB_CONNECT_TIMEOUT": "abc",
+        # Pin the libpq probe: whether the *host's* libpq is modern is a
+        # different question from whether a typo is survivable, and letting it
+        # decide would make this test pass or fail for unrelated reasons.
+        with patch.dict(sys.modules, {"psycopg2": _fake_psycopg2(160000)}), \
+             patch.dict(os.environ, {"DB_CONNECT_TIMEOUT": "abc",
                                      "DB_KEEPALIVES_IDLE": "",
                                      "DB_TCP_USER_TIMEOUT_MS": "soon"}):
             args = database._apply_socket_timeouts({})
         self.assertEqual(args["connect_timeout"], 10)
         self.assertEqual(args["keepalives_idle"], 30)
-        self.assertIn("tcp_user_timeout", args)   # fell back to the default
+        self.assertEqual(args["tcp_user_timeout"], 30000)  # fell back too
+
+    def test_a_failing_libpq_probe_omits_the_option_without_breaking_boot(self):
+        """If we cannot tell, leave it off rather than risk every connection."""
+        import database
+
+        class _Broken:
+            class extensions:
+                @staticmethod
+                def libpq_version():
+                    raise RuntimeError("no libpq here")
+
+        with patch.dict(sys.modules, {"psycopg2": _Broken}):
+            args = database._apply_socket_timeouts({})
+        self.assertNotIn("tcp_user_timeout", args)
+        self.assertEqual(args["keepalives"], 1)   # the rest still applies
 
     def test_tcp_user_timeout_can_be_disabled(self):
         import database

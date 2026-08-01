@@ -68,18 +68,32 @@ def _apply_socket_timeouts(args):
     no scheduler ticks — before the commit finally raised "SSL connection has
     been closed unexpectedly" and five minutes of queued updates landed at once.
 
-    ``keepalives_*`` catch a peer that vanished while the connection sat idle in
-    the pool; ``tcp_user_timeout`` is the one that matters for the case above,
-    where we have already sent bytes and are waiting for a reply that will never
-    come.
+    The two options cover different halves of "the peer is gone", and neither
+    is a query timeout:
 
-    To be clear about what this does and does not buy: the statement in flight
-    still *fails*, and its transaction with it — nothing here retries a query.
+    * ``tcp_user_timeout`` aborts the connection once *transmitted data has
+      gone unacknowledged* for that long. That is the case above — we sent a
+      commit and the peer stopped answering at the TCP level — and it is the
+      one that turns five minutes into ~30 seconds.
+    * ``keepalives_*`` cover the other shape, where the peer acknowledged
+      everything and then vanished while we waited. Nothing is unacknowledged
+      there, so ``tcp_user_timeout`` never fires; the keepalive probes are what
+      notice, in roughly ``idle + interval × count`` (~60s by default).
+
+    What neither gives us is a bound on a server that is merely *slow*: an
+    acknowledged query that takes a long time to answer is not covered by
+    either option. That would need ``statement_timeout``, which is deliberately
+    not set here because boot does schema creation and seeding, where a blanket
+    statement cap would do more harm than good. The defence against a slow
+    query is the same as the defence against everything else in this file —
+    keep the blocking call off the asyncio event loop.
+
+    And to be clear about what this does not buy: the statement in flight still
+    *fails*, and its transaction with it — nothing here retries a query.
     SQLAlchemy marks the connection invalid and discards the rest of the pool
     generation, so the *next* checkout gets a healthy connection instead of
-    another dead one. The win is bounding the failure to ~30 seconds rather than
-    the length of a TCP retransmit, so one bad socket costs a command rather
-    than the whole bot.
+    another dead one. The win is bounding the failure, so one bad socket costs
+    a command rather than the whole bot.
     """
     args.setdefault("connect_timeout", _timeout_setting("DB_CONNECT_TIMEOUT", 10, 1))
     args.setdefault("keepalives", 1)

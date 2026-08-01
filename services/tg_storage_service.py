@@ -27,13 +27,33 @@ from telegram import Bot, InputFile
 
 logger = logging.getLogger(__name__)
 
-# Ceiling on one blocking restore-from-Telegram. Generous enough for a slow CDN
-# fetch, short enough that a card render stays a card render.
-DOWNLOAD_TIMEOUT = float(os.getenv("TG_DOWNLOAD_TIMEOUT_SECONDS", "20"))
+def _seconds_setting(name, default):
+    """Read a positive float timeout from the environment, or fall back.
+
+    Parsed at import, so a typo must not stop the bot booting — and a negative
+    grace would put the outer limit *before* the inner one, quietly disabling
+    the cancellable path. Anything not a finite positive number is refused.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float("nan")
+    if not (value > 0) or value == float("inf"):
+        logger.warning("ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+    return value
+
+
+# Ceiling on one restore-from-Telegram. Generous enough for a slow CDN fetch,
+# short enough that a card render stays a card render.
+DOWNLOAD_TIMEOUT = _seconds_setting("TG_DOWNLOAD_TIMEOUT_SECONDS", 20.0)
 # Extra grace for the outer, uncancellable belt. The inner timeout should
 # always be the one that fires; this only covers a worker wedged somewhere
 # asyncio cannot interrupt, so it sits just past the inner one.
-DOWNLOAD_TIMEOUT_GRACE = float(os.getenv("TG_DOWNLOAD_GRACE_SECONDS", "5"))
+DOWNLOAD_TIMEOUT_GRACE = _seconds_setting("TG_DOWNLOAD_GRACE_SECONDS", 5.0)
 
 
 def is_configured() -> bool:
