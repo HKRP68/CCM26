@@ -17,6 +17,7 @@ Validation:
 
 import os
 import logging
+from collections import OrderedDict
 from datetime import datetime
 
 from models import PlayerImage
@@ -49,7 +50,7 @@ def _path_for(player_id, ext):
     return os.path.join(IMAGES_ROOT, f"{player_id}.{ext}")
 
 
-def get_custom_image_bytes(player_id):
+def get_custom_image_bytes(player_id, session=None):
     """Return raw bytes of the custom image if one is set & active, else None.
 
     Looks up DB → reads the local file. If an ephemeral deploy wiped the file,
@@ -57,21 +58,32 @@ def get_custom_image_bytes(player_id):
     Designed to be called every time a card is needed; the bot returns these
     bytes instead of calling the generator if non-None.
 
+    Pass ``session`` whenever the caller already holds one. This function used
+    to always open its own, which meant a caller rendering a card inside a
+    request that already had a session checked out held *two* pooled
+    connections at once — the pool ran out at half the concurrency it was
+    sized for, and every other user of the process (the Telegram handlers, the
+    scheduler jobs) then blocked on checkout.
+
     Result is cached in-memory with an LRU. Cache invalidated when admin
     uploads/removes/toggles. Cuts disk I/O + DB round-trips on hot paths.
     """
     # Check cache first
+    if player_id in _NO_IMAGE_IDS:
+        return None
     if player_id in _IMG_CACHE:
         return _IMG_CACHE[player_id]
     try:
         from database import get_session
-        session = get_session()
+        own = session is None
+        if own:
+            session = get_session()
         try:
             row = (session.query(PlayerImage)
                    .filter(PlayerImage.player_id == player_id,
                            PlayerImage.is_active == True).first())
             if not row:
-                _IMG_CACHE[player_id] = None
+                _NO_IMAGE_IDS.add(player_id)
                 return None
             path = row.image_path
             if path and os.path.isfile(path):
@@ -107,15 +119,20 @@ def get_custom_image_bytes(player_id):
                 logger.warning(
                     f"PlayerImage row exists for player {player_id} but local file "
                     f"is missing and no Telegram file_id is stored: {path}")
-                _IMG_CACHE[player_id] = None
+                _NO_IMAGE_IDS.add(player_id)
                 return None
-            # Cap cache size to avoid runaway memory
-            if len(_IMG_CACHE) > 200:
-                _IMG_CACHE.clear()
+            # Cap cache size to avoid runaway memory. Evict the least recently
+            # inserted entries one at a time rather than clearing the whole
+            # cache: a full flush on entry 201 sent the next few hundred card
+            # renders straight back to the database, which is exactly the
+            # traffic this cache exists to absorb.
             _IMG_CACHE[player_id] = data
+            while len(_IMG_CACHE) > _IMG_CACHE_MAX:
+                _IMG_CACHE.popitem(last=False)
             return data
         finally:
-            session.close()
+            if own:
+                session.close()
     except Exception:
         logger.exception(f"get_custom_image_bytes failed for player {player_id}")
         return None
@@ -126,12 +143,22 @@ def _invalidate_image_cache(player_id=None):
     If player_id is None, drops all."""
     if player_id is None:
         _IMG_CACHE.clear()
+        _NO_IMAGE_IDS.clear()
     else:
         _IMG_CACHE.pop(player_id, None)
+        _NO_IMAGE_IDS.discard(player_id)
 
 
-# Module-level image bytes cache (LRU-ish, capped at 200 entries)
-_IMG_CACHE = {}
+# Module-level image bytes cache, capped at _IMG_CACHE_MAX entries (LRU by
+# insertion). Only players that actually have custom artwork live here, so the
+# cap bounds real memory.
+_IMG_CACHE = OrderedDict()
+_IMG_CACHE_MAX = 200
+
+# "This player has no custom card" is the answer for almost every player, and
+# it costs one int to remember. Keeping it out of the byte cache means a squad
+# of ordinary players never evicts real artwork — and never re-queries for it.
+_NO_IMAGE_IDS = set()
 
 
 def save_custom_image(session, player_id, file_bytes, original_filename,

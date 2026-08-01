@@ -323,8 +323,28 @@ def _template_bowling_style(player):
     return f"{hand} ARM {style}".strip()
 
 
+def _session_for(player):
+    """The open Session this player is attached to, or None.
+
+    Card rendering reads a handful of config rows, and it is nearly always
+    called from code that already holds a session. Reusing that one keeps a
+    render to a single pooled connection; opening more while the caller's is
+    still checked out is what let a burst of Mini App card requests exhaust
+    the pool and block every other database user in the process.
+    """
+    try:
+        from sqlalchemy.orm import object_session
+        session = object_session(player)
+    except Exception:
+        return None  # synthetic/unmapped player (e.g. /statscl SimpleNamespace)
+    # A session mid-rollback would fail every query we handed it, and these
+    # reads are all optional — fall back to opening a short-lived one.
+    return session if (session is not None and session.is_active) else None
+
+
 def generate_template_card(player, force_global_portrait=False, template_variant=None,
-                           preview_settings=None, preview_show_portrait=None) -> bytes | None:
+                           preview_settings=None, preview_show_portrait=None,
+                           session=None) -> bytes | None:
     """Render a card using the website-managed v7.1 HTML layer order.
 
     Preview-only overrides let the admin page display unsaved layout changes
@@ -333,7 +353,8 @@ def generate_template_card(player, force_global_portrait=False, template_variant
     try:
         from services.card_template_service import get_template_config, player_template_variant
         variant = template_variant or player_template_variant(player)
-        tcfg = get_template_config(variant=variant)
+        tcfg = get_template_config(session=session or _session_for(player),
+                                   variant=variant)
     except Exception:
         logger.exception("template config load failed")
         return None
@@ -440,10 +461,17 @@ def generate_card(player) -> bytes | None:
     doesn't change at runtime, so re-generating it is wasted CPU + memory.
     Cache is invalidated when admin edits a player.
     """
+    # Every database read below reuses the session the player is already
+    # attached to, when there is one. Opening fresh sessions here instead meant
+    # a card rendered inside a web request held that request's connection *plus*
+    # one or two of its own, so ~10 simultaneous card renders could drain a
+    # 20-connection pool and stall the whole process, bot included.
+    session = _session_for(player)
+
     # Custom image override — short-circuit if admin uploaded one
     try:
         from services.player_image_service import get_custom_image_bytes
-        custom = get_custom_image_bytes(player.id)
+        custom = get_custom_image_bytes(player.id, session=session)
         if custom:
             return custom
     except Exception:
@@ -456,9 +484,10 @@ def generate_card(player) -> bytes | None:
     try:
         from services.card_template_service import get_template_config
         from services.card_template_service import player_template_variant
-        tcfg = get_template_config(variant=player_template_variant(player))
+        tcfg = get_template_config(session=session,
+                                   variant=player_template_variant(player))
         if tcfg.get("style") == "template":
-            tpl = generate_template_card(player)
+            tpl = generate_template_card(player, session=session)
             if tpl is not None:
                 return tpl
             # Missing rarity template → fall through to original auto card.
