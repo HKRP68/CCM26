@@ -61,6 +61,15 @@ def save_country_flag(country, file_bytes, original_filename):
     except OSError as exc:
         logger.exception("save_country_flag disk write failed")
         return False, f"Disk write failed: {exc}"
+    # Keep a copy in the database — the host wipes data/ on every deploy, and
+    # re-uploading two dozen flags by hand each release is not a plan.
+    global _RESTORE_ATTEMPTED
+    _RESTORE_ATTEMPTED = False
+    try:
+        from services.asset_store import put
+        put(path, file_bytes)
+    except Exception:
+        logger.exception("could not persist the %s flag to the asset store", country)
     return True, f"Flag saved for {country}."
 
 
@@ -69,13 +78,39 @@ def remove_country_flag(country):
     path = _path_for(country)
     if path and os.path.isfile(path):
         os.remove(path)
+        try:
+            from services.asset_store import drop
+            drop(path)
+        except Exception:
+            logger.exception("could not drop the %s flag from the asset store", country)
         return True
     return False
+
+
+# Flags are read on every generated card, so the database is consulted at most
+# once per process rather than on each miss (most countries have no flag).
+_RESTORE_ATTEMPTED = False
+
+
+def _restore_flags(force=False):
+    """Refill the flag directory from the database after a redeploy wiped it."""
+    global _RESTORE_ATTEMPTED
+    if _RESTORE_ATTEMPTED and not force:
+        return 0
+    _RESTORE_ATTEMPTED = True
+    try:
+        from services.asset_store import ensure_dir
+        return ensure_dir("data/country_flags")
+    except Exception:
+        logger.exception("could not restore country flags from the asset store")
+        return 0
 
 
 def get_country_flag(country):
     """Return a country's configured flag as RGBA Pillow image, or ``None``."""
     path = _path_for(country)
+    if path and not os.path.isfile(path) and _restore_flags():
+        pass  # refilled from the database; fall through and read it below
     if not path or not os.path.isfile(path):
         return None
     try:
@@ -88,6 +123,7 @@ def get_country_flag(country):
 
 def list_country_flags():
     """Return uploaded flag keys for the website manager."""
+    _restore_flags()
     if not os.path.isdir(FLAGS_ROOT):
         return []
     return sorted(

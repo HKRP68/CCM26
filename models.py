@@ -2,8 +2,8 @@
 
 from datetime import datetime, timedelta
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index, Text,
-    UniqueConstraint
+    Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index,
+    LargeBinary, Text, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -771,6 +771,41 @@ class CMUShopImage(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(String(100), nullable=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# STORED ASSETS — uploads that must survive a redeploy
+# ══════════════════════════════════════════════════════════════════════
+
+class StoredAsset(Base):
+    """One website upload, kept in the database so it is never lost.
+
+    The app runs on hosts with an ephemeral filesystem: everything written under
+    ``data/`` disappears on the next deploy, which used to mean re-uploading
+    every card template, font, flag and wizard image by hand. Mirroring to a
+    Telegram storage channel only helped deployments that had set
+    ``STORAGE_CHAT_ID``, and never covered flags or wizard artwork at all.
+
+    The database is the one store that survives unconditionally and needs no
+    extra configuration, so every website upload is written here as well as to
+    disk. Disk stays the fast path; this is the source of truth that refills it.
+    See services/asset_store.py.
+    """
+    __tablename__ = "stored_assets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Project-relative path with forward slashes, e.g.
+    # "data/card_templates/template_career_1.png". Unique, so re-uploading
+    # replaces rather than duplicates.
+    key = Column(String(300), unique=True, nullable=False, index=True)
+    filename = Column(String(200), nullable=True)
+    content_type = Column(String(100), nullable=True)
+    data = Column(LargeBinary, nullable=False)
+    byte_size = Column(Integer, default=0, nullable=False)
+    # Lets a restore skip rewriting a file that is already correct on disk.
+    sha256 = Column(String(64), nullable=True, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(100), nullable=True)
 
 
 # ══════════════════════════════════════════════════════════════════════

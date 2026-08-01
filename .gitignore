@@ -17,5 +17,19 @@ logs/
 # Runtime card-template state (admin-saved; committing it shadows pinned state)
 data/card_templates/state.json
 
+# Website uploads. These live in the stored_assets table (see
+# services/asset_store.py) and are written back to disk on boot, so the copies
+# here are a cache — committing them would mean somebody's uploaded artwork
+# landing in the repo. data/card_templates/template.* stays tracked on purpose:
+# it is the committed default blank card.
+data/country_flags/
+data/career_steps/
+data/player_images/
+data/player_portraits/
+data/event_media/
+data/card_templates/font*.ttf
+data/card_templates/font*.otf
+data/card_templates/template_career_*
+
 # Backup written by migrate_clear_card_file_ids.py
 card_file_id_backup_*.json

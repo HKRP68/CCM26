@@ -16683,6 +16683,16 @@ def _collect_variant_settings(db, only_variant=None):
     return current
 
 
+def _asset_store_usage():
+    """What the durable upload store is holding, for the website to show."""
+    try:
+        from services.asset_store import usage
+        return usage()
+    except Exception:
+        logger.debug("asset store usage lookup failed", exc_info=True)
+        return {"count": 0, "bytes": 0, "by_root": {}}
+
+
 def _career_face_usage(db, slot):
     """How many career players currently wear a face (0 when unavailable)."""
     try:
@@ -16841,6 +16851,7 @@ def admin_card_template():
                                variant_fonts=variant_fonts,
                                country_flags=list_country_flags(),
                                has_global_portrait=has_global_player_portrait(),
+                               asset_usage=_asset_store_usage(),
                                stats_settings=stats_settings)
     finally:
         db.close()

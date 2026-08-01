@@ -309,6 +309,22 @@
 {% endfor %}
 
 <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
+  <h3 style="margin:0 0 .5rem;font-size:1rem;">💾 Your uploads are saved permanently</h3>
+  <p style="color:var(--muted);font-size:.85rem;margin:0 0 .75rem;line-height:1.6;">
+    Every file you upload here — blank cards, fonts, country flags, wizard artwork and player images — is kept in the database as well as on disk, so <strong>a redeploy can never lose it and you never have to upload the same file twice.</strong> If the server is rebuilt, the files are put back automatically before anything is served.
+  </p>
+  {% if asset_usage and asset_usage.count %}
+  <p style="color:var(--muted);font-size:.82rem;margin:0;">
+    Currently keeping <strong>{{ asset_usage.count }}</strong> file{{ '' if asset_usage.count == 1 else 's' }}
+    ({{ '%.1f'|format(asset_usage.bytes / 1024 / 1024) }} MB):
+    {% for root, entry in asset_usage.by_root | dictsort %}<code>{{ root }}</code> {{ entry.count }}{{ ' · ' if not loop.last }}{% endfor %}
+  </p>
+  {% else %}
+  <p style="color:var(--muted);font-size:.82rem;margin:0;">Nothing stored yet — the first upload starts the collection.</p>
+  {% endif %}
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-top:1.5rem;">
   <h3 style="margin:0 0 .5rem;font-size:1rem;">🎭 Career Player Card — faces</h3>
   <p style="color:var(--muted);font-size:.8rem;margin:0 0 1rem;line-height:1.5;">
     Upload one <strong>complete card with the face already on it</strong> per design — the same 1536×1024 layout as the other cards, with the name, OVR, batting power, bowling specs, flag/country and style slots left empty. Each face becomes its own tab above with independent text positions, colours and a save button. Players choose between them in <code>/cmucareer</code>.
