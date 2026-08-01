@@ -267,16 +267,20 @@ def create_career_player(session, user, *, name, country, bat_hand, bowl_hand,
     for attr in ALL_ATTRS:
         setattr(player, attr_column(attr), CAREER_START)
     recompute_ratings(player)
-    session.add(player)
     try:
-        session.flush()
+        # A SAVEPOINT, not the whole transaction: a losing race must undo this
+        # one insert and nothing else. session.rollback() here would discard
+        # whatever the caller had already buffered — the freshly created User
+        # on the /debut-then-/cmucareer path, for one — and leave them with a
+        # polite error message and no account.
+        with session.begin_nested():
+            session.add(player)
+            session.flush()
     except IntegrityError:
         # A concurrent request beat us between the checks above and this flush.
         # Two indexes can fire: uq_players_career_owner (they created their own
-        # card) or uq_players_name_version (somebody else took the name). The
-        # rollback makes the session usable again, so ask which it was rather
-        # than guessing — the two need different advice.
-        session.rollback()
+        # card) or uq_players_name_version (somebody else took the name). Ask
+        # which it was rather than guessing — the two need different advice.
         logger.info("concurrent career creation for user %s hit a unique index",
                     user.id)
         if get_career_player(session, user.id):

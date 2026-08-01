@@ -209,6 +209,12 @@ def _judge_career_week(session, user, period, weeks, bonus_gems):
     A week counts only if the user was assigned at least one career quest and
     completed *every* one of them. Miss one and the streak resets to zero. Every
     ``weeks`` consecutive cleared weeks pays a ``bonus_gems`` jackpot.
+
+    Deactivated quests are ignored. A quest retired mid-week — by the seeder
+    after a rebalance, or by an admin — vanishes from ``get_user_quests`` and
+    stops taking progress in ``track_event``, both of which filter on
+    ``is_active``. Judging it here too would fail the owner on a quest they
+    could no longer see, let alone finish.
     """
     rows = (session.query(UserQuestProgress, Quest)
             .join(Quest, Quest.id == UserQuestProgress.quest_id)
@@ -216,6 +222,7 @@ def _judge_career_week(session, user, period, weeks, bonus_gems):
                     UserQuestProgress.assigned == True,
                     UserQuestProgress.period_key == period,
                     Quest.quest_type == "weekly",
+                    Quest.is_active == True,
                     Quest.career_only == True)
             .all())
     if not rows:
@@ -369,8 +376,14 @@ def _draw_spread(candidates, count, seen):
     return picked
 
 
-def _pick_career_weeklies(session, user_id, career_pool, now):
+def _pick_career_weeklies(session, user_id, career_pool, now, *, slots=None,
+                          exclude=()):
     """Choose this week's Career Player quests: five, balanced, and new.
+
+    ``slots`` overrides how many to draw, for the callers that have already
+    filled part of the five — a pinned career quest, or a top-up part-way
+    through a week. ``exclude`` holds quest ids the owner already has, so a
+    top-up cannot deal the same quest twice.
 
     Three things shape the pick, in order:
 
@@ -387,25 +400,81 @@ def _pick_career_weeklies(session, user_id, career_pool, now):
       deactivated most of a category) tops up from whatever is left, so the
       user still gets five whenever the catalogue holds five.
     """
+    want = CAREER_QUESTS_PER_USER if slots is None else max(0, int(slots))
+    if not want:
+        return []
+
+    exclude = set(exclude)
+    career_pool = [q for q in career_pool if q.id not in exclude]
     last_week = _quests_assigned_in(
         session, user_id, weekly_period_key(now - timedelta(days=7)))
 
-    by_id = {q.id: q for q in career_pool}
     seen = set(last_week)
     chosen = []
+    # Scale the bucket mix to the slots actually going out, so a partly-filled
+    # week still comes out as balanced as the room allows.
     for events, count in CAREER_QUEST_MIX:
+        if len(chosen) >= want:
+            break
+        count = min(count, want - len(chosen))
         bucket = [q for q in career_pool if q.event_key in events]
         chosen += _draw_spread(bucket, count, seen)
 
-    # Top up to five from anything not already taken — a short bucket must not
-    # cost the user a slot, and a quest whose event key predates the buckets
-    # (or was typed in by hand on the website) is still eligible here.
+    # Top up from anything not already taken — a short bucket must not cost the
+    # user a slot, and a quest whose event key predates the buckets (or was
+    # typed in by hand on the website) is still eligible here.
     taken = {q.id for q in chosen}
-    if len(chosen) < CAREER_QUESTS_PER_USER:
-        rest = [q for q in by_id.values() if q.id not in taken]
-        chosen += _draw(rest, CAREER_QUESTS_PER_USER - len(chosen),
-                        set(last_week) | taken)
-    return chosen[:CAREER_QUESTS_PER_USER]
+    if len(chosen) < want:
+        rest = [q for q in career_pool if q.id not in taken]
+        chosen += _draw(rest, want - len(chosen), set(last_week) | taken)
+    return chosen[:want]
+
+
+def _top_up_career_weeklies(session, user_id, quest_type, current_period, now,
+                            has_career, *, already_pinned=()):
+    """Deal any career quests a mid-week career owner is still short of.
+
+    The weekly deal happens once, on the owner's first quest read of the week.
+    Create a Career Player *after* that read and the week's five never arrive —
+    so this fills the gap the moment they next open their quests, rather than
+    leaving the new card with nothing to do until Monday.
+
+    Returns the quests newly assigned (empty for everyone already up to date).
+    """
+    if quest_type != "weekly" or not has_career:
+        return []
+
+    held = (session.query(Quest)
+            .join(UserQuestProgress, Quest.id == UserQuestProgress.quest_id)
+            .filter(UserQuestProgress.user_id == user_id,
+                    UserQuestProgress.period_key == current_period,
+                    UserQuestProgress.assigned == True,
+                    Quest.quest_type == "weekly",
+                    Quest.career_only == True)
+            .all())
+    held_ids = {q.id for q in held} | {q.id for q in already_pinned
+                                       if getattr(q, "career_only", False)}
+    missing = CAREER_QUESTS_PER_USER - len(held_ids)
+    if missing <= 0:
+        return []
+
+    pool = (session.query(Quest)
+            .filter(Quest.quest_type == "weekly",
+                    Quest.is_active == True,
+                    Quest.career_only == True,
+                    Quest.always_assign == False)
+            .all())
+    dealt = _pick_career_weeklies(session, user_id, pool, now, slots=missing,
+                                  exclude=held_ids)
+    for quest in dealt:
+        session.add(UserQuestProgress(
+            user_id=user_id, quest_id=quest.id, period_key=current_period,
+            progress=0, completed=False, claimed=False, assigned=True,
+            last_updated=now))
+    if dealt:
+        logger.info("topped up %s career weekly quest(s) for user %s",
+                    len(dealt), user_id)
+    return dealt
 
 
 def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
@@ -471,6 +540,16 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
                 )
                 session.add(uqp)
                 newly_pinned.append(q)
+
+        # Somebody who opened their quests on Monday and created a Career
+        # Player on Tuesday had no career quests at all until the next Monday,
+        # because the week's deal happened before they had a card. Top them up
+        # now instead — the streak treats a week with no career quests as
+        # unjudged, so this costs them nothing retroactively.
+        newly_pinned += _top_up_career_weeklies(
+            session, user_id, quest_type, current_period, now, has_career,
+            already_pinned=newly_pinned)
+
         if newly_pinned:
             session.flush()
         return {"assigned": newly_pinned, "auto_claimed": []}
@@ -519,17 +598,26 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     # the ordinary weekly ones, so a Career Player owner always has a full
     # career card to work through — and always has a week that can be judged.
     career_pool = []
+    career_slots = 0
     if quest_type == "weekly" and has_career:
         career_pool = [q for q in random_pool
                        if getattr(q, "career_only", False)]
         random_pool = [q for q in random_pool
                        if not getattr(q, "career_only", False)]
+        # A career quest an admin has pinned already occupies one of the five.
+        # The streak judge counts every assigned career_only row, so letting a
+        # pinned one arrive *on top* would quietly make the week a six-quest
+        # week for those owners — harder than the deal advertises, and harder
+        # than it is for everybody else.
+        career_slots = CAREER_QUESTS_PER_USER - sum(
+            1 for q in pinned if getattr(q, "career_only", False))
 
     chosen = list(pinned)  # start with all pinned
     if random_pool:
         chosen += random.sample(random_pool, min(max_count, len(random_pool)))
-    if career_pool:
-        chosen += _pick_career_weeklies(session, user_id, career_pool, now)
+    if career_pool and career_slots > 0:
+        chosen += _pick_career_weeklies(session, user_id, career_pool, now,
+                                        slots=career_slots)
 
     assigned_quests = []
     for q in chosen:

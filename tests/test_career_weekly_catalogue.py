@@ -102,6 +102,42 @@ def _fired_career_events():
     return fired
 
 
+# The per-player match-state key each career event ultimately reads. A quest
+# can only be cleared if *every* ball loop that feeds track_user_match_quests
+# writes that key — see EngineCoverageTests.
+EVENT_NEEDS_STAT = {
+    "career_runs_scored": "runs",
+    "career_chase_runs": "runs",
+    "career_boundary_runs": "fours",
+    "career_quickfire_runs": "balls",
+    "career_fours_hit": "fours",
+    "career_sixes_hit": "sixes",
+    "career_balls_faced": "balls",
+    "career_fifty": "runs",
+    "career_hundred": "runs",
+    "career_score_25_plus": "runs",
+    "career_score_75_plus": "runs",
+    "career_not_out": "out",
+    "career_wickets_taken": "wickets",
+    "career_dot_balls": "dots",
+    "career_maiden_overs": "maidens",
+    "career_balls_bowled": "balls",
+    "career_three_fer": "wickets",
+    "career_five_fer": "wickets",
+    "career_hattrick": "hattrick",
+    "career_economy_spell": "balls",
+    "career_match_played": None,        # needs no per-player stat
+    "career_match_won": None,
+    "career_allrounder_match": "runs",
+    "career_potm": None,                # supplied by the finalize, not the loop
+}
+
+# The ball loops behind the two callers of track_user_match_quests. vsbot has
+# no loop of its own — it drives handlers.match — and cipl never reaches the
+# career tracker, so these two are the complete set.
+BALL_LOOPS = ("handlers/match.py", "services/match_webapp_service.py")
+
+
 class CatalogueTests(unittest.TestCase):
     def setUp(self):
         from seed_career_quests import CAREER_QUESTS
@@ -165,6 +201,52 @@ class CatalogueTests(unittest.TestCase):
             self.assertTrue(emoji.strip(), name)
             self.assertLessEqual(len(name), 100, name)
             self.assertLessEqual(len(description), 300, name)
+
+
+class EngineCoverageTests(unittest.TestCase):
+    """A dealt quest must be clearable in every match mode that feeds quests.
+
+    This is the check that was missing when ``career_hattrick`` went into the
+    catalogue: the tracker emitted it faithfully, and no engine had ever set
+    the ``hattrick`` flag it reads, so the quest could be dealt and never move.
+    An unclearable quest does not just waste a slot — the streak needs all five,
+    so it costs its owner the jackpot for that week.
+    """
+
+    def setUp(self):
+        from seed_career_quests import CAREER_QUESTS
+        self.catalogue = CAREER_QUESTS
+        self.sources = {path: open(path).read() for path in BALL_LOOPS}
+
+    def test_the_map_covers_every_event_the_tracker_fires(self):
+        """Keeps this test honest when a new event is added."""
+        self.assertEqual(_fired_career_events() - set(EVENT_NEEDS_STAT), set())
+
+    def test_every_catalogue_quest_reads_a_stat_both_loops_record(self):
+        for name, _desc, event_key, *_rest in self.catalogue:
+            stat = EVENT_NEEDS_STAT.get(event_key)
+            if stat is None:
+                continue
+            for path, source in self.sources.items():
+                self.assertIn(
+                    f'"{stat}"', source,
+                    f"{name} needs the '{stat}' stat, which {path} never sets — "
+                    f"the quest would be dealt and never progress")
+
+    def test_the_hattrick_quest_stays_out_until_an_engine_records_one(self):
+        """Guards the specific regression, in case the map above drifts."""
+        records_hattrick = any('"hattrick"' in source
+                               for source in self.sources.values())
+        in_catalogue = any(q[2] == "career_hattrick" for q in self.catalogue)
+        if not records_hattrick:
+            self.assertFalse(
+                in_catalogue,
+                "no ball loop records a hat-trick, so no quest may ask for one")
+
+    def test_dot_balls_are_recorded_by_both_loops(self):
+        """The Mini App loop did not, so dot quests only moved in chat."""
+        for path, source in self.sources.items():
+            self.assertIn('["dots"]', source, f"{path} does not record dots")
 
 
 class SeedTests(unittest.TestCase):
@@ -435,6 +517,113 @@ class WeeklyDealTests(unittest.TestCase):
                     light_ids & {q.id for q in dealt},
                     f"no lighter quest from this bucket: "
                     f"{[q.name for q in dealt]}")
+
+    def test_a_pinned_career_quest_counts_against_the_five(self):
+        """Otherwise pinning one quietly makes it a six-quest week."""
+        from models import Quest
+        from services.quest_service import (CAREER_QUESTS_PER_USER,
+                                            ensure_quests_assigned)
+        pinned = (self.session.query(Quest)
+                  .filter(Quest.career_only.is_(True)).first())
+        pinned.always_assign = True
+        self.session.commit()
+
+        result = ensure_quests_assigned(self.session, self.user.id, "weekly")
+        self.session.commit()
+        career = [q for q in result["assigned"] if q.career_only]
+        self.assertEqual(len(career), CAREER_QUESTS_PER_USER)
+        self.assertIn(pinned.id, {q.id for q in career})
+
+    def test_a_career_player_made_mid_week_still_gets_its_quests(self):
+        """Created after the week's deal, they used to wait until Monday."""
+        from models import Quest, User, UserQuestProgress
+        from services import career_service as cs
+        from services.quest_service import (CAREER_QUESTS_PER_USER,
+                                            ensure_quests_assigned)
+
+        # An ordinary weekly quest, so the first read assigns something and the
+        # already-assigned branch is the one taken second time round.
+        self.session.add(Quest(
+            name="Plain Weekly", description="Ordinary", quest_type="weekly",
+            event_key="match_played", target_count=5, reward_points=8,
+            reward_gems=0, is_active=True, career_only=False, emoji="🎯",
+            sort_order=1))
+        latecomer = User(telegram_id=next(_TG_IDS), username="late",
+                         total_coins=0, total_gems=0, roster_count=0)
+        self.session.add(latecomer)
+        self.session.commit()
+
+        first = ensure_quests_assigned(self.session, latecomer.id, "weekly")
+        self.session.commit()
+        self.assertEqual([q for q in first["assigned"] if q.career_only], [])
+
+        made = cs.create_career_player(
+            self.session, latecomer, name=f"Late {latecomer.id}",
+            country="India", bat_hand="Right", bowl_hand="Right",
+            bowl_style="Fast", face_slot=1)
+        self.assertTrue(made["ok"], made.get("message"))
+        self.session.commit()
+
+        second = ensure_quests_assigned(self.session, latecomer.id, "weekly")
+        self.session.commit()
+        self.assertEqual(
+            len([q for q in second["assigned"] if q.career_only]),
+            CAREER_QUESTS_PER_USER)
+
+        # And a third read must not pile on another five.
+        third = ensure_quests_assigned(self.session, latecomer.id, "weekly")
+        self.session.commit()
+        self.assertEqual([q for q in third["assigned"] if q.career_only], [])
+        held = (self.session.query(UserQuestProgress)
+                .join(Quest, Quest.id == UserQuestProgress.quest_id)
+                .filter(UserQuestProgress.user_id == latecomer.id,
+                        Quest.career_only.is_(True)).count())
+        self.assertEqual(held, CAREER_QUESTS_PER_USER)
+
+    def test_a_top_up_never_repeats_a_quest_the_owner_already_holds(self):
+        from models import Quest, UserQuestProgress
+        from services.quest_service import (_top_up_career_weeklies,
+                                            weekly_period_key)
+        held = (self.session.query(Quest)
+                .filter(Quest.career_only.is_(True)).limit(2).all())
+        for quest in held:
+            self.session.add(UserQuestProgress(
+                user_id=self.user.id, quest_id=quest.id,
+                period_key=weekly_period_key(), progress=0, completed=False,
+                claimed=False, assigned=True))
+        self.session.commit()
+
+        dealt = _top_up_career_weeklies(
+            self.session, self.user.id, "weekly", weekly_period_key(),
+            datetime.utcnow(), True)
+        self.session.commit()
+        self.assertEqual(len(dealt), 3, "two held, three still to come")
+        self.assertEqual({q.id for q in dealt} & {q.id for q in held}, set())
+
+    def test_a_retired_quest_cannot_fail_the_streak(self):
+        """A quest the seeder deactivated mid-week is invisible and unfinishable."""
+        from models import Quest, UserQuestProgress, User
+        from services.quest_service import (_judge_career_week,
+                                            weekly_period_key)
+
+        period = weekly_period_key(datetime.utcnow() - timedelta(days=7))
+        quests = (self.session.query(Quest)
+                  .filter(Quest.career_only.is_(True)).limit(3).all())
+        for index, quest in enumerate(quests):
+            # Everything cleared except the one that then gets retired.
+            done = index < len(quests) - 1
+            self.session.add(UserQuestProgress(
+                user_id=self.user.id, quest_id=quest.id, period_key=period,
+                progress=quest.target_count if done else 0, completed=done,
+                claimed=done, assigned=True))
+        quests[-1].is_active = False
+        self.session.commit()
+
+        user = self.session.query(User).get(self.user.id)
+        judged = _judge_career_week(self.session, user, period, 4, 100)
+        self.assertIsNotNone(judged)
+        self.assertTrue(judged["cleared"],
+                        "the retired quest must not count against them")
 
     def test_a_thin_bucket_still_yields_five(self):
         """An admin who deactivates most of a category must not shrink the deal."""

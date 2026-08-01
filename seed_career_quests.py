@@ -193,9 +193,12 @@ CAREER_QUESTS = [
     ("Career: Five For",
      "Take 5 wickets in a single match with your Career Player",
      "career_five_fer", 1, "5️⃣", 4),
-    ("Career: Hat-trick Hero",
-     "Take a hat-trick with your Career Player",
-     "career_hattrick", 1, "🎩", 4),
+    # No "Career: Hat-trick Hero" here on purpose. 'career_hattrick' is wired
+    # up and will fire the moment a match engine records one, but today none of
+    # them do — nothing anywhere writes a `hattrick` flag onto bowler stats. A
+    # quest on it could be dealt and never progress, and since the streak needs
+    # every quest cleared, one would cost its owner the jackpot for that week.
+    # It goes in the catalogue when an engine can actually award it.
 
     # ── Bowling: control ─────────────────────────────────────────────────
     ("Career: Tight Lines",
