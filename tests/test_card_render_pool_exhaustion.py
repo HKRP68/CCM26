@@ -260,6 +260,19 @@ class RenderConcurrencyTests(unittest.TestCase):
             session.close()
         admin.app.config["TESTING"] = True
 
+    def test_bad_tuning_values_fall_back_instead_of_killing_the_boot(self):
+        """These are host env vars — a typo must not stop the bot starting."""
+        parse = self.admin._tuning_value
+        self.assertEqual(parse("X_MISSING", 4, int, 1), 4)
+        with patch.dict(os.environ, {"X_TUNING": "not-a-number"}):
+            self.assertEqual(parse("X_TUNING", 4, int, 1), 4)
+        with patch.dict(os.environ, {"X_TUNING": "8"}):
+            self.assertEqual(parse("X_TUNING", 4, int, 1), 8)
+        # A negative wait must not reach the semaphore as-is.
+        with patch.dict(os.environ, {"X_TUNING": "-5"}):
+            self.assertEqual(parse("X_TUNING", 20.0, float, 0.0), 0.0)
+            self.assertEqual(parse("X_TUNING", 4, int, 1), 1)
+
     def test_a_squad_burst_is_capped_at_the_configured_concurrency(self):
         admin = self.admin
         cap = admin.CARD_RENDER_CONCURRENCY
@@ -313,9 +326,12 @@ class RenderConcurrencyTests(unittest.TestCase):
         for _ in range(admin.CARD_RENDER_CONCURRENCY):
             admin._card_render_slots.acquire()
             holders.append(True)
+        # Bound before the try: the cleanup below iterates it, and an exception
+        # from _PoolWatch would otherwise surface as a NameError that buries
+        # whatever actually went wrong.
+        waiters = []
         try:
             with _PoolWatch(database.engine) as watch:
-                waiters = []
                 with patch("services.card_generator.generate_card",
                            blocking_render):
                     for _ in range(6):

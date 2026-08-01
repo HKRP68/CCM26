@@ -4166,10 +4166,28 @@ CARD_CACHE_SECONDS = int(os.getenv("CARD_CACHE_SECONDS", "300"))
 # Cards are pure render work backed by an in-process cache, so serialising them
 # a few at a time costs the Mini App very little and leaves the pool free for
 # everything that is actually interactive.
-CARD_RENDER_CONCURRENCY = max(1, int(os.getenv("CARD_RENDER_CONCURRENCY", "4")))
+#
+# Both knobs are read defensively: these are host environment variables, and a
+# typo in one must not take the whole bot down at import with a ValueError
+# nobody sees. A bad value falls back to the default instead.
+def _tuning_value(name, default, cast, floor):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(floor, cast(raw))
+    except (TypeError, ValueError):
+        logger.warning("ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+
+
+CARD_RENDER_CONCURRENCY = _tuning_value("CARD_RENDER_CONCURRENCY", 4, int, 1)
 # Long enough that a real queue drains rather than erroring; short enough that a
-# wedged render sheds load instead of parking Flask threads indefinitely.
-CARD_RENDER_WAIT_SECONDS = float(os.getenv("CARD_RENDER_WAIT_SECONDS", "20"))
+# wedged render sheds load instead of parking Flask threads indefinitely. Zero
+# is a legitimate setting — it sheds every queued request immediately — so the
+# floor is 0 rather than 1.
+CARD_RENDER_WAIT_SECONDS = _tuning_value("CARD_RENDER_WAIT_SECONDS", 20.0,
+                                         float, 0.0)
 _card_render_slots = threading.BoundedSemaphore(CARD_RENDER_CONCURRENCY)
 
 
