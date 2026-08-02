@@ -230,9 +230,16 @@ class NoFillPassGapTests(unittest.TestCase):
         """Otherwise a pass would pay for a spin and leave the next ad unlocked,
         which is a faster loop than watching ads."""
         stats = _mid_cycle()
+        granted, _status = self.quota_service.claim_nofill_pass(stats, "spin")
+        self.assertTrue(granted)
+        # The pass buys an ad slot, and spending that slot stamps the gap
+        # exactly as a watched ad does.
         self.quota_service.consume_slot(stats, "spin", "ad")
         self.assertGreater(
             self.quota_service.get_quota_status(stats, "spin")["ad_ready_in"], 0)
+        # …so a second pass, straight after, is refused.
+        granted_again, _s = self.quota_service.claim_nofill_pass(stats, "spin")
+        self.assertFalse(granted_again)
 
 
 class AdCreditTests(unittest.TestCase):
@@ -297,6 +304,26 @@ class AdCreditTests(unittest.TestCase):
         self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
         self.assertTrue(self.ad_service.claim_credit(self.db, self.tg_id))
 
+    def test_the_oldest_credit_is_redeemed_first(self):
+        """Newest-first would let the oldest credit sit until it expired at day
+        7 — a watched ad lost, which is the thing the ledger prevents."""
+        from models import AdReward
+        for _ in range(3):
+            self.ad_service.bank_credit(self.db, self.tg_id, "test")
+        rows = (self.db.query(AdReward)
+                .filter(AdReward.telegram_id == self.tg_id)
+                .order_by(AdReward.id).all())
+        # Age them apart; banking three in the same tick gives identical stamps.
+        for age_days, row in enumerate(reversed(rows)):
+            row.received_at = datetime.utcnow() - timedelta(days=age_days)
+        self.db.commit()
+        oldest_id = min(rows, key=lambda r: r.received_at).id
+
+        self.assertTrue(self.ad_service.claim_credit(self.db, self.tg_id))
+        self.db.expire_all()
+        claimed = [r.id for r in rows if r.consumed_at is not None]
+        self.assertEqual(claimed, [oldest_id])
+
     def test_a_stale_credit_expires_eventually(self):
         from models import AdReward
         self.ad_service.bank_credit(self.db, self.tg_id, "test")
@@ -327,6 +354,21 @@ class GuaranteedRewardTests(unittest.TestCase):
             self.assertGreaterEqual(reward.amount_max, reward.amount_min)
         finally:
             db.close()
+
+    def test_a_zero_coin_band_never_becomes_a_worthless_reward(self):
+        """(0, 0) is truthy, and apply_reward only rolls when the top of the
+        band is positive — so a configured zero band would pay nothing to a
+        player who had just watched an ad."""
+        import services.gspin_reward_service as svc
+        import config as cfg
+        saved = cfg.GSPIN_OUTCOMES
+        try:
+            cfg.GSPIN_OUTCOMES = [(1.0, "red", "coins", (0, 0))]
+            reward = svc.fallback_reward()
+        finally:
+            cfg.GSPIN_OUTCOMES = saved
+        self.assertGreater(reward.amount_max, 0)
+        self.assertGreaterEqual(reward.amount_min, 1)
 
     def test_the_fallback_can_be_applied_like_a_real_row(self):
         """It is handed to apply_reward, so it has to answer every attribute

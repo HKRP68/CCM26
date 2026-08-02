@@ -538,11 +538,18 @@
     // page recovers without a reload.
     function applyAdGap(quota, adBtn) {
       const wait = quota?.ad_ready_in || 0;
-      if (wait <= 0) {
-        adBtn.disabled = false;
-        adBtn.innerHTML = '<span>📺 Watch Ad to Spin</span>';
-        return;
-      }
+      // The gap elapsing is not the same as there being a slot to spend. With
+      // the cycle's last ad slot gone, re-enabling on the timer alone invites
+      // an ad the server will answer `cycle_exhausted` to — banked, so nothing
+      // is lost, but a wasted ad view all the same.
+      const slotsLeft = (quota?.ad_used ?? 0) < (quota?.ad_total ?? 0);
+      const release = () => {
+        adBtn.disabled = !slotsLeft;
+        adBtn.innerHTML = slotsLeft
+          ? '<span>📺 Watch Ad to Spin</span>'
+          : '<span>✅ All spins used</span>';
+      };
+      if (wait <= 0) { release(); return; }
       adBtn.disabled = true;
       const paint = (secs) => {
         adBtn.innerHTML = `<span>⏱️ Next ad spin in ${formatGap(secs)}</span>`;
@@ -554,8 +561,7 @@
         left -= 30;
         if (left <= 0) {
           clearInterval(window.__adGapTimer);
-          adBtn.disabled = false;
-          adBtn.innerHTML = '<span>📺 Watch Ad to Spin</span>';
+          release();
           return;
         }
         paint(left);

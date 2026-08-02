@@ -182,16 +182,23 @@ def claim_postback(session, telegram_id: int) -> bool:
         .first())
 
 
-def _unclaimed(session, telegram_id: int, window_seconds: int):
-    """Query for this user's unconsumed reward rows inside ``window_seconds``,
-    newest first."""
+def _unclaimed(session, telegram_id: int, window_seconds: int,
+               oldest_first: bool = False):
+    """Query for this user's unconsumed reward rows inside ``window_seconds``.
+
+    Newest first by default, which is what a postback wants: the latest one is
+    the ad the user just watched. Credits want the opposite — see
+    ``claim_credit``.
+    """
     from models import AdReward
     cutoff = datetime.utcnow() - timedelta(seconds=window_seconds)
+    order = (AdReward.received_at.asc() if oldest_first
+             else AdReward.received_at.desc())
     return (session.query(AdReward)
             .filter(AdReward.telegram_id == telegram_id,
                     AdReward.consumed_at.is_(None),
                     AdReward.received_at >= cutoff)
-            .order_by(AdReward.received_at.desc()))
+            .order_by(order))
 
 
 def _claim_row(session, row) -> bool:
@@ -238,11 +245,18 @@ def bank_credit(session, telegram_id: int, reason: str = "") -> None:
 
 
 def claim_credit(session, telegram_id: int) -> bool:
-    """Consume one banked credit. True if one was found and just spent."""
+    """Consume one banked credit, oldest first. True if one was just spent.
+
+    FIFO matters here in a way it doesn't for postbacks. Credits live for
+    ``CREDIT_TTL_SECONDS``, and a player who banks them faster than they spend
+    them would, under newest-first, always redeem the fresh one while the
+    oldest sat untouched until it expired — losing a watched ad, which is the
+    single thing this ledger exists to prevent.
+    """
     from models import AdReward
     return _claim_row(
         session,
-        _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
+        _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
         .filter(AdReward.provider == CREDIT_PROVIDER)
         .first())
 

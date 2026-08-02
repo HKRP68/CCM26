@@ -82,11 +82,17 @@ def fallback_reward():
         from config import GSPIN_OUTCOMES
         for _cum, _colour, kind, amount_range in GSPIN_OUTCOMES:
             if kind == "coins" and amount_range:
-                lo, hi = int(amount_range[0]), int(amount_range[1])
-                break
+                band_lo, band_hi = int(amount_range[0]), int(amount_range[1])
+                # A band of (0, 0) is truthy and would hand back a reward worth
+                # nothing — the one outcome this function exists to prevent, and
+                # the player has already watched an ad for it. Keep the built-in
+                # range instead and carry on looking.
+                if max(band_lo, band_hi) > 0:
+                    lo, hi = band_lo, band_hi
+                    break
     except Exception:
-        pass
-    return _FallbackReward(lo, max(lo, hi))
+        logger.exception("could not read the configured coin band")
+    return _FallbackReward(max(1, lo), max(1, lo, hi))
 
 
 def guaranteed_reward(session):
