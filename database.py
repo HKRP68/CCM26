@@ -522,6 +522,10 @@ def _migrate_add_columns():
     _try_add("user_stats", "last_coinchest", "TIMESTAMP")
     _try_add("user_stats", "coinchest_used", "INTEGER DEFAULT 0")
 
+    # Rewarded ads are no longer Adsgram-only — tag each postback with the
+    # network that sent it. Legacy rows stay NULL and are read as Adsgram.
+    _try_add("adsgram_rewards", "provider", "VARCHAR(20)")
+
     # Challenge League Tournaments: per-league tournament command + match tagging.
     # (The tournament_* tables themselves are created by create_all above.)
     _try_add("challenge_leagues", "tournament_command", "VARCHAR(60)")

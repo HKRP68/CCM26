@@ -8,7 +8,33 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+  <!-- The ad SDK is loaded at runtime from /api/ads/config: this page is a
+       static file, so it can't be told at render time which network is active.
+       See services/ad_service.py. -->
+  <script>
+    window.__adConfig = null;
+    window.__adSdkReady = (async function () {
+      try {
+        const res = await fetch('/api/ads/config');
+        const cfg = (await res.json())?.ads;
+        if (!cfg || !cfg.configured || !cfg.sdk_url) return false;
+        window.__adConfig = cfg;
+        await new Promise((resolve, reject) => {
+          const el = document.createElement('script');
+          el.src = cfg.sdk_url;
+          if (cfg.provider === 'monetag') {
+            el.setAttribute('data-zone', cfg.zone_id);
+            el.setAttribute('data-sdk', cfg.sdk_function);
+          }
+          el.onload = resolve;
+          el.onerror = reject;
+          document.head.appendChild(el);
+          setTimeout(resolve, 6000);   // never block the wheel on a dead CDN
+        });
+        return true;
+      } catch (e) { return false; }
+    })();
+  </script>
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     :root {
@@ -439,15 +465,16 @@
     }
 
     async function getAdToken() {
-      // Best-effort: show an Adsgram ad if the SDK is available, then claim a token.
+      // Best-effort: show an ad if the SDK is available, then claim a token.
       // The SDK promise is not guaranteed to settle — a request that dies on a
       // phone network can hang indefinitely — so it is raced against a timer
       // rather than awaited outright, which is what used to strand this page on
       // "LOADING AD…" with nothing ever happening.
       try {
-        if (window.Adsgram && window.__adController) {
+        const show = await adShowFn();
+        if (show) {
           await Promise.race([
-            window.__adController.show(),
+            show(),
             new Promise((_, reject) => setTimeout(() => reject(new Error('ad timeout')), 12000)),
           ]);
         }
@@ -524,12 +551,28 @@
       }
     }
 
-    // Optional Adsgram init (no-op without a configured block id).
-    try {
-      const blockId = (tg?.initDataUnsafe?.start_param || '').startsWith('block_')
-        ? tg.initDataUnsafe.start_param.slice(6) : null;
-      if (window.Adsgram && blockId) { window.__adController = window.Adsgram.init({ blockId }); }
-    } catch (e) {}
+    // Returns a zero-arg function that shows one ad and resolves when it was
+    // watched, or null when no network is usable. Provider differences live
+    // here and nowhere else on this page.
+    async function adShowFn() {
+      try {
+        await window.__adSdkReady;
+        const cfg = window.__adConfig;
+        if (!cfg || !cfg.configured) return null;
+        if (cfg.provider === 'monetag') {
+          const fn = window[cfg.sdk_function];
+          if (typeof fn !== 'function') return null;
+          const ymid = tg?.initDataUnsafe?.user?.id;
+          // ymid is what Monetag echoes back in its server-to-server postback.
+          return () => fn(ymid ? { ymid: String(ymid), requestVar: 'spin' } : {});
+        }
+        if (!window.Adsgram?.init) return null;
+        if (!window.__adController) {
+          window.__adController = window.Adsgram.init({ blockId: cfg.placement_id });
+        }
+        return () => window.__adController.show();
+      } catch (e) { return null; }
+    }
   </script>
 </body>
 </html>

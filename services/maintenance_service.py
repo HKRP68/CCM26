@@ -188,7 +188,9 @@ MINIAPP_GUARDED_PREFIXES = (
     "/api/webapp/",
     "/api/fantasy/",
     "/api/ipl16/",
+    "/api/ads/",
     "/api/adsgram/",
+    "/api/monetag/",
 )
 
 # Endpoints a match already in progress needs to reach the final ball. These

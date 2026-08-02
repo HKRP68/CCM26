@@ -553,9 +553,9 @@ def dashboard():
                                .filter(ActivityLog.action.in_(["buy", "buy_player", "market_buy"])))
                                .scalar() or 0)
         try:
-            from models import AdsgramReward
-            total_ad_watched = (apply_reward_range(db.query(func.count(AdsgramReward.id)),
-                                                    AdsgramReward.received_at).scalar() or 0)
+            from models import AdReward
+            total_ad_watched = (apply_reward_range(db.query(func.count(AdReward.id)),
+                                                    AdReward.received_at).scalar() or 0)
         except Exception:
             total_ad_watched = 0
         total_ad_watched += (apply_reward_range(db.query(func.count(ActivityLog.id))
@@ -4208,8 +4208,14 @@ def _image_mimetype(data):
 
 @app.route("/webapp")
 def webapp():
-    """Serve the Mini App HTML."""
-    return render_template("webapp.html")
+    """Serve the Mini App HTML.
+
+    The ad network's SDK tag is rendered server-side from ``ad_config`` so the
+    script starts downloading with the page instead of a round trip later —
+    and so switching networks is an env-var change with no template edit.
+    """
+    from services import ad_service
+    return render_template("webapp.html", ad_config=ad_service.client_config())
 
 
 @app.route("/webapp/player-card/<int:player_id>")
@@ -4291,7 +4297,7 @@ def webapp_init():
                 },
             }
         from models import UserStats
-        from services import adsgram_service, quota_service as _quota_service
+        from services import ad_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
         from services.command_config_service import get_user_cooldown
@@ -4362,9 +4368,13 @@ def webapp_init():
                 "casual_match_played": bool((user.quick_matches_played or 0) > 0),
                 "club_joined": bool(user.club_id),
             },
+            # Which ad network the client should load and how to call it.
+            # `adsgram` is the legacy shape, kept so a Mini App page cached in
+            # a Telegram WebView from before the switch keeps working.
+            "ads": ad_service.client_config(),
             "adsgram": {
-                "configured": adsgram_service.is_configured(),
-                "block_id": adsgram_service.get_block_id(),
+                "configured": ad_service.is_configured(),
+                "block_id": ad_service.get_block_id(),
             },
             "branding": _get_branding_safe(db),
             "login_streak": _touch_login_safe(db, user, stats),
@@ -5087,12 +5097,12 @@ def webapp_spin():
         import os as _os
         from datetime import datetime as _dt
         from models import UserStats
-        from services import adsgram_service, quota_service
+        from services import ad_service, quota_service
 
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
         dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
-        ads_configured = adsgram_service.is_configured()
+        ads_configured = ad_service.is_configured()
 
         # ── Load stats first to check quota ──
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -5102,16 +5112,16 @@ def webapp_spin():
 
         # ── Try to verify ad (so we know what slot is available) ──
         verified_via = None
-        if adsgram_service.claim_postback(db, tg_id):
+        if ad_service.claim_postback(db, tg_id):
             verified_via = "server_postback"
         elif ad_token.startswith("CT-"):
-            if adsgram_service.consume_client_token(ad_token, tg_id):
+            if ad_service.consume_client_token(ad_token, tg_id):
                 verified_via = "client_token"
         elif ad_token.startswith("NF-"):
             # No-fill pass: the grace was already debited when the token was
             # issued at /api/webapp/ad-unavailable, so redeeming it here just
             # unlocks the ad slot. Deliberately NOT counted as an ad watched.
-            if adsgram_service.consume_nofill_token(ad_token, tg_id, "spin"):
+            if ad_service.consume_nofill_token(ad_token, tg_id, "spin"):
                 verified_via = "nofill_pass"
         elif ad_token.startswith("MOCK-"):
             if dev_mode or not ads_configured:
@@ -5201,7 +5211,7 @@ def webapp_spin():
 @app.route("/api/webapp/ad-completed", methods=["POST"])
 @csrf_exempt
 def webapp_ad_completed():
-    """Called by client after Adsgram SDK's show() promise resolves.
+    """Called by client after the ad SDK's show() promise resolves.
 
     Returns a single-use token the client immediately passes to /api/webapp/spin.
     This is the client-side verification fallback used when server-side
@@ -5212,10 +5222,10 @@ def webapp_ad_completed():
         return err
     db, user, tg_id = auth
     try:
-        from services import adsgram_service
-        token = adsgram_service.issue_client_token(tg_id)
+        from services import ad_service
+        token = ad_service.issue_client_token(tg_id)
         # Track for the "watch N ads" daily quest. This endpoint fires once per
-        # completed ad (the Adsgram SDK resolves only on full view).
+        # completed ad (the SDK promise resolves only on a full view).
         try:
             from services.quest_service import safe_track
             safe_track(db, user.id, "ad_watched", 1)
@@ -5242,7 +5252,7 @@ def webapp_ad_unavailable():
 
     Returns a single-use ``NF-`` token the client passes to the spin/daily
     endpoint in place of an ad token. This is the *no-fill pass* — see
-    ``services.adsgram_service`` for why it exists: Adsgram answering "no
+    ``services.ad_service`` for why it exists: an ad network answering "no
     banner", or its SDK never loading inside a Telegram WebView on a phone
     network, is common and is not something the player can fix, so it must not
     dead-end them on a feature they were told they could reach by watching an
@@ -5259,7 +5269,7 @@ def webapp_ad_unavailable():
     db, user, tg_id = auth
     try:
         from models import UserStats
-        from services import adsgram_service, quota_service
+        from services import ad_service, quota_service
 
         data = request.get_json(silent=True) or {}
         kind = "daily" if (data.get("kind") or "spin") == "daily" else "spin"
@@ -5298,7 +5308,7 @@ def webapp_ad_unavailable():
             db.rollback()
 
         return {"ok": True,
-                "ad_token": adsgram_service.issue_nofill_token(tg_id, kind),
+                "ad_token": ad_service.issue_nofill_token(tg_id, kind),
                 "quota": status}
     except Exception as e:
         db.rollback()
@@ -5316,18 +5326,18 @@ def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
     redeemed against here; leave it None for actions that have no quota of
     their own and therefore issue no passes.
     """
-    from services import adsgram_service
-    if adsgram_service.claim_postback(db, tg_id):
+    from services import ad_service
+    if ad_service.claim_postback(db, tg_id):
         return "server_postback"
     if ad_token and ad_token.startswith("CT-"):
-        if adsgram_service.consume_client_token(ad_token, tg_id):
+        if ad_service.consume_client_token(ad_token, tg_id):
             return "client_token"
     if ad_token and ad_token.startswith("NF-") and nofill_kind:
         # The network had no ad to serve; the pass was already debited when the
         # token was issued (see /api/webapp/ad-unavailable). Only the quota the
         # pass came out of accepts it — callers with no quota of their own
         # (free packs) pass nofill_kind=None and so never take one.
-        if adsgram_service.consume_nofill_token(ad_token, tg_id, nofill_kind):
+        if ad_service.consume_nofill_token(ad_token, tg_id, nofill_kind):
             return "nofill_pass"
     if ad_token and ad_token.startswith("MOCK-"):
         if dev_mode or not ads_configured:
@@ -5352,13 +5362,13 @@ def webapp_daily():
     try:
         import os as _os
         from models import UserStats
-        from services import adsgram_service, quota_service
+        from services import ad_service, quota_service
         from services.daily_service import claim_daily
 
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
         dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
-        ads_configured = adsgram_service.is_configured()
+        ads_configured = ad_service.is_configured()
 
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         if not stats:
@@ -5950,7 +5960,7 @@ def webapp_freepack_status():
         return err
     db, user, tg_id = auth
     try:
-        from services import adsgram_service
+        from services import ad_service
         from services.free_pack_service import (
             check_free_pack_cooldown, get_band_percentages, get_cooldown_minutes,
         )
@@ -5965,8 +5975,9 @@ def webapp_freepack_status():
             "remaining_seconds": remaining,
             "cooldown_minutes": get_cooldown_minutes(db),
             "bands": get_band_percentages(db),
-            "ads_configured": adsgram_service.is_configured(),
-            "adsgram_block_id": adsgram_service.get_block_id(),
+            "ads": ad_service.client_config(),
+            "ads_configured": ad_service.is_configured(),
+            "adsgram_block_id": ad_service.get_block_id(),
             "roster_count": user.roster_count or 0,
             "roster_full": (user.roster_count or 0) >= 25,
         }
@@ -5988,13 +5999,13 @@ def webapp_freepack_open():
         return err
     db, user, tg_id = auth
     try:
-        from services import adsgram_service
+        from services import ad_service
         from services.free_pack_service import open_free_pack, check_free_pack_cooldown
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
 
         dev_mode = os.getenv("WEBAPP_DEV_MODE") == "1"
-        ads_configured = adsgram_service.is_configured()
+        ads_configured = ad_service.is_configured()
 
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         if not stats:
@@ -6010,10 +6021,10 @@ def webapp_freepack_open():
 
         # Verify ad
         verified_via = None
-        if adsgram_service.claim_postback(db, tg_id):
+        if ad_service.claim_postback(db, tg_id):
             verified_via = "server_postback"
         elif ad_token.startswith("CT-"):
-            if adsgram_service.consume_client_token(ad_token, tg_id):
+            if ad_service.consume_client_token(ad_token, tg_id):
                 verified_via = "client_token"
         elif ad_token.startswith("MOCK-"):
             if dev_mode or not ads_configured:
@@ -10685,25 +10696,61 @@ def webapp_match_scorecard():
         db.close()
 
 
-@app.route("/api/adsgram/reward", methods=["GET"])
+# Every parameter name an ad network might carry the Telegram id in. Adsgram
+# sends `userid`, Monetag sends `ymid` (whatever we passed to the SDK) and also
+# `telegram_id`. Accepting all of them means switching networks needs no code
+# change here — only the URL pasted into the new dashboard.
+_POSTBACK_ID_PARAMS = ("userid", "ymid", "telegram_id", "tgid", "user_id")
+
+
+@app.route("/api/ads/config", methods=["GET"])
 @csrf_exempt
-def adsgram_postback():
-    """Adsgram server-to-server postback endpoint.
+def ads_config():
+    """Public: which ad network to load and how to call it.
 
-    Adsgram fires GET requests here with ?userid=<telegram_id> after a
-    user finishes watching a rewarded ad. We log it; the spin endpoint
-    claims it later.
+    The Mini App gets this rendered into its HTML, but the standalone spin page
+    is a static file with no template pass, so it reads the config from here.
+    Nothing secret is in it — the block/zone id is public by definition; it
+    ships in the SDK tag of every page that shows an ad.
+    """
+    from services import ad_service
+    return {"ok": True, "ads": ad_service.client_config()}
 
-    Configure this URL in your Adsgram block as:
-      https://your-app.onrender.com/api/adsgram/reward?userid=[userId]
 
-    Adsgram substitutes [userId] with the actual telegram_id before
-    making the request. No auth needed — Adsgram's docs don't include
-    signed requests; the security model is "obscurity of the URL +
-    cooldown limits".
+@app.route("/api/ads/reward", methods=["GET"])
+@app.route("/api/adsgram/reward", methods=["GET"])
+@app.route("/api/monetag/reward", methods=["GET"])
+@csrf_exempt
+def ads_postback():
+    """Server-to-server postback endpoint for the active ad network.
+
+    The network fires a GET here after a user finishes watching a rewarded ad.
+    We log it; the spin/daily endpoint claims it later (within
+    ``POSTBACK_WINDOW_SECONDS``).
+
+    Configure the reward URL in your network's dashboard as:
+
+      Adsgram: https://your-app.example.com/api/ads/reward?userid=[userId]
+      Monetag: https://your-app.example.com/api/ads/reward?ymid={ymid}
+               &event_type={event_type}&reward_event_type={reward_event_type}
+
+    Adsgram substitutes ``[userId]`` and Monetag substitutes ``{ymid}`` (the
+    value the Mini App passed to ``show_<zone>({ymid})`` — we pass the Telegram
+    id) before making the request. The legacy ``/api/adsgram/reward`` and a
+    matching ``/api/monetag/reward`` both point here, so an already-configured
+    Adsgram block keeps working after the switch and neither dashboard needs a
+    URL the other can't produce.
+
+    No auth — neither network signs these requests; the security model is
+    "obscurity of the URL + the per-cycle ad quota", and a postback only ever
+    unlocks a slot the user already had.
     """
     try:
-        userid_raw = request.args.get("userid", "")
+        userid_raw = ""
+        for param in _POSTBACK_ID_PARAMS:
+            userid_raw = (request.args.get(param) or "").strip()
+            if userid_raw:
+                break
         if not userid_raw:
             return {"ok": False, "error": "no_userid"}, 400
         try:
@@ -10711,27 +10758,43 @@ def adsgram_postback():
         except ValueError:
             return {"ok": False, "error": "bad_userid"}, 400
 
+        # Monetag fires a postback per event and marks which kind it was. Only
+        # the impression is "the user watched it" — a click on the same ad would
+        # otherwise hand out a second reward for one view. Networks that send no
+        # event_type at all (Adsgram) fall through unchanged.
+        event_type = (request.args.get("event_type") or "").strip().lower()
+        if event_type and event_type not in ("impression", "view", "reward"):
+            logger.info("Ad postback ignored for %s (event_type=%s)",
+                        telegram_id, event_type)
+            return {"ok": True, "note": "ignored_event"}, 200
+
         # Optional: only accept postbacks for users that actually exist
         db = get_session()
         try:
             user = db.query(User).filter(User.telegram_id == telegram_id).first()
             if not user:
-                # Still 200 OK so Adsgram doesn't retry, but don't insert a row
-                logger.warning(f"Adsgram postback for unknown user {telegram_id}")
+                # Still 200 OK so the network doesn't retry, but don't insert a row
+                logger.warning(f"Ad postback for unknown user {telegram_id}")
                 return {"ok": True, "note": "user_not_found"}, 200
 
-            from services import adsgram_service
-            adsgram_service.record_postback(
+            from services import ad_service
+            # Trust the route the network actually hit over the configured
+            # provider: during a switch both dashboards can be live at once.
+            provider = ("monetag" if request.path.startswith("/api/monetag/")
+                        else "adsgram" if request.path.startswith("/api/adsgram/")
+                        else ad_service.get_provider())
+            ad_service.record_postback(
                 db, telegram_id,
                 source_ip=request.remote_addr,
                 query_string=request.query_string.decode("utf-8", errors="ignore"),
+                provider=provider,
             )
-            logger.info(f"Adsgram postback recorded for {telegram_id}")
+            logger.info(f"Ad postback ({provider}) recorded for {telegram_id}")
             return {"ok": True}
         finally:
             db.close()
     except Exception as e:
-        logger.exception("adsgram_postback failed")
+        logger.exception("ads_postback failed")
         return {"ok": False, "error": "internal"}, 500
 
 
@@ -15909,34 +15972,35 @@ def admin_market_trait_delete(slot_id):
     return redirect(url_for("admin_markets_overview"))
 
 
-# ─── Adsgram (Mini App ad analytics) ────────────────────────────────────
+# ─── Ads (Mini App ad analytics) ────────────────────────────────────────
 
-@app.route("/adsgram")
+@app.route("/ads")
+@app.route("/adsgram")            # legacy path, kept for bookmarks
 @login_required
-def admin_adsgram():
-    """Recent Adsgram postbacks + Mini App spin history."""
+def admin_ads():
+    """Recent rewarded-ad postbacks + Mini App spin history."""
     db = get_session()
     try:
-        from models import AdsgramReward, ActivityLog
-        from services import adsgram_service
+        from models import AdReward, ActivityLog
+        from services import ad_service
         from sqlalchemy import func as _sqlfn
 
         # Last 100 postbacks
-        recent = (db.query(AdsgramReward)
-                  .order_by(AdsgramReward.received_at.desc())
+        recent = (db.query(AdReward)
+                  .order_by(AdReward.received_at.desc())
                   .limit(100).all())
 
         # Summary
-        total = db.query(_sqlfn.count(AdsgramReward.id)).scalar() or 0
-        consumed = (db.query(_sqlfn.count(AdsgramReward.id))
-                    .filter(AdsgramReward.consumed_at.isnot(None))
+        total = db.query(_sqlfn.count(AdReward.id)).scalar() or 0
+        consumed = (db.query(_sqlfn.count(AdReward.id))
+                    .filter(AdReward.consumed_at.isnot(None))
                     .scalar() or 0)
 
         # Today (last 24h)
         from datetime import timedelta
         day_ago = datetime.utcnow() - timedelta(hours=24)
-        today = (db.query(_sqlfn.count(AdsgramReward.id))
-                 .filter(AdsgramReward.received_at >= day_ago)
+        today = (db.query(_sqlfn.count(AdReward.id))
+                 .filter(AdReward.received_at >= day_ago)
                  .scalar() or 0)
 
         # Recent Mini App spins (from activity log)
@@ -15956,13 +16020,18 @@ def admin_adsgram():
             users = {}
 
         return render_template(
-            "admin_adsgram.html",
+            "admin_ads.html",
             recent=recent,
             spins=spins,
             users=users,
             total=total, consumed=consumed, today=today,
-            configured=adsgram_service.is_configured(),
-            block_id=adsgram_service.get_block_id() or "",
+            ad_config=ad_service.client_config(),
+            configured=ad_service.is_configured(),
+            provider=ad_service.get_provider(),
+            placement_id=ad_service.get_placement_id() or "",
+            block_id=ad_service.get_block_id() or "",
+            public_base_url=(os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+                             or "https://your-app.example.com"),
         )
     finally:
         db.close()

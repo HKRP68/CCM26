@@ -9,13 +9,24 @@
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
   // ad or CDN domain) degrades gracefully instead of breaking the app.
-  window.__adsgramReady = false;
-  window.__adsgramFailed = false;
+  window.__adsReady = false;
+  window.__adsFailed = false;
   window.__sortableFailed = false;
+  // Which ad network this deployment runs, rendered server-side from
+  // AD_PROVIDER so the SDK downloads with the page rather than after the
+  // first /api/webapp/init round trip. Empty object = mock mode.
+  window.__adConfig = {{ (ad_config or {}) | tojson }};
 </script>
-<script src="https://sad.adsgram.ai/js/sad.min.js" async
-        onload="window.__adsgramReady = true; window.dispatchEvent(new Event('adsgram-ready'));"
-        onerror="window.__adsgramFailed = true; console.warn('Adsgram SDK failed to load — ad spins unavailable this session');"></script>
+{% if ad_config and ad_config.configured and ad_config.provider == 'adsgram' %}
+<script src="{{ ad_config.sdk_url }}" async
+        onload="window.__adsReady = true; window.dispatchEvent(new Event('ads-sdk-ready'));"
+        onerror="window.__adsFailed = true; console.warn('Ad SDK failed to load — ad spins unavailable this session');"></script>
+{% elif ad_config and ad_config.configured and ad_config.provider == 'monetag' %}
+<script src="{{ ad_config.sdk_url }}" data-zone="{{ ad_config.zone_id }}"
+        data-sdk="{{ ad_config.sdk_function }}" async
+        onload="window.__adsReady = true; window.dispatchEvent(new Event('ads-sdk-ready'));"
+        onerror="window.__adsFailed = true; console.warn('Ad SDK failed to load — ad spins unavailable this session');"></script>
+{% endif %}
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" async
         onerror="window.__sortableFailed = true; console.warn('SortableJS failed to load — using ▲▼ reorder buttons only');"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -3327,7 +3338,7 @@ async function refreshDashboard() {
   document.getElementById('daily-streak-line').textContent =
     `🔥 Streak: ${userData.streak || 0} days`;
 
-  initAdsgram(data.adsgram);
+  initAds(data.ads || data.adsgram);
 
   // Login streak banner
   if (data.login_streak) {
@@ -4560,44 +4571,76 @@ async function onSpinClick() {
   }
 }
 
-// Adsgram AdController, initialised lazily once we know the block ID
+// Ad controller, initialised lazily once we know which network is configured.
+//
+// Provider-agnostic by design: whichever network is behind it,
+// `_adController.show()` returns a promise that resolves `{done: true}` only
+// when the ad was watched to the end, and rejects otherwise. Everything below
+// this line — retries, timeouts, no-fill passes — is therefore identical for
+// Adsgram and Monetag, and adding a third network means adding one branch in
+// _tryInitAdController + _reloadAdsSdk and nothing else.
+// See services/ad_service.py for the server half.
 let _adController = null;
 let _adsConfigured = false;
-let _adsBlockId = null;
+let _adsProvider = null;        // 'adsgram' | 'monetag' | null
+let _adsPlacementId = null;     // Adsgram block id / Monetag zone id
+let _adsSdkUrl = null;
+let _adsSdkFunction = null;     // Monetag: global the SDK tag defines
 let _adsWaitingForSdk = false;
 
-function initAdsgram(config) {
-  _adsConfigured = !!config?.configured;
-  _adsBlockId = config?.block_id || null;
-  if (!_adsConfigured || !_adsBlockId) return;
-  // The Adsgram SDK loads async, so it may not be present yet when init
-  // data arrives. Try now, and if the SDK isn't ready, wait for its load
-  // event (or bail if it already failed to load — e.g. DNS blocked).
+// Telegram id, passed to Monetag as `ymid` so its server-to-server postback
+// can be matched back to this user. Adsgram derives the id itself from the
+// WebApp context, so it needs nothing here.
+function _adYmid() {
+  try {
+    const id = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+    return id ? String(id) : '';
+  } catch (e) { return ''; }
+}
+
+function initAds(config) {
+  // The server renders the config into the page; /api/webapp/init repeats it
+  // so a Mini App page still cached in a WebView from before a provider switch
+  // corrects itself on the next refresh instead of running the old network.
+  const cfg = config || window.__adConfig || {};
+  _adsConfigured = !!cfg.configured;
+  _adsProvider = cfg.provider || (cfg.block_id ? 'adsgram' : null);
+  _adsPlacementId = cfg.placement_id || cfg.zone_id || cfg.block_id || null;
+  _adsSdkUrl = cfg.sdk_url || null;
+  _adsSdkFunction = cfg.sdk_function
+    || (cfg.zone_id ? 'show_' + cfg.zone_id : null);
+  if (!_adsConfigured || !_adsPlacementId) return;
+  // The SDK loads async, so it may not be present yet when init data arrives.
+  // Try now, and if the SDK isn't ready, wait for its load event (or bail if
+  // it already failed to load — e.g. DNS blocked).
   if (_tryInitAdController()) return;
-  if (window.__adsgramFailed) {
+  if (window.__adsFailed) {
     // The page-level <script> errored — usually a WebView that opened before
     // the phone had a working connection. Re-fetch now rather than leaving the
     // whole session ad-less; this is the same recovery the tap path does, just
     // done ahead of the tap so the first ad is not the one that pays for it.
-    _reloadAdsgramSdk().then(ok => { if (ok) _tryInitAdController(); });
+    _reloadAdsSdk().then(ok => { if (ok) _tryInitAdController(); });
     return;
   }
   if (_adsWaitingForSdk) return;       // already waiting (init runs each refresh)
   _adsWaitingForSdk = true;
-  window.addEventListener('adsgram-ready', () => {
+  window.addEventListener('ads-sdk-ready', () => {
     _adsWaitingForSdk = false;
     _tryInitAdController();
   }, { once: true });
 }
 
+// Older name, kept because /api/webapp/init used to hand back an `adsgram` key.
+const initAdsgram = initAds;
+
 // Best-effort, fire-and-forget: make sure the SDK is loaded and the controller
 // built before an ad is actually wanted. Safe to call as often as you like —
-// it is a no-op once the controller exists, and _reloadAdsgramSdk dedupes any
+// it is a no-op once the controller exists, and _reloadAdsSdk dedupes any
 // load already in flight.
 function warmAds() {
-  if (_adController || !_adsConfigured || !_adsBlockId) return;
+  if (_adController || !_adsConfigured || !_adsPlacementId) return;
   if (_tryInitAdController()) return;
-  _reloadAdsgramSdk().then(ok => { if (ok) _tryInitAdController(); });
+  _reloadAdsSdk().then(ok => { if (ok) _tryInitAdController(); });
 }
 
 // Clear the failed-load cooldown. A tap is the user asking for an ad right now,
@@ -4608,21 +4651,46 @@ function _forceAdsRetry() {
   _adsRetryBlockedUntil = 0;
 }
 
+// Has the active provider's SDK actually finished loading? Each network
+// announces itself differently: Adsgram hangs an object off `window.Adsgram`,
+// Monetag's tag defines a single global named after the zone.
+function _adSdkLoaded() {
+  if (_adsProvider === 'monetag') {
+    return !!(_adsSdkFunction && typeof window[_adsSdkFunction] === 'function');
+  }
+  return !!window.Adsgram?.init;
+}
+
 function _tryInitAdController() {
   if (_adController) return true;
-  if (!_adsConfigured || !_adsBlockId || !window.Adsgram?.init) return false;
+  if (!_adsConfigured || !_adsPlacementId || !_adSdkLoaded()) return false;
   try {
-    _adController = window.Adsgram.init({ blockId: _adsBlockId });
+    if (_adsProvider === 'monetag') {
+      const showFn = window[_adsSdkFunction];
+      // Monetag resolves with nothing when the ad was watched and rejects
+      // otherwise. Normalise it to Adsgram's `{done:true}` here so the whole
+      // ad phase below stays provider-blind.
+      _adController = {
+        show: (opts) => {
+          const args = Object.assign({}, opts || {});
+          const ymid = _adYmid();
+          if (ymid) args.ymid = ymid;   // links the S2S postback to this user
+          return Promise.resolve(showFn(args)).then(() => ({ done: true }));
+        },
+      };
+    } else {
+      _adController = window.Adsgram.init({ blockId: _adsPlacementId });
+    }
     return true;
   } catch (e) {
-    console.error('Adsgram init failed:', e);
+    console.error('Ad SDK init failed:', e);
     _adController = null;
     return false;
   }
 }
 
-// "No ads available" is almost never a permanent state — it is Adsgram's ad
-// network reporting no fill for THIS request, and the very next request often
+// "No ads available" is almost never a permanent state — it is the ad network
+// reporting no fill for THIS request, and the very next request often
 // fills. So a no-fill is retried on a short backoff instead of being handed
 // straight to the user as a dead end. A user skipping the ad, or any other
 // error, is NOT retried: replaying an ad someone just closed is hostile.
@@ -4683,15 +4751,15 @@ function _adFailureKind(err) {
 
 const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// One-shot re-fetch of the Adsgram SDK. The page-level <script> tag is loaded
+// One-shot re-fetch of the ad SDK. The page-level <script> tag is loaded
 // once at boot; a Telegram WebView that opened on a flaky connection therefore
-// spent the WHOLE session with `__adsgramFailed` set and every ad reported as
+// spent the WHOLE session with `__adsFailed` set and every ad reported as
 // unavailable, even after the network came back. Re-injecting on demand costs
 // nothing when the SDK is already there and rescues the common case where the
 // user simply opened the app a few seconds too early.
 let _adsRetryLoad = null;
 // When a load fails, don't try again until this long has passed. Memoizing the
-// failure outright would rebuild the whole-session dead end _reloadAdsgramSdk
+// failure outright would rebuild the whole-session dead end _reloadAdsSdk
 // exists to fix, but retrying with no cooldown is its own problem now that
 // warmAds() runs on every screen entry: flipping between Spin and Daily on a
 // dead connection would fire a script fetch per tab. A short window keeps the
@@ -4699,8 +4767,9 @@ let _adsRetryLoad = null;
 const ADS_SDK_RETRY_COOLDOWN_MS = 20000;
 let _adsRetryBlockedUntil = 0;
 
-function _reloadAdsgramSdk() {
-  if (window.Adsgram?.init) return Promise.resolve(true);
+function _reloadAdsSdk() {
+  if (_adSdkLoaded()) return Promise.resolve(true);
+  if (!_adsSdkUrl) return Promise.resolve(false);   // mock mode — nothing to load
   if (_adsRetryLoad) return _adsRetryLoad;   // a load is already in flight
   if (Date.now() < _adsRetryBlockedUntil) return Promise.resolve(false);
   _adsRetryLoad = new Promise((resolve) => {
@@ -4712,20 +4781,34 @@ function _reloadAdsgramSdk() {
       resolve(ok);
     };
     const el = document.createElement('script');
-    el.src = 'https://sad.adsgram.ai/js/sad.min.js';
+    el.src = _adsSdkUrl;
+    // Monetag's tag is configured by attributes, not by a later init() call —
+    // without these the script loads and defines nothing.
+    if (_adsProvider === 'monetag') {
+      el.setAttribute('data-zone', _adsPlacementId);
+      el.setAttribute('data-sdk', _adsSdkFunction);
+    }
     el.async = true;
     el.onload = () => {
-      window.__adsgramFailed = false;
-      done(!!window.Adsgram?.init);
+      window.__adsFailed = false;
+      done(_adSdkLoaded());
     };
     // Drop the dead tag so retries don't stack duplicates in <head>.
     el.onerror = () => { el.remove(); done(false); };
     document.head.appendChild(el);
     // Don't let a hanging request block the tap forever.
-    setTimeout(() => done(!!window.Adsgram?.init), 6000);
+    setTimeout(() => done(_adSdkLoaded()), 6000);
   });
   return _adsRetryLoad;
 }
+
+// Boot straight off the server-rendered config rather than waiting for the
+// first /api/webapp/init to come back. The SDK tag is already in <head> by
+// now, so this is usually the point at which the controller becomes usable —
+// which matters, because a user can reach the Spin tab before init returns.
+// Placed after _reloadAdsSdk so the recovery path it may take is fully
+// defined (the retry state below it is `let`, not a hoisted declaration).
+initAds(window.__adConfig);
 
 // Ask the backend for a no-fill pass: a one-shot token that unlocks an
 // ad-gated slot when the network had no ad to give. `quotaKind` is 'spin' or
@@ -4767,15 +4850,15 @@ async function showAd(quotaKind = null) {
   const timeLeft = () => deadline - Date.now();
   _setAdPhase('Getting your ad…');
 
-  // Real Adsgram SDK if configured + initialised. The SDK loads async, so
+  // Real ad SDK if configured + initialised. The SDK loads async, so
   // if the controller isn't up yet, try once more before giving up.
   if (!_adController) _tryInitAdController();
-  if (!_adController && _adsConfigured && _adsBlockId) {
+  if (!_adController && _adsConfigured && _adsPlacementId) {
     // Configured, but the SDK never arrived. Give it one more chance now that
     // the user has actually asked for an ad.
     _setAdPhase('Loading ads…');
     _forceAdsRetry();
-    if (await _reloadAdsgramSdk()) _tryInitAdController();
+    if (await _reloadAdsSdk()) _tryInitAdController();
   }
 
   if (_adController) {
@@ -4786,8 +4869,11 @@ async function showAd(quotaKind = null) {
       try {
         _setAdPhase(attempt === 0 ? 'Getting your ad…' : 'Finding an ad…');
         // Never await the SDK unbounded — see AD_SHOW_TIMEOUT_MS.
+        // `requestVar` tags the placement in the network's reports (Monetag
+        // reads it, Adsgram ignores the argument entirely).
         const result = await _withAdTimeout(
-          _adController.show(), Math.min(AD_SHOW_TIMEOUT_MS, timeLeft()));
+          _adController.show(quotaKind ? { requestVar: quotaKind } : undefined),
+          Math.min(AD_SHOW_TIMEOUT_MS, timeLeft()));
         // SDK promise resolves only if user watched ad till the end
         if (result && result.done) {
           _setAdPhase('Claiming reward…');
@@ -4848,7 +4934,7 @@ async function showAd(quotaKind = null) {
   }
 
   // Fallback: dev/mock mode (only works if backend has WEBAPP_DEV_MODE=1
-  // or ADSGRAM_BLOCK_ID is unset)
+  // or no ad network is configured — see AD_PROVIDER)
   toast('📺 Playing ad… (mock)', 'info');
   await new Promise(r => setTimeout(r, 1200));
   return 'MOCK-' + Date.now();

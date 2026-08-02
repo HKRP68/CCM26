@@ -1710,16 +1710,22 @@ class PendingUndo(Base):
     expires_at = Column(DateTime, nullable=False)
 
 
-class AdsgramReward(Base):
-    """Records ad-watch postbacks received from Adsgram's server.
+class AdReward(Base):
+    """Records ad-watch postbacks received from the ad network's server.
 
-    Adsgram fires GET https://your-app/api/adsgram/reward?userid=<telegram_id>
-    after a user finishes watching a rewarded ad. We log it here so the
+    Whichever network is active (see ``services.ad_service``) fires a GET at
+    our reward URL after a user finishes watching a rewarded ad —
+    ``/api/ads/reward?userid=<telegram_id>`` for Adsgram,
+    ``/api/ads/reward?ymid={ymid}`` for Monetag. We log it here so the
     /api/webapp/spin endpoint can validate "this user really watched an ad
     in the last few minutes" before granting the spin.
 
     consumed_at is set when the user actually claims a spin using this
     postback, preventing replay.
+
+    The table keeps its original ``adsgram_rewards`` name: it predates the
+    multi-provider split, and renaming it would buy nothing but a migration
+    that can fail on a live database.
     """
     __tablename__ = "adsgram_rewards"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -1730,9 +1736,18 @@ class AdsgramReward(Base):
     received_at = Column(DateTime, default=datetime.utcnow,
                          nullable=False, index=True)
     consumed_at = Column(DateTime, nullable=True)
-    # Optional fields for debugging — IP and full query string Adsgram sent
+    # Which network sent it. Rows written before the multi-provider split have
+    # NULL here and are all Adsgram. Recorded for reporting only — claiming a
+    # postback deliberately ignores it, so a switch mid-cycle doesn't strand
+    # rewards the outgoing network already paid for.
+    provider = Column(String(20), nullable=True)
+    # Optional fields for debugging — IP and full query string the network sent
     source_ip = Column(String(64), nullable=True)
     query_string = Column(String(500), nullable=True)
+
+
+# Legacy name kept so older imports (and any pickled references) keep resolving.
+AdsgramReward = AdReward
 
 
 
