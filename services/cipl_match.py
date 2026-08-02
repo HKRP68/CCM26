@@ -28,6 +28,7 @@ from engine.game_state_engine import (
     BALL_HISTORY_WINDOW,
 )
 from engine.approach_modifiers import batting_label, bowling_label
+from services.match_engine import note_bowler_ball
 from services.sim_match import (
     _adapt_player,
     _fmt_to_engine_fmt,
@@ -1368,6 +1369,8 @@ def simulate_over(state):
             continue
 
         # --- Legal ball ---
+        # Hat-trick streak baseline — compared once the outcome is applied.
+        wkts_before_ball = bws["wickets"]
         balls_this_over += 1
         state["current_ball"] += 1
         bws["balls"] += 1
@@ -1506,6 +1509,8 @@ def simulate_over(state):
             free_hit = False
             if runs % 2 == 1:
                 _swap_strike(state)
+
+        note_bowler_ball(bws, bowler_wicket=bws["wickets"] > wkts_before_ball)
 
         state["timeline"].append(over_timeline[-1] if over_timeline else "0")
         state["timeline"] = state["timeline"][-18:]

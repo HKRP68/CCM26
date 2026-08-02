@@ -73,6 +73,31 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
     }
 
 
+def note_bowler_ball(bws, *, bowler_wicket):
+    """Record one LEGAL delivery against a bowler's hat-trick streak.
+
+    Every ball loop kept ``wickets`` per bowler but nothing ever wrote the
+    ``hattrick`` flag the quest tracker reads, so 'take a hat-trick' quests
+    could never complete — and a career hat-trick quest put the weekly streak
+    jackpot permanently out of reach. This is the one place that flag is set.
+
+    Call once per legal ball, after the outcome has been applied.
+    ``bowler_wicket`` is True only for a dismissal credited to the bowler (a
+    run-out is not), and the streak resets on any other legal delivery — three
+    *consecutive* deliveries is what makes a hat-trick. Wides and no-balls are
+    not legal deliveries, so callers skip them and a hat-trick survives them.
+    """
+    if not isinstance(bws, dict):
+        return
+    if bowler_wicket:
+        streak = bws.get("wkt_streak", 0) + 1
+        bws["wkt_streak"] = streak
+        if streak >= 3:
+            bws["hattrick"] = True
+    else:
+        bws["wkt_streak"] = 0
+
+
 def get_striker(s):
     return s["batting_order"][s["striker_idx"]]
 

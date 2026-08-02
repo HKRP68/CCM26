@@ -1878,6 +1878,8 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     bws = state["bowl_stats"].setdefault(b_rid, {
         "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
         "this_over_balls": 0, "maidens": 0, "this_over_runs": 0})
+    # Hat-trick streak baseline — compared after the outcome below.
+    wkts_before_ball = bws.get("wickets", 0)
 
     legal = True
     need_new_bat = False
@@ -1961,6 +1963,9 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         state["current_ball"] += 1
         bws["this_over_balls"] += 1
         bws["balls"] = bws.get("balls", 0) + 1
+        from services.match_engine import note_bowler_ball
+        note_bowler_ball(bws,
+                         bowler_wicket=bws.get("wickets", 0) > wkts_before_ball)
 
     eoo = False
     if state["current_ball"] >= 6:
@@ -3062,7 +3067,8 @@ def finalize_webapp_match(session, match_id):
     # /wpm and /wpmbot matches counted toward no quests. Fire the same shared
     # tracker here for both human participants (the bot user is skipped inside).
     try:
-        from services.quest_service import track_user_match_quests
+        from services.quest_service import (
+            track_user_match_quests, safe_track, match_counts_for_quests)
         from models import User as _QUser
         is_vsbot_q = bool((state or {}).get("is_vsbot"))
         is_tie = result.get("margin_type") == "tie"
@@ -3074,6 +3080,11 @@ def finalize_webapp_match(session, match_id):
                 session, state or {}, qu,
                 bool(winner_uid and uid == winner_uid and not is_tie),
                 is_vsbot_q, winner_uid)
+        # A tie the auto super over decided counts as a Super Over win, same as
+        # the interactive one in handlers.super_over.
+        if (result.get("margin_type") == "super_over" and winner_uid
+                and match_counts_for_quests(state, is_vsbot=is_vsbot_q)):
+            safe_track(session, winner_uid, "super_over_won", 1)
     except Exception:
         logger.exception("webapp match-end quest tracking failed")
 

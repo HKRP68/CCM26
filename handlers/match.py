@@ -4315,6 +4315,8 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 "balls": 0, "runs": 0, "wickets": 0,
                 "overs_done": 0, "this_over_balls": 0,
             })
+            # Hat-trick streak baseline — compared after the outcome below.
+            wkts_before_ball = bws.get("wickets", 0)
 
             # Snapshot pre-ball values for milestone detection (fifty/hundred)
             # and rich commentary narratives (partnership / big-over context).
@@ -4407,6 +4409,10 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 s["current_ball"] += 1
                 bws["this_over_balls"] += 1
                 bws["balls"] = bws.get("balls", 0) + 1
+                from services.match_engine import note_bowler_ball
+                note_bowler_ball(
+                    bws,
+                    bowler_wicket=bws.get("wickets", 0) > wkts_before_ball)
 
             eoo = False
             is_maiden = False

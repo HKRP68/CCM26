@@ -61,8 +61,26 @@
       {% endfor %}
     </select>
     <small style="color:var(--muted); display:block; margin-top:.3rem;">
-      The user's progress increments by 1 each time this event fires
-      (except <code>runs_scored</code> and <code>wickets_taken</code> which use the actual count).
+      Progress increments by 1 each time this event fires; triggers labelled
+      <i>“total for the period”</i> add the real figure instead (runs, wickets,
+      sixes…), and <i>“uses MAX”</i> triggers keep the best single attempt
+      rather than a running sum.
+    </small>
+    <small style="color:var(--muted); display:block; margin-top:.3rem;">
+      <b>Triggers are period-agnostic — the Type above sets the window.</b>
+      <code>wickets_taken</code> on a 🗓️ Monthly quest <i>is</i> “Wickets Taken
+      in Month”; the same trigger on a 📅 Daily counts only today's wickets.
+    </small>
+    <small style="color:var(--muted); display:block; margin-top:.3rem;">
+      ⚖️ Match triggers only fire when a user's own XI plays another user's own
+      XI. Matches vs the bot (<code>/vsbot</code>, <code>/wpmbot</code>,
+      <code>/lpbot</code>, <code>/ciplbot</code>), spectator matches and matches
+      voided by the Team Overall gap (10+ apart) earn no quest progress.
+    </small>
+    <small style="color:var(--muted); display:block; margin-top:.3rem;">
+      ⚠️ <code>manual</code> quests have no trigger behind them and are never
+      dealt in the random draw — progress only moves when an admin sets it, so
+      pin the quest (<i>Always assign</i>) if you intend to run one.
     </small>
   </div>
 

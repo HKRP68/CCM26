@@ -1540,6 +1540,27 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                 _record_cipl_potm(session, main_state, best)
         except Exception:
             logger.exception("Super Over POTM career credit failed (%s)", mid)
+        # ── Match-end quest tracking ──
+        # A tied match never reaches the ordinary finalize — it returns early to
+        # start the Super Over — so this is the only place the tie-breaker's
+        # match can credit quests. Both sides get the main match's events off
+        # the same shared tracker, and the winner also gets 'super_over_won'.
+        try:
+            from services.quest_service import (
+                track_user_match_quests, safe_track, match_counts_for_quests)
+            from models import User as _QUser
+            main_state = so.get("main_state") or {}
+            for uid in (main_state.get("inn1_bat_team_id"),
+                        main_state.get("inn1_bowl_team_id")):
+                if not uid:
+                    continue
+                qu = session.query(_QUser).get(uid)
+                track_user_match_quests(session, main_state, qu,
+                                        uid == winner_uid, False, winner_uid)
+            if match_counts_for_quests(main_state):
+                safe_track(session, winner_uid, "super_over_won", 1)
+        except Exception:
+            logger.exception("Super Over quest tracking failed (%s)", mid)
         session.commit()
     except Exception:
         session.rollback()
