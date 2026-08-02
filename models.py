@@ -241,6 +241,11 @@ class UserStats(Base):
     daily_cycle_started_at = Column(DateTime, nullable=True)
     daily_free_used = Column(Boolean, default=False, nullable=False)
     daily_ad_count = Column(Integer, default=0, nullable=False)
+    # Ad-gated slots taken this cycle WITHOUT an ad, because the network had
+    # none to serve (see services.adsgram_service "No-fill passes"). Counted
+    # separately from spin_ad_count so the grace can be capped on its own.
+    spin_nofill_used = Column(Integer, default=0, nullable=False)
+    daily_nofill_used = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="stats")
@@ -988,6 +993,10 @@ class GameConfig(Base):
     # 1 free use). Admin-tunable via /admin/economy.
     spin_ad_quota = Column(Integer, default=5, nullable=False)
     daily_ad_quota = Column(Integer, default=5, nullable=False)
+    # How many of those ad slots may be taken per cycle when the ad network has
+    # nothing to serve. 0 disables the rescue entirely (ads become mandatory
+    # again); raising it trades a little revenue for never dead-ending a player.
+    spin_nofill_grace = Column(Integer, default=2, nullable=False)
     # Daily Quick Match limit per user. Resets at UTC midnight.
     daily_quick_match_limit = Column(Integer, default=5, nullable=False)
     # ── Free Pack (Mini App, ad-gated) ──

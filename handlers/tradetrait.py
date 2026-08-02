@@ -3,11 +3,11 @@
 The same shape as /trade for players, one tier down: you pick one of your
 unequipped traits, they pick one of theirs at the **same level** (the trait
 analogue of /trade's same-OVR rule), then both confirm and the two swap. Each
-side pays a gem fee for that level — 30 💎 at Lv.1, rising with the upgrade gems
+side pays a gem fee for that level — 15 💎 at Lv.1, rising with the upgrade gems
 sunk into the trait (see ``config.trait_trade_fee``):
 
     Level        1      2      3      4      5
-    trade fee   30     50     90    170    320   each side
+    trade fee   15     25     45     85    160   each side
 
 Rules worth knowing:
   • Inventory only. A trait on a player isn't tradable — /removetrait first,

@@ -9,7 +9,7 @@ Commands:
   /traitupgrade       — upgrade a trait on a player (callback picker)
   /traitreplace       — replace a trait on a player (callback picker)
   /removetrait        — unequip a trait, returning it to inventory (picker)
-  /selltrait          — sell an inventory trait for gems (30% below buy value)
+  /selltrait          — sell an inventory trait for gems (15% below buy value)
 
 Anything that changes what a PLAYER is carrying is frozen while that user has a
 match on (see ``services.roster_lock``) — you can't re-kit the XI after the
@@ -937,7 +937,7 @@ def _sell_quote_lines(user):
 
 
 async def selltrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/selltrait — sell an inventory trait for gems (30% below buy value)."""
+    """/selltrait — sell an inventory trait for gems (15% below buy value)."""
     tg = update.effective_user
     session = get_session()
     try:

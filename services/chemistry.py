@@ -353,12 +353,12 @@ def calculate_chemistry(players):
 #
 # Each role line reads:  category/20 + xi/20 = +boost/max
 #
-# The boost is the *in-match* stat lift for that unit, capped at +4 for
-# BAT/BOWL/WK and +3 for ALR. All-rounders are halved on the category component
+# The boost is the *in-match* stat lift for that unit, capped at +6 for
+# BAT/BOWL/WK and +4 for ALR. All-rounders are halved on the category component
 # because they already collect the batting and bowling benefit; paying them a
 # full share would count the same cohesion twice. Their line divides by its own
 # halved ceiling (10 + 20 = 30) rather than the full 40 — dividing by 40 caps
-# ALR at 2.25 of 3, so +3/3 could never appear however good the squad was, and
+# ALR at 3 of 4, so +4/4 could never appear however good the squad was, and
 # a ceiling nobody can reach reads to players as a broken stat.
 
 ROLE_ORDER = ("Batsman", "Bowler", "Wicket Keeper", "All-rounder")
@@ -370,8 +370,16 @@ ROLE_LABEL = {"Batsman": "BAT", "Bowler": "BOWL",
 # able to scan the left column and know where the work is.
 CHEM_COLOURS = ((15, "🟩"), (10, "🟨"), (5, "🟧"), (0, "🟥"))
 
-ROLE_MAX_BONUS = {"Batsman": 4, "Bowler": 4, "Wicket Keeper": 4,
-                  "All-rounder": 3}
+# Raised from 4/4/4/3. At +4 the whole system was quieter than it read: form
+# already swings ±2.5 OVR on its own, so a squad built deliberately around
+# national units was worth barely more than a lucky run of form on one card, and
+# most captains correctly ignored chemistry when picking an XI. +6 makes the
+# selection decision land — a fully unified unit now beats a scattered one by
+# more than the noise around it — while staying under the ~10 OVR gaps that
+# separate real cards, so chemistry still decides close matches instead of
+# overturning a better squad.
+ROLE_MAX_BONUS = {"Batsman": 6, "Bowler": 6, "Wicket Keeper": 6,
+                  "All-rounder": 4}
 # Roles whose category component is halved to avoid double-counting.
 ROLE_HALVED = ("All-rounder",)
 
@@ -640,6 +648,10 @@ def match_boosts(players):
 PARTNERSHIP_SAME_COUNTRY = 1.0
 PARTNERSHIP_WITH_ICON = 0.5
 
+# How hard a full bond hits the run distribution lives with the engine
+# (``services.probability_engine.BOND_*``); these two only say *how bonded* a
+# given pair is.
+
 # ── Layer 3: Clutch ─────────────────────────────────────────────────
 # Chemistry counts double at the death and in a tight chase. A well-drilled
 # side holds its nerve when the game is decided, which concentrates the effect
@@ -652,8 +664,11 @@ CLUTCH_PRESSURE = 0.5            # or any chase this desperate
 # ── Layer 4: Fielding Cohesion ──────────────────────────────────────
 # A side that plays together drops fewer catches. Feeds the engine's existing
 # fielding-quality curve, where +10 quality is worth roughly 2 percentage
-# points of drop chance.
-FIELDING_MAX_BONUS = 10.0
+# points of drop chance. Raised from 10 to 15 alongside the role boosts: at 10
+# the gap between a unified side and a scattered one was under a percentage
+# point of drop chance across a whole innings, which is not something a player
+# can ever notice, let alone select for.
+FIELDING_MAX_BONUS = 15.0
 
 
 def partnership_bond(striker, non_striker):

@@ -269,10 +269,10 @@ class RoleChemistryTests(unittest.TestCase):
 
     def test_role_maximums_match_the_card(self):
         lines = {l["label"]: l for l in chemistry.role_chemistry(self._squad())}
-        self.assertEqual(lines["BAT"]["max_bonus"], 4)
-        self.assertEqual(lines["BOWL"]["max_bonus"], 4)
-        self.assertEqual(lines["WK"]["max_bonus"], 4)
-        self.assertEqual(lines["ALR"]["max_bonus"], 3)
+        self.assertEqual(lines["BAT"]["max_bonus"], 6)
+        self.assertEqual(lines["BOWL"]["max_bonus"], 6)
+        self.assertEqual(lines["WK"]["max_bonus"], 6)
+        self.assertEqual(lines["ALR"]["max_bonus"], 4)
 
     def test_category_curve_for_four_players(self):
         # The published example table in /chemhelp.
@@ -347,18 +347,18 @@ class RoleChemistryTests(unittest.TestCase):
             self.assertEqual(line["bonus"], line["max_bonus"], role)
 
     def test_worked_example_from_the_spec(self):
-        # BAT all different + full XI bonus -> +2/4; ALR at 7 halved -> +2/3.
+        # BAT all different + full XI bonus -> +3/6; ALR at 7 halved -> +3/4.
         bat = chemistry.role_chemistry(
             [_rc(f"C{i}", "Batsman") for i in range(4)], xi_bonus=20)
         self.assertEqual(
-            [l for l in bat if l["label"] == "BAT"][0]["bonus"], 2)
+            [l for l in bat if l["label"] == "BAT"][0]["bonus"], 3)
         alr = chemistry.role_chemistry(
             [_rc("India", "All-rounder")] * 2
             + [_rc("Australia", "All-rounder"), _rc("England", "All-rounder")],
             xi_bonus=20)
         line = [l for l in alr if l["label"] == "ALR"][0]
         self.assertEqual(line["category"], 7)
-        self.assertEqual(line["bonus"], 2)
+        self.assertEqual(line["bonus"], 3)
 
     def test_colour_tracks_severity(self):
         self.assertEqual(chemistry.chem_colour(20), "🟩")
@@ -586,17 +586,34 @@ class MatchBoostTests(unittest.TestCase):
         boosts = chemistry.match_boosts(squad)
         for role, boost in boosts.items():
             self.assertLessEqual(boost, chemistry.ROLE_MAX_BONUS[role], role)
-        self.assertEqual(boosts["Batsman"], 4)
-        self.assertEqual(boosts["All-rounder"], 3)
+        self.assertEqual(boosts["Batsman"], 6)
+        self.assertEqual(boosts["All-rounder"], 4)
 
     def test_swing_between_best_and_worst_is_bounded(self):
         # The whole point of the cap: chemistry decides close matches, it must
-        # not overturn a rating gap.
+        # not overturn a rating gap. Real cards are ~10 OVR apart at the top, so
+        # the best possible chemistry has to stay clear of that even doubled at
+        # the death — otherwise the worse squad wins on selection alone.
         best = self._unified()
         for card, version in zip(best, ("Icon", "TOTY", "IPL 2026", "BBL")):
             card.version = version
         swing = max(chemistry.match_boosts(best).values())
-        self.assertLessEqual(swing, 4)
+        self.assertLessEqual(swing, 6)
+        self.assertLess(swing * chemistry.CLUTCH_MULTIPLIER, 15)
+
+    def test_chemistry_outweighs_a_lucky_run_of_form(self):
+        """Why the ceiling was raised from +4.
+
+        Form swings a card by ±2.5 OVR on its own and needs no decisions at all.
+        A squad built deliberately around national units has to be worth more
+        than that or selecting for chemistry is not a real choice.
+        """
+        from services.form_service import MAX_FORM_MOD
+        best = self._unified()
+        for card, version in zip(best, ("Icon", "TOTY", "IPL 2026", "BBL")):
+            card.version = version
+        self.assertGreater(max(chemistry.match_boosts(best).values()),
+                           MAX_FORM_MOD * 2)
 
     def test_engine_dicts_are_accepted_without_shims(self):
         # The match engine carries its XI as plain dicts (handlers.match._pd).

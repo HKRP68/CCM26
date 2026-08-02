@@ -11,8 +11,8 @@ upgrade paid on the way up:
 
     Level        1      2      3      4      5
     buy        150    350    750  1,550  3,050   gems invested
-    sell       105    245    525  1,085  2,135   always 30% below buy
-    trade fee   30     50     90    170    320   each side
+    sell       127    297    637  1,317  2,592   always 15% below buy
+    trade fee   15     25     45     85    160   each side
 
 The swap mirrors ``services.trading_service``: both traits must be the same
 level (the trait analogue of the same-OVR player rule), so one fee figure covers

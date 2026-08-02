@@ -440,8 +440,8 @@ TRAIT_REPLACE_COST = 250  # gems
 #
 #   Level      1      2      3      4      5
 #   buy      150    350    750  1,550  3,050   (invested gems)
-#   sell     105    245    525  1,085  2,135   (30% below buy, always)
-#   trade fee 30     50     90    170    320   (each side, in gems)
+#   sell     127    297    637  1,317  2,592   (15% below buy, always)
+#   trade fee 15     25     45     85    160   (each side, in gems)
 
 
 def _trait_buy_values():
@@ -456,15 +456,28 @@ def _trait_buy_values():
 TRAIT_BUY_VALUE = _trait_buy_values()
 TRAIT_MAX_LEVEL = max(TRAIT_BUY_VALUE)
 
-# Selling always returns 30% less than the trait cost to build — at every level.
-TRAIT_SELL_DISCOUNT_PCT = 30
+# Selling always returns 15% less than the trait cost to build — at every level.
+# It was 30%, which made resale a last resort: a Lv.5 trait cost 3,050 gems to
+# build and handed back 2,135, so a captain reshaping a squad ate a 915-gem hole
+# and mostly chose to hoard dead traits instead. Halving the haircut keeps a real
+# sink (nobody profits by churning the shop) while making "sell what you don't
+# use" a move worth making.
+TRAIT_SELL_DISCOUNT_PCT = 15
 
 # Trading is priced off the same investment: a flat fee at Lv.1, plus a share of
 # the upgrade gems sunk into the trait above it. That keeps a Lv.1 swap cheap
-# (30 gems, as specified) while a Lv.5 swap costs real money — roughly doubling
-# per level — without charging a fresh trait's worth of gems for the privilege.
-TRAIT_TRADE_FEE_BASE = 30          # gems, Lv.1
-TRAIT_TRADE_FEE_UPGRADE_PCT = 10   # + this % of the upgrade gems above Lv.1
+# while a Lv.5 swap still costs real money — roughly doubling per level —
+# without charging a fresh trait's worth of gems for the privilege.
+#
+# Both halves are half what they were (base 30 → 15, share 10% → 5%), so every
+# level's fee is exactly halved. The old top end was the problem: 320 gems each
+# side to swap two Lv.5 traits is more than a fresh trait costs, and two captains
+# who each held what the other wanted simply didn't trade. The fee still has to
+# be cheaper than selling-and-rebuying or /tradetrait has no reason to exist, and
+# at 15% resale that ceiling came down too — halving keeps clear of it at every
+# level (Lv.5: 160 fee vs a 458-gem resale loss).
+TRAIT_TRADE_FEE_BASE = 15          # gems, Lv.1
+TRAIT_TRADE_FEE_UPGRADE_PCT = 5    # + this % of the upgrade gems above Lv.1
 
 
 def _clamp_trait_level(level) -> int:
@@ -481,7 +494,7 @@ def trait_buy_value(level) -> int:
 
 
 def trait_sell_value(level) -> int:
-    """Gems returned for selling a trait — always 30% below its buy value."""
+    """Gems returned for selling a trait — always 15% below its buy value."""
     value = trait_buy_value(level) * (100 - TRAIT_SELL_DISCOUNT_PCT) // 100
     return max(1, value)
 

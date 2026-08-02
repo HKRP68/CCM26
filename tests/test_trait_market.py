@@ -6,8 +6,8 @@ the shop:
 
     Level        1      2      3      4      5
     buy        150    350    750  1,550  3,050   gems invested
-    sell       105    245    525  1,085  2,135   always 30% below buy
-    trade fee   30     50     90    170    320   each side
+    sell       127    297    637  1,317  2,592   always 15% below buy
+    trade fee   15     25     45     85    160   each side
 
 The rules that decide an outcome live in ``services.trait_trading_service``, so
 these run with no Telegram and a fake session.
@@ -33,7 +33,7 @@ class PricingTests(unittest.TestCase):
             running += TRAIT_UPGRADE_COSTS[level]
             self.assertEqual(trait_buy_value(level + 1), running)
 
-    def test_selling_is_always_thirty_percent_below_buy_value(self):
+    def test_selling_is_always_fifteen_percent_below_buy_value(self):
         for level in LEVELS:
             buy = trait_buy_value(level)
             self.assertEqual(trait_sell_value(level),
@@ -45,13 +45,28 @@ class PricingTests(unittest.TestCase):
         self.assertEqual([trait_buy_value(l) for l in LEVELS],
                          [150, 350, 750, 1550, 3050])
         self.assertEqual([trait_sell_value(l) for l in LEVELS],
-                         [105, 245, 525, 1085, 2135])
+                         [127, 297, 637, 1317, 2592])
         self.assertEqual([trait_trade_fee(l) for l in LEVELS],
-                         [30, 50, 90, 170, 320])
+                         [15, 25, 45, 85, 160])
 
-    def test_a_level_one_swap_costs_the_specified_thirty_gems(self):
+    def test_a_level_one_swap_costs_the_specified_fifteen_gems(self):
         self.assertEqual(trait_trade_fee(1), TRAIT_TRADE_FEE_BASE)
-        self.assertEqual(TRAIT_TRADE_FEE_BASE, 30)
+        self.assertEqual(TRAIT_TRADE_FEE_BASE, 15)
+
+    def test_resale_returns_more_than_it_used_to(self):
+        """The 30%-haircut table this economy shipped with, pinned as a floor.
+
+        Resale was raised because a 30% loss made /selltrait a last resort. If a
+        later tuning pass ever drops it back to or below those numbers, that is
+        a regression in the thing this change existed to fix, not a re-tune.
+        """
+        for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135)):
+            self.assertGreater(trait_sell_value(level), old, level)
+
+    def test_swapping_costs_less_than_it_used_to(self):
+        """Same guard from the other side: the old fee table is a ceiling."""
+        for level, old in zip(LEVELS, (30, 50, 90, 170, 320)):
+            self.assertLess(trait_trade_fee(level), old, level)
 
     def test_both_prices_rise_with_every_level(self):
         for low, high in zip(LEVELS, LEVELS[1:]):

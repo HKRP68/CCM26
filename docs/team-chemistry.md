@@ -462,13 +462,13 @@ Each role converts its chemistry into an in-match lift for that unit:
 
 ```
 boost = (category + xi_bonus) ÷ ceiling × max
-max:  BAT 4   BOWL 4   WK 4   ALR 3
+max:  BAT 6   BOWL 6   WK 6   ALR 4
 ```
 
 All-rounders are halved on the category component — they already collect the
 batting and bowling boosts, so paying them a full share would count the same
 cohesion twice. Their line divides by its own halved ceiling (10 + 20 = 30)
-rather than the full 40: dividing by 40 caps ALR at 2.25 of 3, so **+3/3 could
+rather than the full 40: dividing by 40 caps ALR at 3 of 4, so **+4/4 could
 never appear** however good the squad was, and a ceiling nobody can reach reads
 to players as a broken stat. The halving applies to the *boost* only — an
 all-rounder's full category still counts toward the 100.
@@ -543,7 +543,7 @@ thing a player notices winning them a game.
 | **1. Unit Boost** | role boost → effective rating | every ball |
 | **2. Partnership Bond** | countrymen at the crease run better — more 2s and 1s, fewer dots | while that pair bats |
 | **3. Clutch** | ×2 on the unit boost | last quarter of the innings, or a tight chase |
-| **4. Fielding Cohesion** | up to +10 fielding quality → fewer dropped catches | every ball |
+| **4. Fielding Cohesion** | up to +15 fielding quality → fewer dropped catches | every ball |
 
 **Layer 2 is the interesting one.** Cricket is a game of partnerships, and this
 is the only part of chemistry that *moves during an innings* — it changes every
@@ -564,7 +564,9 @@ over 16.
 
 ### 7.6.1 Measured impact
 
-Simulated over 250 innings per row, equal 80-rated sides on a flat pitch:
+Simulated over 250 innings per row, equal 80-rated sides on a flat pitch. The
+table below was measured at the **original** ceilings (+4 BAT/BOWL/WK, +3 ALR,
++10 fielding); see the note after it for the current figures:
 
 | Squad | Avg score | Wickets |
 |---|---:|---:|
@@ -575,6 +577,16 @@ Simulated over 250 innings per row, equal 80-rated sides on a flat pitch:
 
 A **+27 run swing (+12.6%)** between the worst and best chemistry — decisive in
 a close chase, and visible to the player.
+
+**Re-tuned ceilings.** Those numbers turned out to be the floor of "visible",
+not the middle of it: at +4 a deliberately built squad was worth about as much
+as a lucky run of form (±2.5 OVR) on one card, and most captains sensibly
+ignored chemistry when picking an XI. The ceilings were raised to **+6
+BAT/BOWL/WK, +4 ALR, +15 fielding**, and the partnership bond's run deltas by
+half. Re-measured like-for-like in one harness, worst-to-best chemistry moves
+from **+9.6%** to **+15.0%** — roughly 1.5× the pull, so the selection decision
+lands, while still finishing well inside the ~10 OVR gaps that separate real
+cards.
 
 It still cannot buy a match, which was the binding constraint:
 
@@ -587,9 +599,11 @@ Card quality wins by 42 runs. Chemistry sharpens a squad; it does not replace
 one, so no player is ever forced to build for chemistry before fielding the
 cards they actually want.
 
-**Why it is deliberately small.** The ceiling is +4, against a form band of
-±2.5 OVR. Chemistry decides close matches between comparable squads and cannot
-overturn a real rating gap. If it could, it would stop being an optimisation
+**Why it is deliberately small.** The ceiling is +6, against a form band of
+±2.5 OVR — enough that building for chemistry beats getting lucky with form,
+which is the bar it has to clear to be a real decision, and not so much that it
+can overturn a rating gap. Chemistry decides close matches between comparable
+squads. If it could, it would stop being an optimisation
 and become a tax: every player would be forced to build for chemistry before
 they could field the cards they actually wanted.
 

@@ -5107,6 +5107,12 @@ def webapp_spin():
         elif ad_token.startswith("CT-"):
             if adsgram_service.consume_client_token(ad_token, tg_id):
                 verified_via = "client_token"
+        elif ad_token.startswith("NF-"):
+            # No-fill pass: the grace was already debited when the token was
+            # issued at /api/webapp/ad-unavailable, so redeeming it here just
+            # unlocks the ad slot. Deliberately NOT counted as an ad watched.
+            if adsgram_service.consume_nofill_token(ad_token, tg_id, "spin"):
+                verified_via = "nofill_pass"
         elif ad_token.startswith("MOCK-"):
             if dev_mode or not ads_configured:
                 verified_via = "mock"
@@ -5114,7 +5120,8 @@ def webapp_spin():
         ad_provided = bool(verified_via)
 
         # Track ad_watched for the daily quest — ONLY for postback/mock.
-        # client_token (CT-) ads were already tracked at /ad-completed.
+        # client_token (CT-) ads were already tracked at /ad-completed, and a
+        # no-fill pass means no ad was ever shown.
         if verified_via in ("server_postback", "mock"):
             try:
                 from services.quest_service import safe_track
@@ -5226,14 +5233,95 @@ def webapp_ad_completed():
         db.close()
 
 
-def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured):
-    """Shared ad-verification helper for spin/daily. Returns verified_via str or None."""
+@app.route("/api/webapp/ad-unavailable", methods=["POST"])
+@csrf_exempt
+def webapp_ad_unavailable():
+    """Called by the client when the ad network could not serve an ad.
+
+    Request body: ``{kind: "spin"|"daily"}``.
+
+    Returns a single-use ``NF-`` token the client passes to the spin/daily
+    endpoint in place of an ad token. This is the *no-fill pass* — see
+    ``services.adsgram_service`` for why it exists: Adsgram answering "no
+    banner", or its SDK never loading inside a Telegram WebView on a phone
+    network, is common and is not something the player can fix, so it must not
+    dead-end them on a feature they were told they could reach by watching an
+    ad.
+
+    The pass is debited here, before the token is handed out, and is capped per
+    cycle by ``GameConfig.spin_nofill_grace``. So a client that lies about
+    no-fill spends its own small grace and gains nothing beyond it — the rest of
+    the ad quota still needs real ads.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from models import UserStats
+        from services import adsgram_service, quota_service
+
+        data = request.get_json(silent=True) or {}
+        kind = "daily" if (data.get("kind") or "spin") == "daily" else "spin"
+
+        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if not stats:
+            stats = UserStats(user_id=user.id)
+            db.add(stats); db.flush()
+
+        granted, status = quota_service.claim_nofill_pass(
+            stats, kind, session=db, user=user)
+        if not granted:
+            db.rollback()
+            return {"ok": False, "error": "no_pass_available",
+                    "message": ("No ads available right now — and you've used "
+                                "your no-ad passes for this cycle. Try again "
+                                "in a few minutes."),
+                    "quota": status}, 429
+
+        db.commit()
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, user.id, "ad_nofill",
+                         f"No ad available — {kind} no-fill pass granted "
+                         f"({status['nofill_total'] - status['nofill_left']}"
+                         f"/{status['nofill_total']} used)")
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        return {"ok": True,
+                "ad_token": adsgram_service.issue_nofill_token(tg_id, kind),
+                "quota": status}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_ad_unavailable failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
+                          nofill_kind=None):
+    """Shared ad-verification helper for spin/daily. Returns verified_via str or None.
+
+    ``nofill_kind`` names the quota ("spin"/"daily") a no-fill pass may be
+    redeemed against here; leave it None for actions that have no quota of
+    their own and therefore issue no passes.
+    """
     from services import adsgram_service
     if adsgram_service.claim_postback(db, tg_id):
         return "server_postback"
     if ad_token and ad_token.startswith("CT-"):
         if adsgram_service.consume_client_token(ad_token, tg_id):
             return "client_token"
+    if ad_token and ad_token.startswith("NF-") and nofill_kind:
+        # The network had no ad to serve; the pass was already debited when the
+        # token was issued (see /api/webapp/ad-unavailable). Only the quota the
+        # pass came out of accepts it — callers with no quota of their own
+        # (free packs) pass nofill_kind=None and so never take one.
+        if adsgram_service.consume_nofill_token(ad_token, tg_id, nofill_kind):
+            return "nofill_pass"
     if ad_token and ad_token.startswith("MOCK-"):
         if dev_mode or not ads_configured:
             return "mock"
@@ -5272,11 +5360,11 @@ def webapp_daily():
 
         # ── Verify ad (so we know which slot is available) ──
         verified_via = _verify_ad_for_action(
-            db, tg_id, ad_token, dev_mode, ads_configured)
+            db, tg_id, ad_token, dev_mode, ads_configured, nofill_kind="daily")
         ad_provided = bool(verified_via)
 
         # Track ad_watched for daily quest — postback/mock only
-        # (CT- tracked at /ad-completed).
+        # (CT- tracked at /ad-completed, and a no-fill pass showed no ad).
         if verified_via in ("server_postback", "mock"):
             try:
                 from services.quest_service import safe_track
@@ -12156,6 +12244,7 @@ def admin_economy():
                     "daily_streak_bonus_gems": int(request.form.get("daily_streak_bonus_gems", 0)),
                     "spin_ad_quota": max(0, min(99, int(request.form.get("spin_ad_quota", 5)))),
                     "daily_ad_quota": max(0, min(99, int(request.form.get("daily_ad_quota", 5)))),
+                    "spin_nofill_grace": max(0, min(99, int(request.form.get("spin_nofill_grace", 2)))),
                     "debut_coins": int(request.form.get("debut_coins", 100000)),
                     "debut_gems": int(request.form.get("debut_gems", 20)),
                 }

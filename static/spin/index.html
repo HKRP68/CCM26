@@ -440,9 +440,18 @@
 
     async function getAdToken() {
       // Best-effort: show an Adsgram ad if the SDK is available, then claim a token.
+      // The SDK promise is not guaranteed to settle — a request that dies on a
+      // phone network can hang indefinitely — so it is raced against a timer
+      // rather than awaited outright, which is what used to strand this page on
+      // "LOADING AD…" with nothing ever happening.
       try {
-        if (window.Adsgram && window.__adController) { await window.__adController.show(); }
-      } catch (e) { /* ad skipped/failed — still try to claim */ }
+        if (window.Adsgram && window.__adController) {
+          await Promise.race([
+            window.__adController.show(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('ad timeout')), 12000)),
+          ]);
+        }
+      } catch (e) { /* ad skipped/failed/timed out — still try to claim */ }
       // Bound the claim request so a stalled ad-completion can't hang the spin.
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);

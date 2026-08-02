@@ -11,9 +11,18 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from config import (TRAIT_SELL_DISCOUNT_PCT, trait_sell_value, trait_trade_fee,
+                    TRAIT_MAX_LEVEL)
 from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
+
+# Read the resale/swap price lists off ``config`` rather than typing them out —
+# a tuning pass on the trait economy re-prices this tutorial with it instead of
+# leaving a stale table on the page nobody remembers to edit.
+_TRAIT_LEVELS = range(1, TRAIT_MAX_LEVEL + 1)
+TRAIT_SELL_TABLE = " / ".join(f"{trait_sell_value(l):,}" for l in _TRAIT_LEVELS)
+TRAIT_FEE_TABLE = " / ".join(f"{trait_trade_fee(l):,}" for l in _TRAIT_LEVELS)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -148,10 +157,10 @@ SECTIONS = {
             "<b>💠 Trait resale &amp; swaps</b>\n"
             "A trait's value is what it cost to build — 150💎 for Lv.1 plus every "
             "upgrade on top (Lv.5 = 3,050💎).\n"
-            "• <b>/selltrait</b> pays 30% below that value: "
-            "105 / 245 / 525 / 1,085 / 2,135💎 for Lv.1→5\n"
+            f"• <b>/selltrait</b> pays {TRAIT_SELL_DISCOUNT_PCT}% below that "
+            f"value: {TRAIT_SELL_TABLE}💎 for Lv.1→5\n"
             "• <b>/tradetrait</b> swaps two traits of the <b>same level</b>, and "
-            "each side pays 30 / 50 / 90 / 170 / 320💎 for Lv.1→5\n"
+            f"each side pays {TRAIT_FEE_TABLE}💎 for Lv.1→5\n"
             "• Inventory only, both commands — a trait on a player isn't for "
             "sale. /removetrait first (free, keeps the level)\n\n"
             "<b>🔄 Trading</b>\n"
