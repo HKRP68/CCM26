@@ -31,6 +31,21 @@
           document.head.appendChild(el);
           setTimeout(resolve, 6000);   // never block the wheel on a dead CDN
         });
+        // Loaded is not ready: Monetag's sdk.js defines show_<zone> after it
+        // runs, so the global can still be a moment away here. Poll for it
+        // rather than judging at this instant and writing the SDK off.
+        const fnName = cfg.sdk_function;
+        if (cfg.provider === 'monetag' && fnName) {
+          const deadline = Date.now() + 5000;
+          while (typeof window[fnName] !== 'function' && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 150));
+          }
+          if (typeof window[fnName] !== 'function') {
+            console.warn('[ads] SDK loaded but ' + fnName + ' was never defined'
+                         + ' — check the zone id is the MAIN zone, not a sub-zone');
+            return false;
+          }
+        }
         return true;
       } catch (e) {
         // Degrading to no-fill silently is what makes a dead ad network look
