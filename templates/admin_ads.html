@@ -103,12 +103,15 @@
     </li>
     <li>Optional but recommended — in the zone's <strong>Postback</strong> settings, set the S2S URL to:<br>
       <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
-        {{ public_base_url }}/api/ads/reward?ymid={ymid}&amp;event_type={event_type}&amp;telegram_id={telegram_id}
+        {{ public_base_url }}/api/ads/reward?ymid={ymid}&amp;telegram_id={telegram_id}&amp;event_type={event_type}&amp;reward_event_type={reward_event_type}
       </code>
       <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
-        Keep the <code>{…}</code> macros literal — Monetag substitutes them. The Mini App passes the
-        player's Telegram ID as <code>ymid</code>, which is what links the postback to an account.
-        Click events are ignored here so one view can't pay out twice.
+        Keep the <code>{…}</code> macros literal — Monetag substitutes them. Include all four:
+        <code>telegram_id</code> is resolved by Monetag and is preferred over <code>ymid</code>,
+        which is whatever the Mini App handed the SDK and so is client-controlled.
+        Click events are ignored here so one view can't pay out twice, and
+        <code>not_valued</code> events — impressions that earned nothing — are dropped rather
+        than paid out of your economy.
       </span>
     </li>
     <li>Verify: this page should show "✅ Monetag is LIVE", and postbacks appear in the table below</li>

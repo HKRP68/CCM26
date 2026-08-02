@@ -32,7 +32,12 @@
           setTimeout(resolve, 6000);   // never block the wheel on a dead CDN
         });
         return true;
-      } catch (e) { return false; }
+      } catch (e) {
+        // Degrading to no-fill silently is what makes a dead ad network look
+        // like a broken app in production. Say why in the console.
+        console.warn('[ads] SDK failed to load', e);
+        return false;
+      }
     })();
   </script>
   <style>
@@ -571,7 +576,10 @@
           window.__adController = window.Adsgram.init({ blockId: cfg.placement_id });
         }
         return () => window.__adController.show();
-      } catch (e) { return null; }
+      } catch (e) {
+        console.warn('[ads] no usable show function', e);
+        return null;
+      }
     }
   </script>
 </body>

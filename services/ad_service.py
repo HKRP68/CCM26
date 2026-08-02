@@ -67,6 +67,7 @@ rest of the quota.
 import logging
 import os
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -79,7 +80,14 @@ POSTBACK_WINDOW_SECONDS = 300  # 5 minutes
 # Map of token → (telegram_id, expires_at, scope). `scope` is None for a
 # watched-ad token and the quota name ("spin"/"daily") for a no-fill pass.
 # Cleared periodically.
+#
+# Guarded by _TOKENS_LOCK. Individual dict operations are atomic under CPython,
+# but "single use" needs read-validate-remove to be one step: two threads that
+# both read a valid record and then both pop it would each be told the token was
+# theirs to spend, which is a duplicated reward. An RLock, because _gc_tokens
+# takes it too and both public entry points call that first.
 _CLIENT_TOKENS = {}
+_TOKENS_LOCK = threading.RLock()
 CLIENT_TOKEN_TTL = 120  # 2 minutes for the user to claim after ad finishes
 
 # Token prefixes. The prefix is what tells the spin endpoint which kind of
@@ -199,8 +207,9 @@ def client_config() -> dict:
     }
 
 
-def record_postback(session, telegram_id: int, source_ip: str = None,
-                    query_string: str = None, provider: str = None):
+def record_postback(session, telegram_id: int, source_ip: str | None = None,
+                    query_string: str | None = None,
+                    provider: str | None = None):
     """Insert a row when the ad network pings our reward URL.
     Called from /api/ads/reward (and its per-provider aliases)."""
     from models import AdReward
@@ -225,9 +234,18 @@ def claim_postback(session, telegram_id: int) -> bool:
     This is the high-confidence "yes, the ad was really watched" signal.
     Provider-agnostic on purpose: a deployment that switches networks
     mid-cycle must still honour postbacks the old one already delivered.
+
+    Consuming is a conditional UPDATE, not a read followed by a write. Two
+    concurrent spins can select the same unconsumed row and both see
+    ``consumed_at IS NULL``; the ``consumed_at.is_(None)`` in the UPDATE's own
+    WHERE is what makes exactly one of them affect a row, and the caller whose
+    rowcount is 0 simply falls through to the client-token path rather than
+    being granted a second reward for one ad. Works the same on Postgres and
+    SQLite, unlike SELECT … FOR UPDATE.
     """
     from models import AdReward
-    cutoff = datetime.utcnow() - timedelta(seconds=POSTBACK_WINDOW_SECONDS)
+    now = datetime.utcnow()
+    cutoff = now - timedelta(seconds=POSTBACK_WINDOW_SECONDS)
     row = (session.query(AdReward)
            .filter(AdReward.telegram_id == telegram_id,
                    AdReward.consumed_at.is_(None),
@@ -236,9 +254,13 @@ def claim_postback(session, telegram_id: int) -> bool:
            .first())
     if not row:
         return False
-    row.consumed_at = datetime.utcnow()
+    claimed = (session.query(AdReward)
+               .filter(AdReward.id == row.id,
+                       AdReward.consumed_at.is_(None))
+               .update({AdReward.consumed_at: now},
+                       synchronize_session=False))
     session.commit()
-    return True
+    return bool(claimed)
 
 
 def _issue_token(prefix: str, telegram_id: int, scope=None) -> str:
@@ -250,7 +272,9 @@ def _issue_token(prefix: str, telegram_id: int, scope=None) -> str:
     """
     _gc_tokens()
     token = prefix + secrets.token_urlsafe(16)
-    _CLIENT_TOKENS[token] = (telegram_id, time.time() + CLIENT_TOKEN_TTL, scope)
+    with _TOKENS_LOCK:
+        _CLIENT_TOKENS[token] = (telegram_id, time.time() + CLIENT_TOKEN_TTL,
+                                 scope)
     return token
 
 
@@ -262,25 +286,30 @@ def _consume_token(prefix: str, token: str, telegram_id: int, scope=None) -> boo
     for a no-fill pass that silently burns the grace, which was debited when
     the token was issued. An expired record is still dropped, since it is dead
     either way.
+
+    The whole read-validate-remove runs under _TOKENS_LOCK, and success is the
+    pop returning a record rather than the validation passing: a token is spent
+    by exactly the caller that removed it, so two concurrent redemptions of the
+    same token can never both be granted.
     """
     _gc_tokens()
     if not token or not token.startswith(prefix):
         return False
-    record = _CLIENT_TOKENS.get(token)
-    if not record:
-        return False
-    tg_id, expires, token_scope = record
-    if tg_id != telegram_id:
-        return False
-    if time.time() > expires:
-        _CLIENT_TOKENS.pop(token, None)
-        return False
-    # A scoped token is only good for the feature it was issued for, so a pass
-    # bought out of the spin grace can't be spent on a different reward.
-    if token_scope != scope:
-        return False
-    _CLIENT_TOKENS.pop(token, None)
-    return True
+    with _TOKENS_LOCK:
+        record = _CLIENT_TOKENS.get(token)
+        if not record:
+            return False
+        tg_id, expires, token_scope = record
+        if tg_id != telegram_id:
+            return False
+        if time.time() > expires:
+            _CLIENT_TOKENS.pop(token, None)
+            return False
+        # A scoped token is only good for the feature it was issued for, so a
+        # pass bought out of the spin grace can't be spent on another reward.
+        if token_scope != scope:
+            return False
+        return _CLIENT_TOKENS.pop(token, None) is not None
 
 
 def issue_client_token(telegram_id: int) -> str:
@@ -319,9 +348,15 @@ def consume_nofill_token(token: str, telegram_id: int, kind: str) -> bool:
 
 
 def _gc_tokens():
-    """Drop expired client tokens to keep the dict bounded."""
+    """Drop expired client tokens to keep the dict bounded.
+
+    Under the lock: scanning the live dict while another request thread is
+    issuing a token raises "dictionary changed size during iteration", which
+    would surface as a failed spin on an unrelated user's request.
+    """
     now = time.time()
-    expired = [t for t, (_tg, exp, _scope) in _CLIENT_TOKENS.items()
-               if exp < now]
-    for t in expired:
-        _CLIENT_TOKENS.pop(t, None)
+    with _TOKENS_LOCK:
+        expired = [t for t, (_tg, exp, _scope) in _CLIENT_TOKENS.items()
+                   if exp < now]
+        for t in expired:
+            _CLIENT_TOKENS.pop(t, None)

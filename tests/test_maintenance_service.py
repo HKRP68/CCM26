@@ -87,9 +87,23 @@ class MiniAppMaintenanceTests(unittest.TestCase):
                      "/api/webapp/packs/open", "/api/webapp/market/buy/7",
                      "/api/webapp/quests/claim_all", "/api/webapp/xi/reorder",
                      "/api/webapp/quickmatch/start", "/api/fantasy/save",
-                     "/api/adsgram/reward", "/api/ipl16/share"):
+                     "/api/ads/config", "/api/ipl16/share"):
             with self.subTest(path=path):
                 self.assertTrue(should_block_miniapp_path(path, 123, MAINTENANCE_ON))
+
+    def test_ad_postbacks_stay_open_so_earned_rewards_are_not_lost(self):
+        """These are the ad networks calling us, not a player using the app.
+
+        The networks don't retry indefinitely, so blocking a postback destroys
+        a reward someone already watched an ad for. Letting it through grants
+        nothing on its own — the spin it unlocks is blocked with everything
+        else, and there is no telegram_id on the request to bypass with.
+        """
+        for path in ("/api/ads/reward", "/api/adsgram/reward",
+                     "/api/monetag/reward"):
+            with self.subTest(path=path):
+                self.assertFalse(
+                    should_block_miniapp_path(path, None, MAINTENANCE_ON))
 
     def test_live_match_endpoints_stay_open_so_matches_can_finish(self):
         for path in ("/api/webapp/match/init", "/api/webapp/match/deliver",

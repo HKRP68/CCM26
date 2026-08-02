@@ -18,6 +18,8 @@ No Flask, no database — the provider layer is pure env reading.
 """
 
 import os
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 
@@ -136,6 +138,63 @@ class MockModeTests(unittest.TestCase):
         with ad_env(AD_PROVIDER="monetagg", MONETAG_ZONE_ID="1234567"):
             self.assertEqual(ad_service.get_provider(), "monetag")
             self.assertTrue(ad_service.is_configured())
+
+
+class TokenConcurrencyTests(unittest.TestCase):
+    """A single-use token must survive being redeemed from two threads at once.
+
+    Flask serves requests on threads, so two spin requests carrying the same
+    token really do race. Validation passing is not what spends a token —
+    removing it is — or both callers are told it was theirs and one ad pays out
+    twice.
+    """
+
+    def test_only_one_of_two_racing_redemptions_wins(self):
+        for _ in range(200):
+            token = ad_service.issue_client_token(4242)
+            results = []
+            barrier = threading.Barrier(2)
+
+            def redeem():
+                barrier.wait()          # line both threads up on the same token
+                results.append(ad_service.consume_client_token(token, 4242))
+
+            threads = [threading.Thread(target=redeem) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(sorted(results), [False, True])
+
+    def test_collecting_expired_tokens_survives_concurrent_issuing(self):
+        """_gc_tokens used to scan the live dict — an insert mid-scan raises
+        'dictionary changed size during iteration' on an unrelated request."""
+        stop = threading.Event()
+        errors = []
+
+        def issue_forever():
+            try:
+                while not stop.is_set():
+                    ad_service.issue_client_token(99)
+            except Exception as exc:      # pragma: no cover - the bug this pins
+                errors.append(exc)
+
+        def collect_forever():
+            try:
+                while not stop.is_set():
+                    ad_service._gc_tokens()
+            except Exception as exc:      # pragma: no cover - the bug this pins
+                errors.append(exc)
+
+        workers = [threading.Thread(target=issue_forever),
+                   threading.Thread(target=collect_forever)]
+        for t in workers:
+            t.start()
+        time.sleep(0.3)
+        stop.set()
+        for t in workers:
+            t.join()
+        self.assertEqual(errors, [])
 
 
 class LegacyImportTests(unittest.TestCase):
