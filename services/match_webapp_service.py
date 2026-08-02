@@ -1912,7 +1912,12 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
     elif t == "wicket":
         runs = oc.get("runs", 0)
         state["total_runs"] += runs; state["total_wickets"] += 1
-        bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
+        # A run-out belongs to the fielding side, not the bowler — same rule
+        # cipl_match and sim_match have always applied.
+        from services.match_engine import is_bowler_wicket
+        if is_bowler_wicket(oc.get("how", "Bowled")):
+            bws["wickets"] += 1
+        bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
         bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
         if runs == 0:
             # A wicket off a no-run delivery is a dot for both, same as the

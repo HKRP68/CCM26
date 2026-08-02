@@ -60,7 +60,7 @@ DAILY_QUESTS = [
     # ── Turning up ───────────────────────────────────────────────────────
     ("Take the Field",
      "Play 1 match today", "match_played", 1, "🏏", 1),
-    ("Double Header",
+    ("Triple Header",
      "Play 3 matches today", "match_played", 3, "🏟", 2),
     ("Day's Work",
      "Win 1 match today", "match_won", 1, "🏆", 1),

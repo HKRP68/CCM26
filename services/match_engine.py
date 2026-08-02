@@ -73,6 +73,19 @@ def create_match_state(match_id, overs, bat_user_id, bowl_user_id,
     }
 
 
+def is_bowler_wicket(how):
+    """True when a dismissal goes in the bowler's column.
+
+    A run-out is the fielding side's wicket, not the bowler's — it counts on
+    the team total and on the batting card, and nowhere in the bowling figures.
+    ``services.cipl_match`` and ``services.sim_match`` have always excluded it;
+    the in-chat and Mini App loops did not, so the same run-out inflated a
+    bowler's figures in /playmatch and /wpm but not in /lp. This is the shared
+    rule all four now use.
+    """
+    return str(how or "").strip().casefold() != "run out"
+
+
 def note_bowler_ball(bws, *, bowler_wicket):
     """Record one LEGAL delivery against a bowler's hat-trick streak.
 

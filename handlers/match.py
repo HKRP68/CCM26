@@ -4356,7 +4356,12 @@ async def _process_shot_core(context, mid, si, *, q=None):
                     s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
             elif oc["type"] == "wicket":
                 runs = oc.get("runs", 0); s["total_runs"] += runs; s["total_wickets"] += 1
-                bws["wickets"] += 1; bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
+                # A run-out belongs to the fielding side, not the bowler — same
+                # rule cipl_match and sim_match have always applied.
+                from services.match_engine import is_bowler_wicket
+                if is_bowler_wicket(oc.get("how", "Bowled")):
+                    bws["wickets"] += 1
+                bws["runs"] += runs; bs["balls"] += 1; bs["out"] = True
                 bws["this_over_runs"] = bws.get("this_over_runs", 0) + runs
                 # A wicket off a no-run delivery is a dot ball for both the
                 # bowler and the (dismissed) batter, so the batting-card dot

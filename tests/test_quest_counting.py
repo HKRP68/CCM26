@@ -351,9 +351,8 @@ class HatTrickDetectionTests(unittest.TestCase):
                 self.assertIn("note_bowler_ball(", source)
                 self.assertIn("wkts_before_ball", source)
 
-    def test_the_mini_app_loop_flags_three_in_three(self):
-        from services.match_webapp_service import _apply_outcome
-
+    @staticmethod
+    def _mini_app_state():
         def player(rid, name):
             return {"roster_id": rid, "player_id": rid, "name": name,
                     "rating": 80, "category": "All-rounder", "bat_rating": 80,
@@ -361,24 +360,81 @@ class HatTrickDetectionTests(unittest.TestCase):
                     "bowl_hand": "Right", "bat_hand": "Right"}
 
         bat = [player(i, f"A{i}") for i in range(1, 12)]
-        bowler = player(100, "B1")
-        state = {
+        return {
             "innings": 1, "current_over": 1, "current_ball": 0,
             "total_runs": 0, "total_wickets": 0, "extras_total": 0,
             "wides": 0, "noballs": 0, "legbyes": 0, "byes": 0,
             "bat_stats": {}, "bowl_stats": {}, "batting_order": bat,
             "striker_idx": 0, "non_striker_idx": 1, "next_batsman_idx": 2,
-            "bat_xi": bat, "bowl_xi": [bowler], "timeline": [],
+            "bat_xi": bat, "bowl_xi": [player(100, "B1")], "timeline": [],
             "over_runs": [], "partnership_runs": 0, "partnership_balls": 0,
             "partnership_history": [], "overs": 20, "wicket_limit": 10,
         }
+
+    def _bowl_three(self, how):
+        from services.match_webapp_service import _apply_outcome
+        state = self._mini_app_state()
+        bowler = state["bowl_xi"][0]
         for _ in range(3):
-            _apply_outcome(state,
-                           {"type": "wicket", "runs": 0, "how": "Bowled"},
+            _apply_outcome(state, {"type": "wicket", "runs": 0, "how": how},
                            "Drive", "Yorker",
                            state["batting_order"][state["striker_idx"]],
                            bowler)
+        return state
+
+    def test_the_mini_app_loop_flags_three_in_three(self):
+        state = self._bowl_three("Bowled")
         self.assertTrue(state["bowl_stats"]["100"].get("hattrick"))
+
+    def test_three_run_outs_are_not_a_hat_trick(self):
+        # A run-out is the fielding side's wicket. Three in a row must leave
+        # the bowler's figures and their hat-trick streak untouched, while the
+        # team still loses three wickets.
+        state = self._bowl_three("Run Out")
+        row = state["bowl_stats"]["100"]
+        self.assertFalse(row.get("hattrick"))
+        self.assertEqual(row.get("wkt_streak", 0), 0)
+        self.assertEqual(row["wickets"], 0)
+        self.assertEqual(state["total_wickets"], 3)
+
+    def test_a_run_out_breaks_a_bowlers_streak(self):
+        from services.match_webapp_service import _apply_outcome
+        state = self._mini_app_state()
+        bowler = state["bowl_xi"][0]
+        for how in ("Bowled", "Run Out", "Bowled", "Bowled"):
+            _apply_outcome(state, {"type": "wicket", "runs": 0, "how": how},
+                           "Drive", "Yorker",
+                           state["batting_order"][state["striker_idx"]],
+                           bowler)
+        row = state["bowl_stats"]["100"]
+        self.assertFalse(row.get("hattrick"))
+        self.assertEqual(row["wickets"], 3)
+        self.assertEqual(state["total_wickets"], 4)
+
+    def test_run_outs_are_never_the_bowlers_wicket(self):
+        from services.match_engine import is_bowler_wicket
+        for how in ("Run Out", "run out", " RUN OUT "):
+            with self.subTest(how=how):
+                self.assertFalse(is_bowler_wicket(how))
+        for how in ("Bowled", "Caught", "LBW", "Stumped", "Caught & Bowled"):
+            with self.subTest(how=how):
+                self.assertTrue(is_bowler_wicket(how))
+
+    def test_every_ball_loop_excludes_run_outs_from_bowler_figures(self):
+        # All four loops score wickets. If one credits a run-out to the bowler,
+        # the same dismissal inflates figures in one mode but not another.
+        for path in ("handlers/match.py",
+                     "services/match_webapp_service.py",
+                     "services/cipl_match.py",
+                     "services/sim_match.py"):
+            with self.subTest(loop=path):
+                with open(os.path.join(os.path.dirname(__file__), "..",
+                                       path)) as fh:
+                    source = fh.read()
+                self.assertTrue(
+                    "is_bowler_wicket(" in source
+                    or 'wtype != "Run Out"' in source,
+                    f"{path} credits run-outs to the bowler")
 
 
 # ════════════════════════════════════════════════════════════════════
