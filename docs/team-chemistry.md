@@ -589,7 +589,7 @@ finishing well inside the ~10 OVR gaps that separate real cards.
 
 Those two figures are reproducible rather than quoted:
 
-```
+```bash
 python -m tools.chemistry_impact --compare 4
 ```
 

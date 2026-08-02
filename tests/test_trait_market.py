@@ -88,7 +88,8 @@ class PricingTests(unittest.TestCase):
         later tuning pass ever drops it back to or below those numbers, that is
         a regression in the thing this change existed to fix, not a re-tune.
         """
-        for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135)):
+        for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135),
+                              strict=True):
             self.assertGreater(trait_sell_value(level), old, level)
 
     def test_the_uplift_is_taken_wherever_the_floor_allows_it(self):
@@ -101,7 +102,8 @@ class PricingTests(unittest.TestCase):
         re-opening the buy-and-sell-back loop.
         """
         uplifts = [(trait_sell_value(level) - old) / old
-                   for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135))]
+                   for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135),
+                                         strict=True)]
         self.assertAlmostEqual(uplifts[0], 0.133, places=2)
         self.assertAlmostEqual(uplifts[-1], 0.414, places=2)
         for uplift in uplifts:
@@ -113,7 +115,7 @@ class PricingTests(unittest.TestCase):
 
     def test_swapping_costs_less_than_it_used_to(self):
         """Same guard from the other side: the old fee table is a ceiling."""
-        for level, old in zip(LEVELS, (30, 50, 90, 170, 320)):
+        for level, old in zip(LEVELS, (30, 50, 90, 170, 320), strict=True):
             self.assertLess(trait_trade_fee(level), old, level)
 
     def test_both_prices_rise_with_every_level(self):
