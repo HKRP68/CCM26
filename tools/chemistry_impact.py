@@ -18,7 +18,7 @@ Usage:
     python -m tools.chemistry_impact --compare 4      # ...vs an older ceiling
 
 ``--compare`` re-runs the whole table with ``ROLE_MAX_BONUS`` forced to the given
-value and the pre-uplift bond deltas, which is how the "+9.6% → +15.0%"
+value and the pre-uplift bond deltas, which is how the "+9.5% → +13.8%"
 like-for-like figure in the doc was produced. Both halves run in one process
 against one harness, so the comparison is meaningful even though the absolute
 totals depend on this harness's simplifications (a fixed delivery mix, no pitch
@@ -134,6 +134,8 @@ def run_rating_check(innings, ceiling=None):
 
 
 def main():
+    """Print the impact table for the current constants, and optionally an older
+    ceiling alongside it for a like-for-like comparison."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=DEFAULT_INNINGS,
                         help=f"innings per row (default {DEFAULT_INNINGS})")

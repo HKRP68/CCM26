@@ -119,6 +119,12 @@ def claim_postback(session, telegram_id: int) -> bool:
 
 
 def _issue_token(prefix: str, telegram_id: int, scope=None) -> str:
+    """Mint a one-shot token for ``telegram_id``, valid for ``CLIENT_TOKEN_TTL``.
+
+    ``scope`` is None for a watched-ad token and the quota name for a no-fill
+    pass; ``_consume_token`` requires an exact match, so the two can never be
+    spent on each other.
+    """
     _gc_tokens()
     token = prefix + secrets.token_urlsafe(16)
     _CLIENT_TOKENS[token] = (telegram_id, time.time() + CLIENT_TOKEN_TTL, scope)
