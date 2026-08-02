@@ -700,7 +700,14 @@ def clutch_multiplier(over, total_overs, pressure=0.0):
 
 
 def fielding_bonus(players):
-    """Fielding-quality bonus (0-10) earned by the side's chemistry."""
+    """Fielding-quality bonus (0-``FIELDING_MAX_BONUS``) from the side's chemistry.
+
+    The match engine adds this to the bowling side's fielding quality and then
+    holds the sum at the engine's own 95 ceiling, so on a squad already fielding
+    near that ceiling the last few points are absorbed. That is intended:
+    chemistry helps a side *reach* the best fielding in the game, it does not
+    let one side field better than the game allows.
+    """
     total = calculate_role_report(players)["total"]
     return round(FIELDING_MAX_BONUS * total / CMUCHEM_TOTAL_MAX, 2)
 

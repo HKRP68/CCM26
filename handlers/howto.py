@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 # a tuning pass on the trait economy re-prices this tutorial with it instead of
 # leaving a stale table on the page nobody remembers to edit.
 _TRAIT_LEVELS = range(1, TRAIT_MAX_LEVEL + 1)
-TRAIT_SELL_TABLE = " / ".join(f"{trait_sell_value(l):,}" for l in _TRAIT_LEVELS)
-TRAIT_FEE_TABLE = " / ".join(f"{trait_trade_fee(l):,}" for l in _TRAIT_LEVELS)
+TRAIT_SELL_TABLE = " / ".join(
+    f"{trait_sell_value(level):,}" for level in _TRAIT_LEVELS)
+TRAIT_FEE_TABLE = " / ".join(
+    f"{trait_trade_fee(level):,}" for level in _TRAIT_LEVELS)
 
 
 # ════════════════════════════════════════════════════════════════════

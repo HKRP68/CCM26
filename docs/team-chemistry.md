@@ -583,10 +583,24 @@ not the middle of it: at +4 a deliberately built squad was worth about as much
 as a lucky run of form (±2.5 OVR) on one card, and most captains sensibly
 ignored chemistry when picking an XI. The ceilings were raised to **+6
 BAT/BOWL/WK, +4 ALR, +15 fielding**, and the partnership bond's run deltas by
-half. Re-measured like-for-like in one harness, worst-to-best chemistry moves
-from **+9.6%** to **+15.0%** — roughly 1.5× the pull, so the selection decision
-lands, while still finishing well inside the ~10 OVR gaps that separate real
-cards.
+half. Re-measured like-for-like, worst-to-best chemistry moves from **+9.5%** to
+**+13.8%** — roughly 1.5× the pull, so the selection decision lands, while still
+finishing well inside the ~10 OVR gaps that separate real cards.
+
+Those two figures are reproducible rather than quoted:
+
+```
+python -m tools.chemistry_impact --compare 4
+```
+
+`tools/chemistry_impact.py` runs whole innings through the real
+`services.probability_engine`, reading `ROLE_MAX_BONUS`, `FIELDING_MAX_BONUS`
+and the `BOND_*` deltas live, and `--compare` re-runs the same table at the old
+ceiling in the same process. Its absolute totals are higher than the 250-innings
+table above because it holds everything except chemistry still — a fixed
+delivery mix, no pitch wear, no fielding quality — so use it for the *swing*
+between rows, which is what it exists to measure, and re-run it after any tuning
+pass rather than trusting the percentages written here.
 
 It still cannot buy a match, which was the binding constraint:
 

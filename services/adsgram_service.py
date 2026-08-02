@@ -126,21 +126,31 @@ def _issue_token(prefix: str, telegram_id: int, scope=None) -> str:
 
 
 def _consume_token(prefix: str, token: str, telegram_id: int, scope=None) -> bool:
+    """Validate a one-shot token and, only if it is good, spend it.
+
+    Read before pop, deliberately. Popping first would mean a rejected call
+    destroyed a token that is still valid for its real owner and scope — and
+    for a no-fill pass that silently burns the grace, which was debited when
+    the token was issued. An expired record is still dropped, since it is dead
+    either way.
+    """
     _gc_tokens()
     if not token or not token.startswith(prefix):
         return False
-    record = _CLIENT_TOKENS.pop(token, None)
+    record = _CLIENT_TOKENS.get(token)
     if not record:
         return False
     tg_id, expires, token_scope = record
     if tg_id != telegram_id:
         return False
     if time.time() > expires:
+        _CLIENT_TOKENS.pop(token, None)
         return False
     # A scoped token is only good for the feature it was issued for, so a pass
     # bought out of the spin grace can't be spent on a different reward.
     if token_scope != scope:
         return False
+    _CLIENT_TOKENS.pop(token, None)
     return True
 
 

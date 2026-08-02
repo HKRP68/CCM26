@@ -166,6 +166,29 @@ class PassTokenTests(unittest.TestCase):
         self.assertTrue(adsgram_service.issue_client_token(self.TG_ID)
                         .startswith(adsgram_service.CLIENT_TOKEN_PREFIX))
 
+    def test_a_rejected_attempt_does_not_destroy_a_valid_pass(self):
+        """A wrong guess must not burn a pass the real owner still holds.
+
+        The grace is debited when the token is issued, so a token destroyed by a
+        failed lookup takes a spin with it and the player gets nothing for it.
+        """
+        token = adsgram_service.issue_nofill_token(self.TG_ID, "spin")
+        self.assertFalse(
+            adsgram_service.consume_nofill_token(token, self.TG_ID + 1, "spin"))
+        self.assertFalse(
+            adsgram_service.consume_nofill_token(token, self.TG_ID, "daily"))
+        # ...and it is still there for the call that is actually entitled to it.
+        self.assertTrue(
+            adsgram_service.consume_nofill_token(token, self.TG_ID, "spin"))
+
+    def test_an_expired_pass_is_dropped_rather_than_left_to_accumulate(self):
+        token = adsgram_service.issue_nofill_token(self.TG_ID, "spin")
+        tg_id, _expires, scope = adsgram_service._CLIENT_TOKENS[token]
+        adsgram_service._CLIENT_TOKENS[token] = (tg_id, time.time() - 1, scope)
+        self.assertFalse(
+            adsgram_service.consume_nofill_token(token, self.TG_ID, "spin"))
+        self.assertNotIn(token, adsgram_service._CLIENT_TOKENS)
+
     def test_an_expired_pass_is_refused(self):
         token = adsgram_service.issue_nofill_token(self.TG_ID, "spin")
         tg_id, _expires, scope = adsgram_service._CLIENT_TOKENS[token]

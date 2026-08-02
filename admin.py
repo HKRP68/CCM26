@@ -5264,7 +5264,14 @@ def webapp_ad_unavailable():
         data = request.get_json(silent=True) or {}
         kind = "daily" if (data.get("kind") or "spin") == "daily" else "spin"
 
-        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        # Lock the row for the read-check-increment below. Without it two
+        # concurrent calls both read the same remaining grace and both get a
+        # token, so one pass pays for two spins. Ignored on SQLite, which has no
+        # row locks and doesn't need them (single writer).
+        stats = (db.query(UserStats)
+                 .filter(UserStats.user_id == user.id)
+                 .with_for_update()
+                 .first())
         if not stats:
             stats = UserStats(user_id=user.id)
             db.add(stats); db.flush()

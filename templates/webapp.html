@@ -4600,6 +4600,14 @@ function warmAds() {
   _reloadAdsgramSdk().then(ok => { if (ok) _tryInitAdController(); });
 }
 
+// Clear the failed-load cooldown. A tap is the user asking for an ad right now,
+// and making them wait out a backoff they can't see would be the original bug
+// in a new costume — the cooldown exists to throttle background warming, not to
+// gate a deliberate request.
+function _forceAdsRetry() {
+  _adsRetryBlockedUntil = 0;
+}
+
 function _tryInitAdController() {
   if (_adController) return true;
   if (!_adsConfigured || !_adsBlockId || !window.Adsgram?.init) return false;
@@ -4629,6 +4637,8 @@ const AD_SHOW_TIMEOUT_MS = 12000;
 // Cap on the WHOLE ad phase including retries and backoff. Past this we stop
 // asking and fall back, because more waiting has stopped being worth anything.
 const AD_PHASE_BUDGET_MS = 26000;
+// Cap on the no-fill pass request that may follow a spent budget.
+const NOFILL_REQUEST_TIMEOUT_MS = 8000;
 
 // What the spin/daily button says while the ad phase runs. Updated as the
 // phase progresses so a slow ad looks like progress rather than a freeze.
@@ -4680,17 +4690,25 @@ const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // nothing when the SDK is already there and rescues the common case where the
 // user simply opened the app a few seconds too early.
 let _adsRetryLoad = null;
+// When a load fails, don't try again until this long has passed. Memoizing the
+// failure outright would rebuild the whole-session dead end _reloadAdsgramSdk
+// exists to fix, but retrying with no cooldown is its own problem now that
+// warmAds() runs on every screen entry: flipping between Spin and Daily on a
+// dead connection would fire a script fetch per tab. A short window keeps the
+// recovery and drops the stampede.
+const ADS_SDK_RETRY_COOLDOWN_MS = 20000;
+let _adsRetryBlockedUntil = 0;
 
 function _reloadAdsgramSdk() {
   if (window.Adsgram?.init) return Promise.resolve(true);
   if (_adsRetryLoad) return _adsRetryLoad;   // a load is already in flight
+  if (Date.now() < _adsRetryBlockedUntil) return Promise.resolve(false);
   _adsRetryLoad = new Promise((resolve) => {
-    // Memoizing a FAILED load would rebuild the whole-session dead end this
-    // function exists to fix — every later tap would get the cached false and
-    // never re-attempt. Only a load still in flight (or one that succeeded, via
-    // the window.Adsgram check above) is worth reusing.
     const done = (ok) => {
-      if (!ok) _adsRetryLoad = null;
+      if (!ok) {
+        _adsRetryLoad = null;
+        _adsRetryBlockedUntil = Date.now() + ADS_SDK_RETRY_COOLDOWN_MS;
+      }
       resolve(ok);
     };
     const el = document.createElement('script');
@@ -4713,9 +4731,22 @@ function _reloadAdsgramSdk() {
 // ad-gated slot when the network had no ad to give. `quotaKind` is 'spin' or
 // 'daily'; anything else (a free pack) has no quota of its own and so gets no
 // pass. Returns a token or null — the caller treats null as "no rescue left".
-async function _requestNoFillPass(quotaKind) {
+async function _requestNoFillPass(quotaKind, budgetMs) {
   if (quotaKind !== 'spin' && quotaKind !== 'daily') return null;
-  const r = await api('/api/webapp/ad-unavailable', { kind: quotaKind });
+  let r;
+  try {
+    // Bounded separately from api()'s 25s default: this call is the tail of an
+    // ad phase that has already spent most of its budget, and the whole point
+    // of the pass is to end the wait rather than extend it.
+    r = await api('/api/webapp/ad-unavailable', { kind: quotaKind },
+                  Math.max(4000, Math.min(NOFILL_REQUEST_TIMEOUT_MS,
+                                          budgetMs || NOFILL_REQUEST_TIMEOUT_MS)));
+  } catch (e) {
+    // This is the path that exists to rescue a broken ad network — it must not
+    // be the thing that throws. Fall through to the caller's "no rescue" toast.
+    console.error('No-fill pass request failed:', e);
+    return null;
+  }
   if (r.ok && r.data?.ad_token) {
     const left = r.data.quota?.nofill_left;
     toast('📺 No ads available — using a no-ad pass'
@@ -4727,8 +4758,10 @@ async function _requestNoFillPass(quotaKind) {
 }
 
 // Returns an ad token for `quotaKind` ('spin'/'daily'/null), or null if the
-// user gets nothing this time. Every path through here is bounded: no await in
-// it can outlive AD_PHASE_BUDGET_MS, and every exit toasts a reason.
+// user gets nothing this time. Every path through here is bounded and every
+// exit toasts a reason. AD_PHASE_BUDGET_MS covers the ad attempts themselves;
+// the no-fill pass request that may follow them carries its own smaller
+// timeout on top, so the worst case is the budget plus that.
 async function showAd(quotaKind = null) {
   const deadline = Date.now() + AD_PHASE_BUDGET_MS;
   const timeLeft = () => deadline - Date.now();
@@ -4741,6 +4774,7 @@ async function showAd(quotaKind = null) {
     // Configured, but the SDK never arrived. Give it one more chance now that
     // the user has actually asked for an ad.
     _setAdPhase('Loading ads…');
+    _forceAdsRetry();
     if (await _reloadAdsgramSdk()) _tryInitAdController();
   }
 
@@ -4789,7 +4823,7 @@ async function showAd(quotaKind = null) {
     }
     // No fill, or the SDK erroring out: the user did everything right and the
     // network still gave them nothing. Rescue the attempt if they have a pass.
-    const pass = await _requestNoFillPass(quotaKind);
+    const pass = await _requestNoFillPass(quotaKind, timeLeft());
     if (pass) return pass;
     if (failure === 'error') {
       const desc = lastErr?.description || lastErr?.message || 'unavailable';
@@ -4806,7 +4840,7 @@ async function showAd(quotaKind = null) {
   // backend would reject it. A pass is exactly the right answer here: the
   // player cannot watch an ad that their network will not let them load.
   if (_adsConfigured) {
-    const pass = await _requestNoFillPass(quotaKind);
+    const pass = await _requestNoFillPass(quotaKind, timeLeft());
     if (pass) return pass;
     toast('Ads can\'t load right now — check your connection and reopen the app',
           'error');

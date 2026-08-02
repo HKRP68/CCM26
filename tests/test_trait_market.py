@@ -68,13 +68,13 @@ class PricingTests(unittest.TestCase):
             self.assertLess(trait_sell_value(1), paid, discount)
 
     def test_the_documented_tables(self):
-        self.assertEqual([trait_buy_value(l) for l in LEVELS],
+        self.assertEqual([trait_buy_value(level) for level in LEVELS],
                          [150, 350, 750, 1550, 3050])
-        self.assertEqual([trait_floor_cost(l) for l in LEVELS],
+        self.assertEqual([trait_floor_cost(level) for level in LEVELS],
                          [120, 320, 720, 1520, 3020])
-        self.assertEqual([trait_sell_value(l) for l in LEVELS],
+        self.assertEqual([trait_sell_value(level) for level in LEVELS],
                          [119, 319, 719, 1519, 3019])
-        self.assertEqual([trait_trade_fee(l) for l in LEVELS],
+        self.assertEqual([trait_trade_fee(level) for level in LEVELS],
                          [15, 16, 18, 22, 29])
 
     def test_a_level_one_swap_costs_the_specified_fifteen_gems(self):
@@ -100,8 +100,8 @@ class PricingTests(unittest.TestCase):
         the shop discount visibly moves these numbers instead of silently
         re-opening the buy-and-sell-back loop.
         """
-        uplifts = [(trait_sell_value(l) - old) / old
-                   for l, old in zip(LEVELS, (105, 245, 525, 1085, 2135))]
+        uplifts = [(trait_sell_value(level) - old) / old
+                   for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135))]
         self.assertAlmostEqual(uplifts[0], 0.133, places=2)
         self.assertAlmostEqual(uplifts[-1], 0.414, places=2)
         for uplift in uplifts:
