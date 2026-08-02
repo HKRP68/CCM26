@@ -26,6 +26,7 @@ DEFAULTS = {
     "daily_streak_bonus_gems": 0,
     "spin_ad_quota": 5,
     "daily_ad_quota": 5,
+    "spin_nofill_grace": 2,
     "debut_coins": 1500,
     "debut_gems": 30,
     # Simulation tuning — applied as additive % points after all modifiers.

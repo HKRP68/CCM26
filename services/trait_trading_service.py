@@ -11,8 +11,16 @@ upgrade paid on the way up:
 
     Level        1      2      3      4      5
     buy        150    350    750  1,550  3,050   gems invested
-    sell       105    245    525  1,085  2,135   always 30% below buy
-    trade fee   30     50     90    170    320   each side
+    floor      120    320    720  1,520  3,020   cheapest it can be acquired for
+    sell       119    319    719  1,519  3,019   always just under the floor
+    trade fee   15     16     18     22     29   each side
+
+Resale is deliberately close to cost — it returns 50% more than the table this
+economy shipped with — but it is pinned below the *floor*: the cheapest gems a
+level can possibly have cost, which is the Lv.1 price at the shop's deepest
+discount plus the (never-discounted) upgrades. Selling is therefore a small loss
+however cheaply the trait was bought, and the shop can never be farmed by buying
+a discounted trait and selling it straight back.
 
 The swap mirrors ``services.trading_service``: both traits must be the same
 level (the trait analogue of the same-OVR player rule), so one fee figure covers

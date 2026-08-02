@@ -579,9 +579,16 @@ FREE_HIT_WICKET_MULT   = 0.10  # only a run-out is possible on a free hit
 # Partnership Bond — two batters who share a country (or bat with an Icon) run
 # better together: more twos and singles, fewer dots. Deltas are percentage
 # points on a ~100-point distribution, applied at full bond.
-BOND_TWO_BONUS = 1.6
-BOND_ONE_BONUS = 1.0
-BOND_DOT_PENALTY = 2.6
+#
+# Raised by half (1.6/1.0/2.6 → 2.4/1.5/3.9). At the old figures a bonded pair
+# turned roughly one dot in forty into a run — real, but under the ball-to-ball
+# noise of a 20-over innings, so the layer that was supposed to be the *visible*
+# part of chemistry (it moves every time a wicket falls) was the one nobody could
+# see. Still deliberately confined to running: a bond makes a pair harder to tie
+# down, it never makes them better strikers of the ball.
+BOND_TWO_BONUS = 2.4
+BOND_ONE_BONUS = 1.5
+BOND_DOT_PENALTY = 3.9
 
 
 def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,

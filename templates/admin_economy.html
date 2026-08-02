@@ -149,6 +149,20 @@
              value="{{ cfg.daily_ad_quota }}"
              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
     </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        No-ad passes per cycle <span style="color:var(--muted);">(default: 2)</span>
+      </label>
+      <input type="number" name="spin_nofill_grace" min="0" max="99" required
+             value="{{ cfg.spin_nofill_grace }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      <p style="color:var(--muted); font-size:.75rem; margin:.35rem 0 0;">
+        When the ad network has nothing to serve, this many of the ad slots
+        above can still be used without an ad — so a no-fill never dead-ends a
+        player. It spends an ad slot either way, so this is never extra quota.
+        Set to 0 to require a watched ad, always.
+      </p>
+    </div>
   </div>
 
   <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🎉 Debut Bonus</h2>

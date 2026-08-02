@@ -9,7 +9,7 @@ Commands:
   /traitupgrade       — upgrade a trait on a player (callback picker)
   /traitreplace       — replace a trait on a player (callback picker)
   /removetrait        — unequip a trait, returning it to inventory (picker)
-  /selltrait          — sell an inventory trait for gems (30% below buy value)
+  /selltrait          — sell an inventory trait for gems (just below cost)
 
 Anything that changes what a PLAYER is carrying is frozen while that user has a
 match on (see ``services.roster_lock``) — you can't re-kit the XI after the
@@ -36,7 +36,7 @@ from services.trait_trading_service import list_inventory, sell_inventory_trait
 from config import (
     TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_REROLL_COST,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
-    TRAIT_BUY_VALUE, TRAIT_SELL_DISCOUNT_PCT, trait_buy_value, trait_sell_value,
+    TRAIT_BUY_VALUE, trait_buy_value, trait_sell_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -924,8 +924,9 @@ def _sell_quote_lines(user):
     """The price list shown above the picker, so nobody sells on a guess."""
     lines = ["💰 <b>SELL TRAIT</b>", "━━━━━━━━━━━━━━━━━━━",
              f"💎 Gems: {user.total_gems:,}", "",
-             f"Selling always returns <b>{TRAIT_SELL_DISCOUNT_PCT}% less</b> "
-             f"than the gems a trait cost to build:"]
+             "Selling always returns <b>a little less</b> than the gems a "
+             "trait cost to build — never more, however cheaply you bought "
+             "it:"]
     for level in sorted(TRAIT_BUY_VALUE):
         lines.append(f"  Lv.{level}: {trait_buy_value(level):,} 💎 invested → "
                      f"<b>{trait_sell_value(level):,} 💎</b> back")
@@ -937,7 +938,7 @@ def _sell_quote_lines(user):
 
 
 async def selltrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/selltrait — sell an inventory trait for gems (30% below buy value)."""
+    """/selltrait — sell an inventory trait for gems (just below what it cost)."""
     tg = update.effective_user
     session = get_session()
     try:
@@ -1016,7 +1017,7 @@ async def trsell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏷 {trait.category}\n\n"
             f"Invested: {buy:,} 💎\n"
             f"You receive: <b>{gems:,} 💎</b> "
-            f"({TRAIT_SELL_DISCOUNT_PCT}% below buy value)\n\n"
+            f"(you lose {buy - gems:,} 💎)\n\n"
             f"<i>This cannot be undone — the trait is gone for good.</i>",
             parse_mode="HTML", reply_markup=kb)
     except Exception:
