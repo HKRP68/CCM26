@@ -26,8 +26,12 @@ from contextlib import contextmanager
 from services import ad_service
 
 
-AD_ENV_VARS = ("AD_PROVIDER", "ADSGRAM_BLOCK_ID", "MONETAG_ZONE_ID",
-               "MONETAG_SDK_URL")
+AD_ENV_VARS = ("AD_PROVIDER", "ADSGRAM_BLOCK_ID",
+               "MONETAG_ZONE_ID", "MONETAG_SDK_URL", "MONETAG_SDK_FUNCTION",
+               "MONETAG_SDK_ATTRS",
+               "ONCLICKA_ZONE_ID", "ONCLICKA_SDK_URL", "ONCLICKA_SDK_FUNCTION",
+               "ONCLICKA_SDK_ATTRS",
+               "AD_ZONE_ID", "AD_SDK_URL", "AD_SDK_FUNCTION", "AD_SDK_ATTRS")
 
 
 @contextmanager
@@ -105,6 +109,75 @@ class ProviderSelectionTests(unittest.TestCase):
             cfg = ad_service.client_config()
         self.assertIsNone(cfg["block_id"])
         self.assertEqual(cfg["zone_id"], "1234567")
+
+
+class GlobalFunctionProviderTests(unittest.TestCase):
+    """Monetag, OnClicka and friends share one SDK shape.
+
+    A `<script>` tag whose attributes name a zone, which then defines a global
+    `show_<zone>()` returning a promise. The client branches on `sdk_kind`, not
+    on the provider name, so a network of that shape is configuration — these
+    tests pin that a provider we have never special-cased still comes out fully
+    described.
+    """
+
+    def test_onclicka_is_described_like_any_other_tag_provider(self):
+        with ad_env(AD_PROVIDER="onclicka", ONCLICKA_ZONE_ID="778899",
+                    ONCLICKA_SDK_URL="https://cdn.onclicka.test/sdk.js"):
+            cfg = ad_service.client_config()
+        self.assertEqual(cfg["provider"], "onclicka")
+        self.assertTrue(cfg["configured"])
+        self.assertEqual(cfg["sdk_kind"], "global-function")
+        self.assertEqual(cfg["zone_id"], "778899")
+        self.assertEqual(cfg["sdk_url"], "https://cdn.onclicka.test/sdk.js")
+        self.assertEqual(cfg["sdk_function"], "show_778899")
+        self.assertEqual(cfg["sdk_attrs"],
+                         {"data-zone": "778899", "data-sdk": "show_778899"})
+
+    def test_an_unknown_network_needs_no_code_at_all(self):
+        with ad_env(AD_PROVIDER="custom", AD_ZONE_ID="XY1",
+                    AD_SDK_URL="https://ads.example.test/loader.js",
+                    AD_SDK_FUNCTION="playRewarded",
+                    AD_SDK_ATTRS="data-spot=XY1,data-callback=playRewarded"):
+            cfg = ad_service.client_config()
+        self.assertEqual(cfg["sdk_kind"], "global-function")
+        self.assertEqual(cfg["sdk_function"], "playRewarded")
+        self.assertEqual(cfg["sdk_attrs"],
+                         {"data-spot": "XY1", "data-callback": "playRewarded"})
+
+    def test_adsgram_keeps_its_own_shape(self):
+        """Adsgram is the odd one out — an init() object, not a global."""
+        with ad_env(AD_PROVIDER="adsgram", ADSGRAM_BLOCK_ID="int-1"):
+            cfg = ad_service.client_config()
+        self.assertEqual(cfg["sdk_kind"], "adsgram-object")
+        self.assertIsNone(cfg["sdk_function"])
+        self.assertEqual(cfg["sdk_attrs"], {})
+
+    def test_a_zone_without_an_sdk_url_is_not_configured(self):
+        """The id alone loads nothing. Rendering a tag with an empty src fails
+        on every device while the admin page reports the network as live."""
+        with ad_env(AD_PROVIDER="onclicka", ONCLICKA_ZONE_ID="778899"):
+            self.assertFalse(ad_service.is_configured())
+            self.assertFalse(ad_service.client_config()["configured"])
+
+    def test_monetag_still_has_its_documented_default_host(self):
+        with ad_env(AD_PROVIDER="monetag", MONETAG_ZONE_ID="1234567"):
+            self.assertTrue(ad_service.is_configured())
+            self.assertEqual(ad_service.get_sdk_url(),
+                             ad_service.MONETAG_SDK_URL_DEFAULT)
+
+    def test_a_junk_attribute_name_is_dropped_not_rendered(self):
+        """Attr names go into a <script> tag unescaped, so they are constrained."""
+        with ad_env(AD_PROVIDER="custom", AD_ZONE_ID="Z",
+                    AD_SDK_URL="https://x.test/s.js",
+                    AD_SDK_ATTRS='data-ok=1,on click=x,"><b>=2'):
+            attrs = ad_service.get_sdk_attrs()
+        self.assertEqual(attrs, {"data-ok": "1"})
+
+    def test_a_new_zone_alone_switches_provider(self):
+        with ad_env(ONCLICKA_ZONE_ID="778899",
+                    ONCLICKA_SDK_URL="https://cdn.onclicka.test/sdk.js"):
+            self.assertEqual(ad_service.get_provider(), "onclicka")
 
 
 class MockModeTests(unittest.TestCase):

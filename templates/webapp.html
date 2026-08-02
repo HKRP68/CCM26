@@ -17,13 +17,13 @@
   // first /api/webapp/init round trip. Empty object = mock mode.
   window.__adConfig = {{ (ad_config or {}) | tojson }};
 </script>
-{% if ad_config and ad_config.configured and ad_config.provider == 'adsgram' %}
-<script src="{{ ad_config.sdk_url }}" async
-        onload="window.__adsReady = true; window.dispatchEvent(new Event('ads-sdk-ready'));"
-        onerror="window.__adsFailed = true; console.warn('Ad SDK failed to load — ad spins unavailable this session');"></script>
-{% elif ad_config and ad_config.configured and ad_config.provider == 'monetag' %}
-<script src="{{ ad_config.sdk_url }}" data-zone="{{ ad_config.zone_id }}"
-        data-sdk="{{ ad_config.sdk_function }}" async
+{% if ad_config and ad_config.configured %}
+{# One tag for every network: the attributes it needs come from sdk_attrs, so
+   swapping networks (or adding one) never edits this template. #}
+<script src="{{ ad_config.sdk_url }}"
+        {%- for name, value in (ad_config.sdk_attrs or {}).items() %}
+        {{ name }}="{{ value }}"
+        {%- endfor %} async
         onload="window.__adsReady = true; window.dispatchEvent(new Event('ads-sdk-ready'));"
         onerror="window.__adsFailed = true; console.warn('Ad SDK failed to load — ad spins unavailable this session');"></script>
 {% endif %}
@@ -4582,10 +4582,12 @@ async function onSpinClick() {
 // See services/ad_service.py for the server half.
 let _adController = null;
 let _adsConfigured = false;
-let _adsProvider = null;        // 'adsgram' | 'monetag' | null
-let _adsPlacementId = null;     // Adsgram block id / Monetag zone id
+let _adsProvider = null;        // 'adsgram' | 'monetag' | 'onclicka' | …
+let _adsSdkKind = null;         // 'adsgram-object' | 'global-function'
+let _adsPlacementId = null;     // Adsgram block id / everyone else's zone id
 let _adsSdkUrl = null;
-let _adsSdkFunction = null;     // Monetag: global the SDK tag defines
+let _adsSdkFunction = null;     // global-function: the global the tag defines
+let _adsSdkAttrs = null;        // attributes the tag needs to configure itself
 let _adsWaitingForSdk = false;
 
 // Telegram id, passed to Monetag as `ymid` so its server-to-server postback
@@ -4609,6 +4611,12 @@ function initAds(config) {
   _adsSdkUrl = cfg.sdk_url || null;
   _adsSdkFunction = cfg.sdk_function
     || (cfg.zone_id ? 'show_' + cfg.zone_id : null);
+  _adsSdkAttrs = cfg.sdk_attrs || null;
+  // Older payloads (a page cached from before this shipped) carry no sdk_kind;
+  // infer it so a stale client still drives the right SDK.
+  _adsSdkKind = cfg.sdk_kind
+    || (_adsProvider === 'adsgram' ? 'adsgram-object'
+        : _adsSdkFunction ? 'global-function' : null);
   if (!_adsConfigured || !_adsPlacementId) return;
   // The SDK loads async, so it may not be present yet when init data arrives.
   // Try now, and if the SDK isn't ready, wait for its load event (or bail if
@@ -4659,7 +4667,7 @@ function _forceAdsRetry() {
 // announces itself differently: Adsgram hangs an object off `window.Adsgram`,
 // Monetag's tag defines a single global named after the zone.
 function _adSdkLoaded() {
-  if (_adsProvider === 'monetag') {
+  if (_adsSdkKind === 'global-function') {
     return !!(_adsSdkFunction && typeof window[_adsSdkFunction] === 'function');
   }
   return !!window.Adsgram?.init;
@@ -4669,11 +4677,11 @@ function _tryInitAdController() {
   if (_adController) return true;
   if (!_adsConfigured || !_adsPlacementId || !_adSdkLoaded()) return false;
   try {
-    if (_adsProvider === 'monetag') {
+    if (_adsSdkKind === 'global-function') {
       const showFn = window[_adsSdkFunction];
-      // Monetag resolves with nothing when the ad was watched and rejects
-      // otherwise. Normalise it to Adsgram's `{done:true}` here so the whole
-      // ad phase below stays provider-blind.
+      // These SDKs resolve with nothing when the ad was watched and reject
+      // otherwise. Normalise to Adsgram's `{done:true}` here so the whole ad
+      // phase below stays provider-blind.
       _adController = {
         show: (opts) => {
           const args = Object.assign({}, opts || {});
@@ -4800,9 +4808,10 @@ function _waitForAdSdk(ms) {
 // never "inject another one".
 function _adTagPresent() {
   try {
-    if (_adsProvider === 'monetag') {
+    if (_adsSdkKind === 'global-function' && _adsSdkFunction) {
       return !!document.querySelector(
-        'script[data-sdk="' + _adsSdkFunction + '"]');
+        'script[data-sdk="' + _adsSdkFunction + '"]')
+        || !!document.querySelector('script[src="' + _adsSdkUrl + '"]');
     }
     return !!document.querySelector('script[src="' + _adsSdkUrl + '"]');
   } catch (e) { return false; }
@@ -4833,12 +4842,12 @@ function _reloadAdsSdk() {
     };
     const el = document.createElement('script');
     el.src = _adsSdkUrl;
-    // Monetag's tag is configured by attributes, not by a later init() call —
-    // without these the script loads and defines nothing.
-    if (_adsProvider === 'monetag') {
-      el.setAttribute('data-zone', _adsPlacementId);
-      el.setAttribute('data-sdk', _adsSdkFunction);
-    }
+    // These tags are configured by attributes, not by a later init() call —
+    // without them the script loads and defines nothing. Same list the
+    // server-rendered tag uses, so the two can't disagree.
+    Object.entries(_adsSdkAttrs || {}).forEach(([k, v]) => {
+      try { el.setAttribute(k, v); } catch (e) {}
+    });
     el.async = true;
     el.onload = () => {
       window.__adsFailed = false;

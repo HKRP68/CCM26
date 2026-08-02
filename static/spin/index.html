@@ -22,10 +22,10 @@
         await new Promise((resolve, reject) => {
           const el = document.createElement('script');
           el.src = cfg.sdk_url;
-          if (cfg.provider === 'monetag') {
-            el.setAttribute('data-zone', cfg.zone_id);
-            el.setAttribute('data-sdk', cfg.sdk_function);
-          }
+          // Attributes come from the server so a new network is config-only.
+          Object.entries(cfg.sdk_attrs || {}).forEach(([k, v]) => {
+            try { el.setAttribute(k, v); } catch (e) {}
+          });
           el.onload = resolve;
           el.onerror = reject;
           document.head.appendChild(el);
@@ -35,7 +35,7 @@
         // runs, so the global can still be a moment away here. Poll for it
         // rather than judging at this instant and writing the SDK off.
         const fnName = cfg.sdk_function;
-        if (cfg.provider === 'monetag' && fnName) {
+        if (cfg.sdk_kind === 'global-function' && fnName) {
           const deadline = Date.now() + 5000;
           while (typeof window[fnName] !== 'function' && Date.now() < deadline) {
             await new Promise(r => setTimeout(r, 150));
@@ -579,7 +579,7 @@
         await window.__adSdkReady;
         const cfg = window.__adConfig;
         if (!cfg || !cfg.configured) return null;
-        if (cfg.provider === 'monetag') {
+        if (cfg.sdk_kind === 'global-function') {
           const fn = window[cfg.sdk_function];
           if (typeof fn !== 'function') return null;
           const ymid = tg?.initDataUnsafe?.user?.id;
