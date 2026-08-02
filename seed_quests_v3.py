@@ -259,6 +259,7 @@ MONTHLY_QUESTS = [
 
 
 def _rewards(base, tier):
+    """Scale a base reward by a quest's difficulty tier (1-4)."""
     return {
         "points": base["points"] * tier,
         "coins": base["coins"] * tier,
@@ -338,6 +339,7 @@ def seed(session, *, retire_legacy=True, dry_run=False):
 
 
 def main():
+    """Command-line entry point — see the module docstring for the flags."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would change, write nothing")
