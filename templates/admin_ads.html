@@ -10,82 +10,24 @@
 <!-- Config status banner -->
 {% if configured %}
 <div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
-  <strong style="color:var(--green);">✅ {{ provider|capitalize }} is LIVE</strong>
-  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">
-    {{ 'Block ID' if provider == 'adsgram' else 'Zone ID' }}: <code>{{ placement_id }}</code>
-  </span>
-  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">SDK: <code>{{ ad_config.sdk_url }}</code></span>
-  {% if ad_config.sdk_function %}
-  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">
-    Global: <code>{{ ad_config.sdk_function }}()</code></span>
-  {% endif %}
+  <strong style="color:var(--green);">✅ Adsgram is LIVE</strong>
+  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">Block ID: <code>{{ block_id }}</code></span>
   <p style="color:var(--muted);font-size:.78rem;margin:.5rem 0 0;line-height:1.5;">
-    The Mini App renders this tag:
-    <code style="background:var(--card-2);padding:.15rem .4rem;border-radius:4px;">&lt;script
-    src="{{ ad_config.sdk_url }}"{% for k, v in (ad_config.sdk_attrs or {}).items() %} {{ k }}="{{ v }}"{% endfor %}&gt;</code>
-    — it must match your dashboard's tag exactly, id included.
+    The SDK script is loaded on every Mini App page regardless of this setting —
+    only <code>init()</code> depends on the block id, so a wrong value can never
+    make the SDK itself disappear.
   </p>
 </div>
 {% else %}
 <div style="background:rgba(255,217,102,.08);border:1px solid var(--accent);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
-  <strong style="color:var(--accent);">⚠️ Mock mode — no ad network configured</strong>
+  <strong style="color:var(--accent);">⚠️ Mock mode</strong>
   <p style="color:var(--muted);font-size:.85rem;margin:.4rem 0 0;line-height:1.5;">
-    Pick a network below and set its env vars, then redeploy. Ads stay mocked
-    (and every reward stays claimable) until then.
+    Set <code>ADSGRAM_BLOCK_ID</code> on your host to enable real ads.<br>
+    Get a block ID at <a href="https://partner.adsgram.ai" target="_blank" style="color:var(--accent);">partner.adsgram.ai</a> after signing up + creating a Reward block.
+    Ads stay mocked (and every reward stays claimable) until then.
   </p>
 </div>
 {% endif %}
-
-<!-- Provider switch -->
-<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
-  <strong style="font-size:.95rem;">🔀 Switching ad network</strong>
-  <p style="color:var(--muted);font-size:.85rem;margin:.4rem 0 0;line-height:1.6;">
-    The network is chosen entirely by env vars — no code change, no redeploy of
-    the Mini App code itself:
-  </p>
-  <table style="margin-top:.5rem;font-size:.85rem;">
-    <thead><tr><th>Network</th><th>Env vars</th></tr></thead>
-    <tbody>
-      <tr>
-        <td><strong>Monetag</strong></td>
-        <td><code>AD_PROVIDER=monetag</code>, <code>MONETAG_ZONE_ID=&lt;zone&gt;</code>,
-            optional <code>MONETAG_SDK_URL=&lt;host from your SDK tag&gt;</code></td>
-      </tr>
-      <tr>
-        <td><strong>OnClicka</strong></td>
-        <td><code>AD_PROVIDER=onclicka</code>, <code>ONCLICKA_ZONE_ID=&lt;spot&gt;</code>,
-            <code>ONCLICKA_SDK_URL=&lt;host from your SDK tag&gt;</code> (required — no default)</td>
-      </tr>
-      <tr>
-        <td><strong>Any other</strong></td>
-        <td><code>AD_PROVIDER=custom</code>, <code>AD_ZONE_ID</code>, <code>AD_SDK_URL</code>,
-            optional <code>AD_SDK_FUNCTION</code> / <code>AD_SDK_ATTRS</code></td>
-      </tr>
-      <tr>
-        <td><strong>Adsgram</strong></td>
-        <td><code>AD_PROVIDER=adsgram</code>, <code>ADSGRAM_BLOCK_ID=&lt;block&gt;</code></td>
-      </tr>
-      <tr>
-        <td><strong>None</strong> (mock)</td>
-        <td><code>AD_PROVIDER=none</code></td>
-      </tr>
-    </tbody>
-  </table>
-  <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;line-height:1.5;">
-    Leave <code>AD_PROVIDER</code> unset and it auto-detects whichever zone or
-    block id is set. Postbacks already delivered by the outgoing network stay
-    claimable, so a switch never eats a pending reward.
-  </p>
-  <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;line-height:1.5;">
-    Monetag, OnClicka and most Telegram Mini App networks share one SDK shape:
-    a <code>&lt;script&gt;</code> tag whose attributes name a zone, which then
-    defines a global <code>show_&lt;zone&gt;()</code> returning a promise. Any
-    network of that shape works through <code>custom</code> with no code change
-    — transcribe its tag into <code>AD_SDK_URL</code> and
-    <code>AD_SDK_ATTRS</code>. Adsgram is the odd one out (an
-    <code>init()</code> object), which is why it has its own provider name.
-  </p>
-</div>
 
 <!-- Stats grid -->
 <div class="stats-grid" style="margin-bottom:1.5rem;">
@@ -107,79 +49,8 @@
   </div>
 </div>
 
-<!-- Setup guides -->
-<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:.75rem;" {{ 'open' if provider == 'monetag' or not configured }}>
-  <summary style="cursor:pointer;font-weight:600;">🔧 Monetag setup</summary>
-  <ol style="margin:.75rem 0 .25rem;padding-left:1.25rem;line-height:1.6;font-size:.9rem;color:var(--text);">
-    <li>Sign up at <a href="https://monetag.com" target="_blank" style="color:var(--accent);">monetag.com</a> and add your
-      Telegram Mini App as a site (the <code>t.me/&lt;bot&gt;/&lt;app&gt;</code> link, plus the web app URL from
-      <code>@BotFather</code> → <code>/myapps</code>)</li>
-    <li>Create an ad zone of type <strong>Rewarded Interstitial</strong> (SDK / Telegram Mini App)</li>
-    <li>Open the zone's SDK tag. It looks like:<br>
-      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
-        &lt;script src='//libtl.com/sdk.js' data-zone='1234567' data-sdk='show_1234567'&gt;&lt;/script&gt;
-      </code>
-      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
-        ↑ The number is your <strong>zone ID</strong>. The host can differ per account — copy it exactly.
-      </span>
-    </li>
-    <li>Set env vars and redeploy:<br>
-      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
-        AD_PROVIDER=monetag<br>
-        MONETAG_ZONE_ID=1234567<br>
-        MONETAG_SDK_URL=https://libtl.com/sdk.js
-      </code>
-    </li>
-    <li>Optional but recommended — in the zone's <strong>Postback</strong> settings, set the S2S URL to:<br>
-      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
-        {{ public_base_url }}/api/ads/reward?ymid={ymid}&amp;telegram_id={telegram_id}&amp;event_type={event_type}&amp;reward_event_type={reward_event_type}
-      </code>
-      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
-        Keep the <code>{…}</code> macros literal — Monetag substitutes them. Include all four:
-        <code>telegram_id</code> is resolved by Monetag and is preferred over <code>ymid</code>,
-        which is whatever the Mini App handed the SDK and so is client-controlled.
-        Click events are ignored here so one view can't pay out twice, and
-        <code>not_valued</code> events — impressions that earned nothing — are dropped rather
-        than paid out of your economy.
-      </span>
-    </li>
-    <li>Verify: this page should show "✅ Monetag is LIVE", and postbacks appear in the table below</li>
-  </ol>
-</details>
-
-<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:.75rem;" {{ 'open' if provider == 'onclicka' }}>
-  <summary style="cursor:pointer;font-weight:600;">🔧 OnClicka setup</summary>
-  <ol style="margin:.75rem 0 .25rem;padding-left:1.25rem;line-height:1.6;font-size:.9rem;color:var(--text);">
-    <li>Sign up as a <strong>publisher</strong> at <a href="https://onclicka.com" target="_blank" style="color:var(--accent);">onclicka.com</a> and add your Mini App</li>
-    <li>Create a spot of type <strong>Rewarded Video</strong> and open its SDK tag</li>
-    <li>Transcribe the tag into env vars, exactly as shown — the SDK host is
-      per-publisher, so there is no default and a guess just fails to load:<br>
-      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
-        AD_PROVIDER=onclicka<br>
-        ONCLICKA_ZONE_ID=&lt;the id in the tag&gt;<br>
-        ONCLICKA_SDK_URL=&lt;the exact src from the tag&gt;
-      </code>
-      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
-        If their tag uses attribute names other than <code>data-zone</code>/<code>data-sdk</code>,
-        or names the global something other than <code>show_&lt;id&gt;</code>, set
-        <code>ONCLICKA_SDK_ATTRS</code> and <code>ONCLICKA_SDK_FUNCTION</code> to match.
-        The banner above shows the tag we render — compare it to theirs character by character.
-      </span>
-    </li>
-    <li>Optional S2S postback, if their dashboard offers one — point it at:<br>
-      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
-        {{ public_base_url }}/api/ads/reward?ymid=&lt;their user-id macro&gt;
-      </code>
-      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
-        We pass the player's Telegram ID as <code>ymid</code> when showing the ad, and accept it
-        back under <code>ymid</code>, <code>userid</code> or <code>telegram_id</code>.
-      </span>
-    </li>
-    <li>Verify: this page should show "✅ Onclicka is LIVE"</li>
-  </ol>
-</details>
-
-<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.5rem;" {{ 'open' if provider == 'adsgram' }}>
+<!-- Setup guide -->
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.5rem;" {{ 'open' if not configured }}>
   <summary style="cursor:pointer;font-weight:600;">🔧 Adsgram setup</summary>
   <ol style="margin:.75rem 0 .25rem;padding-left:1.25rem;line-height:1.6;font-size:.9rem;color:var(--text);">
     <li>Sign up at <a href="https://partner.adsgram.ai/registration" target="_blank" style="color:var(--accent);">partner.adsgram.ai</a></li>
@@ -204,7 +75,6 @@
     <li>After approval, click "Show code" → copy the Block ID</li>
     <li>Set env vars and redeploy:<br>
       <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
-        AD_PROVIDER=adsgram<br>
         ADSGRAM_BLOCK_ID=&lt;your_block_id&gt;
       </code>
     </li>
@@ -217,14 +87,13 @@
 <div class="table-wrap">
 <table>
   <thead><tr>
-    <th>Received at</th><th>Telegram ID</th><th>Network</th><th>Status</th><th>Consumed at</th><th>Source IP</th>
+    <th>Received at</th><th>Telegram ID</th><th>Status</th><th>Consumed at</th><th>Source IP</th>
   </tr></thead>
   <tbody>
   {% for r in recent %}
   <tr>
     <td style="font-family:monospace;font-size:.82rem;">{{ r.received_at | ist('%Y-%m-%d %H:%M:%S') }}</td>
     <td style="font-family:monospace;">{{ r.telegram_id }}</td>
-    <td style="font-size:.82rem;color:var(--muted);">{{ r.provider or 'adsgram' }}</td>
     <td>
       {% if r.consumed_at %}
         <span style="color:var(--green);">✅ Used</span>
@@ -241,9 +110,9 @@
 </div>
 {% else %}
 <p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
-  No postbacks yet. Once an ad network is configured (with its server-to-server
-  postback URL set) and users start watching ads, they'll appear here. Client-side
-  ad completions don't create rows — they mint a one-shot token instead.
+  No postbacks yet. Once Adsgram is configured (with its Reward URL set) and users
+  start watching ads, they'll appear here. Client-side ad completions don't create
+  rows — they mint a one-shot token instead.
 </p>
 {% endif %}
 

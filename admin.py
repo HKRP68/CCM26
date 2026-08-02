@@ -4210,9 +4210,9 @@ def _image_mimetype(data):
 def webapp():
     """Serve the Mini App HTML.
 
-    The ad network's SDK tag is rendered server-side from ``ad_config`` so the
-    script starts downloading with the page instead of a round trip later —
-    and so switching networks is an env-var change with no template edit.
+    ``ad_config`` carries the block id so the controller can be built without
+    waiting for /api/webapp/init. The SDK script tag itself is unconditional in
+    the template — see ``ad_service.client_config``.
     """
     from services import ad_service
     return render_template("webapp.html", ad_config=ad_service.client_config())
@@ -4368,18 +4368,8 @@ def webapp_init():
                 "casual_match_played": bool((user.quick_matches_played or 0) > 0),
                 "club_joined": bool(user.club_id),
             },
-            # Which ad network the client should load and how to call it.
-            # `adsgram` is the legacy shape, kept so a Mini App page cached in
-            # a Telegram WebView from before the switch keeps working.
-            #
-            # `configured` stays "an ad network is live", NOT "Adsgram is live",
-            # even when the provider is Monetag and `block_id` is therefore
-            # null. Pre-switch JS reads the pair together: with configured=true
-            # and no block id it skips SDK init and asks for a no-fill pass, so
-            # the player keeps a capped number of spins until their WebView
-            # reloads. Narrowing this to Adsgram would instead send them down
-            # the mock path, whose token this build rejects while a real
-            # network is configured — a dead end where there is now a rescue.
+            # `ads` is the current shape; `adsgram` is the legacy one, kept so
+            # a Mini App page cached in a Telegram WebView keeps working.
             "ads": ad_service.client_config(),
             "adsgram": {
                 "configured": ad_service.is_configured(),
@@ -10705,27 +10695,20 @@ def webapp_match_scorecard():
         db.close()
 
 
-# Every parameter name an ad network might carry the Telegram id in. Adsgram
-# sends `userid`, Monetag sends `telegram_id` and `ymid` (the latter being
-# whatever the Mini App passed to the SDK). Accepting all of them means
-# switching networks needs no code change here — only the URL pasted into the
-# new dashboard.
-#
-# Order matters: the network-derived names come first, and `ymid` last, because
-# `ymid` originates in the client. Configure the Monetag postback with both and
-# the id we trust is the one Monetag resolved itself.
-_POSTBACK_ID_PARAMS = ("userid", "telegram_id", "tgid", "user_id", "ymid")
+# Adsgram sends the Telegram id as `userid`. The aliases cost nothing and make
+# a mistyped reward URL work rather than silently dropping every postback.
+_POSTBACK_ID_PARAMS = ("userid", "telegram_id", "tgid", "user_id")
 
 
 @app.route("/api/ads/config", methods=["GET"])
 @csrf_exempt
 def ads_config():
-    """Public: which ad network to load and how to call it.
+    """Public: the Adsgram block id for the client SDK.
 
     The Mini App gets this rendered into its HTML, but the standalone spin page
     is a static file with no template pass, so it reads the config from here.
-    Nothing secret is in it — the block/zone id is public by definition; it
-    ships in the SDK tag of every page that shows an ad.
+    Nothing secret is in it — the block id is public by definition; it ships in
+    every page that shows an ad.
     """
     from services import ad_service
     return {"ok": True, "ads": ad_service.client_config()}
@@ -10733,38 +10716,23 @@ def ads_config():
 
 @app.route("/api/ads/reward", methods=["GET"])
 @app.route("/api/adsgram/reward", methods=["GET"])
-@app.route("/api/monetag/reward", methods=["GET"])
 @csrf_exempt
 def ads_postback():
-    """Server-to-server postback endpoint for the active ad network.
+    """Adsgram server-to-server postback endpoint.
 
-    The network fires a GET here after a user finishes watching a rewarded ad.
+    Adsgram fires a GET here after a user finishes watching a rewarded ad.
     We log it; the spin/daily endpoint claims it later (within
     ``POSTBACK_WINDOW_SECONDS``).
 
     Configure the reward URL in your network's dashboard as:
 
-      Adsgram: https://your-app.example.com/api/ads/reward?userid=[userId]
-      Monetag: https://your-app.example.com/api/ads/reward?ymid={ymid}
-               &telegram_id={telegram_id}&event_type={event_type}
-               &reward_event_type={reward_event_type}
+      https://your-app.example.com/api/ads/reward?userid=[userId]
 
-    Adsgram substitutes ``[userId]`` and Monetag substitutes its ``{…}`` macros
-    before making the request. The legacy ``/api/adsgram/reward`` and a matching
-    ``/api/monetag/reward`` both point here, so an already-configured Adsgram
-    block keeps working after the switch and neither dashboard needs a URL the
-    other can't produce.
+    Adsgram substitutes ``[userId]`` with the Telegram id before making the
+    request. ``/api/adsgram/reward`` points here too, so a block configured
+    with the older URL keeps working untouched.
 
-    Include ``telegram_id`` in the Monetag URL: ``ymid`` is whatever the Mini
-    App handed the SDK, so it is client-controlled, while ``telegram_id`` is
-    resolved by Monetag. ``_POSTBACK_ID_PARAMS`` reads the network-derived names
-    first for exactly that reason and only falls back to ``ymid``.
-
-    Events that earned nothing (``reward_event_type=not_valued``) and events
-    that aren't the impression (a click on the same ad) are dropped rather than
-    recorded, so one view can't pay out twice and an unpaid one can't pay at all.
-
-    No auth — neither network signs these requests; the security model is
+    No auth — Adsgram doesn't sign these requests; the security model is
     "obscurity of the URL + the per-cycle ad quota", and a postback only ever
     unlocks a slot the user already had.
     """
@@ -10781,50 +10749,22 @@ def ads_postback():
         except ValueError:
             return {"ok": False, "error": "bad_userid"}, 400
 
-        # Monetag fires a postback per event and marks which kind it was. Only
-        # the impression is "the user watched it" — a click on the same ad would
-        # otherwise hand out a second reward for one view. Networks that send no
-        # event_type at all (Adsgram) fall through unchanged.
-        event_type = (request.args.get("event_type") or "").strip().lower()
-        if event_type and event_type not in ("impression", "view", "reward"):
-            logger.info("Ad postback ignored for %s (event_type=%s)",
-                        telegram_id, event_type)
-            return {"ok": True, "note": "ignored_event"}, 200
-
-        # `not_valued` is Monetag saying the impression earned nothing. Treating
-        # it as a watched ad would pay a reward out of our own economy for an ad
-        # that paid us nothing — so it is logged and dropped. Absent (Adsgram,
-        # or a postback URL without the macro) still means "assume valued",
-        # which keeps the old behaviour for anyone who hasn't updated their URL.
-        reward_event_type = (request.args.get("reward_event_type")
-                             or "").strip().lower()
-        if reward_event_type == "not_valued":
-            logger.info("Ad postback ignored for %s (reward_event_type=%s)",
-                        telegram_id, reward_event_type)
-            return {"ok": True, "note": "not_valued"}, 200
-
         # Optional: only accept postbacks for users that actually exist
         db = get_session()
         try:
             user = db.query(User).filter(User.telegram_id == telegram_id).first()
             if not user:
-                # Still 200 OK so the network doesn't retry, but don't insert a row
-                logger.warning(f"Ad postback for unknown user {telegram_id}")
+                # Still 200 OK so Adsgram doesn't retry, but don't insert a row
+                logger.warning(f"Adsgram postback for unknown user {telegram_id}")
                 return {"ok": True, "note": "user_not_found"}, 200
 
             from services import ad_service
-            # Trust the route the network actually hit over the configured
-            # provider: during a switch both dashboards can be live at once.
-            provider = ("monetag" if request.path.startswith("/api/monetag/")
-                        else "adsgram" if request.path.startswith("/api/adsgram/")
-                        else ad_service.get_provider())
             ad_service.record_postback(
                 db, telegram_id,
                 source_ip=request.remote_addr,
                 query_string=request.query_string.decode("utf-8", errors="ignore"),
-                provider=provider,
             )
-            logger.info(f"Ad postback ({provider}) recorded for {telegram_id}")
+            logger.info(f"Adsgram postback recorded for {telegram_id}")
             return {"ok": True}
         finally:
             db.close()
@@ -16062,8 +16002,6 @@ def admin_ads():
             total=total, consumed=consumed, today=today,
             ad_config=ad_service.client_config(),
             configured=ad_service.is_configured(),
-            provider=ad_service.get_provider(),
-            placement_id=ad_service.get_placement_id() or "",
             block_id=ad_service.get_block_id() or "",
             public_base_url=(os.getenv("WEBAPP_URL", "").strip().rstrip("/")
                              or "https://your-app.example.com"),
