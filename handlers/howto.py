@@ -11,8 +11,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import (TRAIT_SELL_DISCOUNT_PCT, trait_sell_value, trait_trade_fee,
-                    TRAIT_MAX_LEVEL)
+from config import trait_sell_value, trait_trade_fee, TRAIT_MAX_LEVEL
 from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
@@ -157,8 +156,8 @@ SECTIONS = {
             "<b>💠 Trait resale &amp; swaps</b>\n"
             "A trait's value is what it cost to build — 150💎 for Lv.1 plus every "
             "upgrade on top (Lv.5 = 3,050💎).\n"
-            f"• <b>/selltrait</b> pays {TRAIT_SELL_DISCOUNT_PCT}% below that "
-            f"value: {TRAIT_SELL_TABLE}💎 for Lv.1→5\n"
+            f"• <b>/selltrait</b> pays just under what the trait cost you: "
+            f"{TRAIT_SELL_TABLE}💎 for Lv.1→5\n"
             "• <b>/tradetrait</b> swaps two traits of the <b>same level</b>, and "
             f"each side pays {TRAIT_FEE_TABLE}💎 for Lv.1→5\n"
             "• Inventory only, both commands — a trait on a player isn't for "

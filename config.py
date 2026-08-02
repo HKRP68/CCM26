@@ -440,7 +440,8 @@ TRAIT_REPLACE_COST = 250  # gems
 #
 #   Level      1      2      3      4      5
 #   buy      150    350    750  1,550  3,050   (invested gems)
-#   sell     127    297    637  1,317  2,592   (15% below buy, always)
+#   floor    120    320    720  1,520  3,020   (cheapest this level can cost)
+#   sell     119    319    719  1,519  3,019   (+50%, capped below the floor)
 #   trade fee 15     25     45     85    160   (each side, in gems)
 
 
@@ -456,28 +457,47 @@ def _trait_buy_values():
 TRAIT_BUY_VALUE = _trait_buy_values()
 TRAIT_MAX_LEVEL = max(TRAIT_BUY_VALUE)
 
-# Selling always returns 15% less than the trait cost to build — at every level.
-# It was 30%, which made resale a last resort: a Lv.5 trait cost 3,050 gems to
-# build and handed back 2,135, so a captain reshaping a squad ate a 915-gem hole
-# and mostly chose to hoard dead traits instead. Halving the haircut keeps a real
-# sink (nobody profits by churning the shop) while making "sell what you don't
-# use" a move worth making.
-TRAIT_SELL_DISCOUNT_PCT = 15
+# ── Resale ────────────────────────────────────────────────────────
+# Resale used to return 30% below buy value, which made /selltrait a last
+# resort: a Lv.5 trait cost 3,050 gems to build and handed back 2,135, so a
+# captain reshaping a squad ate a 915-gem hole and mostly hoarded dead traits
+# instead. Resale is now worth 50% more than that table at every level.
+TRAIT_SELL_BASELINE_DISCOUNT_PCT = 30   # the old table, kept as the reference
+TRAIT_SELL_UPLIFT_PCT = 50              # ...and how much more it now returns
+
+# ...with ONE hard ceiling, which is what stops the uplift printing gems.
+#
+# A trait must never sell for more than it could have been bought for, or the
+# shop becomes a gem tap: buy, sell, repeat. The cheapest a level can ever cost
+# is not its list price — the daily shop discounts one slot by up to
+# TRAIT_DISCOUNT_RANGE[1], so a Lv.1 trait is available for 120 gems, and every
+# higher level is that 120 plus its upgrades (upgrade costs are never
+# discounted). A flat +50% clears that floor at *every* level (Lv.1 would pay
+# 157 for a trait bought at 120), so the uplift is applied and then capped one
+# gem below the floor. In practice that delivers the full +50% nowhere and
+# +13/+30/+37/+40/+41% at Lv.1→5 — the ceiling binds hardest at Lv.1, where the
+# shop discount is deepest relative to the price.
+TRAIT_SELL_FLOOR_MARGIN = 1             # gems kept below the floor, always
 
 # Trading is priced off the same investment: a flat fee at Lv.1, plus a share of
 # the upgrade gems sunk into the trait above it. That keeps a Lv.1 swap cheap
 # while a Lv.5 swap still costs real money — roughly doubling per level —
 # without charging a fresh trait's worth of gems for the privilege.
 #
-# Both halves are half what they were (base 30 → 15, share 10% → 5%), so every
-# level's fee is exactly halved. The old top end was the problem: 320 gems each
-# side to swap two Lv.5 traits is more than a fresh trait costs, and two captains
-# who each held what the other wanted simply didn't trade. The fee still has to
-# be cheaper than selling-and-rebuying or /tradetrait has no reason to exist, and
-# at 15% resale that ceiling came down too — halving keeps clear of it at every
-# level (Lv.5: 160 fee vs a 458-gem resale loss).
-TRAIT_TRADE_FEE_BASE = 15          # gems, Lv.1
-TRAIT_TRADE_FEE_UPGRADE_PCT = 5    # + this % of the upgrade gems above Lv.1
+# The old top end was the problem: 320 gems each side to swap two Lv.5 traits is
+# more than a fresh trait costs, and two captains who each held what the other
+# wanted simply didn't trade.
+#
+# The ceiling on the fee is the cost of the obvious alternative — selling the
+# trait and buying another. A swap has to be cheaper than that or /tradetrait
+# has no reason to exist. Raising resale to just under cost pulled that ceiling
+# right down with it: the loss on a sale is now a flat 31 gems at every level,
+# so the fee has to clear 31 everywhere, not just at the bottom. Hence base 15
+# with a 0.5% share of the upgrade gems: 15 / 16 / 18 / 22 / 29 for Lv.1→5.
+# It still rises with the gems sunk into the trait, just inside a much smaller
+# band than the resale economy used to leave room for.
+TRAIT_TRADE_FEE_BASE = 15            # gems, Lv.1
+TRAIT_TRADE_FEE_UPGRADE_PCT = 0.5    # + this % of the upgrade gems above Lv.1
 
 
 def _clamp_trait_level(level) -> int:
@@ -488,21 +508,58 @@ def _clamp_trait_level(level) -> int:
     return max(1, min(TRAIT_MAX_LEVEL, level))
 
 
+def _trait_floor_costs():
+    """Cheapest gems each level can possibly have cost.
+
+    The Lv.1 shop price at the deepest discount the shop can roll, plus every
+    upgrade above it at full price — upgrades are never discounted. This is the
+    line ``trait_sell_value`` has to stay under.
+    """
+    best_discount = max(TRAIT_DISCOUNT_RANGE)
+    running = TRAIT_MARKET_BUY_COST * (100 - best_discount) // 100
+    values = {1: running}
+    for level in sorted(TRAIT_UPGRADE_COSTS):
+        running += TRAIT_UPGRADE_COSTS[level]
+        values[level + 1] = running
+    return values
+
+
+TRAIT_FLOOR_COST = _trait_floor_costs()
+
+
 def trait_buy_value(level) -> int:
     """Gems invested in a trait by the time it reaches ``level``."""
     return TRAIT_BUY_VALUE[_clamp_trait_level(level)]
 
 
+def trait_floor_cost(level) -> int:
+    """Cheapest gems a trait of ``level`` could have been acquired for."""
+    return TRAIT_FLOOR_COST[_clamp_trait_level(level)]
+
+
 def trait_sell_value(level) -> int:
-    """Gems returned for selling a trait — always 15% below its buy value."""
-    value = trait_buy_value(level) * (100 - TRAIT_SELL_DISCOUNT_PCT) // 100
-    return max(1, value)
+    """Gems returned for selling a trait.
+
+    50% more than the original resale table, then held one gem below what the
+    trait could have cost to acquire — see the notes above ``TRAIT_SELL_*``.
+    Selling is therefore always a loss, however cheaply the trait was bought.
+    """
+    level = _clamp_trait_level(level)
+    baseline = (trait_buy_value(level)
+                * (100 - TRAIT_SELL_BASELINE_DISCOUNT_PCT) // 100)
+    uplifted = baseline * (100 + TRAIT_SELL_UPLIFT_PCT) // 100
+    ceiling = trait_floor_cost(level) - TRAIT_SELL_FLOOR_MARGIN
+    return max(1, min(uplifted, ceiling))
 
 
 def trait_trade_fee(level) -> int:
     """Gems each side pays to swap a trait of ``level``."""
     upgrades_above_l1 = trait_buy_value(level) - TRAIT_BUY_VALUE[1]
-    fee = TRAIT_TRADE_FEE_BASE + upgrades_above_l1 * TRAIT_TRADE_FEE_UPGRADE_PCT // 100
+    # int() after the division, not floor division on the percentage — the
+    # share is now a fraction of a percent, which integer division would
+    # collapse to zero and flatten the fee to a single number at every level.
+    fee = TRAIT_TRADE_FEE_BASE + int(
+        upgrades_above_l1 * TRAIT_TRADE_FEE_UPGRADE_PCT / 100)
     return max(1, fee)
 
 # ── Aliases so trait_service / trait_engine can use consistent names ──

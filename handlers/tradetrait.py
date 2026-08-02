@@ -7,7 +7,7 @@ side pays a gem fee for that level — 15 💎 at Lv.1, rising with the upgrade 
 sunk into the trait (see ``config.trait_trade_fee``):
 
     Level        1      2      3      4      5
-    trade fee   15     25     45     85    160   each side
+    trade fee   15     16     18     22     29   each side
 
 Rules worth knowing:
   • Inventory only. A trait on a player isn't tradable — /removetrait first,

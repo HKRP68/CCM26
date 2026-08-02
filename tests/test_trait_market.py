@@ -6,8 +6,9 @@ the shop:
 
     Level        1      2      3      4      5
     buy        150    350    750  1,550  3,050   gems invested
-    sell       127    297    637  1,317  2,592   always 15% below buy
-    trade fee   15     25     45     85    160   each side
+    floor      120    320    720  1,520  3,020   cheapest it can be acquired for
+    sell       119    319    719  1,519  3,019   always just under the floor
+    trade fee   15     16     18     22     29   each side
 
 The rules that decide an outcome live in ``services.trait_trading_service``, so
 these run with no Telegram and a fake session.
@@ -17,8 +18,9 @@ import unittest
 
 import config
 from config import (
-    TRAIT_MARKET_BUY_COST, TRAIT_SELL_DISCOUNT_PCT, TRAIT_TRADE_FEE_BASE,
-    TRAIT_UPGRADE_COSTS, trait_buy_value, trait_sell_value, trait_trade_fee,
+    TRAIT_DISCOUNT_RANGE, TRAIT_MARKET_BUY_COST, TRAIT_TRADE_FEE_BASE,
+    TRAIT_UPGRADE_COSTS, trait_buy_value, trait_floor_cost, trait_sell_value,
+    trait_trade_fee,
 )
 from services import trait_trading_service as tts
 
@@ -33,21 +35,47 @@ class PricingTests(unittest.TestCase):
             running += TRAIT_UPGRADE_COSTS[level]
             self.assertEqual(trait_buy_value(level + 1), running)
 
-    def test_selling_is_always_fifteen_percent_below_buy_value(self):
+    def test_selling_is_a_loss_however_cheaply_the_trait_was_bought(self):
+        """The one rule resale cannot break, whatever it pays.
+
+        A trait that sells for at least what it could have been bought for turns
+        the shop into a gem tap: buy the discounted slot, sell it straight back,
+        repeat. So the comparison that matters is against the FLOOR — the Lv.1
+        price at the shop's deepest discount plus the never-discounted upgrades
+        — not against the list price.
+        """
         for level in LEVELS:
-            buy = trait_buy_value(level)
-            self.assertEqual(trait_sell_value(level),
-                             buy * (100 - TRAIT_SELL_DISCOUNT_PCT) // 100)
-            # ...which is a real loss at every level, never a profit.
-            self.assertLess(trait_sell_value(level), buy)
+            self.assertLess(trait_sell_value(level), trait_floor_cost(level),
+                            level)
+            self.assertLess(trait_sell_value(level), trait_buy_value(level),
+                            level)
+
+    def test_the_floor_is_the_shop_at_its_deepest_discount(self):
+        best = max(TRAIT_DISCOUNT_RANGE)
+        self.assertEqual(trait_floor_cost(1),
+                         TRAIT_MARKET_BUY_COST * (100 - best) // 100)
+        # Upgrades are never discounted, so they enter the floor at full price.
+        running = trait_floor_cost(1)
+        for level in sorted(TRAIT_UPGRADE_COSTS):
+            running += TRAIT_UPGRADE_COSTS[level]
+            self.assertEqual(trait_floor_cost(level + 1), running)
+
+    def test_buying_the_discounted_slot_and_selling_it_back_loses_gems(self):
+        """The exploit the floor rule exists to close, stated as the exploit."""
+        for discount in range(TRAIT_DISCOUNT_RANGE[0],
+                              TRAIT_DISCOUNT_RANGE[1] + 1):
+            paid = TRAIT_MARKET_BUY_COST * (100 - discount) // 100
+            self.assertLess(trait_sell_value(1), paid, discount)
 
     def test_the_documented_tables(self):
         self.assertEqual([trait_buy_value(l) for l in LEVELS],
                          [150, 350, 750, 1550, 3050])
+        self.assertEqual([trait_floor_cost(l) for l in LEVELS],
+                         [120, 320, 720, 1520, 3020])
         self.assertEqual([trait_sell_value(l) for l in LEVELS],
-                         [127, 297, 637, 1317, 2592])
+                         [119, 319, 719, 1519, 3019])
         self.assertEqual([trait_trade_fee(l) for l in LEVELS],
-                         [15, 25, 45, 85, 160])
+                         [15, 16, 18, 22, 29])
 
     def test_a_level_one_swap_costs_the_specified_fifteen_gems(self):
         self.assertEqual(trait_trade_fee(1), TRAIT_TRADE_FEE_BASE)
@@ -63,6 +91,26 @@ class PricingTests(unittest.TestCase):
         for level, old in zip(LEVELS, (105, 245, 525, 1085, 2135)):
             self.assertGreater(trait_sell_value(level), old, level)
 
+    def test_the_uplift_is_taken_wherever_the_floor_allows_it(self):
+        """Resale is +50% on the old table except where the floor cuts it off.
+
+        The floor binds at every level, hardest at Lv.1 where the shop's own
+        discount is deepest relative to the price — so the delivered uplift runs
+        from +13% to +41% rather than a flat +50%. Pinned so a later change to
+        the shop discount visibly moves these numbers instead of silently
+        re-opening the buy-and-sell-back loop.
+        """
+        uplifts = [(trait_sell_value(l) - old) / old
+                   for l, old in zip(LEVELS, (105, 245, 525, 1085, 2135))]
+        self.assertAlmostEqual(uplifts[0], 0.133, places=2)
+        self.assertAlmostEqual(uplifts[-1], 0.414, places=2)
+        for uplift in uplifts:
+            self.assertLessEqual(uplift, 0.50)
+        # The floor is what cut it short, so every level sits right on it.
+        for level in LEVELS:
+            self.assertEqual(trait_sell_value(level),
+                             trait_floor_cost(level) - 1, level)
+
     def test_swapping_costs_less_than_it_used_to(self):
         """Same guard from the other side: the old fee table is a ceiling."""
         for level, old in zip(LEVELS, (30, 50, 90, 170, 320)):
@@ -73,11 +121,18 @@ class PricingTests(unittest.TestCase):
             self.assertLess(trait_sell_value(low), trait_sell_value(high))
             self.assertLess(trait_trade_fee(low), trait_trade_fee(high))
 
-    def test_a_swap_never_costs_more_than_a_fresh_trait_until_level_four(self):
-        """The fee is meant to bite at the top end without being absurd."""
-        for level in (1, 2, 3):
-            self.assertLess(trait_trade_fee(level), TRAIT_MARKET_BUY_COST)
-        self.assertGreater(trait_trade_fee(5), TRAIT_MARKET_BUY_COST)
+    def test_a_swap_never_approaches_the_cost_of_the_trait(self):
+        """The fee used to bite hardest exactly where it stopped trades happening.
+
+        A Lv.5 swap cost 320 gems a side — more than a fresh trait — so two
+        captains who each held what the other wanted simply didn't trade. The
+        fee still rises with the gems sunk into a trait, but it now stays a
+        small fraction of that trait's value at every level.
+        """
+        for level in LEVELS:
+            self.assertLess(trait_trade_fee(level), TRAIT_MARKET_BUY_COST, level)
+            self.assertLessEqual(trait_trade_fee(level),
+                                 trait_buy_value(level) // 10, level)
 
     def test_a_swap_is_always_cheaper_than_selling_and_rebuying(self):
         """Otherwise nobody would ever use /tradetrait."""
