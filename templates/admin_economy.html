@@ -163,6 +163,20 @@
         Set to 0 to require a watched ad, always.
       </p>
     </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Gap between rewarded ads, minutes <span style="color:var(--muted);">(default: 60)</span>
+      </label>
+      <input type="number" name="ad_reward_gap_minutes" min="0" max="1440" required
+             value="{{ cfg.ad_reward_gap_minutes }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      <p style="color:var(--muted); font-size:.75rem; margin:.35rem 0 0;">
+        How long after an ad-gated spin/daily before the next one unlocks, so
+        the ad slots above are spread out instead of drained in one sitting.
+        Tracked per feature, never applied to the 1 free use, and no-ad passes
+        wait it out too. Set to 0 to allow back-to-back ads.
+      </p>
+    </div>
   </div>
 
   <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🎉 Debut Bonus</h2>

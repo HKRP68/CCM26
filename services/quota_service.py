@@ -16,6 +16,24 @@ bot and the Mini App's cooldown timer use — so the Mini App becomes available
 again on that schedule rather than a fixed 24h window.
 
 Quotas are admin-tunable from /admin/economy — defaults to 5 each.
+
+────────────────────────────────────────────────────────────────────────
+The gap between rewarded ads
+────────────────────────────────────────────────────────────────────────
+The ad-gated slots are not meant to be spent back to back. Once one is taken,
+the next is locked for ``GameConfig.ad_reward_gap_minutes`` (default 60), so a
+cycle's ad quota is spread across the day rather than drained in two minutes.
+
+Three rules keep the gap honest and non-hostile:
+
+  • it never touches the FREE use — that one is not an ad reward, so a player
+    who opens the app to a free spin is never told to wait;
+  • it covers no-fill passes too. A pass stands in for a watched ad, so letting
+    it skip the gap would make "no ad available" the fast route past it;
+  • it is enforced *before* the ad is shown, and any ad that still reaches the
+    server inside the gap is banked as an ad credit rather than burned — see
+    ``services.ad_service.bank_credit``. The gap delays a reward; it must never
+    cost the player one they already watched an ad for.
 """
 
 from datetime import datetime, timedelta
@@ -26,6 +44,8 @@ DEFAULT_DAILY_AD_QUOTA = 5
 # How many of the ad-gated slots may be taken without an ad when the network
 # has none to serve. Small on purpose: it is a rescue, not a second free tier.
 DEFAULT_NOFILL_GRACE = 2
+# Minimum gap between two ad-gated uses of the same feature, in minutes.
+DEFAULT_AD_GAP_MINUTES = 60
 # Legacy fallback cycle length, used only when the per-command cooldown can't
 # be resolved (config/services unreachable).
 CYCLE_HOURS = 24
@@ -82,6 +102,47 @@ def _get_nofill_grace(session):
         return DEFAULT_NOFILL_GRACE
 
 
+def _get_ad_gap_seconds(session):
+    """Configured gap between two ad-gated uses, in seconds (0 = disabled).
+
+    One figure covers spin and daily: what is being spaced out is how often a
+    player watches a rewarded ad, which is a property of the ads rather than of
+    the feature behind them. Each feature still tracks its own last-ad time, so
+    a spin never blocks the daily claim.
+    """
+    if session is None:
+        return DEFAULT_AD_GAP_MINUTES * 60
+    try:
+        from services.config_service import get_config
+        cfg = get_config(session)
+        value = cfg.get("ad_reward_gap_minutes")
+        minutes = DEFAULT_AD_GAP_MINUTES if value is None else int(value)
+        return max(0, minutes) * 60
+    except Exception:
+        return DEFAULT_AD_GAP_MINUTES * 60
+
+
+def _ad_ready_in(stats, kind, gap_secs):
+    """Seconds until the next ad-gated use of ``kind`` is allowed (0 = now).
+
+    Reads ``spin_last_ad_at`` / ``daily_last_ad_at``; a database that predates
+    those columns simply has no gap, which is the right way to fail — an
+    unknown last-ad time must not lock a player out.
+    """
+    if gap_secs <= 0:
+        return 0
+    last = getattr(stats, f"{'spin' if kind == 'spin' else 'daily'}_last_ad_at",
+                   None)
+    if last is None:
+        return 0
+    elapsed = (datetime.utcnow() - last).total_seconds()
+    # A clock skew (or a restored backup) that puts the stamp in the future
+    # would otherwise lock the feature for as long as the skew lasts.
+    if elapsed < 0:
+        return gap_secs
+    return max(0, int(gap_secs - elapsed))
+
+
 def _reset_if_expired(stats, prefix, cycle_secs):
     """Reset the cycle if ``cycle_secs`` have passed since it started.
 
@@ -120,6 +181,9 @@ def get_quota_status(stats, kind, session=None, user=None):
       "all_used": bool,
       "nofill_left": int no-fill passes still available this cycle,
       "nofill_total": int configured passes per cycle,
+      "ad_gap_seconds": int configured gap between rewarded ads,
+      "ad_ready_in": int seconds until the next ad-gated use is allowed,
+      "ad_available": bool — an ad-gated use can be taken right now,
     }
 
     `session` is optional — used to look up admin-configured ad_quota and the
@@ -128,6 +192,7 @@ def get_quota_status(stats, kind, session=None, user=None):
     """
     ad_total = _get_ad_quota(session, kind)
     nofill_total = _get_nofill_grace(session)
+    gap_secs = _get_ad_gap_seconds(session)
     cycle_secs = _cycle_seconds(session, user, kind)
     prefix = "spin" if kind == "spin" else "daily"
     started_attr = f"{prefix}_cycle_started_at"
@@ -138,7 +203,9 @@ def get_quota_status(stats, kind, session=None, user=None):
     if stats is None:
         return {"free_available": True, "ad_used": 0, "ad_total": ad_total,
                 "cycle_reset_in": 0, "all_used": False,
-                "nofill_left": nofill_total, "nofill_total": nofill_total}
+                "nofill_left": nofill_total, "nofill_total": nofill_total,
+                "ad_gap_seconds": gap_secs, "ad_ready_in": 0,
+                "ad_available": ad_total > 0}
 
     _reset_if_expired(stats, kind, cycle_secs)
     started = getattr(stats, started_attr, None)
@@ -155,6 +222,8 @@ def get_quota_status(stats, kind, session=None, user=None):
     else:
         reset_in = 0
 
+    ad_ready_in = _ad_ready_in(stats, kind, gap_secs)
+
     return {
         "free_available": free_available,
         "ad_used": ad_count,
@@ -163,6 +232,12 @@ def get_quota_status(stats, kind, session=None, user=None):
         "all_used": all_used,
         "nofill_left": max(0, nofill_total - nofill_used),
         "nofill_total": nofill_total,
+        "ad_gap_seconds": gap_secs,
+        "ad_ready_in": ad_ready_in,
+        # What the client needs to decide whether showing an ad is worth it:
+        # slots left AND the gap elapsed. Reported separately from the slot
+        # count so a waiting player can be told when, not just "no".
+        "ad_available": ad_count < ad_total and ad_ready_in <= 0,
     }
 
 
@@ -173,16 +248,25 @@ def can_use(stats, kind, ad_provided, session=None, user=None):
     `session`/`user` are optional — passed through to read configured quota and
     the tier-reduced cycle length.
     Returns (allowed: bool, slot_type: 'free'|'ad'|None, reason: str|None).
+
+    Reasons: ``ad_required`` (an ad would unlock this), ``cycle_exhausted``
+    (nothing left until the cycle resets), ``ad_cooldown`` (slots remain but the
+    gap between rewarded ads has not elapsed). A caller that already consumed
+    ad evidence and gets ``ad_cooldown`` or ``cycle_exhausted`` back owes the
+    player an ad credit — the ad was watched, only the timing was wrong.
     """
     status = get_quota_status(stats, kind, session=session, user=user)
     if status["free_available"]:
         return True, "free", None
-    if not ad_provided:
-        if status["ad_used"] >= status["ad_total"]:
-            return False, None, "cycle_exhausted"
-        return False, None, "ad_required"
     if status["ad_used"] >= status["ad_total"]:
         return False, None, "cycle_exhausted"
+    # The gap is checked before "did you bring an ad": inside it the answer is
+    # the same either way, and reporting `ad_required` there would send the
+    # client off to watch an ad it is about to be told it cannot spend.
+    if status["ad_ready_in"] > 0:
+        return False, None, "ad_cooldown"
+    if not ad_provided:
+        return False, None, "ad_required"
     return True, "ad", None
 
 
@@ -194,12 +278,18 @@ def claim_nofill_pass(stats, kind, session=None, user=None):
     to exceed the quota. Debiting here rather than at spin time is deliberate:
     the pass is spent the moment it is handed out, so a client that asks
     repeatedly burns its grace instead of farming tokens it can replay later.
+
+    The gap between rewarded ads applies here too: a pass stands in for a
+    watched ad, so handing one out inside the gap would make "no ad available"
+    the cheap way around it.
     """
     status = get_quota_status(stats, kind, session=session, user=user)
     if status["free_available"]:
         # Nothing to rescue — the free slot needs no ad at all.
         return False, status
     if status["ad_used"] >= status["ad_total"]:
+        return False, status
+    if status["ad_ready_in"] > 0:
         return False, status
     if status["nofill_left"] <= 0:
         return False, status
@@ -219,10 +309,12 @@ def consume_slot(stats, kind, slot_type, session=None, user=None):
         started_attr = "spin_cycle_started_at"
         free_attr = "spin_free_used"
         count_attr = "spin_ad_count"
+        last_ad_attr = "spin_last_ad_at"
     else:
         started_attr = "daily_cycle_started_at"
         free_attr = "daily_free_used"
         count_attr = "daily_ad_count"
+        last_ad_attr = "daily_last_ad_at"
 
     # Reset cycle if expired before consuming (defensive)
     _reset_if_expired(stats, kind, _cycle_seconds(session, user, kind))
@@ -236,3 +328,9 @@ def consume_slot(stats, kind, slot_type, session=None, user=None):
     elif slot_type == "ad":
         setattr(stats, count_attr,
                 int(getattr(stats, count_attr, 0) or 0) + 1)
+        # Start the gap now. Stamped on the slot rather than on the ad watch so
+        # an ad that was banked and redeemed later still spaces out the *reward*
+        # — which is the thing being limited. hasattr-guarded because a DB that
+        # predates the column still serves rows without it.
+        if hasattr(stats, last_ad_attr):
+            setattr(stats, last_ad_attr, datetime.utcnow())

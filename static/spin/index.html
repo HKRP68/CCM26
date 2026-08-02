@@ -112,7 +112,7 @@
         0 0 50px rgba(0,0,0,0.9),
         0 0 60px rgba(79,172,254,0.12),
         inset 0 0 20px rgba(0,0,0,0.7);
-      transition: transform 5s cubic-bezier(0.15, 0.85, 0.15, 1);
+      transition: transform 2s cubic-bezier(0.15, 0.85, 0.15, 1);
     }
     @keyframes spinLoop { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     #spin-wheel.wheel-free-spin { animation: spinLoop 0.7s linear infinite; }
@@ -366,12 +366,18 @@
       return coinSlices[Math.floor(Math.random() * coinSlices.length)];
     }
 
+    // How long the wheel takes to land. The reward is already decided by the
+    // time this runs, so the animation is only presentation — five seconds of
+    // it read as the spin hanging. Kept in one place so the landing, the tick
+    // loop and the reveal below can never drift apart.
+    const SPIN_ANIM_MS = 2000;
+
     function animateTo(targetIndex) {
       try { tg?.HapticFeedback?.impactOccurred('rigid'); } catch (e) {}
       const offset = Math.floor(Math.random() * 24) - 12;     // -12..+12 deg
       const sliceCenter = targetIndex * 36 + 18;
       const targetDegree = 270 - (sliceCenter + offset);
-      const extraSpins = 6;
+      const extraSpins = 3;
       let nextRotation = currentRotation + (360 * extraSpins);
       nextRotation -= nextRotation % 360;
       currentRotation = nextRotation + targetDegree;
@@ -379,13 +385,13 @@
       const wheel = document.getElementById('spin-wheel');
       const pointer = document.querySelector('.wheel-pointer');
       // Restore the deceleration transition (it is cleared during the continuous spin).
-      wheel.style.transition = 'transform 5s cubic-bezier(0.15, 0.85, 0.15, 1)';
+      wheel.style.transition = `transform ${SPIN_ANIM_MS}ms cubic-bezier(0.15, 0.85, 0.15, 1)`;
       wheel.style.transform = `rotate(${currentRotation}deg)`;
 
       // Pointer "tick" + haptic as each slice passes under the pointer.
       let lastSlice = -1;
       const startTime = Date.now();
-      const duration = 5000;
+      const duration = SPIN_ANIM_MS;
       function checkTick() {
         if (Date.now() - startTime >= duration) { pointer?.classList.remove('tick'); return; }
         const style = window.getComputedStyle(wheel);
@@ -451,22 +457,44 @@
       return `<span style="color:#00f2fe;">You won ${Number(r.amount).toLocaleString()} coins!</span>`;
     }
 
-    async function doSpin(adToken) {
+    async function doSpin(adToken, onRetry) {
       // Hard timeout so a slow/hanging request can never leave the wheel
       // spinning forever — it aborts and surfaces an error instead.
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
-      try {
-        const res = await fetch('/api/webapp/spin', {
-          method: 'POST', headers: authHeaders(),
-          body: JSON.stringify(adToken ? { ad_token: adToken } : {}),
-          signal: controller.signal
-        });
-        const data = await res.json().catch(() => ({}));
-        return { ok: res.ok, status: res.status, data };
-      } finally {
-        clearTimeout(timer);
+      //
+      // Retried up to three times on a transport failure, always with the same
+      // request_id. The ad is already spent by the time this runs, so a dropped
+      // connection must not cost the player their reward: if the first attempt
+      // reached the server, the id makes the retry replay that same reward
+      // rather than granting a second one. A server that answered — even with
+      // an error — has decided, and is never retried.
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const body = JSON.stringify(
+        adToken ? { ad_token: adToken, request_id: requestId }
+                : { request_id: requestId });
+      let lastErr = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        try {
+          const res = await fetch('/api/webapp/spin', {
+            method: 'POST', headers: authHeaders(),
+            body, signal: controller.signal
+          });
+          const data = await res.json().catch(() => ({}));
+          return { ok: res.ok, status: res.status, data };
+        } catch (e) {
+          lastErr = e;
+          if (attempt < 2) {
+            // Say that it is reconnecting. A silent retry behind a spinning
+            // wheel is indistinguishable from the wheel being stuck.
+            try { onRetry?.(attempt + 1); } catch (_) {}
+            await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
+          }
+        } finally {
+          clearTimeout(timer);
+        }
       }
+      throw lastErr;
     }
 
     async function getAdToken() {
@@ -497,6 +525,49 @@
       }
     }
 
+    // Wait time for the gap between rewarded ads: "45m", "1h 5m".
+    function formatGap(seconds) {
+      const mins = Math.max(1, Math.ceil(Math.max(0, seconds || 0) / 60));
+      if (mins < 60) return `${mins}m`;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return m ? `${h}h ${m}m` : `${h}h`;
+    }
+
+    // Reflect the server's quota on the ad button: locked with a countdown
+    // while the gap runs, and re-enabled by the timer when it is up, so the
+    // page recovers without a reload.
+    function applyAdGap(quota, adBtn) {
+      const wait = quota?.ad_ready_in || 0;
+      // The gap elapsing is not the same as there being a slot to spend. With
+      // the cycle's last ad slot gone, re-enabling on the timer alone invites
+      // an ad the server will answer `cycle_exhausted` to — banked, so nothing
+      // is lost, but a wasted ad view all the same.
+      const slotsLeft = (quota?.ad_used ?? 0) < (quota?.ad_total ?? 0);
+      const release = () => {
+        adBtn.disabled = !slotsLeft;
+        adBtn.innerHTML = slotsLeft
+          ? '<span>📺 Watch Ad to Spin</span>'
+          : '<span>✅ All spins used</span>';
+      };
+      if (wait <= 0) { release(); return; }
+      adBtn.disabled = true;
+      const paint = (secs) => {
+        adBtn.innerHTML = `<span>⏱️ Next ad spin in ${formatGap(secs)}</span>`;
+      };
+      paint(wait);
+      clearInterval(window.__adGapTimer);
+      let left = wait;
+      window.__adGapTimer = setInterval(() => {
+        left -= 30;
+        if (left <= 0) {
+          clearInterval(window.__adGapTimer);
+          release();
+          return;
+        }
+        paint(left);
+      }, 30000);
+    }
+
     async function executeSpin(isAd) {
       const freeBtn = document.getElementById('free-spin-btn');
       const adBtn = document.getElementById('ad-spin-btn');
@@ -507,21 +578,39 @@
       status.innerHTML = isAd ? 'LOADING AD… ⏳' : 'SPINNING… 🎡';
 
       try {
-        // Spin the wheel right away — before the ad-token flow too — so it reacts
-        // instantly and never sits frozen while any network request runs.
+        // The ad first, with the wheel STILL. Spinning it through the ad phase
+        // is what made a slow ad look like a wheel that spins forever and pays
+        // nothing: the wheel was the only thing on screen, and it was spinning
+        // for a reason that had nothing to do with the reward. It now starts
+        // only once there is a slot to spend, so it turns for the ~1s the
+        // reward call takes.
+        let adToken = '';
+        if (isAd) { adToken = await getAdToken(); }
+        status.innerHTML = 'SPINNING… 🎡';
         startContinuousSpin();
 
-        let adToken = '';
-        if (isAd) { adToken = await getAdToken(); status.innerHTML = 'SPINNING… 🎡'; }
-
-        const { ok, status: code, data } = await doSpin(adToken);
+        const { ok, status: code, data } = await doSpin(adToken, (n) => {
+          status.innerHTML = `RECONNECTING… (${n}/2) 🎡`;
+        });
 
         if (!ok || !data.ok) {
           stopContinuousSpin();
           const msg = (data && (data.message || data.error)) || 'Spin failed.';
-          status.innerHTML = `<span style="color:var(--danger);">${msg}</span>`;
-          // ad_required → free already used; keep ad button. cycle_exhausted → both off.
-          if (data && data.error === 'cycle_exhausted') { freeBtn.disabled = true; adBtn.disabled = true; }
+          // A banked ad is not a loss — it is the ad waiting for its slot, so
+          // it gets the neutral colour rather than the error red.
+          const banked = !!(data && data.ad_banked);
+          status.innerHTML = `<span style="color:${banked ? 'var(--gold)' : 'var(--danger)'};">${msg}</span>`;
+          // ad_required → free already used; keep ad button. cycle_exhausted →
+          // nothing to press until the cycle resets.
+          if (data && data.error === 'ad_cooldown') {
+            // Slots remain, they are just not unlocked yet — count the gap down
+            // on the button instead of leaving a dead control behind.
+            freeBtn.disabled = !data.quota?.free_available;
+            applyAdGap(data.quota, adBtn);
+          }
+          else if (data && data.error === 'cycle_exhausted') {
+            freeBtn.disabled = true; adBtn.disabled = true;
+          }
           else if (data && data.error === 'ad_required') { freeBtn.disabled = true; adBtn.disabled = false; }
           else { freeBtn.disabled = false; adBtn.disabled = false; }
           return;
@@ -546,8 +635,11 @@
           } else {
             freeBtn.disabled = false;
           }
-          adBtn.disabled = false;
-        }, 5000);
+          // The gap between rewarded ads: keep the ad button off and say when
+          // it comes back, rather than letting a tap fetch an ad the server is
+          // going to refuse.
+          applyAdGap(data.quota, adBtn);
+        }, SPIN_ANIM_MS);
       } catch (err) {
         stopContinuousSpin();
         const timedOut = err && err.name === 'AbortError';

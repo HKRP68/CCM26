@@ -4303,6 +4303,12 @@ def webapp_init():
         from services.command_config_service import get_user_cooldown
         gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db, user=user)
         daily_quota = _quota_service.get_quota_status(stats, "daily", session=db, user=user)
+        # Ads banked when a reward couldn't be handed over (see ad_service).
+        # Surfaced on both quotas so either screen can say "1 ad saved" and
+        # skip the ad instead of asking for one the player already watched.
+        _ads_saved = ad_service.count_credits(db, tg_id)
+        gspin_quota["ads_saved"] = _ads_saved
+        daily_quota["ads_saved"] = _ads_saved
         gspin_ready = not gspin_quota["all_used"]
         gspin_remaining = gspin_quota["cycle_reset_in"] if gspin_quota["all_used"] else 0
         daily_ready = not daily_quota["all_used"]
@@ -5080,13 +5086,25 @@ def webapp_spin():
 
     Each user gets, per cycle (cycle length = the effective /gspin cooldown):
       - 1 FREE spin (no ad needed)
-      - N additional ad-gated spins (N = spin_ad_quota, admin-configurable)
+      - N additional ad-gated spins (N = spin_ad_quota, admin-configurable),
+        spaced out by GameConfig.ad_reward_gap_minutes (default 1 hour)
 
     Request body:
-      {ad_token: <optional, only needed when using ad-gated slot>}
+      {ad_token: <optional, only needed when using ad-gated slot>,
+       request_id: <optional client-generated id, makes a retry idempotent>}
 
     If `ad_token` is missing/empty, we'll try to use the FREE slot. If
     free isn't available, returns 400 with hint to watch ad.
+
+    A watched ad always ends in a reward. Three things enforce that:
+
+      • ad evidence is only consumed when an ad slot is actually what is being
+        spent. A free spin no longer quietly eats a pending postback;
+      • when the ad is good but the spin can't proceed (the gap has not
+        elapsed, the cycle is exhausted, something raised), the ad is banked as
+        a credit and redeemed by the next spin with no second ad;
+      • the reward pick can't come back empty — an unconfigured reward table
+        falls back to coins rather than erroring after the ad.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -5097,11 +5115,21 @@ def webapp_spin():
         from datetime import datetime as _dt
         from models import UserStats
         from services import ad_service, quota_service
+        from utils.idempotency import recall, remember
 
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
+        request_id = (str(data.get("request_id") or "")).strip()[:64]
         dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
         ads_configured = ad_service.is_configured()
+
+        # A client that retries after a dropped response gets the reward it was
+        # already granted, not a second one and not "watch another ad".
+        replay_key = f"spin_{tg_id}_{request_id}" if request_id else None
+        if replay_key:
+            cached = recall(replay_key)
+            if cached is not None:
+                return dict(cached, replayed=True)
 
         # ── Load stats first to check quota ──
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
@@ -5109,28 +5137,30 @@ def webapp_spin():
             stats = UserStats(user_id=user.id)
             db.add(stats); db.flush()
 
-        # ── Try to verify ad (so we know what slot is available) ──
+        # ── Which slot is this spin spending? ──
+        # The free one is decided without touching any ad evidence: claiming a
+        # postback here and then spinning for free threw the ad away, and the
+        # user's next spin asked them to watch another one.
+        pre = quota_service.get_quota_status(stats, "spin", session=db, user=user)
         verified_via = None
-        if ad_service.claim_postback(db, tg_id):
-            verified_via = "server_postback"
+        if not pre["free_available"]:
+            verified_via = _verify_ad_for_action(
+                db, tg_id, ad_token, dev_mode, ads_configured,
+                nofill_kind="spin")
         elif ad_token.startswith("CT-"):
+            # The free slot came back (a cycle turned over between the tap and
+            # this request, or a second tab spun first) but the client had
+            # already watched its ad. Bank it rather than let the token expire:
+            # the spin is free and the ad still pays for the next one.
             if ad_service.consume_client_token(ad_token, tg_id):
-                verified_via = "client_token"
-        elif ad_token.startswith("NF-"):
-            # No-fill pass: the grace was already debited when the token was
-            # issued at /api/webapp/ad-unavailable, so redeeming it here just
-            # unlocks the ad slot. Deliberately NOT counted as an ad watched.
-            if ad_service.consume_nofill_token(ad_token, tg_id, "spin"):
-                verified_via = "nofill_pass"
-        elif ad_token.startswith("MOCK-"):
-            if dev_mode or not ads_configured:
-                verified_via = "mock"
+                ad_service.bank_credit(db, tg_id, "ad watched, free spin used")
 
         ad_provided = bool(verified_via)
 
         # Track ad_watched for the daily quest — ONLY for postback/mock.
-        # client_token (CT-) ads were already tracked at /ad-completed, and a
-        # no-fill pass means no ad was ever shown.
+        # client_token (CT-) ads were already tracked at /ad-completed, a
+        # no-fill pass means no ad was ever shown, and a credit was counted when
+        # it was banked.
         if verified_via in ("server_postback", "mock"):
             try:
                 from services.quest_service import safe_track
@@ -5139,30 +5169,58 @@ def webapp_spin():
                 pass
 
         # ── Check quota ──
+        # Re-read the row under a lock first. Deciding and consuming have to be
+        # one step: two taps that both read `ad_ready_in == 0` would both be
+        # granted an ad slot and the second would skip the gap entirely. The
+        # lock is taken HERE rather than at load, because the ad-verification
+        # above commits (each claim is a conditional UPDATE + commit) and a
+        # commit drops any lock held before it.
+        stats = _locked_stats(db, user.id)
         allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db, user=user)
         if not allowed:
+            # The ad was real but can't be spent right now — keep it. Without
+            # this the player pays for a spin the server then refuses.
+            banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
+                                        f"spin blocked: {reason}")
             status = quota_service.get_quota_status(stats, "spin", session=db, user=user)
+            saved = ad_service.count_credits(db, tg_id)
+            # Carried on the quota too, so a client that only reads `quota`
+            # still sees the saved ad it is about to be told about.
+            status["ads_saved"] = saved
+            if reason == "ad_cooldown":
+                mins = max(1, (status["ad_ready_in"] + 59) // 60)
+                return {"ok": False, "error": "ad_cooldown",
+                        "message": (f"Next ad spin unlocks in {_fmt_gap(status['ad_ready_in'])}."
+                                    + (" Your ad is saved — it'll be used then."
+                                       if banked else "")),
+                        "quota": status, "ad_banked": banked,
+                        "ads_saved": saved,
+                        "retry_after_minutes": mins,
+                        "cooldown_remaining": status["ad_ready_in"]}, 429
             if reason == "ad_required":
                 return {"ok": False, "error": "ad_required",
                         "message": "Free spin already used — watch an ad for next spin.",
                         "quota": status,
+                        "ads_saved": saved,
                         "ads_configured": ads_configured}, 400
             elif reason == "cycle_exhausted":
                 h = status["cycle_reset_in"] // 3600
                 m = (status["cycle_reset_in"] % 3600) // 60
                 return {"ok": False, "error": "cycle_exhausted",
-                        "message": f"All spins used. New spins in {h}h {m}m.",
-                        "quota": status,
+                        "message": (f"All spins used. New spins in {h}h {m}m."
+                                    + (" Your ad is saved for then." if banked else "")),
+                        "quota": status, "ad_banked": banked,
+                        "ads_saved": saved,
                         "cooldown_remaining": status["cycle_reset_in"]}, 429
             else:
-                return {"ok": False, "error": reason or "blocked"}, 400
+                return {"ok": False, "error": reason or "blocked",
+                        "ad_banked": banked, "ads_saved": saved}, 400
 
         # ── Reward ──
-        from services.gspin_reward_service import pick_reward, apply_reward
-        reward = pick_reward(db)
-        if not reward:
-            return {"ok": False, "error": "no_rewards_configured",
-                    "message": "No spin rewards configured. Contact admin."}, 500
+        # guaranteed_reward, not pick_reward: past this line the slot is being
+        # spent, so an empty reward table has to pay coins rather than 500.
+        from services.gspin_reward_service import guaranteed_reward, apply_reward
+        reward = guaranteed_reward(db)
 
         # hold_overflow=True → a squad-full player reward is parked as a pending
         # claim (Replace flow) instead of being lost.
@@ -5186,12 +5244,13 @@ def webapp_spin():
 
         db.commit()
         post_miniapp_activity(user, "gspin", reward=result)
-        return {
+        payload = {
             "ok": True,
             "reward": result,
             "slot_type": slot_type,
             "verified_via": verified_via,
             "quota": quota_service.get_quota_status(stats, "spin", session=db, user=user),
+            "ads_saved": ad_service.count_credits(db, tg_id),
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -5199,10 +5258,28 @@ def webapp_spin():
                 "roster_count": user.roster_count or 0,
             },
         }
+        # Remembered only after the commit: a reward that was rolled back must
+        # not be replayed to a retry as though it had been granted.
+        if replay_key:
+            remember(replay_key, payload)
+        return payload
     except Exception as e:
         db.rollback()
         logger.exception("webapp_spin failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        # The spin blew up after the ad had already been consumed — bank it so
+        # the retry costs the player nothing. `verified_via` only exists once
+        # the ad has been verified, so a failure before that banks nothing.
+        banked = False
+        try:
+            verified = locals().get("verified_via")
+            banked = _bank_if_spendable(db, tg_id, bool(verified), verified,
+                                        f"spin error: {e}")
+        except Exception:
+            logger.exception("failed to bank the ad after a failed spin")
+        return {"ok": False, "error": "internal", "message": str(e),
+                "ad_banked": banked,
+                "message_extra": ("Your ad was saved — spin again and it will "
+                                  "be used." if banked else "")}, 500
     finally:
         db.close()
 
@@ -5317,13 +5394,69 @@ def webapp_ad_unavailable():
         db.close()
 
 
+def _locked_stats(db, user_id):
+    """Re-read a UserStats row with the DB row lock held (Postgres).
+
+    Deciding a quota slot and consuming it must be one step, or two concurrent
+    requests both read the same free/ad/gap state and both spend it. Callers
+    take this immediately before ``can_use`` — ad verification runs earlier and
+    commits, which would release a lock taken any sooner.
+
+    ``with_for_update`` is a no-op on SQLite, which needs no row locks (single
+    writer); same reasoning as /api/webapp/ad-unavailable.
+    """
+    from models import UserStats
+    stats = (db.query(UserStats)
+             .filter(UserStats.user_id == user_id)
+             .with_for_update()
+             .first())
+    if not stats:
+        stats = UserStats(user_id=user_id)
+        db.add(stats)
+        db.flush()
+    return stats
+
+
+def _bank_if_spendable(db, tg_id, ad_provided, verified_via, reason):
+    """Bank a consumed ad as a credit when its reward couldn't be handed over.
+
+    Returns whether anything was banked, for the ``ad_banked`` flag the clients
+    read. A no-fill pass is excluded: no ad was ever shown, so there is nothing
+    to keep — and banking one would turn the pass grace into free credits.
+
+    Shared by spin, daily and the free pack so the rule can't drift between
+    them; each has two call sites (the blocked path and its except handler).
+    """
+    if ad_provided and verified_via != "nofill_pass":
+        from services import ad_service
+        ad_service.bank_credit(db, tg_id, reason)
+        return True
+    return False
+
+
+def _fmt_gap(seconds):
+    """Human wait time for the gap between rewarded ads: '45m', '1h 5m'."""
+    seconds = max(0, int(seconds or 0))
+    minutes = (seconds + 59) // 60          # round up; "0m" reads as a bug
+    if minutes < 60:
+        return f"{max(1, minutes)}m"
+    return f"{minutes // 60}h {minutes % 60}m" if minutes % 60 else f"{minutes // 60}h"
+
+
 def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
-                          nofill_kind=None):
+                          nofill_kind=None, allow_credit=True):
     """Shared ad-verification helper for spin/daily. Returns verified_via str or None.
 
     ``nofill_kind`` names the quota ("spin"/"daily") a no-fill pass may be
     redeemed against here; leave it None for actions that have no quota of
     their own and therefore issue no passes.
+
+    ``allow_credit`` lets a previously banked ad (see ad_service "Ad credits")
+    stand in for a fresh one. It is checked LAST, on purpose: a client that just
+    watched an ad has a live ``CT-`` token which expires in two minutes, so
+    spending the credit ahead of it would throw that ad away — exactly the bug
+    credits exist to prevent. Fresh evidence first, savings only when there is
+    none.
     """
     from services import ad_service
     if ad_service.claim_postback(db, tg_id):
@@ -5341,6 +5474,8 @@ def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
     if ad_token and ad_token.startswith("MOCK-"):
         if dev_mode or not ads_configured:
             return "mock"
+    if allow_credit and ad_service.claim_credit(db, tg_id):
+        return "ad_credit"
     return None
 
 
@@ -5375,12 +5510,20 @@ def webapp_daily():
             db.add(stats); db.flush()
 
         # ── Verify ad (so we know which slot is available) ──
-        verified_via = _verify_ad_for_action(
-            db, tg_id, ad_token, dev_mode, ads_configured, nofill_kind="daily")
+        # Only when the free claim is gone: verifying first would consume a
+        # pending postback (or a banked credit) to pay for a claim that needed
+        # no ad at all.
+        pre = quota_service.get_quota_status(stats, "daily", session=db, user=user)
+        verified_via = None
+        if not pre["free_available"]:
+            verified_via = _verify_ad_for_action(
+                db, tg_id, ad_token, dev_mode, ads_configured,
+                nofill_kind="daily")
         ad_provided = bool(verified_via)
 
         # Track ad_watched for daily quest — postback/mock only
-        # (CT- tracked at /ad-completed, and a no-fill pass showed no ad).
+        # (CT- tracked at /ad-completed, a no-fill pass showed no ad, and a
+        # credit was counted when it was banked).
         if verified_via in ("server_postback", "mock"):
             try:
                 from services.quest_service import safe_track
@@ -5389,21 +5532,47 @@ def webapp_daily():
                 pass
 
         # ── Check quota ──
+        # Locked re-read, for the same reason as the spin: the decision and the
+        # consumption have to be one step, and ad verification above commits.
+        stats = _locked_stats(db, user.id)
         allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db, user=user)
         if not allowed:
+            # A verified ad that can't be spent right now is banked, not burned.
+            banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
+                                        f"daily blocked: {reason}")
             status = quota_service.get_quota_status(stats, "daily", session=db, user=user)
+            saved = ad_service.count_credits(db, tg_id)
+            status["ads_saved"] = saved
+            if reason == "ad_cooldown":
+                return {"ok": False, "error": "ad_cooldown",
+                        "message": (f"Next ad claim unlocks in {_fmt_gap(status['ad_ready_in'])}."
+                                    + (" Your ad is saved — it'll be used then."
+                                       if banked else "")),
+                        "quota": status, "ad_banked": banked,
+                        "ads_saved": saved,
+                        "cooldown_remaining": status["ad_ready_in"]}, 429
             if reason == "ad_required":
                 return {"ok": False, "error": "ad_required",
                         "message": "Free daily already used — watch an ad for next claim.",
                         "quota": status,
+                        "ads_saved": saved,
                         "ads_configured": ads_configured}, 400
             elif reason == "cycle_exhausted":
                 h = status["cycle_reset_in"] // 3600
                 m = (status["cycle_reset_in"] % 3600) // 60
                 return {"ok": False, "error": "cycle_exhausted",
-                        "message": f"All daily claims used. New claims in {h}h {m}m.",
-                        "quota": status,
+                        "message": (f"All daily claims used. New claims in {h}h {m}m."
+                                    + (" Your ad is saved for then." if banked else "")),
+                        "quota": status, "ad_banked": banked,
+                        "ads_saved": saved,
                         "cooldown_remaining": status["cycle_reset_in"]}, 429
+            else:
+                # Refused for a reason this branch doesn't name yet. Falling
+                # through would claim the daily with slot_type=None — granting
+                # the very thing the quota just denied.
+                return {"ok": False, "error": reason or "blocked",
+                        "quota": status, "ad_banked": banked,
+                        "ads_saved": saved}, 400
 
         # ── Claim ── (skip the legacy last_daily cooldown; quota_service handles limits)
         # hold_overflow=True → parks squad-full players as pending claims so the
@@ -5411,8 +5580,13 @@ def webapp_daily():
         result = claim_daily(db, user, source_label=f"MiniApp/{slot_type}/{verified_via or 'free'}",
                              skip_cooldown=True, hold_overflow=True)
         if not result["ok"]:
+            banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
+                                        "daily claim failed")
             return {"ok": False, "error": result.get("error", "internal"),
-                    "message": "Daily claim failed unexpectedly."}, 500
+                    "ad_banked": banked,
+                    "message": ("Daily claim failed unexpectedly."
+                                + (" Your ad was saved — try again."
+                                   if banked else ""))}, 500
 
         quota_service.consume_slot(stats, "daily", slot_type, session=db, user=user)
         db.commit()
@@ -5427,6 +5601,9 @@ def webapp_daily():
             "slot_type": slot_type,
             "verified_via": verified_via,
             "quota": quota_service.get_quota_status(stats, "daily", session=db, user=user),
+            # Same field the spin returns, so a client reading the claim
+            # response rather than re-fetching init sees the saved-ad count.
+            "ads_saved": ad_service.count_credits(db, tg_id),
             "reward": {
                 "coins": result["coins"],
                 "gems": result["gems"],
@@ -5447,7 +5624,17 @@ def webapp_daily():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_daily failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        # Same contract as the spin endpoint: an ad already consumed is banked
+        # rather than lost when the claim falls over mid-flight.
+        banked = False
+        try:
+            verified = locals().get("verified_via")
+            banked = _bank_if_spendable(db, tg_id, bool(verified), verified,
+                                        f"daily error: {e}")
+        except Exception:
+            logger.exception("failed to bank the ad after a failed daily claim")
+        return {"ok": False, "error": "internal", "message": str(e),
+                "ad_banked": banked}, 500
     finally:
         db.close()
 
@@ -6018,16 +6205,11 @@ def webapp_freepack_open():
                     "message": "Free Pack is still on cooldown.",
                     "remaining_seconds": remaining}, 400
 
-        # Verify ad
-        verified_via = None
-        if ad_service.claim_postback(db, tg_id):
-            verified_via = "server_postback"
-        elif ad_token.startswith("CT-"):
-            if ad_service.consume_client_token(ad_token, tg_id):
-                verified_via = "client_token"
-        elif ad_token.startswith("MOCK-"):
-            if dev_mode or not ads_configured:
-                verified_via = "mock"
+        # Verify ad. nofill_kind=None — a free pack has no quota of its own, so
+        # it never issues (or takes) a no-fill pass; a banked credit still
+        # counts, since it is an ad this user really watched.
+        verified_via = _verify_ad_for_action(
+            db, tg_id, ad_token, dev_mode, ads_configured, nofill_kind=None)
 
         if not verified_via:
             return {"ok": False, "error": "ad_required",
@@ -6048,6 +6230,12 @@ def webapp_freepack_open():
         result = open_free_pack(db, user, hold_overflow=True)
         if not result.get("ok"):
             db.rollback()
+            # The ad was watched and the pack still didn't open — bank it so
+            # the next attempt doesn't ask for another ad. verified_via is
+            # non-empty here (the endpoint returns above without it) and a free
+            # pack takes no no-fill pass, so this always banks.
+            result["ad_banked"] = _bank_if_spendable(
+                db, tg_id, True, verified_via, "free pack failed")
             return result, 400
 
         db.commit()
@@ -12290,6 +12478,9 @@ def admin_economy():
                     "spin_ad_quota": max(0, min(99, int(request.form.get("spin_ad_quota", 5)))),
                     "daily_ad_quota": max(0, min(99, int(request.form.get("daily_ad_quota", 5)))),
                     "spin_nofill_grace": max(0, min(99, int(request.form.get("spin_nofill_grace", 2)))),
+                    # Capped at 24h: a gap longer than the quota cycle would
+                    # silently make the ad slots unreachable.
+                    "ad_reward_gap_minutes": max(0, min(1440, int(request.form.get("ad_reward_gap_minutes", 60)))),
                     "debut_coins": int(request.form.get("debut_coins", 100000)),
                     "debut_gems": int(request.form.get("debut_gems", 20)),
                 }

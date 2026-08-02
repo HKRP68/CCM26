@@ -25,6 +25,12 @@ Key the guard on the *button message instance* (chat_id + message_id) for
 actions that can legitimately repeat later (buy, market, packs, spins). The key
 then dedups this physical button press without ever blocking a future, separate
 press of a new button.
+
+``remember``/``recall`` are the same idea for request/response pairs: a Mini App
+call that already succeeded can be replayed by its client (a dropped connection
+on a phone network looks exactly like a failure to the caller) and must return
+the reward it granted the first time rather than "ad required" — the ad is gone
+and the reward is already in the account.
 """
 
 import threading
@@ -69,6 +75,47 @@ def release(key: str) -> None:
     'insufficient coins') works immediately rather than waiting for the TTL."""
     with _LOCK:
         _GUARD.pop(key, None)
+
+
+_RESULTS: dict[str, tuple[float, object]] = {}   # key -> (stored-at, value)
+_RESULT_TTL = 300.0               # 5 minutes; covers a user retrying by hand
+_MAX_RESULTS = 2000
+
+
+def remember(key: str, value, ttl: float = _RESULT_TTL) -> None:
+    """Store the result of a completed, non-repeatable action under ``key``.
+
+    In-process by design, like the rest of this module. Under multiple workers
+    a retry can land elsewhere and miss the cache — which is why the durable
+    half of the guarantee is the ad credit in the database, not this. This is
+    what makes the common case (same worker, immediate retry) return the very
+    same reward instead of a second one.
+    """
+    now = time.monotonic()
+    with _LOCK:
+        _RESULTS[key] = (now, value)
+        if len(_RESULTS) > _MAX_RESULTS:
+            cutoff = now - ttl
+            for k in [k for k, (t, _v) in _RESULTS.items() if t < cutoff]:
+                _RESULTS.pop(k, None)
+            overflow = len(_RESULTS) - _MAX_RESULTS
+            if overflow > 0:
+                oldest = sorted(_RESULTS.items(), key=lambda kv: kv[1][0])[:overflow]
+                for k, _ in oldest:
+                    _RESULTS.pop(k, None)
+
+
+def recall(key: str, ttl: float = _RESULT_TTL):
+    """Return a remembered result for ``key``, or None if there isn't a live one."""
+    with _LOCK:
+        record = _RESULTS.get(key)
+        if not record:
+            return None
+        stored_at, value = record
+        if (time.monotonic() - stored_at) >= ttl:
+            _RESULTS.pop(key, None)
+            return None
+        return value
 
 
 def in_progress(key: str, ttl: float = _DEFAULT_TTL) -> bool:
