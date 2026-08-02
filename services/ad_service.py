@@ -1,59 +1,37 @@
-"""Rewarded-ad integration, provider-agnostic.
+"""Adsgram rewarded-ad integration.
 
 The Mini App gates spins, the daily claim and free packs behind a rewarded ad.
-Which network serves that ad is a deployment decision, not a code decision:
-set ``AD_PROVIDER`` (plus that provider's id) and redeploy.
-
-────────────────────────────────────────────────────────────────────────
-Supported providers
-────────────────────────────────────────────────────────────────────────
-``adsgram``   ADSGRAM_BLOCK_ID=<block id>
-              SDK: https://sad.adsgram.ai/js/sad.min.js
-              Client: ``Adsgram.init({blockId}).show()`` — resolves ``{done:true}``
-              Postback: GET /api/ads/reward?userid=[userId]
-
-``monetag``   MONETAG_ZONE_ID=<zone id>
-              MONETAG_SDK_URL=https://libtl.com/sdk.js   (the exact host is
-              shown in your Monetag dashboard — copy it from the SDK tag there)
-              Client: the SDK tag defines a global ``show_<zone>()`` which
-              returns a promise that resolves once the ad has been watched.
-              Postback: GET /api/ads/reward?ymid={ymid}&event_type={event_type}
-
-``none``      no network configured → mock mode (dev only)
-
-``AD_PROVIDER`` unset is auto-detected: Monetag if MONETAG_ZONE_ID is set,
-else Adsgram if ADSGRAM_BLOCK_ID is set, else mock. So an existing Adsgram
-deployment keeps working untouched, and switching is done purely by setting
-MONETAG_ZONE_ID (+ optionally AD_PROVIDER=monetag to be explicit).
+Adsgram serves them; ``ADSGRAM_BLOCK_ID`` turns it on and its absence means
+mock mode (dev only).
 
 ────────────────────────────────────────────────────────────────────────
 How a reward is proven
 ────────────────────────────────────────────────────────────────────────
-Every provider gives the publisher the same two signals, so the verification
-logic below is deliberately provider-independent:
+Adsgram gives the publisher two signals:
 
-  1. CLIENT-SIDE: the SDK's show() promise resolves in the user's browser.
-     The client then calls /api/webapp/ad-completed, which mints a one-shot,
-     short-lived ``CT-`` token that the spin/daily endpoint spends.
-  2. SERVER-SIDE (optional): the network fires a GET at our reward URL with
-     the user's telegram id. We insert an ``AdReward`` row; the spin endpoint
+  1. CLIENT-SIDE: the SDK's ``AdController.show()`` promise resolves with
+     ``done: true`` in the user's browser. The client then calls
+     /api/webapp/ad-completed, which mints a one-shot, short-lived ``CT-``
+     token that the spin/daily endpoint spends.
+  2. SERVER-SIDE (optional): Adsgram fires a GET at our reward URL with the
+     user's telegram id. We insert an ``AdReward`` row; the spin endpoint
      claims the most recent unconsumed one inside POSTBACK_WINDOW_SECONDS.
 
 Server-side evidence is preferred when present, client-side is the fallback.
-Both networks describe the S2S postback as optional for small publishers, so
-the client path has to remain acceptable — the short TTL, single use and the
-per-cycle ad quota are what keep it honest.
+Adsgram describes the reward URL as worth it "for publishers who have more than
+50k daily users", so the client path has to remain acceptable — the short TTL,
+single use and the per-cycle ad quota are what keep it honest.
 
 ────────────────────────────────────────────────────────────────────────
 No-fill passes
 ────────────────────────────────────────────────────────────────────────
-An ad network is not a guarantee. Every network routinely answers "no banner"
-for a request — no inventory for this user, this country, this minute — and a
-Telegram WebView on a phone network drops the SDK often enough that a session
-can spend its whole life with no ads at all. Neither is the player's fault, and
-neither is a reason to lock them out of the feature the ad was gating: the old
-flow left them tapping a button that spun a wheel for a minute and a half and
-then said "no ad available", which reads as a broken app.
+An ad network is not a guarantee. Adsgram routinely answers "no banner" for a
+request — no inventory for this user, this country, this minute — and a Telegram
+WebView on a phone network drops the SDK often enough that a session can spend
+its whole life with no ads at all. Neither is the player's fault, and neither is
+a reason to lock them out of the feature the ad was gating: the old flow left
+them tapping a button that spun a wheel for a minute and a half and then said
+"no ad available", which reads as a broken app.
 
 So when the client has genuinely exhausted its ad attempts, it asks for a
 **no-fill pass** (``NF-`` token) instead. The pass spends an ad slot exactly as
@@ -66,7 +44,6 @@ rest of the quota.
 
 import logging
 import os
-import re
 import secrets
 import threading
 import time
@@ -74,7 +51,7 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# Window after the network fires its postback during which it can be claimed
+# Window after Adsgram fires its postback during which it can be claimed
 POSTBACK_WINDOW_SECONDS = 300  # 5 minutes
 
 # Client-side ad tokens are stored in-memory for replay protection.
@@ -96,55 +73,9 @@ CLIENT_TOKEN_TTL = 120  # 2 minutes for the user to claim after ad finishes
 CLIENT_TOKEN_PREFIX = "CT-"    # a real ad, watched to the end
 NOFILL_TOKEN_PREFIX = "NF-"    # no ad was available to watch
 
-PROVIDER_ADSGRAM = "adsgram"
-PROVIDER_MONETAG = "monetag"
-PROVIDER_ONCLICKA = "onclicka"
-PROVIDER_CUSTOM = "custom"
-PROVIDER_NONE = "none"
-
-SUPPORTED_PROVIDERS = (PROVIDER_ADSGRAM, PROVIDER_MONETAG, PROVIDER_ONCLICKA,
-                       PROVIDER_CUSTOM)
-
-# How the client drives the SDK once it has loaded. There are only two shapes
-# in this market, and the frontend branches on this rather than on the provider
-# name — which is what makes a new network config-only.
-SDK_KIND_ADSGRAM_OBJECT = "adsgram-object"    # Adsgram.init({blockId}).show()
-SDK_KIND_GLOBAL_FUNCTION = "global-function"  # tag defines show_<id>(), returns a promise
-
 ADSGRAM_SDK_URL = "https://sad.adsgram.ai/js/sad.min.js"
-# Monetag serves the SDK from a per-publisher host; libtl.com is the current
-# default in their docs. Always override with whatever the dashboard's SDK tag
-# shows for your account — a wrong host just fails to load and every ad becomes
-# a no-fill.
-MONETAG_SDK_URL_DEFAULT = "https://libtl.com/sdk.js"
 
-# Providers that follow the "script tag defines a global function" pattern,
-# mapped to the env prefix their settings live under. They share one client code
-# path; only the ids and the SDK host differ. Adding another network to this
-# dict is the whole integration — there is no per-network JavaScript.
-GLOBAL_FUNCTION_PROVIDERS = {
-    PROVIDER_MONETAG: "MONETAG",
-    PROVIDER_ONCLICKA: "ONCLICKA",
-    # The escape hatch: any network using this pattern, with no code change at
-    # all. Paste its SDK tag's URL, id and attributes into AD_SDK_* env vars.
-    PROVIDER_CUSTOM: "AD",
-}
-
-# Default SDK host per provider. Empty means "no sane default — copy the exact
-# URL out of your dashboard's SDK tag", which is the honest answer for any
-# network that serves the SDK from a per-publisher host.
-_DEFAULT_SDK_URLS = {
-    PROVIDER_MONETAG: MONETAG_SDK_URL_DEFAULT,
-    PROVIDER_ONCLICKA: "",
-    PROVIDER_CUSTOM: "",
-}
-
-# Attribute names are written into a <script> tag, so keep them to the shape a
-# real data-attribute has. Values are escaped at render time; names are not, so
-# they are the ones that must be constrained.
-_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\-]*$")
-
-# Values that mean "not configured" rather than a real id.
+# Values that mean "not configured" rather than a real block id.
 _PLACEHOLDERS = ("", "none", "mock", "disabled", "off", "false", "0")
 
 
@@ -152,187 +83,44 @@ def _env(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
-def _real(value: str) -> str:
-    """Return ``value`` if it looks like a real id, else ''."""
-    return value if value and value.lower() not in _PLACEHOLDERS else ""
-
-
-def _provider_env(provider: str, suffix: str) -> str:
-    """Read ``<PREFIX>_<suffix>`` for a global-function provider."""
-    prefix = GLOBAL_FUNCTION_PROVIDERS.get(provider)
-    return _env(f"{prefix}_{suffix}") if prefix else ""
-
-
-def _provider_zone(provider: str) -> str:
-    """The configured placement id for a global-function provider, or ''."""
-    return _real(_provider_env(provider, "ZONE_ID"))
-
-
-def get_provider() -> str:
-    """Which ad network is active: adsgram, monetag, onclicka, custom or none.
-
-    ``AD_PROVIDER`` wins when set. Otherwise it is inferred from whichever id
-    is present, so upgrading a running Adsgram deployment needs no new env var.
-    """
-    explicit = _env("AD_PROVIDER").lower()
-    if explicit:
-        if explicit in SUPPORTED_PROVIDERS:
-            return explicit
-        if explicit in _PLACEHOLDERS:
-            return PROVIDER_NONE
-        logger.warning("Unknown AD_PROVIDER=%r — falling back to auto-detect",
-                       explicit)
-    for provider in GLOBAL_FUNCTION_PROVIDERS:
-        if _provider_zone(provider):
-            return provider
-    if _real(_env("ADSGRAM_BLOCK_ID")):
-        return PROVIDER_ADSGRAM
-    return PROVIDER_NONE
-
-
-def get_sdk_kind() -> str | None:
-    """How the client should drive the active SDK, or None in mock mode."""
-    provider = get_provider()
-    if provider == PROVIDER_ADSGRAM:
-        return SDK_KIND_ADSGRAM_OBJECT
-    if provider in GLOBAL_FUNCTION_PROVIDERS:
-        return SDK_KIND_GLOBAL_FUNCTION
-    return None
-
-
 def get_block_id() -> str | None:
-    """Adsgram block ID for the client SDK, or None when Adsgram isn't active."""
-    if get_provider() != PROVIDER_ADSGRAM:
-        return None
-    return _real(_env("ADSGRAM_BLOCK_ID")) or None
-
-
-def get_zone_id() -> str | None:
-    """Zone/spot id of the active global-function provider, or None.
-
-    Called a zone by Monetag and a spot by OnClicka; same thing, same env
-    suffix (``<PROVIDER>_ZONE_ID``) so the code needs one name for it.
-    """
-    return _provider_zone(get_provider()) or None
-
-
-def get_placement_id() -> str | None:
-    """The active provider's id, whatever it happens to be called there."""
-    return get_block_id() or get_zone_id()
+    """Adsgram block ID for the client SDK, or None for mock mode."""
+    value = _env("ADSGRAM_BLOCK_ID")
+    return value if value and value.lower() not in _PLACEHOLDERS else None
 
 
 def is_configured() -> bool:
-    """True when a real ad network is wired up. False means mock/dev mode.
-
-    A global-function provider also needs its SDK URL: the id alone can't load
-    anything, and shipping a tag with an empty src would fail on every device
-    while the admin page cheerfully reported the network as live.
-    """
-    if not get_placement_id():
-        return False
-    if get_sdk_kind() == SDK_KIND_GLOBAL_FUNCTION and not get_sdk_url():
-        logger.warning("%s is configured but its SDK URL is empty — copy it "
-                       "from the dashboard's SDK tag", get_provider())
-        return False
-    return True
-
-
-def get_sdk_url() -> str | None:
-    """URL of the client SDK for the active provider."""
-    provider = get_provider()
-    if provider == PROVIDER_ADSGRAM:
-        return ADSGRAM_SDK_URL
-    if provider in GLOBAL_FUNCTION_PROVIDERS:
-        return (_provider_env(provider, "SDK_URL")
-                or _DEFAULT_SDK_URLS.get(provider) or None)
-    return None
-
-
-def get_sdk_function() -> str | None:
-    """Name of the global the SDK tag defines, e.g. ``show_1234567``.
-
-    These networks name the function after the zone by default, and the tag's
-    ``data-sdk`` attribute is what actually sets it — so both come from this one
-    value and cannot drift apart. Override with ``<PROVIDER>_SDK_FUNCTION`` when
-    a network names it something else.
-    """
-    provider = get_provider()
-    if provider not in GLOBAL_FUNCTION_PROVIDERS:
-        return None
-    zone = _provider_zone(provider)
-    if not zone:
-        return None
-    return _provider_env(provider, "SDK_FUNCTION") or f"show_{zone}"
-
-
-def get_sdk_attrs() -> dict:
-    """Attributes to put on the SDK ``<script>`` tag.
-
-    Defaults to the ``data-zone`` / ``data-sdk`` pair Monetag documents, which
-    OnClicka and the other copies of that SDK also use. Override wholesale with
-    ``<PROVIDER>_SDK_ATTRS`` in ``name=value,name=value`` form when a network
-    wants different ones — that is what makes a new network config-only.
-    """
-    provider = get_provider()
-    if provider not in GLOBAL_FUNCTION_PROVIDERS:
-        return {}
-    zone = _provider_zone(provider)
-    fn = get_sdk_function()
-    if not zone:
-        return {}
-    raw = _provider_env(provider, "SDK_ATTRS")
-    if not raw:
-        return {"data-zone": zone, "data-sdk": fn}
-    attrs = {}
-    for pair in raw.split(","):
-        name, _, value = pair.partition("=")
-        name, value = name.strip(), value.strip()
-        if not name:
-            continue
-        if not _ATTR_NAME_RE.match(name):
-            logger.warning("Ignoring bad SDK attribute name %r in %s_SDK_ATTRS",
-                           name, GLOBAL_FUNCTION_PROVIDERS[provider])
-            continue
-        attrs[name] = value
-    return attrs or {"data-zone": zone, "data-sdk": fn}
+    """True when ADSGRAM_BLOCK_ID is set (real ads active).
+    False means mock/dev mode."""
+    return bool(get_block_id())
 
 
 def client_config() -> dict:
-    """Everything the Mini App needs to load and drive the active network.
+    """What the Mini App needs to drive the SDK.
 
-    Shape is stable across providers so the frontend has exactly one code path
-    for "is there an ad network, and how do I call it".
+    The SDK script itself is loaded unconditionally by the page — it is a fixed
+    URL and costs nothing when unused. Only whether we have a block id to
+    ``init()`` with depends on configuration, which is the one thing here.
+    Gating the script tag on this instead was a mistake worth not repeating: a
+    single wrong env var then removed the SDK from the page entirely, and every
+    ad in the app failed with nothing in the config to suggest why.
     """
-    provider = get_provider()
-    configured = is_configured()
     return {
-        "provider": provider,
-        "configured": configured,
-        # How to drive it. The client branches on this, not on `provider`, so
-        # a new network of a known shape needs no new client code.
-        "sdk_kind": get_sdk_kind(),
-        # Adsgram calls it a block, the rest call it a zone or a spot. Both are
-        # exposed under their own name plus a neutral one.
+        "configured": is_configured(),
         "block_id": get_block_id(),
-        "zone_id": get_zone_id(),
-        "placement_id": get_placement_id(),
-        "sdk_url": get_sdk_url() if configured else None,
-        "sdk_function": get_sdk_function(),
-        # Attributes the tag needs to configure itself, e.g. data-zone/data-sdk.
-        "sdk_attrs": get_sdk_attrs() if configured else {},
+        "sdk_url": ADSGRAM_SDK_URL,
     }
 
 
 def record_postback(session, telegram_id: int, source_ip: str | None = None,
-                    query_string: str | None = None,
-                    provider: str | None = None):
-    """Insert a row when the ad network pings our reward URL.
-    Called from /api/ads/reward (and its per-provider aliases)."""
+                    query_string: str | None = None):
+    """Insert a row when Adsgram pings the reward URL.
+    Called from /api/ads/reward."""
     from models import AdReward
     row = AdReward(
         telegram_id=telegram_id,
         received_at=datetime.utcnow(),
-        provider=(provider or get_provider())[:20],
+        provider="adsgram",
         source_ip=(source_ip or "")[:64],
         query_string=(query_string or "")[:500],
     )
@@ -342,14 +130,12 @@ def record_postback(session, telegram_id: int, source_ip: str | None = None,
 
 
 def claim_postback(session, telegram_id: int) -> bool:
-    """Find and consume an unclaimed ad postback for this user.
+    """Find and consume an unclaimed Adsgram postback for this user.
 
     Returns True if a recent (within POSTBACK_WINDOW_SECONDS) unconsumed
     postback exists and was just marked consumed; False otherwise.
 
     This is the high-confidence "yes, the ad was really watched" signal.
-    Provider-agnostic on purpose: a deployment that switches networks
-    mid-cycle must still honour postbacks the old one already delivered.
 
     Consuming is a conditional UPDATE, not a read followed by a write. Two
     concurrent spins can select the same unconsumed row and both see
@@ -431,11 +217,10 @@ def _consume_token(prefix: str, token: str, telegram_id: int, scope=None) -> boo
 def issue_client_token(telegram_id: int) -> str:
     """Generate a single-use token after client-side ad completion.
 
-    The frontend asks for one of these AFTER the ad SDK's promise resolves
+    The frontend asks for one of these AFTER the Adsgram SDK promise resolves
     successfully; then includes it in the spin request. We can't fully trust
     this (it's frontend-issued) but combined with the ad quota and cooldown
-    it's adequate — and it is the only signal available at all until a
-    publisher is big enough for the networks to bother with S2S postbacks.
+    it's adequate per Adsgram's own guidance for small apps.
     """
     return _issue_token(CLIENT_TOKEN_PREFIX, telegram_id)
 

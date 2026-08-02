@@ -190,19 +190,17 @@ MINIAPP_GUARDED_PREFIXES = (
     "/api/ipl16/",
     "/api/ads/",
     "/api/adsgram/",
-    "/api/monetag/",
 )
 
-# Server-to-server callbacks from the ad networks. These are not the Mini App
-# — they are an external service telling us a player finished an ad — and the
-# networks do not retry indefinitely, so blocking them during maintenance
-# quietly destroys rewards players already earned. Recording one grants nothing
+# Adsgram's server-to-server callbacks. These are not the Mini App — they are
+# an external service telling us a player finished an ad — and Adsgram does not
+# retry indefinitely, so blocking them during maintenance quietly destroys
+# rewards players already earned. Recording one grants nothing
 # on its own: the spin it unlocks stays blocked with everything else, and the
 # row is claimed later (or expires) through the normal path.
 MINIAPP_POSTBACK_PATHS = (
     "/api/ads/reward",
     "/api/adsgram/reward",
-    "/api/monetag/reward",
 )
 
 # Endpoints a match already in progress needs to reach the final ball. These
