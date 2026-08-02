@@ -3,6 +3,13 @@
 The /gspin handler calls `pick_reward(session)` to get one row from the
 GSpinReward table according to weighted probability. If the table is empty,
 returns None so the handler can fall back to the legacy config-based outcomes.
+
+Mini App callers use `guaranteed_reward(session)` instead. There the spin has
+usually just cost the player a rewarded ad, and "no rewards configured" —
+whether that is an empty table, a disabled last row, or a bad weight — cannot be
+allowed to end the request with nothing: the ad is already watched. So the
+picker falls back to a plain coin reward built from the legacy config range,
+and the spin always has something to land on.
 """
 
 import random
@@ -11,6 +18,34 @@ import logging
 from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
+
+# Coin range for the fallback reward when nothing is configured. Read from
+# config.GSPIN_OUTCOMES' coin band so the safety net pays what the legacy
+# bot spin pays, rather than a number invented here.
+FALLBACK_COINS = (1500, 3000)
+
+
+class _FallbackReward:
+    """Stand-in for a GSpinReward row, shaped for ``apply_reward``.
+
+    Not persisted and never shown in the admin reward table — it exists only
+    so a spin that has been paid for can still be honoured.
+    """
+
+    id = None
+    reward_type = "coins"
+    label = "Consolation Coins"
+    emoji = "💰"
+    color = "4facfe"
+    pack_id = None
+    player_rating_min = None
+    player_rating_max = None
+    weight = 1
+    enabled = True
+
+    def __init__(self, amount_min, amount_max):
+        self.amount_min = amount_min
+        self.amount_max = amount_max
 
 
 def pick_reward(session):
@@ -38,6 +73,34 @@ def pick_reward(session):
         if r < cumulative:
             return row
     return rows[-1]  # safety fallback
+
+
+def fallback_reward():
+    """The reward used when nothing is configured. Coins, always grantable."""
+    lo, hi = FALLBACK_COINS
+    try:
+        from config import GSPIN_OUTCOMES
+        for _cum, _colour, kind, amount_range in GSPIN_OUTCOMES:
+            if kind == "coins" and amount_range:
+                lo, hi = int(amount_range[0]), int(amount_range[1])
+                break
+    except Exception:
+        pass
+    return _FallbackReward(lo, max(lo, hi))
+
+
+def guaranteed_reward(session):
+    """Pick a reward that is never None — for spins that have already been paid
+    for with an ad. Falls back to coins when the reward table can't answer."""
+    try:
+        reward = pick_reward(session)
+    except Exception:
+        logger.exception("pick_reward failed — falling back to coins")
+        reward = None
+    if reward is not None:
+        return reward
+    logger.warning("No enabled GSpinReward rows — granting the fallback reward")
+    return fallback_reward()
 
 
 def reward_probability(row, all_enabled_rows):

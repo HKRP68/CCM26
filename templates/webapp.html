@@ -3021,8 +3021,14 @@ let isSpinning = false;
 // while the wheel sits still.
 let isPreparingSpinAd = false;
 // Whole-request cap on the reward call once an ad is already paid for. The api()
-// helper aborts at 25s, so this is only the belt-and-braces stop.
+// helper aborts at 25s, so this is only the belt-and-braces stop. It has to
+// outlast requestSpin's three bounded attempts (see below), or the watchdog
+// would call a spin dead while a retry is still in flight and about to pay out.
 const SPIN_REQUEST_WATCHDOG_MS = 30000;
+// Per-attempt cap on the spin request. Short, because the reward call is a
+// single database round trip — anything past this is a stalled connection, and
+// retrying beats waiting for the default 25s abort.
+const SPIN_REQUEST_TIMEOUT_MS = 7000;
 let setupBotUsername = '';
 let lastOnboardingData = null;
 let suggestionSending = false;
@@ -3578,6 +3584,15 @@ function formatNum(n) {
   return n.toLocaleString();
 }
 
+// Wait time for the gap between rewarded ads: "45m", "1h 5m". Rounded up —
+// "0m left" on a button the player can't press reads as a bug.
+function formatGap(seconds) {
+  const mins = Math.max(1, Math.ceil(Math.max(0, seconds || 0) / 60));
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 function updateSpinButton(g) {
   const btn = document.getElementById('spin-btn');
   if (isPreparingSpinAd) {
@@ -3602,6 +3617,22 @@ function updateSpinButton(g) {
     }
     const adsLeft = quota.ad_total - quota.ad_used;
     if (adsLeft > 0) {
+      // The gap between rewarded ads, first: it applies to a saved ad exactly
+      // as it does to a fresh one, so offering the saved one here would just
+      // hand the player a button the server is about to refuse. Disabled with
+      // the wait on it, so it reads as "later" instead of "broken".
+      if (quota.ad_ready_in > 0) {
+        btn.disabled = true;
+        btn.textContent = `⏱️ Next ad spin in ${formatGap(quota.ad_ready_in)}`;
+        return;
+      }
+      // A banked ad is spent first and needs no new one — say so, or the
+      // button asks the player to watch an ad they have already watched.
+      if (quota.ads_saved > 0) {
+        btn.disabled = false;
+        btn.textContent = `🎟️ Spin with saved ad (${quota.ads_saved})`;
+        return;
+      }
       btn.disabled = false;
       btn.textContent = `📺 Watch ad to spin (${adsLeft} left)`;
       return;
@@ -3639,6 +3670,16 @@ function updateDailyButton() {
     }
     const adsLeft = quota.ad_total - quota.ad_used;
     if (adsLeft > 0) {
+      if (quota.ad_ready_in > 0) {
+        btn.disabled = true;
+        btn.textContent = `⏱️ Next ad claim in ${formatGap(quota.ad_ready_in)}`;
+        return;
+      }
+      if (quota.ads_saved > 0) {
+        btn.disabled = false;
+        btn.textContent = `🎟️ Claim with saved ad (${quota.ads_saved})`;
+        return;
+      }
       btn.disabled = false;
       btn.textContent = `📺 Watch ad to claim (${adsLeft} left)`;
       return;
@@ -3661,9 +3702,17 @@ async function onDailyClick() {
   const quota = lastInitData?.daily?.quota;
   const useFree = quota?.free_available;
   const adsAvailable = (quota?.ad_used || 0) < (quota?.ad_total || 5);
+  // An ad already watched but never spent — the server redeems it from the
+  // ledger, so this claim shows no second ad. See ad_service "Ad credits".
+  const useSavedAd = !useFree && (quota?.ads_saved || 0) > 0;
 
   if (!useFree && !adsAvailable) {
     toast('All claims used. Come back later.', 'info');
+    return;
+  }
+  // Same gap as the spin, checked before an ad is fetched rather than after.
+  if (!useFree && (quota?.ad_ready_in || 0) > 0) {
+    toast(`Next ad claim unlocks in ${formatGap(quota.ad_ready_in)}.`, 'info');
     return;
   }
 
@@ -3671,7 +3720,7 @@ async function onDailyClick() {
   updateDailyButton();
 
   let adToken = '';
-  if (!useFree) {
+  if (!useFree && !useSavedAd) {
     isClaimingDailyAd = true;
     updateDailyButton();
     try {
@@ -4453,8 +4502,12 @@ function decelerateWheelToReward(reward) {
   }
 
   const from = wheelRotation;
-  const target = from + 5 * 360 + ((targetModulo - from % 360 + 360) % 360);
-  const duration = 3200;
+  // Three turns over 1.6s, not five over 3.2s. The reward is already decided
+  // by the time this runs, so every extra second is the player watching an
+  // animation replay a result the server has committed — which is what "the
+  // wheel spins for ages" was. Still long enough to read as a spin.
+  const target = from + 3 * 360 + ((targetModulo - from % 360 + 360) % 360);
+  const duration = 1600;
   const started = performance.now();
   let lastSlice = Math.floor(from / 60);
   return new Promise(resolve => {
@@ -4472,6 +4525,27 @@ function decelerateWheelToReward(reward) {
   });
 }
 
+// Post the spin, retrying a request that never got an answer.
+//
+// A dropped connection in a Telegram WebView is indistinguishable from a
+// failure at the client end, and the ad has already been spent by then — so
+// giving up on the first network error is exactly the "watched an ad, got
+// nothing" case. Every attempt carries the same `request_id`: if the first one
+// actually reached the server, the retry replays that same reward instead of
+// granting a second, and if it didn't, the retry runs the spin normally.
+// Only transport failures are retried; a server that answered has decided.
+async function requestSpin(adToken) {
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const body = { ad_token: adToken, request_id: requestId };
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    last = await api('/api/webapp/spin', body, SPIN_REQUEST_TIMEOUT_MS);
+    if (last.status !== 0) return last;      // the server answered
+    if (attempt < 2) await _sleep(600 * (attempt + 1));
+  }
+  return last;
+}
+
 // The wheel must never spin while we are still waiting on an ad. That was the
 // old shape and it is what "stuck in Spin for ages, then no ad" actually was:
 // the wheel started on tap, the ad phase then ran for up to a minute and a half
@@ -4487,15 +4561,26 @@ async function onSpinClick() {
   const quota = lastInitData?.gspin?.quota;
   const useFree = quota?.free_available;
   const adsAvailable = (quota?.ad_used || 0) < (quota?.ad_total || 5);
+  // An ad already watched but never spent (see ad_service "Ad credits"). The
+  // server redeems it from the ledger, so this spin sends no token and — this
+  // is the point — shows no second ad.
+  const useSavedAd = !useFree && (quota?.ads_saved || 0) > 0;
 
   if (!useFree && !adsAvailable) {
     toast('All spins used. Come back later.', 'info');
     return;
   }
+  // The gap between rewarded ads, enforced here as well as on the server so
+  // nobody watches an ad the spin is about to refuse. A saved ad waits it out
+  // too — the gap is between rewards, not between ad views.
+  if (!useFree && (quota?.ad_ready_in || 0) > 0) {
+    toast(`Next ad spin unlocks in ${formatGap(quota.ad_ready_in)}.`, 'info');
+    return;
+  }
 
   // ── Phase 1: the ad, with the wheel still ──────────────────────
   let adToken = '';
-  if (!useFree) {
+  if (!useFree && !useSavedAd) {
     isPreparingSpinAd = true;
     updateSpinButton();
     try {
@@ -4509,7 +4594,8 @@ async function onSpinClick() {
       return;   // showAd already said why
     }
   }
-  // else: free spin → no ad_token needed, backend allows it via quota system
+  // else: free spin (or a saved ad) → no ad_token needed, the backend resolves
+  // the slot from the quota system and the credit ledger
 
   // ── Phase 2: the spin itself ───────────────────────────────────
   isSpinning = true;
@@ -4539,12 +4625,18 @@ async function onSpinClick() {
   const finish = () => { settled = true; clearTimeout(watchdog); };
 
   try {
-    const { ok, data } = await api('/api/webapp/spin', { ad_token: adToken });
+    const { ok, data } = await requestSpin(adToken);
     if (settled) return;  // watchdog already fired
     if (!ok || !data?.reward) {
       finish();
       stopSpin();
-      toast(data?.message || 'Spin failed', 'error');
+      // ad_banked: the ad was accepted but the reward couldn't be given yet.
+      // Say that plainly — "Spin failed" after a watched ad is what made this
+      // look like the app eating ads.
+      toast(data?.message || (data?.ad_banked
+              ? 'Your ad was saved — spin again to use it'
+              : 'Spin failed'),
+            data?.ad_banked ? 'info' : 'error');
       hapticNotif('error');
       refreshDashboard();
       return;

@@ -40,6 +40,23 @@ a watched ad would, but it is separately capped per cycle
 route past every ad — a client that always claims no-fill still gets no more
 free value than the grace allows, and a real ad remains the only way to use the
 rest of the quota.
+
+────────────────────────────────────────────────────────────────────────
+Ad credits — a watched ad is never lost
+────────────────────────────────────────────────────────────────────────
+Proving the ad and spending it are two steps, and everything between them can
+fail: the reward request times out on a phone network, the quota cycle turned
+over, the gap between rewarded ads had not elapsed, the reward table came back
+empty. Every one of those used to end the same way — the player watched a full
+ad and got nothing, which is the complaint this module now has to make
+impossible.
+
+So whenever ad evidence has been consumed but the reward could not be handed
+over, the endpoint calls ``bank_credit``: an ``AdReward`` row tagged
+``provider="credit"``. It is exactly the receipt a postback is, minus the
+5-minute window — the player redeems it on their next spin with no second ad.
+``claim_credit`` spends one, and the balance is reported to the client so the
+app can say "1 ad saved" instead of leaving it invisible.
 """
 
 import logging
@@ -53,6 +70,15 @@ logger = logging.getLogger(__name__)
 
 # Window after Adsgram fires its postback during which it can be claimed
 POSTBACK_WINDOW_SECONDS = 300  # 5 minutes
+
+# Banked ad credits live in the same table, tagged with this provider so the
+# postback query can tell them apart — a credit is not a network postback and
+# must not be claimed under the postback's short window.
+CREDIT_PROVIDER = "credit"
+# How long a banked credit stays redeemable. Long, because the whole point is
+# that the player keeps what they watched: a gap of an hour, a cycle that
+# resets tomorrow, or simply closing the app must all still pay out.
+CREDIT_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 
 # Client-side ad tokens are stored in-memory for replay protection.
 # Map of token → (telegram_id, expires_at, scope). `scope` is None for a
@@ -146,23 +172,95 @@ def claim_postback(session, telegram_id: int) -> bool:
     SQLite, unlike SELECT … FOR UPDATE.
     """
     from models import AdReward
-    now = datetime.utcnow()
-    cutoff = now - timedelta(seconds=POSTBACK_WINDOW_SECONDS)
-    row = (session.query(AdReward)
-           .filter(AdReward.telegram_id == telegram_id,
-                   AdReward.consumed_at.is_(None),
-                   AdReward.received_at >= cutoff)
-           .order_by(AdReward.received_at.desc())
-           .first())
+    return _claim_row(
+        session,
+        _unclaimed(session, telegram_id, POSTBACK_WINDOW_SECONDS)
+        # Banked credits share the table but not the window; they are claimed
+        # by claim_credit. Legacy rows have a NULL provider and are postbacks.
+        .filter((AdReward.provider.is_(None))
+                | (AdReward.provider != CREDIT_PROVIDER))
+        .first())
+
+
+def _unclaimed(session, telegram_id: int, window_seconds: int):
+    """Query for this user's unconsumed reward rows inside ``window_seconds``,
+    newest first."""
+    from models import AdReward
+    cutoff = datetime.utcnow() - timedelta(seconds=window_seconds)
+    return (session.query(AdReward)
+            .filter(AdReward.telegram_id == telegram_id,
+                    AdReward.consumed_at.is_(None),
+                    AdReward.received_at >= cutoff)
+            .order_by(AdReward.received_at.desc()))
+
+
+def _claim_row(session, row) -> bool:
+    """Consume ``row`` with a conditional UPDATE. See ``claim_postback``."""
+    from models import AdReward
     if not row:
         return False
     claimed = (session.query(AdReward)
                .filter(AdReward.id == row.id,
                        AdReward.consumed_at.is_(None))
-               .update({AdReward.consumed_at: now},
+               .update({AdReward.consumed_at: datetime.utcnow()},
                        synchronize_session=False))
     session.commit()
     return bool(claimed)
+
+
+def bank_credit(session, telegram_id: int, reason: str = "") -> None:
+    """Bank a watched-but-unspendable ad as a credit the user can redeem later.
+
+    Called wherever ad evidence has already been consumed and the reward could
+    not be granted — the gap between rewarded ads, an exhausted cycle, an empty
+    reward table, an error mid-spin. The credit carries no expiry beyond
+    ``CREDIT_TTL_SECONDS`` and needs no second ad to redeem.
+
+    Deliberately swallows its own failures: this runs on the error path of a
+    request that is already returning bad news, and an exception here would
+    replace a recoverable "your ad is saved" with a 500.
+    """
+    from models import AdReward
+    try:
+        session.add(AdReward(
+            telegram_id=telegram_id,
+            received_at=datetime.utcnow(),
+            provider=CREDIT_PROVIDER,
+            query_string=(reason or "")[:500],
+        ))
+        session.commit()
+    except Exception:
+        logger.exception("bank_credit failed for %s", telegram_id)
+        try:
+            session.rollback()
+        except Exception:
+            pass
+
+
+def claim_credit(session, telegram_id: int) -> bool:
+    """Consume one banked credit. True if one was found and just spent."""
+    from models import AdReward
+    return _claim_row(
+        session,
+        _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
+        .filter(AdReward.provider == CREDIT_PROVIDER)
+        .first())
+
+
+def count_credits(session, telegram_id: int) -> int:
+    """How many banked credits this user can still redeem.
+
+    Reported to the client so a saved ad is visible ("1 ad saved — spin it
+    now") rather than a silent balance the player has to stumble into.
+    """
+    from models import AdReward
+    try:
+        return int(_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
+                   .filter(AdReward.provider == CREDIT_PROVIDER)
+                   .count() or 0)
+    except Exception:
+        logger.exception("count_credits failed for %s", telegram_id)
+        return 0
 
 
 def _issue_token(prefix: str, telegram_id: int, scope=None) -> str:

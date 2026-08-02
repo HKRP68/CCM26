@@ -620,10 +620,15 @@ def _migrate_add_columns():
     # Ad slots taken without an ad because the network had no fill
     _try_add("user_stats", "spin_nofill_used", "INTEGER DEFAULT 0")
     _try_add("user_stats", "daily_nofill_used", "INTEGER DEFAULT 0")
+    # When the last ad-gated spin/daily was taken — drives the gap between
+    # rewarded ads (game_config.ad_reward_gap_minutes).
+    _try_add("user_stats", "spin_last_ad_at", "TIMESTAMP")
+    _try_add("user_stats", "daily_last_ad_at", "TIMESTAMP")
     # Admin-tunable Mini App quota sizes
     _try_add("game_config", "spin_ad_quota", "INTEGER DEFAULT 5")
     _try_add("game_config", "daily_ad_quota", "INTEGER DEFAULT 5")
     _try_add("game_config", "spin_nofill_grace", "INTEGER DEFAULT 2")
+    _try_add("game_config", "ad_reward_gap_minutes", "INTEGER DEFAULT 60")
     # Global gameplay style: preserve the original in-chat bot flow by default.
     _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     _try_add("game_config", "challenge_max_overs", "INTEGER DEFAULT 2 NOT NULL")

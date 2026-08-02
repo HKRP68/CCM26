@@ -246,6 +246,12 @@ class UserStats(Base):
     # separately from spin_ad_count so the grace can be capped on its own.
     spin_nofill_used = Column(Integer, default=0, nullable=False)
     daily_nofill_used = Column(Integer, default=0, nullable=False)
+    # When the last AD-GATED spin/daily was taken. The next one is locked until
+    # GameConfig.ad_reward_gap_minutes have passed — rewarded ads are spaced
+    # out rather than watchable back to back. Independent of the quota cycle,
+    # and never applied to the free use.
+    spin_last_ad_at = Column(DateTime, nullable=True)
+    daily_last_ad_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="stats")
@@ -997,6 +1003,10 @@ class GameConfig(Base):
     # nothing to serve. 0 disables the rescue entirely (ads become mandatory
     # again); raising it trades a little revenue for never dead-ending a player.
     spin_nofill_grace = Column(Integer, default=2, nullable=False)
+    # Minimum gap between two AD-GATED rewards of the same kind (spin, daily),
+    # in minutes. 60 = one rewarded ad per hour per feature. 0 disables the gap
+    # and restores back-to-back ad watching.
+    ad_reward_gap_minutes = Column(Integer, default=60, nullable=False)
     # Daily Quick Match limit per user. Resets at UTC midnight.
     daily_quick_match_limit = Column(Integer, default=5, nullable=False)
     # ── Free Pack (Mini App, ad-gated) ──
