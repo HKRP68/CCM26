@@ -5,7 +5,7 @@ Each user gets, per rolling cycle:
   - N AD-gated uses (N = `spin_ad_quota` or `daily_ad_quota` from GameConfig)
 
 Of those N ad-gated uses, up to `spin_nofill_grace` may be taken with a
-**no-fill pass** rather than a watched ad — see `services.adsgram_service`. The
+**no-fill pass** rather than a watched ad — see `services.ad_service`. The
 pass is not extra quota: it spends an ad slot like any other, it just doesn't
 require an ad the network was never going to serve. Its own per-cycle cap is
 what stops a client claiming no-fill on every request.

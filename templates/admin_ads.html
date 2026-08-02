@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Ad Analytics{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📺 Rewarded Ads <span style="color:var(--muted);font-weight:400;font-size:1rem;">Mini App ad analytics</span></h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<!-- Config status banner -->
+{% if configured %}
+<div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <strong style="color:var(--green);">✅ {{ provider|capitalize }} is LIVE</strong>
+  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">
+    {{ 'Zone ID' if provider == 'monetag' else 'Block ID' }}: <code>{{ placement_id }}</code>
+  </span>
+  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">SDK: <code>{{ ad_config.sdk_url }}</code></span>
+</div>
+{% else %}
+<div style="background:rgba(255,217,102,.08);border:1px solid var(--accent);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <strong style="color:var(--accent);">⚠️ Mock mode — no ad network configured</strong>
+  <p style="color:var(--muted);font-size:.85rem;margin:.4rem 0 0;line-height:1.5;">
+    Pick a network below and set its env vars, then redeploy. Ads stay mocked
+    (and every reward stays claimable) until then.
+  </p>
+</div>
+{% endif %}
+
+<!-- Provider switch -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
+  <strong style="font-size:.95rem;">🔀 Switching ad network</strong>
+  <p style="color:var(--muted);font-size:.85rem;margin:.4rem 0 0;line-height:1.6;">
+    The network is chosen entirely by env vars — no code change, no redeploy of
+    the Mini App code itself:
+  </p>
+  <table style="margin-top:.5rem;font-size:.85rem;">
+    <thead><tr><th>Network</th><th>Env vars</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Monetag</strong></td>
+        <td><code>AD_PROVIDER=monetag</code>, <code>MONETAG_ZONE_ID=&lt;zone&gt;</code>,
+            optional <code>MONETAG_SDK_URL=&lt;host from your SDK tag&gt;</code></td>
+      </tr>
+      <tr>
+        <td><strong>Adsgram</strong></td>
+        <td><code>AD_PROVIDER=adsgram</code>, <code>ADSGRAM_BLOCK_ID=&lt;block&gt;</code></td>
+      </tr>
+      <tr>
+        <td><strong>None</strong> (mock)</td>
+        <td><code>AD_PROVIDER=none</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;line-height:1.5;">
+    Leave <code>AD_PROVIDER</code> unset and it auto-detects: Monetag if a zone
+    is set, else Adsgram if a block is set. Postbacks already delivered by the
+    outgoing network stay claimable, so a switch never eats a pending reward.
+  </p>
+</div>
+
+<!-- Stats grid -->
+<div class="stats-grid" style="margin-bottom:1.5rem;">
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Total postbacks</p>
+    <p style="font-size:1.8rem;font-weight:800;margin:.25rem 0 0;color:var(--accent);">{{ total }}</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Last 24h</p>
+    <p style="font-size:1.8rem;font-weight:800;margin:.25rem 0 0;color:var(--blue);">{{ today }}</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Consumed</p>
+    <p style="font-size:1.8rem;font-weight:800;margin:.25rem 0 0;color:var(--green);">{{ consumed }}</p>
+  </div>
+  <div class="stat-card">
+    <p style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0;">Conversion</p>
+    <p style="font-size:1.8rem;font-weight:800;margin:.25rem 0 0;">{{ "%.0f%%"|format(consumed * 100.0 / total if total else 0) }}</p>
+  </div>
+</div>
+
+<!-- Setup guides -->
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:.75rem;" {{ 'open' if provider == 'monetag' or not configured }}>
+  <summary style="cursor:pointer;font-weight:600;">🔧 Monetag setup</summary>
+  <ol style="margin:.75rem 0 .25rem;padding-left:1.25rem;line-height:1.6;font-size:.9rem;color:var(--text);">
+    <li>Sign up at <a href="https://monetag.com" target="_blank" style="color:var(--accent);">monetag.com</a> and add your
+      Telegram Mini App as a site (the <code>t.me/&lt;bot&gt;/&lt;app&gt;</code> link, plus the web app URL from
+      <code>@BotFather</code> → <code>/myapps</code>)</li>
+    <li>Create an ad zone of type <strong>Rewarded Interstitial</strong> (SDK / Telegram Mini App)</li>
+    <li>Open the zone's SDK tag. It looks like:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
+        &lt;script src='//libtl.com/sdk.js' data-zone='1234567' data-sdk='show_1234567'&gt;&lt;/script&gt;
+      </code>
+      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
+        ↑ The number is your <strong>zone ID</strong>. The host can differ per account — copy it exactly.
+      </span>
+    </li>
+    <li>Set env vars and redeploy:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
+        AD_PROVIDER=monetag<br>
+        MONETAG_ZONE_ID=1234567<br>
+        MONETAG_SDK_URL=https://libtl.com/sdk.js
+      </code>
+    </li>
+    <li>Optional but recommended — in the zone's <strong>Postback</strong> settings, set the S2S URL to:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
+        {{ public_base_url }}/api/ads/reward?ymid={ymid}&amp;telegram_id={telegram_id}&amp;event_type={event_type}&amp;reward_event_type={reward_event_type}
+      </code>
+      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
+        Keep the <code>{…}</code> macros literal — Monetag substitutes them. Include all four:
+        <code>telegram_id</code> is resolved by Monetag and is preferred over <code>ymid</code>,
+        which is whatever the Mini App handed the SDK and so is client-controlled.
+        Click events are ignored here so one view can't pay out twice, and
+        <code>not_valued</code> events — impressions that earned nothing — are dropped rather
+        than paid out of your economy.
+      </span>
+    </li>
+    <li>Verify: this page should show "✅ Monetag is LIVE", and postbacks appear in the table below</li>
+  </ol>
+</details>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.5rem;" {{ 'open' if provider == 'adsgram' }}>
+  <summary style="cursor:pointer;font-weight:600;">🔧 Adsgram setup</summary>
+  <ol style="margin:.75rem 0 .25rem;padding-left:1.25rem;line-height:1.6;font-size:.9rem;color:var(--text);">
+    <li>Sign up at <a href="https://partner.adsgram.ai/registration" target="_blank" style="color:var(--accent);">partner.adsgram.ai</a></li>
+    <li>Click "Create" → "Ad Platform". Enter:
+      <ul>
+        <li>App name: <strong>CricMaster Ultra</strong></li>
+        <li>Telegram direct link + Web app URL: get from <code>@BotFather</code> → <code>/myapps</code></li>
+        <li>Bot ID: first part of your token before the colon</li>
+      </ul>
+    </li>
+    <li>Click "Create" → "Ad unit". Choose <strong>Reward</strong> block type</li>
+    <li>In Ad unit settings, set <strong>Reward URL</strong> to:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
+        {{ public_base_url }}/api/ads/reward?userid=[userId]
+      </code>
+      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
+        ↑ Keep <code>[userId]</code> literal — Adsgram substitutes it. The old
+        <code>/api/adsgram/reward</code> path still works, so an existing block needs no edit.
+      </span>
+    </li>
+    <li>Submit for moderation (DM <code>@adsgramsupport</code> on Telegram with platform link)</li>
+    <li>After approval, click "Show code" → copy the Block ID</li>
+    <li>Set env vars and redeploy:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
+        AD_PROVIDER=adsgram<br>
+        ADSGRAM_BLOCK_ID=&lt;your_block_id&gt;
+      </code>
+    </li>
+    <li>Verify here: this page should show "✅ Adsgram is LIVE" instead of "⚠️ Mock mode"</li>
+  </ol>
+</details>
+
+<h3 style="margin-top:1.5rem;">Recent postbacks <span style="color:var(--muted);font-size:.85rem;font-weight:400;">(latest 100)</span></h3>
+{% if recent %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Received at</th><th>Telegram ID</th><th>Network</th><th>Status</th><th>Consumed at</th><th>Source IP</th>
+  </tr></thead>
+  <tbody>
+  {% for r in recent %}
+  <tr>
+    <td style="font-family:monospace;font-size:.82rem;">{{ r.received_at | ist('%Y-%m-%d %H:%M:%S') }}</td>
+    <td style="font-family:monospace;">{{ r.telegram_id }}</td>
+    <td style="font-size:.82rem;color:var(--muted);">{{ r.provider or 'adsgram' }}</td>
+    <td>
+      {% if r.consumed_at %}
+        <span style="color:var(--green);">✅ Used</span>
+      {% else %}
+        <span style="color:var(--accent);">⏳ Pending</span>
+      {% endif %}
+    </td>
+    <td style="font-family:monospace;font-size:.82rem;color:var(--muted);">{{ r.consumed_at | ist('%H:%M:%S') if r.consumed_at else '—' }}</td>
+    <td style="font-family:monospace;font-size:.78rem;color:var(--muted);">{{ r.source_ip or '—' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
+  No postbacks yet. Once an ad network is configured (with its server-to-server
+  postback URL set) and users start watching ads, they'll appear here. Client-side
+  ad completions don't create rows — they mint a one-shot token instead.
+</p>
+{% endif %}
+
+<h3 style="margin-top:1.5rem;">Recent Mini App spins</h3>
+{% if spins %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Time</th><th>User</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for s in spins %}
+  <tr>
+    <td style="font-family:monospace;font-size:.82rem;">{{ s.created_at | ist('%m-%d %H:%M') }}</td>
+    <td><a href="{{ url_for('user_detail', user_id=s.user_id) }}" style="color:var(--accent);">{{ users.get(s.user_id, '#' ~ s.user_id) }}</a></td>
+    <td style="font-size:.85rem;color:var(--muted);">{{ s.detail }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--muted);padding:1rem;text-align:center;">No Mini App spins yet.</p>
+{% endif %}
+
+{% endblock %}

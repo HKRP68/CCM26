@@ -504,7 +504,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <div class="section-label">System</div>
     <a href="{{ url_for('admin_maintenance') }}" class="{{ 'active' if request.endpoint == 'admin_maintenance' }}">🛠️ Maintenance</a>
     <a href="{{ url_for('admin_audit_log') }}" class="{{ 'active' if request.endpoint == 'admin_audit_log' }}">📋 Audit Log</a>
-    <a href="{{ url_for('admin_adsgram') }}" class="{{ 'active' if request.endpoint == 'admin_adsgram' }}">📺 Adsgram</a>
+    <a href="{{ url_for('admin_ads') }}" class="{{ 'active' if request.endpoint == 'admin_ads' }}">📺 Ads</a>
     <a href="{{ url_for('admin_storage') }}" class="{{ 'active' if request.endpoint == 'admin_storage' }}">📦 Storage</a>
     <a href="{{ url_for('admin_competitions') }}" class="{{ 'active' if 'competition' in (request.endpoint or '') }}">🏆 Competitions</a>
     <a href="{{ url_for('admin_branding') }}" class="{{ 'active' if 'branding' in (request.endpoint or '') }}">📣 Branding</a>
