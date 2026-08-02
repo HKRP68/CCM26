@@ -12,9 +12,19 @@
 <div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
   <strong style="color:var(--green);">✅ {{ provider|capitalize }} is LIVE</strong>
   <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">
-    {{ 'Zone ID' if provider == 'monetag' else 'Block ID' }}: <code>{{ placement_id }}</code>
+    {{ 'Block ID' if provider == 'adsgram' else 'Zone ID' }}: <code>{{ placement_id }}</code>
   </span>
   <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">SDK: <code>{{ ad_config.sdk_url }}</code></span>
+  {% if ad_config.sdk_function %}
+  <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">
+    Global: <code>{{ ad_config.sdk_function }}()</code></span>
+  {% endif %}
+  <p style="color:var(--muted);font-size:.78rem;margin:.5rem 0 0;line-height:1.5;">
+    The Mini App renders this tag:
+    <code style="background:var(--card-2);padding:.15rem .4rem;border-radius:4px;">&lt;script
+    src="{{ ad_config.sdk_url }}"{% for k, v in (ad_config.sdk_attrs or {}).items() %} {{ k }}="{{ v }}"{% endfor %}&gt;</code>
+    — it must match your dashboard's tag exactly, id included.
+  </p>
 </div>
 {% else %}
 <div style="background:rgba(255,217,102,.08);border:1px solid var(--accent);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
@@ -42,6 +52,16 @@
             optional <code>MONETAG_SDK_URL=&lt;host from your SDK tag&gt;</code></td>
       </tr>
       <tr>
+        <td><strong>OnClicka</strong></td>
+        <td><code>AD_PROVIDER=onclicka</code>, <code>ONCLICKA_ZONE_ID=&lt;spot&gt;</code>,
+            <code>ONCLICKA_SDK_URL=&lt;host from your SDK tag&gt;</code> (required — no default)</td>
+      </tr>
+      <tr>
+        <td><strong>Any other</strong></td>
+        <td><code>AD_PROVIDER=custom</code>, <code>AD_ZONE_ID</code>, <code>AD_SDK_URL</code>,
+            optional <code>AD_SDK_FUNCTION</code> / <code>AD_SDK_ATTRS</code></td>
+      </tr>
+      <tr>
         <td><strong>Adsgram</strong></td>
         <td><code>AD_PROVIDER=adsgram</code>, <code>ADSGRAM_BLOCK_ID=&lt;block&gt;</code></td>
       </tr>
@@ -52,9 +72,18 @@
     </tbody>
   </table>
   <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;line-height:1.5;">
-    Leave <code>AD_PROVIDER</code> unset and it auto-detects: Monetag if a zone
-    is set, else Adsgram if a block is set. Postbacks already delivered by the
-    outgoing network stay claimable, so a switch never eats a pending reward.
+    Leave <code>AD_PROVIDER</code> unset and it auto-detects whichever zone or
+    block id is set. Postbacks already delivered by the outgoing network stay
+    claimable, so a switch never eats a pending reward.
+  </p>
+  <p style="color:var(--muted);font-size:.8rem;margin:.5rem 0 0;line-height:1.5;">
+    Monetag, OnClicka and most Telegram Mini App networks share one SDK shape:
+    a <code>&lt;script&gt;</code> tag whose attributes name a zone, which then
+    defines a global <code>show_&lt;zone&gt;()</code> returning a promise. Any
+    network of that shape works through <code>custom</code> with no code change
+    — transcribe its tag into <code>AD_SDK_URL</code> and
+    <code>AD_SDK_ATTRS</code>. Adsgram is the odd one out (an
+    <code>init()</code> object), which is why it has its own provider name.
   </p>
 </div>
 
@@ -115,6 +144,38 @@
       </span>
     </li>
     <li>Verify: this page should show "✅ Monetag is LIVE", and postbacks appear in the table below</li>
+  </ol>
+</details>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:.75rem;" {{ 'open' if provider == 'onclicka' }}>
+  <summary style="cursor:pointer;font-weight:600;">🔧 OnClicka setup</summary>
+  <ol style="margin:.75rem 0 .25rem;padding-left:1.25rem;line-height:1.6;font-size:.9rem;color:var(--text);">
+    <li>Sign up as a <strong>publisher</strong> at <a href="https://onclicka.com" target="_blank" style="color:var(--accent);">onclicka.com</a> and add your Mini App</li>
+    <li>Create a spot of type <strong>Rewarded Video</strong> and open its SDK tag</li>
+    <li>Transcribe the tag into env vars, exactly as shown — the SDK host is
+      per-publisher, so there is no default and a guess just fails to load:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;">
+        AD_PROVIDER=onclicka<br>
+        ONCLICKA_ZONE_ID=&lt;the id in the tag&gt;<br>
+        ONCLICKA_SDK_URL=&lt;the exact src from the tag&gt;
+      </code>
+      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
+        If their tag uses attribute names other than <code>data-zone</code>/<code>data-sdk</code>,
+        or names the global something other than <code>show_&lt;id&gt;</code>, set
+        <code>ONCLICKA_SDK_ATTRS</code> and <code>ONCLICKA_SDK_FUNCTION</code> to match.
+        The banner above shows the tag we render — compare it to theirs character by character.
+      </span>
+    </li>
+    <li>Optional S2S postback, if their dashboard offers one — point it at:<br>
+      <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
+        {{ public_base_url }}/api/ads/reward?ymid=&lt;their user-id macro&gt;
+      </code>
+      <span style="color:var(--muted);font-size:.8rem;display:block;margin-top:.25rem;">
+        We pass the player's Telegram ID as <code>ymid</code> when showing the ad, and accept it
+        back under <code>ymid</code>, <code>userid</code> or <code>telegram_id</code>.
+      </span>
+    </li>
+    <li>Verify: this page should show "✅ Onclicka is LIVE"</li>
   </ol>
 </details>
 
