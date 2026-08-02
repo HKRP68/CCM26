@@ -2405,6 +2405,29 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("CL tour result recording failed for %s", mid)
 
+            # ── Match-end quest tracking ──
+            # /letsplay and Challenge League finish here, and until now neither
+            # fired a single quest event — so a player could win ten /lp matches
+            # and watch "Win 3 matches" sit at 0/3. Fire the same shared tracker
+            # the in-chat and Mini App finalizes use. It gates itself: a practice
+            # match vs the bot or a Team Overall mismatch is flagged
+            # ``stats_disabled`` and comes back out having changed nothing.
+            try:
+                from services.quest_service import track_user_match_quests
+                quest_winner = (None if result["tie"] or not match
+                                else match.winner_id)
+                for uid in (state.get("inn1_bat_team_id"),
+                            state.get("inn1_bowl_team_id")):
+                    if not uid:
+                        continue
+                    qu = session.query(User).get(uid)
+                    track_user_match_quests(
+                        session, state, qu,
+                        bool(quest_winner) and uid == quest_winner,
+                        False, quest_winner)
+            except Exception:
+                logger.exception("cipl match-end quest tracking failed for %s", mid)
+
             session.commit()
         except Exception:
             session.rollback()
@@ -2718,6 +2741,10 @@ def _record_cipl_potm(session, state, best):
         row.potm = (row.potm or 0) + 1
     else:
         session.add(PlayerGameStats(user_id=owner_uid, player_id=pid, potm=1))
+    # Hand the result to the quest tracker, which fires 'career_potm' when the
+    # winner is somebody's own Career Player (parity with the Mini App finalize).
+    state["potm_player_id"] = pid
+    state["potm_owner_user_id"] = owner_uid
 
 
 def _summary_caption(state, result_line):

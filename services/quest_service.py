@@ -8,6 +8,23 @@ Event-driven design:
   - When progress reaches target_count, quest is marked completed (auto).
   - User must explicitly press "Claim" to receive the reward.
 
+Which matches count
+-------------------
+Match-end quests are a reward for *competitive* cricket: a user's own XI
+against another user's own XI. :func:`match_counts_for_quests` is the single
+gate every finalize goes through, and it turns quest tracking off for
+
+  * matches against the AI (``/vsbot``, ``/wpmbot``, ``/lpbot``, ``/ciplbot``),
+  * spectator and bot-vs-bot matches, which nobody is playing,
+  * unranked practice, which already pays no coins, gems, W/L or streak, and
+  * matches the fair-match gate voided because the two Team Overalls are
+    ``player_stats_service.STATS_FAIRNESS_OVR_GAP`` or more apart.
+
+Cumulative keys count over the *quest's own period* — a ``wickets_taken``
+quest is "wickets today" as a daily, "wickets this week" as a weekly and
+"wickets this month" as a monthly. The period comes from the quest, never from
+the event.
+
 Standard event_keys:
   'claim'          — fired by /claim on a successful retain
   'gspin'          — fired by /gspin (any spin)
@@ -21,17 +38,27 @@ Standard event_keys:
   'trait_apply'    — fired when /traitapply succeeds
   'trait_buy'      — fired when /traitbuy succeeds
   'market_buy'     — fired when /playermarket buy succeeds
-  'vsbot_played'   — fired when /vsbot match completes
-  'vsbot_won'      — fired when user wins a /vsbot match
 
 Per-match event_keys (added for the v2 quest list):
   'sixes_hit'             — fired with N sixes at match end (cumulative quests)
   'sixes_in_match'        — fired with max(N) once if N >= target (single-match quests)
   'boundaries_hit'        — fired with N (4s+6s) at match end
   'boundaries_in_match'   — fired with N once if N >= target
+  'fours_hit'             — fired with N fours at match end (cumulative)
   'wickets_in_match'      — fired with N once at match end (single-match)
   'runs_in_innings'       — fired with N once at match end (single-match)
   'hattrick'              — fired once if at least one bowler took a hat-trick
+  'three_fer'             — once per bowler who took 3+ wickets in the match
+  'five_fer'              — once per bowler who took 5+ wickets in the match
+  'dot_balls'             — fired with N dot balls bowled (cumulative)
+  'powerplay_runs'        — team runs in your first 6 overs (single-innings MAX)
+  'death_over_runs'       — team runs in your last 5 overs (single-innings MAX)
+  'defended_total'        — fired once when you won batting first
+  'super_over_won'        — fired when you win a Super Over
+
+Retired event_keys — kept so old quests still render, but nothing fires them
+any more now that bot matches earn no quest progress:
+  'vsbot_played', 'vsbot_won'
 
 Career Player event_keys (fired only for the user's own /cmucareer card, and
 only ever consumed by quests flagged career_only). Every one is derived from
@@ -141,6 +168,42 @@ CAREER_QUEST_MIX = (
     (CAREER_BOWL_EVENTS, 2),
     (CAREER_ALL_EVENTS, 1),
 )
+
+
+def match_counts_for_quests(state, *, is_vsbot=False):
+    """True when a finished match may feed match-end quest progress.
+
+    One gate for every finalize — the in-chat one (``handlers.match``), the
+    Mini App one (``services.match_webapp_service``), Challenge League and
+    LetsPlay (``handlers.cipl_play``) and the Super Over decider
+    (``handlers.super_over``) — so a quest counts the same wherever the match
+    was played, and a mode added later has one place to opt in.
+
+    A match counts only when a user's own XI played another user's own XI:
+
+    * ``is_vsbot`` / ``is_bot_match`` — one side is the AI. Practice against a
+      bot is not something to hand out quest rewards for, and the bot side has
+      no owner to credit anyway.
+    * ``is_spectator`` / ``is_bot_vs_bot`` — nobody played it.
+    * ``stats_disabled`` — the fair-match gate voided the match because the two
+      Team Overalls were too far apart (see
+      ``player_stats_service.STATS_FAIRNESS_OVR_GAP``, currently 10). Such a
+      match already earns no career stats, coins, gems, W/L or streak; letting
+      it still tick quests along would leave exactly the stat-farming hole the
+      gate exists to close. Unranked practice sets this flag too, which is the
+      same answer for the same reason.
+
+    ``state`` may be ``{}`` or ``None`` — an unknown match counts, so a caller
+    that cannot supply state does not silently lose every quest.
+    """
+    s = state or {}
+    if is_vsbot or s.get("is_vsbot") or s.get("is_bot_match"):
+        return False
+    if s.get("is_spectator") or s.get("is_bot_vs_bot"):
+        return False
+    if s.get("stats_disabled") or s.get("unranked"):
+        return False
+    return True
 
 
 def _claim_silently(session, user, uqp, q):
@@ -594,6 +657,20 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     pinned = [q for q in pool if getattr(q, "always_assign", False)]
     random_pool = [q for q in pool if not getattr(q, "always_assign", False)]
 
+    # A quest on the 'manual' event key has no trigger behind it: nothing in the
+    # game ever calls track_event for it, so its bar sits at 0/N until an admin
+    # types a number in by hand. Dealing those at random is most of why players
+    # report quests "not counting" — a third of somebody's day could be spent on
+    # a quest that cannot move. They stay in the catalogue (an admin can still
+    # pin one and drive it manually), but they are no longer dealt by the draw.
+    trackable = [q for q in random_pool if (q.event_key or "") != "manual"]
+    if trackable:
+        random_pool = trackable
+    else:
+        logger.warning(
+            "no auto-tracked %s quests available — falling back to the manual "
+            "ones so users are not left with an empty quest list", quest_type)
+
     # Career weekly quests get their own five slots rather than competing with
     # the ordinary weekly ones, so a Career Player owner always has a full
     # career card to work through — and always has a week that can be judged.
@@ -882,12 +959,18 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     """Fire every per-user match-end quest event for ``user`` from a completed
     match ``state``.
 
-    Shared by the in-chat finalize (``handlers.match``) and the Mini App finalize
-    (``services.match_webapp_service.finalize_webapp_match``) so /wpm and /wpmbot
-    track exactly the same quests as /vsbot and PvP. ``state`` uses the common
-    shape (``inn1_*`` snapshots plus the live 2nd-innings stats). The bot user
+    Shared by every finalize — in-chat (``handlers.match``), Mini App
+    (``services.match_webapp_service.finalize_webapp_match``), LetsPlay and
+    Challenge League (``handlers.cipl_play``) and the Super Over decider
+    (``handlers.super_over``) — so /lp, /wpm, /cipl and tour matches all track
+    the same quests off the same numbers. ``state`` uses the common shape
+    (``inn1_*`` snapshots plus the live 2nd-innings stats). The bot user
     (telegram_id == -1) is a no-op. Each event is best-effort via ``safe_track``;
     callers still wrap this in their own try/except.
+
+    Nothing fires at all unless :func:`match_counts_for_quests` says the match
+    qualifies, so a bot match, a spectator match or a Team-Overall mismatch
+    leaves every quest exactly where it was.
 
     Player of the Match is worked out by the caller, not here, so a caller that
     wants ``career_potm`` to fire puts ``potm_player_id`` and
@@ -897,21 +980,21 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
 
     if not user or getattr(user, "telegram_id", None) == -1:
         return
+    if not match_counts_for_quests(state, is_vsbot=is_vsbot):
+        return
 
     uid = user.id
     safe_track(session, uid, "match_played", 1)
-    if is_vsbot:
-        safe_track(session, uid, "vsbot_played", 1)
     if is_winner:
         safe_track(session, uid, "match_won", 1)
-        if is_vsbot:
-            safe_track(session, uid, "vsbot_won", 1)
 
     # Aggregates across all of this user's players (both innings)
     runs_total = wkts_total = fifties = hundreds = 0
     sixes_total = fours_total = 0
     hattricks_total = 0
     maidens_total = 0
+    dots_total = 0
+    three_fers = five_fers = 0
     # Single-match maxes
     max_runs_in_innings = 0
     max_wickets_in_match = 0
@@ -1038,7 +1121,12 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
                 max_wickets_in_match = max(max_wickets_in_match, w)
                 if pst.get("hattrick"):
                     hattricks_total += 1
+                if w >= 5:
+                    five_fers += 1
+                if w >= 3:
+                    three_fers += 1
                 maidens_total += pst.get("maidens", 0)
+                dots_total += pst.get("dots", 0)
                 balls_b = pst.get("balls", 0)
                 runs_b = pst.get("runs", 0)
                 if balls_b >= 24:  # 4+ overs
@@ -1055,14 +1143,22 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
         safe_track(session, uid, "wickets_taken", wkts_total)
     if sixes_total > 0:
         safe_track(session, uid, "sixes_hit", sixes_total)
+    if fours_total > 0:
+        safe_track(session, uid, "fours_hit", fours_total)
     if (sixes_total + fours_total) > 0:
         safe_track(session, uid, "boundaries_hit", sixes_total + fours_total)
+    if dots_total > 0:
+        safe_track(session, uid, "dot_balls", dots_total)
     for _ in range(fifties):
         safe_track(session, uid, "fifty", 1)
     for _ in range(hundreds):
         safe_track(session, uid, "hundred", 1)
     for _ in range(hattricks_total):
         safe_track(session, uid, "hattrick", 1)
+    for _ in range(three_fers):
+        safe_track(session, uid, "three_fer", 1)
+    for _ in range(five_fers):
+        safe_track(session, uid, "five_fer", 1)
     if maidens_total > 0:
         safe_track(session, uid, "maiden_over", maidens_total)
     for _ in range(user_match_not_outs):
@@ -1156,3 +1252,50 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     # Chase win: user won AND batted second ("bat_xi" is the 2nd-innings lineup).
     if is_winner and state.get("bat_team_id") == uid:
         safe_track(session, uid, "chase_won", 1)
+    # …and the mirror image: won after setting a total and defending it.
+    if is_winner and state.get("inn1_bat_team_id") == uid:
+        safe_track(session, uid, "defended_total", 1)
+
+    # Phase scoring, off the per-over run list the Manhattan chart already
+    # keeps. "Score 45+ in the powerplay" quests were previously untrackable
+    # and had to be seeded as manual, which meant they never progressed.
+    pp_runs, death_runs = _phase_runs(state, uid)
+    if pp_runs > 0:
+        safe_track(session, uid, "powerplay_runs", pp_runs, mode="max")
+    if death_runs > 0:
+        safe_track(session, uid, "death_over_runs", death_runs, mode="max")
+
+
+# How many overs count as the powerplay and as the death, for the phase quests.
+POWERPLAY_OVERS = 6
+DEATH_OVERS = 5
+
+
+def _phase_runs(state, user_id):
+    """(powerplay runs, death-overs runs) from the innings ``user_id`` batted.
+
+    Reads ``over_runs`` — the per-over run list every ball loop appends to for
+    the Manhattan chart — so no engine change is needed to score a phase. The
+    second innings keeps its list in ``over_runs`` and the first innings' copy
+    is snapshotted to ``inn1_over_runs`` at the break.
+
+    Returns ``(0, 0)`` when the user did not bat or the list is missing, and
+    the death window is skipped for innings too short to have one (a 6-over
+    game is all powerplay; counting its last 5 overs as "death" too would hand
+    out both quests for the same runs).
+    """
+    s = state or {}
+    if s.get("inn1_bat_team_id") == user_id:
+        overs = s.get("inn1_over_runs") or []
+    elif s.get("bat_team_id") == user_id:
+        overs = s.get("over_runs") or []
+    else:
+        return 0, 0
+
+    runs = [r for r in overs if isinstance(r, (int, float))]
+    if not runs:
+        return 0, 0
+    powerplay = int(sum(runs[:POWERPLAY_OVERS]))
+    death = (int(sum(runs[-DEATH_OVERS:]))
+             if len(runs) > POWERPLAY_OVERS + DEATH_OVERS else 0)
+    return powerplay, death

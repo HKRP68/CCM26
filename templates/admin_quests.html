@@ -5,13 +5,22 @@
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.6rem;">
   <h1>🎯 Quests</h1>
   <div style="display:flex; gap:.5rem;">
-    <form method="POST" action="{{ url_for('admin_quests_import') }}"
-          onsubmit="return confirm('Import all quests from data/quests_table.md? Existing quests with the same name will be skipped.');"
+    <form method="POST" action="{{ url_for('admin_quests_reseed') }}"
+          onsubmit="return confirm('Replace the Daily and Monthly catalogue with the curated, fully auto-tracked set?\n\nEvery other daily/monthly quest is DEACTIVATED (not deleted). Pinned and Career Player quests are left alone.');"
           style="display:inline;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit"
-              style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
-        📥 Bulk Import (data/quests_table.md)
+              style="background:var(--accent); color:#000; border:none; padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
+        ♻️ Reseed Daily/Monthly
+      </button>
+    </form>
+    <form method="POST" action="{{ url_for('admin_quests_import') }}"
+          onsubmit="return confirm('LEGACY IMPORT.\n\nMost rows in data/quests_table.md have no trackable event and land on event_key=manual, which is what Reseed Daily/Monthly exists to clear out. Import anyway?');"
+          style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit"
+              style="background:var(--card); color:var(--muted); border:1px solid var(--border); padding:.55rem 1.1rem; border-radius:6px; font-weight:600; cursor:pointer;">
+        📥 Legacy Import (quests_table.md)
       </button>
     </form>
     <form method="POST" action="{{ url_for('admin_quests_convert_manual') }}"
@@ -31,8 +40,15 @@
 </div>
 
 <div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-bottom:1.2rem; font-size:.85rem; color:var(--muted);">
-  ℹ️ Quest progress is event-driven. Each quest has an <strong>event_key</strong> the engine fires.
-  Quests with <code>event_key=manual</code> are admin-tracked — bump user progress on the user detail page.
+  ℹ️ Quest progress is event-driven. Each quest has an <strong>event_key</strong> the engine fires,
+  counted over that quest's own period — <code>wickets_taken</code> on a Monthly quest <em>is</em>
+  “Wickets Taken in Month”.<br>
+  ⚠️ Quests with <code>event_key=manual</code> have no trigger behind them and are
+  <strong>never dealt in the random draw</strong> — progress only moves when an admin bumps it on the
+  user detail page. Pin one (<em>Always assign</em>) if you intend to run it.<br>
+  ⚖️ Match quests only count when a user's own XI plays another user's own XI. Bot matches
+  (<code>/vsbot</code>, <code>/wpmbot</code>, <code>/lpbot</code>, <code>/ciplbot</code>), spectator
+  matches and matches voided by the 10+ Team Overall gap earn no quest progress.
 </div>
 
 {% macro quest_table(quests, label, icon) %}

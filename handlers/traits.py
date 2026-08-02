@@ -255,6 +255,13 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 daily.purchases = (daily.purchases or 0) + 1
             except Exception:
                 pass
+            # 'trait_buy' has been offered on the quest form all along but was
+            # never fired anywhere, so a "buy a trait" quest sat at 0 forever.
+            try:
+                from services.quest_service import safe_track
+                safe_track(session, user.id, "trait_buy", 1)
+            except Exception:
+                logger.exception("trait_buy quest tracking failed")
             session.commit()
             await q.answer(f"✅ {name_or_msg} added to inventory!", show_alert=False)
             await _refresh_shop_display(q, session, user)

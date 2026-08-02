@@ -10887,27 +10887,47 @@ def admin_bot_team_bulk_add(team_id):
 # QUESTS ADMIN
 # ═══════════════════════════════════════════════════════════════════════
 
+# Event triggers offered on the quest form.
+#
+# Cumulative triggers count over THE QUEST'S OWN PERIOD — the same trigger is
+# "…today" on a Daily, "…this week" on a Weekly and "…this month" on a Monthly.
+# So "Wickets Taken in Month" is `wickets_taken` on a Monthly quest; there is no
+# separate month-locked key to pick, and the labels below say so rather than
+# leaving an admin to guess.
+#
+# Match triggers only fire for a user's own XI against another user's own XI.
+# Bot matches, spectator matches and matches voided by the Team Overall
+# fair-match gap earn no quest progress at all — see
+# services.quest_service.match_counts_for_quests.
 EVENT_KEYS = [
     ("claim", "Claim a player (/claim)"),
     ("gspin", "Spin GSpin (/gspin)"),
     ("daily", "Collect daily (/daily)"),
-    ("match_played", "Play a match (any result)"),
-    ("match_won", "Win a match"),
-    ("runs_scored", "Total runs scored across matches (cumulative)"),
-    ("wickets_taken", "Total wickets taken across matches (cumulative)"),
-    ("fifty", "Score 50+ in a match"),
-    ("hundred", "Score 100+ in a match"),
-    ("sixes_hit", "Sixes hit (cumulative across matches)"),
+    ("match_played", "Play a match (any result) — per period"),
+    ("match_won", "Win a match — per period"),
+    ("runs_scored", "Runs scored — total for the period (day/week/MONTH)"),
+    ("wickets_taken", "Wickets taken — total for the period (day/week/MONTH)"),
+    ("fifty", "Score 50+ in a match — per period"),
+    ("hundred", "Score 100+ in a match — per period"),
+    ("sixes_hit", "Sixes hit — total for the period (day/week/month)"),
     ("sixes_in_match", "Sixes in a single match (uses MAX, not sum)"),
-    ("boundaries_hit", "Boundaries 4s+6s (cumulative)"),
+    ("fours_hit", "Fours hit — total for the period (day/week/month)"),
+    ("boundaries_hit", "Boundaries 4s+6s — total for the period"),
     ("boundaries_in_match", "Boundaries in a single match (uses MAX)"),
-    ("wickets_in_match", "Wickets in a single match (uses MAX)"),
-    ("runs_in_innings", "Runs in a single innings (uses MAX)"),
+    ("wickets_in_match", "Wickets by one bowler in a match (uses MAX)"),
+    ("runs_in_innings", "Runs by one batter in an innings (uses MAX)"),
     ("hattrick", "Take a hat-trick"),
-    ("maiden_over", "Bowl a maiden over (cumulative)"),
-    ("not_out_innings", "Stay not out in an innings (cumulative)"),
+    ("three_fer", "A bowler takes 3+ wickets in a match"),
+    ("five_fer", "A bowler takes 5+ wickets in a match"),
+    ("maiden_over", "Bowl a maiden over — total for the period"),
+    ("dot_balls", "Dot balls bowled — total for the period"),
+    ("not_out_innings", "Stay not out in an innings — total for the period"),
     ("allrounder_match", "30+ runs AND 2+ wickets in same match"),
     ("chase_won", "Win a match while batting second"),
+    ("defended_total", "Win a match while batting first (defended a total)"),
+    ("super_over_won", "Win a Super Over"),
+    ("powerplay_runs", "Team runs in your first 6 overs (uses MAX)"),
+    ("death_over_runs", "Team runs in your last 5 overs (uses MAX)"),
     ("clean_spell", "4-over spell with 1+ maiden and 3+ wickets"),
     ("economy_under_4_5", "4+ over spell with economy < 4.5"),
     ("economy_under_5", "4+ over spell with economy < 5.0"),
@@ -10916,8 +10936,13 @@ EVENT_KEYS = [
     ("trait_apply", "Apply a trait (/traitapply)"),
     ("trait_buy", "Buy a trait (/traitshop)"),
     ("market_buy", "Buy from /playermarket"),
-    ("vsbot_played", "Play a /vsbot match"),
-    ("vsbot_won", "Win a /vsbot match"),
+    ("pack_buy", "Buy a pack (/buypack)"),
+    ("pack_open", "Open a pack (/openpack)"),
+    ("free_pack_opened", "Open the free daily pack"),
+    ("cmumysterybox", "Open a mystery box (/cmumysterybox)"),
+    ("ad_watched", "Watch a rewarded ad"),
+    ("vsbot_played", "⛔ RETIRED — bot matches no longer count for quests"),
+    ("vsbot_won", "⛔ RETIRED — bot matches no longer count for quests"),
     # Career Player events — fire only for the user's own /cmucareer card.
     # Pair these with the "Career Player quest" checkbox. Grouped the same way
     # the weekly assigner buckets them: batting, bowling, then all-round.
@@ -10945,7 +10970,7 @@ EVENT_KEYS = [
     ("career_match_won", "🎖⭐ Career Player featured in a won match"),
     ("career_allrounder_match", "🎖⭐ Career Player made 25+ AND took 2+ in one match"),
     ("career_potm", "🎖⭐ Career Player was Player of the Match"),
-    ("manual", "Manual — admin bumps progress directly"),
+    ("manual", "Manual — admin bumps progress directly (never auto-assigned)"),
 ]
 
 
@@ -10971,6 +10996,33 @@ def admin_quests_convert_manual():
     except Exception as e:
         db.rollback()
         flash(f"Conversion failed: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_quests_list"))
+
+
+@app.route("/quests/reseed", methods=["POST"])
+@login_required
+def admin_quests_reseed():
+    """Replace the Daily/Monthly catalogue with the curated auto-tracked set."""
+    db = get_session()
+    try:
+        from seed_quests_v3 import seed, DAILY_QUESTS, MONTHLY_QUESTS
+        result = seed(db)
+        log_admin(db, "quest_reseed", "quest", 0, "daily_monthly_reseed",
+                  f"Created {result['created']}, updated {result['updated']}, "
+                  f"retired {result['retired']}")
+        db.commit()
+        flash(
+            f"♻️ Daily/Monthly catalogue reseeded: {result['created']} created, "
+            f"{result['updated']} updated, {result['retired']} legacy quests "
+            f"deactivated. {len(DAILY_QUESTS)} daily + {len(MONTHLY_QUESTS)} "
+            f"monthly now live, all auto-tracked.",
+            "info",
+        )
+    except Exception as e:
+        db.rollback()
+        flash(f"Reseed failed: {e}", "error")
     finally:
         db.close()
     return redirect(url_for("admin_quests_list"))
