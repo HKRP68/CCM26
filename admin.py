@@ -5150,10 +5150,10 @@ def webapp_spin():
         elif ad_token.startswith("CT-"):
             # The free slot came back (a cycle turned over between the tap and
             # this request, or a second tab spun first) but the client had
-            # already watched its ad. Bank it rather than let the token expire:
-            # the spin is free and the ad still pays for the next one.
-            if ad_service.consume_client_token(ad_token, tg_id):
-                ad_service.bank_credit(db, tg_id, "ad watched, free spin used")
+            # already watched its ad. Keep it: the spin is free and the ad
+            # still pays for the next one.
+            ad_service.preserve_client_ad(db, ad_token, tg_id,
+                                          "ad watched, free spin used")
 
         ad_provided = bool(verified_via)
 
@@ -5249,7 +5249,12 @@ def webapp_spin():
             "reward": result,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "spin", session=db, user=user),
+            # ads_saved rides on the quota as well as the top level: clients
+            # cache `quota` wholesale, and a success payload without it would
+            # overwrite a cached saved-ad count with nothing.
+            "quota": dict(quota_service.get_quota_status(stats, "spin",
+                                                         session=db, user=user),
+                          ads_saved=ad_service.count_credits(db, tg_id)),
             "ads_saved": ad_service.count_credits(db, tg_id),
             "balance": {
                 "coins": user.total_coins or 0,
@@ -5292,6 +5297,11 @@ def webapp_ad_completed():
     Returns a single-use token the client immediately passes to /api/webapp/spin.
     This is the client-side verification fallback used when server-side
     postback isn't available (small apps, dev mode, etc).
+
+    The ad is also written to the ledger here, and the token addresses that row
+    rather than standing in for it. That is what makes a watched ad survive a
+    restart, an expired token, a lost response or a refused reward — see
+    ``ad_service.register_client_ad``.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -5299,7 +5309,7 @@ def webapp_ad_completed():
     db, user, tg_id = auth
     try:
         from services import ad_service
-        token = ad_service.issue_client_token(tg_id)
+        token = ad_service.issue_client_token(tg_id, session=db)
         # Track for the "watch N ads" daily quest. This endpoint fires once per
         # completed ad (the SDK promise resolves only on a full view).
         try:
@@ -5314,7 +5324,10 @@ def webapp_ad_completed():
             db.commit()
         except Exception:
             db.rollback()
-        return {"ok": True, "ad_token": token}
+        # ads_saved lets the client tell the player their ad is banked even if
+        # this response is the last thing that reaches them.
+        return {"ok": True, "ad_token": token,
+                "ads_saved": ad_service.count_credits(db, tg_id)}
     finally:
         db.close()
 
@@ -5462,7 +5475,11 @@ def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
     if ad_service.claim_postback(db, tg_id):
         return "server_postback"
     if ad_token and ad_token.startswith("CT-"):
-        if ad_service.consume_client_token(ad_token, tg_id):
+        # The session matters: a token minted with one addresses a ledger row,
+        # and spending the token means spending that row — so an ad whose row
+        # was already redeemed (as a saved ad, or claimed as a postback) is
+        # correctly refused here instead of paying twice.
+        if ad_service.consume_client_token(ad_token, tg_id, session=db):
             return "client_token"
     if ad_token and ad_token.startswith("NF-") and nofill_kind:
         # The network had no ad to serve; the pass was already debited when the
@@ -5600,7 +5617,9 @@ def webapp_daily():
             "ok": True,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "daily", session=db, user=user),
+            "quota": dict(quota_service.get_quota_status(stats, "daily",
+                                                         session=db, user=user),
+                          ads_saved=ad_service.count_credits(db, tg_id)),
             # Same field the spin returns, so a client reading the claim
             # response rather than re-fetching init sees the saved-ad count.
             "ads_saved": ad_service.count_credits(db, tg_id),
@@ -6164,6 +6183,9 @@ def webapp_freepack_status():
             "ads": ad_service.client_config(),
             "ads_configured": ad_service.is_configured(),
             "adsgram_block_id": ad_service.get_block_id(),
+            # Ads this user has already watched but not yet spent. With one
+            # banked the pack opens without showing another.
+            "ads_saved": ad_service.count_credits(db, tg_id),
             "roster_count": user.roster_count or 0,
             "roster_full": (user.roster_count or 0) >= 25,
         }
@@ -6198,11 +6220,21 @@ def webapp_freepack_open():
             stats = UserStats(user_id=user.id)
             db.add(stats); db.flush()
 
-        # Cooldown check first (don't waste their ad)
+        # Cooldown check first (don't waste their ad). The client can still
+        # arrive here having already watched one — its countdown was stale, or
+        # a pack was opened in another tab — so the ad is kept for the next
+        # open rather than left to expire with the token.
         ready, remaining = check_free_pack_cooldown(db, stats)
         if not ready:
+            kept = (ad_token.startswith("CT-")
+                    and ad_service.preserve_client_ad(
+                        db, ad_token, tg_id, "free pack on cooldown"))
             return {"ok": False, "error": "cooldown",
-                    "message": "Free Pack is still on cooldown.",
+                    "message": ("Free Pack is still on cooldown."
+                                + (" Your ad is saved — the next pack opens "
+                                   "without one." if kept else "")),
+                    "ad_banked": bool(kept),
+                    "ads_saved": ad_service.count_credits(db, tg_id),
                     "remaining_seconds": remaining}, 400
 
         # Verify ad. nofill_kind=None — a free pack has no quota of its own, so
