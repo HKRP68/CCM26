@@ -3983,6 +3983,10 @@ from utils.idempotency import claim_once, release
 # `finally` (worker killed mid-request). Normal requests release the claim as
 # soon as they commit, so this only bounds the worst case.
 _WEBAPP_PACK_GUARD_TTL = 30.0
+# Same idea for the reward claims (daily / spin). Shorter, because these are
+# single commits with no image render behind them, and a stuck claim button is
+# worse here than on the shop: the player is watching a countdown.
+_WEBAPP_CLAIM_GUARD_TTL = 15.0
 
 
 def _init_data_telegram_id():
@@ -5110,6 +5114,18 @@ def webapp_spin():
     if err:
         return err
     db, user, tg_id = auth
+
+    # One spin per user in flight — the same double-tap guard the daily claim
+    # and the pack shop use. `request_id` already makes a *sequential* retry
+    # idempotent; this covers the overlapping case, where the retry arrives
+    # before the first request has committed anything to recall. Duplicates get
+    # a 409 and can retry once the claim is released, which is when the cached
+    # payload exists to answer them with.
+    guard_key = f"webapp_spin_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "Your spin is already going through — hang tight."}, 409
     try:
         import os as _os
         from datetime import datetime as _dt
@@ -5286,6 +5302,7 @@ def webapp_spin():
                 "message_extra": ("Your ad was saved — spin again and it will "
                                   "be used." if banked else "")}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -5417,10 +5434,21 @@ def _locked_stats(db, user_id):
 
     ``with_for_update`` is a no-op on SQLite, which needs no row locks (single
     writer); same reasoning as /api/webapp/ad-unavailable.
+
+    ``populate_existing`` is what makes the lock mean anything, and leaving it
+    out was the multi-claim bug: this request already loaded the same UserStats
+    row a few lines earlier, so SQLAlchemy answered the locked re-read out of
+    the identity map WITHOUT overwriting the attributes it had. The FOR UPDATE
+    did block until the other request committed — and then handed back the
+    pre-commit values anyway, so a second rapid tap read ``daily_free_used ==
+    False``, was granted the free slot again, and claimed a second lot of coins
+    and gems. ``populate_existing`` forces the refresh, so the decision is made
+    on what is actually in the row.
     """
     from models import UserStats
     stats = (db.query(UserStats)
              .filter(UserStats.user_id == user_id)
+             .populate_existing()
              .with_for_update()
              .first())
     if not stats:
@@ -5510,6 +5538,18 @@ def webapp_daily():
     if err:
         return err
     db, user, tg_id = auth
+
+    # Server-side double-tap guard, same shape as the pack Buy button. The Mini
+    # App disables the claim button on the first tap, but a laggy WebView (or a
+    # second tab, or a replayed request) can still land two POSTs before the
+    # first one commits — and each one paid out another lot of coins and gems.
+    # Only one claim per user may be in flight; the claim is released once this
+    # request has finished, so a legitimate second claim right after works.
+    guard_key = f"webapp_daily_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "Your daily claim is already going through — hang tight."}, 409
     try:
         import os as _os
         from models import UserStats
@@ -5655,6 +5695,7 @@ def webapp_daily():
         return {"ok": False, "error": "internal", "message": str(e),
                 "ad_banked": banked}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
