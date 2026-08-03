@@ -89,6 +89,16 @@ _BALL_PAUSE = 1.4
 SO_ENGINE_OVER = 10
 SO_ENGINE_TOTAL_OVERS = 20
 
+# The Super Over's own rules, named rather than sprinkled as literals so every
+# gate (selection, the per-ball guard, the innings-end check) reads the same
+# limit and none of them can drift apart.
+SO_LEGAL_BALLS = 6       # an innings ends after 6 legal balls...
+SO_MAX_WICKETS = 2       # ...or 2 wickets, whichever comes first
+SO_BATTERS = 3           # 2 openers + 1 backup
+# Wides and no-balls are re-bowled, so a pathological run of them would never
+# reach 6 legal balls. Cap total deliveries so an innings always terminates.
+SO_MAX_DELIVERIES = 24
+
 
 def _so_key(mid):
     return f"so_{mid}"
@@ -417,11 +427,26 @@ def _reset_selection(so):
 
 
 def _eligible_batters(so, uid):
+    """Batters this team may still pick — the XI minus anyone dismissed in an
+    earlier Super Over of this tie.
+
+    If the restriction leaves fewer than the three a Super Over needs, the pool
+    is topped back up with already-dismissed batters — but only by as many as
+    are missing, rather than throwing the rule away and re-offering the whole
+    XI. A side must always be able to field a Super Over; that is no reason to
+    let a batter who is out come back while fresh ones are still available.
+    """
     out = so["dismissed"][uid]
-    pool = [p for p in so["teams"][uid]["xi"] if int(p["roster_id"]) not in out]
-    # Fallback: if restrictions left fewer than 2, allow the full XI (a team must
-    # always be able to field a Super Over — keep playing until a winner).
-    return pool if len(pool) >= 2 else list(so["teams"][uid]["xi"])
+    xi = so["teams"][uid]["xi"]
+    pool = [p for p in xi if int(p["roster_id"]) not in out]
+    if len(pool) >= SO_BATTERS:
+        return pool
+    for p in xi:
+        if len(pool) >= SO_BATTERS:
+            break
+        if int(p["roster_id"]) in out:
+            pool.append(p)
+    return pool
 
 
 def _eligible_bowlers(so, uid):
@@ -464,7 +489,7 @@ def _render_selection(so):
         head, "",
         f"Batting: <b>{html.escape(bat['name'])}</b>",
         f"Bowling: <b>{html.escape(bowl['name'])}</b>{target_line}", "",
-        f"{_mention(bat['tg'], bat['name'])}, select <b>3 batters</b> "
+        f"{_mention(bat['tg'], bat['name'])}, select <b>{SO_BATTERS} batters</b> "
         "(2 openers + 1 backup).",
         f"{_mention(bowl['tg'], bowl['name'])}, select <b>1 bowler</b>.", "",
         "🏏 Every ball is a duel: the bowler picks the delivery, the batter "
@@ -482,7 +507,7 @@ def _render_selection(so):
         kb.append([InlineKeyboardButton(
             f"{mark}🏏 {p['name']}", callback_data=f"so_bat_{so['mid']}_{rid}")])
     bat_done = "✅ Batters confirmed" if so["bat_confirmed"] else \
-        f"Confirm Batters ({len(chosen_b)}/3)"
+        f"Confirm Batters ({len(chosen_b)}/{SO_BATTERS})"
     kb.append([InlineKeyboardButton(bat_done, callback_data=f"so_batok_{so['mid']}")])
 
     # Bowling buttons (single choice)
@@ -549,8 +574,8 @@ async def so_bat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if rid not in eligible:
         await q.answer("That player can't bat in this Super Over.", show_alert=True)
         return
-    if len(sel) >= 3:
-        await q.answer("You already picked 3 — tap a selected one to remove it.",
+    if len(sel) >= SO_BATTERS:
+        await q.answer(f"You already picked {SO_BATTERS} — tap a selected one to remove it.",
                        show_alert=True)
         return
     sel.append(rid)
@@ -571,7 +596,7 @@ async def so_batok_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer(f"❌ Only {bat['name']} can confirm batters.", show_alert=True)
         return
     eligible = {int(p["roster_id"]) for p in _eligible_batters(so, so["bat_uid"])}
-    need = min(3, len(eligible))
+    need = min(SO_BATTERS, len(eligible))
     if len(so["sel_batters"]) != need:
         await q.answer(f"Select {need} batters first.", show_alert=True)
         return
@@ -667,7 +692,19 @@ async def _start_innings(context, mid):
     await _disable_message(context, so["chat_id"], so.get("sel_msg_id"))
     so["sel_msg_id"] = None
     bat_uid, bowl_uid = so["bat_uid"], so["bowl_uid"]
-    trio = list(so["sel_batters"])
+    # Sanitise the confirmed picks: de-dupe and drop anything not in this XI, so
+    # a duplicated pick can't put the same player at both ends (where a wicket
+    # would leave a dismissed batter still at the crease).
+    trio = []
+    for rid in so["sel_batters"]:
+        rid = int(rid)
+        if rid not in trio and _player_by_rid(so, bat_uid, rid):
+            trio.append(rid)
+    if not trio:
+        logger.warning("Super Over: no valid batters confirmed (%s)", mid)
+        _reset_selection(so)
+        await _send_selection(context, mid)
+        return
     bowler_rid = so["sel_bowler"]
     so["inn"] = {
         "trio": trio,
@@ -713,7 +750,7 @@ def _pressure_bar(so, inn):
     ceiling; innings 1 reads the balls already gone. It is cosmetic, but it is
     what makes a 3-off-2 finish *look* like 3 off 2.
     """
-    left = max(0, 6 - inn["legal"])
+    left = max(0, SO_LEGAL_BALLS - inn["legal"])
     if so["innings_no"] == 2 and so.get("target"):
         need = max(0, so["target"] - inn["runs"])
         if left <= 0 or need <= 0:
@@ -729,11 +766,11 @@ def _pressure_bar(so, inn):
 def _equation_line(so, inn):
     """The one line everybody actually stares at during a Super Over."""
     need = max(0, so["target"] - inn["runs"])
-    left = max(0, 6 - inn["legal"])
+    left = max(0, SO_LEGAL_BALLS - inn["legal"])
     if need <= 0:
         return "✅ <b>Target reached!</b>"
     if left <= 0:
-        return "⌛ <b>No balls left.</b>"
+        return "⌛ <b>No deliveries left.</b>"
     if left == 1:
         return f"🚨 <b>{need} needed off the LAST BALL!</b>"
     return f"⚡ Need <b>{need}</b> off <b>{left}</b> balls"
@@ -901,6 +938,13 @@ async def so_shot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if inn["stage"] != "SHOT":
         await q.answer("Not your turn.", show_alert=True)
         return
+    # Hard stop at the Super Over's limits. The innings-end path below already
+    # closes the innings the moment the 2nd wicket falls or the 6th legal ball
+    # is bowled, but a stale button from a message that was still on screen must
+    # never be able to bat on past them.
+    if inn["wickets"] >= SO_MAX_WICKETS or inn["legal"] >= SO_LEGAL_BALLS:
+        await q.answer("That innings is over.", show_alert=True)
+        return
     bat = so["teams"][so["bat_uid"]]
     if q.from_user.id != bat["tg"]:
         await q.answer("Only the batting side picks the shot.", show_alert=True)
@@ -979,7 +1023,7 @@ def _crowd_line(so, inn, otype, runs, out):
         return "😬 <i>Nerves from the bowler — free runs in a Super Over!</i>"
     if so["innings_no"] == 2 and so.get("target"):
         need = max(0, so["target"] - inn["runs"])
-        left = max(0, 6 - inn["legal"])
+        left = max(0, SO_LEGAL_BALLS - inn["legal"])
         if left == 1 and need <= 6:
             return f"🚨 <i>It all comes down to the final ball — {need} to win.</i>"
         if need <= 2 and left >= 2:
@@ -994,7 +1038,7 @@ def _required_rate(target, runs, legal):
     (Clutch, Finisher, Death, Yorker), so they fire in a Super Over too."""
     if not target:
         return 0.0
-    balls_left = max(0, 6 - legal)
+    balls_left = max(0, SO_LEGAL_BALLS - legal)
     if balls_left <= 0:
         return 0.0
     return max(0.0, (target - runs) * 6.0 / balls_left)
@@ -1077,51 +1121,86 @@ async def _resolve_ball(context, mid, shot):
     if inn["pending"]["length"]:
         deliv = f"{deliv} {inn['pending']['length']}"
     legal = True            # does this ball count toward the 6?
+    rotate = False          # do the batters cross on this delivery?
     sym = "•"
     runs = int(oc.get("runs", 0))
     otype = oc.get("type")
     extra_type = oc.get("extra_type")
-    out = bool(oc.get("batter_out"))
+    # An engine that flags the dismissal without typing the ball a wicket (a run
+    # out taken off a no-ball, say) still costs the batting side a wicket, so
+    # read both and let either one stand.
+    out = bool(oc.get("batter_out")) or otype == "wicket"
+    wicket_counted = False
 
-    if otype == "extra":
-        if extra_type in ("Wide", "No Ball"):
-            legal = False
-            inn["runs"] += runs
-            inn["bowl_runs"] += runs
-            sym = "Wd" if extra_type == "Wide" else "Nb"
-            if extra_type == "No Ball":
-                inn["free_hit"] = True   # next legal ball is a free hit
-        else:  # Leg Bye / Byes — legal delivery, runs are extras (not to batter)
-            inn["runs"] += runs
-            inn["bat"][s_rid]["b"] += 1
-            # The two engines spell it "Leg Bye" and "LegByes"; accept both.
-            is_leg_bye = str(extra_type or "").replace(" ", "").lower().startswith("legbye")
-            sym = ("Lb" if is_leg_bye else "B") + (str(runs) if runs else "")
-    elif otype == "wicket":
+    def _credit_batter(n):
+        """Runs off the bat — to the batter's tally, with the boundary counts
+        the level-scores countback is decided on."""
+        inn["bat"][s_rid]["r"] += n
+        if n == 4:
+            inn["bat"][s_rid]["4"] += 1
+            streak["boundaries"] += 1
+        elif n == 6:
+            inn["bat"][s_rid]["6"] += 1
+            streak["boundaries"] += 1
+
+    if otype == "extra" and extra_type in ("Wide", "No Ball"):
+        legal = False
+        # A wide or no-ball is ONE run to the batting side plus anything run off
+        # it — the engine reports only the latter (nothing at all, for a wide).
+        # Without the penalty a wide was a free re-bowl that cost the bowling
+        # side nothing, which in a six-ball innings is worth a match.
+        conceded = 1 + runs
+        inn["runs"] += conceded
+        inn["bowl_runs"] += conceded
+        if extra_type == "No Ball":
+            inn["free_hit"] = True   # next legal ball is a free hit
+            if runs:
+                _credit_batter(runs)  # runs off a no-ball are the batter's
+                rotate = runs % 2 == 1
+            sym = "Nb" + (str(runs) if runs else "")
+        else:
+            sym = "Wd" + (str(runs) if runs else "")
+    elif otype == "extra" and not out:
+        # Leg Bye / Byes — legal delivery, runs are extras (not to the batter,
+        # not against the bowler).
+        inn["runs"] += runs
         inn["bat"][s_rid]["b"] += 1
-        inn["bat"][s_rid]["r"] += runs       # e.g. completed runs before a run out
+        rotate = runs % 2 == 1
+        # The two engines spell it "Leg Bye" and "LegByes"; accept both.
+        is_leg_bye = str(extra_type or "").replace(" ", "").lower().startswith("legbye")
+        sym = ("Lb" if is_leg_bye else "B") + (str(runs) if runs else "")
+    elif out:
+        inn["bat"][s_rid]["b"] += 1
+        _credit_batter(runs)                 # completed runs before a run out
         inn["bat"][s_rid]["out"] = True
-        wtype = oc.get("wicket_type", "Out")
+        wtype = oc.get("wicket_type") or "Out"
         inn["bat"][s_rid]["how"] = wtype
         inn["runs"] += runs
         inn["bowl_runs"] += runs
         inn["wickets"] += 1
+        wicket_counted = True
         # A run out is not the bowler's wicket (matters on free-hit run-outs).
         if wtype != "Run Out":
             inn["bowl_wkts"] += 1
+        # Batters who crossed before the run out swap ends, so the dismissed one
+        # is not always the striker — the crease is sorted out below.
+        rotate = wtype == "Run Out" and runs % 2 == 1
         sym = "W"
     else:  # run
         inn["bat"][s_rid]["b"] += 1
-        inn["bat"][s_rid]["r"] += runs
+        _credit_batter(runs)
         inn["runs"] += runs
         inn["bowl_runs"] += runs
-        if runs == 4:
-            inn["bat"][s_rid]["4"] += 1
-            streak["boundaries"] += 1
-        elif runs == 6:
-            inn["bat"][s_rid]["6"] += 1
-            streak["boundaries"] += 1
+        rotate = runs % 2 == 1
         sym = str(runs)
+
+    if out and not wicket_counted:
+        # A dismissal off a wide/no-ball: the delivery was scored above, but the
+        # wicket itself still has to land on the card and count toward the two.
+        inn["bat"][s_rid]["out"] = True
+        inn["bat"][s_rid]["how"] = oc.get("wicket_type") or "Run Out"
+        inn["wickets"] += 1
+        sym += "+W"
 
     if legal:
         inn["legal"] += 1
@@ -1145,21 +1224,35 @@ async def _resolve_ball(context, mid, shot):
             f"{trait_tag}{html.escape(commentary)}{no_ball_tag}")
     inn["hype"] = _crowd_line(so, inn, otype, runs, out)
 
-    # Strike rotation on odd runs off a legal ball (not on extras-only events).
-    if otype == "run" and runs % 2 == 1:
+    # Batters cross on odd runs — off the bat, off byes/leg byes, and off a
+    # no-ball alike.
+    if rotate:
         inn["striker"], inn["non_striker"] = inn["non_striker"], inn["striker"]
 
-    # Wicket → bring in the backup batter (if any) at the striker's end.
+    # Wicket → bring in the backup batter (if any) at the dismissed batter's end.
     innings_ended_reason = None
     if out:
         so["dismissed"][so["bat_uid"]].add(s_rid)
-        if inn["wickets"] >= 2:
+        if inn["wickets"] >= SO_MAX_WICKETS:
             innings_ended_reason = "2 down"
         elif inn["backup"] is not None and not inn["backup_used"]:
             inn["backup_used"] = True
-            inn["striker"] = inn["backup"]
+            # Replace at whichever end the dismissed batter is standing: a run
+            # out with the batters crossed leaves them at the non-striker's end,
+            # and leaving an out batter there is exactly how a side ends up
+            # batting on with a dismissed player.
+            if int(inn["non_striker"]) == s_rid:
+                inn["non_striker"] = inn["backup"]
+            else:
+                inn["striker"] = inn["backup"]
         else:
             innings_ended_reason = "no batters left"
+
+    # Invariant, whatever the engine returned: the innings cannot go on past the
+    # wicket limit or the sixth legal ball.
+    if not innings_ended_reason and (inn["wickets"] >= SO_MAX_WICKETS
+                                     or inn["legal"] >= SO_LEGAL_BALLS):
+        innings_ended_reason = "innings complete"
 
     # Show the ball result.
     so["inn"]["pending"] = {"delivery": None, "length": None}
@@ -1173,7 +1266,8 @@ async def _resolve_ball(context, mid, shot):
             return
     # Safety valve against a pathological run of wides/no-balls never reaching
     # 6 legal balls — cap total deliveries so an innings always terminates.
-    if innings_ended_reason or inn["legal"] >= 6 or inn["deliveries"] >= 24:
+    if (innings_ended_reason or inn["legal"] >= SO_LEGAL_BALLS
+            or inn["deliveries"] >= SO_MAX_DELIVERIES):
         await asyncio.sleep(_BALL_PAUSE)
         await _end_innings(context, mid)
         return
@@ -1210,7 +1304,9 @@ def _capture_innings_detail(so, inn, bat_uid, bowl_uid):
     batters = []
     for rid in inn["trio"]:
         st = inn["bat"].get(int(rid), {})
-        if st.get("b", 0) > 0 or st.get("out"):
+        # Runs count even with no legal ball faced (a six off a no-ball), and the
+        # countback is read back off these rows — so never drop a scoring batter.
+        if st.get("b", 0) > 0 or st.get("r", 0) > 0 or st.get("out"):
             batters.append({
                 "name": _name(so, bat_uid, rid), "runs": st.get("r", 0),
                 "balls": st.get("b", 0), "fours": st.get("4", 0),

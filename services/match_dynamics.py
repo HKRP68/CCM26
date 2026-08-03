@@ -16,6 +16,9 @@ SO_WICKET_LIMIT = 2          # a super over ends after 2 wickets
 SO_BALLS = 6                 # ...or 6 legal balls
 SO_BATSMEN = 3               # each side nominates 3 batsmen
 SO_MAX_REPEATS = 3           # repeat tied super overs at most this many times
+# Wides and no-balls are re-bowled, so a pathological run of them would never
+# reach 6 legal balls. Cap the total deliveries so an innings always terminates.
+SO_MAX_DELIVERIES = 24
 
 
 # ── Pressure & scenario ────────────────────────────────────────────────
@@ -79,15 +82,37 @@ def total_pressure(state, *, scenario=False):
 
 # ── Super over selection ───────────────────────────────────────────────
 
-def super_over_batsmen(xi, n=SO_BATSMEN):
-    """Top-n batsmen (by batting rating) nominated for the super over."""
-    return sorted(xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
-                  reverse=True)[:n]
+def super_over_batsmen(xi, n=SO_BATSMEN, exclude=None):
+    """Top-n batsmen (by batting rating) nominated for the super over.
+
+    ``exclude`` is a collection of names dismissed in an EARLIER super over of
+    the same tie — they cannot bat again, so they are skipped. The pool is only
+    topped back up with them if the restriction would leave a side unable to
+    field a pair (which needs an XI of one or two, so effectively never).
+    """
+    ranked = sorted(xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
+                    reverse=True)
+    out = set(exclude or ())
+    pool = [p for p in ranked if p.get("name") not in out]
+    for p in ranked:                       # safety valve: a side must always bat
+        if len(pool) >= min(n, len(ranked)):
+            break
+        if p.get("name") in out:
+            pool.append(p)
+    return pool[:n]
 
 
-def super_over_bowler(xi):
-    """Best eligible (Bowler/All-rounder) bowler for the super over."""
+def super_over_bowler(xi, exclude=None):
+    """Best eligible (Bowler/All-rounder) bowler for the super over.
+
+    ``exclude`` is the name of the bowler who bowled the PREVIOUS super over of
+    the same tie — a bowler cannot bowl two super overs in a row.
+    """
     elig = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")] or list(xi)
+    if exclude:
+        fresh = [p for p in elig if p.get("name") != exclude]
+        if fresh:
+            elig = fresh
     return max(elig, key=lambda p: p.get("bowl_rating", 0))
 
 
@@ -95,18 +120,39 @@ def super_over_bowler(xi):
 
 def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
                                 target=None, commentary=None, feed=None,
-                                label="Super Over"):
+                                label="Super Over", exclude_batsmen=None,
+                                exclude_bowler=None):
     """Auto-simulate one super-over innings (1 over, 2 wickets, 3 batsmen).
 
-    Returns {runs, wickets, balls, boundaries}. Reuses calculate_outcome so
-    scoring matches the rest of the engine.
+    Both ends of the crease are tracked. That is the whole point: a super over
+    nominates three batsmen, so once one is out the pair at the crease is no
+    longer "slots 0 and 1" — and rotating strike as if it were put a batsman
+    who had already been dismissed back on strike, letting a side keep batting
+    with an out player. The striker and non-striker are now real positions and
+    a dismissed batsman never returns.
+
+    Returns {runs, wickets, balls, deliveries, boundaries, sixes, fours,
+    dismissed, bowler}. ``sixes``/``fours`` feed the boundary countback;
+    ``dismissed``/``bowler`` feed the replay restrictions in
+    :func:`resolve_super_over`. Reuses calculate_outcome so scoring matches the
+    rest of the engine.
     """
     from services.sim_match import _HOW_TO_EVENT, _RUNS_TO_EVENT, _ATTACK
-    batsmen = super_over_batsmen(bat_xi)
-    bowler = super_over_bowler(bowl_xi)
+    batsmen = super_over_batsmen(bat_xi, exclude=exclude_batsmen)
+    bowler = super_over_bowler(bowl_xi, exclude=exclude_bowler)
 
-    runs = wkts = balls = boundaries = 0
-    striker_i, next_i = 0, 2  # batsmen[0] & [1] open; [2] is the reserve
+    runs = wkts = balls = deliveries = 0
+    sixes = fours = 0
+    dismissed = []
+    if not batsmen:
+        return {"runs": 0, "wickets": 0, "balls": 0, "deliveries": 0,
+                "boundaries": 0, "sixes": 0, "fours": 0, "dismissed": [],
+                "bowler": bowler.get("name") if bowler else None}
+    # batsmen[0] & [1] open, batsmen[2] is the reserve. ``next_i`` is the next
+    # man in — never an index that has already been at the crease.
+    striker_i = 0
+    non_striker_i = 1 if len(batsmen) > 1 else 0
+    next_i = 2
     free_hit = False
 
     def _emit(event_key, batsman):
@@ -122,7 +168,11 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
         feed.append({"phase": label, "ball": f"{balls}", "score": f"{runs}/{wkts}",
                      "event": event_key, "text": line or ""})
 
-    while balls < SO_BALLS and wkts < SO_WICKET_LIMIT:
+    def _chased():
+        return target is not None and runs >= target
+
+    while (balls < SO_BALLS and wkts < SO_WICKET_LIMIT
+           and deliveries < SO_MAX_DELIVERIES):
         striker = batsmen[striker_i]
         shot = random.choice(_ATTACK)  # super over = all-out attack
         oc = calculate_outcome(
@@ -132,48 +182,66 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
             bowler.get("bowl_rating", 0),
             free_hit=free_hit, pressure=0.6,
         )
+        deliveries += 1
         t = oc["type"]
+        # Wides and no-balls are re-bowled, but they still carry the penalty run
+        # and can still win a chase — so the target is checked on every delivery,
+        # not just the legal ones.
         if t == "wide":
             runs += 1
             _emit("wide", striker["name"])
+            if _chased():
+                break
             continue
         if t == "noball":
             r = oc.get("runs", 0)
             runs += 1 + r
-            if r in (4, 6):
-                boundaries += 1
+            if r == 6:
+                sixes += 1
+            elif r == 4:
+                fours += 1
             free_hit = True
             _emit("no_ball", striker["name"])
             if r % 2 == 1:
-                striker_i = 1 - striker_i if striker_i < 2 else striker_i
+                striker_i, non_striker_i = non_striker_i, striker_i
+            if _chased():
+                break
             continue
         balls += 1
         free_hit = False
         if t == "legbye":
-            runs += oc.get("runs", 1)
+            r = oc.get("runs", 1)
+            runs += r
             _emit("extras", striker["name"])
+            if r % 2 == 1:
+                striker_i, non_striker_i = non_striker_i, striker_i
         elif t == "wicket":
+            runs += int(oc.get("runs", 0) or 0)   # completed runs on a run out
             wkts += 1
+            dismissed.append(striker.get("name"))
             how = oc.get("how", "Caught")
             _emit(_HOW_TO_EVENT.get(how, "wicket_caught_fielder"), striker["name"])
-            if next_i < len(batsmen):
-                striker_i = next_i
-                next_i += 1
-            else:
-                break
+            if wkts >= SO_WICKET_LIMIT or next_i >= len(batsmen):
+                break                              # 2 down — the innings is over
+            striker_i = next_i                     # new man in at the same end
+            next_i += 1
         else:
             r = oc.get("runs", 0)
             runs += r
-            if r in (4, 6):
-                boundaries += 1
+            if r == 6:
+                sixes += 1
+            elif r == 4:
+                fours += 1
             _emit(_RUNS_TO_EVENT.get(r, "general"), striker["name"])
-            if r % 2 == 1 and next_i <= len(batsmen):
-                # rotate strike between the two batsmen at the crease
-                striker_i = 1 if striker_i == 0 else 0
-        if target is not None and runs >= target:
+            if r % 2 == 1:
+                striker_i, non_striker_i = non_striker_i, striker_i
+        if _chased():
             break
 
-    return {"runs": runs, "wickets": wkts, "balls": balls, "boundaries": boundaries}
+    return {"runs": runs, "wickets": wkts, "balls": balls,
+            "deliveries": deliveries, "boundaries": sixes + fours,
+            "sixes": sixes, "fours": fours, "dismissed": dismissed,
+            "bowler": bowler.get("name") if bowler else None}
 
 
 def resolve_super_over(team_a_xi, team_b_xi, a_name, b_name, pitch,
@@ -181,36 +249,53 @@ def resolve_super_over(team_a_xi, team_b_xi, a_name, b_name, pitch,
                        first_bat="a"):
     """Auto-resolve a tie via super over(s).
 
-    Returns {winner, loser, text, innings: [..], shared: bool}. On a tied super
-    over the side with more boundaries wins; if still level it repeats (capped).
+    Returns {winner, loser, text, innings: [..], shared: bool}. Level on runs
+    goes to cricket's boundary countback — most sixes, then most fours — before
+    a replay, which matches the interactive Super Over (handlers/super_over.py)
+    instead of lumping every boundary together.
+
+    A replay carries the real restrictions across from the previous super over:
+    the side that batted second bats first, batsmen already dismissed cannot bat
+    again, and a bowler cannot bowl two super overs in a row.
     """
-    if first_bat == "a":
-        first_xi, first_name, second_xi, second_name = team_a_xi, a_name, team_b_xi, b_name
-    else:
-        first_xi, first_name, second_xi, second_name = team_b_xi, b_name, team_a_xi, a_name
+    a = {"xi": team_a_xi, "name": a_name, "out": [], "bowled": None}
+    b = {"xi": team_b_xi, "name": b_name, "out": [], "bowled": None}
+    first, second = (a, b) if first_bat == "a" else (b, a)
 
     innings_log = []
     for attempt in range(SO_MAX_REPEATS):
-        i1 = simulate_super_over_innings(first_xi, second_xi, pitch, run_factor,
-                                         target=None, commentary=commentary,
-                                         feed=feed, label=f"Super Over {first_name}")
-        i2 = simulate_super_over_innings(second_xi, first_xi, pitch, run_factor,
-                                         target=i1["runs"] + 1, commentary=commentary,
-                                         feed=feed, label=f"Super Over {second_name}")
-        innings_log.append((first_name, i1, second_name, i2))
+        i1 = simulate_super_over_innings(
+            first["xi"], second["xi"], pitch, run_factor, target=None,
+            commentary=commentary, feed=feed,
+            label=f"Super Over {first['name']}",
+            exclude_batsmen=first["out"], exclude_bowler=second["bowled"])
+        first["out"].extend(i1.get("dismissed") or [])
+        second["bowled"] = i1.get("bowler")
+
+        i2 = simulate_super_over_innings(
+            second["xi"], first["xi"], pitch, run_factor, target=i1["runs"] + 1,
+            commentary=commentary, feed=feed,
+            label=f"Super Over {second['name']}",
+            exclude_batsmen=second["out"], exclude_bowler=first["bowled"])
+        second["out"].extend(i2.get("dismissed") or [])
+        first["bowled"] = i2.get("bowler")
+
+        innings_log.append((first["name"], i1, second["name"], i2))
 
         if i2["runs"] > i1["runs"]:
-            return _so_result(second_name, first_name, i1, i2, innings_log)
+            return _so_result(second["name"], first["name"], i1, i2, innings_log)
         if i1["runs"] > i2["runs"]:
-            return _so_result(first_name, second_name, i1, i2, innings_log)
-        # tied super over → more boundaries wins
-        if i1["boundaries"] != i2["boundaries"]:
-            if i1["boundaries"] > i2["boundaries"]:
-                return _so_result(first_name, second_name, i1, i2, innings_log,
-                                  note="(more boundaries)")
-            return _so_result(second_name, first_name, i1, i2, innings_log,
-                              note="(more boundaries)")
-        # still tied → repeat
+            return _so_result(first["name"], second["name"], i1, i2, innings_log)
+        # Level on runs → boundary countback: most sixes, then most fours.
+        for key, note in (("sixes", "(more sixes)"), ("fours", "(more fours)")):
+            if i1.get(key, 0) != i2.get(key, 0):
+                if i1[key] > i2[key]:
+                    return _so_result(first["name"], second["name"], i1, i2,
+                                      innings_log, note=note)
+                return _so_result(second["name"], first["name"], i1, i2,
+                                  innings_log, note=note)
+        # Still level → another super over, chasing side batting first.
+        first, second = second, first
 
     return {"winner": None, "loser": None, "shared": True,
             "text": "Super Over tied — honours shared", "innings": innings_log}

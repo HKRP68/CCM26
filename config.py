@@ -26,6 +26,7 @@ MEDIA_STORAGE_CHAT_ID = os.getenv("MEDIA_STORAGE_CHAT_ID", "").strip()
 #
 #   command  | Free & Bronze | Silver  | Platinum | Diamond
 #   /claim   | 1h            | 55m     | 50m      | 45m
+#   /sim     | 4h            | 3h 40m  | 3h 20m   | 3h
 #   /gspin   | 8h            | 7h 20m  | 6h 40m   | 6h
 #   /daily   | 24h           | 22h     | 20h      | 18h
 #
@@ -35,6 +36,11 @@ CLAIM_COOLDOWN = 3600    # 1 hour
 DAILY_COOLDOWN = 86400   # 24 hours
 GSPIN_COOLDOWN = 28800   # 8 hours
 XIMAGE_COOLDOWN = 3600  # /ximage render cooldown (1 hour)
+# /sim simulates a whole match server-side (two innings, scorecard images and a
+# full commentary feed), so it is rate-limited like a reward command rather than
+# a free action. A challenge — /sim in reply to another player — spends BOTH
+# players' cooldowns, so a player already on cooldown cannot be challenged.
+SIM_COOLDOWN = 14400     # 4 hours
 
 # ── Paid subscription tiers ─────────────────────────────────────────
 # Manually granted by an admin from the website (no self-serve payment).

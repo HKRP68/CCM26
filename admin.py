@@ -3411,12 +3411,13 @@ def user_reset_cooldowns(user_id):
             stats.last_claim = None
             stats.last_daily = None
             stats.last_gspin = None
+            stats.last_sim = None
             from services.activity_service import log_activity
             log_activity(db, user_id, "admin_reset", "Admin reset all cooldowns")
             u = db.query(User).get(user_id)
             log_admin(db, "cooldown_reset", target_type="user", target_id=user_id,
                       target_name=(u.username or u.first_name) if u else str(user_id),
-                      detail="Reset claim/daily/gspin cooldowns")
+                      detail="Reset claim/daily/gspin/sim cooldowns")
             db.commit()
             flash("All cooldowns reset", "success")
     except Exception as e:

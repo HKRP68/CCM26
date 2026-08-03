@@ -659,7 +659,10 @@ def test_scorecard_images_sent_tie_superover_and_winner():
         # 1) main "Match Tied" card, 2) Super Over card, 3) main winner card.
         assert "Match Tied" in caps
         assert "Super Over" in caps
-        assert "won the match by" in caps
+        # The winner card reads either "won the match by N runs/wickets" or,
+        # when a level score went to the boundary countback, "won on sixes/fours
+        # hit (scores level) — and the match". Both are winner captions.
+        assert "won the match by" in caps or "and the match" in caps
         assert len(photos) >= 3
         # Every scorecard image carries the main-match spectate button.
         assert all(getattr(p, "reply_markup", None) is not None for p in photos)
@@ -841,3 +844,146 @@ def test_many_seeds_always_terminate_with_a_winner():
         assert asyncio.run(start_super_over(ctx, mid, state)) is True
         asyncio.run(_play_match(ctx, mid))
         assert _get(ctx, mid) is None, f"seed {seed} did not finish"
+
+
+# ── Rule enforcement, ball by ball ────────────────────────────────────
+#
+# The tests above drive the real engine, so what happens on any given ball is up
+# to the dice. These script the outcome instead, so the wicket limit, the crease
+# and the extras arithmetic can be asserted exactly.
+
+WIDE = {"type": "extra", "is_extra": True, "extra_type": "Wide", "runs": 0,
+        "batter_out": False, "wicket_type": None}
+BOWLED = {"type": "wicket", "is_extra": False, "runs": 0, "batter_out": True,
+          "wicket_type": "Bowled", "extra_type": ""}
+
+
+def _live_innings():
+    """A Super Over kicked off and taken through selection, ready to bowl."""
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    asyncio.run(_do_selection(ctx, mid))
+    return ctx, mid
+
+
+def _bowl_scripted(ctx, mid, outcome):
+    """Bowl one ball whose outcome is fixed rather than rolled."""
+    so = _get(ctx, mid)
+    bat_tg = so["teams"][so["bat_uid"]]["tg"]
+    bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+    orig = so_mod._super_over_ball
+    so_mod._super_over_ball = lambda *a, **k: dict(outcome)
+    try:
+        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
+        so = _get(ctx, mid)
+        if so and "inn" in so and so["inn"]["stage"] == "LEN":
+            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
+        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
+    finally:
+        so_mod._super_over_ball = orig
+
+
+def test_a_wide_costs_a_run_and_is_re_bowled():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, WIDE)
+    inn = _get(ctx, mid)["inn"]
+    # A wide is one run to the batting side and is NOT a legal ball — it used to
+    # be scored as nothing at all, making it a free re-bowl for the bowler.
+    assert inn["runs"] == 1
+    assert inn["bowl_runs"] == 1
+    assert inn["legal"] == 0
+    assert inn["deliveries"] == 1
+
+
+def test_a_no_ball_carries_the_penalty_run_and_the_batter_keeps_the_six():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    striker = int(so["inn"]["striker"])
+    _bowl_scripted(ctx, mid, {"type": "extra", "is_extra": True,
+                              "extra_type": "No Ball", "runs": 6,
+                              "batter_out": False, "wicket_type": None})
+    inn = _get(ctx, mid)["inn"]
+    assert inn["runs"] == 7                     # 6 off the bat + 1 penalty
+    assert inn["bat"][striker]["r"] == 6        # the six is the batter's
+    assert inn["bat"][striker]["6"] == 1        # ...and counts on the countback
+    assert inn["legal"] == 0
+    assert inn["free_hit"] is True
+
+
+def test_the_innings_is_over_the_moment_the_second_wicket_falls():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    bat_uid = so["bat_uid"]
+    _bowl_scripted(ctx, mid, BOWLED)
+    assert _get(ctx, mid)["inn"]["wickets"] == 1     # backup walks in
+    _bowl_scripted(ctx, mid, BOWLED)
+
+    so = _get(ctx, mid)
+    assert so["score"][bat_uid] == (0, 2)
+    assert so["innings_no"] == 2                     # rolled straight on to the chase
+    assert so["bat_uid"] != bat_uid                  # roles swapped
+    assert so["inn"]["legal"] == 2                   # nobody batted a 3rd time
+
+
+def test_no_shot_is_accepted_once_two_wickets_are_down():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, BOWLED)
+    _bowl_scripted(ctx, mid, BOWLED)
+
+    so = _get(ctx, mid)
+    inn = so["inn"]                                  # the finished innings
+    assert inn["wickets"] == 2
+    # Simulate a prompt that was still on screen when the innings closed: the
+    # shot button must be refused rather than bowling a 3rd ball at a side that
+    # is already all out.
+    inn["stage"] = "SHOT"
+    inn["pending"] = {"delivery": "Bouncer", "length": "Short"}
+    before = (inn["runs"], inn["legal"], inn["deliveries"])
+    asyncio.run(so_shot_callback(
+        _upd(FakeQuery(f"so_sh_{mid}_0", so["teams"][so["bat_uid"]]["tg"])), ctx))
+    assert (inn["runs"], inn["legal"], inn["deliveries"]) == before
+
+
+def test_a_run_out_takes_the_dismissed_batter_off_whichever_end_they_are_at():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    inn = so["inn"]
+    opener, partner, backup = inn["striker"], inn["non_striker"], inn["backup"]
+    # One completed run, then the run out: the batters crossed, so the man who
+    # is out is standing at the NON-striker's end.
+    _bowl_scripted(ctx, mid, {"type": "wicket", "is_extra": False, "runs": 1,
+                              "batter_out": True, "wicket_type": "Run Out",
+                              "extra_type": ""})
+    inn = _get(ctx, mid)["inn"]
+    assert inn["wickets"] == 1
+    assert opener not in (inn["striker"], inn["non_striker"])
+    assert {inn["striker"], inn["non_striker"]} == {partner, backup}
+    assert inn["bowl_wkts"] == 0                # a run out is not the bowler's
+
+
+def test_a_dismissal_off_a_no_ball_still_costs_a_wicket():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, {"type": "extra", "is_extra": True,
+                              "extra_type": "No Ball", "runs": 0,
+                              "batter_out": True, "wicket_type": "Run Out"})
+    inn = _get(ctx, mid)["inn"]
+    assert inn["runs"] == 1                     # the penalty run still stands
+    assert inn["wickets"] == 1                  # and the wicket is not lost
+    assert inn["legal"] == 0                    # a no-ball is still re-bowled
+
+
+def test_dismissed_batters_are_not_re_offered_while_fresh_ones_remain():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    uid = so["bat_uid"]
+    xi = so["teams"][uid]["xi"]                 # five players
+    so["dismissed"][uid] = {int(p["roster_id"]) for p in xi[:3]}
+
+    names = [p["name"] for p in _eligible_batters(so, uid)]
+    # Two fresh batters left, so the pool is topped back up to three — and the
+    # two who never batted are both in it.
+    assert len(names) == 3
+    assert xi[3]["name"] in names and xi[4]["name"] in names

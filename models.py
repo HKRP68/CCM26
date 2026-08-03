@@ -203,6 +203,9 @@ class UserStats(Base):
     last_gspin = Column(DateTime, nullable=True)
     # /ximage Playing XI image render (1h cooldown)
     last_ximage = Column(DateTime, nullable=True)
+    # /sim auto-simulated match (4h cooldown). A challenge sim spends this for
+    # BOTH players, so it also gates who can be challenged.
+    last_sim = Column(DateTime, nullable=True)
     # Free Pack (Mini App, ad-gated, 1h cooldown)
     last_free_pack = Column(DateTime, nullable=True)
     # ── Subscription recurring-drop cooldowns ──

@@ -6,20 +6,30 @@ ball-by-ball commentary as a JSON file. Team setup is automatic:
   - batting order = the one you saved with /sbo; highest batting rating to
     lowest if you never saved one
   - only Bowlers + All-rounders bowl (rotated, no consecutive overs)
+
+/sim runs on a cooldown (``config.SIM_COOLDOWN``, 4 hours; admin-overridable per
+command and reduced by paid tiers). Replying to another player sims your XI
+against theirs, and that is a CHALLENGE: it spends the cooldown for both sides,
+so a player who is still on cooldown cannot be challenged. The clock is only
+started once a match has actually been simulated, so a rejected command (no
+squad, invalid XI, opponent on cooldown) never costs anyone their sim.
 """
 
 import io
 import json
 import logging
 import random
+from datetime import datetime
 
 from sqlalchemy import func
 from telegram import Update, InputFile
 from telegram.ext import ContextTypes
 
+from config import SIM_COOLDOWN
 from database import get_session
-from models import Player
+from models import Player, UserStats
 from handlers.lineup import _get_ordered_roster, validate_xi
+from services.cooldown_service import check_cooldown, format_remaining
 from services.telegram_user_service import sync_telegram_user
 from services.config_service import get_config
 from services.commentary_service import build_commentary_picker
@@ -93,6 +103,32 @@ def _team_display_name(user, fallback="User XI"):
     if user.first_name:
         return f"{user.first_name}'s XI"
     return fallback
+
+
+def _stats_row(session, user_id):
+    """The user's UserStats row, created on first use so the cooldown has
+    somewhere to live."""
+    stats = (session.query(UserStats)
+             .filter(UserStats.user_id == user_id).first())
+    if not stats:
+        stats = UserStats(user_id=user_id)
+        session.add(stats)
+        session.flush()
+    return stats
+
+
+def sim_cooldown_state(session, user):
+    """``(stats, ready, remaining_seconds, cooldown_seconds)`` for ``user``.
+
+    The cooldown comes from ``get_user_cooldown`` rather than the constant, so
+    an admin override on the website and the caller's subscription-tier
+    reduction both apply — the same ladder /claim and /gspin sit on.
+    """
+    from services.command_config_service import get_user_cooldown
+    stats = _stats_row(session, user.id)
+    cooldown = get_user_cooldown(session, user, "sim", SIM_COOLDOWN)
+    ready, remaining = check_cooldown(stats, "last_sim", cooldown)
+    return stats, ready, remaining, cooldown
 
 
 def _reply_target_user(session, update):
@@ -180,6 +216,27 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Do /debut first!")
             return
 
+        async def say(text):
+            """Reply through the progress message when we managed to post one."""
+            if progress:
+                try:
+                    await progress.edit_text(text, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
+            await update.message.reply_text(text, parse_mode="HTML")
+
+        # ── Cooldown gate (checked before the heavy roster reads) ──
+        stats, ready, remaining, cooldown = sim_cooldown_state(session, user)
+        if not ready:
+            await say(
+                f"⏳ <b>/sim is cooling down.</b>\n"
+                f"Your next simulation is ready in <b>{format_remaining(remaining)}</b>.\n\n"
+                f"<i>One sim every {format_remaining(cooldown)} — paid tiers get it "
+                f"back sooner. Meanwhile: /wpm and /cm play out ball by ball, and "
+                f"/vsbot is always open.</i>")
+            return
+
         roster = _get_ordered_roster(session, user.id)
         session.commit()
         if len(roster) < 11:
@@ -213,7 +270,21 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Reply to another real user to sim your XI vs their XI.")
             return
 
+        opponent_stats = None
         if opponent:
+            # A challenge spends the opponent's sim as well as yours, so they
+            # have to be off cooldown too — nobody gets their /sim burned by
+            # someone else's reply, and nobody can be challenged on repeat.
+            opponent_stats, opp_ready, opp_remaining, _ = sim_cooldown_state(
+                session, opponent)
+            if not opp_ready:
+                await say(
+                    f"⏳ <b>{_team_display_name(opponent)} is still on /sim cooldown.</b>\n"
+                    f"They can be challenged again in <b>{format_remaining(opp_remaining)}</b>.\n\n"
+                    f"<i>A challenge sim spends both players' cooldowns, so it "
+                    f"needs both of you ready. Send /sim on its own to play the "
+                    f"Sim XI instead.</i>")
+                return
             opponent_roster = _get_ordered_roster(session, opponent.id)
             if len(opponent_roster) < 11:
                 text = (f"❌ {_team_display_name(opponent)} needs 11 players to simulate "
@@ -259,6 +330,19 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                team_name, opponent_name, toss_winner=toss_winner,
                                toss_decision=toss_decision, commentary=commentary,
                                fmt=fmt)
+
+        # The match has been played — start the clock. Committed here, before
+        # the (slow, failure-prone) rendering and delivery below, so a hiccup in
+        # a scorecard image can never hand out a second free simulation.
+        now = datetime.utcnow()
+        stats.last_sim = now
+        if opponent_stats is not None:
+            opponent_stats.last_sim = now
+        session.commit()
+        cooldown_note = (
+            f"⏳ Next /sim for both sides in <b>{format_remaining(cooldown)}</b>"
+            if opponent_stats is not None
+            else f"⏳ Next /sim in <b>{format_remaining(cooldown)}</b>")
 
         # Pre-render everything while the session is alive.
         card1 = render_innings_card(match["innings1"])
@@ -345,7 +429,8 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(card1, parse_mode="HTML")
         await update.message.reply_text(card2, parse_mode="HTML")
-        await update.message.reply_text(result_text, parse_mode="HTML")
+        await update.message.reply_text(f"{result_text}\n\n{cooldown_note}",
+                                        parse_mode="HTML")
 
         if summary_bytes:
             photo = io.BytesIO(summary_bytes)

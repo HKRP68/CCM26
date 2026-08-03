@@ -661,6 +661,8 @@ def _migrate_add_columns():
     _try_add("game_config", "daily_quick_match_limit", "INTEGER DEFAULT 5")
     # /ximage render cooldown (1 hour)
     _try_add("user_stats", "last_ximage", "TIMESTAMP")
+    # /sim match-simulation cooldown (4 hours, shared by both sides of a challenge)
+    _try_add("user_stats", "last_sim", "TIMESTAMP")
     # Free Pack + cooldown-ready notifications
     _try_add("user_stats", "last_free_pack", "TIMESTAMP")
     _try_add("user_stats", "notified_daily_ready", "BOOLEAN DEFAULT FALSE")
