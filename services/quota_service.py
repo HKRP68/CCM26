@@ -20,11 +20,22 @@ Quotas are admin-tunable from /admin/economy — defaults to 5 each.
 ────────────────────────────────────────────────────────────────────────
 The gap between rewarded ads
 ────────────────────────────────────────────────────────────────────────
-The ad-gated slots are not meant to be spent back to back. Once one is taken,
-the next is locked for ``GameConfig.ad_reward_gap_minutes`` (default 60), so a
-cycle's ad quota is spread across the day rather than drained in two minutes.
+``GameConfig.ad_reward_gap_minutes`` can lock the next ad-gated slot for a
+while after one is taken, so a cycle's ad quota is spread out rather than
+drained in two minutes.
 
-Three rules keep the gap honest and non-hostile:
+**It ships disabled (0).** It was briefly defaulted to an hour, and that one
+number produced the single loudest complaint this feature has ever had:
+players watched a full rewarded ad and were answered "next ad spin in 59m".
+The ad was banked rather than lost, but nobody reads a banked credit as a
+reward — from the other side of the screen it is simply "I watched an ad and
+got nothing", for the spin, the daily claim and the free pack alike. Rationing
+is not worth being indistinguishable from being broken, so watching an ad now
+pays out on the spot and the quota alone decides how many ads are worth
+watching.
+
+The mechanism stays, admin-tunable from /admin/economy, for anyone who wants
+the rationing back. When it is switched on, three rules keep it honest:
 
   • it never touches the FREE use — that one is not an ad reward, so a player
     who opens the app to a free spin is never told to wait;
@@ -45,7 +56,9 @@ DEFAULT_DAILY_AD_QUOTA = 5
 # has none to serve. Small on purpose: it is a rescue, not a second free tier.
 DEFAULT_NOFILL_GRACE = 2
 # Minimum gap between two ad-gated uses of the same feature, in minutes.
-DEFAULT_AD_GAP_MINUTES = 60
+# 0 = watching an ad pays out immediately, which is the shipped behaviour. See
+# the module docstring for why this is not an hour any more.
+DEFAULT_AD_GAP_MINUTES = 0
 # Legacy fallback cycle length, used only when the per-command cooldown can't
 # be resolved (config/services unreachable).
 CYCLE_HOURS = 24

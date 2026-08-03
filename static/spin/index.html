@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Lucky Spin</title>
+  <title>Lucky Card Pick</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -89,104 +89,97 @@
     }
     .balance-row { display: flex; gap: 14px; margin-top: 4px; font-size: 14px; color: var(--hint); font-weight: 600; }
 
-    /* ── Premium Spin Wheel ── */
-    .wheel-container { position: relative; width: 300px; height: 300px; margin: 0 auto 30px auto; }
-    .wheel {
-      width: 100%; height: 100%; border-radius: 50%;
-      background: conic-gradient(from -90deg,
-        #1a1240 0deg 35.5deg, #0a0820 35.5deg 36deg,
-        #4facfe 36deg 71.5deg, #0a0820 71.5deg 72deg,
-        #1a1240 72deg 107.5deg, #0a0820 107.5deg 108deg,
-        #9c27b0 108deg 143.5deg, #0a0820 143.5deg 144deg,
-        #1a1240 144deg 179.5deg, #0a0820 179.5deg 180deg,
-        #ff3b30 180deg 215.5deg, #0a0820 215.5deg 216deg,
-        #1a1240 216deg 251.5deg, #0a0820 251.5deg 252deg,
-        #34c759 252deg 287.5deg, #0a0820 287.5deg 288deg,
-        #1a1240 288deg 323.5deg, #0a0820 323.5deg 324deg,
-        #e8b84b 324deg 359.5deg, #0a0820 359.5deg 360deg
-      );
-      box-shadow:
-        0 0 0 3px #1e1650,
-        0 0 0 5px var(--gold),
-        0 0 0 7px #1e1650,
-        0 0 50px rgba(0,0,0,0.9),
-        0 0 60px rgba(79,172,254,0.12),
-        inset 0 0 20px rgba(0,0,0,0.7);
-      transition: transform 2s cubic-bezier(0.15, 0.85, 0.15, 1);
+    /* ── The deck ──
+       Five face-down cards. The player picks one; the server has already
+       decided which reward is behind it. The pick is the reveal, never the
+       request — see the script below for why that ordering matters. */
+    .deck {
+      display: flex; justify-content: center; align-items: flex-end;
+      gap: 8px; margin: 8px auto 26px; perspective: 1100px;
     }
-    @keyframes spinLoop { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    #spin-wheel.wheel-free-spin { animation: spinLoop 0.7s linear infinite; }
-    .wheel-pointer {
-      position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
-      width: 0; height: 0; border-left: 20px solid transparent; border-right: 20px solid transparent;
-      border-top: 40px solid var(--gold); filter: drop-shadow(0 4px 8px rgba(0,0,0,0.9)) drop-shadow(0 0 6px var(--gold-glow));
-      z-index: 10; transform-origin: 50% 0%;
+    .card {
+      flex: 0 1 74px; height: 112px; padding: 0; border: none; background: none;
+      cursor: default; position: relative;
+      /* The button's own perspective: the deck's does not reach through the
+         transform on this element, and without one the flip renders flat. */
+      perspective: 800px;
+      transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg));
+      transition: transform .25s ease, filter .25s ease, opacity .25s ease;
     }
-    .wheel-pointer.tick { animation: pointer-click 0.15s ease-out; }
-    .wheel-center {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 60px; height: 60px;
-      background: radial-gradient(circle, var(--gold-2), var(--gold), #8a5a00);
-      border-radius: 50%; border: 3px solid var(--gold-2);
-      box-shadow: 0 0 20px var(--gold-glow), 0 0 40px rgba(232,184,75,0.2), 0 0 8px rgba(0,0,0,0.8);
-      display: flex; align-items: center; justify-content: center; font-size: 22px; z-index: 5;
+    .card[data-i="0"] { --fan-y: 12px; --fan-r: -9deg; }
+    .card[data-i="1"] { --fan-y: 4px;  --fan-r: -4deg; }
+    .card[data-i="2"] { --fan-y: 0;    --fan-r: 0deg; }
+    .card[data-i="3"] { --fan-y: 4px;  --fan-r: 4deg; }
+    .card[data-i="4"] { --fan-y: 12px; --fan-r: 9deg; }
+    .card-inner {
+      /* display:block is load-bearing — these wrappers are spans (a <button>
+         may not contain a <div>), and an inline box ignores width/height, so
+         without it the whole card collapses to the size of its crest. */
+      display: block; position: relative; width: 100%; height: 100%;
+      transform-style: preserve-3d;
+      transition: transform .55s cubic-bezier(.4,.9,.3,1.2);
     }
-    .wheel-lights { position: absolute; width: 100%; height: 100%; top: 0; left: 0; pointer-events: none; z-index: 3; }
-    .light {
-      position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; margin-top: -4px; margin-left: -4px;
-      border-radius: 50%; background: #fff; box-shadow: 0 0 6px #fff, 0 0 12px var(--gold);
-      animation: light-flash 0.6s infinite alternate;
+    .face {
+      position: absolute; inset: 0; border-radius: 12px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      backface-visibility: hidden; -webkit-backface-visibility: hidden;
+      overflow: hidden; text-align: center; padding: 4px;
     }
-    .light:nth-child(even) { animation-delay: 0.3s; background: var(--gold); }
-    @keyframes light-flash {
-      0% { opacity: 0.4; filter: brightness(0.8); }
-      100% { opacity: 1; filter: brightness(1.3); box-shadow: 0 0 10px var(--gold), 0 0 20px var(--gold); }
+    .face-back {
+      background:
+        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 3px, transparent 3px 8px),
+        linear-gradient(160deg, #241a52, #150f33 55%, #0b0820);
+      border: 2px solid rgba(232,184,75,.5);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 6px 18px rgba(0,0,0,.6);
     }
-    @keyframes pointer-click {
-      0% { transform: translateX(-50%) rotate(0deg); }
-      50% { transform: translateX(-50%) rotate(-15deg); }
-      100% { transform: translateX(-50%) rotate(0deg); }
+    .face-back::after {
+      content: ''; position: absolute; inset: 6px; border-radius: 7px;
+      border: 1px solid rgba(232,184,75,.25);
     }
-    .slice-text {
-      position: absolute; top: 50%; left: 50%; width: 50%; height: 24px; margin-top: -12px;
-      transform-origin: 0 50%; display: flex; align-items: center; justify-content: flex-end;
-      padding-right: 25px; box-sizing: border-box; font-size: 18px; font-weight: 800;
-      font-family: var(--heading-font);
-      color: #fff; text-shadow: 2px 2px 4px rgba(0,0,0,0.9); user-select: none;
+    .crest { font-size: 26px; filter: drop-shadow(0 2px 4px rgba(0,0,0,.7)); }
+    .face-front {
+      transform: rotateY(180deg);
+      background: linear-gradient(160deg, #2a2258, #161033);
+      border: 2px solid rgba(255,255,255,.16);
+      box-shadow: 0 6px 18px rgba(0,0,0,.6);
     }
-    /* 10 slices, 36 degrees each. Center is i * 36 + 18 */
-    .slice-text[data-i="0"] { transform: rotate(18deg); }
-    .slice-text[data-i="1"] { transform: rotate(54deg); }
-    .slice-text[data-i="2"] { transform: rotate(90deg); }
-    .slice-text[data-i="3"] { transform: rotate(126deg); }
-    .slice-text[data-i="4"] { transform: rotate(162deg); }
-    .slice-text[data-i="5"] { transform: rotate(198deg); }
-    .slice-text[data-i="6"] { transform: rotate(234deg); }
-    .slice-text[data-i="7"] { transform: rotate(270deg); }
-    .slice-text[data-i="8"] { transform: rotate(306deg); }
-    .slice-text[data-i="9"] { transform: rotate(342deg); padding-right: 16px; font-size: 22px; }
+    .face-front .prize { font-size: 24px; line-height: 1; }
+    .face-front .prize-label {
+      font-size: 10px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase;
+      color: var(--hint); margin-top: 5px; line-height: 1.15;
+      max-width: 100%; padding: 0 3px; word-break: break-word;
+    }
 
-    .grand-prize-tag {
-      display: flex; align-items: center; justify-content: center; gap: 10px;
-      margin: 20px auto 25px auto; padding: 12px 20px; max-width: 300px; border-radius: 30px;
-      background: linear-gradient(135deg, rgba(232,184,75,0.1) 0%, rgba(232,184,75,0.04) 100%);
-      border: 1px solid rgba(232,184,75,0.35);
-      box-shadow: 0 0 20px rgba(232,184,75,0.12), inset 0 0 12px rgba(232,184,75,0.06);
-      font-size: 14px; color: #fff; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-      position: relative; overflow: hidden;
+    .deck.armed .card { cursor: pointer; animation: float 1.6s ease-in-out infinite; }
+    .deck.armed .card[data-i="1"] { animation-delay: .12s; }
+    .deck.armed .card[data-i="2"] { animation-delay: .24s; }
+    .deck.armed .card[data-i="3"] { animation-delay: .36s; }
+    .deck.armed .card[data-i="4"] { animation-delay: .48s; }
+    .deck.armed .face-back { border-color: var(--gold); box-shadow: 0 0 20px var(--gold-glow), inset 0 1px 0 rgba(255,255,255,.14); }
+    .deck.armed .card:active { transform: translateY(calc(var(--fan-y, 0px) - 7px)) rotate(var(--fan-r, 0deg)) scale(.95); }
+    @keyframes float {
+      0%, 100% { transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg)); }
+      50% { transform: translateY(calc(var(--fan-y, 0px) - 8px)) rotate(var(--fan-r, 0deg)); }
     }
-    .grand-prize-tag::before {
-      content: '';
-      position: absolute; top: 0; left: -80%;
-      width: 50%; height: 100%;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-      transform: skewX(-20deg);
-      animation: prizeShimmer 3s ease-in-out 1s infinite;
+
+    .card.dealing { animation: deal .4s cubic-bezier(.3,1.3,.5,1) both; }
+    @keyframes deal {
+      from { opacity: 0; transform: translate(-46px, 30px) rotate(-26deg) scale(.78); }
+      to   { opacity: 1; transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg)); }
     }
-    @keyframes prizeShimmer { 0% { left: -80%; } 60% { left: 140%; } 100% { left: 140%; } }
-    .prize-crown { font-size: 20px; animation: crown-float 2s ease-in-out infinite alternate; }
-    .prize-tag-text { font-family: var(--heading-font); font-weight: 700; }
-    @keyframes crown-float { 0% { transform: translateY(0) scale(1); } 100% { transform: translateY(-3px) scale(1.1); } }
+
+    .card.flipped .card-inner { transform: rotateY(180deg); }
+    .card.miss { opacity: .4; filter: saturate(.3); }
+    .card.won { z-index: 2; }
+    .card.won .card-inner { transform: rotateY(180deg) scale(1.16); }
+    .card.won .face-front {
+      border-color: var(--gold);
+      background: linear-gradient(160deg, rgba(232,184,75,.32), rgba(22,16,51,.96));
+      box-shadow: 0 0 30px rgba(232,184,75,.8);
+    }
+    .card.won .face-front .prize-label { color: #fff; }
+    .card.won.tier-player .face-front { border-color: #ffd966; box-shadow: 0 0 42px rgba(255,217,102,1); }
+    .card.won.tier-gems .face-front { border-color: #a78bfa; box-shadow: 0 0 32px rgba(167,139,250,.9); }
 
     @keyframes btnShimmer { 0% { left: -60%; } 100% { left: 130%; } }
     .btn {
@@ -232,8 +225,42 @@
       animation: goldTextShimmer 3s ease-in-out infinite;
     }
     @keyframes goldTextShimmer { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
-    .title-block p { color: var(--hint); margin: 0; font-size: 15px; }
-    .spin-status { text-align: center; font-size: 14px; margin-top: 18px; color: var(--hint); font-weight: 600; min-height: 22px; }
+    .title-block p { color: var(--hint); margin: 0; font-size: 15px; min-height: 20px; }
+    .title-block p.live { color: var(--gold); font-weight: 700; }
+
+    .prize-tag {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      margin: 0 auto 22px auto; padding: 12px 20px; max-width: 320px; border-radius: 30px;
+      background: linear-gradient(135deg, rgba(232,184,75,0.1) 0%, rgba(232,184,75,0.04) 100%);
+      border: 1px solid rgba(232,184,75,0.35);
+      box-shadow: 0 0 20px rgba(232,184,75,0.12), inset 0 0 12px rgba(232,184,75,0.06);
+      font-size: 14px; color: #fff; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      position: relative; overflow: hidden;
+    }
+    .prize-tag::before {
+      content: '';
+      position: absolute; top: 0; left: -80%;
+      width: 50%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+      transform: skewX(-20deg);
+      animation: prizeShimmer 3s ease-in-out 1s infinite;
+    }
+    @keyframes prizeShimmer { 0% { left: -80%; } 60% { left: 140%; } 100% { left: 140%; } }
+    .prize-crown { font-size: 20px; animation: crown-float 2s ease-in-out infinite alternate; }
+    .prize-tag-text { font-family: var(--heading-font); font-weight: 700; }
+    @keyframes crown-float { 0% { transform: translateY(0) scale(1); } 100% { transform: translateY(-3px) scale(1.1); } }
+
+    .status { text-align: center; font-size: 14px; margin-top: 18px; color: var(--hint); font-weight: 600; min-height: 22px; }
+
+    @media (max-width: 360px) {
+      .deck { gap: 5px; }
+      .card { flex-basis: 62px; height: 96px; --fan-y: 0 !important; --fan-r: 0deg !important; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .deck.armed .card, .card.dealing, .pulse, .prize-tag::before,
+      .title-block h1, .btn::after { animation: none !important; }
+      .card, .card-inner { transition: none !important; }
+    }
   </style>
 </head>
 <body>
@@ -250,50 +277,54 @@
     </div>
 
     <div class="title-block">
-      <h1>Lucky Spin</h1>
-      <p>Spin the wheel to win the Grand Prize!</p>
+      <h1>Lucky Card Pick</h1>
+      <p id="hint">Five cards. One is yours.</p>
     </div>
 
-    <div class="wheel-container">
-      <div class="wheel-pointer"></div>
-      <div class="wheel-lights">
-        <div class="light" style="transform: rotate(0deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(36deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(72deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(108deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(144deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(180deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(216deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(252deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(288deg) translate(146px);"></div>
-        <div class="light" style="transform: rotate(324deg) translate(146px);"></div>
-      </div>
-      <div class="wheel" id="spin-wheel">
-        <div class="slice-text" data-i="0">100</div>
-        <div class="slice-text" data-i="1">500</div>
-        <div class="slice-text" data-i="2">💎</div>
-        <div class="slice-text" data-i="3">1k</div>
-        <div class="slice-text" data-i="4">100</div>
-        <div class="slice-text" data-i="5">2k</div>
-        <div class="slice-text" data-i="6">💎</div>
-        <div class="slice-text" data-i="7">500</div>
-        <div class="slice-text" data-i="8">100</div>
-        <div class="slice-text" data-i="9">🏆</div>
-      </div>
-      <div class="wheel-center">⭐</div>
+    <div class="deck" id="deck" role="group" aria-label="Five face-down cards">
+      <button class="card" type="button" data-i="0" onclick="onCardPick(0)" aria-label="Card 1">
+        <span class="card-inner">
+          <span class="face face-back"><span class="crest">🏏</span></span>
+          <span class="face face-front"><span class="prize">🎁</span><span class="prize-label"></span></span>
+        </span>
+      </button>
+      <button class="card" type="button" data-i="1" onclick="onCardPick(1)" aria-label="Card 2">
+        <span class="card-inner">
+          <span class="face face-back"><span class="crest">🏏</span></span>
+          <span class="face face-front"><span class="prize">🎁</span><span class="prize-label"></span></span>
+        </span>
+      </button>
+      <button class="card" type="button" data-i="2" onclick="onCardPick(2)" aria-label="Card 3">
+        <span class="card-inner">
+          <span class="face face-back"><span class="crest">🏏</span></span>
+          <span class="face face-front"><span class="prize">🎁</span><span class="prize-label"></span></span>
+        </span>
+      </button>
+      <button class="card" type="button" data-i="3" onclick="onCardPick(3)" aria-label="Card 4">
+        <span class="card-inner">
+          <span class="face face-back"><span class="crest">🏏</span></span>
+          <span class="face face-front"><span class="prize">🎁</span><span class="prize-label"></span></span>
+        </span>
+      </button>
+      <button class="card" type="button" data-i="4" onclick="onCardPick(4)" aria-label="Card 5">
+        <span class="card-inner">
+          <span class="face face-back"><span class="crest">🏏</span></span>
+          <span class="face face-front"><span class="prize">🎁</span><span class="prize-label"></span></span>
+        </span>
+      </button>
     </div>
 
-    <div class="grand-prize-tag">
+    <div class="prize-tag">
       <span class="prize-crown">👑</span>
-      <span class="prize-tag-text">Grand Prize: <b>Rare Player Card</b></span>
+      <span class="prize-tag-text">Top card: <b>Rare Player Card</b></span>
     </div>
 
     <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
-      <button class="btn pulse" id="free-spin-btn" onclick="executeSpin(false)"><span>🎁 Spin for Free</span></button>
-      <button class="btn ghost" id="ad-spin-btn" onclick="executeSpin(true)"><span>📺 Watch Ad to Spin</span></button>
+      <button class="btn pulse" id="free-btn" onclick="executePick(false)"><span>🎁 Free Pick</span></button>
+      <button class="btn ghost" id="ad-btn" onclick="executePick(true)"><span>📺 Watch Ad to Play</span></button>
     </div>
 
-    <div class="spin-status" id="spin-status"></div>
+    <div class="status" id="status"></div>
   </div>
 
   <script>
@@ -304,8 +335,11 @@
     function authHeaders() {
       return { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData };
     }
+    function haptic(kind) {
+      try { tg?.HapticFeedback?.impactOccurred(kind || 'light'); } catch (e) {}
+    }
 
-    // Greet the user from initData (cosmetic; balances fill in after a spin).
+    // Greet the user from initData (cosmetic; balances fill in after a round).
     (function greet() {
       try {
         const u = tg?.initDataUnsafe?.user;
@@ -322,15 +356,24 @@
       if (bal.gems != null) document.getElementById('bal-gems').innerText = Number(bal.gems).toLocaleString();
     }
 
+    const freeBtn = () => document.getElementById('free-btn');
+    const adBtn = () => document.getElementById('ad-btn');
+    const statusEl = () => document.getElementById('status');
+
+    function setHint(text, live) {
+      const el = document.getElementById('hint');
+      el.textContent = text;
+      el.classList.toggle('live', !!live);
+    }
+    function setStatus(html) { statusEl().innerHTML = html; }
+
     // The quota as the server last reported it. Null until the first load —
-    // and that gap mattered: this page used to offer "Watch Ad to Spin" with
-    // no idea whether a slot existed, so during the hour between rewarded ads
-    // a fresh open meant watching an ad the spin would then refuse.
+    // and that gap mattered: this page used to offer "Watch Ad to Play" with
+    // no idea whether a slot existed, so a fresh open could mean watching an
+    // ad the server would then refuse.
     let spinQuota = null;
 
     async function loadQuota() {
-      const freeBtn = document.getElementById('free-spin-btn');
-      const adBtn = document.getElementById('ad-spin-btn');
       try {
         const res = await fetch('/api/webapp/init', {
           method: 'POST', headers: authHeaders(), body: '{}' });
@@ -338,116 +381,216 @@
         if (!res.ok || !data.ok) return;
         setBalance({ coins: data.user?.total_coins, gems: data.user?.total_gems });
         spinQuota = data.gspin?.quota || null;
-        if (!spinQuota) return;
-        if (!spinQuota.free_available) {
-          freeBtn.innerHTML = '<span>⏳ Free spin used</span>';
-          freeBtn.classList.remove('pulse');
-          freeBtn.disabled = true;
-        }
-        if ((spinQuota.ads_saved || 0) > 0) {
-          adBtn.disabled = false;
-          adBtn.innerHTML = `<span>🎟️ Spin with saved ad (${spinQuota.ads_saved})</span>`;
-          return;
-        }
-        applyAdGap(spinQuota, adBtn);
+        applyQuota(spinQuota);
       } catch (e) {
         // Leave the buttons as they are: a failed status read must not be the
-        // thing that stops someone spinning.
-        console.warn('[spin] could not read quota', e);
+        // thing that stops someone playing.
+        console.warn('[pick] could not read quota', e);
       }
     }
 
-    let currentRotation = 0;
-
-    // Read the wheel's current visual rotation (0..360) from its computed transform.
-    function currentWheelAngle() {
-      const wheel = document.getElementById('spin-wheel');
-      const style = window.getComputedStyle(wheel);
-      const matrix = style.transform || style.webkitTransform;
-      if (!matrix || matrix === 'none') return 0;
-      try {
-        const v = matrix.split('(')[1].split(')')[0].split(',');
-        let angle = Math.round(Math.atan2(parseFloat(v[1]), parseFloat(v[0])) * (180 / Math.PI));
-        if (angle < 0) angle += 360;
-        return angle;
-      } catch (e) { return 0; }
+    // Paint both buttons from a quota snapshot.
+    function applyQuota(quota) {
+      if (!quota) return;
+      if (quota.free_available) {
+        freeBtn().disabled = false;
+        freeBtn().classList.add('pulse');
+        freeBtn().innerHTML = '<span>🎁 Free Pick</span>';
+      } else {
+        freeBtn().innerHTML = '<span>⏳ Free pick used</span>';
+        freeBtn().classList.remove('pulse');
+        freeBtn().disabled = true;
+      }
+      // A saved ad — one watched but never spent — is redeemed server-side
+      // from the ledger, so it opens a round with no new ad at all.
+      if ((quota.ads_saved || 0) > 0) {
+        adBtn().disabled = false;
+        adBtn().innerHTML = `<span>🎟️ Play with saved ad (${quota.ads_saved})</span>`;
+        return;
+      }
+      applyAdGap(quota, adBtn());
     }
 
-    // Start an immediate, continuous free spin so the wheel reacts the instant
-    // the user taps — instead of sitting frozen while the network request runs.
-    function startContinuousSpin() {
-      const wheel = document.getElementById('spin-wheel');
-      wheel.style.transition = 'none';
-      wheel.classList.add('wheel-free-spin');
+    // Wait time for the gap between rewarded ads: "45m", "1h 5m".
+    function formatGap(seconds) {
+      const mins = Math.max(1, Math.ceil(Math.max(0, seconds || 0) / 60));
+      if (mins < 60) return `${mins}m`;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return m ? `${h}h ${m}m` : `${h}h`;
     }
 
-    // Stop the continuous spin, pinning the wheel at its current visual angle so
-    // there is no jump before the deterministic landing (or on error/cancel).
-    function stopContinuousSpin() {
-      const wheel = document.getElementById('spin-wheel');
-      const angle = currentWheelAngle();
-      wheel.classList.remove('wheel-free-spin');
-      wheel.style.transition = 'none';
-      wheel.style.transform = `rotate(${angle}deg)`;
-      void wheel.offsetWidth; // flush reflow so the next transition animates
-      currentRotation = angle;
-    }
-
-    function pickSlice(reward) {
-      // Land on a slice that matches the reward type; otherwise a coin slice.
-      if (reward && reward.type === 'player') return 9;       // jackpot slice
-      if (reward && reward.type === 'gems') return [2, 6][Math.floor(Math.random() * 2)];
-      const coinSlices = [0, 1, 3, 4, 5, 7, 8];
-      return coinSlices[Math.floor(Math.random() * coinSlices.length)];
-    }
-
-    // How long the wheel takes to land. The reward is already decided by the
-    // time this runs, so the animation is only presentation — five seconds of
-    // it read as the spin hanging. Kept in one place so the landing, the tick
-    // loop and the reveal below can never drift apart.
-    const SPIN_ANIM_MS = 2000;
-
-    function animateTo(targetIndex) {
-      try { tg?.HapticFeedback?.impactOccurred('rigid'); } catch (e) {}
-      const offset = Math.floor(Math.random() * 24) - 12;     // -12..+12 deg
-      const sliceCenter = targetIndex * 36 + 18;
-      const targetDegree = 270 - (sliceCenter + offset);
-      const extraSpins = 3;
-      let nextRotation = currentRotation + (360 * extraSpins);
-      nextRotation -= nextRotation % 360;
-      currentRotation = nextRotation + targetDegree;
-
-      const wheel = document.getElementById('spin-wheel');
-      const pointer = document.querySelector('.wheel-pointer');
-      // Restore the deceleration transition (it is cleared during the continuous spin).
-      wheel.style.transition = `transform ${SPIN_ANIM_MS}ms cubic-bezier(0.15, 0.85, 0.15, 1)`;
-      wheel.style.transform = `rotate(${currentRotation}deg)`;
-
-      // Pointer "tick" + haptic as each slice passes under the pointer.
-      let lastSlice = -1;
-      const startTime = Date.now();
-      const duration = SPIN_ANIM_MS;
-      function checkTick() {
-        if (Date.now() - startTime >= duration) { pointer?.classList.remove('tick'); return; }
-        const style = window.getComputedStyle(wheel);
-        const matrix = style.transform || style.webkitTransform;
-        if (matrix && matrix !== 'none') {
-          const v = matrix.split('(')[1].split(')')[0].split(',');
-          let angle = Math.round(Math.atan2(parseFloat(v[1]), parseFloat(v[0])) * (180 / Math.PI));
-          if (angle < 0) angle += 360;
-          const cur = Math.floor(angle / 36);
-          if (cur !== lastSlice) {
-            lastSlice = cur;
-            if (pointer) { pointer.classList.remove('tick'); void pointer.offsetWidth; pointer.classList.add('tick'); }
-            try { tg?.HapticFeedback?.impactOccurred('light'); } catch (e) {}
-          }
+    // Reflect the server's quota on the ad button: locked with a countdown
+    // while the gap runs, and re-enabled by the timer when it is up, so the
+    // page recovers without a reload. The gap ships disabled, so on a default
+    // deployment this only ever takes the `release()` branch.
+    function applyAdGap(quota, btn) {
+      const wait = quota?.ad_ready_in || 0;
+      // The gap elapsing is not the same as there being a slot to spend. With
+      // the cycle's last ad slot gone, re-enabling on the timer alone invites
+      // an ad the server will answer `cycle_exhausted` to — banked, so nothing
+      // is lost, but a wasted ad view all the same.
+      const slotsLeft = (quota?.ad_used ?? 0) < (quota?.ad_total ?? 0);
+      const release = () => {
+        btn.disabled = !slotsLeft;
+        btn.innerHTML = slotsLeft
+          ? '<span>📺 Watch Ad to Play</span>'
+          : '<span>✅ All picks used</span>';
+      };
+      if (wait <= 0) { release(); return; }
+      btn.disabled = true;
+      const paint = (secs) => {
+        btn.innerHTML = `<span>⏱️ Next ad pick in ${formatGap(secs)}</span>`;
+      };
+      paint(wait);
+      clearInterval(window.__adGapTimer);
+      let left = wait;
+      window.__adGapTimer = setInterval(() => {
+        left -= 30;
+        if (left <= 0) {
+          clearInterval(window.__adGapTimer);
+          release();
+          return;
         }
-        requestAnimationFrame(checkTick);
-      }
-      requestAnimationFrame(checkTick);
+        paint(left);
+      }, 30000);
     }
 
-    function launchSpinConfetti(type) {
+    // ── The deck ────────────────────────────────────────────────────
+    const CARD_COUNT = 5;
+    // Never leave a granted reward unseen: a player who watches an ad and then
+    // puts the phone down still gets the reveal.
+    const AUTO_REVEAL_MS = 9000;
+    const DECOYS = [
+      // Kept to one short word each: these sit on a 74px card face, and a
+      // two-word label wraps into the border.
+      { emoji: '💰', label: 'Coins' },
+      { emoji: '💎', label: 'Gems' },
+      { emoji: '⭐', label: 'QP' },
+      { emoji: '🎁', label: 'Pack' },
+      { emoji: '🏏', label: 'Player' },
+      { emoji: '🧤', label: 'Miss' },
+      { emoji: '🎯', label: 'Almost' },
+    ];
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    let pendingPick = null;      // the reward waiting on a tap
+    let autoTimer = null;
+
+    const cards = () => Array.from(document.querySelectorAll('#deck .card'));
+
+    function resetDeck(hint) {
+      clearTimeout(autoTimer);
+      autoTimer = null;
+      pendingPick = null;
+      document.getElementById('deck').classList.remove('armed');
+      cards().forEach(card => {
+        card.classList.remove('flipped', 'won', 'miss', 'dealing', 'tier-player', 'tier-gems');
+        card.style.animationDelay = '';
+        card.disabled = true;
+        card.querySelector('.prize').textContent = '🎁';
+        card.querySelector('.prize-label').textContent = '';
+      });
+      setHint(hint || 'Five cards. One is yours.', false);
+    }
+
+    function armDeck(reward) {
+      pendingPick = reward;
+      document.getElementById('deck').classList.add('armed');
+      cards().forEach((card, i) => {
+        card.disabled = false;
+        if (!reduceMotion.matches) {
+          card.classList.remove('dealing');
+          void card.offsetWidth;
+          card.style.animationDelay = `${i * 55}ms`;
+          card.classList.add('dealing');
+        }
+      });
+      setHint('👆 Pick a card', true);
+      setStatus('');
+      haptic('light');
+      clearTimeout(autoTimer);
+      autoTimer = setTimeout(() => {
+        if (pendingPick) reveal(Math.floor(Math.random() * CARD_COUNT));
+      }, AUTO_REVEAL_MS);
+    }
+
+    // Shuffled decoy faces for the four losing cards, minus anything that
+    // reads as the prize the player actually won — a "GEMS" card next to a
+    // gems win looks like the game showed them two winners.
+    function decoysFor(reward) {
+      const byType = { coins: 'coins', gems: 'gems', quest_points: 'qp',
+                       pack: 'pack', player: 'player' };
+      const banned = new Set([
+        (reward.label || '').toLowerCase(),
+        byType[reward.type] || '',
+      ]);
+      const pool = DECOYS.filter(d => !banned.has(d.label.toLowerCase()));
+      return (pool.length ? pool : DECOYS).sort(() => Math.random() - 0.5);
+    }
+
+    function onCardPick(index) {
+      if (!pendingPick) return;
+      haptic('medium');
+      reveal(index);
+    }
+
+    function reveal(index) {
+      const reward = pendingPick;
+      if (!reward) return;
+      pendingPick = null;                       // one reveal per round
+      clearTimeout(autoTimer);
+      autoTimer = null;
+      document.getElementById('deck').classList.remove('armed');
+
+      const decoys = decoysFor(reward);
+
+      cards().forEach((card, i) => {
+        card.disabled = true;
+        card.style.animationDelay = '';
+        card.classList.remove('dealing');
+        const won = (i === index);
+        if (won) {
+          card.querySelector('.prize').textContent = reward.emoji || '🎁';
+          card.querySelector('.prize-label').textContent = cardLabel(reward);
+          card.classList.add('won');
+          if (reward.type === 'player') card.classList.add('tier-player');
+          else if (reward.type === 'gems') card.classList.add('tier-gems');
+        } else {
+          const decoy = decoys[i % decoys.length] || DECOYS[0];
+          card.querySelector('.prize').textContent = decoy.emoji;
+          card.querySelector('.prize-label').textContent = decoy.label;
+          card.classList.add('miss');
+        }
+        setTimeout(() => card.classList.add('flipped'),
+                   reduceMotion.matches ? 0 : (won ? 0 : 260 + i * 70));
+      });
+
+      setHint('', false);
+      setTimeout(() => {
+        setStatus(rewardText(reward));
+        launchConfetti(reward.type);
+        try {
+          if (reward.type === 'player') tg?.HapticFeedback?.notificationOccurred('success');
+          else tg?.HapticFeedback?.impactOccurred('heavy');
+        } catch (e) {}
+        // The round is over — hand the buttons back. Both are held down while
+        // a hand is live (see executePick's finally), so without this the page
+        // would sit on a revealed card with nothing left to press.
+        applyQuota(spinQuota);
+      }, reduceMotion.matches ? 0 : 520);
+    }
+
+    function cardLabel(r) {
+      if (r.type === 'coins') return `+${Number(r.amount || 0).toLocaleString()}`;
+      if (r.type === 'gems') return `+${r.amount} 💎`;
+      if (r.type === 'quest_points') return `+${r.amount} QP`;
+      if (r.type === 'player') return r.player_rating ? `${r.player_rating} OVR` : 'Player';
+      if (r.type === 'pack') return 'Pack';
+      return r.label || 'Reward';
+    }
+
+    function launchConfetti(type) {
+      if (reduceMotion.matches) return;
       const palettes = {
         player: ['#e8b84b', '#fcc844', '#fff', '#ff8c00', '#ffd700'],
         gems:   ['#a78bfa', '#c4b5fd', '#7c3aed', '#fff', '#e0d9ff'],
@@ -474,9 +617,9 @@
         ].join(';');
         layer.appendChild(p);
       }
-      if (!document.getElementById('spin-confetti-kf')) {
+      if (!document.getElementById('confetti-kf')) {
         const s = document.createElement('style');
-        s.id = 'spin-confetti-kf';
+        s.id = 'confetti-kf';
         s.textContent = '@keyframes confettiFall{0%{transform:translateY(0) rotateZ(0);opacity:1}100%{transform:translateY(110vh) rotateZ(720deg);opacity:0}}';
         document.head.appendChild(s);
       }
@@ -486,15 +629,18 @@
     function rewardText(r) {
       if (!r) return 'You won a prize!';
       if (r.type === 'player') {
-        return `<span style="color:#FFD700;font-size:18px;font-weight:bold;text-shadow:0 0 15px #ffd700;">🎉 JACKPOT! Won ${r.player_name || 'a player'}${r.player_rating ? ` (${r.player_rating} OVR)` : ''}! 🎉</span>`;
+        return `<span style="color:#FFD700;font-size:18px;font-weight:bold;text-shadow:0 0 15px #ffd700;">🎉 ${r.player_name || 'A player'}${r.player_rating ? ` (${r.player_rating} OVR)` : ''}! 🎉</span>`;
       }
       if (r.type === 'gems') return `<span style="color:#a78bfa;">You won ${Number(r.amount).toLocaleString()} gems! 💎</span>`;
+      if (r.type === 'quest_points') return `<span style="color:#00f2fe;">You won ${Number(r.amount).toLocaleString()} quest points! ⭐</span>`;
+      if (r.type === 'pack') return `<span style="color:#00f2fe;">You won a pack! 🎁</span>`;
       return `<span style="color:#00f2fe;">You won ${Number(r.amount).toLocaleString()} coins!</span>`;
     }
 
-    async function doSpin(adToken, onRetry) {
-      // Hard timeout so a slow/hanging request can never leave the wheel
-      // spinning forever — it aborts and surfaces an error instead.
+    // ── The reward call ─────────────────────────────────────────────
+    async function claimReward(adToken, onRetry) {
+      // Hard timeout so a slow/hanging request can never leave the page waiting
+      // forever — it aborts and surfaces an error instead.
       //
       // Retried up to three times on a transport failure, always with the same
       // request_id. The ad is already spent by the time this runs, so a dropped
@@ -509,7 +655,7 @@
       let lastErr = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6000);
+        const timer = setTimeout(() => controller.abort(), 8000);
         try {
           const res = await fetch('/api/webapp/spin', {
             method: 'POST', headers: authHeaders(),
@@ -520,8 +666,6 @@
         } catch (e) {
           lastErr = e;
           if (attempt < 2) {
-            // Say that it is reconnecting. A silent retry behind a spinning
-            // wheel is indistinguishable from the wheel being stuck.
             try { onRetry?.(attempt + 1); } catch (_) {}
             await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
           }
@@ -532,160 +676,195 @@
       throw lastErr;
     }
 
+    // ── The ad ──────────────────────────────────────────────────────
+    // Returns {token} when the player has genuinely earned a slot, or
+    // {error} naming why they haven't.
+    //
+    // Only a *watched* ad mints a token. This used to call /ad-completed
+    // regardless — after a skip, after a timeout, even when the SDK was never
+    // usable — which meant the page handed out rewards for ads nobody saw. A
+    // network that served nothing is a real problem and it has its own answer
+    // below (the no-fill pass); silently paying out is not that answer.
     async function getAdToken() {
-      // Best-effort: show an ad if the SDK is available, then claim a token.
-      // The SDK promise is not guaranteed to settle — a request that dies on a
-      // phone network can hang indefinitely — so it is raced against a timer
-      // rather than awaited outright, which is what used to strand this page on
-      // "LOADING AD…" with nothing ever happening.
+      let show = null;
       try {
-        const show = await adShowFn();
-        if (show) {
-          await Promise.race([
-            show(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('ad timeout')), 12000)),
-          ]);
+        show = await adShowFn();
+      } catch (e) {
+        console.warn('[ads] no usable show function', e);
+      }
+      if (!show) {
+        // No ad network configured at all (dev, or a deployment with no block
+        // id) — the same mock token the Mini App sends. The server accepts a
+        // MOCK- token only when ads really are unconfigured or WEBAPP_DEV_MODE
+        // is on, so this cannot become a way past a live ad network.
+        await window.__adSdkReady;
+        if (!window.__adConfig?.configured) {
+          setStatus('📺 Playing ad… (mock)');
+          await new Promise(r => setTimeout(r, 1000));
+          return { token: 'MOCK-' + Date.now() };
         }
-      } catch (e) { /* ad skipped/failed/timed out — still try to claim */ }
-      // Bound the claim request so a stalled ad-completion can't hang the spin.
+        // Configured, but the SDK never became usable: blocked domain, dead
+        // DNS, a block id it rejects. The player cannot watch an ad their
+        // network will not load, so rescue the attempt with a pass.
+        return await noFillPass('unavailable');
+      }
+
+      let done = false;
+      try {
+        // The SDK promise is not guaranteed to settle — a request that dies on
+        // a phone network can hang indefinitely — so it is raced against a
+        // timer rather than awaited outright, which is what used to strand
+        // this page on "LOADING AD…" with nothing ever happening.
+        const result = await Promise.race([
+          show(),
+          new Promise((_, reject) => setTimeout(
+            () => reject({ nofill: true, message: 'ad request timed out' }), 12000)),
+        ]);
+        // Some SDK versions resolve without `done` when the user closed the ad
+        // early. Treat a missing `done` as a skip, not as a completed view.
+        done = !!(result && result.done !== false);
+      } catch (e) {
+        const desc = ((e && (e.description || e.message)) || '').toString();
+        const state = ((e && (e.state || e.error)) || '').toString().toLowerCase();
+        const nofill = !!(e && e.nofill)
+          || /no.?banner|not.?loaded|unavailable|empty|no.?ad|no.?fill/i.test(desc)
+          || state.includes('nofill') || state.includes('no_banner')
+          || state.includes('load');
+        // A skip is the player's own choice and gets no rescue — replaying an
+        // ad someone just closed, or paying them for it, are both wrong.
+        return nofill ? await noFillPass('nofill') : { error: 'skipped' };
+      }
+      if (!done) return { error: 'skipped' };
+
+      // Bound the claim request so a stalled ad-completion can't hang the round.
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
       try {
         const res = await fetch('/api/webapp/ad-completed', {
           method: 'POST', headers: authHeaders(), signal: controller.signal });
         const data = await res.json().catch(() => ({}));
-        return data && data.ad_token ? data.ad_token : '';
+        if (data && data.ad_token) return { token: data.ad_token };
+      } catch (e) {
+        console.warn('[ads] could not register the completed ad', e);
       } finally {
         clearTimeout(timer);
       }
+      // The ad was watched. Even if this response was lost, the server wrote
+      // it to the ledger, so the round can go ahead with no token and the
+      // saved ad is redeemed there.
+      return { token: '' };
     }
 
-    // Wait time for the gap between rewarded ads: "45m", "1h 5m".
-    function formatGap(seconds) {
-      const mins = Math.max(1, Math.ceil(Math.max(0, seconds || 0) / 60));
-      if (mins < 60) return `${mins}m`;
-      const h = Math.floor(mins / 60), m = mins % 60;
-      return m ? `${h}h ${m}m` : `${h}h`;
-    }
-
-    // Reflect the server's quota on the ad button: locked with a countdown
-    // while the gap runs, and re-enabled by the timer when it is up, so the
-    // page recovers without a reload.
-    function applyAdGap(quota, adBtn) {
-      const wait = quota?.ad_ready_in || 0;
-      // The gap elapsing is not the same as there being a slot to spend. With
-      // the cycle's last ad slot gone, re-enabling on the timer alone invites
-      // an ad the server will answer `cycle_exhausted` to — banked, so nothing
-      // is lost, but a wasted ad view all the same.
-      const slotsLeft = (quota?.ad_used ?? 0) < (quota?.ad_total ?? 0);
-      const release = () => {
-        adBtn.disabled = !slotsLeft;
-        adBtn.innerHTML = slotsLeft
-          ? '<span>📺 Watch Ad to Spin</span>'
-          : '<span>✅ All spins used</span>';
-      };
-      if (wait <= 0) { release(); return; }
-      adBtn.disabled = true;
-      const paint = (secs) => {
-        adBtn.innerHTML = `<span>⏱️ Next ad spin in ${formatGap(secs)}</span>`;
-      };
-      paint(wait);
-      clearInterval(window.__adGapTimer);
-      let left = wait;
-      window.__adGapTimer = setInterval(() => {
-        left -= 30;
-        if (left <= 0) {
-          clearInterval(window.__adGapTimer);
-          release();
-          return;
+    // The network had nothing to serve. That is not the player's fault and
+    // must not dead-end them, so ask for a no-fill pass — capped per cycle
+    // server-side, so it can never become the cheap route past every ad.
+    async function noFillPass(reason) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+          const res = await fetch('/api/webapp/ad-unavailable', {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify({ kind: 'spin' }), signal: controller.signal });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ad_token) {
+            const left = data.quota?.nofill_left;
+            setStatus('📺 No ads available — using a no-ad pass'
+                      + (typeof left === 'number' ? ` (${left} left this cycle)` : ''));
+            return { token: data.ad_token };
+          }
+        } finally {
+          clearTimeout(timer);
         }
-        paint(left);
-      }, 30000);
+      } catch (e) {
+        console.warn('[ads] no-fill pass request failed', e);
+      }
+      return { error: reason };
     }
 
-    async function executeSpin(isAd) {
-      const freeBtn = document.getElementById('free-spin-btn');
-      const adBtn = document.getElementById('ad-spin-btn');
-      const status = document.getElementById('spin-status');
-      if (freeBtn.disabled && adBtn.disabled) return;
+    const AD_ERROR_TEXT = {
+      skipped: 'Ad skipped — watch it to the end to earn a pick.',
+      nofill: 'No ad available right now, and your no-ad passes are used up. Try again in a few minutes.',
+      unavailable: 'Ads can\'t load right now — check your connection and reopen the app.',
+    };
 
-      freeBtn.disabled = true; adBtn.disabled = true;
-      status.innerHTML = isAd ? 'LOADING AD… ⏳' : 'SPINNING… 🎡';
+    let inFlight = false;
 
-      // A saved ad (one watched but never spent) is redeemed server-side from
-      // the ledger, so it needs no new ad and carries no token.
+    async function executePick(isAd) {
+      if (inFlight) return;
+      // A round is already dealt and waiting on a tap — send them to the cards
+      // rather than starting a second one over the top of it.
+      if (pendingPick) { setHint('👆 Pick a card', true); haptic('light'); return; }
+      if (freeBtn().disabled && adBtn().disabled) return;
+
+      inFlight = true;
+      freeBtn().disabled = true; adBtn().disabled = true;
+      resetDeck('Shuffling…');
+
+      // A saved ad is redeemed server-side from the ledger: no new ad, no token.
       if (isAd && (spinQuota?.ads_saved || 0) > 0) isAd = false;
 
       try {
-        // The ad first, with the wheel STILL. Spinning it through the ad phase
-        // is what made a slow ad look like a wheel that spins forever and pays
-        // nothing: the wheel was the only thing on screen, and it was spinning
-        // for a reason that had nothing to do with the reward. It now starts
-        // only once there is a slot to spend, so it turns for the ~1s the
-        // reward call takes.
+        // The ad first, with the deck face-down. Nothing is animated until the
+        // reward exists — the old wheel span on tap and asked for the reward
+        // behind it, so a slow ad or a refused slot read as "it span and paid
+        // nothing".
         let adToken = '';
-        if (isAd) { adToken = await getAdToken(); }
-        status.innerHTML = 'SPINNING… 🎡';
-        startContinuousSpin();
+        if (isAd) {
+          setStatus('LOADING AD… ⏳');
+          const r = await getAdToken();
+          if (r.error) {
+            setStatus(`<span style="color:var(--danger);">${AD_ERROR_TEXT[r.error] || 'No ad available.'}</span>`);
+            applyQuota(spinQuota);
+            loadQuota();
+            return;
+          }
+          adToken = r.token || '';
+        }
 
-        const { ok, status: code, data } = await doSpin(adToken, (n) => {
-          status.innerHTML = `RECONNECTING… (${n}/2) 🎡`;
+        setStatus('DEALING… 🎴');
+        const { ok, data } = await claimReward(adToken, (n) => {
+          setStatus(`RECONNECTING… (${n}/2) 🎴`);
         });
 
-        if (!ok || !data.ok) {
-          stopContinuousSpin();
-          const msg = (data && (data.message || data.error)) || 'Spin failed.';
+        if (!ok || !data.ok || !data.reward) {
+          resetDeck();
+          const msg = (data && (data.message || data.error)) || 'Could not deal your cards.';
           // A banked ad is not a loss — it is the ad waiting for its slot, so
           // it gets the neutral colour rather than the error red.
           const banked = !!(data && data.ad_banked);
-          status.innerHTML = `<span style="color:${banked ? 'var(--gold)' : 'var(--danger)'};">${msg}</span>`;
-          // ad_required → free already used; keep ad button. cycle_exhausted →
-          // nothing to press until the cycle resets.
-          if (data && data.error === 'ad_cooldown') {
-            // Slots remain, they are just not unlocked yet — count the gap down
-            // on the button instead of leaving a dead control behind.
-            spinQuota = data.quota || spinQuota;
-            freeBtn.disabled = !data.quota?.free_available;
-            applyAdGap(data.quota, adBtn);
+          setStatus(`<span style="color:${banked ? 'var(--gold)' : 'var(--danger)'};">${msg}</span>`);
+          if (data && data.quota) {
+            spinQuota = data.quota;
+            applyQuota(spinQuota);
+          } else if (data && data.error === 'cycle_exhausted') {
+            freeBtn().disabled = true; adBtn().disabled = true;
+          } else {
+            applyQuota(spinQuota);
           }
-          else if (data && data.error === 'cycle_exhausted') {
-            freeBtn.disabled = true; adBtn.disabled = true;
-          }
-          else if (data && data.error === 'ad_required') { freeBtn.disabled = true; adBtn.disabled = false; }
-          else { freeBtn.disabled = false; adBtn.disabled = false; }
           return;
         }
 
-        const reward = data.reward;
-        stopContinuousSpin();
-        animateTo(pickSlice(reward));
-
-        setTimeout(() => {
-          status.innerHTML = rewardText(reward);
-          if (reward) launchSpinConfetti(reward.type);
-          setBalance(data.balance);
-          try {
-            if (reward && reward.type === 'player') tg?.HapticFeedback?.notificationOccurred('success');
-            else tg?.HapticFeedback?.impactOccurred('heavy');
-          } catch (e) {}
-          // The free slot is consumed after a free spin; ad spins remain.
-          if (data.slot_type === 'free') {
-            freeBtn.innerHTML = '<span>⏳ Free spin used</span>';
-            freeBtn.classList.remove('pulse'); freeBtn.disabled = true;
-          } else {
-            freeBtn.disabled = false;
-          }
-          // The gap between rewarded ads: keep the ad button off and say when
-          // it comes back, rather than letting a tap fetch an ad the server is
-          // going to refuse.
-          spinQuota = data.quota || spinQuota;
-          applyAdGap(data.quota, adBtn);
-        }, SPIN_ANIM_MS);
+        // The reward is committed server-side from here on. The deck is only a
+        // reveal, so the balance and the quota are updated now rather than
+        // after the animation — a player who closes the app mid-reveal has
+        // still been paid.
+        setBalance(data.balance);
+        spinQuota = data.quota || spinQuota;
+        applyQuota(spinQuota);
+        armDeck(data.reward);
       } catch (err) {
-        stopContinuousSpin();
+        resetDeck();
         const timedOut = err && err.name === 'AbortError';
-        status.innerHTML = `<span style="color:var(--danger);">${timedOut ? 'Spin timed out. Please try again.' : 'Something went wrong. Try again.'}</span>`;
-        freeBtn.disabled = false; adBtn.disabled = false;
+        setStatus(`<span style="color:var(--danger);">${timedOut
+          ? 'Timed out. Please try again — any watched ad is saved.'
+          : 'Something went wrong. Try again.'}</span>`);
+        applyQuota(spinQuota);
+      } finally {
+        inFlight = false;
+        // armDeck leaves both buttons off on purpose: the round is live until
+        // the reveal, and applyQuota above has already set what they say.
+        if (pendingPick) { freeBtn().disabled = true; adBtn().disabled = true; }
       }
     }
 
@@ -706,6 +885,7 @@
       }
     }
 
+    resetDeck();
     // Ask the server what this player can actually do before offering them an
     // ad for it.
     loadQuota();

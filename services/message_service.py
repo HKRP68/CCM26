@@ -69,7 +69,7 @@ REGISTRY = {
             "/myroster - View your players\n"
             "/playerinfo [name] - Player details\n"
             "/daily - Daily reward (24h cooldown)\n"
-            "/gspin - Spin wheel (8h cooldown)"
+            "/gspin - Lucky Card Pick (8h cooldown)"
         ),
     },
     # ── Rewards ────────────────────────────────────────────────

@@ -230,7 +230,7 @@ CLAIM_RARITY = [
     (1.0,   95, 100),   # 0.05% Ultimate (≈1 in 2000)
 ]
 
-# ── Gspin wheel outcomes ────────────────────────────────────────────
+# ── Lucky Card Pick outcomes (legacy fallback for /gspin) ───────────
 # Most spins = coins/gems. Player pulls skew low-mid.
 GSPIN_OUTCOMES = [
     (0.58,  "red",    "coins",  (1500, 3000)),    # 58% coins

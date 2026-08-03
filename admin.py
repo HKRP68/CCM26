@@ -6246,6 +6246,10 @@ def webapp_freepack_open():
         if not verified_via:
             return {"ok": False, "error": "ad_required",
                     "message": "Watch an ad to claim your free pack.",
+                    # Same field the spin and daily send, so a client that
+                    # arrived here on a stale saved-ad count corrects itself
+                    # from the refusal instead of needing another round trip.
+                    "ads_saved": ad_service.count_credits(db, tg_id),
                     "ads_configured": ads_configured}, 400
 
         # Track ad_watched for the daily quest — ONLY postback/mock
@@ -6282,7 +6286,22 @@ def webapp_freepack_open():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_freepack_open failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        # Same contract as the spin and the daily claim: an ad that has already
+        # been consumed is banked rather than lost when the open falls over
+        # mid-flight. Without this the free pack was the one ad-gated feature
+        # where an unlucky 500 really did eat the ad — the rollback above
+        # cannot bring it back, because claiming the evidence commits.
+        banked = False
+        try:
+            verified = locals().get("verified_via")
+            banked = _bank_if_spendable(db, tg_id, bool(verified), verified,
+                                        f"free pack error: {e}")
+        except Exception:
+            logger.exception("failed to bank the ad after a failed free pack")
+        return {"ok": False, "error": "internal", "message": str(e),
+                "ad_banked": banked,
+                "message_extra": ("Your ad was saved — open again and it will "
+                                  "be used." if banked else "")}, 500
     finally:
         db.close()
 

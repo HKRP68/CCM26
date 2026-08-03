@@ -270,9 +270,17 @@
     font-family: var(--font-display);
   }
 
+  /* Sweeps the gold gradient across a button, which is what every user of this
+     animation is set up for: they all pair it with a multi-stop gradient and
+     `background-size: 200% auto`.
+     It used to animate `left`, and every one of those buttons is
+     `position: relative` — so the rule did not move a highlight across the
+     button, it moved the BUTTON, ~1.9x its own width to the right, on a three
+     second loop, forever. The Lucky Pick's only control drifted out from under
+     the player's finger; so did "Buy" in the player modal. */
   @keyframes btnShimmer {
-    0% { left: -60%; }
-    100% { left: 130%; }
+    0% { background-position: 0% center; }
+    100% { background-position: 200% center; }
   }
   @keyframes cardShimmer {
     0%   { transform: translateX(-100%) skewX(-15deg); }
@@ -1240,53 +1248,128 @@
   }
   .chip.active { background: rgba(212, 168, 42, 0.15); border-color: var(--accent); color: var(--accent); }
 
-  /* ════ Spin wheel ════ */
+  /* ════ Lucky Card Pick ════
+     Replaces the old prize wheel. A wheel is a five-second animation the
+     player watches; a card pick is a choice they make, which is the only
+     interaction in the loop that belongs to them — the reward itself is
+     decided server-side either way. It also happens to be the right shape for
+     a game about collecting cricket cards. */
   .spin-container {
     display: flex; flex-direction: column; align-items: center;
-    padding: 1.5rem 1rem;
+    padding: 1.1rem 1rem;
   }
-  .wheel-outer {
-    width: 260px; height: 260px;
-    border-radius: 50%;
-    position: relative;
+  .pick-head { text-align: center; margin-bottom: 1rem; }
+  .pick-title {
+    font-family: var(--font-display); font-weight: 900; font-size: 1.5rem;
+    letter-spacing: .04em; text-transform: uppercase;
+    background: linear-gradient(90deg, #c8942a, var(--accent), #fff0a2, var(--accent), #c8942a);
+    background-size: 220% auto; -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: btnShimmer 3.4s linear infinite;
+  }
+  .pick-hint {
+    color: var(--muted); font-size: .82rem; margin-top: .3rem; min-height: 1.2em;
+    transition: color .2s;
+  }
+  .pick-hint.live { color: var(--accent); font-weight: 700; }
+
+  /* The deck. Five cards, fanned slightly so it reads as a hand rather than a
+     row of buttons, and flattened on narrow screens where the fan overlaps. */
+  .pick-deck {
+    display: flex; justify-content: center; align-items: flex-end;
+    gap: .45rem; padding: .6rem 0 .2rem; perspective: 1000px; width: 100%;
+  }
+  .pick-card {
+    flex: 0 1 62px; height: 96px; padding: 0; border: none; background: none;
+    cursor: default; position: relative;
+    /* The button's own perspective: the deck's does not reach through the
+       transform on this element, and without one the flip renders flat. */
+    perspective: 700px;
+    transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg));
+    transition: transform .25s ease, filter .25s ease, opacity .25s ease;
+  }
+  .pick-card[data-i="0"] { --fan-y: 10px; --fan-r: -8deg; }
+  .pick-card[data-i="1"] { --fan-y: 3px;  --fan-r: -4deg; }
+  .pick-card[data-i="2"] { --fan-y: 0;    --fan-r: 0deg; }
+  .pick-card[data-i="3"] { --fan-y: 3px;  --fan-r: 4deg; }
+  .pick-card[data-i="4"] { --fan-y: 10px; --fan-r: 8deg; }
+  .pick-card-inner {
+    /* display:block is load-bearing — these wrappers are spans (a <button>
+       may not contain a <div>), and an inline box ignores width/height, so
+       without it the whole card collapses to the size of its crest. */
+    display: block; position: relative; width: 100%; height: 100%;
+    transform-style: preserve-3d;
+    transition: transform .55s cubic-bezier(.4,.9,.3,1.2);
+  }
+  .pick-face {
+    position: absolute; inset: 0; border-radius: 10px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    overflow: hidden; text-align: center;
+  }
+  .pick-back {
     background:
-      conic-gradient(
-        from 0deg,
-        #ffd966 0deg 60deg,
-        #ff8c00 60deg 120deg,
-        #00d4aa 120deg 180deg,
-        #4a9eff 180deg 240deg,
-        #a78bfa 240deg 300deg,
-        #ff4d6d 300deg 360deg
-      );
-    box-shadow:
-      0 0 0 8px var(--card),
-      0 0 0 10px var(--accent),
-      0 0 30px rgba(212, 168, 42, 0.3);
-    transition: transform 2.5s cubic-bezier(0.17, 0.67, 0.32, 1.34);
+      repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 3px, transparent 3px 7px),
+      linear-gradient(160deg, #1d2440, #121a30 55%, #0b1020);
+    border: 2px solid rgba(232,184,75,.55);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 5px 14px rgba(0,0,0,.5);
   }
-  .wheel-outer::before {
-    content: "🏏";
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 70px; height: 70px;
-    background: var(--bg);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.8rem;
-    border: 2px solid var(--accent);
+  .pick-crest {
+    font-size: 1.5rem; filter: drop-shadow(0 2px 3px rgba(0,0,0,.6));
   }
-  .wheel-pointer {
-    position: absolute; top: -5px; left: 50%;
-    transform: translateX(-50%);
-    width: 0; height: 0;
-    border-left: 12px solid transparent;
-    border-right: 12px solid transparent;
-    border-top: 22px solid var(--accent);
-    z-index: 5;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+  .pick-back::after {
+    content: ''; position: absolute; inset: 5px; border-radius: 6px;
+    border: 1px solid rgba(232,184,75,.28);
   }
+  .pick-front {
+    transform: rotateY(180deg);
+    background: linear-gradient(160deg, #232c4c, #141b31);
+    border: 2px solid rgba(255,255,255,.16);
+    box-shadow: 0 5px 14px rgba(0,0,0,.5);
+    padding: .3rem;
+  }
+  .pick-front .pick-emoji { font-size: 1.45rem; line-height: 1; }
+  .pick-front .pick-label {
+    font-size: .52rem; font-weight: 800; letter-spacing: .02em;
+    text-transform: uppercase; color: var(--muted); margin-top: .28rem;
+    line-height: 1.15; max-width: 100%; padding: 0 2px; word-break: break-word;
+  }
+
+  /* Armed: the cards are live and asking to be tapped. */
+  .pick-deck.armed .pick-card { cursor: pointer; animation: pickFloat 1.6s ease-in-out infinite; }
+  .pick-deck.armed .pick-card[data-i="1"] { animation-delay: .12s; }
+  .pick-deck.armed .pick-card[data-i="2"] { animation-delay: .24s; }
+  .pick-deck.armed .pick-card[data-i="3"] { animation-delay: .36s; }
+  .pick-deck.armed .pick-card[data-i="4"] { animation-delay: .48s; }
+  .pick-deck.armed .pick-back { border-color: var(--accent); box-shadow: 0 0 16px rgba(232,184,75,.45), inset 0 1px 0 rgba(255,255,255,.14); }
+  .pick-deck.armed .pick-card:active { transform: translateY(calc(var(--fan-y, 0px) - 6px)) rotate(var(--fan-r, 0deg)) scale(.95); }
+  @keyframes pickFloat {
+    0%, 100% { transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg)); }
+    50% { transform: translateY(calc(var(--fan-y, 0px) - 7px)) rotate(var(--fan-r, 0deg)); }
+  }
+
+  /* Dealing: a quick cascade in when a round starts. */
+  .pick-card.dealing { animation: pickDeal .38s cubic-bezier(.3,1.3,.5,1) both; }
+  @keyframes pickDeal {
+    from { opacity: 0; transform: translate(-40px, 26px) rotate(-24deg) scale(.8); }
+    to   { opacity: 1; transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg)); }
+  }
+
+  /* Revealed. */
+  .pick-card.flipped .pick-card-inner { transform: rotateY(180deg); }
+  .pick-card.miss { opacity: .42; filter: saturate(.35); }
+  .pick-card.won { z-index: 2; }
+  .pick-card.won .pick-card-inner { transform: rotateY(180deg) scale(1.16); }
+  .pick-card.won .pick-front {
+    border-color: var(--accent);
+    background: linear-gradient(160deg, rgba(232,184,75,.3), rgba(20,27,49,.95));
+    box-shadow: 0 0 26px rgba(232,184,75,.75);
+  }
+  .pick-card.won .pick-front .pick-label { color: #fff; }
+  .pick-card.won.tier-rare .pick-front { border-color: #4a9eff; box-shadow: 0 0 26px rgba(74,158,255,.8); }
+  .pick-card.won.tier-epic .pick-front { border-color: #a78bfa; box-shadow: 0 0 30px rgba(167,139,250,.85); }
+  .pick-card.won.tier-legend .pick-front { border-color: #ffd966; box-shadow: 0 0 40px rgba(255,217,102,1); }
+
   .spin-button {
     margin-top: 2rem;
     padding: 1.05rem 2.5rem;
@@ -1380,50 +1463,6 @@
     0% { transform: translateY(-20px) rotateZ(0deg); opacity: 1; }
     100% { transform: translateY(100vh) rotateZ(720deg); opacity: 0.6; }
   }
-  /* anticipation glow ring behind the wheel while spinning */
-  .wheel-outer.spinning {
-    box-shadow:
-      0 0 0 8px var(--card),
-      0 0 0 10px var(--accent),
-      0 0 50px rgba(212, 168, 42, 0.7),
-      0 0 90px rgba(255, 217, 102, 0.35);
-  }
-  /* Premium prize wheel: layered slices, rim bulbs, a fixed pointer, and reward glows. */
-  .wheel-stage { width: 292px; height: 292px; position: relative; display: grid; place-items: center; }
-  .wheel-outer {
-    overflow: hidden; border: 7px solid #f5c95d; will-change: transform;
-    background:
-      repeating-conic-gradient(from -30deg, rgba(255,255,255,.82) 0deg 1.4deg, transparent 1.4deg 60deg),
-      conic-gradient(from -30deg, #e69b22 0deg 60deg, #166f91 60deg 120deg, #6f4cc4 120deg 180deg, #b83558 180deg 240deg, #237657 240deg 300deg, #9a5b20 300deg 360deg);
-    box-shadow: inset 0 0 0 4px rgba(35,20,7,.7), inset 0 0 24px rgba(0,0,0,.45), 0 0 0 7px #5d3512, 0 0 0 10px #e7b847, 0 10px 30px rgba(0,0,0,.52), 0 0 34px rgba(232,184,75,.34);
-    transition: none;
-  }
-  .wheel-outer::before { content: none; }
-  .wheel-slice {
-    position: absolute; top: 50%; left: 50%; width: 86px; text-align: center;
-    color: #fff9e8; font-family: var(--font-display); font-size: .72rem; font-weight: 900;
-    line-height: 1.05; letter-spacing: .03em; text-shadow: 0 2px 3px rgba(0,0,0,.8);
-    transform: translate(-50%, -50%) rotate(var(--slice-angle)) translateY(-88px) rotate(calc(-1 * var(--slice-angle)));
-  }
-  .wheel-slice .slice-icon { display: block; font-size: 1.35rem; margin-bottom: .12rem; }
-  .wheel-slice .slice-label, .wheel-slice .slice-value { display: block; }
-  .wheel-slice .slice-value { color: #ffe9a1; font-size: .62rem; margin-top: .14rem; }
-  .wheel-hub {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 70px; height: 70px;
-    border-radius: 50%; display: grid; place-items: center; color: #2b1807; font-size: 1.72rem;
-    background: radial-gradient(circle at 35% 28%, #fff4bb, #e8b443 52%, #8d5316 100%); border: 4px solid #fff0a2;
-    box-shadow: 0 0 0 4px #643911, 0 5px 14px rgba(0,0,0,.55), inset 0 2px 4px rgba(255,255,255,.55); z-index: 3;
-  }
-  .wheel-bulbs { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; animation: wheelBulbs 1.1s steps(2,end) infinite; }
-  .wheel-bulb { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; margin: -4px; border-radius: 50%; background: #fff1a6; box-shadow: 0 0 7px 2px rgba(255,217,102,.86); transform: rotate(var(--bulb-angle)) translateY(-140px); }
-  .wheel-bulb:nth-child(even) { background: #ff9f43; animation: bulbAlternate 1.1s steps(2,end) infinite; }
-  .wheel-pointer { top: -1px; width: 34px; height: 47px; background: linear-gradient(135deg,#fff0a2,#e4aa2c 58%,#8d5316); clip-path: polygon(50% 100%,0 0,100% 0); border: none; filter: drop-shadow(0 4px 4px rgba(0,0,0,.65)); }
-  .wheel-pointer::before { content: ''; position: absolute; top: 4px; left: 50%; width: 12px; height: 12px; transform: translateX(-50%); border-radius: 50%; background: #fff7ce; box-shadow: 0 0 0 3px #6b3e12; }
-  @keyframes wheelBulbs { 50% { filter: brightness(1.55); } }
-  @keyframes bulbAlternate { 50% { background: #fff9da; box-shadow: 0 0 9px 3px rgba(255,245,190,.96); } }
-  .wheel-stage.glow-rare .wheel-outer { box-shadow: inset 0 0 0 4px rgba(35,20,7,.7), 0 0 0 7px #285d97, 0 0 42px rgba(74,158,255,.9); }
-  .wheel-stage.glow-epic .wheel-outer { box-shadow: inset 0 0 0 4px rgba(35,20,7,.7), 0 0 0 7px #62439a, 0 0 55px rgba(167,139,250,.95); }
-  .wheel-stage.glow-legend .wheel-outer { box-shadow: inset 0 0 0 4px rgba(35,20,7,.7), 0 0 0 7px #fff0a2, 0 0 68px rgba(255,217,102,1); }
   .reward-banner.tier-rare { animation-name: rewardRevealRare; }
   .reward-banner.tier-epic { animation-name: rewardRevealEpic; }
   .reward-banner.tier-legend { animation-name: rewardRevealLegend; }
@@ -1431,8 +1470,17 @@
   @keyframes rewardRevealEpic { 0% { transform: scale(.55) rotate(-3deg); opacity: 0; } 65% { transform: scale(1.08) rotate(1deg); opacity: 1; } 100% { transform: scale(1) rotate(0); } }
   @keyframes rewardRevealLegend { 0% { transform: scale(.42) rotate(-5deg); opacity: 0; filter: brightness(2); } 62% { transform: scale(1.12) rotate(2deg); opacity: 1; } 100% { transform: scale(1) rotate(0); filter: brightness(1); } }
   @media (prefers-reduced-motion: reduce) {
-    .wheel-bulbs, .wheel-bulb, .reward-banner::after, .reward-banner .emoji { animation: none !important; }
+    .reward-banner::after, .reward-banner .emoji { animation: none !important; }
     .reward-banner, .reward-banner.tier-rare, .reward-banner.tier-epic, .reward-banner.tier-legend { animation: rewardFade .18s ease-out !important; }
+    /* Keep the flip readable but instant, and stop the deck bobbing. */
+    .pick-deck.armed .pick-card, .pick-card.dealing { animation: none !important; }
+    .pick-card, .pick-card-inner { transition: none !important; }
+    .pick-title { animation: none !important; }
+  }
+  /* Very narrow phones: drop the fan so five cards still fit side by side. */
+  @media (max-width: 360px) {
+    .pick-deck { gap: .3rem; }
+    .pick-card { flex-basis: 54px; height: 84px; --fan-y: 0 !important; --fan-r: 0deg !important; }
   }
   @keyframes rewardFade { from { opacity: 0; } to { opacity: 1; } }
 
@@ -2289,8 +2337,8 @@
       <div class="tile-sub">Play in 60s</div>
     </button>
     <button class="tile spin" onclick="navigate('spin')">
-      <div class="tile-icon">🎡</div>
-      <div class="tile-label">Spin &amp; Win</div>
+      <div class="tile-icon">🎴</div>
+      <div class="tile-label">Lucky Pick</div>
       <div class="tile-sub" id="spin-tile-sub">Tap to play</div>
     </button>
     <button class="tile daily" onclick="navigate('daily')">
@@ -2374,28 +2422,50 @@
   </div>
 </div>
 
-<!-- ════ Spin screen ════ -->
+<!-- ════ Lucky Card Pick screen ════
+     Screen id, route key and endpoints stay "spin": the quota, the reward
+     table, the ad ledger and the bot all address this feature by that name.
+     What changed is the game on top of them. -->
 <div class="screen" id="screen-spin">
-  <div class="ad-banner" id="spin-ad-banner">🎁 <strong>1 FREE spin</strong> + 📺 <strong>5 ad spins</strong> per cycle.</div>
+  <div class="ad-banner" id="spin-ad-banner">🎁 <strong>1 FREE pick</strong> + 📺 <strong>5 ad picks</strong> per cycle.</div>
   <div class="spin-container">
-    <div class="wheel-stage" id="wheel-stage">
-      <div class="wheel-pointer" aria-hidden="true"></div>
-      <div class="wheel-outer" id="wheel" aria-label="Prize wheel with coins, gems, quest points, packs, and player cards">
-        <div class="wheel-slice" style="--slice-angle:0deg"><span class="slice-icon">💰</span><span class="slice-label">COINS</span><span class="slice-value">BONUS</span></div>
-        <div class="wheel-slice" style="--slice-angle:60deg"><span class="slice-icon">💎</span><span class="slice-label">GEMS</span><span class="slice-value">RARE</span></div>
-        <div class="wheel-slice" style="--slice-angle:120deg"><span class="slice-icon">⭐</span><span class="slice-label">QUEST</span><span class="slice-value">POINTS</span></div>
-        <div class="wheel-slice" style="--slice-angle:180deg"><span class="slice-icon">🎁</span><span class="slice-label">PACK</span><span class="slice-value">DROP</span></div>
-        <div class="wheel-slice" style="--slice-angle:240deg"><span class="slice-icon">🏏</span><span class="slice-label">PLAYER</span><span class="slice-value">CARD</span></div>
-        <div class="wheel-slice" style="--slice-angle:300deg"><span class="slice-icon">💰</span><span class="slice-label">COINS</span><span class="slice-value">JACKPOT</span></div>
-        <div class="wheel-hub" aria-hidden="true">🏏</div>
-      </div>
-      <div class="wheel-bulbs" aria-hidden="true">
-        <i class="wheel-bulb" style="--bulb-angle:0deg"></i><i class="wheel-bulb" style="--bulb-angle:30deg"></i><i class="wheel-bulb" style="--bulb-angle:60deg"></i><i class="wheel-bulb" style="--bulb-angle:90deg"></i>
-        <i class="wheel-bulb" style="--bulb-angle:120deg"></i><i class="wheel-bulb" style="--bulb-angle:150deg"></i><i class="wheel-bulb" style="--bulb-angle:180deg"></i><i class="wheel-bulb" style="--bulb-angle:210deg"></i>
-        <i class="wheel-bulb" style="--bulb-angle:240deg"></i><i class="wheel-bulb" style="--bulb-angle:270deg"></i><i class="wheel-bulb" style="--bulb-angle:300deg"></i><i class="wheel-bulb" style="--bulb-angle:330deg"></i>
-      </div>
+    <div class="pick-head">
+      <div class="pick-title">Lucky Card Pick</div>
+      <div class="pick-hint" id="pick-hint">Five cards. One is yours.</div>
     </div>
-    <button class="spin-button" id="spin-btn" onclick="onSpinClick()">📺 Watch ad to spin</button>
+    <div class="pick-deck" id="pick-deck" role="group" aria-label="Five face-down cards">
+      <button class="pick-card" type="button" data-i="0" onclick="onCardPick(0)" aria-label="Card 1">
+        <span class="pick-card-inner">
+          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
+        </span>
+      </button>
+      <button class="pick-card" type="button" data-i="1" onclick="onCardPick(1)" aria-label="Card 2">
+        <span class="pick-card-inner">
+          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
+        </span>
+      </button>
+      <button class="pick-card" type="button" data-i="2" onclick="onCardPick(2)" aria-label="Card 3">
+        <span class="pick-card-inner">
+          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
+        </span>
+      </button>
+      <button class="pick-card" type="button" data-i="3" onclick="onCardPick(3)" aria-label="Card 4">
+        <span class="pick-card-inner">
+          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
+        </span>
+      </button>
+      <button class="pick-card" type="button" data-i="4" onclick="onCardPick(4)" aria-label="Card 5">
+        <span class="pick-card-inner">
+          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
+        </span>
+      </button>
+    </div>
+    <button class="spin-button" id="spin-btn" onclick="onSpinClick()">📺 Watch ad to play</button>
     <div id="spin-result"></div>
   </div>
 </div>
@@ -2900,8 +2970,8 @@
     <div>Home</div>
   </button>
   <button class="tab" data-screen="spin" onclick="navigate('spin')">
-    <div class="icon">🎡</div>
-    <div>Spin</div>
+    <div class="icon">🎴</div>
+    <div>Pick</div>
   </button>
   <button class="tab" data-screen="market" onclick="navigate('market')">
     <div class="icon">🌟</div>
@@ -3015,10 +3085,11 @@ let currentScreen = 'home';
 let userData = null;
 let searchTimer = null;
 let currentCat = '';
+// True while the reward for a Lucky Pick round is being claimed.
 let isSpinning = false;
-// True while the ad for a spin is being fetched/watched — a separate state from
-// isSpinning so the button can say "getting an ad" instead of "Spinning..."
-// while the wheel sits still.
+// True while the ad for a round is being fetched/watched — a separate state
+// from isSpinning so the button can say "getting an ad" instead of "dealing"
+// while the deck sits face-down.
 let isPreparingSpinAd = false;
 // Whole-request cap on the reward call once an ad is already paid for. The api()
 // helper aborts at 25s, so this is only the belt-and-braces stop. It has to
@@ -3036,8 +3107,8 @@ let suggestionSending = false;
 // ════════════════ API ════════════════
 async function api(path, body, timeoutMs = 25000) {
   // Abort a stalled request so callers never hang forever. Without this a
-  // dropped connection in the Telegram WebView would leave the spin wheel
-  // animating with no reward ever arriving.
+  // dropped connection in the Telegram WebView would leave a screen waiting
+  // on a reward that is never going to arrive.
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -3264,6 +3335,12 @@ function navigate(screen) {
     });
   }
   if (screen === 'daily') updateDailyButton();
+  // Entering the pick screen deals a fresh face-down hand — unless a round is
+  // still waiting on a tap, which would throw away a reward already granted.
+  if (screen === 'spin') {
+    if (!pendingPick) resetDeck();
+    updateSpinButton();
+  }
   // Get the ad SDK ready the moment a user opens a screen whose button needs
   // one. Doing it here rather than on the tap moves the SDK fetch off the
   // critical path, so the first ad of a session isn't the slow one.
@@ -3304,21 +3381,21 @@ async function refreshDashboard() {
   pill.style.display = 'flex';
   document.getElementById('bp-coins').textContent = formatNum(userData.coins);
 
-  // Spin tile
+  // Lucky Pick tile
   const spinSub = document.getElementById('spin-tile-sub');
   const sq = data.gspin?.quota;
   if (sq) {
     if (sq.free_available) {
       spinSub.textContent = `🎁 1 free + ${sq.ad_total} ads`;
     } else if (sq.ad_used < sq.ad_total) {
-      spinSub.textContent = `📺 ${sq.ad_total - sq.ad_used} ad spins left`;
+      spinSub.textContent = `📺 ${sq.ad_total - sq.ad_used} ad picks left`;
     } else {
       spinSub.textContent = `⏱️ New in ${fmtRemaining(sq.cycle_reset_in)}`;
     }
   } else {
     spinSub.textContent = 'Tap to play';
   }
-  setAdBanner('spin-ad-banner', 'spin', sq?.ad_total, data.gspin?.cooldown_total);
+  setAdBanner('spin-ad-banner', 'pick', sq?.ad_total, data.gspin?.cooldown_total);
   updateSpinButton(data.gspin);
 
   // Daily tile
@@ -3596,15 +3673,22 @@ function formatGap(seconds) {
 function updateSpinButton(g) {
   const btn = document.getElementById('spin-btn');
   if (isPreparingSpinAd) {
-    // Say what is actually happening. "Spinning..." during the ad phase is why
-    // a slow ad felt like a broken wheel.
+    // Say what is actually happening. A generic "playing…" during the ad phase
+    // is why a slow ad used to feel like a broken game.
     btn.disabled = true;
     btn.innerHTML = `<span class="spinner"></span> ${escapeHtml(adPhaseLabel())}`;
     return;
   }
   if (isSpinning) {
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Spinning...';
+    btn.innerHTML = '<span class="spinner"></span> Dealing…';
+    return;
+  }
+  // A dealt hand waiting on a tap. The reward is already granted, so this is a
+  // prompt, not a control.
+  if (pendingPick) {
+    btn.disabled = true;
+    btn.textContent = '👆 Pick a card above';
     return;
   }
   // Use quota from latest init data
@@ -3612,29 +3696,30 @@ function updateSpinButton(g) {
   if (quota) {
     if (quota.free_available) {
       btn.disabled = false;
-      btn.textContent = '🎁 FREE Spin';
+      btn.textContent = '🎁 FREE Pick';
       return;
     }
     const adsLeft = quota.ad_total - quota.ad_used;
     if (adsLeft > 0) {
-      // The gap between rewarded ads, first: it applies to a saved ad exactly
-      // as it does to a fresh one, so offering the saved one here would just
-      // hand the player a button the server is about to refuse. Disabled with
-      // the wait on it, so it reads as "later" instead of "broken".
+      // The gap between rewarded ads, if one is configured, first: it applies
+      // to a saved ad exactly as it does to a fresh one, so offering the saved
+      // one here would just hand the player a button the server is about to
+      // refuse. Disabled with the wait on it, so it reads as "later" instead
+      // of "broken". Off by default — see services/quota_service.py.
       if (quota.ad_ready_in > 0) {
         btn.disabled = true;
-        btn.textContent = `⏱️ Next ad spin in ${formatGap(quota.ad_ready_in)}`;
+        btn.textContent = `⏱️ Next ad pick in ${formatGap(quota.ad_ready_in)}`;
         return;
       }
       // A banked ad is spent first and needs no new one — say so, or the
       // button asks the player to watch an ad they have already watched.
       if (quota.ads_saved > 0) {
         btn.disabled = false;
-        btn.textContent = `🎟️ Spin with saved ad (${quota.ads_saved})`;
+        btn.textContent = `🎟️ Play with saved ad (${quota.ads_saved})`;
         return;
       }
       btn.disabled = false;
-      btn.textContent = `📺 Watch ad to spin (${adsLeft} left)`;
+      btn.textContent = `📺 Watch ad to play (${adsLeft} left)`;
       return;
     }
     // All used — show countdown to reset
@@ -3642,12 +3727,12 @@ function updateSpinButton(g) {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
     btn.disabled = true;
-    btn.textContent = `⏱️ New spins in ${h}h ${m}m`;
+    btn.textContent = `⏱️ New picks in ${h}h ${m}m`;
     return;
   }
   // Fallback (no quota info yet)
   btn.disabled = false;
-  btn.textContent = '📺 Watch ad to spin';
+  btn.textContent = '📺 Watch ad to play';
 }
 
 // ════════════════ Daily ════════════════
@@ -4450,79 +4535,179 @@ function lbRow(r) {
   `;
 }
 
-// ════════════════ Spin ════════════════
-const SPIN_SLICE_COUNT = 6;
+// ════════════════ Lucky Card Pick ════════════════
+//
+// This replaced a prize wheel, and the order of operations is the point.
+//
+// The wheel started turning on tap and the reward landed at the end of a
+// multi-second animation, so every failure in between — a dropped request, a
+// refused slot, a client-side throw — surfaced as a wheel that span and paid
+// nothing. Here the reward is fetched and committed FIRST, while the deck sits
+// still, and the cards only go live once there is a reward behind them. The
+// pick is a reveal, never a request: by the time a card can be tapped the
+// prize is already in the player's balance, so nothing the UI does next can
+// cost them the ad they watched.
+//
+// The auto-reveal below closes the last hole in that: a player who watches an
+// ad and then puts their phone down still gets shown what they won.
 const reducedSpinMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-let wheelRotation = 0;
-let anticipationFrame = null;
 
-// Keep backend rewards visually honest: each reward type lands on a representative slice.
-function rewardToSlice(reward) {
-  const slices = { coins: [0, 5], gems: [1], quest_points: [2], pack: [3], player: [4] };
-  const matches = slices[reward?.type] || [0];
-  if (reward?.type === 'coins') return (reward.amount || 0) >= 5000 ? 5 : 0;
-  return matches[Math.floor(Math.random() * matches.length)];
+// Faces for the four cards the player did NOT pick. Purely decorative — the
+// server decides the one that matters — so they are a fixed pool rather than
+// anything read from the reward table.
+// Kept to one short word each: these sit on a 62px card face, and a two-word
+// label wraps into the border.
+const PICK_DECOYS = [
+  { emoji: '💰', label: 'Coins' },
+  { emoji: '💎', label: 'Gems' },
+  { emoji: '⭐', label: 'QP' },
+  { emoji: '🎁', label: 'Pack' },
+  { emoji: '🏏', label: 'Player' },
+  { emoji: '🧤', label: 'Miss' },
+  { emoji: '🎯', label: 'Almost' },
+];
+
+const PICK_CARD_COUNT = 5;
+// How long the deck waits for a tap before revealing itself. Long enough not
+// to rush anyone, short enough that a player who has walked away still sees
+// the reward when they look back.
+const PICK_AUTO_REVEAL_MS = 9000;
+
+// The reward waiting to be revealed, or null when no round is live.
+let pendingPick = null;
+let pickAutoTimer = null;
+
+function pickCards() {
+  return Array.from(document.querySelectorAll('#pick-deck .pick-card'));
 }
 
-function setWheelRotation(degrees) {
-  wheelRotation = degrees;
-  const wheel = document.getElementById('wheel');
-  if (wheel) wheel.style.transform = `rotate(${degrees}deg)`;
+function setPickHint(text, live) {
+  const el = document.getElementById('pick-hint');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('live', !!live);
 }
 
-function startWheelAnticipation() {
-  if (reducedSpinMotion.matches) return;
-  let lastTime = performance.now();
-  let lastSlice = Math.floor(wheelRotation / 60);
-  const advance = now => {
-    const elapsed = now - lastTime;
-    lastTime = now;
-    setWheelRotation(wheelRotation + elapsed * 0.34);
-    const slice = Math.floor(wheelRotation / 60);
-    if (slice !== lastSlice) haptic('light');
-    lastSlice = slice;
-    anticipationFrame = requestAnimationFrame(advance);
-  };
-  anticipationFrame = requestAnimationFrame(advance);
-}
-
-function stopWheelAnticipation() {
-  if (anticipationFrame) cancelAnimationFrame(anticipationFrame);
-  anticipationFrame = null;
-}
-
-function decelerateWheelToReward(reward) {
-  stopWheelAnticipation();
-  const targetSlice = rewardToSlice(reward);
-  const sliceCenter = targetSlice * (360 / SPIN_SLICE_COUNT);
-  const targetModulo = (360 - sliceCenter) % 360;
-  if (reducedSpinMotion.matches) {
-    setWheelRotation(wheelRotation + ((targetModulo - wheelRotation % 360 + 360) % 360));
-    return new Promise(resolve => setTimeout(resolve, 180));
-  }
-
-  const from = wheelRotation;
-  // Three turns over 1.6s, not five over 3.2s. The reward is already decided
-  // by the time this runs, so every extra second is the player watching an
-  // animation replay a result the server has committed — which is what "the
-  // wheel spins for ages" was. Still long enough to read as a spin.
-  const target = from + 3 * 360 + ((targetModulo - from % 360 + 360) % 360);
-  const duration = 1600;
-  const started = performance.now();
-  let lastSlice = Math.floor(from / 60);
-  return new Promise(resolve => {
-    const animate = now => {
-      const progress = Math.min((now - started) / duration, 1);
-      const rotation = from + (target - from) * (1 - Math.pow(1 - progress, 5));
-      setWheelRotation(rotation);
-      const activeSlice = Math.floor(rotation / 60);
-      if (activeSlice !== lastSlice) haptic('light');
-      lastSlice = activeSlice;
-      if (progress < 1) requestAnimationFrame(animate);
-      else resolve();
-    };
-    requestAnimationFrame(animate);
+// Put every card back face-down. Called before a round and when leaving the
+// screen, so a player never returns to last round's revealed hand.
+function resetDeck(hint) {
+  clearTimeout(pickAutoTimer);
+  pickAutoTimer = null;
+  pendingPick = null;
+  document.getElementById('pick-deck')?.classList.remove('armed');
+  pickCards().forEach(card => {
+    card.classList.remove('flipped', 'won', 'miss', 'dealing',
+                          'tier-rare', 'tier-epic', 'tier-legend');
+    card.disabled = true;
+    const front = card.querySelector('.pick-front');
+    if (front) {
+      front.querySelector('.pick-emoji').textContent = '🎁';
+      front.querySelector('.pick-label').textContent = '';
+    }
   });
+  const result = document.getElementById('spin-result');
+  if (result) result.innerHTML = '';
+  setPickHint(hint || 'Five cards. One is yours.', false);
+}
+
+// Deal the hand and hand control to the player. The reward is already granted
+// at this point; `pendingPick` only holds what to show.
+function armDeck(reward) {
+  pendingPick = reward;
+  const deck = document.getElementById('pick-deck');
+  deck?.classList.add('armed');
+  pickCards().forEach((card, i) => {
+    card.disabled = false;
+    if (!reducedSpinMotion.matches) {
+      card.classList.remove('dealing');
+      void card.offsetWidth;                 // restart the deal animation
+      card.style.animationDelay = `${i * 55}ms`;
+      card.classList.add('dealing');
+    }
+  });
+  setPickHint('👆 Pick a card', true);
+  haptic('light');
+  // Never leave a granted reward unseen. See PICK_AUTO_REVEAL_MS.
+  clearTimeout(pickAutoTimer);
+  pickAutoTimer = setTimeout(() => {
+    if (pendingPick) revealPick(Math.floor(Math.random() * PICK_CARD_COUNT));
+  }, PICK_AUTO_REVEAL_MS);
+}
+
+// Shuffled decoy faces for the four losing cards, minus anything that reads as
+// the prize the player actually won — a "GEMS" card sitting next to a gems win
+// looks like the game showed them two winners.
+function pickDecoysFor(reward) {
+  const byType = { coins: 'coins', gems: 'gems', quest_points: 'qp',
+                   pack: 'pack', player: 'player' };
+  const banned = new Set([
+    (reward.label || '').toLowerCase(),
+    byType[reward.type] || '',
+  ]);
+  const pool = PICK_DECOYS.filter(d => !banned.has(d.label.toLowerCase()));
+  return (pool.length ? pool : PICK_DECOYS).sort(() => Math.random() - 0.5);
+}
+
+function onCardPick(index) {
+  if (!pendingPick) return;
+  haptic('medium');
+  revealPick(index);
+}
+
+// Flip `index` to the real reward and the rest to decoys.
+function revealPick(index) {
+  const reward = pendingPick;
+  if (!reward) return;
+  pendingPick = null;                        // one reveal per round
+  clearTimeout(pickAutoTimer);
+  pickAutoTimer = null;
+
+  const deck = document.getElementById('pick-deck');
+  deck?.classList.remove('armed');
+  const tier = rewardTier(reward);
+  const decoys = pickDecoysFor(reward);
+
+  pickCards().forEach((card, i) => {
+    card.disabled = true;
+    card.style.animationDelay = '';
+    card.classList.remove('dealing');
+    const front = card.querySelector('.pick-front');
+    const won = (i === index);
+    if (won) {
+      front.querySelector('.pick-emoji').textContent = reward.emoji || '🎁';
+      front.querySelector('.pick-label').textContent = pickCardLabel(reward);
+      card.classList.add('won');
+      if (tier) card.classList.add(`tier-${tier}`);
+    } else {
+      const decoy = decoys[i % decoys.length] || PICK_DECOYS[0];
+      front.querySelector('.pick-emoji').textContent = decoy.emoji;
+      front.querySelector('.pick-label').textContent = decoy.label;
+      card.classList.add('miss');
+    }
+    // The chosen card turns first; the others follow so the eye lands on the
+    // prize rather than on five simultaneous flips.
+    setTimeout(() => card.classList.add('flipped'),
+               reducedSpinMotion.matches ? 0 : (won ? 0 : 260 + i * 70));
+  });
+
+  setPickHint('', false);
+  const delay = reducedSpinMotion.matches ? 0 : 520;
+  setTimeout(() => {
+    hapticNotif('success');
+    showReward(reward);
+    updateSpinButton();
+  }, delay);
+}
+
+// Short face text for the winning card — the banner underneath carries the
+// detail, so this only has to be readable at 0.52rem.
+function pickCardLabel(r) {
+  if (r.type === 'coins') return `+${formatNum(r.amount)}`;
+  if (r.type === 'gems') return `+${r.amount} 💎`;
+  if (r.type === 'quest_points') return `+${r.amount} QP`;
+  if (r.type === 'player') return r.player_rating ? `${r.player_rating} OVR` : 'Player';
+  if (r.type === 'pack') return 'Pack';
+  return r.label || 'Reward';
 }
 
 // Post the spin, retrying a request that never got an answer.
@@ -4546,15 +4731,18 @@ async function requestSpin(adToken) {
   return last;
 }
 
-// The wheel must never spin while we are still waiting on an ad. That was the
-// old shape and it is what "stuck in Spin for ages, then no ad" actually was:
-// the wheel started on tap, the ad phase then ran for up to a minute and a half
-// behind it, and every second of that read as the spin itself hanging. Now the
-// ad is resolved FIRST, against its own bounded budget and with the button
-// saying what it is doing, and the wheel only starts once there is a slot to
-// spend — so the wheel is spinning only for the ~1s the reward call takes.
+// Start a round: resolve the ad, claim the reward, then hand the deck over.
+//
+// Nothing is animated until the reward exists. The old wheel did the opposite
+// — it span on tap and asked for the reward behind it — which is why "watched
+// an ad and it just span" was a report at all. Here the deck stays face-down
+// and the button narrates ("Getting your ad…", "Dealing…") until the server
+// has answered, and a failure is a message rather than a dead animation.
 async function onSpinClick() {
   if (isSpinning || isPreparingSpinAd) return;
+  // A round is already dealt and waiting on a tap — send them to the cards
+  // rather than starting a second one over the top of it.
+  if (pendingPick) { setPickHint('👆 Pick a card', true); haptic('light'); return; }
   haptic('medium');
 
   // Check what slot is available
@@ -4562,23 +4750,26 @@ async function onSpinClick() {
   const useFree = quota?.free_available;
   const adsAvailable = (quota?.ad_used || 0) < (quota?.ad_total || 5);
   // An ad already watched but never spent (see ad_service "Ad credits"). The
-  // server redeems it from the ledger, so this spin sends no token and — this
+  // server redeems it from the ledger, so this round sends no token and — this
   // is the point — shows no second ad.
   const useSavedAd = !useFree && (quota?.ads_saved || 0) > 0;
 
   if (!useFree && !adsAvailable) {
-    toast('All spins used. Come back later.', 'info');
+    toast('All picks used. Come back later.', 'info');
     return;
   }
-  // The gap between rewarded ads, enforced here as well as on the server so
-  // nobody watches an ad the spin is about to refuse. A saved ad waits it out
-  // too — the gap is between rewards, not between ad views.
+  // The gap between rewarded ads, if an admin has turned it on: checked here
+  // as well as on the server so nobody watches an ad the pick is about to
+  // refuse. A saved ad waits it out too — the gap is between rewards, not
+  // between ad views. It ships at 0, so this normally never fires.
   if (!useFree && (quota?.ad_ready_in || 0) > 0) {
-    toast(`Next ad spin unlocks in ${formatGap(quota.ad_ready_in)}.`, 'info');
+    toast(`Next ad pick unlocks in ${formatGap(quota.ad_ready_in)}.`, 'info');
     return;
   }
 
-  // ── Phase 1: the ad, with the wheel still ──────────────────────
+  resetDeck('Shuffling…');
+
+  // ── Phase 1: the ad, with the deck face-down ───────────────────
   let adToken = '';
   if (!useFree && !useSavedAd) {
     isPreparingSpinAd = true;
@@ -4590,35 +4781,30 @@ async function onSpinClick() {
       updateSpinButton();
     }
     if (!adToken) {
+      resetDeck();
       refreshDashboard();
       return;   // showAd already said why
     }
   }
-  // else: free spin (or a saved ad) → no ad_token needed, the backend resolves
+  // else: free pick (or a saved ad) → no ad_token needed, the backend resolves
   // the slot from the quota system and the credit ledger
 
-  // ── Phase 2: the spin itself ───────────────────────────────────
+  // ── Phase 2: claim the reward ──────────────────────────────────
   isSpinning = true;
   updateSpinButton();
-  document.getElementById('wheel-stage')?.classList.remove('glow-rare', 'glow-epic', 'glow-legend');
-  document.getElementById('wheel')?.classList.add('spinning');
-  startWheelAnticipation();
+  setPickHint('Dealing…', false);
 
-  // Watchdog: no matter what goes wrong below, never leave the wheel
-  // spinning forever with no reward. The ad is already paid for by this point,
-  // so this only has to cover the reward request and the deceleration —
-  // hence a window measured in seconds rather than the old 90.
+  // Watchdog: never leave the button stuck on "Dealing…" if the request
+  // neither resolves nor rejects. The ad is already paid for by this point, so
+  // this only has to cover the reward request itself.
   let settled = false;
-  const stopSpin = () => {
-    stopWheelAnticipation();
-    document.getElementById('wheel')?.classList.remove('spinning');
-    isSpinning = false;
-  };
+  const stopRound = () => { isSpinning = false; updateSpinButton(); };
   const watchdog = setTimeout(() => {
     if (settled) return;
     settled = true;
-    stopSpin();
-    toast('Spin timed out — please try again', 'error');
+    stopRound();
+    resetDeck('Timed out — tap to try again');
+    toast('Timed out — please try again. Any watched ad is saved.', 'error');
     hapticNotif('error');
     refreshDashboard();
   }, SPIN_REQUEST_WATCHDOG_MS);
@@ -4627,35 +4813,36 @@ async function onSpinClick() {
   try {
     const { ok, data } = await requestSpin(adToken);
     if (settled) return;  // watchdog already fired
+    finish();
     if (!ok || !data?.reward) {
-      finish();
-      stopSpin();
+      stopRound();
+      resetDeck();
       // ad_banked: the ad was accepted but the reward couldn't be given yet.
-      // Say that plainly — "Spin failed" after a watched ad is what made this
-      // look like the app eating ads.
+      // Say that plainly — a bare "failed" after a watched ad is what made
+      // this look like the app eating ads.
       toast(data?.message || (data?.ad_banked
-              ? 'Your ad was saved — spin again to use it'
-              : 'Spin failed'),
+              ? 'Your ad was saved — play again to use it'
+              : 'Could not deal your cards'),
             data?.ad_banked ? 'info' : 'error');
       hapticNotif('error');
       refreshDashboard();
       return;
     }
 
-    finish();
-    await decelerateWheelToReward(data.reward);
-    document.getElementById('wheel')?.classList.remove('spinning');
+    // The reward is committed server-side from here on. The deck is only a
+    // reveal, so refresh the balances now rather than after the animation —
+    // a player who closes the app mid-reveal has still been paid.
     isSpinning = false;
-    hapticNotif('success');
-    showReward(data.reward);
-    // Refresh quota + balances
+    armDeck(data.reward);
+    updateSpinButton();
     refreshDashboard();
   } catch (e) {
     if (settled) return;
     finish();
-    stopSpin();
-    console.error('Spin failed:', e);
-    toast('Spin failed — please try again', 'error');
+    stopRound();
+    resetDeck();
+    console.error('Card pick failed:', e);
+    toast('Something went wrong — please try again', 'error');
     hapticNotif('error');
     refreshDashboard();
   }
@@ -5081,9 +5268,6 @@ function showReward(r) {
 
   const tier = rewardTier(r);
   const tierClass = tier ? `tier-${tier}` : '';
-  const wheelStage = document.getElementById('wheel-stage');
-  wheelStage?.classList.remove('glow-rare', 'glow-epic', 'glow-legend');
-  if (tier) wheelStage?.classList.add(`glow-${tier}`);
   el.innerHTML = `
     <div class="reward-banner ${tierClass}">
       ${tier === 'legend' ? '<div style="font-size:0.7rem;font-weight:800;color:#ffd966;letter-spacing:0.1em;">⭐ LEGENDARY PULL ⭐</div>' : ''}
@@ -8176,7 +8360,10 @@ function maybeFantasyRedirect() {
 function handleHashDeepLink() {
   const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch'];
   const alias = {
-    gspin: 'spin', wheel: 'spin', myroster: 'roster', squad: 'roster',
+    // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
+    // already out there in group chats and still belong on this screen.
+    gspin: 'spin', wheel: 'spin', pick: 'spin', cards: 'spin',
+    myroster: 'roster', squad: 'roster',
     lb: 'leaderboard', ranks: 'leaderboard', pack: 'packs',
     quest: 'quests', achievement: 'achievements', club: 'clubs',
     freepacks: 'freepack', playingxi: 'xi', pxi: 'xi',

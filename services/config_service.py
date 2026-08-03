@@ -27,7 +27,9 @@ DEFAULTS = {
     "spin_ad_quota": 5,
     "daily_ad_quota": 5,
     "spin_nofill_grace": 2,
-    "ad_reward_gap_minutes": 60,
+    # 0 = a watched ad pays out immediately. See services/quota_service.py for
+    # why spacing rewarded ads out is off by default.
+    "ad_reward_gap_minutes": 0,
     "debut_coins": 1500,
     "debut_gems": 30,
     # Simulation tuning — applied as additive % points after all modifiers.

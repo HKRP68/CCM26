@@ -9,7 +9,7 @@ def test_gspin_activity_message_escapes_user_and_reward():
     )
 
     assert text == (
-        "🎡 <b>A&amp;B &lt;XI&gt;</b> spun the GSpin and won "
+        "🎴 <b>A&amp;B &lt;XI&gt;</b> drew a Lucky Card and won "
         "<b>Virat &lt;King&gt;</b> (99 OVR)!"
     )
 

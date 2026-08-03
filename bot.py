@@ -354,7 +354,7 @@ BOT_MENU_COMMANDS = (
     ("start", "Show the welcome message and command overview"),
     ("debut", "Create your account and receive a starting squad"),
     ("claim", "Claim your hourly player and coin reward"),
-    ("gspin", "Spin the reward wheel"),
+    ("gspin", "Lucky Card Pick — pick a card, win a reward"),
     ("daily", "Claim your daily reward"),
     ("cmumysterybox", "Open your subscriber Mystery Box 🎁"),
     ("cmuweekly", "Claim your weekly card (Platinum/Diamond) 🏆"),
@@ -679,7 +679,7 @@ async def start_handler(update, context):
             return
 
     _MINIAPP_SCREENS = {
-        "spin": "🎡 Open Spin", "daily": "📅 Open Daily",
+        "spin": "🎴 Open Lucky Pick", "daily": "📅 Open Daily",
         "market": "🌟 Open Market", "xi": "👥 Open XI",
         "roster": "👥 Open Squad", "packs": "🎴 Open Packs",
         "freepack": "📦 Open Free Pack", "quests": "🎯 Open Quests",
@@ -718,7 +718,7 @@ async def start_handler(update, context):
         "/debut /d - Create account & get your starter XI\n"
         "/claim /c - Claim 1 player + coins (hourly)\n"
         "/daily /dl - Daily reward (24h)\n"
-        "/gspin /gs - Spin the wheel (8h)\n"
+        "/gspin /gs - Lucky Card Pick (8h)\n"
         "/myroster /mr - View your roster\n"
         "/playingxi /pxi /xi - Playing XI\n"
         "/ximage /xiimg - Playing XI as an image\n"

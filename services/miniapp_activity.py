@@ -89,7 +89,7 @@ def build_message(action, name, **ctx):
             phrase = _gspin_reward_phrase(ctx.get("reward"))
             if not phrase:
                 return None
-            return f"🎡 {who} spun the GSpin and won {phrase}!"
+            return f"🎴 {who} drew a Lucky Card and won {phrase}!"
 
         if action == "daily":
             coins = _fmt_int(ctx.get("coins") or 0)
