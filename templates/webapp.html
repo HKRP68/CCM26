@@ -6549,10 +6549,28 @@ function renderQuestList() {
   `).join('');
 }
 
+// One quest claim at a time, covering both the per-quest buttons and Claim all
+// — they pay from the same rows, so a tap on one must not overlap the other.
+let questClaimBusy = false;
+
+function setQuestButtonsBusy(busy) {
+  document.querySelectorAll('.quest-claim-btn')
+    .forEach(b => { b.disabled = busy; });
+}
+
 async function claimQuest(questId) {
+  if (questClaimBusy) return;
+  questClaimBusy = true;
+  setQuestButtonsBusy(true);
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/quests/claim', { quest_id: questId });
+  let ok, data;
+  try {
+    ({ ok, data } = await api('/api/webapp/quests/claim', { quest_id: questId }));
+  } finally {
+    questClaimBusy = false;
+  }
   if (!ok) {
+    setQuestButtonsBusy(false);
     toast(data.message || 'Claim failed', 'error');
     hapticNotif('error');
     return;
@@ -6569,9 +6587,18 @@ async function claimQuest(questId) {
 }
 
 async function claimAllQuests(qtype) {
+  if (questClaimBusy) return;
+  questClaimBusy = true;
+  setQuestButtonsBusy(true);
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/quests/claim_all', { type: qtype });
+  let ok, data;
+  try {
+    ({ ok, data } = await api('/api/webapp/quests/claim_all', { type: qtype }));
+  } finally {
+    questClaimBusy = false;
+  }
   if (!ok) {
+    setQuestButtonsBusy(false);
     toast(data.message || 'Claim failed', 'error');
     hapticNotif('error');
     return;
@@ -7099,10 +7126,31 @@ function renderLoginLadder() {
   }
 }
 
+// Dropped taps that arrive while a claim is in flight. Without this the button
+// stayed live for the whole round trip, so three quick taps sent three claims.
+// Same shape as the pack shop's packActionBusy.
+let loginClaimBusy = false;
+
 async function claimLoginReward() {
+  if (loginClaimBusy) return;
+  loginClaimBusy = true;
+  const btn = document.getElementById('login-claim-btn');
+  const wasLabel = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Claiming…';
+  }
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/login-streak/claim', {});
+  let ok, data;
+  try {
+    ({ ok, data } = await api('/api/webapp/login-streak/claim', {}));
+  } finally {
+    loginClaimBusy = false;
+  }
   if (!ok) {
+    // Re-arm only on a refusal — a success repaints the ladder below, which
+    // sets the button to its claimed state.
+    if (btn) { btn.disabled = false; btn.textContent = wasLabel; }
     toast(data.message || 'Already claimed', 'error');
     return;
   }

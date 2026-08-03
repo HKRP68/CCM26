@@ -120,9 +120,49 @@ def get_login_status(session, stats, user=None):
     }
 
 
+def _claim_today(session, user, today):
+    """Stamp today onto the user's row, once. Returns whether this caller won.
+
+    One UPDATE that only matches a row not already stamped with ``today``, so
+    two concurrent claims can never both pass it. ``synchronize_session=False``
+    because nothing in this session is querying on that column; the in-memory
+    ``stats`` is brought in line by the caller.
+
+    Sessionless callers (unit tests exercising the ladder maths against a
+    stand-in stats object) have no row to update — they fall back to the
+    in-memory check the caller already made, which is all a single-threaded
+    test needs.
+    """
+    if session is None or user is None:
+        return True
+    try:
+        won = (session.query(UserStats)
+               .filter(UserStats.user_id == user.id,
+                       (UserStats.login_reward_claimed_date.is_(None))
+                       | (UserStats.login_reward_claimed_date != today))
+               .update({UserStats.login_reward_claimed_date: today},
+                       synchronize_session=False))
+        return bool(won)
+    except Exception:
+        # A backend that can't run the conditional update must not block a
+        # legitimate claim — the caller's read check and row lock still stand.
+        logger.exception("login reward compare-and-set failed; falling back")
+        return True
+
+
 def claim_login_reward(session, user, stats):
     """Pay today's ladder reward. Returns dict {ok, error?, reward?, ...}.
-    Caller commits."""
+    Caller commits.
+
+    Claiming the day is a compare-and-set, not a read-then-write. Reading
+    ``login_reward_claimed_date``, paying out, and stamping the date at the end
+    left the whole payout between the check and the write: three taps on the
+    Mini App's claim button raced through that gap and were paid three times.
+    Stamping the date first, in one conditional UPDATE, means exactly one
+    request can win the day — the loser sees rowcount 0 and is refused with the
+    reward untouched. Atomic on every backend, and it does not depend on the
+    caller holding a row lock (though the Mini App takes one anyway).
+    """
     today = _today()
 
     # Must have logged in today
@@ -131,6 +171,10 @@ def claim_login_reward(session, user, stats):
         touch_login_streak(session, stats)
 
     if stats.login_reward_claimed_date == today:
+        return {"ok": False, "error": "already_claimed",
+                "message": "You've already claimed today's reward. Come back tomorrow!"}
+
+    if not _claim_today(session, user, today):
         return {"ok": False, "error": "already_claimed",
                 "message": "You've already claimed today's reward. Come back tomorrow!"}
 
@@ -184,6 +228,8 @@ def claim_login_reward(session, user, stats):
         except Exception:
             logger.exception("Login streak pack grant failed (non-fatal)")
 
+    # The row was already stamped by the compare-and-set above; this keeps the
+    # in-memory copy the caller reads (and returns to the client) in step.
     stats.login_reward_claimed_date = today
 
     # Activity log

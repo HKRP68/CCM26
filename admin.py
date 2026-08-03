@@ -3983,10 +3983,41 @@ from utils.idempotency import claim_once, release
 # `finally` (worker killed mid-request). Normal requests release the claim as
 # soon as they commit, so this only bounds the worst case.
 _WEBAPP_PACK_GUARD_TTL = 30.0
-# Same idea for the reward claims (daily / spin). Shorter, because these are
-# single commits with no image render behind them, and a stuck claim button is
-# worse here than on the shop: the player is watching a countdown.
+# Same idea for the reward claims (daily, spin, login streak, quests, free
+# pack). Shorter, because these are single commits with no image render behind
+# them, and a stuck claim button is worse here than on the shop: the player is
+# watching a countdown.
 _WEBAPP_CLAIM_GUARD_TTL = 15.0
+
+
+def _lock_user_row(db, user_id):
+    """Serialize one user's reward claims at the database.
+
+    The same `SELECT … FOR UPDATE` the pack shop takes on the buyer before
+    validating (see ``services.pack_service._lock_buyer_row``), for the same
+    reason: every claim endpoint reads a balance and a "have you already had
+    this" flag, then writes both, and two requests that overlap otherwise read
+    the same pre-payout snapshot and both pay.
+
+    ``populate_existing`` is not optional. Without it SQLAlchemy answers the
+    locked re-read out of the identity map without refreshing attributes this
+    session already loaded, so the lock blocks and then hands back exactly the
+    stale values it was taken to avoid.
+
+    Best-effort, like the pack shop's: a session that cannot lock (a test
+    double, an exotic backend) must never block a legitimate claim — the
+    in-flight guard and the services' compare-and-set still stand.
+    """
+    from models import User as _User
+    try:
+        db.flush()   # autoflush is off; don't let populate_existing drop writes
+        (db.query(_User)
+         .filter(_User.id == user_id)
+         .populate_existing()
+         .with_for_update()
+         .first())
+    except Exception:
+        logger.debug("claim: user row lock unavailable", exc_info=True)
 
 
 def _init_data_telegram_id():
@@ -6247,6 +6278,15 @@ def webapp_freepack_open():
     if err:
         return err
     db, user, tg_id = auth
+
+    # Same in-flight guard as the other claims. The button disables itself on
+    # the first tap, but that is the client's word for it — the cooldown check
+    # below reads a timestamp that a concurrent open hasn't written yet.
+    guard_key = f"webapp_freepack_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "Your free pack is already opening — hang tight."}, 409
     try:
         from services import ad_service
         from services.free_pack_service import open_free_pack, check_free_pack_cooldown
@@ -6256,10 +6296,9 @@ def webapp_freepack_open():
         dev_mode = os.getenv("WEBAPP_DEV_MODE") == "1"
         ads_configured = ad_service.is_configured()
 
-        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
-        if not stats:
-            stats = UserStats(user_id=user.id)
-            db.add(stats); db.flush()
+        # Locked + refreshed so the cooldown is judged on the committed
+        # last_free_pack, not on a read taken before a concurrent open.
+        stats = _locked_stats(db, user.id)
 
         # Cooldown check first (don't waste their ad). The client can still
         # arrive here having already watched one — its countdown was stale, or
@@ -6344,6 +6383,7 @@ def webapp_freepack_open():
                 "message_extra": ("Your ad was saved — open again and it will "
                                   "be used." if banked else "")}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7034,6 +7074,16 @@ def webapp_redeem():
     if err:
         return err
     db, user, tg_id = auth
+
+    # Redeeming pays both accounts, and the "have you already redeemed" check
+    # is a read followed by a write like every other claim here. Narrower blast
+    # radius (once per account, new users only) but the same shape, so it gets
+    # the same guard.
+    guard_key = f"webapp_redeem_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "Your code is already being redeemed — hang tight."}, 409
     try:
         from services.referral_service import redeem_code
         data = request.get_json(silent=True) or {}
@@ -7047,6 +7097,7 @@ def webapp_redeem():
             return {"ok": False, "error": "invalid_format",
                     "message": "Codes are 6 characters (no spaces or special chars)."}, 400
 
+        _lock_user_row(db, user.id)
         result = redeem_code(db, code, user.id)
         if result["ok"]:
             db.commit()
@@ -7058,6 +7109,7 @@ def webapp_redeem():
         logger.exception("webapp_redeem failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7136,6 +7188,14 @@ def webapp_quest_claim():
     if err:
         return err
     db, user, tg_id = auth
+
+    # One quest claim per user in flight, and the key is shared with Claim all
+    # so the two can't interleave and pay for the same quest twice.
+    guard_key = f"webapp_questclaim_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A quest reward is already being claimed — hang tight."}, 409
     try:
         from services.quest_service import claim_quest_reward
         data = request.get_json(silent=True) or {}
@@ -7146,8 +7206,13 @@ def webapp_quest_claim():
         if not qid:
             return {"ok": False, "error": "missing_id"}, 400
 
+        _lock_user_row(db, user.id)
         ok, message, reward = claim_quest_reward(db, user.id, qid)
         if not ok:
+            # Explicit: the claim takes the `claimed` flag with an UPDATE that
+            # has already hit the database, so a refusal has to undo it rather
+            # than lean on close() to roll back.
+            db.rollback()
             return {"ok": False, "error": "claim_failed", "message": message}, 400
 
         quest_title = None
@@ -7176,6 +7241,7 @@ def webapp_quest_claim():
         logger.exception("webapp_quest_claim failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7188,6 +7254,14 @@ def webapp_quest_claim_all():
     if err:
         return err
     db, user, tg_id = auth
+
+    # Shares the single-quest key on purpose: Claim all and a stray tap on one
+    # quest's own button must not run at the same time over the same rows.
+    guard_key = f"webapp_questclaim_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A quest reward is already being claimed — hang tight."}, 409
     try:
         from services.quest_service import claim_all_completed
         data = request.get_json(silent=True) or {}
@@ -7195,6 +7269,7 @@ def webapp_quest_claim_all():
         if qtype not in ("daily", "weekly", "monthly"):
             return {"ok": False, "error": "bad_type"}, 400
 
+        _lock_user_row(db, user.id)
         count, total = claim_all_completed(db, user.id, qtype)
         db.commit()
         post_miniapp_activity(user, "quest_claim_all",
@@ -7214,6 +7289,7 @@ def webapp_quest_claim_all():
         logger.exception("webapp_quest_claim_all failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7250,12 +7326,21 @@ def webapp_login_streak_claim():
     if err:
         return err
     db, user, tg_id = auth
+
+    # One claim per user in flight. The ladder button pays coins and gems (and
+    # a pack on day 7) and had nothing stopping a burst of taps — not on the
+    # client, not here — so three taps were three rewards.
+    guard_key = f"webapp_loginclaim_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "Your reward is already on its way — hang tight."}, 409
     try:
         from services.login_streak_service import claim_login_reward, get_login_status
-        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
-        if not stats:
-            stats = UserStats(user_id=user.id)
-            db.add(stats); db.flush()
+        # Locked + refreshed, so the "already claimed today" check is made
+        # against what is committed rather than a snapshot from before a
+        # concurrent claim. _locked_stats creates the row if it's missing.
+        stats = _locked_stats(db, user.id)
         result = claim_login_reward(db, user, stats)
         if not result.get("ok"):
             db.rollback()
@@ -7268,6 +7353,7 @@ def webapp_login_streak_claim():
         logger.exception("webapp_login_streak_claim failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
