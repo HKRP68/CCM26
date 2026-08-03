@@ -322,6 +322,41 @@
       if (bal.gems != null) document.getElementById('bal-gems').innerText = Number(bal.gems).toLocaleString();
     }
 
+    // The quota as the server last reported it. Null until the first load —
+    // and that gap mattered: this page used to offer "Watch Ad to Spin" with
+    // no idea whether a slot existed, so during the hour between rewarded ads
+    // a fresh open meant watching an ad the spin would then refuse.
+    let spinQuota = null;
+
+    async function loadQuota() {
+      const freeBtn = document.getElementById('free-spin-btn');
+      const adBtn = document.getElementById('ad-spin-btn');
+      try {
+        const res = await fetch('/api/webapp/init', {
+          method: 'POST', headers: authHeaders(), body: '{}' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) return;
+        setBalance({ coins: data.user?.total_coins, gems: data.user?.total_gems });
+        spinQuota = data.gspin?.quota || null;
+        if (!spinQuota) return;
+        if (!spinQuota.free_available) {
+          freeBtn.innerHTML = '<span>⏳ Free spin used</span>';
+          freeBtn.classList.remove('pulse');
+          freeBtn.disabled = true;
+        }
+        if ((spinQuota.ads_saved || 0) > 0) {
+          adBtn.disabled = false;
+          adBtn.innerHTML = `<span>🎟️ Spin with saved ad (${spinQuota.ads_saved})</span>`;
+          return;
+        }
+        applyAdGap(spinQuota, adBtn);
+      } catch (e) {
+        // Leave the buttons as they are: a failed status read must not be the
+        // thing that stops someone spinning.
+        console.warn('[spin] could not read quota', e);
+      }
+    }
+
     let currentRotation = 0;
 
     // Read the wheel's current visual rotation (0..360) from its computed transform.
@@ -577,6 +612,10 @@
       freeBtn.disabled = true; adBtn.disabled = true;
       status.innerHTML = isAd ? 'LOADING AD… ⏳' : 'SPINNING… 🎡';
 
+      // A saved ad (one watched but never spent) is redeemed server-side from
+      // the ledger, so it needs no new ad and carries no token.
+      if (isAd && (spinQuota?.ads_saved || 0) > 0) isAd = false;
+
       try {
         // The ad first, with the wheel STILL. Spinning it through the ad phase
         // is what made a slow ad look like a wheel that spins forever and pays
@@ -605,6 +644,7 @@
           if (data && data.error === 'ad_cooldown') {
             // Slots remain, they are just not unlocked yet — count the gap down
             // on the button instead of leaving a dead control behind.
+            spinQuota = data.quota || spinQuota;
             freeBtn.disabled = !data.quota?.free_available;
             applyAdGap(data.quota, adBtn);
           }
@@ -638,6 +678,7 @@
           // The gap between rewarded ads: keep the ad button off and say when
           // it comes back, rather than letting a tap fetch an ad the server is
           // going to refuse.
+          spinQuota = data.quota || spinQuota;
           applyAdGap(data.quota, adBtn);
         }, SPIN_ANIM_MS);
       } catch (err) {
@@ -664,6 +705,10 @@
         return null;
       }
     }
+
+    // Ask the server what this player can actually do before offering them an
+    // ad for it.
+    loadQuota();
   </script>
 </body>
 </html>

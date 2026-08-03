@@ -6442,7 +6442,9 @@ function renderFreePackAction() {
       <p style="margin:0.6rem 0 ${d.roster_full ? '0.4rem' : '1rem'};font-weight:700;">Your free pack is ready!</p>
       ${fullNote}
       <button class="spin-button" id="freepack-open-btn" onclick="openFreePack()" style="width:100%;">
-        📺 Watch ad &amp; open pack
+        ${(d.ads_saved || 0) > 0
+          ? `🎟️ Open with saved ad (${d.ads_saved})`
+          : '📺 Watch ad &amp; open pack'}
       </button>
     `;
   } else {
@@ -6484,20 +6486,30 @@ function formatCountdown(sec) {
 
 async function openFreePack() {
   const btn = document.getElementById('freepack-open-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '📺 Loading ad…'; }
+  // An ad already watched but never spent opens the pack with no new ad — the
+  // server redeems it from the ledger, so this request carries no token.
+  const useSavedAd = (freePackState?.ads_saved || 0) > 0;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = useSavedAd ? '📦 Opening…' : '📺 Loading ad…';
+  }
   haptic('medium');
 
-  // Watch ad → get token
-  const adToken = await showAd();
-  if (!adToken) {
-    if (btn) { btn.disabled = false; btn.textContent = '📺 Watch ad & open pack'; }
-    return;  // showAd already toasted
+  let adToken = '';
+  if (!useSavedAd) {
+    adToken = await showAd();
+    if (!adToken) {
+      if (btn) { btn.disabled = false; btn.textContent = '📺 Watch ad & open pack'; }
+      return;  // showAd already toasted
+    }
   }
 
   if (btn) btn.textContent = '📦 Opening…';
   const { ok, data } = await api('/api/webapp/freepack/open', { ad_token: adToken });
   if (!ok) {
-    toast(data.message || 'Pack failed', 'error');
+    // ad_banked / ads_saved: the ad was kept, so this isn't the loss it reads
+    // as. Say so rather than only "Pack failed".
+    toast(data.message || 'Pack failed', data.ad_banked ? 'info' : 'error');
     hapticNotif('error');
     loadFreePack();
     return;

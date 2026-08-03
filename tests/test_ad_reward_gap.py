@@ -336,6 +336,134 @@ class AdCreditTests(unittest.TestCase):
         self.assertFalse(self.ad_service.claim_credit(self.db, self.tg_id))
 
 
+class DurableReceiptTests(unittest.TestCase):
+    """A watched ad is a database row, not an entry in process memory.
+
+    This is the class of failure the credit ledger alone did not cover: the
+    proof of the ad used to live only in ``_CLIENT_TOKENS``, a dict with a
+    two-minute TTL inside one process. A deploy, a phone that took too long to
+    come back, a refused reward or a lost response each destroyed a real
+    watched ad. The token now only addresses a row, so all four survive.
+    """
+
+    def setUp(self):
+        from database import SessionLocal
+        from services import ad_service
+        self.ad_service = ad_service
+        self.db = SessionLocal()
+        AdCreditTests._n[0] += 1
+        self.tg_id = 7_800_200_001 + AdCreditTests._n[0]
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_a_watched_ad_is_written_down_before_the_token_is_handed_out(self):
+        token = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.assertTrue(token.startswith("CT-"))
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+
+    def test_a_lost_token_does_not_lose_the_ad(self):
+        """The restart / expiry / dropped-response case: the client never comes
+        back with the token, and the ad still pays on the next spin."""
+        self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.ad_service._CLIENT_TOKENS.clear()      # a restart, in one line
+        self.assertTrue(self.ad_service.claim_credit(self.db, self.tg_id))
+
+    def test_spending_the_token_spends_the_row(self):
+        token = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.assertTrue(
+            self.ad_service.consume_client_token(token, self.tg_id,
+                                                 session=self.db))
+        # The row went with it — the ad cannot also be redeemed as a saved one.
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
+        self.assertFalse(self.ad_service.claim_credit(self.db, self.tg_id))
+
+    def test_a_token_whose_row_was_already_redeemed_is_refused(self):
+        """One ad, one reward — even though two paths can reach it."""
+        token = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.assertTrue(self.ad_service.claim_credit(self.db, self.tg_id))
+        self.assertFalse(
+            self.ad_service.consume_client_token(token, self.tg_id,
+                                                 session=self.db))
+
+    def test_preserving_an_unneeded_ad_leaves_it_claimable(self):
+        token = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.assertTrue(
+            self.ad_service.preserve_client_ad(self.db, token, self.tg_id))
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+
+    def test_a_memory_only_token_is_converted_when_preserved(self):
+        """Tokens minted without a session (an older build still in flight)
+        have no row yet, so preserving one has to create it."""
+        token = self.ad_service.issue_client_token(self.tg_id)
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
+        self.assertTrue(
+            self.ad_service.preserve_client_ad(self.db, token, self.tg_id))
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+
+    def test_a_postback_for_an_ad_already_registered_pays_nothing_extra(self):
+        """Adsgram fires both halves for ONE ad: the SDK resolves in the
+        browser and the reward URL is called server-side. Banking both would
+        pay twice per ad."""
+        self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.ad_service.record_postback(self.db, self.tg_id)
+        self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
+        # Exactly one spendable receipt for the one ad.
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+
+    def test_a_postback_that_arrives_first_is_the_receipt(self):
+        """The other order: no second row, and the token addresses the
+        postback that is already there."""
+        self.ad_service.record_postback(self.db, self.tg_id)
+        token = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
+        self.assertTrue(
+            self.ad_service.consume_client_token(token, self.tg_id,
+                                                 session=self.db))
+        # …and that one postback is now spent, not still waiting to be claimed.
+        self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
+
+    def test_a_client_calling_in_a_loop_cannot_hoard_saved_ads(self):
+        """/ad-completed is reachable by any authenticated client, and a
+        durable row is worth more than the expiring token it replaced."""
+        from models import AdReward
+        for _ in range(25):
+            self.ad_service.issue_client_token(self.tg_id, session=self.db)
+            # Age each receipt past the same-ad window, or the loop only ever
+            # re-registers the first one and proves nothing about the cap.
+            row = (self.db.query(AdReward)
+                   .filter(AdReward.telegram_id == self.tg_id,
+                           AdReward.consumed_at.is_(None))
+                   .order_by(AdReward.received_at.desc()).first())
+            if row:
+                row.received_at -= timedelta(
+                    seconds=self.ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS + 1)
+                self.db.commit()
+        self.assertLessEqual(
+            self.ad_service.count_credits(self.db, self.tg_id),
+            self.ad_service.MAX_OUTSTANDING_CLIENT_ADS)
+
+    def test_registering_the_same_ad_twice_banks_it_once(self):
+        """A retried /ad-completed is the same ad — nothing finishes a rewarded
+        ad inside the repeat window."""
+        first = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        second = self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+        # Both tokens address the one row, so only one of them can spend it.
+        self.assertTrue(
+            self.ad_service.consume_client_token(first, self.tg_id,
+                                                 session=self.db))
+        self.assertFalse(
+            self.ad_service.consume_client_token(second, self.tg_id,
+                                                 session=self.db))
+
+    def test_a_postback_with_no_client_ad_still_pays(self):
+        """The server-only path has to keep working — a WebView that never
+        reached /ad-completed is exactly when the postback matters most."""
+        self.ad_service.record_postback(self.db, self.tg_id)
+        self.assertTrue(self.ad_service.claim_postback(self.db, self.tg_id))
+
+
 class GuaranteedRewardTests(unittest.TestCase):
     """A spin that has been paid for always lands on something."""
 

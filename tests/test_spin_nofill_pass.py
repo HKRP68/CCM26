@@ -183,16 +183,18 @@ class PassTokenTests(unittest.TestCase):
 
     def test_an_expired_pass_is_dropped_rather_than_left_to_accumulate(self):
         token = adsgram_service.issue_nofill_token(self.TG_ID, "spin")
-        tg_id, _expires, scope = adsgram_service._CLIENT_TOKENS[token]
-        adsgram_service._CLIENT_TOKENS[token] = (tg_id, time.time() - 1, scope)
+        record = adsgram_service._CLIENT_TOKENS[token]
+        adsgram_service._CLIENT_TOKENS[token] = record._replace(
+            expires_at=time.time() - 1)
         self.assertFalse(
             adsgram_service.consume_nofill_token(token, self.TG_ID, "spin"))
         self.assertNotIn(token, adsgram_service._CLIENT_TOKENS)
 
     def test_an_expired_pass_is_refused(self):
         token = adsgram_service.issue_nofill_token(self.TG_ID, "spin")
-        tg_id, _expires, scope = adsgram_service._CLIENT_TOKENS[token]
-        adsgram_service._CLIENT_TOKENS[token] = (tg_id, time.time() - 1, scope)
+        record = adsgram_service._CLIENT_TOKENS[token]
+        adsgram_service._CLIENT_TOKENS[token] = record._replace(
+            expires_at=time.time() - 1)
         self.assertFalse(
             adsgram_service.consume_nofill_token(token, self.TG_ID, "spin"))
 

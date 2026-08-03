@@ -64,9 +64,15 @@ import os
 import secrets
 import threading
 import time
+from collections import namedtuple
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+# What an outstanding one-shot token stands for. ``receipt_id`` is the AdReward
+# row the token addresses (None for a no-fill pass, which is not an ad).
+TokenRecord = namedtuple("TokenRecord",
+                         "telegram_id expires_at scope receipt_id")
 
 # Window after Adsgram fires its postback during which it can be claimed
 POSTBACK_WINDOW_SECONDS = 300  # 5 minutes
@@ -79,6 +85,14 @@ CREDIT_PROVIDER = "credit"
 # that the player keeps what they watched: a gap of an hour, a cycle that
 # resets tomorrow, or simply closing the app must all still pay out.
 CREDIT_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+
+# Limits on the client-side registration of a watched ad — see
+# ``register_client_ad``. The floor is well under the length of any rewarded
+# ad, so it can only catch repeats; the ceiling is above what a player can
+# genuinely be owed (the quota and the gap cap how fast credits are earned in
+# the first place) while keeping a spammed client from hoarding them.
+MIN_CLIENT_AD_INTERVAL_SECONDS = 10
+MAX_OUTSTANDING_CLIENT_ADS = 3
 
 # Client-side ad tokens are stored in-memory for replay protection.
 # Map of token → (telegram_id, expires_at, scope). `scope` is None for a
@@ -141,14 +155,32 @@ def client_config() -> dict:
 def record_postback(session, telegram_id: int, source_ip: str | None = None,
                     query_string: str | None = None):
     """Insert a row when Adsgram pings the reward URL.
-    Called from /api/ads/reward."""
+    Called from /api/ads/reward.
+
+    One ad is one reward, and both halves of Adsgram's contract fire for the
+    same ad: the SDK resolves in the browser (which registers a receipt — see
+    ``register_client_ad``) and the network calls this URL. Whichever lands
+    first is the receipt; a postback that follows a client receipt from the
+    same few minutes is that same ad arriving twice, so it is stored already
+    consumed. It stays in the table for debugging, but it can't be spent — a
+    postback banked on top of the receipt would pay the user twice per ad.
+    """
     from models import AdReward
+    now = datetime.utcnow()
+    cutoff = now - timedelta(seconds=POSTBACK_WINDOW_SECONDS)
+    duplicate_of_client_ad = (session.query(AdReward)
+                              .filter(AdReward.telegram_id == telegram_id,
+                                      AdReward.provider == CREDIT_PROVIDER,
+                                      AdReward.received_at >= cutoff)
+                              .first())
     row = AdReward(
         telegram_id=telegram_id,
-        received_at=datetime.utcnow(),
+        received_at=now,
         provider="adsgram",
         source_ip=(source_ip or "")[:64],
         query_string=(query_string or "")[:500],
+        # Consumed on arrival when the client already registered this ad.
+        consumed_at=now if duplicate_of_client_ad else None,
     )
     session.add(row)
     session.commit()
@@ -215,7 +247,7 @@ def _claim_row(session, row) -> bool:
     return bool(claimed)
 
 
-def bank_credit(session, telegram_id: int, reason: str = "") -> None:
+def bank_credit(session, telegram_id: int, reason: str = ""):
     """Bank a watched-but-unspendable ad as a credit the user can redeem later.
 
     Called wherever ad evidence has already been consumed and the reward could
@@ -223,25 +255,30 @@ def bank_credit(session, telegram_id: int, reason: str = "") -> None:
     reward table, an error mid-spin. The credit carries no expiry beyond
     ``CREDIT_TTL_SECONDS`` and needs no second ad to redeem.
 
+    Returns the new row's id, or None if it could not be written.
+
     Deliberately swallows its own failures: this runs on the error path of a
     request that is already returning bad news, and an exception here would
     replace a recoverable "your ad is saved" with a 500.
     """
     from models import AdReward
     try:
-        session.add(AdReward(
+        row = AdReward(
             telegram_id=telegram_id,
             received_at=datetime.utcnow(),
             provider=CREDIT_PROVIDER,
             query_string=(reason or "")[:500],
-        ))
+        )
+        session.add(row)
         session.commit()
+        return row.id
     except Exception:
         logger.exception("bank_credit failed for %s", telegram_id)
         try:
             session.rollback()
         except Exception:
             pass
+        return None
 
 
 def claim_credit(session, telegram_id: int) -> bool:
@@ -277,23 +314,30 @@ def count_credits(session, telegram_id: int) -> int:
         return 0
 
 
-def _issue_token(prefix: str, telegram_id: int, scope=None) -> str:
+def _issue_token(prefix: str, telegram_id: int, scope=None,
+                 receipt_id=None) -> str:
     """Mint a one-shot token for ``telegram_id``, valid for ``CLIENT_TOKEN_TTL``.
 
     ``scope`` is None for a watched-ad token and the quota name for a no-fill
     pass; ``_consume_token`` requires an exact match, so the two can never be
     spent on each other.
+
+    ``receipt_id`` is the ``AdReward`` row this token addresses. When set, that
+    row — not this dict entry — is what actually gets spent, so the ad survives
+    the token.
     """
     _gc_tokens()
     token = prefix + secrets.token_urlsafe(16)
     with _TOKENS_LOCK:
-        _CLIENT_TOKENS[token] = (telegram_id, time.time() + CLIENT_TOKEN_TTL,
-                                 scope)
+        _CLIENT_TOKENS[token] = TokenRecord(
+            telegram_id, time.time() + CLIENT_TOKEN_TTL, scope, receipt_id)
     return token
 
 
-def _consume_token(prefix: str, token: str, telegram_id: int, scope=None) -> bool:
+def _take_token(prefix: str, token: str, telegram_id: int, scope=None):
     """Validate a one-shot token and, only if it is good, spend it.
+
+    Returns the removed ``TokenRecord``, or None.
 
     Read before pop, deliberately. Popping first would mean a rejected call
     destroyed a token that is still valid for its real owner and scope — and
@@ -308,38 +352,159 @@ def _consume_token(prefix: str, token: str, telegram_id: int, scope=None) -> boo
     """
     _gc_tokens()
     if not token or not token.startswith(prefix):
-        return False
+        return None
     with _TOKENS_LOCK:
         record = _CLIENT_TOKENS.get(token)
         if not record:
-            return False
-        tg_id, expires, token_scope = record
-        if tg_id != telegram_id:
-            return False
-        if time.time() > expires:
+            return None
+        if record.telegram_id != telegram_id:
+            return None
+        if time.time() > record.expires_at:
             _CLIENT_TOKENS.pop(token, None)
-            return False
+            return None
         # A scoped token is only good for the feature it was issued for, so a
         # pass bought out of the spin grace can't be spent on another reward.
-        if token_scope != scope:
-            return False
-        return _CLIENT_TOKENS.pop(token, None) is not None
+        if record.scope != scope:
+            return None
+        return _CLIENT_TOKENS.pop(token, None)
 
 
-def issue_client_token(telegram_id: int) -> str:
+def _consume_token(prefix: str, token: str, telegram_id: int, scope=None) -> bool:
+    """``_take_token`` as a boolean, for tokens with no receipt behind them."""
+    return _take_token(prefix, token, telegram_id, scope) is not None
+
+
+def register_client_ad(session, telegram_id: int):
+    """Write down that this user just watched an ad. Returns the row id.
+
+    Called from /api/webapp/ad-completed, and the reason "watched an ad, got
+    nothing" was still possible after everything above: the *proof* used to
+    exist only as an entry in ``_CLIENT_TOKENS``, which is process memory with
+    a two-minute life. Every one of these lost a real ad:
+
+      • the web process restarted (a deploy, a crash, an idle recycle) and took
+        every outstanding token with it;
+      • the player's phone took longer than the TTL to get from the end of the
+        ad to the reward request — backgrounded app, tunnel, dead signal;
+      • the reward request was refused (a cooldown the client hadn't seen yet,
+        a spent cycle), which returns before the token is ever presented;
+      • the /ad-completed response itself was lost, so the client never even
+        received the token the server had minted.
+
+    A row survives all four. The token now only *addresses* it, so a lost token
+    costs the player nothing: the ledger still holds their ad and the next spin
+    or pack redeems it with no second ad.
+
+    One ad must still be one row. If Adsgram's server postback for this same ad
+    has already landed, this binds to that row instead of adding another.
+
+    This endpoint is reachable by any authenticated client, and a durable row
+    is worth more than the two-minute token it replaces — a client that called
+    it in a loop used to accumulate tokens that expired unused, but would now
+    accumulate saved ads and never need to watch a real one again. Two limits
+    make that pointless without touching the honest path: a second call inside
+    ``MIN_CLIENT_AD_INTERVAL_SECONDS`` is treated as the same ad (nothing
+    completes a rewarded ad that fast), and once
+    ``MAX_OUTSTANDING_CLIENT_ADS`` are already banked, further calls bind to
+    one of those instead of adding more.
+    """
+    from models import AdReward
+    now = datetime.utcnow()
+
+    postback = (_unclaimed(session, telegram_id, POSTBACK_WINDOW_SECONDS)
+                .filter((AdReward.provider.is_(None))
+                        | (AdReward.provider != CREDIT_PROVIDER))
+                .first())
+    if postback:
+        return postback.id
+
+    # Same ad, registered twice (a retried request, or a client in a loop).
+    recent = (session.query(AdReward)
+              .filter(AdReward.telegram_id == telegram_id,
+                      AdReward.provider == CREDIT_PROVIDER,
+                      AdReward.received_at
+                      >= now - timedelta(seconds=MIN_CLIENT_AD_INTERVAL_SECONDS))
+              .order_by(AdReward.received_at.desc())
+              .first())
+    if recent is not None:
+        # Still unspent → the token addresses it. Already spent → no receipt,
+        # so the token behaves like the memory-only one it used to be.
+        return recent.id if recent.consumed_at is None else None
+
+    outstanding = (_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS,
+                              oldest_first=True)
+                   .filter(AdReward.provider == CREDIT_PROVIDER)
+                   .limit(MAX_OUTSTANDING_CLIENT_ADS + 1)
+                   .all())
+    if len(outstanding) >= MAX_OUTSTANDING_CLIENT_ADS:
+        return outstanding[0].id
+
+    return bank_credit(session, telegram_id, "ad watched (client)")
+
+
+def issue_client_token(telegram_id: int, session=None) -> str:
     """Generate a single-use token after client-side ad completion.
 
     The frontend asks for one of these AFTER the Adsgram SDK promise resolves
     successfully; then includes it in the spin request. We can't fully trust
     this (it's frontend-issued) but combined with the ad quota and cooldown
     it's adequate per Adsgram's own guidance for small apps.
+
+    With a ``session`` the ad is also written to the ledger and the token is
+    bound to that row — see ``register_client_ad``. Without one the token is
+    memory-only, which is the old behaviour and all a caller with no database
+    handle can do.
     """
-    return _issue_token(CLIENT_TOKEN_PREFIX, telegram_id)
+    receipt_id = None
+    if session is not None:
+        try:
+            receipt_id = register_client_ad(session, telegram_id)
+        except Exception:
+            # A token with no receipt still works for an immediate spin; only
+            # the durability is lost. Better than failing the whole claim.
+            logger.exception("could not register the ad receipt for %s",
+                             telegram_id)
+    return _issue_token(CLIENT_TOKEN_PREFIX, telegram_id,
+                        receipt_id=receipt_id)
 
 
-def consume_client_token(token: str, telegram_id: int) -> bool:
-    """Check + remove a client-side ad token. Returns True if valid for user."""
-    return _consume_token(CLIENT_TOKEN_PREFIX, token, telegram_id)
+def consume_client_token(token: str, telegram_id: int, session=None) -> bool:
+    """Check + remove a client-side ad token. Returns True if valid for user.
+
+    When the token carries a receipt, spending it means consuming that row —
+    the database, not the dict, decides. That is what stops one ad paying
+    twice: a token whose row was already redeemed as a saved ad (or claimed as
+    a postback) is spent, and this returns False.
+    """
+    record = _take_token(CLIENT_TOKEN_PREFIX, token, telegram_id)
+    if record is None:
+        return False
+    if record.receipt_id is None or session is None:
+        return True
+    from models import AdReward
+    return _claim_row(session,
+                      session.query(AdReward).get(record.receipt_id))
+
+
+def preserve_client_ad(session, token: str, telegram_id: int,
+                       reason: str = "") -> bool:
+    """Keep a watched ad the caller turned out not to need.
+
+    For the case where the reward came free after all — the cycle rolled over
+    between the tap and the request — so the ad should go to the *next* one
+    rather than being spent here or left to rot.
+
+    A token with a receipt behind it needs nothing done: the row is already in
+    the ledger, unconsumed, and the next spin picks it up. A memory-only token
+    (one minted before this shipped, or without a session) has to be converted
+    into a row before its two minutes run out.
+    """
+    record = _take_token(CLIENT_TOKEN_PREFIX, token, telegram_id)
+    if record is None:
+        return False
+    if record.receipt_id is not None:
+        return True
+    return bank_credit(session, telegram_id, reason) is not None
 
 
 def issue_nofill_token(telegram_id: int, kind: str) -> str:
@@ -369,7 +534,7 @@ def _gc_tokens():
     """
     now = time.time()
     with _TOKENS_LOCK:
-        expired = [t for t, (_tg, exp, _scope) in _CLIENT_TOKENS.items()
-                   if exp < now]
+        expired = [t for t, record in _CLIENT_TOKENS.items()
+                   if record.expires_at < now]
         for t in expired:
             _CLIENT_TOKENS.pop(t, None)
