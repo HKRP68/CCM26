@@ -69,10 +69,10 @@ STARTER_TEMPLATES = [
         "window_start_hour": 10, "window_end_hour": 14,
     },
     {
-        "name": "Free GSpin reminder",
-        "message": ("🎡 <b>{first_name}, your free GSpin is ready!</b>\n\n"
-                    "Free spins refresh every 6 hours. Could land coins, gems, "
-                    "or even a rare card. Tap <b>/gspin</b> now."),
+        "name": "Free Lucky Card Pick reminder",
+        "message": ("🎴 <b>{first_name}, your free Lucky Card Pick is ready!</b>\n\n"
+                    "Your free pick is waiting — could land coins, gems, or "
+                    "even a rare card. Tap <b>/gspin</b> now."),
         "target_filter": "active",
         "fire_hour": 16, "fire_minute": 30,
         "window_start_hour": 13, "window_end_hour": 21,

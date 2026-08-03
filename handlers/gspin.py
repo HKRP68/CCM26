@@ -1,4 +1,9 @@
-"""Handler for /gspin — button-first, then result.
+"""Handler for /gspin — the Lucky Card Pick, button-first then result.
+
+The command keeps its name (and its callback prefix, its quota key, its quest
+key and its activity label) because everything from the Mini App to the admin
+reward table addresses this feature by it. Only the game on top changed: the
+prize wheel became a pick from a hand of cards.
 
 Rewards are read from the GSpinReward table (admin-configurable via the
 website at /gspin-rewards). Falls back to the legacy GSPIN_OUTCOMES config
@@ -28,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def _format_segments_text(session):
-    """Build the user-facing wheel description from DB rewards (or fallback)."""
+    """Build the user-facing prize list from DB rewards (or fallback)."""
     from models import GSpinReward
     rows = (session.query(GSpinReward)
                    .filter(GSpinReward.enabled == True)
@@ -94,15 +99,16 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     record_miniapp_origin(update.effective_user.id, _origin)
                 except Exception:
                     pass
-            btn = miniapp_button("🎡 Open Mini App to Spin", "spin",
+            btn = miniapp_button("🎴 Open Mini App to Pick", "spin",
                                  is_private=is_private,
                                  origin_chat_id=_origin)
             if btn is not None:
                 text = (
-                    "🎡 <b>Your spin is ready!</b>\n\n"
+                    "🎴 <b>Your Lucky Card Pick is ready!</b>\n\n"
                     "Use your free spin or watch a quick ad in the Mini App "
-                    "to spin the wheel and win coins, gems, players, or packs.\n\n"
-                    "<i>Tap below to open Spin.</i>"
+                    "to pick one of five cards and win coins, gems, players, "
+                    "or packs.\n\n"
+                    "<i>Tap below to open Lucky Card Pick.</i>"
                 )
                 await update.message.reply_text(
                     text, parse_mode="HTML",
@@ -121,12 +127,13 @@ async def gspin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Legacy fallback (no Mini App URL OR group chat with no bot username)
         text = (
-            "🎡 <b>GSPIN Wheel</b>\n\n"
+            "🎴 <b>LUCKY CARD PICK</b>\n\n"
+            "One card from the deck. Here is what can be under it:\n\n"
             + _format_segments_text(session)
-            + "\n\nTap to spin!"
+            + "\n\nTap to draw!"
         )
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🎰 Spin the Wheel", callback_data=f"gspin_{user.id}")
+            InlineKeyboardButton("🎴 Draw a Card", callback_data=f"gspin_{user.id}")
         ]])
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
@@ -163,7 +170,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         ready, _ = check_cooldown(stats, "last_gspin", effective_cooldown)
         if not ready:
             release(key)
-            await query.edit_message_text("⏳ Already spun!")
+            await query.edit_message_text("⏳ Already drawn!")
             return
 
         reward_row = pick_reward(session)
@@ -227,7 +234,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                         session.commit()
 
                         text = (
-                            f"🎡 <b>GSPIN Wheel Result!</b>\n\n"
+                            f"🎴 <b>Your card is turned over!</b>\n\n"
                             f"{emoji} <b>{colour_label}</b>\n\n"
                             f"{reward_lines}\n\n"
                             "✅ Decide what to do with this player below."
@@ -311,7 +318,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                     sell_val = get_sell_value(player.rating)
                     stats.last_gspin = datetime.utcnow()
                     session.commit()
-                    text = (f"🎡 <b>GSPIN!</b>\n\n{emoji} {colour_label}\n\n"
+                    text = (f"🎴 <b>LUCKY CARD PICK</b>\n\n{emoji} {colour_label}\n\n"
                             f"🎉 {player.name} ({player.rating})\n⚠️ Squad full")
                     await query.edit_message_text(text, parse_mode="HTML")
                     claim_text = f"⚠️ <b>Squad full — decide:</b>\n\n" + format_player_card(player)
@@ -339,7 +346,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.commit()
 
         text = (
-            f"🎡 <b>GSPIN Wheel Result!</b>\n\n"
+            f"🎴 <b>Your card is turned over!</b>\n\n"
             f"{emoji} <b>{colour_label}</b>\n\n"
             f"{reward_lines}\n\n"
             "✅ Reward added to your account!"

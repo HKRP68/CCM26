@@ -354,7 +354,7 @@ BOT_MENU_COMMANDS = (
     ("start", "Show the welcome message and command overview"),
     ("debut", "Create your account and receive a starting squad"),
     ("claim", "Claim your hourly player and coin reward"),
-    ("gspin", "Spin the reward wheel"),
+    ("gspin", "Lucky Card Pick — pick a card, win a reward"),
     ("daily", "Claim your daily reward"),
     ("cmumysterybox", "Open your subscriber Mystery Box 🎁"),
     ("cmuweekly", "Claim your weekly card (Platinum/Diamond) 🏆"),
@@ -679,13 +679,24 @@ async def start_handler(update, context):
             return
 
     _MINIAPP_SCREENS = {
-        "spin": "🎡 Open Spin", "daily": "📅 Open Daily",
+        "spin": "🎴 Open Lucky Card Pick", "daily": "📅 Open Daily",
         "market": "🌟 Open Market", "xi": "👥 Open XI",
         "roster": "👥 Open Squad", "packs": "🎴 Open Packs",
         "freepack": "📦 Open Free Pack", "quests": "🎯 Open Quests",
         "achievements": "🏆 Open Achievements", "season": "👑 Open Season",
         "clubs": "🛡️ Open Clubs", "leaderboard": "🏆 Open Ranks",
         "invite": "🎟️ Open Invite",
+    }
+    # How each screen is referred to in a sentence, where the button label
+    # above (emoji + "Open ...") does not read as prose.
+    _MINIAPP_SCREEN_NAMES = {
+        "spin": "Lucky Card Pick", "daily": "Daily Reward",
+        "market": "the Market", "xi": "your Playing XI",
+        "roster": "your Squad", "packs": "Packs",
+        "freepack": "the Free Pack", "quests": "Quests",
+        "achievements": "Achievements", "season": "Season",
+        "clubs": "Clubs", "leaderboard": "the Leaderboard",
+        "invite": "Invite & Win",
     }
     if payload in _MINIAPP_SCREENS:
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
@@ -698,8 +709,12 @@ async def start_handler(update, context):
                     web_app=WebAppInfo(url=webapp_url + "#" + payload),
                 )
             ]])
+            # The screen's own name, not the deep-link key: "/start spin"
+            # used to answer "open the spin screen", which is not what the
+            # screen has been called since it became a card pick.
+            screen_name = _MINIAPP_SCREEN_NAMES.get(payload, payload)
             await update.message.reply_text(
-                f"<b>Welcome!</b> Tap below to open the {payload} screen.",
+                f"<b>Welcome!</b> Tap below to open {screen_name}.",
                 parse_mode="HTML", reply_markup=kb,
             )
             return
@@ -718,7 +733,7 @@ async def start_handler(update, context):
         "/debut /d - Create account & get your starter XI\n"
         "/claim /c - Claim 1 player + coins (hourly)\n"
         "/daily /dl - Daily reward (24h)\n"
-        "/gspin /gs - Spin the wheel (8h)\n"
+        "/gspin /gs - Lucky Card Pick (8h)\n"
         "/myroster /mr - View your roster\n"
         "/playingxi /pxi /xi - Playing XI\n"
         "/ximage /xiimg - Playing XI as an image\n"

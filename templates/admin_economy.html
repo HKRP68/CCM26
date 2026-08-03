@@ -165,16 +165,21 @@
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
-        Gap between rewarded ads, minutes <span style="color:var(--muted);">(default: 60)</span>
+        Gap between rewarded ads, minutes <span style="color:var(--muted);">(default: 0 — off)</span>
       </label>
       <input type="number" name="ad_reward_gap_minutes" min="0" max="1440" required
              value="{{ cfg.ad_reward_gap_minutes }}"
              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
       <p style="color:var(--muted); font-size:.75rem; margin:.35rem 0 0;">
-        How long after an ad-gated spin/daily before the next one unlocks, so
+        How long after an ad-gated pick/daily before the next one unlocks, so
         the ad slots above are spread out instead of drained in one sitting.
         Tracked per feature, never applied to the 1 free use, and no-ad passes
-        wait it out too. Set to 0 to allow back-to-back ads.
+        wait it out too.
+        <strong>0 (the default) means a watched ad pays out immediately.</strong>
+        Raising it is the single fastest way to make the app look broken:
+        players who have just watched a full ad are answered "next pick in
+        59m", and although the ad is banked and redeemed later, that is not
+        how it reads. Only turn it on if you would rather cut the ad quota.
       </p>
     </div>
   </div>

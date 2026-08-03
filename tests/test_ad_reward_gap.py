@@ -1,22 +1,30 @@
-"""The hour between rewarded ads, and the promise that one is never wasted.
+"""The optional gap between rewarded ads, and the promise one is never wasted.
 
 Two reports sat behind this file:
 
-  * ad-gated spins could be taken back to back, so a cycle's whole ad quota was
+  * ad-gated picks could be taken back to back, so a cycle's whole ad quota was
     drained in a couple of minutes; and
-  * a spin could cost a watched ad and pay nothing — the wheel turned for a
-    long time and the reward never arrived.
+  * a pick could cost a watched ad and pay nothing — the game played out and
+    the reward never arrived.
 
-The rules that answer both are here:
+The first was answered with ``GameConfig.ad_reward_gap_minutes``, and that
+answer was worse than the problem: at the hour it originally defaulted to, a
+player who watched a full ad was told to come back in 59 minutes. So the gap
+now **ships disabled**, and the tests below cover both halves of that — the
+default pays out immediately, and the mechanism still behaves when an admin
+turns it back on.
 
-  • an ad-gated use starts a gap (``GameConfig.ad_reward_gap_minutes``, default
-    60) before the next one unlocks — and the FREE use is never subject to it;
+The rules under test:
+
+  • the default gap is 0, so a watched ad is never deferred;
+  • with a gap configured, an ad-gated use starts it before the next one
+    unlocks — and the FREE use is never subject to it;
   • a no-fill pass waits the gap out too, or "no ad available" would be the
     cheap way around it;
   • an ad that is proven but can't be spent is BANKED as a credit and redeemed
-    later with no second ad, which is what makes the gap safe to enforce after
+    later with no second ad, which is what makes a gap safe to enforce after
     the ad rather than only before it;
-  • a spin that has been paid for always has something to land on, even with an
+  • a pick that has been paid for always has something to land on, even with an
     empty reward table.
 
 The quota rules take a plain stats object; the credit ledger needs a database,
@@ -100,16 +108,71 @@ def _mid_cycle(**kw):
                      spin_free_used=True, **kw)
 
 
-class GapTests(unittest.TestCase):
-    """When the next rewarded ad unlocks."""
+class _WithGapConfigured(unittest.TestCase):
+    """Base for the tests that exercise the gap mechanism itself.
+
+    The gap ships disabled, so every one of these has to turn it on. Patching
+    the module default is how: ``get_quota_status`` with no session reads it
+    directly, which is also the path a caller takes when GameConfig is
+    unreachable.
+    """
+
+    GAP_MINUTES = 60
 
     def setUp(self):
         from services import quota_service
         self.quota_service = quota_service
-        self.gap = quota_service.DEFAULT_AD_GAP_MINUTES * 60
+        self._real_gap = quota_service.DEFAULT_AD_GAP_MINUTES
+        quota_service.DEFAULT_AD_GAP_MINUTES = self.GAP_MINUTES
+        self.gap = self.GAP_MINUTES * 60
 
-    def test_the_default_gap_is_an_hour(self):
-        self.assertEqual(self.quota_service.DEFAULT_AD_GAP_MINUTES, 60)
+    def tearDown(self):
+        self.quota_service.DEFAULT_AD_GAP_MINUTES = self._real_gap
+
+
+class NoGapByDefaultTests(unittest.TestCase):
+    """The shipped behaviour: watch an ad, get the reward. No waiting.
+
+    This is the whole point of the file. An hour here reads to a player as
+    "I watched an ad and got nothing", and no amount of banking the ad behind
+    the scenes changes what they saw.
+    """
+
+    def setUp(self):
+        from services import quota_service
+        self.quota_service = quota_service
+
+    def test_the_gap_ships_disabled(self):
+        self.assertEqual(self.quota_service.DEFAULT_AD_GAP_MINUTES, 0)
+
+    def test_an_ad_spin_does_not_defer_the_next_one(self):
+        stats = _mid_cycle()
+        self.quota_service.consume_slot(stats, "spin", "ad")
+        status = self.quota_service.get_quota_status(stats, "spin")
+        self.assertEqual(status["ad_ready_in"], 0)
+        self.assertTrue(status["ad_available"])
+
+    def test_a_second_ad_spin_is_allowed_immediately(self):
+        stats = _mid_cycle(spin_ad_count=1,
+                           spin_last_ad_at=datetime.utcnow())
+        allowed, slot, reason = self.quota_service.can_use(
+            stats, "spin", ad_provided=True)
+        self.assertTrue(allowed)
+        self.assertEqual(slot, "ad")
+        self.assertIsNone(reason)
+
+    def test_the_quota_is_still_what_limits_the_ads(self):
+        """Removing the gap must not remove the cap — the cycle still ends."""
+        stats = _mid_cycle(spin_ad_count=99,
+                           spin_last_ad_at=datetime.utcnow())
+        allowed, _slot, reason = self.quota_service.can_use(
+            stats, "spin", ad_provided=True)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "cycle_exhausted")
+
+
+class GapTests(_WithGapConfigured):
+    """When the next rewarded ad unlocks, for an admin who turns the gap on."""
 
     def test_a_fresh_user_waits_for_nothing(self):
         status = self.quota_service.get_quota_status(FakeStats(), "spin")
@@ -201,12 +264,8 @@ class GapTests(unittest.TestCase):
         self.assertEqual(reason, "cycle_exhausted")
 
 
-class NoFillPassGapTests(unittest.TestCase):
-    """A pass stands in for an ad, so it waits the gap out like one."""
-
-    def setUp(self):
-        from services import quota_service
-        self.quota_service = quota_service
+class NoFillPassGapTests(_WithGapConfigured):
+    """A pass stands in for an ad, so it waits a configured gap out like one."""
 
     def test_no_pass_is_granted_inside_the_gap(self):
         stats = _mid_cycle(spin_ad_count=1,
@@ -218,10 +277,9 @@ class NoFillPassGapTests(unittest.TestCase):
         self.assertEqual(stats.spin_nofill_used, 0)
 
     def test_a_pass_is_granted_once_the_gap_is_up(self):
-        gap = self.quota_service.DEFAULT_AD_GAP_MINUTES * 60
         stats = _mid_cycle(spin_ad_count=1,
                            spin_last_ad_at=datetime.utcnow()
-                           - timedelta(seconds=gap + 5))
+                           - timedelta(seconds=self.gap + 5))
         granted, _status = self.quota_service.claim_nofill_pass(stats, "spin")
         self.assertTrue(granted)
         self.assertEqual(stats.spin_nofill_used, 1)
@@ -277,6 +335,30 @@ class AdCreditTests(unittest.TestCase):
         self.assertFalse(self.ad_service.claim_credit(self.db, self.tg_id + 1))
         self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
 
+    def test_a_stale_postback_is_still_the_players_ad(self):
+        """The leak this file exists to close, in its last hiding place.
+
+        A postback older than the claim window used to be visible to nothing:
+        claim_postback would not look that far back, and claim_credit filtered
+        it out by provider. The row sat there unconsumed until it aged out —
+        an ad watched, and no reward for it, ever.
+        """
+        from models import AdReward
+        self.ad_service.record_postback(self.db, self.tg_id)
+        row = (self.db.query(AdReward)
+               .filter(AdReward.telegram_id == self.tg_id).one())
+        row.received_at = (datetime.utcnow()
+                           - timedelta(seconds=self.ad_service
+                                       .POSTBACK_WINDOW_SECONDS + 60))
+        self.db.commit()
+
+        # Out of the postback window…
+        self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
+        # …and still owed to the player.
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+        self.assertTrue(self.ad_service.claim_credit(self.db, self.tg_id))
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
+
     def test_a_credit_is_not_a_postback(self):
         """claim_postback's five-minute window is about a network callback. A
         credit shares the table but is claimed only by claim_credit, or a spin
@@ -285,11 +367,27 @@ class AdCreditTests(unittest.TestCase):
         self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
         self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
 
-    def test_a_postback_is_not_a_credit(self):
+    def test_an_unspent_postback_is_redeemable_as_a_saved_ad(self):
+        """A postback is an ad the player watched, so it must not evaporate.
+
+        claim_postback only looks back five minutes. A postback nobody spent
+        inside that window — the app was closed, the reward request never
+        landed, the free slot covered that spin — used to be unreachable by
+        every path afterwards, which is a watched ad lost.
+        """
         self.ad_service.record_postback(self.db, self.tg_id)
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+        self.assertTrue(self.ad_service.claim_credit(self.db, self.tg_id))
+        # One ad, one reward: spending it as a credit leaves nothing for the
+        # postback path to claim a second time.
+        self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
         self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
-        self.assertFalse(self.ad_service.claim_credit(self.db, self.tg_id))
+
+    def test_a_postback_pays_once_whichever_path_claims_it(self):
+        """The reverse order, for the same one-ad-one-reward invariant."""
+        self.ad_service.record_postback(self.db, self.tg_id)
         self.assertTrue(self.ad_service.claim_postback(self.db, self.tg_id))
+        self.assertFalse(self.ad_service.claim_credit(self.db, self.tg_id))
 
     def test_a_credit_outlives_the_postback_window(self):
         """The gap is an hour and a cycle is a day — a credit that expired in
@@ -416,12 +514,15 @@ class DurableReceiptTests(unittest.TestCase):
         postback that is already there."""
         self.ad_service.record_postback(self.db, self.tg_id)
         token = self.ad_service.issue_client_token(self.tg_id, session=self.db)
-        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
+        # One ad, one row — and it is spendable, so the player is shown the one
+        # saved ad they actually have.
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
         self.assertTrue(
             self.ad_service.consume_client_token(token, self.tg_id,
                                                  session=self.db))
         # …and that one postback is now spent, not still waiting to be claimed.
         self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 0)
 
     def test_a_client_calling_in_a_loop_cannot_hoard_saved_ads(self):
         """/ad-completed is reachable by any authenticated client, and a

@@ -57,6 +57,11 @@ over, the endpoint calls ``bank_credit``: an ``AdReward`` row tagged
 5-minute window — the player redeems it on their next spin with no second ad.
 ``claim_credit`` spends one, and the balance is reported to the client so the
 app can say "1 ad saved" instead of leaving it invisible.
+
+``claim_credit`` redeems *any* unconsumed row, network postbacks included.
+Postbacks have their own five-minute claim window, and one that goes unspent
+inside it is still an ad the player watched; leaving it outside the credit
+query meant it simply expired, unreachable by every path.
 """
 
 import logging
@@ -87,7 +92,11 @@ CREDIT_PROVIDER = "credit"
 # reconciling against the network postback for that same ad, and treating any
 # banked credit as one silently voided the postback for a genuinely new ad.
 CLIENT_PROVIDER = "client"
-# Both are ads this user watched and has not spent, so both are redeemable.
+# The two providers that are NOT network postbacks. Used to separate the two
+# kinds of evidence where the distinction matters — ``claim_postback`` must not
+# pick up a saved ad under its five-minute window. It is not the set of what
+# can be redeemed: every unconsumed row is an ad someone watched, and
+# ``claim_credit`` spends any of them.
 REDEEMABLE_PROVIDERS = (CREDIT_PROVIDER, CLIENT_PROVIDER)
 # How long after a client receipt the matching network postback is still the
 # same ad. The two fire within seconds of each other; the full postback window
@@ -327,25 +336,32 @@ def claim_credit(session, telegram_id: int) -> bool:
     them would, under newest-first, always redeem the fresh one while the
     oldest sat untouched until it expired — losing a watched ad, which is the
     single thing this ledger exists to prevent.
+
+    Any unconsumed row counts, not only the ones tagged as credits. A network
+    postback is proof of a watched ad too, and restricting this to
+    ``REDEEMABLE_PROVIDERS`` quietly threw those away: ``claim_postback`` only
+    looks back POSTBACK_WINDOW_SECONDS, so a postback nobody spent within five
+    minutes — the player closed the app, the phone dropped the reward request,
+    the free slot covered that spin — became unreachable by every path and the
+    ad was gone. Nothing here can double-pay for it: a postback that merely
+    echoes a client receipt is stored already consumed by ``record_postback``,
+    and consuming is a conditional UPDATE.
     """
-    from models import AdReward
     return _claim_row(
         session,
         _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
-        .filter(AdReward.provider.in_(REDEEMABLE_PROVIDERS))
         .first())
 
 
 def count_credits(session, telegram_id: int) -> int:
-    """How many banked credits this user can still redeem.
+    """How many watched-but-unspent ads this user can still redeem.
 
     Reported to the client so a saved ad is visible ("1 ad saved — spin it
-    now") rather than a silent balance the player has to stumble into.
+    now") rather than a silent balance the player has to stumble into. Counts
+    exactly what ``claim_credit`` will spend, postbacks included.
     """
-    from models import AdReward
     try:
         return int(_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
-                   .filter(AdReward.provider.in_(REDEEMABLE_PROVIDERS))
                    .count() or 0)
     except Exception:
         logger.exception("count_credits failed for %s", telegram_id)
@@ -479,9 +495,11 @@ def _register_client_ad(session, telegram_id: int):
         # so the token behaves like the memory-only one it used to be.
         return recent.id if recent.consumed_at is None else None
 
+    # Counts every unspent row, which is what ``count_credits`` reports to the
+    # player — filtering to the non-postback providers here would let the cap
+    # disagree with the number on their screen.
     outstanding = (_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS,
                               oldest_first=True)
-                   .filter(AdReward.provider.in_(REDEEMABLE_PROVIDERS))
                    .limit(MAX_OUTSTANDING_CLIENT_ADS + 1)
                    .all())
     if len(outstanding) >= MAX_OUTSTANDING_CLIENT_ADS:

@@ -628,7 +628,7 @@ def _migrate_add_columns():
     _try_add("game_config", "spin_ad_quota", "INTEGER DEFAULT 5")
     _try_add("game_config", "daily_ad_quota", "INTEGER DEFAULT 5")
     _try_add("game_config", "spin_nofill_grace", "INTEGER DEFAULT 2")
-    _try_add("game_config", "ad_reward_gap_minutes", "INTEGER DEFAULT 60")
+    _try_add("game_config", "ad_reward_gap_minutes", "INTEGER DEFAULT 0")
     # Global gameplay style: preserve the original in-chat bot flow by default.
     _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     _try_add("game_config", "challenge_max_overs", "INTEGER DEFAULT 2 NOT NULL")
@@ -771,6 +771,28 @@ def _migrate_add_columns():
         # ignore those failures (and to keep retrying them on later boots).
         if not _run_isolated(backfill_sql):
             _record_migration_signature("backfill", sig)
+
+    # ─────────────────────────────────────────────────────────────
+    # Turn off the hour between rewarded ads on databases that already
+    # shipped with it. The column arrived defaulting to 60, which meant a
+    # player who watched a full ad was answered "next ad spin in 59m" — the
+    # ad was banked, but the experience is exactly "watched an ad, got
+    # nothing", and it is the loudest complaint the Mini App has had.
+    #
+    # Deliberately narrow: only rows still sitting on the shipped 60 are
+    # moved. Any other value is an admin's own choice and is left alone.
+    # Keyed separately from the backfill batch so it stays a one-shot — the
+    # marker is recorded on success and this never runs again, so an admin
+    # who sets it back to 60 tomorrow keeps it.
+    # ─────────────────────────────────────────────────────────────
+    ad_gap_sql = [
+        "UPDATE game_config SET ad_reward_gap_minutes = 0 "
+        "WHERE ad_reward_gap_minutes = 60",
+    ]
+    done, sig = _migration_signature_matches("ad_gap_off", ad_gap_sql)
+    if not done:
+        if not _run_isolated(ad_gap_sql):
+            _record_migration_signature("ad_gap_off", sig)
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions

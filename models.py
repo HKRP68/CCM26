@@ -1004,9 +1004,14 @@ class GameConfig(Base):
     # again); raising it trades a little revenue for never dead-ending a player.
     spin_nofill_grace = Column(Integer, default=2, nullable=False)
     # Minimum gap between two AD-GATED rewards of the same kind (spin, daily),
-    # in minutes. 60 = one rewarded ad per hour per feature. 0 disables the gap
-    # and restores back-to-back ad watching.
-    ad_reward_gap_minutes = Column(Integer, default=60, nullable=False)
+    # in minutes. 0 (the default) means a watched ad pays out immediately;
+    # 60 would allow one rewarded ad per hour per feature.
+    #
+    # Defaults to 0 because an hour here is indistinguishable from the feature
+    # being broken: the player watches a full ad and is answered "next spin in
+    # 59m". The ad is banked rather than lost, but nobody experiences a banked
+    # credit as a reward. See services/quota_service.py.
+    ad_reward_gap_minutes = Column(Integer, default=0, nullable=False)
     # Daily Quick Match limit per user. Resets at UTC midnight.
     daily_quick_match_limit = Column(Integer, default=5, nullable=False)
     # ── Free Pack (Mini App, ad-gated) ──
