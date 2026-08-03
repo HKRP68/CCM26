@@ -300,7 +300,7 @@ def test_owner_gating_blocks_wrong_user():
     assert so["sel_batters"] == []  # rejected — wrong owner
 
 
-def test_dismissed_batter_cannot_be_reselected():
+def test_a_batter_who_already_batted_cannot_be_reselected():
     random.seed(3)
     _patch_finalize(so_mod)
     ctx = FakeContext()
@@ -311,11 +311,12 @@ def test_dismissed_batter_cannot_be_reselected():
 
     bat_uid = so["bat_uid"]                       # GUEST
     bat_tg = so["teams"][bat_uid]["tg"]
-    # Pretend this batter was dismissed in an earlier Super Over of this tie.
+    # Pretend this batter came to the crease in an earlier Super Over of this
+    # tie — they are spent and cannot bat again.
     gone = int(so["teams"][bat_uid]["xi"][0]["roster_id"])
-    so["dismissed"][bat_uid].add(gone)
+    so["batted"][bat_uid].add(gone)
 
-    # A stale button tap for the dismissed player must be rejected.
+    # A stale button tap for the used player must be rejected.
     asyncio.run(so_bat_callback(
         _upd(FakeQuery(f"so_bat_{mid}_{gone}", bat_tg)), ctx))
     assert gone not in so["sel_batters"]
@@ -339,9 +340,9 @@ def test_ineligible_bowler_tap_is_rejected():
 
     bowl_uid = so["bowl_uid"]                      # HOST
     bowl_tg = so["teams"][bowl_uid]["tg"]
-    # Mark this team's previous-Super-Over bowler — now restricted.
+    # Mark a bowler who has already bowled a Super Over in this tie.
     restricted = int(so["teams"][bowl_uid]["xi"][0]["roster_id"])
-    so["last_bowler"][bowl_uid] = restricted
+    so["used_bowlers"][bowl_uid].add(restricted)
 
     # A stale button for the restricted bowler must be rejected.
     asyncio.run(so_bowl_callback(
@@ -975,15 +976,101 @@ def test_a_dismissal_off_a_no_ball_still_costs_a_wicket():
     assert inn["legal"] == 0                    # a no-ball is still re-bowled
 
 
-def test_dismissed_batters_are_not_re_offered_while_fresh_ones_remain():
+def test_used_batters_are_not_re_offered_while_fresh_ones_remain():
     ctx, mid = _live_innings()
     so = _get(ctx, mid)
     uid = so["bat_uid"]
     xi = so["teams"][uid]["xi"]                 # five players
-    so["dismissed"][uid] = {int(p["roster_id"]) for p in xi[:3]}
+    so["batted"][uid] = {int(p["roster_id"]) for p in xi[:3]}
 
     names = [p["name"] for p in _eligible_batters(so, uid)]
     # Two fresh batters left, so the pool is topped back up to three — and the
     # two who never batted are both in it.
     assert len(names) == 3
     assert xi[3]["name"] in names and xi[4]["name"] in names
+
+
+def test_the_next_batter_is_announced_when_a_wicket_falls():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    from handlers.super_over import _name
+    backup = so["inn"]["backup"]
+    backup_name = _name(so, so["bat_uid"], backup)
+
+    _bowl_scripted(ctx, mid, BOWLED)
+
+    inn = _get(ctx, mid)["inn"]
+    assert backup in (inn["striker"], inn["non_striker"])   # they really came in
+    # ...and the chat says so, rather than silently swapping a name on the
+    # two-batter line where nobody notices it. Crucially it must survive into
+    # the NEXT prompt: the ball message is overwritten a second later, so an
+    # announcement that lives only there is one nobody sees.
+    latest = ctx.bot.messages[-1].text
+    assert f"{backup_name}</b> walks out to the middle" in latest
+    assert f"🆕 {backup_name}" in latest      # badged until they face a ball
+
+
+def test_only_the_batters_who_walked_out_are_spent_by_a_replay():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    bat_uid = so["bat_uid"]
+    inn = so["inn"]
+    openers = {int(inn["striker"]), int(inn["non_striker"])}
+    backup = int(inn["backup"])
+
+    # Six dot balls: the reserve never leaves the dressing room.
+    for _ in range(6):
+        _bowl_scripted(ctx, mid, {"type": "run", "is_extra": False, "runs": 0,
+                                  "batter_out": False, "wicket_type": None})
+
+    so = _get(ctx, mid)
+    assert so["batted"][bat_uid] == openers
+    assert backup not in so["batted"][bat_uid]
+    # So the next Super Over may still pick them.
+    assert backup in {int(p["roster_id"]) for p in _eligible_batters(so, bat_uid)}
+
+
+def test_a_bowler_who_has_bowled_a_super_over_cannot_bowl_another():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    bowl_uid = so["bowl_uid"]
+    bowler = int(so["inn"]["bowler_rid"])
+
+    for _ in range(6):
+        _bowl_scripted(ctx, mid, {"type": "run", "is_extra": False, "runs": 0,
+                                  "batter_out": False, "wicket_type": None})
+
+    so = _get(ctx, mid)
+    assert bowler in so["used_bowlers"][bowl_uid]
+    assert bowler not in {int(p["roster_id"])
+                          for p in _eligible_bowlers(so, bowl_uid)}
+
+
+def test_bowling_the_same_ball_over_and_over_is_charged_for():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    # The delivery + length pair is what the engine's spam layer counts.
+    _bowl_scripted(ctx, mid, WIDE)
+    assert _get(ctx, mid)["inn"]["repeat"] == 1
+    _bowl_scripted(ctx, mid, WIDE)
+    assert _get(ctx, mid)["inn"]["repeat"] == 2
+
+
+def test_the_super_over_leaks_more_extras_than_an_ordinary_over():
+    from handlers.super_over import _super_over_ball, SO_EXTRAS_MULT
+    import services.probability_engine as pe
+
+    seen = {}
+    orig = pe.calculate_outcome
+
+    def spy(*a, **k):
+        seen["extras_mult"] = k.get("extras_mult")
+        return orig(*a, **k)
+
+    pe.calculate_outcome = spy
+    try:
+        _super_over_ball({"batting_rating": 75}, {"bowling_rating": 70},
+                         "Flat", shot="Drive", variation="Seam Up", length="Good")
+    finally:
+        pe.calculate_outcome = orig
+    assert seen["extras_mult"] == SO_EXTRAS_MULT > 1.0

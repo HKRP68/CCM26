@@ -251,17 +251,19 @@ def test_a_replay_swaps_who_bats_first_and_carries_the_restrictions():
                      exclude_bowler=None):
         calls.append({"label": label,
                       "exclude_batsmen": list(exclude_batsmen or []),
-                      "exclude_bowler": exclude_bowler})
+                      "exclude_bowler": set(exclude_bowler or ())})
         n = len(calls)
         if n <= 2:                       # super over 1: dead level, even boundaries
             side = "A" if n == 1 else "B"
+            # Two batsmen walked out; the nominated reserve was never needed.
             return {"runs": 10, "wickets": 1, "balls": 6, "deliveries": 6,
                     "boundaries": 1, "sixes": 1, "fours": 0,
-                    "dismissed": [f"{side}out"], "bowler": f"{side}opp_bowler"}
+                    "dismissed": [f"{side}1"], "batted": [f"{side}1", f"{side}2"],
+                    "bowler": f"{side}opp_bowler"}
         # super over 2: whoever bats second wins it
         return {"runs": 10 if n == 3 else 11, "wickets": 0, "balls": 6,
                 "deliveries": 6, "boundaries": 0, "sixes": 0, "fours": 0,
-                "dismissed": [], "bowler": "b2"}
+                "dismissed": [], "batted": [], "bowler": "b2"}
 
     orig = md.simulate_super_over_innings
     md.simulate_super_over_innings = fake_innings
@@ -275,12 +277,12 @@ def test_a_replay_swaps_who_bats_first_and_carries_the_restrictions():
     # B chased in super over 1, so B bats first in the replay.
     assert calls[0]["label"] == "Super Over A"
     assert calls[2]["label"] == "Super Over B"
-    # Batsmen dismissed in super over 1 cannot bat in super over 2...
-    assert calls[2]["exclude_batsmen"] == ["Bout"]
-    assert calls[3]["exclude_batsmen"] == ["Aout"]
-    # ...and neither bowler may bowl two super overs in a row.
-    assert calls[2]["exclude_bowler"] == "Bopp_bowler"   # A's bowler in SO1
-    assert calls[3]["exclude_bowler"] == "Aopp_bowler"   # B's bowler in SO1
+    # Everyone who BATTED in super over 1 is spent — not merely those dismissed.
+    assert calls[2]["exclude_batsmen"] == ["B1", "B2"]
+    assert calls[3]["exclude_batsmen"] == ["A1", "A2"]
+    # ...and a bowler who has bowled a super over cannot bowl another.
+    assert calls[2]["exclude_bowler"] == {"Bopp_bowler"}  # A's bowler in SO1
+    assert calls[3]["exclude_bowler"] == {"Aopp_bowler"}  # B's bowler in SO1
     assert so["winner"] == "A"                           # A batted 2nd in SO2
 
 
@@ -314,3 +316,28 @@ def test_the_side_that_batted_second_bats_first_in_the_super_over():
     # be told the OTHER side opens it.
     assert seen["a"] == m["innings1"]["batting_team"]
     assert seen["first_bat"] == "b"
+
+
+def test_only_the_batsmen_who_walked_out_are_spent_by_a_replay():
+    # A reserve who is never needed did not bat, so a replay may still pick them.
+    inn, _ = _run_scripted_innings([DOT] * 6)
+    assert inn["batted"] == ["A0", "A1"]          # the reserve stayed in the hut
+    inn, _ = _run_scripted_innings([WKT] + [DOT] * 5)
+    assert inn["batted"] == ["A0", "A1", "A2"]    # ...until a wicket brings them in
+
+
+def test_the_super_over_leaks_more_extras_than_an_ordinary_over():
+    # Nerves: wides and no-balls are twice as likely, and nothing else moves.
+    def rate(mult, n=40000):
+        random.seed(19)
+        extras = 0
+        for _ in range(n):
+            oc = calculate_outcome("Fast", "Right", "Seam Up", "Good", "Flat",
+                                   10, 20, "Drive", 75, 75, extras_mult=mult)
+            if oc["type"] in ("wide", "noball"):
+                extras += 1
+        return extras / n
+
+    normal, super_over = rate(1.0), rate(md.SO_EXTRAS_MULT)
+    assert super_over > normal * 1.5
+    assert super_over < 0.10, "extras should still be the exception, not the norm"

@@ -19,6 +19,12 @@ SO_MAX_REPEATS = 3           # repeat tied super overs at most this many times
 # Wides and no-balls are re-bowled, so a pathological run of them would never
 # reach 6 legal balls. Cap the total deliveries so an innings always terminates.
 SO_MAX_DELIVERIES = 24
+# Nerves. Six balls with a match on them is the most pressure a bowler ever
+# bowls under, and the engine's base 1.3% wide / 0.4% no-ball made an extra a
+# novelty. Doubling the extras weights (and only those — runs and wickets are
+# untouched) puts a wide in roughly one super over in seven. Shared with the
+# interactive Super Over, which uses the same multiplier.
+SO_EXTRAS_MULT = 2.0
 
 
 # ── Pressure & scenario ────────────────────────────────────────────────
@@ -82,17 +88,27 @@ def total_pressure(state, *, scenario=False):
 
 # ── Super over selection ───────────────────────────────────────────────
 
+def _name_set(exclude):
+    """Normalise an exclusion argument (a single name, or any collection of
+    names) into a set."""
+    if not exclude:
+        return set()
+    if isinstance(exclude, str):
+        return {exclude}
+    return set(exclude)
+
+
 def super_over_batsmen(xi, n=SO_BATSMEN, exclude=None):
     """Top-n batsmen (by batting rating) nominated for the super over.
 
-    ``exclude`` is a collection of names dismissed in an EARLIER super over of
-    the same tie — they cannot bat again, so they are skipped. The pool is only
-    topped back up with them if the restriction would leave a side unable to
-    field a pair (which needs an XI of one or two, so effectively never).
+    ``exclude`` is the names that already BATTED in an earlier super over of the
+    same tie — they are spent and cannot bat again, so they are skipped. The
+    pool is only topped back up with them if the restriction would leave the
+    side short (which takes several replays off an XI of eleven).
     """
     ranked = sorted(xi, key=lambda p: p.get("bat_rating", 0) or p.get("rating", 0),
                     reverse=True)
-    out = set(exclude or ())
+    out = _name_set(exclude)
     pool = [p for p in ranked if p.get("name") not in out]
     for p in ranked:                       # safety valve: a side must always bat
         if len(pool) >= min(n, len(ranked)):
@@ -105,12 +121,13 @@ def super_over_batsmen(xi, n=SO_BATSMEN, exclude=None):
 def super_over_bowler(xi, exclude=None):
     """Best eligible (Bowler/All-rounder) bowler for the super over.
 
-    ``exclude`` is the name of the bowler who bowled the PREVIOUS super over of
-    the same tie — a bowler cannot bowl two super overs in a row.
+    ``exclude`` is every bowler who has already bowled a super over in this tie
+    (a name or a collection of them) — a bowler is spent once they have bowled.
     """
     elig = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")] or list(xi)
-    if exclude:
-        fresh = [p for p in elig if p.get("name") != exclude]
+    out = _name_set(exclude)
+    if out:
+        fresh = [p for p in elig if p.get("name") not in out]
         if fresh:
             elig = fresh
     return max(elig, key=lambda p: p.get("bowl_rating", 0))
@@ -132,10 +149,12 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
     a dismissed batsman never returns.
 
     Returns {runs, wickets, balls, deliveries, boundaries, sixes, fours,
-    dismissed, bowler}. ``sixes``/``fours`` feed the boundary countback;
-    ``dismissed``/``bowler`` feed the replay restrictions in
-    :func:`resolve_super_over`. Reuses calculate_outcome so scoring matches the
-    rest of the engine.
+    dismissed, batted, bowler}. ``sixes``/``fours`` feed the boundary countback;
+    ``batted``/``bowler`` feed the replay restrictions in
+    :func:`resolve_super_over` — ``batted`` is everyone who actually walked out,
+    which is what a replay treats as spent (a reserve who was never needed is
+    still available). Reuses calculate_outcome so scoring matches the rest of
+    the engine.
     """
     from services.sim_match import _HOW_TO_EVENT, _RUNS_TO_EVENT, _ATTACK
     batsmen = super_over_batsmen(bat_xi, exclude=exclude_batsmen)
@@ -147,13 +166,18 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
     if not batsmen:
         return {"runs": 0, "wickets": 0, "balls": 0, "deliveries": 0,
                 "boundaries": 0, "sixes": 0, "fours": 0, "dismissed": [],
-                "bowler": bowler.get("name") if bowler else None}
+                "batted": [], "bowler": bowler.get("name") if bowler else None}
     # batsmen[0] & [1] open, batsmen[2] is the reserve. ``next_i`` is the next
     # man in — never an index that has already been at the crease.
     striker_i = 0
     non_striker_i = 1 if len(batsmen) > 1 else 0
     next_i = 2
     free_hit = False
+    # Everyone who actually walked out. A reserve who is never needed did not
+    # bat, so they stay available for a replay.
+    batted = [batsmen[striker_i].get("name")]
+    if non_striker_i != striker_i:
+        batted.append(batsmen[non_striker_i].get("name"))
 
     def _emit(event_key, batsman):
         if feed is None:
@@ -180,7 +204,7 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
             None, None, pitch, 20, 20, shot,
             striker.get("bat_rating", 0) or striker.get("rating", 0),
             bowler.get("bowl_rating", 0),
-            free_hit=free_hit, pressure=0.6,
+            free_hit=free_hit, pressure=0.6, extras_mult=SO_EXTRAS_MULT,
         )
         deliveries += 1
         t = oc["type"]
@@ -224,6 +248,7 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
             if wkts >= SO_WICKET_LIMIT or next_i >= len(batsmen):
                 break                              # 2 down — the innings is over
             striker_i = next_i                     # new man in at the same end
+            batted.append(batsmen[striker_i].get("name"))
             next_i += 1
         else:
             r = oc.get("runs", 0)
@@ -241,6 +266,7 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
     return {"runs": runs, "wickets": wkts, "balls": balls,
             "deliveries": deliveries, "boundaries": sixes + fours,
             "sixes": sixes, "fours": fours, "dismissed": dismissed,
+            "batted": batted,
             "bowler": bowler.get("name") if bowler else None}
 
 
@@ -254,12 +280,14 @@ def resolve_super_over(team_a_xi, team_b_xi, a_name, b_name, pitch,
     a replay, which matches the interactive Super Over (handlers/super_over.py)
     instead of lumping every boundary together.
 
-    A replay carries the real restrictions across from the previous super over:
-    the side that batted second bats first, batsmen already dismissed cannot bat
-    again, and a bowler cannot bowl two super overs in a row.
+    A replay carries the real restrictions across: the side that batted second
+    bats first, and every player a side has USED is spent — a batsman who walked
+    out cannot bat again and a bowler who bowled cannot bowl again, in any later
+    super over of the same tie. A reserve who was nominated but never needed was
+    not used, so they stay available.
     """
-    a = {"xi": team_a_xi, "name": a_name, "out": [], "bowled": None}
-    b = {"xi": team_b_xi, "name": b_name, "out": [], "bowled": None}
+    a = {"xi": team_a_xi, "name": a_name, "out": [], "bowled": set()}
+    b = {"xi": team_b_xi, "name": b_name, "out": [], "bowled": set()}
     first, second = (a, b) if first_bat == "a" else (b, a)
 
     innings_log = []
@@ -269,16 +297,16 @@ def resolve_super_over(team_a_xi, team_b_xi, a_name, b_name, pitch,
             commentary=commentary, feed=feed,
             label=f"Super Over {first['name']}",
             exclude_batsmen=first["out"], exclude_bowler=second["bowled"])
-        first["out"].extend(i1.get("dismissed") or [])
-        second["bowled"] = i1.get("bowler")
+        first["out"].extend(i1.get("batted") or [])
+        second["bowled"].add(i1.get("bowler"))
 
         i2 = simulate_super_over_innings(
             second["xi"], first["xi"], pitch, run_factor, target=i1["runs"] + 1,
             commentary=commentary, feed=feed,
             label=f"Super Over {second['name']}",
             exclude_batsmen=second["out"], exclude_bowler=first["bowled"])
-        second["out"].extend(i2.get("dismissed") or [])
-        first["bowled"] = i2.get("bowler")
+        second["out"].extend(i2.get("batted") or [])
+        first["bowled"].add(i2.get("bowler"))
 
         innings_log.append((first["name"], i1, second["name"], i2))
 
