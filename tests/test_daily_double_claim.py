@@ -61,9 +61,11 @@ def _func(src, signature):
 class LockedStatsRefreshTests(unittest.TestCase):
     """`with_for_update()` alone hands back the stale in-memory row.
 
-    Reproduced here on a shared SQLite file, which is enough to show the
-    identity-map behaviour that made the lock useless — it is an ORM property,
-    not a dialect one.
+    Reproduced on an in-memory SQLite engine, where every session in the thread
+    shares the one pooled connection — so the "other request" here commits to
+    the same connection rather than a separate one. That is enough, because what
+    made the lock useless is an ORM property (the identity map is not refreshed
+    on a re-read) rather than anything about connections or dialects.
     """
 
     def setUp(self):
@@ -188,10 +190,16 @@ class WebappClaimGuardTests(unittest.TestCase):
         cls.src = _read("admin.py")
 
     def _endpoint(self, route):
-        """Source of the view function registered for `route`."""
+        """Source of the view function registered for `route`.
+
+        The slice runs to the next route decorator, or to the end of the file
+        for the last route in it — `index` would raise there, and a ValueError
+        out of the helper reads as a broken test rather than the assertion the
+        caller was actually making.
+        """
         start = self.src.index(f'@app.route("{route}", methods=["POST"])')
-        nxt = self.src.index("\n@app.route(", start + 1)
-        return self.src[start:nxt]
+        nxt = self.src.find("\n@app.route(", start + 1)
+        return self.src[start:nxt if nxt != -1 else len(self.src)]
 
     def test_daily_claims_the_guard_before_doing_any_work(self):
         body = self._endpoint("/api/webapp/daily")
