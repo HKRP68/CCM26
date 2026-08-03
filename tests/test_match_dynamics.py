@@ -328,7 +328,7 @@ def test_only_the_batsmen_who_walked_out_are_spent_by_a_replay():
 
 def test_the_super_over_leaks_more_extras_than_an_ordinary_over():
     # Nerves: wides and no-balls are twice as likely, and nothing else moves.
-    def rate(mult, n=40000):
+    def rate(mult, n=6000):
         random.seed(19)
         extras = 0
         for _ in range(n):

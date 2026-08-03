@@ -193,6 +193,8 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
                      "event": event_key, "text": line or ""})
 
     def _chased():
+        """Has the target been passed? Checked after every delivery, extras
+        included — a chase can be won off a wide."""
         return target is not None and runs >= target
 
     while (balls < SO_BALLS and wkts < SO_WICKET_LIMIT
@@ -291,7 +293,7 @@ def resolve_super_over(team_a_xi, team_b_xi, a_name, b_name, pitch,
     first, second = (a, b) if first_bat == "a" else (b, a)
 
     innings_log = []
-    for attempt in range(SO_MAX_REPEATS):
+    for _attempt in range(SO_MAX_REPEATS):
         i1 = simulate_super_over_innings(
             first["xi"], second["xi"], pitch, run_factor, target=None,
             commentary=commentary, feed=feed,

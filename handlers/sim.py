@@ -15,11 +15,12 @@ started once a match has actually been simulated, so a rejected command (no
 squad, invalid XI, opponent on cooldown) never costs anyone their sim.
 """
 
+import html
 import io
 import json
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func
 from telegram import Update, InputFile
@@ -120,6 +121,9 @@ def _stats_row(session, user_id):
 def sim_cooldown_state(session, user):
     """``(stats, ready, remaining_seconds, cooldown_seconds)`` for ``user``.
 
+    A read-only look at the clock, used to answer early with a friendly message.
+    It is NOT what makes the cooldown hold — see ``claim_sim_slot``.
+
     The cooldown comes from ``get_user_cooldown`` rather than the constant, so
     an admin override on the website and the caller's subscription-tier
     reduction both apply — the same ladder /claim and /gspin sit on.
@@ -129,6 +133,50 @@ def sim_cooldown_state(session, user):
     cooldown = get_user_cooldown(session, user, "sim", SIM_COOLDOWN)
     ready, remaining = check_cooldown(stats, "last_sim", cooldown)
     return stats, ready, remaining, cooldown
+
+
+def claim_sim_slot(session, user_id, cooldown, now):
+    """Take ``user_id``'s /sim slot with a conditional UPDATE. True if we got it.
+
+    The gate above is a read followed much later by a write, and the bot runs
+    handlers concurrently (``BOT_CONCURRENT_UPDATES``, 16 by default), so two
+    /sim commands from the same player can both pass it before either records
+    anything — two whole matches for one cooldown. The UPDATE only matches a row
+    whose clock has actually run out, so whoever's statement lands first owns the
+    slot and the loser matches no row. Same layering the ad and pack claims use.
+
+    Does not commit: the caller commits once every slot a sim needs (both sides
+    of a challenge) has been claimed, so a half-claimed challenge rolls back
+    whole.
+    """
+    from sqlalchemy import or_
+    cutoff = now - timedelta(seconds=cooldown)
+    return bool(session.query(UserStats)
+                .filter(UserStats.user_id == user_id,
+                        or_(UserStats.last_sim.is_(None),
+                            UserStats.last_sim <= cutoff))
+                .update({UserStats.last_sim: now}, synchronize_session=False))
+
+
+def _release_sim_slots(session, claimed):
+    """Hand back slots claimed for a sim that then failed to run.
+
+    ``claimed`` is [(user_id, previous_last_sim), ...]. Best effort: a player
+    should not lose four hours because the render crashed, but neither should a
+    failure here mask the original error.
+    """
+    if not claimed:
+        return
+    try:
+        session.rollback()
+        for user_id, previous in claimed:
+            (session.query(UserStats)
+             .filter(UserStats.user_id == user_id)
+             .update({UserStats.last_sim: previous}, synchronize_session=False))
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("sim cooldown release failed")
 
 
 def _reply_target_user(session, update):
@@ -198,6 +246,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---- All DB work + the simulation happen up front, so we don't hold a
     # pooled connection while delivering Telegram messages. ----
     session = get_session()
+    claimed = []          # cooldown slots taken; handed back if the sim fails
     try:
         from services.command_config_service import is_command_enabled, get_disabled_message
         if not is_command_enabled(session, "sim"):
@@ -275,8 +324,8 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # A challenge spends the opponent's sim as well as yours, so they
             # have to be off cooldown too — nobody gets their /sim burned by
             # someone else's reply, and nobody can be challenged on repeat.
-            opponent_stats, opp_ready, opp_remaining, _ = sim_cooldown_state(
-                session, opponent)
+            opponent_stats, opp_ready, opp_remaining, opp_cooldown = \
+                sim_cooldown_state(session, opponent)
             if not opp_ready:
                 await say(
                     f"⏳ <b>{_team_display_name(opponent)} is still on /sim cooldown.</b>\n"
@@ -326,23 +375,48 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         commentary = build_commentary_picker(session)
 
+        # Everything is valid — take the cooldown slots BEFORE simulating. The
+        # gate above is only a friendly early answer; this conditional UPDATE is
+        # what actually holds, and it has to land before the expensive work so a
+        # second /sim racing this one loses rather than getting a free match.
+        # Both sides of a challenge are claimed in one transaction, so a
+        # half-claimed challenge rolls back whole.
+        now = datetime.utcnow()
+        prev_self = stats.last_sim
+        prev_opp = opponent_stats.last_sim if opponent_stats is not None else None
+        if not claim_sim_slot(session, user.id, cooldown, now):
+            session.rollback()
+            await say("⏳ <b>That sim just went through on another message.</b>\n"
+                      "<i>Give it a moment, then check /sim again.</i>")
+            return
+        claimed = [(user.id, prev_self)]
+        if opponent is not None:
+            if not claim_sim_slot(session, opponent.id, opp_cooldown, now):
+                session.rollback()          # gives the caller's slot back too
+                await say(
+                    f"⏳ <b>{_team_display_name(opponent)} just used their sim.</b>\n"
+                    "<i>Nobody was charged. Try again once they are ready.</i>")
+                return
+            claimed.append((opponent.id, prev_opp))
+        session.commit()
+
         match = simulate_match(user_xi, opponent_xi, overs, pitch,
                                team_name, opponent_name, toss_winner=toss_winner,
                                toss_decision=toss_decision, commentary=commentary,
                                fmt=fmt)
 
-        # The match has been played — start the clock. Committed here, before
-        # the (slow, failure-prone) rendering and delivery below, so a hiccup in
-        # a scorecard image can never hand out a second free simulation.
-        now = datetime.utcnow()
-        stats.last_sim = now
-        if opponent_stats is not None:
-            opponent_stats.last_sim = now
-        session.commit()
-        cooldown_note = (
-            f"⏳ Next /sim for both sides in <b>{format_remaining(cooldown)}</b>"
-            if opponent_stats is not None
-            else f"⏳ Next /sim in <b>{format_remaining(cooldown)}</b>")
+        if opponent_stats is None:
+            cooldown_note = f"⏳ Next /sim in <b>{format_remaining(cooldown)}</b>"
+        elif opp_cooldown == cooldown:
+            cooldown_note = (
+                f"⏳ Next /sim for both sides in <b>{format_remaining(cooldown)}</b>")
+        else:
+            # Different membership tiers, different clocks — quote each side its
+            # own rather than telling one of them somebody else's time.
+            cooldown_note = (
+                f"⏳ Next /sim: you in <b>{format_remaining(cooldown)}</b>, "
+                f"{html.escape(opponent_name)} in "
+                f"<b>{format_remaining(opp_cooldown)}</b>")
 
         # Pre-render everything while the session is alive.
         card1 = render_innings_card(match["innings1"])
@@ -396,6 +470,9 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
     except Exception:
         logger.exception("sim_handler preparation failed")
+        # The slots were taken but no match reached the player — hand them back
+        # rather than charging four hours for our own failure.
+        _release_sim_slots(session, claimed)
         if progress:
             try:
                 await progress.edit_text("⚠️ Couldn't start the simulation. Try again.")

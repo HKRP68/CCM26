@@ -112,6 +112,16 @@ class SimCooldownTests(unittest.TestCase):
         return (self.db.query(self.UserStats)
                 .filter(self.UserStats.user_id == user.id).first())
 
+    def _stats_for(self, user):
+        """Create the user's stats row, as the cooldown gate would."""
+        return sim_mod._stats_row(self.db, user.id)
+
+    def _last_sim(self, user):
+        """When this user last spent a sim — None if they never have (which
+        includes having no stats row at all)."""
+        row = self._stats(user)
+        return row.last_sim if row is not None else None
+
     def _run(self, caller, reply_to=None):
         """Run /sim as ``caller``, optionally replying to ``reply_to``."""
         sent = []
@@ -235,3 +245,85 @@ class SimCooldownStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SimClaimRaceTests(SimCooldownTests):
+    """The cooldown has to hold against two /sim commands in flight at once.
+
+    The gate is a read; the write lands much later, after the roster reads and
+    the whole simulation. The bot runs handlers concurrently
+    (BOT_CONCURRENT_UPDATES, 16 by default), so both commands could pass the
+    gate and each play a full match for one cooldown. claim_sim_slot closes
+    that with a conditional UPDATE — whoever's statement lands first owns the
+    slot.
+    """
+
+    def test_the_slot_can_only_be_claimed_once(self):
+        now = datetime.utcnow()
+        self._stats_for(self.caller)
+        self.assertTrue(
+            sim_mod.claim_sim_slot(self.db, self.caller.id, SIM_COOLDOWN, now))
+        # A racing request finds the clock already running and matches no row.
+        self.assertFalse(
+            sim_mod.claim_sim_slot(self.db, self.caller.id, SIM_COOLDOWN, now))
+
+    def test_the_slot_can_be_claimed_again_once_the_clock_runs_out(self):
+        self._stats_for(self.caller)
+        old = datetime.utcnow() - timedelta(seconds=SIM_COOLDOWN + 60)
+        self.assertTrue(
+            sim_mod.claim_sim_slot(self.db, self.caller.id, SIM_COOLDOWN, old))
+        self.assertTrue(sim_mod.claim_sim_slot(
+            self.db, self.caller.id, SIM_COOLDOWN, datetime.utcnow()))
+
+    def test_a_challenge_that_cannot_claim_the_rival_charges_nobody(self):
+        # The caller's slot is claimed first; if the rival's then fails, the
+        # whole transaction must roll back — a half-claimed challenge would
+        # cost the caller four hours for a match that never happened.
+        real_claim = sim_mod.claim_sim_slot
+        calls = []
+
+        def claim_then_fail(session, user_id, cooldown, now):
+            calls.append(user_id)
+            if len(calls) == 1:
+                return real_claim(session, user_id, cooldown, now)
+            return False                    # the rival slipped in first
+
+        self._patch(sim_mod, "claim_sim_slot", claim_then_fail)
+        out = self._run(self.caller, reply_to=self.rival)
+
+        self.assertEqual(self.simulated, [])
+        self.assertIn("just used their sim", out)
+        # Neither side is left on cooldown: the rollback took the caller's claim
+        # back with the rival's.
+        self.assertIsNone(self._last_sim(self.caller))
+        self.assertIsNone(self._last_sim(self.rival))
+
+    def test_a_losing_racer_is_told_rather_than_getting_a_free_match(self):
+        self._patch(sim_mod, "claim_sim_slot", lambda *a, **k: False)
+        out = self._run(self.caller)
+        self.assertEqual(self.simulated, [])
+        self.assertIn("went through on another message", out)
+
+    def test_a_sim_that_crashes_hands_the_cooldown_back(self):
+        def boom(*a, **k):
+            raise RuntimeError("engine exploded")
+
+        self._patch(sim_mod, "simulate_match", boom)
+        out = self._run(self.caller)
+        self.assertIn("Couldn't start the simulation", out)
+        # The slot was taken before the match ran, so it has to be given back —
+        # nobody loses four hours because the engine fell over.
+        self.assertIsNone(self._last_sim(self.caller))
+
+    def test_each_side_is_quoted_its_own_cooldown(self):
+        # Different membership tiers mean different clocks; the caller must not
+        # be told the rival gets their sim back at the caller's time.
+        self.rival.subscription_tier = "diamond"
+        self.rival.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+        self.db.commit()
+
+        out = self._run(self.caller, reply_to=self.rival)
+        self.assertEqual(len(self.simulated), 1)
+        self.assertIn("Next /sim: you in", out)
+        self.assertIn("4h", out)          # caller, free tier
+        self.assertIn("3h", out)          # rival, Diamond

@@ -649,10 +649,14 @@ def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
         probs["wide"] *= SPAM_EXTRAS_MULT
         probs["noball"] *= SPAM_EXTRAS_MULT
 
-    # Nerves — a bowler under Super Over pressure sprays a few more.
-    if extras_mult and extras_mult != 1.0:
-        probs["wide"] *= extras_mult
-        probs["noball"] *= extras_mult
+    # Nerves — a bowler under Super Over pressure sprays a few more. Clamped
+    # rather than tested for truthiness: extras_mult=0 means "no extras at all",
+    # not "leave them alone", and a negative would put a negative weight into
+    # _normalize, which cannot make sense of it.
+    _extras = 1.0 if extras_mult is None else max(0.0, float(extras_mult))
+    if _extras != 1.0:
+        probs["wide"] *= _extras
+        probs["noball"] *= _extras
 
     # Free hit — boundary bias up, dismissals (bar run-out) suppressed.
     if free_hit:

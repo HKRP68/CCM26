@@ -443,14 +443,14 @@ def _reset_selection(so):
 
 
 def _eligible_batters(so, uid):
-    """Batters this team may still pick — the XI minus anyone dismissed in an
-    earlier Super Over of this tie.
+    """Batters this team may still pick — the XI minus anyone who came to the
+    crease in an earlier Super Over of this tie.
 
     If the restriction leaves fewer than the three a Super Over needs, the pool
-    is topped back up with already-dismissed batters — but only by as many as
-    are missing, rather than throwing the rule away and re-offering the whole
-    XI. A side must always be able to field a Super Over; that is no reason to
-    let a batter who is out come back while fresh ones are still available.
+    is topped back up with already-used batters — but only by as many as are
+    missing, rather than throwing the rule away and re-offering the whole XI. A
+    side must always be able to field a Super Over; that is no reason to let a
+    spent batter come back while fresh ones are still available.
     """
     out = so["batted"][uid]
     xi = so["teams"][uid]["xi"]
