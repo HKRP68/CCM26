@@ -5190,7 +5190,7 @@ def webapp_spin():
             if reason == "ad_cooldown":
                 mins = max(1, (status["ad_ready_in"] + 59) // 60)
                 return {"ok": False, "error": "ad_cooldown",
-                        "message": (f"Next ad spin unlocks in {_fmt_gap(status['ad_ready_in'])}."
+                        "message": (f"Next ad pick unlocks in {_fmt_gap(status['ad_ready_in'])}."
                                     + (" Your ad is saved — it'll be used then."
                                        if banked else "")),
                         "quota": status, "ad_banked": banked,
@@ -5199,7 +5199,7 @@ def webapp_spin():
                         "cooldown_remaining": status["ad_ready_in"]}, 429
             if reason == "ad_required":
                 return {"ok": False, "error": "ad_required",
-                        "message": "Free spin already used — watch an ad for next spin.",
+                        "message": "Free pick already used — watch an ad for the next one.",
                         "quota": status,
                         "ads_saved": saved,
                         "ads_configured": ads_configured}, 400
@@ -5207,7 +5207,7 @@ def webapp_spin():
                 h = status["cycle_reset_in"] // 3600
                 m = (status["cycle_reset_in"] % 3600) // 60
                 return {"ok": False, "error": "cycle_exhausted",
-                        "message": (f"All spins used. New spins in {h}h {m}m."
+                        "message": (f"All picks used. New picks in {h}h {m}m."
                                     + (" Your ad is saved for then." if banked else "")),
                         "quota": status, "ad_banked": banked,
                         "ads_saved": saved,

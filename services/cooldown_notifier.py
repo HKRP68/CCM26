@@ -90,7 +90,7 @@ def _get_cooldowns(session):
         {
             "field": "last_gspin", "flag": "notified_gspin_ready",
             "cooldown": gspin_cd, "quota_kind": "spin", "miniapp_tab": "spin",
-            "button_label": "🎴 Open Lucky Pick",
+            "button_label": "🎴 Open Lucky Card Pick",
             "message": "🎴 Your Lucky Card Pick is ready! Open the Mini App to pick a card.",
         },
         {

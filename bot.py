@@ -679,7 +679,7 @@ async def start_handler(update, context):
             return
 
     _MINIAPP_SCREENS = {
-        "spin": "🎴 Open Lucky Pick", "daily": "📅 Open Daily",
+        "spin": "🎴 Open Lucky Card Pick", "daily": "📅 Open Daily",
         "market": "🌟 Open Market", "xi": "👥 Open XI",
         "roster": "👥 Open Squad", "packs": "🎴 Open Packs",
         "freepack": "📦 Open Free Pack", "quests": "🎯 Open Quests",
