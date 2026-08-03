@@ -3832,12 +3832,21 @@ async function onDailyClick() {
   updateDailyButton();
   const { ok, data } = await api('/api/webapp/daily', { ad_token: adToken });
   isDailyClaiming = false;
+  // Adopt the quota the server just returned before anything re-enables the
+  // button. refreshDashboard() is a round trip, and until it lands the cached
+  // quota still says a free claim is waiting — which is the window a fast
+  // second tap used to fire another claim into.
+  if (data?.quota && lastInitData?.daily) {
+    lastInitData.daily.quota = data.quota;
+  }
   if (!ok) {
+    updateDailyButton();
     toast(data.message || 'Daily claim failed', 'error');
     hapticNotif('error');
     refreshDashboard();
     return;
   }
+  updateDailyButton();
   hapticNotif('success');
   showDailyReward(data.reward);
   refreshDashboard();

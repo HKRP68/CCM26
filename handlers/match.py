@@ -34,7 +34,17 @@ ACTION_TIMEOUT = 90
 FINE_COINS = 2000   # reduced from 10000 — the forfeit itself is the bigger penalty
 FINE_GEMS = 5       # reduced from 20
 # /endmatch fine scales with how much of the match was played: balls bowled x 50
-# coins (gems stay flat). The opponent is compensated the same amount.
+# coins (gems stay flat).
+#
+# The fine is BURNED, not paid to the opponent. It used to be transferred, and
+# that turned quitting into a payment channel: farmers ran a match against
+# their own alt, let the alt /endmatch, and moved the alt's starter coins and
+# gems onto the main account — every fresh alt minting another payout. The
+# deterrent is the fine itself (plus the abandoned match), which works without
+# ever moving currency between two accounts. See also
+# ``services.match_webapp_service.handle_match_termination`` and
+# ``handlers.cipl_play._forfeit_live_match``, which follow the same rule, and
+# ``_on_action_timeout`` below, which has always burned its fine.
 ENDMATCH_FINE_PER_BALL = 50
 
 # Setup-phase expiries so a half-started match never blocks a chat forever.
@@ -1893,8 +1903,10 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("✅ Yes", callback_data=f"endmatch_{mid}_{tg.id}_{balls}"),
         InlineKeyboardButton("❌ No", callback_data=f"endmatchno_{mid}"),
     ]])
+    # Said out loud so nobody quits expecting to hand their opponent a payday —
+    # and skipped against the AI, which has no wallet to be told about.
     comp_line = ("" if (s_prompt and s_prompt.get("is_vsbot"))
-                 else "\nYour opponent gets the same as compensation.")
+                 else "\n<i>The fine is forfeited, not paid to your opponent.</i>")
     await update.message.reply_text(
         f"🏏 <b>/endmatch</b> ⚡\n\nDo you want to End the match? 🛑\n"
         f"You will be fined {est_fine:,} Coins 💰 ({balls} balls x {ENDMATCH_FINE_PER_BALL}) "
@@ -1922,18 +1934,12 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
         balls = _match_balls_bowled(s)
     fine_coins = balls * ENDMATCH_FINE_PER_BALL
     fine_gems = FINE_GEMS
-    is_vsbot = bool(s.get("is_vsbot")) if s else False
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == uid_tg).first()
         m = session.query(Match).get(mid)
-        opponent = None
-        if u and m and not is_vsbot:
-            opp_id = m.user2_id if m.user1_id == u.id else m.user1_id
-            if opp_id and opp_id != u.id:
-                opponent = session.query(User).get(opp_id)
-        # Only ever compensate what was actually deducted — a low-balance quitter
-        # must not mint coins/gems for the opponent.
+        # The fine leaves the economy. Nothing is credited to the opponent —
+        # see ENDMATCH_FINE_PER_BALL for why that channel was closed.
         charged_coins = 0
         charged_gems = 0
         if u:
@@ -1944,12 +1950,6 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
             log_activity(session, u.id, "endmatch",
                          f"Ended match #{mid} ({balls} balls): -{charged_coins} coins, -{charged_gems} gems",
                          coins_change=-charged_coins, gems_change=-charged_gems)
-        if opponent:
-            opponent.total_coins = (opponent.total_coins or 0) + charged_coins
-            opponent.total_gems = (opponent.total_gems or 0) + charged_gems
-            log_activity(session, opponent.id, "endmatch_compensation",
-                         f"Opponent ended match #{mid} ({balls} balls): +{charged_coins} coins, +{charged_gems} gems",
-                         coins_change=charged_coins, gems_change=charged_gems)
         if m:
             was_active = m.status in ACTIVE_MATCH_STATUSES
             m.status = "completed"
@@ -1973,15 +1973,10 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.exception("endmatch: CL-tour-match reset failed (non-fatal)")
         session.commit()
         u_mention = _mention(u) if u else "Player"
-        comp_line = ""
-        if opponent:
-            comp_line = (f"🎁 {_mention(opponent)} compensated: "
-                         f"+{charged_coins:,} Coins 💰 +{charged_gems} Gems 💎\n")
         await q.edit_message_text(
             f"🛑 <b>MATCH ENDED</b>\n\n{u_mention} ended the match.\n"
             f"⚠️ Fine ({balls} balls x {ENDMATCH_FINE_PER_BALL}): "
             f"-{charged_coins:,} Coins 💰 -{charged_gems} Gems 💎\n"
-            f"{comp_line}"
             f"📊 Player stats saved.", parse_mode="HTML")
     except Exception:
         session.rollback(); logger.exception("endmatch_yes_callback failed")

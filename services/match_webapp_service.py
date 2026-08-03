@@ -3234,9 +3234,17 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
     """Terminate a match because a player quit (or timed out).
 
     • No balls bowled → no penalty, no rewards; the match just ends with no W/L.
-    • Balls bowled → quitter loses `penalty` coins (capped at their balance),
-      opponent receives the same as compensation, and W/L records update
-      (quitter = loss, opponent = win).
+    • Balls bowled → quitter loses `penalty` coins (capped at their balance) and
+      W/L records update (quitter = loss, opponent = win).
+
+    The opponent is NOT paid the penalty. That transfer was an alt-farming
+    channel — run a match against your own alt, quit on the alt, and the alt's
+    balance lands on the main account — and worse, it paid the *full* penalty
+    even when the quitter's balance couldn't cover it, so a broke alt minted
+    coins out of nothing. The opponent's reward for being quit on is the
+    forfeit win, the streak and the stats; the penalty simply leaves the
+    economy. ``compensation`` stays in the returned info (always 0) so callers
+    reading the field keep working.
     Returns (ok, info|msg).
     """
     from models import Match, User
@@ -3262,7 +3270,7 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
     applied_penalty = 0
     compensation = 0
     # A /wpm mismatch flagged for anti stat-farming counts for nothing: no coin
-    # penalty/compensation and no W/L record or streak — quitting it is free.
+    # penalty and no W/L record or streak — quitting it is free.
     count_result = not bool((state or {}).get("stats_disabled"))
     if q["has_progress"] and count_result:
         # Quitter loses coins (never below zero).
@@ -3274,15 +3282,13 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
             log_activity(session, quitter.id, "match_quit",
                          f"Quit match #{match_id} ({balls} balls) — penalty",
                          coins_change=-applied_penalty)
-        # Opponent compensation = full penalty value (not just what was deducted).
-        compensation = penalty
+        # No coin compensation — the win is the reward. See the docstring.
         if opponent:
-            opponent.total_coins = (opponent.total_coins or 0) + compensation
             opponent.matches_won = (opponent.matches_won or 0) + 1
             opponent.matches_played = (opponent.matches_played or 0) + 1
-            log_activity(session, opponent.id, "match_quit_comp",
-                         f"Opponent quit match #{match_id} — compensation",
-                         coins_change=compensation)
+            log_activity(session, opponent.id, "match_quit_win",
+                         f"Opponent quit match #{match_id} — win by forfeit",
+                         coins_change=0)
         margin_type = "forfeit"
         win_id, lose_id = opponent_id, quitter_id
         result_text = f"Won by forfeit ({reason})"

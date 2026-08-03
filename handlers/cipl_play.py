@@ -50,7 +50,8 @@ logger = logging.getLogger(__name__)
 CIPL_TIMEOUT = int(os.getenv("CIPL_TIMEOUT_SECONDS", "120"))  # 2-min turn → forfeit
 CIPL_REMIND = int(os.getenv("CIPL_REMIND_SECONDS", "90"))     # warn 30s before forfeit
 # Forfeiting a *live* match (failing to pick bowler / bowling or batting
-# approach in time) fines the idle player and compensates the opponent.
+# approach in time) fines the idle player. The fine is burned, not paid to the
+# opponent — see _forfeit_live_match.
 CIPL_FORFEIT_COINS = int(os.getenv("CIPL_FORFEIT_COINS", "3000"))
 CIPL_FORFEIT_GEMS = int(os.getenv("CIPL_FORFEIT_GEMS", "5"))
 CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 overs
@@ -600,7 +601,7 @@ async def _on_timeout(context):
 async def _close_idle_bot_match(context, mid, state):
     """Retire an abandoned practice match — no forfeit, no fine, no winner.
 
-    There is no opponent to compensate and nothing was ever at stake, so an idle
+    There is no human opponent and nothing was ever at stake, so an idle
     /lpbot or /ciplbot match is simply packed away and the chat freed.
     """
     _cancel_timer(context, mid)
@@ -655,8 +656,12 @@ async def _close_idle_bot_match(context, mid, state):
 
 
 async def _forfeit_live_match(context, mid, state, expected):
-    """Idle player forfeits a live match: they're fined, the opponent wins and
-    is compensated the same amount."""
+    """Idle player forfeits a live match: they're fined and the opponent wins.
+
+    The fine is burned rather than handed to the winner. Paying it across
+    accounts made an idle "opponent" worth farming — sit out on an alt, collect
+    on the main — so the win is the reward and the fine leaves the economy.
+    """
     _cancel_timer(context, mid)
     (idle_uid, idle_tg, idle_name,
      win_uid, win_tg, win_name) = _idle_actor(state, expected)
@@ -707,11 +712,9 @@ async def _forfeit_live_match(context, mid, state, expected):
                          f"Forfeited match #{mid} (inactivity): -{charged_coins} coins, -{charged_gems} gems",
                          coins_change=-charged_coins, gems_change=-charged_gems)
             if win_user:
-                win_user.total_coins = (win_user.total_coins or 0) + charged_coins
-                win_user.total_gems = (win_user.total_gems or 0) + charged_gems
-                log_activity(session, win_user.id, "cipl_forfeit_compensation",
-                             f"Opponent forfeited match #{mid}: +{charged_coins} coins, +{charged_gems} gems",
-                             coins_change=charged_coins, gems_change=charged_gems)
+                log_activity(session, win_user.id, "cipl_forfeit_win",
+                             f"Opponent forfeited match #{mid} — win by forfeit",
+                             coins_change=0, gems_change=0)
         else:
             charged_coins = charged_gems = 0
         # A forfeit doesn't record a tournament result, so free the reserved
@@ -738,8 +741,7 @@ async def _forfeit_live_match(context, mid, state, expected):
                 f"⌛ <b>Match forfeited</b>\n"
                 f"{_mention(idle_tg, idle_name)} didn't play in time.\n"
                 f"🏆 {_mention(win_tg, win_name)} wins!\n"
-                f"⚠️ Fine: −{charged_coins:,} 🪙 −{charged_gems} 💎\n"
-                f"🎁 Compensation: +{charged_coins:,} 🪙 +{charged_gems} 💎",
+                f"⚠️ Fine: −{charged_coins:,} 🪙 −{charged_gems} 💎",
                 parse_mode="HTML")
         except Exception:
             logger.exception("cipl forfeit announce failed for match %s", mid)
