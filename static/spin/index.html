@@ -108,7 +108,11 @@
     }
     .card[data-i="0"] { --fan-y: 12px; --fan-r: -9deg; }
     .card[data-i="1"] { --fan-y: 4px;  --fan-r: -4deg; }
-    .card[data-i="2"] { --fan-y: 0;    --fan-r: 0deg; }
+    /* 0px, not 0: this value is substituted into calc(var(--fan-y) - 8px)
+       below, and a unitless zero is a <number> there, not a length — the
+       whole declaration is invalid and dropped, so the centre card would
+       neither bob nor depress. */
+    .card[data-i="2"] { --fan-y: 0px;  --fan-r: 0deg; }
     .card[data-i="3"] { --fan-y: 4px;  --fan-r: 4deg; }
     .card[data-i="4"] { --fan-y: 12px; --fan-r: 9deg; }
     .card-inner {
@@ -254,7 +258,9 @@
 
     @media (max-width: 360px) {
       .deck { gap: 5px; }
-      .card { flex-basis: 62px; height: 96px; --fan-y: 0 !important; --fan-r: 0deg !important; }
+      /* 0px for the same calc() reason — unitless here would stop the whole
+         deck bobbing on small phones, which is the cue that it is tappable. */
+      .card { flex-basis: 62px; height: 96px; --fan-y: 0px !important; --fan-r: 0deg !important; }
     }
     @media (prefers-reduced-motion: reduce) {
       .deck.armed .card, .card.dealing, .pulse, .prize-tag::before,
@@ -278,7 +284,7 @@
 
     <div class="title-block">
       <h1>Lucky Card Pick</h1>
-      <p id="hint">Five cards. One is yours.</p>
+      <p id="hint" aria-live="polite">Five cards. One is yours.</p>
     </div>
 
     <div class="deck" id="deck" role="group" aria-label="Five face-down cards">
@@ -324,7 +330,7 @@
       <button class="btn ghost" id="ad-btn" onclick="executePick(true)"><span>📺 Watch Ad to Play</span></button>
     </div>
 
-    <div class="status" id="status"></div>
+    <div class="status" id="status" aria-live="polite"></div>
   </div>
 
   <script>
@@ -365,7 +371,16 @@
       el.textContent = text;
       el.classList.toggle('live', !!live);
     }
+    // Status markup is built here, so innerHTML is fine — but everything
+    // interpolated INTO it has to be escaped first. Player names come from an
+    // admin-editable field, and server messages carry error text; neither is
+    // ours to trust with markup. See esc() at each interpolation site.
     function setStatus(html) { statusEl().innerHTML = html; }
+    function esc(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
 
     // The quota as the server last reported it. Null until the first load —
     // and that gap mattered: this page used to offer "Watch Ad to Play" with
@@ -392,6 +407,13 @@
     // Paint both buttons from a quota snapshot.
     function applyQuota(quota) {
       if (!quota) return;
+      // Every repaint supersedes the countdown from an earlier snapshot. Both
+      // paths below can return without arming a new one — the saved-ad label
+      // and the gap-is-over label — and a surviving interval would tick later
+      // and overwrite whichever of them we just set, possibly re-enabling a
+      // button this quota does not allow.
+      clearInterval(window.__adGapTimer);
+      window.__adGapTimer = null;
       if (quota.free_available) {
         freeBtn().disabled = false;
         freeBtn().classList.add('pulse');
@@ -442,7 +464,6 @@
         btn.innerHTML = `<span>⏱️ Next ad pick in ${formatGap(secs)}</span>`;
       };
       paint(wait);
-      clearInterval(window.__adGapTimer);
       let left = wait;
       window.__adGapTimer = setInterval(() => {
         left -= 30;
@@ -629,7 +650,7 @@
     function rewardText(r) {
       if (!r) return 'You won a prize!';
       if (r.type === 'player') {
-        return `<span style="color:#FFD700;font-size:18px;font-weight:bold;text-shadow:0 0 15px #ffd700;">🎉 ${r.player_name || 'A player'}${r.player_rating ? ` (${r.player_rating} OVR)` : ''}! 🎉</span>`;
+        return `<span style="color:#FFD700;font-size:18px;font-weight:bold;text-shadow:0 0 15px #ffd700;">🎉 ${esc(r.player_name || 'A player')}${r.player_rating ? ` (${esc(r.player_rating)} OVR)` : ''}! 🎉</span>`;
       }
       if (r.type === 'gems') return `<span style="color:#a78bfa;">You won ${Number(r.amount).toLocaleString()} gems! 💎</span>`;
       if (r.type === 'quest_points') return `<span style="color:#00f2fe;">You won ${Number(r.amount).toLocaleString()} quest points! ⭐</span>`;
@@ -814,7 +835,7 @@
           setStatus('LOADING AD… ⏳');
           const r = await getAdToken();
           if (r.error) {
-            setStatus(`<span style="color:var(--danger);">${AD_ERROR_TEXT[r.error] || 'No ad available.'}</span>`);
+            setStatus(`<span style="color:var(--danger);">${esc(AD_ERROR_TEXT[r.error] || 'No ad available.')}</span>`);
             applyQuota(spinQuota);
             loadQuota();
             return;
@@ -829,7 +850,8 @@
 
         if (!ok || !data.ok || !data.reward) {
           resetDeck();
-          const msg = (data && (data.message || data.error)) || 'Could not deal your cards.';
+          const msg = esc((data && (data.message || data.error))
+                          || 'Could not deal your cards.');
           // A banked ad is not a loss — it is the ad waiting for its slot, so
           // it gets the neutral colour rather than the error red.
           const banked = !!(data && data.ad_banked);

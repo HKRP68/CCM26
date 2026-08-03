@@ -71,8 +71,8 @@ STARTER_TEMPLATES = [
     {
         "name": "Free Lucky Card Pick reminder",
         "message": ("🎴 <b>{first_name}, your free Lucky Card Pick is ready!</b>\n\n"
-                    "Free picks refresh every 6 hours. Could land coins, gems, "
-                    "or even a rare card. Tap <b>/gspin</b> now."),
+                    "Your free pick is waiting — could land coins, gems, or "
+                    "even a rare card. Tap <b>/gspin</b> now."),
         "target_filter": "active",
         "fire_hour": 16, "fire_minute": 30,
         "window_start_hour": 13, "window_end_hour": 21,

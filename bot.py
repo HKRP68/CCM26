@@ -687,6 +687,17 @@ async def start_handler(update, context):
         "clubs": "🛡️ Open Clubs", "leaderboard": "🏆 Open Ranks",
         "invite": "🎟️ Open Invite",
     }
+    # How each screen is referred to in a sentence, where the button label
+    # above (emoji + "Open ...") does not read as prose.
+    _MINIAPP_SCREEN_NAMES = {
+        "spin": "Lucky Card Pick", "daily": "Daily Reward",
+        "market": "the Market", "xi": "your Playing XI",
+        "roster": "your Squad", "packs": "Packs",
+        "freepack": "the Free Pack", "quests": "Quests",
+        "achievements": "Achievements", "season": "Season",
+        "clubs": "Clubs", "leaderboard": "the Leaderboard",
+        "invite": "Invite & Win",
+    }
     if payload in _MINIAPP_SCREENS:
         webapp_url = os.getenv("WEBAPP_URL", "").strip()
         if webapp_url and webapp_url.startswith("https://"):
@@ -698,8 +709,12 @@ async def start_handler(update, context):
                     web_app=WebAppInfo(url=webapp_url + "#" + payload),
                 )
             ]])
+            # The screen's own name, not the deep-link key: "/start spin"
+            # used to answer "open the spin screen", which is not what the
+            # screen has been called since it became a card pick.
+            screen_name = _MINIAPP_SCREEN_NAMES.get(payload, payload)
             await update.message.reply_text(
-                f"<b>Welcome!</b> Tap below to open the {payload} screen.",
+                f"<b>Welcome!</b> Tap below to open {screen_name}.",
                 parse_mode="HTML", reply_markup=kb,
             )
             return

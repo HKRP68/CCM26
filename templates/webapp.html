@@ -1290,7 +1290,11 @@
   }
   .pick-card[data-i="0"] { --fan-y: 10px; --fan-r: -8deg; }
   .pick-card[data-i="1"] { --fan-y: 3px;  --fan-r: -4deg; }
-  .pick-card[data-i="2"] { --fan-y: 0;    --fan-r: 0deg; }
+  /* 0px, not 0: this value is substituted into calc(var(--fan-y) - 7px)
+     below, and a unitless zero is a <number> there, not a length — the whole
+     declaration is invalid and dropped, so the centre card would neither bob
+     nor depress. */
+  .pick-card[data-i="2"] { --fan-y: 0px;  --fan-r: 0deg; }
   .pick-card[data-i="3"] { --fan-y: 3px;  --fan-r: 4deg; }
   .pick-card[data-i="4"] { --fan-y: 10px; --fan-r: 8deg; }
   .pick-card-inner {
@@ -1480,7 +1484,9 @@
   /* Very narrow phones: drop the fan so five cards still fit side by side. */
   @media (max-width: 360px) {
     .pick-deck { gap: .3rem; }
-    .pick-card { flex-basis: 54px; height: 84px; --fan-y: 0 !important; --fan-r: 0deg !important; }
+    /* 0px for the same calc() reason — unitless here would stop the whole
+       deck bobbing on small phones, which is the cue that it is tappable. */
+    .pick-card { flex-basis: 54px; height: 84px; --fan-y: 0px !important; --fan-r: 0deg !important; }
   }
   @keyframes rewardFade { from { opacity: 0; } to { opacity: 1; } }
 
@@ -2431,7 +2437,7 @@
   <div class="spin-container">
     <div class="pick-head">
       <div class="pick-title">Lucky Card Pick</div>
-      <div class="pick-hint" id="pick-hint">Five cards. One is yours.</div>
+      <div class="pick-hint" id="pick-hint" aria-live="polite">Five cards. One is yours.</div>
     </div>
     <div class="pick-deck" id="pick-deck" role="group" aria-label="Five face-down cards">
       <button class="pick-card" type="button" data-i="0" onclick="onCardPick(0)" aria-label="Card 1">
@@ -2466,7 +2472,7 @@
       </button>
     </div>
     <button class="spin-button" id="spin-btn" onclick="onSpinClick()">📺 Watch ad to play</button>
-    <div id="spin-result"></div>
+    <div id="spin-result" aria-live="polite"></div>
   </div>
 </div>
 
@@ -5262,8 +5268,11 @@ function showReward(r) {
   else if (r.type === 'gems') detail = `💎 +${r.amount} gems`;
   else if (r.type === 'quest_points') detail = `⭐ +${r.amount} QP`;
   else if (r.type === 'player') {
-    if (r.squad_full) detail = `🎉 ${r.player_name} (${r.player_rating}) — but squad is full!`;
-    else detail = `🎉 ${r.player_name} (${r.player_rating}) added to squad!`;
+    // Escaped: player names are admin-editable free text, and this whole
+    // string goes through innerHTML below.
+    const who = `${escapeHtml(r.player_name)} (${escapeHtml(r.player_rating)})`;
+    if (r.squad_full) detail = `🎉 ${who} — but squad is full!`;
+    else detail = `🎉 ${who} added to squad!`;
   } else if (r.type === 'pack') detail = `🎁 Pack added to inventory`;
 
   const tier = rewardTier(r);
@@ -5271,8 +5280,8 @@ function showReward(r) {
   el.innerHTML = `
     <div class="reward-banner ${tierClass}">
       ${tier === 'legend' ? '<div style="font-size:0.7rem;font-weight:800;color:#ffd966;letter-spacing:0.1em;">⭐ LEGENDARY PULL ⭐</div>' : ''}
-      <div class="emoji">${r.emoji || '🎁'}</div>
-      <div class="label">${r.label}</div>
+      <div class="emoji">${escapeHtml(r.emoji || '🎁')}</div>
+      <div class="label">${escapeHtml(r.label)}</div>
       <div class="detail">${detail}</div>
     </div>
   `;
