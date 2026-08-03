@@ -5249,7 +5249,12 @@ def webapp_spin():
             "reward": result,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "spin", session=db, user=user),
+            # ads_saved rides on the quota as well as the top level: clients
+            # cache `quota` wholesale, and a success payload without it would
+            # overwrite a cached saved-ad count with nothing.
+            "quota": dict(quota_service.get_quota_status(stats, "spin",
+                                                         session=db, user=user),
+                          ads_saved=ad_service.count_credits(db, tg_id)),
             "ads_saved": ad_service.count_credits(db, tg_id),
             "balance": {
                 "coins": user.total_coins or 0,
@@ -5612,7 +5617,9 @@ def webapp_daily():
             "ok": True,
             "slot_type": slot_type,
             "verified_via": verified_via,
-            "quota": quota_service.get_quota_status(stats, "daily", session=db, user=user),
+            "quota": dict(quota_service.get_quota_status(stats, "daily",
+                                                         session=db, user=user),
+                          ads_saved=ad_service.count_credits(db, tg_id)),
             # Same field the spin returns, so a client reading the claim
             # response rather than re-fetching init sees the saved-ad count.
             "ads_saved": ad_service.count_credits(db, tg_id),

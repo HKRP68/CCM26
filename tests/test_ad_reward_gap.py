@@ -457,6 +457,41 @@ class DurableReceiptTests(unittest.TestCase):
             self.ad_service.consume_client_token(second, self.tg_id,
                                                  session=self.db))
 
+    def test_a_leftover_saved_ad_does_not_void_a_new_postback(self):
+        """The reconciliation has to name the ad it is reconciling.
+
+        Matching any banked credit meant this: an ad banked back from an
+        hour-gapped spin sat in the ledger, and the postback for a *later*,
+        genuinely new ad was written off as its duplicate — destroying the
+        second ad, which is the exact loss this whole change exists to stop.
+        """
+        self.ad_service.bank_credit(self.db, self.tg_id,
+                                    "spin blocked: ad_cooldown")
+        self.ad_service.record_postback(self.db, self.tg_id)
+        # The postback is for a different ad, so it is still claimable…
+        self.assertTrue(self.ad_service.claim_postback(self.db, self.tg_id))
+        # …and the banked one is untouched.
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 1)
+
+    def test_two_ads_in_a_row_get_one_receipt_each(self):
+        """A receipt already answered by a postback can't absorb the next one."""
+        from models import AdReward
+        self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.ad_service.record_postback(self.db, self.tg_id)      # ad 1
+        # Age everything past the same-ad repeat window so the second ad is
+        # registered as its own receipt.
+        for row in (self.db.query(AdReward)
+                    .filter(AdReward.telegram_id == self.tg_id).all()):
+            row.received_at -= timedelta(
+                seconds=self.ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS + 1)
+        self.db.commit()
+        self.ad_service.issue_client_token(self.tg_id, session=self.db)
+        self.ad_service.record_postback(self.db, self.tg_id)      # ad 2
+
+        # Two ads watched, two receipts — no more, no less.
+        self.assertEqual(self.ad_service.count_credits(self.db, self.tg_id), 2)
+        self.assertFalse(self.ad_service.claim_postback(self.db, self.tg_id))
+
     def test_a_postback_with_no_client_ad_still_pays(self):
         """The server-only path has to keep working — a WebView that never
         reached /ad-completed is exactly when the postback matters most."""

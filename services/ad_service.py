@@ -81,6 +81,18 @@ POSTBACK_WINDOW_SECONDS = 300  # 5 minutes
 # postback query can tell them apart — a credit is not a network postback and
 # must not be claimed under the postback's short window.
 CREDIT_PROVIDER = "credit"
+# The client's receipt for one specific watched ad, written by
+# ``register_client_ad``. Kept distinct from CREDIT_PROVIDER, which also covers
+# ads banked back after a refused reward: only a *receipt* is a candidate for
+# reconciling against the network postback for that same ad, and treating any
+# banked credit as one silently voided the postback for a genuinely new ad.
+CLIENT_PROVIDER = "client"
+# Both are ads this user watched and has not spent, so both are redeemable.
+REDEEMABLE_PROVIDERS = (CREDIT_PROVIDER, CLIENT_PROVIDER)
+# How long after a client receipt the matching network postback is still the
+# same ad. The two fire within seconds of each other; the full postback window
+# is five minutes, which is long enough to swallow a second, real ad.
+POSTBACK_DEDUPE_SECONDS = 120
 # How long a banked credit stays redeemable. Long, because the whole point is
 # that the player keeps what they watched: a gap of an hour, a cycle that
 # resets tomorrow, or simply closing the app must all still pay out.
@@ -106,6 +118,15 @@ MAX_OUTSTANDING_CLIENT_ADS = 3
 # takes it too and both public entry points call that first.
 _CLIENT_TOKENS = {}
 _TOKENS_LOCK = threading.RLock()
+
+# Serialises the check-then-insert in ``register_client_ad``. Two /ad-completed
+# requests for one user that race inside a few milliseconds — a double tap, or
+# a client retry overlapping the original — would otherwise both read "no
+# recent receipt" and both insert, turning one watched ad into two saved ones.
+# A process-local lock is enough here (the app serves the Mini App from a
+# single threaded Flask process); the 10-second repeat window is the backstop
+# if that ever stops being true.
+_REGISTER_LOCK = threading.Lock()
 CLIENT_TOKEN_TTL = 120  # 2 minutes for the user to claim after ad finishes
 
 # Token prefixes. The prefix is what tells the spin endpoint which kind of
@@ -160,19 +181,35 @@ def record_postback(session, telegram_id: int, source_ip: str | None = None,
     One ad is one reward, and both halves of Adsgram's contract fire for the
     same ad: the SDK resolves in the browser (which registers a receipt — see
     ``register_client_ad``) and the network calls this URL. Whichever lands
-    first is the receipt; a postback that follows a client receipt from the
-    same few minutes is that same ad arriving twice, so it is stored already
-    consumed. It stays in the table for debugging, but it can't be spent — a
-    postback banked on top of the receipt would pay the user twice per ad.
+    first is the receipt; a postback that follows the client's receipt for that
+    same ad is stored already consumed. It stays in the table for debugging,
+    but it can't be spent — banked on top of the receipt it would pay twice.
+
+    Which receipt it reconciles against has to be exact, or the rule does the
+    very damage it exists to prevent. Two things scope it:
+
+      • only a CLIENT_PROVIDER row counts. Ads banked back after a refused
+        reward are credits too, and matching those meant a leftover credit from
+        an hour-gapped spin silently voided the postback for a later, real ad;
+      • only a receipt no postback has already answered. Once one postback has
+        landed for a receipt, the next belongs to a different ad.
     """
     from models import AdReward
     now = datetime.utcnow()
-    cutoff = now - timedelta(seconds=POSTBACK_WINDOW_SECONDS)
-    duplicate_of_client_ad = (session.query(AdReward)
-                              .filter(AdReward.telegram_id == telegram_id,
-                                      AdReward.provider == CREDIT_PROVIDER,
-                                      AdReward.received_at >= cutoff)
-                              .first())
+    cutoff = now - timedelta(seconds=POSTBACK_DEDUPE_SECONDS)
+    receipt = (session.query(AdReward)
+               .filter(AdReward.telegram_id == telegram_id,
+                       AdReward.provider == CLIENT_PROVIDER,
+                       AdReward.received_at >= cutoff)
+               .order_by(AdReward.received_at.desc())
+               .first())
+    already_reconciled = receipt is not None and (
+        session.query(AdReward)
+        .filter(AdReward.telegram_id == telegram_id,
+                AdReward.provider == "adsgram",
+                AdReward.received_at >= receipt.received_at)
+        .first() is not None)
+    duplicate_of_client_ad = receipt is not None and not already_reconciled
     row = AdReward(
         telegram_id=telegram_id,
         received_at=now,
@@ -207,10 +244,10 @@ def claim_postback(session, telegram_id: int) -> bool:
     return _claim_row(
         session,
         _unclaimed(session, telegram_id, POSTBACK_WINDOW_SECONDS)
-        # Banked credits share the table but not the window; they are claimed
-        # by claim_credit. Legacy rows have a NULL provider and are postbacks.
+        # Saved ads share the table but not the window; they are claimed by
+        # claim_credit. Legacy rows have a NULL provider and are postbacks.
         .filter((AdReward.provider.is_(None))
-                | (AdReward.provider != CREDIT_PROVIDER))
+                | (AdReward.provider.notin_(REDEEMABLE_PROVIDERS)))
         .first())
 
 
@@ -247,7 +284,8 @@ def _claim_row(session, row) -> bool:
     return bool(claimed)
 
 
-def bank_credit(session, telegram_id: int, reason: str = ""):
+def bank_credit(session, telegram_id: int, reason: str = "",
+                provider: str = CREDIT_PROVIDER):
     """Bank a watched-but-unspendable ad as a credit the user can redeem later.
 
     Called wherever ad evidence has already been consumed and the reward could
@@ -266,7 +304,7 @@ def bank_credit(session, telegram_id: int, reason: str = ""):
         row = AdReward(
             telegram_id=telegram_id,
             received_at=datetime.utcnow(),
-            provider=CREDIT_PROVIDER,
+            provider=provider,
             query_string=(reason or "")[:500],
         )
         session.add(row)
@@ -294,7 +332,7 @@ def claim_credit(session, telegram_id: int) -> bool:
     return _claim_row(
         session,
         _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
-        .filter(AdReward.provider == CREDIT_PROVIDER)
+        .filter(AdReward.provider.in_(REDEEMABLE_PROVIDERS))
         .first())
 
 
@@ -307,7 +345,7 @@ def count_credits(session, telegram_id: int) -> int:
     from models import AdReward
     try:
         return int(_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
-                   .filter(AdReward.provider == CREDIT_PROVIDER)
+                   .filter(AdReward.provider.in_(REDEEMABLE_PROVIDERS))
                    .count() or 0)
     except Exception:
         logger.exception("count_credits failed for %s", telegram_id)
@@ -407,13 +445,23 @@ def register_client_ad(session, telegram_id: int):
     completes a rewarded ad that fast), and once
     ``MAX_OUTSTANDING_CLIENT_ADS`` are already banked, further calls bind to
     one of those instead of adding more.
+
+    Both of those are check-then-insert, so the whole body runs under
+    ``_REGISTER_LOCK`` — two racing requests that each read "no recent receipt"
+    would otherwise both insert and turn one ad into two.
     """
+    with _REGISTER_LOCK:
+        return _register_client_ad(session, telegram_id)
+
+
+def _register_client_ad(session, telegram_id: int):
+    """``register_client_ad`` with the lock already held."""
     from models import AdReward
     now = datetime.utcnow()
 
     postback = (_unclaimed(session, telegram_id, POSTBACK_WINDOW_SECONDS)
                 .filter((AdReward.provider.is_(None))
-                        | (AdReward.provider != CREDIT_PROVIDER))
+                        | (AdReward.provider.notin_(REDEEMABLE_PROVIDERS)))
                 .first())
     if postback:
         return postback.id
@@ -421,7 +469,7 @@ def register_client_ad(session, telegram_id: int):
     # Same ad, registered twice (a retried request, or a client in a loop).
     recent = (session.query(AdReward)
               .filter(AdReward.telegram_id == telegram_id,
-                      AdReward.provider == CREDIT_PROVIDER,
+                      AdReward.provider == CLIENT_PROVIDER,
                       AdReward.received_at
                       >= now - timedelta(seconds=MIN_CLIENT_AD_INTERVAL_SECONDS))
               .order_by(AdReward.received_at.desc())
@@ -433,13 +481,14 @@ def register_client_ad(session, telegram_id: int):
 
     outstanding = (_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS,
                               oldest_first=True)
-                   .filter(AdReward.provider == CREDIT_PROVIDER)
+                   .filter(AdReward.provider.in_(REDEEMABLE_PROVIDERS))
                    .limit(MAX_OUTSTANDING_CLIENT_ADS + 1)
                    .all())
     if len(outstanding) >= MAX_OUTSTANDING_CLIENT_ADS:
         return outstanding[0].id
 
-    return bank_credit(session, telegram_id, "ad watched (client)")
+    return bank_credit(session, telegram_id, "ad watched (client)",
+                       provider=CLIENT_PROVIDER)
 
 
 def issue_client_token(telegram_id: int, session=None) -> str:
@@ -482,8 +531,7 @@ def consume_client_token(token: str, telegram_id: int, session=None) -> bool:
     if record.receipt_id is None or session is None:
         return True
     from models import AdReward
-    return _claim_row(session,
-                      session.query(AdReward).get(record.receipt_id))
+    return _claim_row(session, session.get(AdReward, record.receipt_id))
 
 
 def preserve_client_ad(session, token: str, telegram_id: int,
